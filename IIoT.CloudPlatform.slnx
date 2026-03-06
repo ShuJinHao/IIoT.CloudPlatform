@@ -1,1 +1,17 @@
-<Solution />
+<Solution>
+  <Folder Name="/src/" />
+  <Folder Name="/src/core/">
+    <Project Path="src/core/IIoT.Core.Production/IIoT.Core.Production.csproj" />
+    <Project Path="src/core/IIoT.Employee/IIoT.Core.Employee.csproj" />
+  </Folder>
+  <Folder Name="/src/hosts/" />
+  <Folder Name="/src/infrastructure/">
+    <Project Path="src/infrastructure/IIoT.EntityFrameworkCore/IIoT.EntityFrameworkCore.csproj" />
+  </Folder>
+  <Folder Name="/src/services/">
+    <Project Path="src/services/IIoT.Services.Common/IIoT.Services.Common.csproj" />
+  </Folder>
+  <Folder Name="/src/shared/">
+    <Project Path="src/shared/IIoT.SharedKernel/IIoT.SharedKernel.csproj" />
+  </Folder>
+</Solution>
