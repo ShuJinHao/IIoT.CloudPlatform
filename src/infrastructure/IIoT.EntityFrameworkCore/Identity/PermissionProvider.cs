@@ -5,49 +5,58 @@ using Microsoft.Extensions.Options;
 
 namespace IIoT.EntityFrameworkCore.Identity;
 
-/// <summary>
-/// 动态角色权限提供者 (基于通用 CacheService 与 PostgreSQL)
-/// </summary>
 public class PermissionProvider(
-    RoleManager<ApplicationUser> roleManager,
-    ICacheService cacheService, // 🌟 核心：直接注入我们刚刚在 Common 定义的接口！
+    UserManager<ApplicationUser> userManager,     // 🌟 新增：注入 UserManager 查人
+    RoleManager<IdentityRole<Guid>> roleManager,  // 🌟 注意：这里必须是 IdentityRole<Guid>
+    ICacheService cacheService,
     IOptions<PermissionCacheOptions> options) : IPermissionProvider
 {
     private readonly PermissionCacheOptions _options = options.Value;
 
-    public async Task<IList<string>> GetPermissionsAsync(string roleName, CancellationToken cancellationToken = default)
+    public async Task<IList<string>> GetPermissionsAsync(Guid userId, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(roleName)) return [];
+        // 🌟 缓存 Key 升级：现在是按用户 ID 隔离缓存 (例如: "iiot:permissions:v1:user:1234-5678-...")
+        var cacheKey = $"{_options.KeyPrefix}user:{userId}";
 
-        var cacheKey = $"{_options.KeyPrefix}{roleName}";
-
-        // ==========================================
-        // 🌟 读链路 第一步：通过 Common 接口尝试从缓存极速读取
-        // ==========================================
+        // 1. 极速读缓存
         var cachedPermissions = await cacheService.GetAsync<List<string>>(cacheKey, cancellationToken);
-        if (cachedPermissions != null)
+        if (cachedPermissions != null) return cachedPermissions;
+
+        // 2. DB 兜底：先找人
+        var user = await userManager.FindByIdAsync(userId.ToString());
+        if (user == null) return [];
+
+        // 🌟 核心：使用 HashSet 去重合并权限
+        var allPermissions = new HashSet<string>();
+
+        // 【维度 A】：获取该用户被“特批”的个人专属权限 (AspNetUserClaims 表)
+        var userClaims = await userManager.GetClaimsAsync(user);
+        foreach (var claim in userClaims.Where(c => c.Type == "Permission"))
         {
-            return cachedPermissions; // 缓存命中！
+            allPermissions.Add(claim.Value);
         }
 
-        // ==========================================
-        // 🌟 读链路 第二步：缓存未命中，执行 DB 兜底 (Fallback)
-        // ==========================================
-        var role = await roleManager.FindByNameAsync(roleName);
-        if (role == null) return [];
+        // 【维度 B】：获取该用户所属的所有角色，并将这些角色的权限一并拉取 (AspNetRoleClaims 表)
+        var roles = await userManager.GetRolesAsync(user);
+        foreach (var roleName in roles)
+        {
+            var role = await roleManager.FindByNameAsync(roleName);
+            if (role != null)
+            {
+                var roleClaims = await roleManager.GetClaimsAsync(role);
+                foreach (var claim in roleClaims.Where(c => c.Type == "Permission"))
+                {
+                    allPermissions.Add(claim.Value);
+                }
+            }
+        }
 
-        var claims = await roleManager.GetClaimsAsync(role);
-        var permissions = claims
-            .Where(c => c.Type == "Permission")
-            .Select(c => c.Value)
-            .ToList();
+        var permissionsList = allPermissions.ToList();
 
-        // ==========================================
-        // 🌟 读链路 第三步：将 DB 数据回写到通用缓存，并设置过期时间
-        // ==========================================
+        // 3. 回写缓存
         var expireTime = TimeSpan.FromHours(_options.ExpirationHours);
-        await cacheService.SetAsync(cacheKey, permissions, expireTime, cancellationToken);
+        await cacheService.SetAsync(cacheKey, permissionsList, expireTime, cancellationToken);
 
-        return permissions;
+        return permissionsList;
     }
 }

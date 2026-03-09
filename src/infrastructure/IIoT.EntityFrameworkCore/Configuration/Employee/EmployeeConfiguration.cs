@@ -1,6 +1,5 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
-using IIoT.Core.Employee.Aggregates.Employees;
 
 namespace IIoT.EntityFrameworkCore.Configuration.Employee;
 
@@ -11,14 +10,11 @@ public class EmployeeConfiguration : IEntityTypeConfiguration<Core.Employee.Aggr
 {
     public void Configure(EntityTypeBuilder<Core.Employee.Aggregates.Employees.Employee> builder)
     {
-        // 1. 配置表名 (严格使用小写复数下划线命名法)
         builder.ToTable("employees");
 
-        // 2. 配置主键 (Guid 映射为 PostgreSQL 的 uuid)
         builder.HasKey(e => e.Id);
         builder.Property(e => e.Id).HasColumnName("id");
 
-        // 3. 配置基本属性
         builder.Property(e => e.EmployeeNo)
             .IsRequired()
             .HasMaxLength(50)
@@ -33,15 +29,20 @@ public class EmployeeConfiguration : IEntityTypeConfiguration<Core.Employee.Aggr
             .IsRequired()
             .HasColumnName("is_active");
 
-        // 4. 配置索引：工号在全厂必须唯一，用于登录
         builder.HasIndex(e => e.EmployeeNo)
             .IsUnique()
             .HasDatabaseName("ix_employees_employee_no");
 
-        // 5. 配置一对多导航属性 (EF Core 会自动绑定后端的私有集合 _processAccesses)
+        // 配置一对多导航属性：工序管辖权
         builder.HasMany(e => e.ProcessAccesses)
             .WithOne(epa => epa.Employee)
             .HasForeignKey(epa => epa.EmployeeId)
-            .OnDelete(DeleteBehavior.Cascade); // 级联删除：员工被删，权限映射一并清空
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // 🌟 新增：配置一对多导航属性：具体设备管辖权
+        builder.HasMany(e => e.DeviceAccesses)
+            .WithOne(eda => eda.Employee)
+            .HasForeignKey(eda => eda.EmployeeId)
+            .OnDelete(DeleteBehavior.Cascade); // 级联删除：员工被删，他名下的所有机台管辖权一并清空
     }
 }
