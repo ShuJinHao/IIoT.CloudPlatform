@@ -1,8 +1,10 @@
-﻿using System.Linq.Expressions;
-using Microsoft.EntityFrameworkCore; // 🌟 修复那堆红线报错的唯一关键！
+﻿using IIoT.EntityFrameworkCore;
 using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Repository;
-using IIoT.EntityFrameworkCore;
+using IIoT.SharedKernel.Specification;
+using Microsoft.EntityFrameworkCore; // 🌟 修复那堆红线报错的唯一关键！
+using System.Linq.Expressions;
+using IIoT.EntityFrameworkCore.Specification;
 
 namespace IIoT.EntityFrameworkCore.Repository;
 
@@ -68,5 +70,34 @@ public class EfReadRepository<T>(IIoTDbContext dbContext) : IReadRepository<T>
         }
 
         return await query.Where(expression).ToListAsync(cancellationToken);
+    }
+
+    public async Task<List<T>> GetListAsync(ISpecification<T>? specification = null, CancellationToken cancellationToken = default)
+    {
+        // 🌟 核心修复：使用 dbContext.Set<T>().AsQueryable() 替代未定义的 DbSet
+        return await SpecificationEvaluator
+            .GetQuery(dbContext.Set<T>().AsQueryable(), specification)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<T?> GetSingleOrDefaultAsync(ISpecification<T>? specification = null, CancellationToken cancellationToken = default)
+    {
+        return await SpecificationEvaluator
+            .GetQuery(dbContext.Set<T>().AsQueryable(), specification)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task<int> CountAsync(ISpecification<T>? specification = null, CancellationToken cancellationToken = default)
+    {
+        return await SpecificationEvaluator
+            .GetQuery(dbContext.Set<T>().AsQueryable(), specification)
+            .CountAsync(cancellationToken);
+    }
+
+    public async Task<bool> AnyAsync(ISpecification<T>? specification = null, CancellationToken cancellationToken = default)
+    {
+        return await SpecificationEvaluator
+            .GetQuery(dbContext.Set<T>().AsQueryable(), specification)
+            .AnyAsync(cancellationToken);
     }
 }

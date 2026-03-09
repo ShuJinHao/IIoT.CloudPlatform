@@ -1,5 +1,6 @@
-﻿using System.Linq.Expressions;
-using IIoT.SharedKernel.Domain;
+﻿using IIoT.SharedKernel.Domain;
+using IIoT.SharedKernel.Specification;
+using System.Linq.Expressions;
 
 namespace IIoT.SharedKernel.Repository;
 
@@ -65,4 +66,24 @@ public interface IReadRepository<T> where T : class, IAggregateRoot
         Expression<Func<T, bool>> expression,
         Expression<Func<T, object>>[]? includes = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 使用规约模式查询单条实体
+    /// </summary>
+    Task<T?> GetSingleOrDefaultAsync(ISpecification<T>? specification = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 使用规约模式查询实体列表
+    /// </summary>
+    Task<List<T>> GetListAsync(ISpecification<T>? specification = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 使用规约模式统计数量
+    /// </summary>
+    Task<int> CountAsync(ISpecification<T>? specification = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 使用规约模式判断是否存在
+    /// </summary>
+    Task<bool> AnyAsync(ISpecification<T>? specification = null, CancellationToken cancellationToken = default);
 }

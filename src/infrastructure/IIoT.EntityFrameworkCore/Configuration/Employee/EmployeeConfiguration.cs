@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using IIoT.EntityFrameworkCore.Identity;
 
 namespace IIoT.EntityFrameworkCore.Configuration.Employee;
 
@@ -14,6 +15,14 @@ public class EmployeeConfiguration : IEntityTypeConfiguration<Core.Employee.Aggr
 
         builder.HasKey(e => e.Id);
         builder.Property(e => e.Id).HasColumnName("id");
+
+        // 🌟 核心杀招：确立 IIdentity 为最高主宰！
+        // 声明 Employee.Id 是指向 ApplicationUser.Id 的外键，并且配置级联删除！
+        // 只要调用 IdentityService 删除账号，数据库会自动把 Employee 档案和名下的权限全删光。
+        builder.HasOne<ApplicationUser>()
+            .WithOne()
+            .HasForeignKey<Core.Employee.Aggregates.Employees.Employee>(e => e.Id)
+            .OnDelete(DeleteBehavior.Cascade);
 
         builder.Property(e => e.EmployeeNo)
             .IsRequired()
@@ -39,10 +48,10 @@ public class EmployeeConfiguration : IEntityTypeConfiguration<Core.Employee.Aggr
             .HasForeignKey(epa => epa.EmployeeId)
             .OnDelete(DeleteBehavior.Cascade);
 
-        // 🌟 新增：配置一对多导航属性：具体设备管辖权
+        // 配置一对多导航属性：具体设备管辖权
         builder.HasMany(e => e.DeviceAccesses)
             .WithOne(eda => eda.Employee)
             .HasForeignKey(eda => eda.EmployeeId)
-            .OnDelete(DeleteBehavior.Cascade); // 级联删除：员工被删，他名下的所有机台管辖权一并清空
+            .OnDelete(DeleteBehavior.Cascade);
     }
 }

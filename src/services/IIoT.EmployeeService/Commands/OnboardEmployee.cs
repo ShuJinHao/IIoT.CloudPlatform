@@ -7,63 +7,63 @@ using IIoT.SharedKernel.Result;
 
 namespace IIoT.EmployeeService.Commands;
 
-/// <summary>
-/// 业务层入职指令：协调身份中心与人事档案
-/// </summary>
 [AuthorizeRequirement("Employee.Onboard")]
 public record OnboardEmployeeCommand(
     string EmployeeNo,
     string RealName,
     string Password,
-    string RoleName, // 初始分配的角色
-    List<Guid> ProcessIds, // 初始管辖工序
-    List<Guid> DeviceIds   // 初始管辖机台
+    string? RoleName = null, // 🌟 核心修改 1：改成可空字符串，并赋予默认值 null
+    List<Guid>? ProcessIds = null,
+    List<Guid>? DeviceIds = null
 ) : ICommand<Result<Guid>>;
 
 public class OnboardEmployeeHandler(
-    IIdentityService identityService,   // 🌟 注入身份中心接口 (保安)
-    IRepository<Employee> employeeRepository // 🌟 注入员工仓储 (人事)
+    IIdentityService identityService,
+    IRepository<Employee> employeeRepository
 ) : ICommandHandler<OnboardEmployeeCommand, Result<Guid>>
 {
     public async Task<Result<Guid>> Handle(OnboardEmployeeCommand request, CancellationToken cancellationToken)
     {
-        // 1. 生成全局唯一 ID (作为两个领域的灵魂纽带)
+        // 防线：如果传了角色，坚决禁止传 Admin
+        if (!string.IsNullOrWhiteSpace(request.RoleName) && request.RoleName.Equals("Admin", StringComparison.OrdinalIgnoreCase))
+        {
+            return Result.Failure("系统保护：禁止通过员工入职接口分配最高管理员权限！");
+        }
+
         var sharedId = Guid.NewGuid();
 
         // ==========================================
-        // 🌟 第一步：在【身份中心】办理通行证
+        // 第一步：在【身份中心】办理通行证
         // ==========================================
 
-        // 仅仅创建底层账号，Identity 不知道 Employee 的存在
         var identityResult = await identityService.CreateUserAsync(sharedId, request.EmployeeNo, request.Password);
         if (!identityResult.IsSuccess)
             return Result.Failure(identityResult.Errors?.ToArray() ?? ["身份账号创建失败"]);
 
-        // 绑定系统角色 (保安科盖章)
-        var roleResult = await identityService.AssignRoleToUserAsync(request.EmployeeNo, request.RoleName);
-        if (!roleResult.IsSuccess)
-            return Result.Failure(roleResult.Errors?.ToArray() ?? ["系统角色绑定失败"]);
+        // 🌟 核心修改 2：只有前端明确传了角色名，才去保安科挂载角色
+        if (!string.IsNullOrWhiteSpace(request.RoleName))
+        {
+            var roleResult = await identityService.AssignRoleToUserAsync(request.EmployeeNo, request.RoleName);
+            if (!roleResult.IsSuccess)
+                return Result.Failure(roleResult.Errors?.ToArray() ?? ["系统角色绑定失败"]);
+        }
 
         // ==========================================
-        // 🌟 第二步：在【业务中心】建立档案
+        // 第二步：在【业务中心】建立档案
         // ==========================================
 
-        // 创建 Employee 聚合根
         var employee = new Employee(sharedId, request.EmployeeNo, request.RealName);
 
-        // 分配管辖工序权限
-        foreach (var pId in request.ProcessIds)
+        if (request.ProcessIds != null && request.ProcessIds.Any())
         {
-            employee.AddProcessAccess(pId);
+            foreach (var pId in request.ProcessIds) employee.AddProcessAccess(pId);
         }
 
-        // 🌟 分配具体机台管辖权 (咱们刚才新加的业务血肉)
-        foreach (var dId in request.DeviceIds)
+        if (request.DeviceIds != null && request.DeviceIds.Any())
         {
-            employee.AddDeviceAccess(dId);
+            foreach (var dId in request.DeviceIds) employee.AddDeviceAccess(dId);
         }
 
-        // 3. 业务数据落库
         employeeRepository.Add(employee);
         await employeeRepository.SaveChangesAsync(cancellationToken);
 
