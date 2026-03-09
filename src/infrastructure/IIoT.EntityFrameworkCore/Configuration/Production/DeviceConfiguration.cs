@@ -2,7 +2,7 @@
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using IIoT.Core.Production.Aggregates.Devices;
 
-namespace IIoT.Infrastructure.EntityFrameworkCore.Configuration.Production;
+namespace IIoT.EntityFrameworkCore.Configuration.Production;
 
 /// <summary>
 /// 物理设备终端的 EF Core 数据库映射配置

@@ -21,4 +21,10 @@ public interface IIdentityService
 
     // 获取用户的灵魂绑定ID
     Task<Guid?> GetUserIdByEmployeeNoAsync(string employeeNo);
+
+    // 给角色分配权限集合 (写入 AspNetRoleClaims 表)
+    Task<Result<bool>> UpdateRolePermissionsAsync(string roleName, List<string> permissions);
+
+    // 给用户分配角色 (写入 AspNetUserRoles 表)
+    Task<Result<bool>> AssignRoleToUserAsync(string employeeNo, string roleName);
 }

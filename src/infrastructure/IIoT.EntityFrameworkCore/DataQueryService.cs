@@ -5,7 +5,7 @@ using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.Recipes;
 using Microsoft.EntityFrameworkCore;
 
-namespace IIoT.Infrastructure.EntityFrameworkCore;
+namespace IIoT.EntityFrameworkCore;
 
 // 完美保留主构造函数语法
 public class DataQueryService(IIoTDbContext dbContext) : IDataQueryService

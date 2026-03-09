@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -7,6 +7,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\infrastructure\IIoT.EntityFrameworkCore\IIoT.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="..\..\infrastructure\IIoT.Infrastructure\IIoT.Infrastructure.csproj" />
     <ProjectReference Include="..\..\services\IIoT.IdentityService\IIoT.IdentityService.csproj" />
     <ProjectReference Include="..\IIoT.ServiceDefaults\IIoT.ServiceDefaults.csproj" />
   </ItemGroup>

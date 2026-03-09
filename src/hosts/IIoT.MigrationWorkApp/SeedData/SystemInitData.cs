@@ -1,6 +1,6 @@
 ﻿using IIoT.Core.Employee.Aggregates.Employees;
-using IIoT.Infrastructure.EntityFrameworkCore;
-using IIoT.Infrastructure.EntityFrameworkCore.Identity;
+using IIoT.EntityFrameworkCore;
+using IIoT.EntityFrameworkCore.Identity;
 using Microsoft.AspNetCore.Identity;
 
 namespace IIoT.MigrationWorkApp.SeedData;

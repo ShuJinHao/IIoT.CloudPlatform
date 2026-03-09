@@ -1,8 +1,9 @@
 ﻿using IIoT.Services.Common.Contracts;
 using IIoT.SharedKernel.Result;
 using Microsoft.AspNetCore.Identity;
+using System.Security.Claims;
 
-namespace IIoT.Infrastructure.EntityFrameworkCore.Identity;
+namespace IIoT.EntityFrameworkCore.Identity;
 
 public class IdentityService(
     UserManager<ApplicationUser> userManager,
@@ -52,5 +53,43 @@ public class IdentityService(
     {
         var user = await userManager.FindByNameAsync(employeeNo);
         return user?.Id;
+    }
+
+    public async Task<Result<bool>> UpdateRolePermissionsAsync(string roleName, List<string> permissions)
+    {
+        var role = await roleManager.FindByNameAsync(roleName);
+        if (role == null) return Result.Failure("角色不存在"); // 🌟 修正为 Result.Failure
+
+        var existingClaims = await roleManager.GetClaimsAsync(role);
+        var existingPermissions = existingClaims.Where(c => c.Type == "Permission").ToList();
+
+        foreach (var claim in existingPermissions)
+        {
+            await roleManager.RemoveClaimAsync(role, claim);
+        }
+
+        foreach (var permission in permissions)
+        {
+            await roleManager.AddClaimAsync(role, new Claim("Permission", permission));
+        }
+
+        return Result.Success(true); // 🌟 修正为 Result.Success(true)
+    }
+
+    public async Task<Result<bool>> AssignRoleToUserAsync(string employeeNo, string roleName)
+    {
+        var user = await userManager.FindByNameAsync(employeeNo);
+        if (user == null) return Result.Failure("用户不存在"); // 🌟 修正
+
+        if (!await roleManager.RoleExistsAsync(roleName)) return Result.Failure("角色不存在"); // 🌟 修正
+
+        if (!await userManager.IsInRoleAsync(user, roleName))
+        {
+            var result = await userManager.AddToRoleAsync(user, roleName);
+            // Result.Failure 接收 params object[]，这里直接把错误信息转成数组传入
+            if (!result.Succeeded) return Result.Failure(result.Errors.Select(e => e.Description).ToArray());
+        }
+
+        return Result.Success(true);
     }
 }

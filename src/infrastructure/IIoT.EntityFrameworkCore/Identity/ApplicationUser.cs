@@ -1,6 +1,6 @@
 ﻿using Microsoft.AspNetCore.Identity;
 
-namespace IIoT.Infrastructure.EntityFrameworkCore.Identity;
+namespace IIoT.EntityFrameworkCore.Identity;
 
 /// <summary>
 /// 工业云平台自定义身份验证用户 (纯粹的保安角色)

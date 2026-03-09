@@ -1,6 +1,5 @@
 ﻿using IIoT.Infrastructure.Authentication;
 using IIoT.Infrastructure.Caching;
-using IIoT.Infrastructure.EntityFrameworkCore;
 using IIoT.Services.Common.Contracts;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -13,7 +12,7 @@ public static class DependencyInjection
 {
     public static void AddInfrastructures(this IHostApplicationBuilder builder)
     {
-        builder.AddEfCore();
+        builder.AddRedisDistributedCache("redis-cache");
         // 绑定配置
         builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection(JwtSettings.SectionName));
         builder.Services.AddSingleton<ICacheService, RedisCacheService>();

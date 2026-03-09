@@ -2,7 +2,7 @@
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using IIoT.Core.Production.Aggregates.Recipes;
 
-namespace IIoT.Infrastructure.EntityFrameworkCore.Configuration.Production;
+namespace IIoT.EntityFrameworkCore.Configuration.Production;
 
 /// <summary>
 /// 工艺配方实体的 EF Core 数据库映射配置 (包含 JSONB 高级映射)

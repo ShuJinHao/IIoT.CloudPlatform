@@ -2,7 +2,7 @@
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using IIoT.Core.Employee.Aggregates.MfgProcesses;
 
-namespace IIoT.Infrastructure.EntityFrameworkCore.Configuration.Employee;
+namespace IIoT.EntityFrameworkCore.Configuration.Employee;
 
 /// <summary>
 /// 制造工序实体的 EF Core 数据库映射配置

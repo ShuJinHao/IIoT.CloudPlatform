@@ -2,8 +2,9 @@
 using Microsoft.EntityFrameworkCore; // 🌟 修复那堆红线报错的唯一关键！
 using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Repository;
+using IIoT.EntityFrameworkCore;
 
-namespace IIoT.Infrastructure.EntityFrameworkCore.Repository;
+namespace IIoT.EntityFrameworkCore.Repository;
 
 // 保留极简的主构造函数写法！
 public class EfReadRepository<T>(IIoTDbContext dbContext) : IReadRepository<T>

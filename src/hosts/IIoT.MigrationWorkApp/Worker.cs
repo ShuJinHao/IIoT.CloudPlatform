@@ -1,6 +1,6 @@
 using System.Diagnostics;
-using IIoT.Infrastructure.EntityFrameworkCore;
-using IIoT.Infrastructure.EntityFrameworkCore.Identity;
+using IIoT.EntityFrameworkCore;
+using IIoT.EntityFrameworkCore.Identity;
 using IIoT.MigrationWorkApp.SeedData;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;

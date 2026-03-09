@@ -1,8 +1,9 @@
 ﻿using IIoT.Services.Common.Contracts;
+using IIoT.Services.Common.Options;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Options;
 
-namespace IIoT.Infrastructure.EntityFrameworkCore.Identity;
+namespace IIoT.EntityFrameworkCore.Identity;
 
 /// <summary>
 /// 动态角色权限提供者 (基于通用 CacheService 与 PostgreSQL)

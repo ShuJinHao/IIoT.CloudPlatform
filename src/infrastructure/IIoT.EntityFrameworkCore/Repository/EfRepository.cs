@@ -1,7 +1,7 @@
 ﻿using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Repository;
 
-namespace IIoT.Infrastructure.EntityFrameworkCore.Repository;
+namespace IIoT.EntityFrameworkCore.Repository;
 
 // 保留极简的主构造函数与基类调用
 public class EfRepository<T>(IIoTDbContext dbContext) : EfReadRepository<T>(dbContext), IRepository<T>

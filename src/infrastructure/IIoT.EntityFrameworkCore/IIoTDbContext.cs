@@ -5,9 +5,9 @@ using IIoT.Core.Employee.Aggregates.Employees;
 using IIoT.Core.Employee.Aggregates.MfgProcesses;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.Recipes;
-using IIoT.Infrastructure.EntityFrameworkCore.Identity; // 引入 ApplicationUser
+using IIoT.EntityFrameworkCore.Identity;
 
-namespace IIoT.Infrastructure.EntityFrameworkCore;
+namespace IIoT.EntityFrameworkCore;
 
 // 🌟 核心改造：继承 IdentityDbContext，并指定 ApplicationUser, IdentityRole<Guid>, Guid 主键
 public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)

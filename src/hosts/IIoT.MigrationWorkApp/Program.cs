@@ -1,5 +1,5 @@
 using IIoT.MigrationWorkApp;
-using IIoT.Infrastructure.EntityFrameworkCore;
+using IIoT.EntityFrameworkCore;
 
 var builder = Host.CreateApplicationBuilder(args);
 

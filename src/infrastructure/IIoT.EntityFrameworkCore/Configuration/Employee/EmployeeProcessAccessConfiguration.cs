@@ -2,7 +2,7 @@
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using IIoT.Core.Employee.Aggregates.Employees;
 
-namespace IIoT.Infrastructure.EntityFrameworkCore.Configuration.Employee;
+namespace IIoT.EntityFrameworkCore.Configuration.Employee;
 
 /// <summary>
 /// 员工与工序权限中间表的 EF Core 数据库映射配置

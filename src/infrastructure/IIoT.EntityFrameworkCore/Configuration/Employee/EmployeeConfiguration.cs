@@ -2,14 +2,14 @@
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using IIoT.Core.Employee.Aggregates.Employees;
 
-namespace IIoT.Infrastructure.EntityFrameworkCore.Configuration.Employee;
+namespace IIoT.EntityFrameworkCore.Configuration.Employee;
 
 /// <summary>
 /// 员工(操作员)实体的 EF Core 数据库映射配置
 /// </summary>
-public class EmployeeConfiguration : IEntityTypeConfiguration<IIoT.Core.Employee.Aggregates.Employees.Employee>
+public class EmployeeConfiguration : IEntityTypeConfiguration<Core.Employee.Aggregates.Employees.Employee>
 {
-    public void Configure(EntityTypeBuilder<IIoT.Core.Employee.Aggregates.Employees.Employee> builder)
+    public void Configure(EntityTypeBuilder<Core.Employee.Aggregates.Employees.Employee> builder)
     {
         // 1. 配置表名 (严格使用小写复数下划线命名法)
         builder.ToTable("employees");
