@@ -11,7 +11,8 @@ namespace IIoT.EntityFrameworkCore.Identity;
 /// </summary>
 public class IdentityService(
     UserManager<ApplicationUser> userManager,
-    RoleManager<IdentityRole<Guid>> roleManager) : IIdentityService
+    RoleManager<IdentityRole<Guid>> roleManager,
+    IIoTDbContext dbContext) : IIdentityService // 🌟 注入 dbContext 用于手动开启事务
 {
     private const string PermissionClaimType = "Permission";
 
@@ -107,16 +108,33 @@ public class IdentityService(
         var role = await roleManager.FindByNameAsync(roleName);
         if (role == null) return Result.Failure("角色不存在");
 
-        var claims = await roleManager.GetClaimsAsync(role);
-        var existingPermissions = claims.Where(c => c.Type == PermissionClaimType).ToList();
+        // 🌟 开启显式事务：解决 Identity 框架多步操作无法回滚的问题
+        await using var transaction = await dbContext.Database.BeginTransactionAsync();
+        try
+        {
+            var claims = await roleManager.GetClaimsAsync(role);
+            var existingPermissions = claims.Where(c => c.Type == PermissionClaimType).ToList();
 
-        var toRemove = existingPermissions.Where(c => !permissions.Contains(c.Value)).ToList();
-        var toAdd = permissions.Where(p => !existingPermissions.Any(c => c.Value == p)).ToList();
+            // 计算差集
+            var toRemove = existingPermissions.Where(c => !permissions.Contains(c.Value)).ToList();
+            var toAdd = permissions.Where(p => !existingPermissions.Any(c => c.Value == p)).ToList();
 
-        foreach (var claim in toRemove) await roleManager.RemoveClaimAsync(role, claim);
-        foreach (var permission in toAdd) await roleManager.AddClaimAsync(role, new Claim(PermissionClaimType, permission));
+            // 循环删除旧权限
+            foreach (var claim in toRemove)
+                await roleManager.RemoveClaimAsync(role, claim);
 
-        return Result.Success(true);
+            // 循环添加新权限
+            foreach (var permission in toAdd)
+                await roleManager.AddClaimAsync(role, new Claim(PermissionClaimType, permission));
+
+            await transaction.CommitAsync();
+            return Result.Success(true);
+        }
+        catch (Exception)
+        {
+            await transaction.RollbackAsync();
+            throw; // 向上抛出，由全局异常处理器或调用方处理
+        }
     }
 
     public async Task<Result<bool>> UpdateUserPersonalPermissionsAsync(Guid userId, List<string> permissions)
@@ -124,16 +142,30 @@ public class IdentityService(
         var user = await userManager.FindByIdAsync(userId.ToString());
         if (user == null) return Result.Failure("用户不存在");
 
-        var claims = await userManager.GetClaimsAsync(user);
-        var existingPermissions = claims.Where(c => c.Type == PermissionClaimType).ToList();
+        // 🌟 开启显式事务：保证个人特批权限更新的原子性
+        await using var transaction = await dbContext.Database.BeginTransactionAsync();
+        try
+        {
+            var claims = await userManager.GetClaimsAsync(user);
+            var existingPermissions = claims.Where(c => c.Type == PermissionClaimType).ToList();
 
-        var toRemove = existingPermissions.Where(c => !permissions.Contains(c.Value)).ToList();
-        var toAdd = permissions.Where(p => !existingPermissions.Any(c => c.Value == p)).ToList();
+            var toRemove = existingPermissions.Where(c => !permissions.Contains(c.Value)).ToList();
+            var toAdd = permissions.Where(p => !existingPermissions.Any(c => c.Value == p)).ToList();
 
-        foreach (var claim in toRemove) await userManager.RemoveClaimAsync(user, claim);
-        foreach (var p in toAdd) await userManager.AddClaimAsync(user, new Claim(PermissionClaimType, p));
+            foreach (var claim in toRemove)
+                await userManager.RemoveClaimAsync(user, claim);
 
-        return Result.Success(true);
+            foreach (var p in toAdd)
+                await userManager.AddClaimAsync(user, new Claim(PermissionClaimType, p));
+
+            await transaction.CommitAsync();
+            return Result.Success(true);
+        }
+        catch (Exception)
+        {
+            await transaction.RollbackAsync();
+            throw;
+        }
     }
 
     #endregion 3. 角色与权限策略 (Security Policy)
