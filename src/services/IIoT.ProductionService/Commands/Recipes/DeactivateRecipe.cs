@@ -16,7 +16,7 @@ namespace IIoT.ProductionService.Commands.Recipes;
 /// <summary>
 /// 业务指令：停用/软删除配方 (保留追溯记录，但在前端列表和生产下发中将不可见)
 /// </summary>
-[AuthorizeRequirement("Recipe.Delete")] // 🌟 第一道门：基础行为权限拦截 (假设前端叫删除，后端实为停用)
+[AuthorizeRequirement("Recipe.Create")] // 🌟 第一道门：基础行为权限拦截 (假设前端叫删除，后端实为停用)
 public record DeactivateRecipeCommand(Guid RecipeId) : ICommand<Result<bool>>;
 
 public class DeactivateRecipeHandler(

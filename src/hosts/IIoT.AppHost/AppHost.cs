@@ -28,7 +28,7 @@ var apiService = builder.AddProject<Projects.IIoT_HttpApi>("iiot-httpapi")
 
 builder.AddViteApp("iiot-web", "../../ui/iiot-web")
     .WithReference(apiService)
-    .WithEnvironment("VITE_API_URL", apiService.GetEndpoint("https"))
+    .WithEnvironment("VITE_API_URL", apiService.GetEndpoint("http"))
     .WithExternalHttpEndpoints();
 
 builder.Build().Run();

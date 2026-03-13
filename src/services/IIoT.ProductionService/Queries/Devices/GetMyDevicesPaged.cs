@@ -1,4 +1,4 @@
-﻿using IIoT.Core.Employee.Aggregates.Employees;
+using IIoT.Core.Employee.Aggregates.Employees;
 using IIoT.Core.Employee.Specifications;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Specifications;
@@ -8,11 +8,6 @@ using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Paging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace IIoT.ProductionService.Queries.Devices;
 
@@ -28,9 +23,9 @@ public record DeviceListItemDto(
 );
 
 /// <summary>
-/// 交互查询：获取“我管辖范围内”的设备分页列表
+/// 交互查询：获取"我管辖范围内"的设备分页列表
 /// </summary>
-[AuthorizeRequirement("Device.Read")] // 🌟 第一道门拦截
+[AuthorizeRequirement("Device.Read")]
 public record GetMyDevicesPagedQuery(Pagination PaginationParams, string? Keyword = null) : IQuery<Result<PagedList<DeviceListItemDto>>>;
 
 public class GetMyDevicesPagedHandler(
@@ -44,22 +39,21 @@ public class GetMyDevicesPagedHandler(
         List<Guid>? allowedProcessIds = null;
 
         // ==========================================
-        // 🌟 第二道门：动态计算数据管辖权 (ABAC)
+        // 第二道门：动态计算数据管辖权 (ABAC)
         // ==========================================
         if (currentUser.Role != "Admin")
         {
             if (!Guid.TryParse(currentUser.Id, out var userId)) return Result.Failure("用户凭证异常");
 
-            // 复用员工模块的规约图纸，极速拉取员工的工序管辖权
+            // 复用员工模块规约，拉取员工的工序管辖权（含导航属性）
             var employeeSpec = new EmployeeWithAccessesSpec(userId);
             var employee = await employeeRepository.GetSingleOrDefaultAsync(employeeSpec, cancellationToken);
 
             if (employee == null) return Result.Failure("系统中未找到您的员工档案");
 
-            // 提取该员工被授权的所有工序 ID
             allowedProcessIds = employee.ProcessAccesses.Select(p => p.ProcessId).ToList();
 
-            // 如果非 Admin 且没有任何工序管辖权，直接返回空列表，不查数据库
+            // 非 Admin 且无任何工序管辖权，直接返回空列表，不查数据库
             if (allowedProcessIds.Count == 0)
             {
                 var emptyList = new PagedList<DeviceListItemDto>([], 0, request.PaginationParams);
@@ -67,28 +61,22 @@ public class GetMyDevicesPagedHandler(
             }
         }
 
-        // ==========================================
-        // 🌟 组装规约与并发查询
-        // ==========================================
         var skip = (request.PaginationParams.PageNumber - 1) * request.PaginationParams.PageSize;
         var take = request.PaginationParams.PageSize;
 
-        // 1. 数据列表规约 (开启分页)
-        var pagedSpec = new DevicePagedSpec(skip, take, allowedProcessIds, request.Keyword, isPaging: true);
-
-        // 2. 总数统计规约 (关闭分页)
+        // 统计总数：不启用分页
         var countSpec = new DevicePagedSpec(0, 0, allowedProcessIds, request.Keyword, isPaging: false);
+        var totalCount = await deviceRepository.CountAsync(countSpec, cancellationToken);
 
-        // 🌟 极致性能：并发执行获取数据与统计总数
-        var listTask = deviceRepository.GetListAsync(pagedSpec, cancellationToken);
-        var countTask = deviceRepository.CountAsync(countSpec, cancellationToken);
+        // 先拿 count，再按需查数据，单个 DbContext 串行执行，绝不并发
+        List<Device> list = [];
+        if (totalCount > 0)
+        {
+            var pagedSpec = new DevicePagedSpec(skip, take, allowedProcessIds, request.Keyword, isPaging: true);
+            list = await deviceRepository.GetListAsync(pagedSpec, cancellationToken);
+        }
 
-        await Task.WhenAll(listTask, countTask);
-
-        // ==========================================
-        // 🌟 DTO 转换与封装
-        // ==========================================
-        var dtos = listTask.Result.Select(d => new DeviceListItemDto(
+        var dtos = list.Select(d => new DeviceListItemDto(
             d.Id,
             d.DeviceName,
             d.DeviceCode,
@@ -96,8 +84,7 @@ public class GetMyDevicesPagedHandler(
             d.IsActive
         )).ToList();
 
-        // 完美套用底层 SharedKernel 的 PagedList 封装
-        var pagedList = new PagedList<DeviceListItemDto>(dtos, countTask.Result, request.PaginationParams);
+        var pagedList = new PagedList<DeviceListItemDto>(dtos, totalCount, request.PaginationParams);
 
         return Result.Success(pagedList);
     }

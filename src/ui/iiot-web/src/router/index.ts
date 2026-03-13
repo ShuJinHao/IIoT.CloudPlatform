@@ -1,18 +1,54 @@
+// src/router/index.ts
 import { createRouter, createWebHistory } from 'vue-router';
 import type { RouteRecordRaw } from 'vue-router';
+import { useAuthStore } from '../stores/auth';
+import { Permissions } from '../types/permissions';
 
 const routes: Array<RouteRecordRaw> = [
   {
     path: '/login',
     name: 'Login',
-    component: () => import('../views/Login.vue')
+    component: () => import('../views/Login.vue'),
+    meta: { requiresAuth: false }
   },
   {
     path: '/',
-    name: 'Home',
-    // 为了简单测试，首页我们直接内联一个极简组件
-    component: { template: '<div><h1>欢迎来到 IIoT 生产管护系统首页!</h1><button @click="logout">退出登录</button></div>', methods: { logout() { localStorage.removeItem("token"); location.reload(); } } }
-  }
+    component: () => import('../layout/MainLayout.vue'),
+    meta: { requiresAuth: true },
+    children: [
+      {
+        path: '',
+        name: 'Dashboard',
+        component: () => import('../views/Dashboard.vue'),
+        meta: { requiresAuth: true, title: '系统概览' }
+      },
+      {
+        path: 'employees',
+        name: 'Employees',
+        component: () => import('../views/employees/EmployeeList.vue'),
+        meta: { requiresAuth: true, requiredPermission: Permissions.Employee.Read, title: '员工花名册' }
+      },
+      {
+        path: 'devices',
+        name: 'Devices',
+        component: () => import('../views/devices/DeviceList.vue'),
+        meta: { requiresAuth: true, requiredPermission: Permissions.Device.Read, title: '设备台账' }
+      },
+      {
+        path: 'recipes',
+        name: 'Recipes',
+        component: () => import('../views/recipes/RecipeList.vue'),
+        meta: { requiresAuth: true, requiredPermission: Permissions.Recipe.Read, title: '配方管理' }
+      },
+      {
+        path: 'forbidden',
+        name: 'Forbidden',
+        component: () => import('../views/Forbidden.vue'),
+        meta: { requiresAuth: true, title: '无权访问' }
+      }
+    ]
+  },
+  { path: '/:pathMatch(.*)*', redirect: '/' }
 ];
 
 const router = createRouter({
@@ -20,19 +56,22 @@ const router = createRouter({
   routes
 });
 
-// 🌟 修复：最新版 Vue Router 推荐的拦截器写法
-router.beforeEach((to, _from) => {
-  const token = localStorage.getItem('token');
-  
-  // 如果没登录且不是去登录页，踢回登录页
-  if (to.name !== 'Login' && !token) {
-    return { name: 'Login' };
-  } 
-  // 如果已登录还想去登录页，送去首页
-  else if (to.name === 'Login' && token) {
-    return { name: 'Home' };
-  } 
-  // 其他情况直接放行（不用写 return true 或 next() 了）
+router.beforeEach((to) => {
+  const authStore = useAuthStore();
+
+  if (to.meta.requiresAuth === false) {
+    if (authStore.isAuthenticated) return { name: 'Dashboard' };
+    return true;
+  }
+
+  if (!authStore.isAuthenticated) return { name: 'Login' };
+
+  const requiredPermission = to.meta.requiredPermission as string | undefined;
+  if (requiredPermission && !authStore.hasPermission(requiredPermission)) {
+    return { name: 'Forbidden' };
+  }
+
+  return true;
 });
 
 export default router;

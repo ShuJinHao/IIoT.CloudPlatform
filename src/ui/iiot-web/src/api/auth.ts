@@ -1,3 +1,4 @@
+// src/api/auth.ts
 import http from '../utils/http';
 
 export interface LoginPayload {
@@ -6,7 +7,7 @@ export interface LoginPayload {
 }
 
 export const loginApi = (data: LoginPayload) => {
-  // 🌟 核心防御：强制组装成与 C# Record 完全一致的首字母大写字段！
+  // 🌟 强制首字母大写，对齐 C# Record 字段名
   const csharpPayload = {
     EmployeeNo: data.employeeNo,
     Password: data.password
