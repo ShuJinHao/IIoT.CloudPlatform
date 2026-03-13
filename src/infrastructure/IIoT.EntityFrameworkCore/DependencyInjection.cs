@@ -22,7 +22,12 @@ public static class DependencyInjection
         builder.Services.AddScoped(typeof(IReadRepository<>), typeof(EfReadRepository<>));
         builder.Services.AddScoped(typeof(IRepository<>), typeof(EfRepository<>));
         builder.Services.AddScoped<IDataQueryService, DataQueryService>();
-        builder.Services.AddScoped<IIdentityService, IdentityService>();
+
+        // 🌟 核心改造：一个实现类注册三个接口，共享同一个 Scoped 实例
+        builder.Services.AddScoped<IdentityService>();
+        builder.Services.AddScoped<IAccountService>(sp => sp.GetRequiredService<IdentityService>());
+        builder.Services.AddScoped<IRolePolicyService>(sp => sp.GetRequiredService<IdentityService>());
+        builder.Services.AddScoped<IUserQueryService>(sp => sp.GetRequiredService<IdentityService>());
 
         // 🌟 核心改造：使用 ApplicationUser 和 Guid 版本的 Role 进行注册
         builder.Services.AddIdentityCore<ApplicationUser>(options =>

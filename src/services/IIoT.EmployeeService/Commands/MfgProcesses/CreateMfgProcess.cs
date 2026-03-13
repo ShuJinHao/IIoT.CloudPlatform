@@ -1,6 +1,7 @@
 ﻿using IIoT.Application.Contracts;
 using IIoT.Core.Employee.Aggregates.MfgProcesses;
 using IIoT.Services.Common.Attributes;
+using IIoT.Services.Common.Contracts;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -17,8 +18,9 @@ public record CreateMfgProcessCommand(
 ) : ICommand<Result<Guid>>;
 
 public class CreateMfgProcessHandler(
-    IDataQueryService dataQueryService,       // 🌟 极速无锁查询服务，用于防重校验 (绕过 EF 追踪)
-    IRepository<MfgProcess> processRepository // 🌟 写仓储，用于状态变更与落地
+    IDataQueryService dataQueryService,
+    IRepository<MfgProcess> processRepository,
+    ICacheService cacheService
 ) : ICommandHandler<CreateMfgProcessCommand, Result<Guid>>
 {
     public async Task<Result<Guid>> Handle(CreateMfgProcessCommand request, CancellationToken cancellationToken)
@@ -27,7 +29,6 @@ public class CreateMfgProcessHandler(
         // 🌟 1. 极速无锁校验区 (压榨性能)
         // ==========================================
 
-        // 校验：工序编码在全厂必须绝对唯一
         var codeExists = await dataQueryService.AnyAsync(
             dataQueryService.MfgProcesses.Where(p => p.ProcessCode == request.ProcessCode)
         );
@@ -43,7 +44,15 @@ public class CreateMfgProcessHandler(
         var process = new MfgProcess(request.ProcessCode, request.ProcessName);
 
         processRepository.Add(process);
-        await processRepository.SaveChangesAsync(cancellationToken);
+        var affected = await processRepository.SaveChangesAsync(cancellationToken);
+
+        // ==========================================
+        // 🌟 3. 缓存双杀：新工序入库后爆破全量缓存
+        // ==========================================
+        if (affected > 0)
+        {
+            await cacheService.RemoveAsync("iiot:mfgprocess:v1:all", cancellationToken);
+        }
 
         return Result.Success(process.Id);
     }

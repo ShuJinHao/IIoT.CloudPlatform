@@ -1,6 +1,7 @@
 ﻿using IIoT.Application.Contracts;
 using IIoT.Core.Employee.Aggregates.MfgProcesses;
 using IIoT.Services.Common.Attributes;
+using IIoT.Services.Common.Contracts;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -17,8 +18,9 @@ namespace IIoT.EmployeeService.Commands.MfgProcesses;
 public record DeleteMfgProcessCommand(Guid ProcessId) : ICommand<Result<bool>>;
 
 public class DeleteMfgProcessHandler(
-    IDataQueryService dataQueryService,        // 极速无锁校验关联数据
-    IRepository<MfgProcess> processRepository  // 写仓储
+    IDataQueryService dataQueryService,
+    IRepository<MfgProcess> processRepository,
+    ICacheService cacheService
 ) : ICommandHandler<DeleteMfgProcessCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(DeleteMfgProcessCommand request, CancellationToken cancellationToken)
@@ -35,7 +37,6 @@ public class DeleteMfgProcessHandler(
         // 🌟 2. 关联数据安全校验 (防止数据孤岛)
         // ==========================================
 
-        // 校验 A：是否有设备挂载在此工序下
         var deviceBound = await dataQueryService.AnyAsync(
             dataQueryService.Devices.Where(d => d.ProcessId == request.ProcessId)
         );
@@ -44,7 +45,6 @@ public class DeleteMfgProcessHandler(
             return Result.Failure("删除失败：该工序下仍有设备挂载，请先迁移或停用相关设备");
         }
 
-        // 校验 B：是否有配方关联此工序
         var recipeBound = await dataQueryService.AnyAsync(
             dataQueryService.Recipes.Where(r => r.ProcessId == request.ProcessId)
         );
@@ -55,7 +55,15 @@ public class DeleteMfgProcessHandler(
 
         // 3. 安全删除
         processRepository.Delete(process);
-        await processRepository.SaveChangesAsync(cancellationToken);
+        var affected = await processRepository.SaveChangesAsync(cancellationToken);
+
+        // ==========================================
+        // 🌟 4. 缓存双杀：工序删除后爆破全量缓存
+        // ==========================================
+        if (affected > 0)
+        {
+            await cacheService.RemoveAsync("iiot:mfgprocess:v1:all", cancellationToken);
+        }
 
         return Result.Success(true);
     }

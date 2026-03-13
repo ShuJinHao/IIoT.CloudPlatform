@@ -60,8 +60,14 @@
               <button class="icon-btn edit" title="编辑档案" v-permission="'Employee.Update'" @click="openEditModal(emp)">
                 <svg viewBox="0 0 16 16" fill="none"><path d="M11.5 2.5l2 2-8 8H3.5v-2l8-8z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
               </button>
+              <button class="icon-btn reset-pwd" title="重置密码" v-permission="'Employee.Update'" @click="openResetPwdModal(emp)">
+                <svg viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="7" rx="1.5" stroke="currentColor" stroke-width="1.2"/><path d="M5.5 7V5a2.5 2.5 0 015 0v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+              </button>
               <button class="icon-btn access" title="管辖权配置" v-permission="'Employee.Update'" @click="openAccessModal(emp.id)">
                 <svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="5" r="2.5" stroke="currentColor" stroke-width="1.2"/><path d="M3 13c0-2.761 2.239-5 5-5s5 2.239 5 5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M12 9l1.5 1.5L16 8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <button class="icon-btn personal-perm" title="特批权限" v-permission="'Employee.Update'" @click="openPersonalPermModal(emp)">
+                <svg viewBox="0 0 16 16" fill="none"><path d="M8 1.5l1.5 3h3.3l-2.6 2 1 3-3.2-2.3L4.8 9.5l1-3-2.6-2h3.3L8 1.5z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round" fill="none"/></svg>
               </button>
               <button v-if="emp.isActive" class="icon-btn deactivate" title="停用" v-permission="'Employee.Deactivate'" @click="handleDeactivate(emp)">
                 <svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.2"/><path d="M5.5 8h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
@@ -272,6 +278,70 @@
       </div>
     </Teleport>
 
+    <!-- 重置密码弹窗 -->
+    <Teleport to="body">
+      <div v-if="showResetPwdModal" class="modal-overlay" @click.self="showResetPwdModal=false">
+        <div class="modal modal-sm">
+          <div class="modal-header">
+            <span class="modal-title">重置员工密码</span>
+            <button class="modal-close" @click="showResetPwdModal=false">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="reset-target-info">
+              <span class="reset-label">目标员工</span>
+              <span class="reset-value">{{ resetPwdTarget?.realName }}（{{ resetPwdTarget?.employeeNo }}）</span>
+            </div>
+            <div class="form-field">
+              <label>新密码 <span class="required">*</span></label>
+              <input type="password" v-model="resetPwdForm.newPwd" placeholder="至少8位，含大小写和数字" />
+            </div>
+            <div class="form-field">
+              <label>确认新密码 <span class="required">*</span></label>
+              <input type="password" v-model="resetPwdForm.confirm" placeholder="再次输入新密码" />
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" @click="showResetPwdModal=false">取消</button>
+            <button class="btn btn-primary" :disabled="submitting" @click="submitResetPwd">{{ submitting?'重置中...':'确认重置' }}</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 特批权限弹窗 -->
+    <Teleport to="body">
+      <div v-if="showPersonalPermModal" class="modal-overlay" @click.self="showPersonalPermModal=false">
+        <div class="modal modal-lg">
+          <div class="modal-header">
+            <div>
+              <span class="modal-title">个人特批权限</span>
+              <span class="modal-subtitle">{{ personalPermTarget?.realName }}（{{ personalPermTarget?.employeeNo }}）· 与角色权限是并集关系</span>
+            </div>
+            <button class="modal-close" @click="showPersonalPermModal=false">✕</button>
+          </div>
+          <div class="modal-body">
+            <div v-if="personalPermLoading" class="access-loading">加载中...</div>
+            <div v-else class="perm-selector">
+              <div v-for="group in permissionGroups" :key="group.groupName" class="perm-group">
+                <div class="perm-group-title">{{ group.groupName }}</div>
+                <div class="perm-group-items">
+                  <label v-for="perm in group.permissions" :key="perm" class="perm-checkbox">
+                    <input type="checkbox" :value="perm" v-model="personalPermForm" />
+                    <span class="ck-box"></span>
+                    <span class="ck-label">{{ perm }}</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" @click="showPersonalPermModal=false">取消</button>
+            <button class="btn btn-primary" :disabled="submitting" @click="submitPersonalPerm">{{ submitting?'保存中...':'保存特批权限' }}</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
     <!-- 确认对话框 -->
     <Teleport to="body">
       <div v-if="confirmDialog.show" class="modal-overlay">
@@ -303,6 +373,7 @@ import {
 } from '../../api/employee';
 import { getAllMfgProcessesApi, type MfgProcessSelectDto } from '../../api/mfgProcess';
 import { getAllActiveDevicesApi, type DeviceSelectDto } from '../../api/device';
+import { resetPasswordApi, getUserPersonalPermissionsApi, updateUserPermissionsApi, getAllDefinedPermissionsApi, type PermissionGroupDto } from '../../api/identity';
 
 const employees = ref<EmployeeListItemDto[]>([]);
 const loading = ref(false);
@@ -456,6 +527,69 @@ const openDetailModal = async (id: string) => {
   } catch { }
 };
 
+// ── 重置密码弹窗 ──
+const showResetPwdModal = ref(false);
+const resetPwdTarget = ref<EmployeeListItemDto | null>(null);
+const resetPwdForm = reactive({ newPwd: '', confirm: '' });
+
+const openResetPwdModal = (emp: EmployeeListItemDto) => {
+  resetPwdTarget.value = emp;
+  resetPwdForm.newPwd = '';
+  resetPwdForm.confirm = '';
+  showResetPwdModal.value = true;
+};
+
+const submitResetPwd = async () => {
+  if (!resetPwdTarget.value) return;
+  if (!resetPwdForm.newPwd || !resetPwdForm.confirm) { alert('请输入新密码'); return; }
+  if (resetPwdForm.newPwd !== resetPwdForm.confirm) { alert('两次输入的密码不一致'); return; }
+  submitting.value = true;
+  try {
+    await resetPasswordApi({ UserId: resetPwdTarget.value.id, NewPassword: resetPwdForm.newPwd });
+    showResetPwdModal.value = false;
+    alert('密码重置成功');
+  } catch { } finally { submitting.value = false; }
+};
+
+// ── 特批权限弹窗 ──
+const showPersonalPermModal = ref(false);
+const personalPermTarget = ref<EmployeeListItemDto | null>(null);
+const personalPermLoading = ref(false);
+const personalPermForm = ref<string[]>([]);
+const permissionGroups = ref<PermissionGroupDto[]>([]);
+
+const openPersonalPermModal = async (emp: EmployeeListItemDto) => {
+  personalPermTarget.value = emp;
+  personalPermLoading.value = true;
+  personalPermForm.value = [];
+  showPersonalPermModal.value = true;
+  try {
+    // 并行拉取：权限分组定义 + 该员工当前的个人特批权限
+    const [groups, currentPerms] = await Promise.all([
+      getAllDefinedPermissionsApi() as unknown as Promise<PermissionGroupDto[]>,
+      getUserPersonalPermissionsApi(emp.id) as unknown as Promise<string[]>,
+    ]);
+    permissionGroups.value = groups;
+    personalPermForm.value = [...currentPerms];
+  } catch {
+    permissionGroups.value = [];
+    personalPermForm.value = [];
+  } finally { personalPermLoading.value = false; }
+};
+
+const submitPersonalPerm = async () => {
+  if (!personalPermTarget.value) return;
+  submitting.value = true;
+  try {
+    await updateUserPermissionsApi(personalPermTarget.value.id, {
+      UserId: personalPermTarget.value.id,
+      Permissions: personalPermForm.value,
+    });
+    showPersonalPermModal.value = false;
+    alert('特批权限保存成功，员工重新登录后生效');
+  } catch { } finally { submitting.value = false; }
+};
+
 // ── 确认对话框 ──
 const confirmDialog = reactive({ show: false, type: 'danger', title: '', desc: '', confirmText: '', onConfirm: () => {} });
 
@@ -515,7 +649,9 @@ onMounted(() => { fetchList(); fetchSelectData(); });
 .icon-btn { display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:4px; border:1px solid transparent; background:none; cursor:pointer; margin-left:4px; transition:all 0.15s; color:rgba(255,255,255,0.3); }
 .icon-btn svg { width:14px; height:14px; }
 .icon-btn.edit:hover { background:rgba(0,119,255,0.12); border-color:rgba(0,119,255,0.3); color:#4d9fff; }
+.icon-btn.reset-pwd:hover { background:rgba(255,179,0,0.1); border-color:rgba(255,179,0,0.3); color:#ffb300; }
 .icon-btn.access:hover { background:rgba(0,229,255,0.1); border-color:rgba(0,229,255,0.3); color:#00e5ff; }
+.icon-btn.personal-perm:hover { background:rgba(168,85,247,0.1); border-color:rgba(168,85,247,0.3); color:#a855f7; }
 .icon-btn.deactivate:hover { background:rgba(255,165,0,0.1); border-color:rgba(255,165,0,0.3); color:#ffa500; }
 .icon-btn.terminate:hover { background:rgba(255,77,79,0.1); border-color:rgba(255,77,79,0.3); color:#ff4d4f; }
 .empty-cell { text-align:center; padding:48px 0 !important; }
@@ -606,4 +742,19 @@ onMounted(() => { fetchList(); fetchSelectData(); });
 .confirm-title { font-size:16px; font-weight:500; color:#e8eaf0; margin-bottom:10px; }
 .confirm-desc { font-size:13px; color:rgba(255,255,255,0.4); line-height:1.7; margin-bottom:24px; }
 .confirm-actions { display:flex; justify-content:center; gap:12px; }
+.reset-target-info { display:flex; flex-direction:column; gap:4px; padding:12px 14px; background:rgba(255,179,0,0.06); border:1px solid rgba(255,179,0,0.15); border-radius:4px; margin-bottom:8px; }
+.reset-label { font-size:11px; color:rgba(255,255,255,0.3); }
+.reset-value { font-size:14px; color:rgba(255,255,255,0.8); font-weight:500; }
+.perm-selector { display:flex; flex-direction:column; gap:18px; max-height:400px; overflow-y:auto; }
+.perm-group-title { font-size:11px; font-weight:500; color:rgba(255,255,255,0.3); letter-spacing:1.5px; text-transform:uppercase; margin-bottom:10px; padding-bottom:6px; border-bottom:1px solid rgba(255,255,255,0.05); }
+.perm-group-items { display:flex; flex-wrap:wrap; gap:8px; }
+.perm-checkbox { display:flex; align-items:center; gap:7px; cursor:pointer; padding:5px 10px; border-radius:3px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); transition:all 0.15s; }
+.perm-checkbox:hover { background:rgba(168,85,247,0.05); border-color:rgba(168,85,247,0.15); }
+.perm-checkbox input { display:none; }
+.perm-checkbox .ck-box { width:14px; height:14px; border:1.5px solid rgba(255,255,255,0.2); border-radius:2px; flex-shrink:0; display:flex; align-items:center; justify-content:center; transition:all 0.15s; }
+.perm-checkbox input:checked ~ .ck-box { background:#a855f7; border-color:#a855f7; }
+.perm-checkbox input:checked ~ .ck-box::after { content:'✓'; font-size:10px; color:#080c18; font-weight:700; }
+.perm-checkbox .ck-label { font-size:12px; color:rgba(255,255,255,0.55); }
+.perm-checkbox input:checked ~ .ck-label { color:rgba(168,85,247,0.9); }
+.modal-subtitle { font-size:12px; color:rgba(255,255,255,0.35); margin-top:2px; display:block; }
 </style>

@@ -6,10 +6,10 @@ namespace IIoT.IdentityService.Commands;
 
 public record ChangePasswordCommand(Guid UserId, string CurrentPassword, string NewPassword) : ICommand<Result>;
 
-public class ChangePasswordHandler(IIdentityService identityService) : ICommandHandler<ChangePasswordCommand, Result>
+public class ChangePasswordHandler(IAccountService accountService) : ICommandHandler<ChangePasswordCommand, Result>
 {
     public async Task<Result> Handle(ChangePasswordCommand request, CancellationToken cancellationToken)
     {
-        return await identityService.ChangePasswordAsync(request.UserId, request.CurrentPassword, request.NewPassword);
+        return await accountService.ChangePasswordAsync(request.UserId, request.CurrentPassword, request.NewPassword);
     }
 }

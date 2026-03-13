@@ -11,6 +11,7 @@ public interface IJwtTokenGenerator
     /// <param name="userId">用户的灵魂绑定 ID (Guid)</param>
     /// <param name="employeeNo">工号</param>
     /// <param name="roles">该用户拥有的角色列表</param>
+    /// <param name="permissions">该用户拥有的全部权限点列表 (角色权限 + 个人特批权限的并集)</param>
     /// <returns>Base64 编码的 JWT 字符串</returns>
-    string GenerateToken(Guid userId, string employeeNo, IList<string> roles);
+    string GenerateToken(Guid userId, string employeeNo, IList<string> roles, IList<string> permissions);
 }

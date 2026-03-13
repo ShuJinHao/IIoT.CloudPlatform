@@ -11,7 +11,7 @@ public class JwtTokenGenerator(IOptions<JwtSettings> jwtOptions) : IJwtTokenGene
 {
     private readonly JwtSettings _jwtSettings = jwtOptions.Value;
 
-    public string GenerateToken(Guid userId, string employeeNo, IList<string> roles)
+    public string GenerateToken(Guid userId, string employeeNo, IList<string> roles, IList<string> permissions)
     {
         // 1. 定义标准的 JWT 声明 (Claims)
         var claims = new List<Claim>
@@ -32,11 +32,17 @@ public class JwtTokenGenerator(IOptions<JwtSettings> jwtOptions) : IJwtTokenGene
             claims.Add(new Claim(ClaimTypes.Role, role));
         }
 
-        // 3. 读取密钥并选择加密算法
+        // 🌟 3. 将权限点循环加入声明中 (前端从 Token 解析 "Permission" claim)
+        foreach (var permission in permissions)
+        {
+            claims.Add(new Claim("Permission", permission));
+        }
+
+        // 4. 读取密钥并选择加密算法
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtSettings.Secret));
         var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
-        // 4. 组装 Token
+        // 5. 组装 Token
         var token = new JwtSecurityToken(
             issuer: _jwtSettings.Issuer,
             audience: _jwtSettings.Audience,
@@ -44,7 +50,7 @@ public class JwtTokenGenerator(IOptions<JwtSettings> jwtOptions) : IJwtTokenGene
             expires: DateTime.UtcNow.AddMinutes(_jwtSettings.ExpiryMinutes),
             signingCredentials: credentials);
 
-        // 5. 序列化为前端可读的字符串
+        // 6. 序列化为前端可读的字符串
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 }

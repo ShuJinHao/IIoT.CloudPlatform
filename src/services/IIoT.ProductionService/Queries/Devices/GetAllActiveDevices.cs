@@ -27,7 +27,7 @@ public record DeviceSelectDto(
 /// 管理员在给员工分配设备管辖权时，需要看到全部可用设备。
 /// 带 Redis 缓存抗压，设备变更时由 Command 端负责缓存双杀。
 /// </remarks>
-[AuthorizeRequirement("Employee.UpdateAccess")]
+[AuthorizeRequirement("Device.Read")]
 public record GetAllActiveDevicesQuery() : IQuery<Result<List<DeviceSelectDto>>>;
 
 public class GetAllActiveDevicesHandler(

@@ -1,6 +1,7 @@
 ﻿using IIoT.Application.Contracts;
 using IIoT.Core.Employee.Aggregates.MfgProcesses;
 using IIoT.Services.Common.Attributes;
+using IIoT.Services.Common.Contracts;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -18,8 +19,9 @@ public record UpdateMfgProcessCommand(
 ) : ICommand<Result<bool>>;
 
 public class UpdateMfgProcessHandler(
-    IDataQueryService dataQueryService,       // 极速防重校验
-    IRepository<MfgProcess> processRepository // 写仓储
+    IDataQueryService dataQueryService,
+    IRepository<MfgProcess> processRepository,
+    ICacheService cacheService
 ) : ICommandHandler<UpdateMfgProcessCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(UpdateMfgProcessCommand request, CancellationToken cancellationToken)
@@ -47,7 +49,15 @@ public class UpdateMfgProcessHandler(
 
         // 4. 持久化
         processRepository.Update(process);
-        await processRepository.SaveChangesAsync(cancellationToken);
+        var affected = await processRepository.SaveChangesAsync(cancellationToken);
+
+        // ==========================================
+        // 🌟 5. 缓存双杀：工序变更后爆破全量缓存
+        // ==========================================
+        if (affected > 0)
+        {
+            await cacheService.RemoveAsync("iiot:mfgprocess:v1:all", cancellationToken);
+        }
 
         return Result.Success(true);
     }

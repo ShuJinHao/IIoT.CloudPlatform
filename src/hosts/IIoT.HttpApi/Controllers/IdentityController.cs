@@ -1,4 +1,4 @@
-﻿using IIoT.HttpApi.Infrastructure;
+using IIoT.HttpApi.Infrastructure;
 using IIoT.IdentityService.Commands;
 using IIoT.IdentityService.Queries;
 using Microsoft.AspNetCore.Mvc;
@@ -28,6 +28,16 @@ public class IdentityController : ApiControllerBase
     /// </summary>
     [HttpPut("password")]
     public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordCommand command)
+    {
+        var result = await Sender.Send(command);
+        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+    }
+
+    /// <summary>
+    /// 管理员强制重置指定员工的密码 (不需要旧密码)
+    /// </summary>
+    [HttpPut("password/reset")]
+    public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordCommand command)
     {
         var result = await Sender.Send(command);
         return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
@@ -84,6 +94,29 @@ public class IdentityController : ApiControllerBase
     public async Task<IActionResult> GetAllPermissions()
     {
         var result = await Sender.Send(new GetAllDefinedPermissionsQuery());
+        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+    }
+
+    /// <summary>
+    /// 获取指定员工的个人特批权限点列表 (不含角色继承的权限)
+    /// </summary>
+    [HttpGet("users/{userId}/permissions")]
+    public async Task<IActionResult> GetUserPersonalPermissions([FromRoute] Guid userId)
+    {
+        var query = new GetUserPersonalPermissionsQuery(userId);
+        var result = await Sender.Send(query);
+        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+    }
+
+    /// <summary>
+    /// 管理员为指定员工设置个人特批权限点 (全量同步，与角色权限是并集关系)
+    /// </summary>
+    [HttpPut("users/{userId}/permissions")]
+    public async Task<IActionResult> UpdateUserPermissions(
+        [FromRoute] Guid userId,
+        [FromBody] UpdateUserPermissionsCommand command)
+    {
+        var result = await Sender.Send(command with { UserId = userId });
         return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
     }
 }

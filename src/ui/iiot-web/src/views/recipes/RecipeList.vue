@@ -33,13 +33,13 @@
       <table v-else class="data-table">
         <thead>
           <tr>
-            <th>配方名称</th><th>版本</th><th>类型</th><th>状态</th><th>工序 ID</th>
+            <th>配方名称</th><th>版本</th><th>类型</th><th>状态</th><th>所属工序</th><th>所属机台</th>
             <th style="text-align:right">操作</th>
           </tr>
         </thead>
         <tbody>
           <tr v-if="recipes.length === 0">
-            <td colspan="6" class="empty-cell">
+            <td colspan="7" class="empty-cell">
               <div class="empty-state">
                 <svg viewBox="0 0 48 48" fill="none"><rect x="8" y="6" width="28" height="36" rx="2" stroke="currentColor" stroke-width="1.5" opacity="0.3"/><path d="M14 16h16M14 22h12M14 28h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.3"/><circle cx="36" cy="36" r="8" fill="#0f1525" stroke="currentColor" stroke-width="1.5" opacity="0.5"/><path d="M33 36h6M36 33v6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" opacity="0.5"/></svg>
                 <p>暂无配方档案</p>
@@ -64,7 +64,8 @@
                 <span class="status-dot"></span>{{ recipe.isActive ? '启用' : '已停用' }}
               </span>
             </td>
-            <td><span class="id-chip">{{ recipe.processId.substring(0, 8) }}…</span></td>
+            <td><span class="process-name-chip">{{ processNameMap[recipe.processId] || recipe.processId.substring(0, 8) + '…' }}</span></td>
+            <td><span v-if="recipe.deviceId" class="device-name-chip">{{ deviceNameMap[recipe.deviceId] || recipe.deviceId.substring(0, 8) + '…' }}</span><span v-else class="no-device">—</span></td>
             <td class="action-cell" @click.stop>
               <button class="icon-btn edit" title="编辑参数" v-permission="'Recipe.Create'" @click="openEditModal(recipe)">
                 <svg viewBox="0 0 16 16" fill="none"><path d="M11.5 2.5l2 2-8 8H3.5v-2l8-8z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
@@ -242,12 +243,12 @@
                 <span class="detail-value"><span class="version-tag">{{ detailData.version }}</span></span>
               </div>
               <div class="detail-row">
-                <span class="detail-label">归属工序 ID</span>
-                <span class="detail-value mono small">{{ detailData.processId }}</span>
+                <span class="detail-label">归属工序</span>
+                <span class="detail-value">{{ processNameMap[detailData.processId] || detailData.processId }}</span>
               </div>
               <div v-if="detailData.deviceId" class="detail-row">
-                <span class="detail-label">专属机台 ID</span>
-                <span class="detail-value mono small">{{ detailData.deviceId }}</span>
+                <span class="detail-label">专属机台</span>
+                <span class="detail-value">{{ deviceNameMap[detailData.deviceId] || detailData.deviceId }}</span>
               </div>
               <div class="detail-row">
                 <span class="detail-label">工艺参数 JSONB</span>
@@ -306,6 +307,18 @@ const fetchSelectData = async () => {
   try { allProcesses.value = await getAllMfgProcessesApi() as unknown as MfgProcessSelectDto[]; } catch { allProcesses.value = []; }
   try { allDevices.value = await getAllActiveDevicesApi() as unknown as DeviceSelectDto[]; } catch { allDevices.value = []; }
 };
+
+// 名称映射表（列表和详情展示用）
+const processNameMap = computed(() => {
+  const m: Record<string, string> = {};
+  for (const p of allProcesses.value) m[p.id] = `${p.processCode} · ${p.processName}`;
+  return m;
+});
+const deviceNameMap = computed(() => {
+  const m: Record<string, string> = {};
+  for (const d of allDevices.value) m[d.id] = `${d.deviceCode} · ${d.deviceName}`;
+  return m;
+});
 
 const pageNumbers = computed(() => {
   const total = metaData.value.totalPages;
@@ -514,6 +527,9 @@ onMounted(() => { fetchList(); fetchSelectData(); });
 .type-tag.universal { background: rgba(0,229,255,0.08); color: rgba(0,229,255,0.7); border: 1px solid rgba(0,229,255,0.15); }
 .type-tag.special { background: rgba(255,179,0,0.1); color: #ffb300; border: 1px solid rgba(255,179,0,0.2); }
 .id-chip { font-family: 'Courier New', monospace; font-size: 11px; color: rgba(255,255,255,0.3); background: rgba(255,255,255,0.04); padding: 2px 6px; border-radius: 3px; }
+.process-name-chip { font-size: 12px; color: rgba(255,255,255,0.6); background: rgba(0,229,255,0.06); border: 1px solid rgba(0,229,255,0.1); padding: 2px 8px; border-radius: 3px; }
+.device-name-chip { font-size: 12px; color: rgba(255,179,0,0.8); background: rgba(255,179,0,0.06); border: 1px solid rgba(255,179,0,0.12); padding: 2px 8px; border-radius: 3px; }
+.no-device { color: rgba(255,255,255,0.15); }
 
 .status-tag { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500; padding: 3px 9px; border-radius: 20px; }
 .status-tag.active { background: rgba(0,229,160,0.12); color: #00e5a0; }

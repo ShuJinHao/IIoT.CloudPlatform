@@ -37,24 +37,26 @@ public class GetMyDevicesPagedHandler(
     public async Task<Result<PagedList<DeviceListItemDto>>> Handle(GetMyDevicesPagedQuery request, CancellationToken cancellationToken)
     {
         List<Guid>? allowedProcessIds = null;
+        List<Guid>? allowedDeviceIds = null;
 
         // ==========================================
-        // 第二道门：动态计算数据管辖权 (ABAC)
+        // 第二道门：动态计算双维数据管辖权 (ABAC)
+        // 可见设备 = 我管辖的工序下的所有设备 ∪ 我被单独分配的设备
         // ==========================================
         if (currentUser.Role != "Admin")
         {
             if (!Guid.TryParse(currentUser.Id, out var userId)) return Result.Failure("用户凭证异常");
 
-            // 复用员工模块规约，拉取员工的工序管辖权（含导航属性）
             var employeeSpec = new EmployeeWithAccessesSpec(userId);
             var employee = await employeeRepository.GetSingleOrDefaultAsync(employeeSpec, cancellationToken);
 
             if (employee == null) return Result.Failure("系统中未找到您的员工档案");
 
             allowedProcessIds = employee.ProcessAccesses.Select(p => p.ProcessId).ToList();
+            allowedDeviceIds = employee.DeviceAccesses.Select(d => d.DeviceId).ToList();
 
-            // 非 Admin 且无任何工序管辖权，直接返回空列表，不查数据库
-            if (allowedProcessIds.Count == 0)
+            // 非 Admin 且两个维度都为空，直接返回空列表，不查数据库
+            if (allowedProcessIds.Count == 0 && allowedDeviceIds.Count == 0)
             {
                 var emptyList = new PagedList<DeviceListItemDto>([], 0, request.PaginationParams);
                 return Result.Success(emptyList);
@@ -65,14 +67,14 @@ public class GetMyDevicesPagedHandler(
         var take = request.PaginationParams.PageSize;
 
         // 统计总数：不启用分页
-        var countSpec = new DevicePagedSpec(0, 0, allowedProcessIds, request.Keyword, isPaging: false);
+        var countSpec = new DevicePagedSpec(0, 0, allowedProcessIds, allowedDeviceIds, request.Keyword, isPaging: false);
         var totalCount = await deviceRepository.CountAsync(countSpec, cancellationToken);
 
         // 先拿 count，再按需查数据，单个 DbContext 串行执行，绝不并发
         List<Device> list = [];
         if (totalCount > 0)
         {
-            var pagedSpec = new DevicePagedSpec(skip, take, allowedProcessIds, request.Keyword, isPaging: true);
+            var pagedSpec = new DevicePagedSpec(skip, take, allowedProcessIds, allowedDeviceIds, request.Keyword, isPaging: true);
             list = await deviceRepository.GetListAsync(pagedSpec, cancellationToken);
         }
 
