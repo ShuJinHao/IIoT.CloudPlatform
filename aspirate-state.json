@@ -1,0 +1,16 @@
+{
+  "projectPath": ".",
+  "outputPath": "aspirate-output",
+  "containerRegistry": "10.98.90.154:80/iiot",
+  "containerImageTags": [
+    "latest"
+  ],
+  "containerBuilder": "docker",
+  "outputFormat": "kustomize",
+  "privateRegistryEmail": "aspir8@aka.ms",
+  "secrets": {
+    "salt": "CDE5lKVdJgw0Kngz",
+    "hash": "2Eq3k1k/uezbB0n9u/ZnD4gpYOn8GYqjOtM51k8R5Yg=",
+    "secrets": {}
+  }
+}

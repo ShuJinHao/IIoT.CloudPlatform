@@ -119,4 +119,14 @@ public class IdentityController : ApiControllerBase
         var result = await Sender.Send(command with { UserId = userId });
         return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
     }
+
+    /// <summary>
+    /// WPF 边缘端专用登录（含设备绑定校验）
+    /// </summary>
+    [HttpPost("device-login")]
+    public async Task<IActionResult> DeviceLogin([FromBody] DeviceLoginCommand command)
+    {
+        var result = await Sender.Send(command);
+        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+    }
 }

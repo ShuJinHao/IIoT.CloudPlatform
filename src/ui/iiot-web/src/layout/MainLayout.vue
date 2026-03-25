@@ -1,8 +1,6 @@
 <template>
   <div class="layout-root">
-    <!-- 侧边栏 -->
     <aside class="sidebar" :class="{ collapsed: sidebarCollapsed }">
-      <!-- Logo -->
       <div class="sidebar-logo">
         <div class="logo-icon">
           <svg viewBox="0 0 40 40" fill="none">
@@ -17,7 +15,6 @@
         </transition>
       </div>
 
-      <!-- 导航菜单 -->
       <nav class="sidebar-nav">
         <div class="nav-section-label" v-if="!sidebarCollapsed">主导航</div>
 
@@ -37,13 +34,12 @@
         </router-link>
       </nav>
 
-      <!-- 底部：用户信息 + 修改密码 + 退出 -->
       <div class="sidebar-footer">
         <div class="user-info" v-if="!sidebarCollapsed">
           <div class="user-avatar">{{ avatarChar }}</div>
           <div class="user-detail">
             <div class="user-name">{{ authStore.employeeNo }}</div>
-            <div class="user-role">{{ authStore.role }}</div>
+            <div class="user-name" style="font-size: 11px; color: rgba(0,229,255,0.6); margin-top: 1px;">{{ authStore.role }}</div>
           </div>
         </div>
         <div class="user-avatar-sm" v-else :title="authStore.employeeNo">{{ avatarChar }}</div>
@@ -66,7 +62,6 @@
         </button>
       </div>
 
-      <!-- 折叠按钮 -->
       <button class="collapse-btn" @click="sidebarCollapsed = !sidebarCollapsed">
         <svg viewBox="0 0 16 16" fill="none" :style="{ transform: sidebarCollapsed ? 'rotate(180deg)' : 'none', transition: 'transform 0.3s' }">
           <path d="M10 3L5 8l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -74,9 +69,7 @@
       </button>
     </aside>
 
-    <!-- 主内容区 -->
     <div class="main-area">
-      <!-- 顶部面包屑栏 -->
       <header class="topbar">
         <div class="breadcrumb">
           <span class="breadcrumb-root">系统</span>
@@ -89,7 +82,6 @@
         </div>
       </header>
 
-      <!-- 页面内容 -->
       <main class="page-content">
         <router-view v-slot="{ Component }">
           <transition name="page-fade" mode="out-in">
@@ -99,7 +91,6 @@
       </main>
     </div>
 
-    <!-- 修改密码弹窗 -->
     <Teleport to="body">
       <div v-if="showPasswordModal" class="modal-overlay" @click.self="showPasswordModal=false">
         <div class="modal modal-sm">
@@ -140,6 +131,16 @@ import { useAuthStore } from '../stores/auth';
 import { Permissions } from '../types/permissions';
 import { changePasswordApi } from '../api/identity';
 
+// 🌟 定义导航项接口，解决 badge 属性报错问题
+interface NavItem {
+  name: string;
+  path: string;
+  label: string;
+  icon: string;
+  permission: string | null;
+  badge?: string | number; // 可选属性
+}
+
 const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
@@ -154,8 +155,8 @@ const avatarChar = computed(() => {
   return authStore.employeeNo?.charAt(0)?.toUpperCase() || 'U';
 });
 
-// 导航菜单配置
-const navItems = [
+// 🌟 明确 navItems 的类型为 NavItem[]
+const navItems: NavItem[] = [
   {
     name: 'Dashboard', path: '/', label: '系统概览', permission: null,
     icon: `<svg viewBox="0 0 20 20" fill="none"><rect x="2" y="2" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.5"/><rect x="11" y="2" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.5"/><rect x="2" y="11" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.5"/><rect x="11" y="11" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.5"/></svg>`

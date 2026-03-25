@@ -1,0 +1,13 @@
+{
+  "TemplatePath": null,
+  "ContainerSettings": {
+    "Registry": "10.98.90.154:80/iiot",
+    "RepositoryPrefix": null,
+    "Tags": [
+      "latest"
+    ],
+    "Builder": "docker",
+    "BuildArgs": null,
+    "Context": null
+  }
+}

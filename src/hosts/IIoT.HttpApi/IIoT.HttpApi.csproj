@@ -15,6 +15,20 @@
     <ProjectReference Include="..\IIoT.ServiceDefaults\IIoT.ServiceDefaults.csproj" />
   </ItemGroup>
 
+  <PropertyGroup>
+    <ContainerRepository>$(MSBuildProjectName)</ContainerRepository>
+    <ContainerImageTag>latest</ContainerImageTag>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ContainerEnvironmentVariable Include="ASPNETCORE_ENVIRONMENT" Value="Production" />
+    <ContainerEnvironmentVariable Include="TZ" Value="Asia/Shanghai" />
+    <ContainerPort Include="8080" Type="tcp" />
+
+    <ContainerEnvironmentVariable Include="DOCKER_RESTART_POLICY" Value="always" />
+  </ItemGroup>
+
+
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.2" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.2">

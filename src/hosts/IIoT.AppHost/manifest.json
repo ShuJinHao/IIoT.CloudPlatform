@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json.schemastore.org/aspire-8.0.json",
+  "resources": {
+    "redis-cache": {
+      "type": "container.v0",
+      "connectionString": "{redis-cache.bindings.tcp.host}:{redis-cache.bindings.tcp.port}",
+      "image": "redis:7.4-alpine",
+      "bindings": {
+        "tcp": {
+          "scheme": "tcp",
+          "protocol": "tcp",
+          "transport": "tcp",
+          "targetPort": 6379
+        }
+      }
+    },
+    "pg-password": {
+      "type": "parameter.v0",
+      "value": "{pg-password.inputs.value}",
+      "inputs": {
+        "value": {
+          "type": "string",
+          "secret": true
+        }
+      }
+    },
+    "postgres": {
+      "type": "container.v0",
+      "connectionString": "Host={postgres.bindings.tcp.host};Port={postgres.bindings.tcp.port};Username=postgres;Password={pg-password.value}",
+      "image": "docker.io/library/postgres:17.6",
+      "volumes": [
+        {
+          "name": "postgres-iiot",
+          "target": "/var/lib/postgresql/data",
+          "readOnly": false
+        }
+      ],
+      "env": {
+        "POSTGRES_HOST_AUTH_METHOD": "scram-sha-256",
+        "POSTGRES_INITDB_ARGS": "--auth-host=scram-sha-256 --auth-local=scram-sha-256",
+        "POSTGRES_USER": "postgres",
+        "POSTGRES_PASSWORD": "{pg-password.value}"
+      },
+      "bindings": {
+        "tcp": {
+          "scheme": "tcp",
+          "protocol": "tcp",
+          "transport": "tcp",
+          "targetPort": 5432
+        }
+      }
+    },
+    "iiot-db": {
+      "type": "value.v0",
+      "connectionString": "{postgres.connectionString};Database=iiot-db"
+    },
+    "iiot-migrationworkapp": {
+      "type": "project.v0",
+      "path": "../IIoT.MigrationWorkApp/IIoT.MigrationWorkApp.csproj",
+      "env": {
+        "OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EXCEPTION_LOG_ATTRIBUTES": "true",
+        "OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EVENT_LOG_ATTRIBUTES": "true",
+        "OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY": "in_memory",
+        "ConnectionStrings__iiot-db": "{iiot-db.connectionString}",
+        "IIOT_DB_HOST": "{postgres.bindings.tcp.host}",
+        "IIOT_DB_PORT": "{postgres.bindings.tcp.port}",
+        "IIOT_DB_USERNAME": "postgres",
+        "IIOT_DB_PASSWORD": "{pg-password.value}",
+        "IIOT_DB_URI": "postgresql://postgres:{pg-password-uri-encoded.value}@{postgres.bindings.tcp.host}:{postgres.bindings.tcp.port}/iiot-db",
+        "IIOT_DB_JDBCCONNECTIONSTRING": "jdbc:postgresql://{postgres.bindings.tcp.host}:{postgres.bindings.tcp.port}/iiot-db",
+        "IIOT_DB_DATABASENAME": "iiot-db",
+        "ConnectionStrings__redis-cache": "{redis-cache.connectionString}"
+      }
+    },
+    "iiot-httpapi": {
+      "type": "project.v0",
+      "path": "../IIoT.HttpApi/IIoT.HttpApi.csproj",
+      "env": {
+        "OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EXCEPTION_LOG_ATTRIBUTES": "true",
+        "OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EVENT_LOG_ATTRIBUTES": "true",
+        "OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY": "in_memory",
+        "ASPNETCORE_FORWARDEDHEADERS_ENABLED": "true",
+        "HTTP_PORTS": "{iiot-httpapi.bindings.http.targetPort}",
+        "ConnectionStrings__iiot-db": "{iiot-db.connectionString}",
+        "IIOT_DB_HOST": "{postgres.bindings.tcp.host}",
+        "IIOT_DB_PORT": "{postgres.bindings.tcp.port}",
+        "IIOT_DB_USERNAME": "postgres",
+        "IIOT_DB_PASSWORD": "{pg-password.value}",
+        "IIOT_DB_URI": "postgresql://postgres:{pg-password-uri-encoded.value}@{postgres.bindings.tcp.host}:{postgres.bindings.tcp.port}/iiot-db",
+        "IIOT_DB_JDBCCONNECTIONSTRING": "jdbc:postgresql://{postgres.bindings.tcp.host}:{postgres.bindings.tcp.port}/iiot-db",
+        "IIOT_DB_DATABASENAME": "iiot-db",
+        "ConnectionStrings__redis-cache": "{redis-cache.connectionString}"
+      },
+      "bindings": {
+        "http": {
+          "scheme": "http",
+          "protocol": "tcp",
+          "transport": "http"
+        },
+        "https": {
+          "scheme": "https",
+          "protocol": "tcp",
+          "transport": "http"
+        }
+      }
+    },
+    "iiot-web": {
+      "type": "container.v1",
+      "build": {
+        "context": "../../ui/iiot-web",
+        "dockerfile": "iiot-web.Dockerfile",
+        "buildOnly": true
+      },
+      "env": {
+        "NODE_ENV": "development",
+        "PORT": "{iiot-web.bindings.http.targetPort}",
+        "IIOT_HTTPAPI_HTTP": "{iiot-httpapi.bindings.http.url}",
+        "services__iiot-httpapi__http__0": "{iiot-httpapi.bindings.http.url}",
+        "IIOT_HTTPAPI_HTTPS": "{iiot-httpapi.bindings.https.url}",
+        "services__iiot-httpapi__https__0": "{iiot-httpapi.bindings.https.url}",
+        "VITE_API_URL": "{iiot-httpapi.bindings.http.url}"
+      },
+      "bindings": {
+        "http": {
+          "scheme": "http",
+          "protocol": "tcp",
+          "transport": "http",
+          "targetPort": 8000,
+          "external": true
+        }
+      }
+    },
+    "pg-password-uri-encoded": {
+      "type": "annotated.string",
+      "value": "{pg-password.value}",
+      "filter": "uri"
+    }
+  }
+}
