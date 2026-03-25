@@ -1,7 +1,7 @@
 ﻿using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.SharedKernel.Specification;
 
-namespace IIoT.Core.Production.Specifications;
+namespace IIoT.Core.Production.Specifications.Devices;
 
 /// <summary>
 /// 专用查询规约：获取全量活跃设备 (供管辖权分配等下拉选择器使用)

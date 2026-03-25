@@ -3,7 +3,7 @@ using IIoT.SharedKernel.Specification;
 using System;
 using System.Collections.Generic;
 
-namespace IIoT.Core.Production.Specifications;
+namespace IIoT.Core.Production.Specifications.Devices;
 
 /// <summary>
 /// 专用查询规约：查询设备分页列表 (支持双维管辖权并集过滤 + 关键字搜索)

@@ -1,10 +1,7 @@
 ﻿using MassTransit;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
-using System;
-using System.Collections.Generic;
 using System.Reflection;
-using System.Text;
 
 namespace IIoT.EventBus;
 
@@ -21,13 +18,13 @@ public static class DependencyInjection
 
             x.SetKebabCaseEndpointNameFormatter();
 
-            // 默认配置 RabbitMQ
             x.UsingRabbitMq((context, cfg) =>
             {
-                // 从 Aspire 注入的连接字符串中读取配置
-                // 连接字符串名必须与 AppHost 中 .AddRabbitMQ("eventbus") 的名称一致
                 var connectionString = builder.Configuration.GetConnectionString("eventbus");
                 cfg.Host(connectionString);
+
+                // 全局重试策略：3次，间隔递增 (1s → 3s → 5s)
+                cfg.UseMessageRetry(r => r.Incremental(3, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2)));
 
                 cfg.ConfigureEndpoints(context);
             });

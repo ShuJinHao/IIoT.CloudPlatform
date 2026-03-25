@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>dotnet-IIoT.DataWorker-021fd566-df0f-4ff6-9626-47985c08f6c8</UserSecretsId>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <ContainerRepository>$(MSBuildProjectName)</ContainerRepository>
+    <ContainerImageTag>latest</ContainerImageTag>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ContainerEnvironmentVariable Include="TZ" Value="Asia/Shanghai" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\infrastructure\IIoT.EntityFrameworkCore\IIoT.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="..\..\infrastructure\IIoT.EventBus\IIoT.EventBus.csproj" />
+    <ProjectReference Include="..\..\infrastructure\IIoT.Infrastructure\IIoT.Infrastructure.csproj" />
+    <ProjectReference Include="..\IIoT.ServiceDefaults\IIoT.ServiceDefaults.csproj" />
+  </ItemGroup>
+</Project>

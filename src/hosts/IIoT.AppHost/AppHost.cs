@@ -31,6 +31,8 @@ builder.AddViteApp("iiot-web", "../../ui/iiot-web")
     .WithEnvironment("VITE_API_URL", apiService.GetEndpoint("http"))
     .WithExternalHttpEndpoints();
 
+builder.AddProject<Projects.IIoT_DataWorker>("iiot-dataworker");
+
 builder.Build().Run();
 
 // =========================================================================

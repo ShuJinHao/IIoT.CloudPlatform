@@ -1,14 +1,15 @@
-﻿using System.Text;
-using System.Reflection;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.IdentityModel.Tokens;
+﻿using IIoT.EmployeeService.Commands.Employees;
+using IIoT.EntityFrameworkCore;
 using IIoT.HttpApi.Infrastructure;
+using IIoT.HttpApi.Profiles;
 using IIoT.Infrastructure;
 using IIoT.Infrastructure.Authentication;
 using IIoT.Services.Common.Behaviors;
 using IIoT.Services.Common.Contracts;
-using IIoT.EntityFrameworkCore;
-using IIoT.EmployeeService.Commands.Employees;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Reflection;
+using System.Text;
 
 namespace IIoT.HttpApi;
 
@@ -31,6 +32,11 @@ public static class DependencyInjection
             );
             // 挂载鉴权管道
             cfg.AddOpenBehavior(typeof(AuthorizationBehavior<,>));
+        });
+        // 扫描当前程序集下的所有 Profile
+        builder.Services.AddAutoMapper(cfg =>
+        {
+            cfg.AddProfile<ProductionProfiles>();
         });
     }
 

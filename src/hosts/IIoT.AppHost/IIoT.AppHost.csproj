@@ -16,6 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\IIoT.DataWorker\IIoT.DataWorker.csproj" />
     <ProjectReference Include="..\IIoT.HttpApi\IIoT.HttpApi.csproj" />
     <ProjectReference Include="..\IIoT.MigrationWorkApp\IIoT.MigrationWorkApp.csproj" />
   </ItemGroup>

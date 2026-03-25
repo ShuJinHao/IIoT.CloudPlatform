@@ -3,7 +3,7 @@ using IIoT.SharedKernel.Specification;
 using System;
 using System.Collections.Generic;
 
-namespace IIoT.Core.Production.Specifications;
+namespace IIoT.Core.Production.Specifications.Recipes;
 
 /// <summary>
 /// 专用查询规约：查询配方分页列表 (完美融合工序/机台双维 ABAC 过滤与关键字搜索)

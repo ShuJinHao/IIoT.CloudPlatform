@@ -2,7 +2,7 @@
 using IIoT.SharedKernel.Specification;
 using System;
 
-namespace IIoT.Core.Production.Specifications;
+namespace IIoT.Core.Production.Specifications.Recipes;
 
 /// <summary>
 /// 专用查询规约：根据 ID 获取配方单体档案

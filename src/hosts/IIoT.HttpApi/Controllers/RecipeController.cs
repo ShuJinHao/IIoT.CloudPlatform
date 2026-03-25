@@ -92,4 +92,20 @@ public class RecipeController : ApiControllerBase
         var result = await Sender.Send(command);
         return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
     }
+
+    /// <summary>
+    /// 根据设备ID获取该设备可用的配方列表（含完整 JSONB 工艺参数）
+    /// </summary>
+    /// <remarks>
+    /// 边缘端 RecipeSyncTask 定时拉取专用接口。
+    /// 返回该设备的专属特调配方 + 所属工序的通用配方，不走员工权限校验。
+    /// </remarks>
+    /// <param name="deviceId">设备 ID</param>
+    [HttpGet("device/{deviceId}")]
+    public async Task<IActionResult> GetByDeviceId([FromRoute] Guid deviceId)
+    {
+        var query = new GetRecipesByDeviceIdQuery(deviceId);
+        var result = await Sender.Send(query);
+        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+    }
 }

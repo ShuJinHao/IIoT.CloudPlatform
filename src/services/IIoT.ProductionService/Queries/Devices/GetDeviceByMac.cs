@@ -1,5 +1,6 @@
 ﻿using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Specifications; // 🌟 引入刚刚定义的规约图纸
+using IIoT.Core.Production.Specifications.Devices;
 using IIoT.Services.Common.Contracts;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;

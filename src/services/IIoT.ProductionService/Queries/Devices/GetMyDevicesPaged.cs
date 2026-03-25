@@ -2,6 +2,7 @@ using IIoT.Core.Employee.Aggregates.Employees;
 using IIoT.Core.Employee.Specifications;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Specifications;
+using IIoT.Core.Production.Specifications.Devices;
 using IIoT.Services.Common.Attributes;
 using IIoT.Services.Common.Contracts;
 using IIoT.SharedKernel.Messaging;

@@ -6,6 +6,7 @@
   </Folder>
   <Folder Name="/src/hosts/">
     <Project Path="src/hosts/IIoT.AppHost/IIoT.AppHost.csproj" Id="b7243472-2e78-43e6-a9a2-2fce65e974d4" />
+    <Project Path="src/hosts/IIoT.DataWorker/IIoT.DataWorker.csproj" />
     <Project Path="src/hosts/IIoT.HttpApi/IIoT.HttpApi.csproj" />
     <Project Path="src/hosts/IIoT.MigrationWorkApp/IIoT.MigrationWorkApp.csproj" Id="b2407c0d-7b43-445e-b84b-25b88b7d3946" />
     <Project Path="src/hosts/IIoT.ServiceDefaults/IIoT.ServiceDefaults.csproj" Id="7d2ba11b-2783-40af-bf60-e79f3e1ee9ae" />

@@ -1,7 +1,7 @@
 ﻿using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.SharedKernel.Specification;
 
-namespace IIoT.Core.Production.Specifications;
+namespace IIoT.Core.Production.Specifications.Devices;
 
 /// <summary>
 /// 专用查询规约：根据物理 MAC 地址精确查询设备
