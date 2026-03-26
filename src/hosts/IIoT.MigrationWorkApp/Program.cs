@@ -1,9 +1,15 @@
 using IIoT.EntityFrameworkCore;
 using IIoT.Infrastructure;
+using IIoT.Infrastructure.Logging;
 using IIoT.MigrationWorkApp;
+using Serilog;
 
 var builder = Host.CreateApplicationBuilder(args);
 
+// 1. Serilog 日志
+builder.AddSerilog("migration");
+
+// 2. 基础设施
 builder.AddServiceDefaults();
 builder.Services.AddHostedService<Worker>();
 

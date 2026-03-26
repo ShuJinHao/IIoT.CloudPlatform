@@ -8,21 +8,20 @@ namespace IIoT.Services.Common.Contracts.DapperQueries;
 public interface ICapacityQueryService
 {
     /// <summary>
-    /// 分页查询每日产能汇总
+    /// 分页查询每日产能汇总（所有机台分页加载，JOIN 设备名称）
     /// </summary>
     Task<(List<dynamic> Items, int TotalCount)> GetDailyPagedAsync(
         Pagination pagination,
+        DateOnly? date = null,
         Guid? deviceId = null,
-        DateOnly? startDate = null,
-        DateOnly? endDate = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// 按设备/时间段聚合统计（云端大屏用）
+    /// 单机台产能汇总（指定设备 + 日期范围，带设备名称）
     /// </summary>
-    Task<List<dynamic>> GetSummaryAsync(
-        Guid? deviceId = null,
-        DateOnly? startDate = null,
-        DateOnly? endDate = null,
+    Task<List<dynamic>> GetDeviceSummaryAsync(
+        Guid deviceId,
+        DateOnly startDate,
+        DateOnly endDate,
         CancellationToken cancellationToken = default);
 }

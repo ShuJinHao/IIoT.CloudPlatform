@@ -23,7 +23,7 @@ public record RecipeListItemDto(
     string Version,
     Guid ProcessId,
     Guid? DeviceId,
-    bool IsActive
+    string Status
 );
 
 [AuthorizeRequirement("Recipe.Read")]
@@ -82,7 +82,7 @@ public class GetMyRecipesPagedHandler(
             r.Version,
             r.ProcessId,
             r.DeviceId,
-            r.IsActive
+            r.Status.ToString()
         )).ToList();
 
         var pagedList = new PagedList<RecipeListItemDto>(dtos, totalCount, request.PaginationParams);

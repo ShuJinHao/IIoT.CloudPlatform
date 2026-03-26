@@ -12,14 +12,12 @@ public class Worker(
     IHostApplicationLifetime hostApplicationLifetime,
     ILogger<Worker> logger) : BackgroundService
 {
-    // 🌟 修复 Program.cs 报错的核心：定义链路追踪的源名称和实例
     public const string ActivitySourceName = "IIoT.Migrations";
 
     public static readonly ActivitySource ActivitySource = new(ActivitySourceName);
 
     protected override async Task ExecuteAsync(CancellationToken cancellationToken)
     {
-        // 开启链路追踪 Activity
         using var activity = ActivitySource.StartActivity("Migrating database", ActivityKind.Client);
 
         try
@@ -32,18 +30,19 @@ public class Worker(
             // 1. 执行数据库迁移建表
             await RunMigrationAsync(dbContext, cancellationToken);
 
-            // 2. 集中执行所有种子数据的播种
+            // 2. 初始化 TimescaleDB 扩展和时序表
+            await InitializeTimescaleDbAsync(dbContext, cancellationToken);
+
+            // 3. 集中执行所有种子数据的播种
             await SeedDataAsync(dbContext, userManager, roleManager, cancellationToken);
         }
         catch (Exception ex)
         {
-            // 将异常信息记录到分布式链路追踪里
             activity?.AddException(ex);
             logger.LogCritical(ex, "数据库初始化过程中发生异常！");
             throw;
         }
 
-        // 干完活立刻关闭自己
         hostApplicationLifetime.StopApplication();
     }
 
@@ -51,8 +50,6 @@ public class Worker(
     {
         logger.LogInformation("开始应用 EF Core 数据库迁移...");
 
-        // 💡 架构师经验：在微服务和容器启动时，数据库可能还没彻底 Ready。
-        // 使用 ExecutionStrategy 可以实现启动时的自动重试，防止一启动就报错崩溃。
         var strategy = dbContext.Database.CreateExecutionStrategy();
         await strategy.ExecuteAsync(async () =>
         {
@@ -60,6 +57,50 @@ public class Worker(
         });
 
         logger.LogInformation("数据库迁移应用完成！");
+    }
+
+    /// <summary>
+    /// 初始化 TimescaleDB：启用扩展 + 将过站数据表转为时序表
+    /// 幂等设计：重复执行不会报错
+    /// </summary>
+    private async Task InitializeTimescaleDbAsync(IIoTDbContext dbContext, CancellationToken cancellationToken)
+    {
+        logger.LogInformation("开始初始化 TimescaleDB...");
+
+        var strategy = dbContext.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(async () =>
+        {
+            // 1. 启用 TimescaleDB 扩展（幂等，已存在不会报错）
+            await dbContext.Database.ExecuteSqlRawAsync(
+                "CREATE EXTENSION IF NOT EXISTS timescaledb;", cancellationToken);
+
+            // 2. 将过站数据表转为时序表
+            // 先检查是否已经是 hypertable，避免重复转换报错
+            var isHypertable = await dbContext.Database.ExecuteSqlRawAsync(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM timescaledb_information.hypertables 
+                        WHERE hypertable_name = 'pass_data_injection'
+                    ) THEN
+                        PERFORM create_hypertable('pass_data_injection', 'completed_time');
+                    END IF;
+                END $$;", cancellationToken);
+
+            // 3. 设备日志表也转为时序表（日志量大，同样受益于时间分区）
+            await dbContext.Database.ExecuteSqlRawAsync(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM timescaledb_information.hypertables 
+                        WHERE hypertable_name = 'device_logs'
+                    ) THEN
+                        PERFORM create_hypertable('device_logs', 'log_time');
+                    END IF;
+                END $$;", cancellationToken);
+
+            logger.LogInformation("TimescaleDB 初始化完成：pass_data_injection 和 device_logs 已转为时序表");
+        });
     }
 
     private async Task SeedDataAsync(
@@ -70,12 +111,7 @@ public class Worker(
     {
         logger.LogInformation("开始播种初始数据...");
 
-        // 1. 播种系统管理员与初始员工 (就是咱们刚才写的 101650 那个)
         await SystemInitData.SeedAsync(dbContext, userManager, roleManager);
-
-        // 🌟 2. 后期如果有更多数据要播种，直接在这里往下加即可！比如：
-        // await ProcessDictData.SeedAsync(dbContext); // 播种默认的几道工序
-        // await DefaultRecipeData.SeedAsync(dbContext); // 播种出厂预置配方
 
         logger.LogInformation("所有初始数据播种完成！");
     }

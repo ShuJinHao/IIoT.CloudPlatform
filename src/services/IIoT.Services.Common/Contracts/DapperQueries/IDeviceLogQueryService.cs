@@ -8,12 +8,13 @@ namespace IIoT.Services.Common.Contracts.DapperQueries;
 public interface IDeviceLogQueryService
 {
     /// <summary>
-    /// 分页查询设备日志（可按设备、级别、时间范围筛选）
+    /// 通用条件查询设备日志（漏斗式，所有查询入口最终调这一个方法）
     /// </summary>
-    Task<(List<dynamic> Items, int TotalCount)> GetPagedAsync(
+    Task<(List<dynamic> Items, int TotalCount)> GetLogsByConditionAsync(
         Pagination pagination,
-        Guid? deviceId = null,
+        Guid deviceId,
         string? level = null,
+        string? keyword = null,
         DateTime? startTime = null,
         DateTime? endTime = null,
         CancellationToken cancellationToken = default);

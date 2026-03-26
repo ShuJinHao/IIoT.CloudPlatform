@@ -10,6 +10,7 @@ var redis = builder.AddResource(new CleanRedisResource("redis-cache"))
 var password = builder.AddParameter("pg-password", secret: true);
 
 var postgres = builder.AddPostgres("postgres", password: password)
+    .WithImage("timescale/timescaledb", "latest-pg17")
     .WithDataVolume("postgres-iiot")
     .WithPgWeb()
     .AddDatabase("iiot-db");

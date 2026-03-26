@@ -66,29 +66,25 @@ public class RecipeController : ApiControllerBase
     }
 
     /// <summary>
-    /// 更新配方工艺参数并升级版本号
+    /// 升级配方版本（基于旧版本创建新版本，旧版本自动归档）
     /// </summary>
-    /// <param name="id">配方 ID</param>
-    /// <param name="command">最新的 JSONB 参数与版本号</param>
-    [HttpPut("{id}/parameters")]
-    public async Task<IActionResult> UpdateParameters([FromRoute] Guid id, [FromBody] UpdateRecipeParametersCommand command)
+    /// <param name="id">源配方 ID</param>
+    /// <param name="command">新版本号和参数</param>
+    [HttpPost("{id}/upgrade")]
+    public async Task<IActionResult> UpgradeVersion([FromRoute] Guid id, [FromBody] UpgradeRecipeVersionCommand command)
     {
-        // 🌟 依然采用 record 浅拷贝，将 URL 中的 id 优雅塞入指令体
-        var result = await Sender.Send(command with { RecipeId = id });
+        var result = await Sender.Send(command with { SourceRecipeId = id });
         return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
     }
 
     /// <summary>
-    /// 停用/软删除配方
+    /// 物理删除配方
     /// </summary>
-    /// <remarks>
-    /// 停用后配方从列表页消失，不可再下发，但保留数据库追溯记录。
-    /// </remarks>
     /// <param name="id">配方 ID</param>
     [HttpDelete("{id}")]
-    public async Task<IActionResult> Deactivate([FromRoute] Guid id)
+    public async Task<IActionResult> Delete([FromRoute] Guid id)
     {
-        var command = new DeactivateRecipeCommand(id);
+        var command = new DeleteRecipeCommand(id);
         var result = await Sender.Send(command);
         return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
     }

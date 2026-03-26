@@ -1,12 +1,21 @@
 using IIoT.EntityFrameworkCore;
 using IIoT.DataWorker.Consumers;
+using IIoT.Infrastructure.Logging;
 using MassTransit;
+using Serilog;
 
 var builder = Host.CreateApplicationBuilder(args);
 
+// 1. Serilog 日志（必须最先注册）
+builder.AddSerilog("dataworker");
+
+// 2. Aspire 服务默认配置
 builder.AddServiceDefaults();
+
+// 3. 数据库上下文
 builder.AddNpgsqlDbContext<IIoTDbContext>("iiot-db");
 
+// 4. MassTransit + RabbitMQ + Consumer 注册
 builder.Services.AddMassTransit(x =>
 {
     x.SetKebabCaseEndpointNameFormatter();

@@ -1,5 +1,4 @@
 ﻿using Dapper;
-using IIoT.Dapper;
 using IIoT.Services.Common.Contracts.DapperQueries;
 using IIoT.SharedKernel.Paging;
 
@@ -9,9 +8,8 @@ public class CapacityQueryService(IDbConnectionFactory connectionFactory) : ICap
 {
     public async Task<(List<dynamic> Items, int TotalCount)> GetDailyPagedAsync(
         Pagination pagination,
+        DateOnly? date = null,
         Guid? deviceId = null,
-        DateOnly? startDate = null,
-        DateOnly? endDate = null,
         CancellationToken cancellationToken = default)
     {
         using var connection = connectionFactory.CreateConnection();
@@ -19,33 +17,36 @@ public class CapacityQueryService(IDbConnectionFactory connectionFactory) : ICap
         var conditions = "WHERE 1=1";
         var parameters = new DynamicParameters();
 
+        if (date.HasValue)
+        {
+            conditions += " AND c.date = @Date";
+            parameters.Add("Date", date.Value);
+        }
+
         if (deviceId.HasValue)
         {
-            conditions += " AND device_id = @DeviceId";
+            conditions += " AND c.device_id = @DeviceId";
             parameters.Add("DeviceId", deviceId.Value);
         }
 
-        if (startDate.HasValue)
-        {
-            conditions += " AND date >= @StartDate";
-            parameters.Add("StartDate", startDate.Value);
-        }
-
-        if (endDate.HasValue)
-        {
-            conditions += " AND date <= @EndDate";
-            parameters.Add("EndDate", endDate.Value);
-        }
-
         var dataSql = $@"
-            SELECT id, device_id, date, shift_code, 
-                   total_count, ok_count, ng_count, reported_at
-            FROM daily_capacity
+            SELECT c.id, c.device_id, d.device_name, d.device_code,
+                   c.date, c.shift_code, c.total_count, c.ok_count, c.ng_count,
+                   CASE WHEN c.total_count > 0 
+                        THEN ROUND(c.ok_count * 100.0 / c.total_count, 2) 
+                        ELSE 0 END AS ok_rate,
+                   c.reported_at
+            FROM daily_capacity c
+            INNER JOIN devices d ON c.device_id = d.id
             {conditions}
-            ORDER BY date DESC, shift_code
+            ORDER BY c.date DESC, d.device_code
             OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY";
 
-        var countSql = $"SELECT COUNT(*) FROM daily_capacity {conditions}";
+        var countSql = $@"
+            SELECT COUNT(*) 
+            FROM daily_capacity c
+            INNER JOIN devices d ON c.device_id = d.id
+            {conditions}";
 
         var offset = (pagination.PageNumber - 1) * pagination.PageSize;
         parameters.Add("Offset", offset);
@@ -60,46 +61,30 @@ public class CapacityQueryService(IDbConnectionFactory connectionFactory) : ICap
         return (items, totalCount);
     }
 
-    public async Task<List<dynamic>> GetSummaryAsync(
-        Guid? deviceId = null,
-        DateOnly? startDate = null,
-        DateOnly? endDate = null,
+    public async Task<List<dynamic>> GetDeviceSummaryAsync(
+        Guid deviceId,
+        DateOnly startDate,
+        DateOnly endDate,
         CancellationToken cancellationToken = default)
     {
         using var connection = connectionFactory.CreateConnection();
 
-        var conditions = "WHERE 1=1";
-        var parameters = new DynamicParameters();
+        var sql = @"
+            SELECT c.date, c.shift_code, c.total_count, c.ok_count, c.ng_count,
+                   CASE WHEN c.total_count > 0 
+                        THEN ROUND(c.ok_count * 100.0 / c.total_count, 2) 
+                        ELSE 0 END AS ok_rate,
+                   d.device_name, d.device_code,
+                   c.reported_at
+            FROM daily_capacity c
+            INNER JOIN devices d ON c.device_id = d.id
+            WHERE c.device_id = @DeviceId
+              AND c.date >= @StartDate
+              AND c.date <= @EndDate
+            ORDER BY c.date DESC, c.shift_code";
 
-        if (deviceId.HasValue)
-        {
-            conditions += " AND device_id = @DeviceId";
-            parameters.Add("DeviceId", deviceId.Value);
-        }
+        var command = new CommandDefinition(sql, new { DeviceId = deviceId, StartDate = startDate, EndDate = endDate }, cancellationToken: cancellationToken);
 
-        if (startDate.HasValue)
-        {
-            conditions += " AND date >= @StartDate";
-            parameters.Add("StartDate", startDate.Value);
-        }
-
-        if (endDate.HasValue)
-        {
-            conditions += " AND date <= @EndDate";
-            parameters.Add("EndDate", endDate.Value);
-        }
-
-        var sql = $@"
-            SELECT device_id,
-                   SUM(total_count) AS total_count,
-                   SUM(ok_count) AS ok_count,
-                   SUM(ng_count) AS ng_count
-            FROM daily_capacity
-            {conditions}
-            GROUP BY device_id
-            ORDER BY device_id";
-
-        var command = new CommandDefinition(sql, parameters, cancellationToken: cancellationToken);
         return (await connection.QueryAsync(command)).ToList();
     }
 }

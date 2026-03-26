@@ -1,5 +1,4 @@
 ﻿using Dapper;
-using IIoT.Dapper;
 using IIoT.Services.Common.Contracts.DapperQueries;
 using IIoT.SharedKernel.Paging;
 
@@ -7,11 +6,11 @@ namespace IIoT.Dapper.QueryServices.PassStation;
 
 public class PassStationQueryService(IDbConnectionFactory connectionFactory) : IPassStationQueryService
 {
-    public async Task<(List<dynamic> Items, int TotalCount)> GetInjectionPagedAsync(
+    public async Task<(List<dynamic> Items, int TotalCount)> GetInjectionByConditionAsync(
         Pagination pagination,
+        List<Guid>? deviceIds = null,
         Guid? deviceId = null,
         string? barcode = null,
-        string? cellResult = null,
         DateTime? startTime = null,
         DateTime? endTime = null,
         CancellationToken cancellationToken = default)
@@ -21,6 +20,12 @@ public class PassStationQueryService(IDbConnectionFactory connectionFactory) : I
         var conditions = "WHERE 1=1";
         var parameters = new DynamicParameters();
 
+        if (deviceIds != null && deviceIds.Count > 0)
+        {
+            conditions += " AND device_id = ANY(@DeviceIds)";
+            parameters.Add("DeviceIds", deviceIds.ToArray());
+        }
+
         if (deviceId.HasValue)
         {
             conditions += " AND device_id = @DeviceId";
@@ -29,14 +34,8 @@ public class PassStationQueryService(IDbConnectionFactory connectionFactory) : I
 
         if (!string.IsNullOrWhiteSpace(barcode))
         {
-            conditions += " AND barcode LIKE @Barcode";
-            parameters.Add("Barcode", $"%{barcode}%");
-        }
-
-        if (!string.IsNullOrWhiteSpace(cellResult))
-        {
-            conditions += " AND cell_result = @CellResult";
-            parameters.Add("CellResult", cellResult);
+            conditions += " AND barcode = @Barcode";
+            parameters.Add("Barcode", barcode);
         }
 
         if (startTime.HasValue)
@@ -51,9 +50,8 @@ public class PassStationQueryService(IDbConnectionFactory connectionFactory) : I
             parameters.Add("EndTime", endTime.Value);
         }
 
-        // 列表查询不取大字段，只取核心列
         var dataSql = $@"
-            SELECT id, device_id, barcode, cell_result, 
+            SELECT id, device_id, barcode, cell_result,
                    pre_injection_time, pre_injection_weight,
                    post_injection_time, post_injection_weight,
                    injection_volume, completed_time, received_at

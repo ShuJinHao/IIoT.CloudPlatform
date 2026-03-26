@@ -18,7 +18,7 @@ public record RecipeForDeviceDto(
     Guid ProcessId,
     Guid? DeviceId,
     string ParametersJsonb,
-    bool IsActive
+    string Status
 );
 
 /// <summary>
@@ -57,7 +57,7 @@ public class GetRecipesByDeviceIdHandler(
             r.ProcessId,
             r.DeviceId,
             r.ParametersJsonb,
-            r.IsActive
+            r.Status.ToString()
         )).ToList();
 
         // 4. 写入缓存 (2小时过期，与现有配方缓存策略一致)

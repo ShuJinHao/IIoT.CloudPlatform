@@ -1,18 +1,22 @@
 using IIoT.HttpApi;
+using IIoT.Infrastructure.Logging;
+using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// 🌟 1. 全量注入逻辑
+// 1. Serilog 日志（必须最先注册）
+builder.AddSerilog("httpapi");
+
+// 2. 全量注入逻辑
 builder.AddServiceDefaults();
 builder.AddApplicationService();
 builder.AddWebServices();
 
 builder.Services.AddControllers();
-builder.Services.AddOpenApi(); // 🌟 .NET 10 内置 OpenAPI
+builder.Services.AddOpenApi();
 
 var app = builder.Build();
 
-// 🌟 2. 管道配置 (复刻 AI 示例)
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
@@ -23,6 +27,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseExceptionHandler();
+app.UseSerilogRequestLogging();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();

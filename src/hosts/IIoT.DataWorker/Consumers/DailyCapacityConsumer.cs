@@ -1,5 +1,6 @@
 ﻿using IIoT.Core.Production.Aggregates.Capacities;
 using IIoT.EntityFrameworkCore;
+using IIoT.Services.Common.Contracts;
 using IIoT.Services.Common.Events;
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
@@ -9,6 +10,7 @@ namespace IIoT.DataWorker.Consumers;
 
 public class DailyCapacityConsumer(
     IIoTDbContext dbContext,
+    ICacheService cacheService,
     ILogger<DailyCapacityConsumer> logger)
     : IConsumer<DailyCapacityReceivedEvent>
 {
@@ -54,6 +56,10 @@ public class DailyCapacityConsumer(
         }
 
         await dbContext.SaveChangesAsync();
+
+        // 3. 缓存爆破：单机台产能缓存失效
+        await cacheService.RemoveAsync($"iiot:capacity:summary:v1:{message.DeviceId}");
+
         logger.LogInformation("产能汇总写入成功: DeviceId={DeviceId}, Date={Date}", message.DeviceId, message.Date);
     }
 }

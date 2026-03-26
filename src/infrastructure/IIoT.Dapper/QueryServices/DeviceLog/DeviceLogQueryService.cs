@@ -1,5 +1,4 @@
 ﻿using Dapper;
-using IIoT.Dapper;
 using IIoT.Services.Common.Contracts.DapperQueries;
 using IIoT.SharedKernel.Paging;
 
@@ -7,51 +6,60 @@ namespace IIoT.Dapper.QueryServices.DeviceLog;
 
 public class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : IDeviceLogQueryService
 {
-    public async Task<(List<dynamic> Items, int TotalCount)> GetPagedAsync(
+    public async Task<(List<dynamic> Items, int TotalCount)> GetLogsByConditionAsync(
         Pagination pagination,
-        Guid? deviceId = null,
+        Guid deviceId,
         string? level = null,
+        string? keyword = null,
         DateTime? startTime = null,
         DateTime? endTime = null,
         CancellationToken cancellationToken = default)
     {
         using var connection = connectionFactory.CreateConnection();
 
-        var conditions = "WHERE 1=1";
+        // device_id 必传，先走索引缩小范围
+        var conditions = "WHERE l.device_id = @DeviceId";
         var parameters = new DynamicParameters();
-
-        if (deviceId.HasValue)
-        {
-            conditions += " AND device_id = @DeviceId";
-            parameters.Add("DeviceId", deviceId.Value);
-        }
+        parameters.Add("DeviceId", deviceId);
 
         if (!string.IsNullOrWhiteSpace(level))
         {
-            conditions += " AND level = @Level";
+            conditions += " AND l.level = @Level";
             parameters.Add("Level", level);
         }
 
         if (startTime.HasValue)
         {
-            conditions += " AND log_time >= @StartTime";
+            conditions += " AND l.log_time >= @StartTime";
             parameters.Add("StartTime", startTime.Value);
         }
 
         if (endTime.HasValue)
         {
-            conditions += " AND log_time <= @EndTime";
+            conditions += " AND l.log_time <= @EndTime";
             parameters.Add("EndTime", endTime.Value);
         }
 
+        // 模糊搜索放最后，在索引已经缩小的数据集上做过滤
+        if (!string.IsNullOrWhiteSpace(keyword))
+        {
+            conditions += " AND l.message LIKE @Keyword";
+            parameters.Add("Keyword", $"%{keyword}%");
+        }
+
         var dataSql = $@"
-            SELECT id, device_id, level, message, log_time, received_at
-            FROM device_logs
+            SELECT l.id, l.device_id, d.device_name, d.device_code,
+                   l.level, l.message, l.log_time, l.received_at
+            FROM device_logs l
+            INNER JOIN devices d ON l.device_id = d.id
             {conditions}
-            ORDER BY log_time DESC
+            ORDER BY l.log_time DESC
             OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY";
 
-        var countSql = $"SELECT COUNT(*) FROM device_logs {conditions}";
+        var countSql = $@"
+            SELECT COUNT(*)
+            FROM device_logs l
+            {conditions}";
 
         var offset = (pagination.PageNumber - 1) * pagination.PageSize;
         parameters.Add("Offset", offset);

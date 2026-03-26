@@ -77,3 +77,26 @@ docker stack rm iiot-app
 
 # 查看容器日志
 docker service logs iiot-app_iiot-httpapi -f
+
+
+
+
+# 查看 httpapi 的日志文件
+docker run --rm -v httpapi-logs:/logs alpine ls -la /logs
+
+# 查看某天的日志
+docker run --rm -v httpapi-logs:/logs alpine cat /logs/iiot-httpapi-20260326.log
+
+# 或者直接进容器看
+docker exec -it <container_id> ls /app/logs/
+```
+
+RabbitMQ 管理面板暴露在 15672 端口，浏览器访问 `http://10.98.90.154:15672`，用 guest/guest 登录可以看到队列、消息堆积情况。
+
+**部署操作手册补充：**
+
+验证部署结果那里，正常状态应该多两个服务：
+```
+# iiot-migration    × 1  Complete (一次性任务，跑完自动退出)
+# iiot-dataworker   × 1  Running
+# rabbitmq          × 1  Running

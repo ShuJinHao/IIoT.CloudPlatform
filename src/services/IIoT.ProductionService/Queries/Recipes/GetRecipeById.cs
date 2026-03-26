@@ -24,8 +24,8 @@ public record RecipeDetailDto(
     string Version,
     Guid ProcessId,
     Guid? DeviceId,
-    string ParametersJsonb, // 🌟 详情接口必须暴露这个核心的 JSONB 工艺参数
-    bool IsActive
+    string ParametersJsonb,
+    string Status
 );
 
 /// <summary>
@@ -67,7 +67,7 @@ public class GetRecipeByIdHandler(
                 recipe.ProcessId,
                 recipe.DeviceId,
                 recipe.ParametersJsonb,
-                recipe.IsActive
+                recipe.Status.ToString()
             );
 
             // 写入缓存，防击穿 (设置 2 小时过期，或结合业务调整)
