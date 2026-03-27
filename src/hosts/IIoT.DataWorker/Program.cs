@@ -1,6 +1,8 @@
-using IIoT.EntityFrameworkCore;
 using IIoT.DataWorker.Consumers;
+using IIoT.EntityFrameworkCore;
+using IIoT.Infrastructure.Caching;
 using IIoT.Infrastructure.Logging;
+using IIoT.Services.Common.Contracts;
 using MassTransit;
 using Serilog;
 
@@ -14,6 +16,11 @@ builder.AddServiceDefaults();
 
 // 3. 数据库上下文
 builder.AddNpgsqlDbContext<IIoTDbContext>("iiot-db");
+
+
+// ↓↓↓ 新增：Redis 缓存（DailyCapacityConsumer 爆破缓存需要）
+builder.AddRedisDistributedCache("redis-cache");
+builder.Services.AddSingleton<ICacheService, RedisCacheService>();
 
 // 4. MassTransit + RabbitMQ + Consumer 注册
 builder.Services.AddMassTransit(x =>

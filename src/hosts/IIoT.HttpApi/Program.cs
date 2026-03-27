@@ -4,10 +4,7 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// 1. Serilog 日志（必须最先注册）
 builder.AddSerilog("httpapi");
-
-// 2. 全量注入逻辑
 builder.AddServiceDefaults();
 builder.AddApplicationService();
 builder.AddWebServices();

@@ -14,7 +14,8 @@ public class PassDataInjectionConfiguration : IEntityTypeConfiguration<PassDataI
     {
         builder.ToTable("pass_data_injection");
 
-        builder.HasKey(p => p.Id);
+        // TimescaleDB 超表要求：主键必须包含分区列 completed_time
+        builder.HasKey(p => new { p.Id, p.CompletedTime });
         builder.Property(p => p.Id).HasColumnName("id");
 
         // ==========================================

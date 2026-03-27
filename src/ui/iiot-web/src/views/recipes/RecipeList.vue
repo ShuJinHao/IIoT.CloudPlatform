@@ -4,7 +4,7 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">配方管理</h1>
-        <p class="page-sub">管理生产工序的通用配方与机台专属特调配方</p>
+        <p class="page-sub">管理生产工序的通用配方与机台专属特调配方，支持版本管理</p>
       </div>
       <button class="btn btn-primary" v-permission="'Recipe.Create'" @click="openCreateModal">
         <svg viewBox="0 0 16 16" fill="none"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
@@ -60,18 +60,18 @@
               </span>
             </td>
             <td>
-              <span class="status-tag" :class="recipe.isActive ? 'active' : 'inactive'">
-                <span class="status-dot"></span>{{ recipe.isActive ? '启用' : '已停用' }}
+              <span class="status-tag" :class="recipe.status === 'Active' ? 'active' : 'archived'">
+                <span class="status-dot"></span>{{ recipe.status === 'Active' ? '启用中' : '已归档' }}
               </span>
             </td>
             <td><span class="process-name-chip">{{ processNameMap[recipe.processId] || recipe.processId.substring(0, 8) + '…' }}</span></td>
             <td><span v-if="recipe.deviceId" class="device-name-chip">{{ deviceNameMap[recipe.deviceId] || recipe.deviceId.substring(0, 8) + '…' }}</span><span v-else class="no-device">—</span></td>
             <td class="action-cell" @click.stop>
-              <button class="icon-btn edit" title="编辑参数" v-permission="'Recipe.Create'" @click="openEditModal(recipe)">
-                <svg viewBox="0 0 16 16" fill="none"><path d="M11.5 2.5l2 2-8 8H3.5v-2l8-8z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+              <button v-if="recipe.status === 'Active'" class="icon-btn edit" title="升级版本" v-permission="'Recipe.Update'" @click="openUpgradeModal(recipe)">
+                <svg viewBox="0 0 16 16" fill="none"><path d="M8 12V4M5 7l3-3 3 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </button>
-              <button v-if="recipe.isActive" class="icon-btn deactivate" title="停用配方" v-permission="'Recipe.Create'" @click="handleDeactivate(recipe)">
-                <svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.2"/><path d="M5.5 8h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+              <button class="icon-btn delete" title="删除配方" v-permission="'Recipe.Create'" @click="handleDelete(recipe)">
+                <svg viewBox="0 0 16 16" fill="none"><path d="M4 5h8M5.5 5V4a1 1 0 011-1h3a1 1 0 011 1v1M6.5 7v4M9.5 7v4M5 5l.5 7.5a1 1 0 001 .5h3a1 1 0 001-.5L11 5" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </button>
             </td>
           </tr>
@@ -90,7 +90,7 @@
       </button>
     </div>
 
-    <!-- 新建配方弹窗 -->
+    <!-- 新建配方弹窗（结构化参数表单） -->
     <Teleport to="body">
       <div v-if="showCreateModal" class="modal-overlay" @click.self="showCreateModal=false">
         <div class="modal modal-lg">
@@ -119,32 +119,34 @@
                 <option v-for="d in allDevices" :key="d.id" :value="d.id">{{ d.deviceCode }} · {{ d.deviceName }}</option>
               </select>
             </div>
+            <!-- 结构化参数表单 -->
             <div class="form-field">
               <label class="form-label">
-                工艺参数 JSONB <span class="required">*</span>
-                <span class="json-status" :class="jsonValid ? 'ok' : 'err'">
-                  {{ jsonValid ? '✓ JSON 合法' : '✗ JSON 格式错误' }}
-                </span>
+                工艺参数 <span class="required">*</span>
+                <button class="add-param-btn" @click="addCreateParam">+ 添加参数</button>
               </label>
-              <div class="json-editor-wrap">
-                <textarea
-                  class="json-editor"
-                  v-model="createForm.ParametersJsonb"
-                  @input="validateJson"
-                  spellcheck="false"
-                  placeholder='{"temperature": 85, "pressure": 1.2, "speed": 300}'
-                  rows="10"
-                ></textarea>
-                <button class="format-btn" @click="formatJson('create')" title="格式化 JSON">
-                  <svg viewBox="0 0 16 16" fill="none"><path d="M2 4h12M4 8h8M6 12h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-                  格式化
-                </button>
+              <div class="params-table" v-if="createParams.length > 0">
+                <div class="params-header">
+                  <span class="ph-name">参数名称</span>
+                  <span class="ph-unit">单位</span>
+                  <span class="ph-min">下限</span>
+                  <span class="ph-max">上限</span>
+                  <span class="ph-act"></span>
+                </div>
+                <div class="param-row" v-for="(param, idx) in createParams" :key="param.id">
+                  <input class="param-input name" v-model="param.name" placeholder="如：温度" />
+                  <input class="param-input unit" v-model="param.unit" placeholder="℃" />
+                  <input class="param-input num" v-model.number="param.min" type="number" placeholder="0" />
+                  <input class="param-input num" v-model.number="param.max" type="number" placeholder="100" />
+                  <button class="param-del" @click="createParams.splice(idx, 1)" title="删除">✕</button>
+                </div>
               </div>
+              <div v-else class="params-empty">暂无参数，点击上方"添加参数"开始配置</div>
             </div>
           </div>
           <div class="modal-footer">
             <button class="btn btn-ghost" @click="showCreateModal=false">取消</button>
-            <button class="btn btn-primary" :disabled="submitting || !jsonValid" @click="submitCreate">
+            <button class="btn btn-primary" :disabled="submitting || createParams.length === 0" @click="submitCreate">
               {{ submitting ? '创建中...' : '创建配方' }}
             </button>
           </div>
@@ -152,58 +154,61 @@
       </div>
     </Teleport>
 
-    <!-- 编辑参数弹窗（含版本升级） -->
+    <!-- 升级版本弹窗（结构化参数表单） -->
     <Teleport to="body">
-      <div v-if="showEditModal" class="modal-overlay" @click.self="showEditModal=false">
+      <div v-if="showUpgradeModal" class="modal-overlay" @click.self="showUpgradeModal=false">
         <div class="modal modal-lg">
           <div class="modal-header">
             <div>
-              <span class="modal-title">更新工艺参数</span>
-              <span class="modal-subtitle">{{ editTarget?.recipeName }} · 当前版本 {{ editTarget?.version }}</span>
+              <span class="modal-title">升级配方版本</span>
+              <span class="modal-subtitle">{{ upgradeTarget?.recipeName }} · 当前版本 {{ upgradeTarget?.version }}</span>
             </div>
-            <button class="modal-close" @click="showEditModal=false">✕</button>
+            <button class="modal-close" @click="showUpgradeModal=false">✕</button>
           </div>
           <div class="modal-body">
             <div class="form-row">
               <div class="form-field">
                 <label class="form-label">新版本号 <span class="required">*</span></label>
-                <input class="form-input mono-input" v-model="editForm.Version" placeholder="如：V2.0" />
-                <p class="form-hint">版本号必须与同名配方中现有版本不重复</p>
+                <input class="form-input mono-input" v-model="upgradeForm.NewVersion" placeholder="如：V2.0" />
+                <p class="form-hint">版本号不能与已有版本重复</p>
               </div>
               <div class="form-field">
                 <label class="form-label">配方类型</label>
                 <div class="readonly-field">
-                  <span class="type-tag" :class="editTarget?.deviceId ? 'special' : 'universal'">
-                    {{ editTarget?.deviceId ? '机台专属特调' : '工序通用配方' }}
+                  <span class="type-tag" :class="upgradeTarget?.deviceId ? 'special' : 'universal'">
+                    {{ upgradeTarget?.deviceId ? '机台专属特调' : '工序通用配方' }}
                   </span>
                 </div>
               </div>
             </div>
+            <!-- 结构化参数表单 -->
             <div class="form-field">
               <label class="form-label">
-                工艺参数 JSONB <span class="required">*</span>
-                <span class="json-status" :class="editJsonValid ? 'ok' : 'err'">
-                  {{ editJsonValid ? '✓ JSON 合法' : '✗ JSON 格式错误' }}
-                </span>
+                工艺参数 <span class="required">*</span>
+                <button class="add-param-btn" @click="addUpgradeParam">+ 添加参数</button>
               </label>
-              <div class="json-editor-wrap">
-                <textarea
-                  class="json-editor"
-                  v-model="editForm.ParametersJsonb"
-                  @input="validateEditJson"
-                  spellcheck="false"
-                  rows="12"
-                ></textarea>
-                <button class="format-btn" @click="formatJson('edit')" title="格式化 JSON">
-                  <svg viewBox="0 0 16 16" fill="none"><path d="M2 4h12M4 8h8M6 12h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-                  格式化
-                </button>
+              <div class="params-table" v-if="upgradeParams.length > 0">
+                <div class="params-header">
+                  <span class="ph-name">参数名称</span>
+                  <span class="ph-unit">单位</span>
+                  <span class="ph-min">下限</span>
+                  <span class="ph-max">上限</span>
+                  <span class="ph-act"></span>
+                </div>
+                <div class="param-row" v-for="(param, idx) in upgradeParams" :key="param.id">
+                  <input class="param-input name" v-model="param.name" placeholder="如：温度" />
+                  <input class="param-input unit" v-model="param.unit" placeholder="℃" />
+                  <input class="param-input num" v-model.number="param.min" type="number" placeholder="0" />
+                  <input class="param-input num" v-model.number="param.max" type="number" placeholder="100" />
+                  <button class="param-del" @click="upgradeParams.splice(idx, 1)" title="删除">✕</button>
+                </div>
               </div>
+              <div v-else class="params-empty">暂无参数，点击上方"添加参数"开始配置</div>
             </div>
           </div>
           <div class="modal-footer">
-            <button class="btn btn-ghost" @click="showEditModal=false">取消</button>
-            <button class="btn btn-primary" :disabled="submitting || !editJsonValid" @click="submitEdit">
+            <button class="btn btn-ghost" @click="showUpgradeModal=false">取消</button>
+            <button class="btn btn-primary" :disabled="submitting || upgradeParams.length === 0" @click="submitUpgrade">
               {{ submitting ? '保存中...' : '保存并升版' }}
             </button>
           </div>
@@ -211,7 +216,7 @@
       </div>
     </Teleport>
 
-    <!-- 详情侧边栏（含 JSONB 预览） -->
+    <!-- 详情侧边栏 -->
     <Teleport to="body">
       <div v-if="showDetailPanel" class="detail-overlay" @click.self="showDetailPanel=false">
         <div class="detail-panel">
@@ -226,9 +231,9 @@
             </div>
           </div>
           <div class="detail-body" v-else-if="detailData">
-            <div class="detail-status-banner" :class="detailData.isActive ? 'active' : 'inactive'">
+            <div class="detail-status-banner" :class="detailData.status === 'Active' ? 'active' : 'archived'">
               <span class="status-dot"></span>
-              {{ detailData.isActive ? '配方启用中' : '配方已停用' }}
+              {{ detailData.status === 'Active' ? '配方启用中' : '配方已归档' }}
               <span class="detail-type-badge" :class="detailData.deviceId ? 'special' : 'universal'">
                 {{ detailData.deviceId ? '特调' : '通用' }}
               </span>
@@ -251,8 +256,14 @@
                 <span class="detail-value">{{ deviceNameMap[detailData.deviceId] || detailData.deviceId }}</span>
               </div>
               <div class="detail-row">
-                <span class="detail-label">工艺参数 JSONB</span>
-                <div class="json-preview-wrap">
+                <span class="detail-label">工艺参数</span>
+                <div class="detail-params-list" v-if="detailParams.length > 0">
+                  <div class="detail-param-item" v-for="p in detailParams" :key="p.id">
+                    <span class="dp-name">{{ p.name }}</span>
+                    <span class="dp-range">{{ p.min }} ~ {{ p.max }} {{ p.unit }}</span>
+                  </div>
+                </div>
+                <div v-else class="json-preview-wrap">
                   <pre class="json-preview">{{ prettyJson(detailData.parametersJsonb) }}</pre>
                 </div>
               </div>
@@ -262,7 +273,7 @@
       </div>
     </Teleport>
 
-    <!-- 确认停用对话框 -->
+    <!-- 确认删除对话框 -->
     <Teleport to="body">
       <div v-if="confirmDialog.show" class="modal-overlay">
         <div class="confirm-box">
@@ -287,8 +298,8 @@
 import { ref, reactive, computed, onMounted } from 'vue';
 import {
   getRecipePagedListApi, getRecipeDetailApi, createRecipeApi,
-  updateRecipeParametersApi, deactivateRecipeApi,
-  type RecipeListItemDto, type RecipeDetailDto, type PagedMetaData,
+  upgradeRecipeVersionApi, deleteRecipeApi,
+  type RecipeListItemDto, type RecipeDetailDto, type RecipeParameter, type PagedMetaData,
 } from '../../api/recipe';
 import { getAllMfgProcessesApi, type MfgProcessSelectDto } from '../../api/mfgProcess';
 import { getAllActiveDevicesApi, type DeviceSelectDto } from '../../api/device';
@@ -300,7 +311,6 @@ const currentPage = ref(1);
 const metaData = ref<PagedMetaData>({ totalCount: 0, pageSize: 10, currentPage: 1, totalPages: 1 });
 const submitting = ref(false);
 
-// 🌟 全量工序和设备列表（供下拉选择器使用）
 const allProcesses = ref<MfgProcessSelectDto[]>([]);
 const allDevices = ref<DeviceSelectDto[]>([]);
 const fetchSelectData = async () => {
@@ -308,7 +318,6 @@ const fetchSelectData = async () => {
   try { allDevices.value = await getAllActiveDevicesApi() as unknown as DeviceSelectDto[]; } catch { allDevices.value = []; }
 };
 
-// 名称映射表（列表和详情展示用）
 const processNameMap = computed(() => {
   const m: Record<string, string> = {};
   for (const p of allProcesses.value) m[p.id] = `${p.processCode} · ${p.processName}`;
@@ -361,89 +370,101 @@ const fetchList = async () => {
 
 const goPage = (page: number) => { currentPage.value = page; fetchList(); };
 
-// ── JSON 工具 ──
-const isValidJson = (str: string): boolean => {
-  if (!str.trim()) return false;
-  try { JSON.parse(str); return true; } catch { return false; }
+// ── 参数工具函数 ──
+const generateParamId = () => crypto.randomUUID?.() || Math.random().toString(36).substring(2, 10);
+
+const parseParams = (jsonb: string): RecipeParameter[] => {
+  try {
+    const arr = JSON.parse(jsonb);
+    if (Array.isArray(arr)) return arr.map((p: any) => ({ id: p.id || generateParamId(), name: p.name || '', unit: p.unit || '', min: p.min ?? 0, max: p.max ?? 0 }));
+  } catch { }
+  return [];
+};
+
+const paramsToJsonb = (params: RecipeParameter[]): string => {
+  return JSON.stringify(params.map(p => ({ id: p.id, name: p.name, unit: p.unit, min: p.min, max: p.max })));
 };
 
 const prettyJson = (str: string): string => {
   try { return JSON.stringify(JSON.parse(str), null, 2); } catch { return str; }
 };
 
-const formatJson = (target: 'create' | 'edit') => {
-  if (target === 'create') {
-    try { createForm.ParametersJsonb = JSON.stringify(JSON.parse(createForm.ParametersJsonb), null, 2); jsonValid.value = true; } catch { }
-  } else {
-    try { editForm.ParametersJsonb = JSON.stringify(JSON.parse(editForm.ParametersJsonb), null, 2); editJsonValid.value = true; } catch { }
-  }
-};
-
 // ── 新建配方 ──
 const showCreateModal = ref(false);
-const jsonValid = ref(true);
+const createParams = ref<RecipeParameter[]>([]);
 const createForm = reactive({
-  RecipeName: '', ProcessId: '', DeviceId: '', ParametersJsonb: '{\n  \n}',
+  RecipeName: '', ProcessId: '', DeviceId: '',
 });
 
-const validateJson = () => { jsonValid.value = isValidJson(createForm.ParametersJsonb); };
+const addCreateParam = () => {
+  createParams.value.push({ id: generateParamId(), name: '', unit: '', min: 0, max: 0 });
+};
 
 const openCreateModal = async () => {
-  Object.assign(createForm, { RecipeName: '', ProcessId: '', DeviceId: '', ParametersJsonb: '{\n  \n}' });
-  jsonValid.value = true;
+  Object.assign(createForm, { RecipeName: '', ProcessId: '', DeviceId: '' });
+  createParams.value = [];
   showCreateModal.value = true;
   await fetchSelectData();
 };
 
 const submitCreate = async () => {
   if (!createForm.RecipeName.trim() || !createForm.ProcessId) { alert('配方名称和归属工序为必填项'); return; }
-  if (!isValidJson(createForm.ParametersJsonb)) { alert('工艺参数 JSON 格式错误，请检查'); return; }
+  if (createParams.value.length === 0) { alert('至少添加一个工艺参数'); return; }
+  const emptyName = createParams.value.some(p => !p.name.trim());
+  if (emptyName) { alert('参数名称不能为空'); return; }
   submitting.value = true;
   try {
     await createRecipeApi({
       RecipeName: createForm.RecipeName,
       ProcessId: createForm.ProcessId,
       DeviceId: createForm.DeviceId.trim() || null,
-      ParametersJsonb: createForm.ParametersJsonb,
+      ParametersJsonb: paramsToJsonb(createParams.value),
     });
     showCreateModal.value = false;
     fetchList();
   } catch { } finally { submitting.value = false; }
 };
 
-// ── 编辑参数（升版） ──
-const showEditModal = ref(false);
-const editTarget = ref<RecipeListItemDto | null>(null);
-const editJsonValid = ref(true);
-const editForm = reactive({ ParametersJsonb: '', Version: '' });
+// ── 升级版本 ──
+const showUpgradeModal = ref(false);
+const upgradeTarget = ref<RecipeListItemDto | null>(null);
+const upgradeParams = ref<RecipeParameter[]>([]);
+const upgradeForm = reactive({ NewVersion: '' });
 
-const validateEditJson = () => { editJsonValid.value = isValidJson(editForm.ParametersJsonb); };
+const addUpgradeParam = () => {
+  upgradeParams.value.push({ id: generateParamId(), name: '', unit: '', min: 0, max: 0 });
+};
 
-const openEditModal = async (recipe: RecipeListItemDto) => {
-  editTarget.value = recipe;
-  editForm.Version = '';
-  editForm.ParametersJsonb = '';
-  showEditModal.value = true;
-  // 拉取含 JSONB 的完整详情
+const openUpgradeModal = async (recipe: RecipeListItemDto) => {
+  upgradeTarget.value = recipe;
+  upgradeForm.NewVersion = '';
+  upgradeParams.value = [];
+  showUpgradeModal.value = true;
   try {
-    const detail = await getRecipeDetailApi(recipe.id) as unknown as RecipeDetailDto;
-    editForm.ParametersJsonb = prettyJson(detail.parametersJsonb);
-    editJsonValid.value = true;
-  } catch {
-    editForm.ParametersJsonb = '{}';
+    const raw = await getRecipeDetailApi(recipe.id) as any;
+    const jsonb = raw?.parametersJsonb || '';
+    upgradeParams.value = parseParams(jsonb);
+  } catch (e: any) {
+    if (e && e.parametersJsonb) {
+      upgradeParams.value = parseParams(e.parametersJsonb);
+    } else {
+      upgradeParams.value = [];
+    }
   }
 };
 
-const submitEdit = async () => {
-  if (!editTarget.value || !editForm.Version.trim()) { alert('版本号不能为空'); return; }
-  if (!isValidJson(editForm.ParametersJsonb)) { alert('工艺参数 JSON 格式错误，请检查'); return; }
+const submitUpgrade = async () => {
+  if (!upgradeTarget.value || !upgradeForm.NewVersion.trim()) { alert('版本号不能为空'); return; }
+  if (upgradeParams.value.length === 0) { alert('至少保留一个工艺参数'); return; }
+  const emptyName = upgradeParams.value.some(p => !p.name.trim());
+  if (emptyName) { alert('参数名称不能为空'); return; }
   submitting.value = true;
   try {
-    await updateRecipeParametersApi(editTarget.value.id, {
-      ParametersJsonb: editForm.ParametersJsonb,
-      Version: editForm.Version,
+    await upgradeRecipeVersionApi(upgradeTarget.value.id, {
+      NewVersion: upgradeForm.NewVersion,
+      ParametersJsonb: paramsToJsonb(upgradeParams.value),
     });
-    showEditModal.value = false;
+    showUpgradeModal.value = false;
     fetchList();
   } catch { } finally { submitting.value = false; }
 };
@@ -452,36 +473,46 @@ const submitEdit = async () => {
 const showDetailPanel = ref(false);
 const detailData = ref<RecipeDetailDto | null>(null);
 const detailLoading = ref(false);
+const detailParams = computed(() => {
+  if (!detailData.value) return [];
+  return parseParams(detailData.value.parametersJsonb);
+});
 
 const openDetailPanel = async (recipe: RecipeListItemDto) => {
   showDetailPanel.value = true;
   detailLoading.value = true;
   detailData.value = null;
   try {
-    detailData.value = await getRecipeDetailApi(recipe.id) as unknown as RecipeDetailDto;
-  } catch {
-    showDetailPanel.value = false;
+    const raw = await getRecipeDetailApi(recipe.id) as any;
+    detailData.value = raw as RecipeDetailDto;
+  } catch (e: any) {
+    // 拦截器 reject 的数据可能就是有效的详情对象
+    if (e && e.id && e.parametersJsonb) {
+      detailData.value = e as RecipeDetailDto;
+    } else {
+      showDetailPanel.value = false;
+    }
   } finally {
     detailLoading.value = false;
   }
 };
 
-// ── 停用确认 ──
+// ── 物理删除确认 ──
 const confirmDialog = reactive({
   show: false, title: '', desc: '', confirmText: '',
   onConfirm: () => {},
 });
 
-const handleDeactivate = (recipe: RecipeListItemDto) => {
+const handleDelete = (recipe: RecipeListItemDto) => {
   Object.assign(confirmDialog, {
     show: true,
-    title: '确认停用配方',
-    desc: `配方【${recipe.recipeName} · ${recipe.version}】停用后将从生产终端下发列表中移除，请确认。`,
-    confirmText: '停用',
+    title: '确认永久删除配方',
+    desc: `配方【${recipe.recipeName} · ${recipe.version}】将被永久删除且无法恢复，确认要删除吗？`,
+    confirmText: '永久删除',
     onConfirm: async () => {
       submitting.value = true;
       try {
-        await deactivateRecipeApi(recipe.id);
+        await deleteRecipeApi(recipe.id);
         confirmDialog.show = false;
         fetchList();
       } catch { } finally { submitting.value = false; }
@@ -526,23 +557,22 @@ onMounted(() => { fetchList(); fetchSelectData(); });
 .type-tag { font-size: 11px; padding: 3px 8px; border-radius: 3px; font-weight: 500; }
 .type-tag.universal { background: rgba(0,229,255,0.08); color: rgba(0,229,255,0.7); border: 1px solid rgba(0,229,255,0.15); }
 .type-tag.special { background: rgba(255,179,0,0.1); color: #ffb300; border: 1px solid rgba(255,179,0,0.2); }
-.id-chip { font-family: 'Courier New', monospace; font-size: 11px; color: rgba(255,255,255,0.3); background: rgba(255,255,255,0.04); padding: 2px 6px; border-radius: 3px; }
 .process-name-chip { font-size: 12px; color: rgba(255,255,255,0.6); background: rgba(0,229,255,0.06); border: 1px solid rgba(0,229,255,0.1); padding: 2px 8px; border-radius: 3px; }
 .device-name-chip { font-size: 12px; color: rgba(255,179,0,0.8); background: rgba(255,179,0,0.06); border: 1px solid rgba(255,179,0,0.12); padding: 2px 8px; border-radius: 3px; }
 .no-device { color: rgba(255,255,255,0.15); }
 
 .status-tag { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500; padding: 3px 9px; border-radius: 20px; }
 .status-tag.active { background: rgba(0,229,160,0.12); color: #00e5a0; }
-.status-tag.inactive { background: rgba(255,107,107,0.1); color: #ff8888; }
+.status-tag.archived { background: rgba(255,179,0,0.1); color: #ffb300; }
 .status-dot { width: 5px; height: 5px; border-radius: 50%; }
 .status-tag.active .status-dot { background: #00e5a0; box-shadow: 0 0 4px #00e5a0; }
-.status-tag.inactive .status-dot { background: #ff8888; }
+.status-tag.archived .status-dot { background: #ffb300; }
 
 .action-cell { text-align: right; white-space: nowrap; }
 .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 3px; border: none; cursor: pointer; background: rgba(255,255,255,0.04); color: rgba(255,255,255,0.4); transition: all 0.15s; margin-left: 4px; }
 .icon-btn svg { width: 13px; height: 13px; }
 .icon-btn.edit:hover { background: rgba(0,229,255,0.12); color: #00e5ff; }
-.icon-btn.deactivate:hover { background: rgba(255,107,107,0.12); color: #ff8888; }
+.icon-btn.delete:hover { background: rgba(255,77,79,0.12); color: #ff8888; }
 
 .skeleton-rows { padding: 8px 0; }
 .skeleton-row { display: flex; gap: 16px; padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,0.04); align-items: center; }
@@ -575,7 +605,7 @@ onMounted(() => { fetchList(); fetchSelectData(); });
 
 .modal-overlay { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; }
 .modal { background: #0f1525; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; width: 520px; max-width: 95vw; overflow: hidden; box-shadow: 0 24px 48px rgba(0,0,0,0.6); max-height: 90vh; display: flex; flex-direction: column; }
-.modal-lg { width: 680px; }
+.modal-lg { width: 720px; }
 .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px; border-bottom: 1px solid rgba(255,255,255,0.06); flex-shrink: 0; }
 .modal-title { font-size: 15px; font-weight: 600; color: #fff; display: block; }
 .modal-subtitle { font-size: 12px; color: rgba(255,255,255,0.35); margin-top: 2px; display: block; }
@@ -598,30 +628,21 @@ select.form-input option { background: #0f1525; color: #e0e4ef; }
 .form-hint { font-size: 11px; color: rgba(255,255,255,0.2); margin: 0; }
 .readonly-field { display: flex; align-items: center; padding: 6px 0; }
 
-/* JSONB 编辑器 */
-.json-status { font-size: 11px; font-weight: 400; margin-left: auto; }
-.json-status.ok { color: #00e5a0; }
-.json-status.err { color: #ff8888; }
-.json-editor-wrap { position: relative; }
-.json-editor {
-  width: 100%; background: #080c18;
-  border: 1px solid rgba(0,229,255,0.15); border-radius: 4px;
-  padding: 12px 14px; color: #a8d8ea;
-  font-family: 'Courier New', Courier, monospace; font-size: 12px; line-height: 1.6;
-  outline: none; resize: vertical; transition: border-color 0.2s;
-  min-height: 120px;
-}
-.json-editor:focus { border-color: rgba(0,229,255,0.35); box-shadow: inset 0 0 0 1px rgba(0,229,255,0.08); }
-.format-btn {
-  position: absolute; bottom: 10px; right: 10px;
-  display: inline-flex; align-items: center; gap: 4px;
-  background: rgba(0,229,255,0.08); border: 1px solid rgba(0,229,255,0.2);
-  color: rgba(0,229,255,0.7); font-size: 11px; padding: 3px 8px;
-  border-radius: 3px; cursor: pointer; transition: all 0.15s;
-  font-family: 'Noto Sans SC', sans-serif;
-}
-.format-btn:hover { background: rgba(0,229,255,0.15); color: #00e5ff; }
-.format-btn svg { width: 12px; height: 12px; }
+/* 结构化参数表单 */
+.add-param-btn { margin-left: auto; background: rgba(0,229,255,0.08); border: 1px solid rgba(0,229,255,0.2); color: rgba(0,229,255,0.7); font-size: 11px; padding: 2px 10px; border-radius: 3px; cursor: pointer; font-family: 'Noto Sans SC', sans-serif; transition: all 0.15s; }
+.add-param-btn:hover { background: rgba(0,229,255,0.15); color: #00e5ff; }
+.params-table { border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden; }
+.params-header { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 32px; gap: 1px; background: rgba(255,255,255,0.03); padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.params-header span { font-size: 11px; color: rgba(255,255,255,0.3); font-weight: 500; letter-spacing: 0.5px; }
+.param-row { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 32px; gap: 6px; padding: 6px 10px; border-bottom: 1px solid rgba(255,255,255,0.04); align-items: center; }
+.param-row:last-child { border-bottom: none; }
+.param-input { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 3px; padding: 6px 8px; color: rgba(255,255,255,0.8); font-size: 12px; font-family: 'Noto Sans SC', sans-serif; outline: none; transition: border-color 0.15s; }
+.param-input:focus { border-color: rgba(0,229,255,0.3); }
+.param-input::placeholder { color: rgba(255,255,255,0.15); }
+.param-input.num { font-family: 'Courier New', monospace; text-align: center; }
+.param-del { width: 24px; height: 24px; background: none; border: none; color: rgba(255,255,255,0.2); cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: center; border-radius: 3px; transition: all 0.15s; }
+.param-del:hover { background: rgba(255,77,79,0.12); color: #ff8888; }
+.params-empty { padding: 24px 0; text-align: center; font-size: 12px; color: rgba(255,255,255,0.2); border: 1px dashed rgba(255,255,255,0.08); border-radius: 4px; }
 
 /* 详情侧边栏 */
 .detail-overlay { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,0.5); display: flex; align-items: stretch; justify-content: flex-end; }
@@ -635,10 +656,10 @@ select.form-input option { background: #0f1525; color: #e0e4ef; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .detail-status-banner { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 4px; font-size: 13px; font-weight: 500; margin-bottom: 20px; }
 .detail-status-banner.active { background: rgba(0,229,160,0.1); color: #00e5a0; border: 1px solid rgba(0,229,160,0.2); }
-.detail-status-banner.inactive { background: rgba(255,107,107,0.08); color: #ff8888; border: 1px solid rgba(255,107,107,0.2); }
+.detail-status-banner.archived { background: rgba(255,179,0,0.08); color: #ffb300; border: 1px solid rgba(255,179,0,0.2); }
 .detail-status-banner .status-dot { width: 7px; height: 7px; border-radius: 50%; }
 .detail-status-banner.active .status-dot { background: #00e5a0; box-shadow: 0 0 5px #00e5a0; }
-.detail-status-banner.inactive .status-dot { background: #ff8888; }
+.detail-status-banner.archived .status-dot { background: #ffb300; }
 .detail-type-badge { margin-left: auto; font-size: 10px; padding: 2px 7px; border-radius: 3px; }
 .detail-type-badge.universal { background: rgba(0,229,255,0.1); color: rgba(0,229,255,0.8); }
 .detail-type-badge.special { background: rgba(255,179,0,0.12); color: #ffb300; }
@@ -646,10 +667,14 @@ select.form-input option { background: #0f1525; color: #e0e4ef; }
 .detail-row { display: flex; flex-direction: column; gap: 5px; }
 .detail-label { font-size: 11px; color: rgba(255,255,255,0.3); text-transform: uppercase; letter-spacing: 0.8px; }
 .detail-value { font-size: 13px; color: rgba(255,255,255,0.8); word-break: break-all; }
-.detail-value.mono { font-family: 'Courier New', monospace; color: #00e5ff; font-size: 12px; }
-.detail-value.small { font-size: 11px; color: rgba(255,255,255,0.45); }
 .json-preview-wrap { background: #080c18; border: 1px solid rgba(0,229,255,0.12); border-radius: 4px; overflow: auto; max-height: 320px; }
 .json-preview { margin: 0; padding: 12px 14px; font-family: 'Courier New', monospace; font-size: 11px; line-height: 1.6; color: #a8d8ea; white-space: pre; }
+
+/* 详情参数列表 */
+.detail-params-list { display: flex; flex-direction: column; gap: 6px; }
+.detail-param-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; }
+.dp-name { font-size: 13px; color: rgba(255,255,255,0.8); font-weight: 500; }
+.dp-range { font-size: 12px; color: rgba(0,229,255,0.7); font-family: 'Courier New', monospace; }
 
 /* 确认框 */
 .confirm-box { background: #0f1525; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 28px 28px 22px; width: 400px; max-width: 90vw; text-align: center; box-shadow: 0 24px 48px rgba(0,0,0,0.6); }

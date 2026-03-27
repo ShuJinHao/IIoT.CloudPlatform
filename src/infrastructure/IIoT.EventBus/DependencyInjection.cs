@@ -1,5 +1,6 @@
 ﻿using MassTransit;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System.Reflection;
 
@@ -21,13 +22,23 @@ public static class DependencyInjection
             x.UsingRabbitMq((context, cfg) =>
             {
                 var connectionString = builder.Configuration.GetConnectionString("eventbus");
-                cfg.Host(connectionString);
+                if (!string.IsNullOrEmpty(connectionString))
+                {
+                    cfg.Host(connectionString);
+                }
 
-                // 全局重试策略：3次，间隔递增 (1s → 3s → 5s)
                 cfg.UseMessageRetry(r => r.Incremental(3, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2)));
 
                 cfg.ConfigureEndpoints(context);
             });
+        });
+
+        // 关键：让 MassTransit 不阻塞应用启动
+        builder.Services.Configure<MassTransitHostOptions>(options =>
+        {
+            options.WaitUntilStarted = false;
+            options.StartTimeout = TimeSpan.FromSeconds(30);
+            options.StopTimeout = TimeSpan.FromSeconds(30);
         });
     }
 }

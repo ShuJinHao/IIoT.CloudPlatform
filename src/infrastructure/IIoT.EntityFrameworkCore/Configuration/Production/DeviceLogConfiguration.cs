@@ -13,7 +13,8 @@ public class DeviceLogConfiguration : IEntityTypeConfiguration<DeviceLog>
     {
         builder.ToTable("device_logs");
 
-        builder.HasKey(l => l.Id);
+        // TimescaleDB 超表要求：主键必须包含分区列 log_time
+        builder.HasKey(l => new { l.Id, l.LogTime });
         builder.Property(l => l.Id).HasColumnName("id");
 
         builder.Property(l => l.DeviceId)

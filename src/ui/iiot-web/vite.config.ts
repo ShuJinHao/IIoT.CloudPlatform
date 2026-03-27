@@ -1,17 +1,25 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
+// Aspire 注入的环境变量可能是这些格式之一
+const apiUrl = process.env.VITE_API_URL
+  || process.env['services__iiot-httpapi__http__0']
+  || process.env['services__iiot-httpapi__https__0']
+  || 'https://localhost:7041'
+
+console.log('=== ALL ENV WITH iiot or VITE ===')
+console.log(Object.entries(process.env).filter(([k]) => /iiot|vite|PORT/i.test(k)))
+console.log('=== Using API target:', apiUrl, '===')
+
 export default defineConfig({
   plugins: [vue()],
   server: {
-    // 允许 Aspire 动态分配端口
     port: process.env.PORT ? parseInt(process.env.PORT) : 5173,
     proxy: {
-      // 拦截所有 /api 开头的请求，代理给后端
       '/api': {
-        target: process.env.VITE_API_URL || 'https://localhost:7041',
+        target: apiUrl,
         changeOrigin: true,
-        secure: false 
+        secure: false
       }
     }
   }

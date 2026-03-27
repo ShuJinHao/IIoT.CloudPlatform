@@ -12,6 +12,7 @@ var password = builder.AddParameter("pg-password", secret: true);
 var postgres = builder.AddPostgres("postgres", password: password)
     .WithImage("timescale/timescaledb", "latest-pg17")
     .WithDataVolume("postgres-iiot")
+    .WithArgs("-c", "shared_preload_libraries=timescaledb")
     .WithPgWeb()
     .AddDatabase("iiot-db");
 
@@ -32,6 +33,7 @@ var apiService = builder.AddProject<Projects.IIoT_HttpApi>("iiot-httpapi")
 
 builder.AddProject<Projects.IIoT_DataWorker>("iiot-dataworker")
     .WithReference(postgres)
+    .WithReference(redis)
     .WithReference(rabbitmq)
     .WaitFor(migration);
 

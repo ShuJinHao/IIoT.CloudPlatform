@@ -14,8 +14,8 @@ export interface RecipeListItemDto {
   recipeName: string;
   version: string;
   processId: string;
-  deviceId: string | null;  // null = 通用配方；有值 = 特调配方
-  isActive: boolean;
+  deviceId: string | null;
+  status: string;  // "Active" | "Archived"
 }
 
 /** 配方详情 DTO — 对齐 RecipeDetailDto（含完整 JSONB） */
@@ -25,22 +25,31 @@ export interface RecipeDetailDto {
   version: string;
   processId: string;
   deviceId: string | null;
-  parametersJsonb: string;  // 🌟 核心：完整 JSONB 工艺参数
-  isActive: boolean;
+  parametersJsonb: string;
+  status: string;
+}
+
+/** 配方参数结构 */
+export interface RecipeParameter {
+  id: string;
+  name: string;
+  unit: string;
+  min: number;
+  max: number;
 }
 
 /** 创建配方指令 — 对齐 CreateRecipeCommand */
 export interface CreateRecipePayload {
   RecipeName: string;
   ProcessId: string;
-  DeviceId?: string | null;   // 不传 = 通用配方
-  ParametersJsonb: string;    // JSON 字符串
+  DeviceId?: string | null;
+  ParametersJsonb: string;
 }
 
-/** 更新配方参数指令 — 对齐 UpdateRecipeParametersCommand */
-export interface UpdateRecipeParametersPayload {
+/** 升级配方版本指令 — 对齐 UpgradeRecipeVersionCommand */
+export interface UpgradeRecipeVersionPayload {
+  NewVersion: string;
   ParametersJsonb: string;
-  Version: string;
 }
 
 /** 分页返回包装 */
@@ -77,12 +86,12 @@ export const createRecipeApi = (payload: CreateRecipePayload) => {
   return http.post<string>('/recipe', payload);
 };
 
-/** 更新配方参数并升版 — PUT /api/v1/recipe/{id}/parameters */
-export const updateRecipeParametersApi = (id: string, payload: UpdateRecipeParametersPayload) => {
-  return http.put<boolean>(`/recipe/${id}/parameters`, payload);
+/** 升级配方版本 — POST /api/v1/recipe/{id}/upgrade */
+export const upgradeRecipeVersionApi = (id: string, payload: UpgradeRecipeVersionPayload) => {
+  return http.post<string>(`/recipe/${id}/upgrade`, payload);
 };
 
-/** 停用配方 — DELETE /api/v1/recipe/{id} */
-export const deactivateRecipeApi = (id: string) => {
+/** 物理删除配方 — DELETE /api/v1/recipe/{id} */
+export const deleteRecipeApi = (id: string) => {
   return http.delete<boolean>(`/recipe/${id}`);
 };

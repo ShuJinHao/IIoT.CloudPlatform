@@ -12,12 +12,13 @@ public static class DependencyInjection
 {
     public static void AddDapper(this IHostApplicationBuilder builder)
     {
-        var connectionString = builder.Configuration.GetConnectionString("iiot-db");
-
-        // 设计时（EF Migration）可能没有连接字符串，跳过注册
-        if (string.IsNullOrEmpty(connectionString)) return;
-
-        builder.Services.AddSingleton<IDbConnectionFactory>(new NpgsqlConnectionFactory(connectionString));
+        builder.Services.AddSingleton<IDbConnectionFactory>(sp =>
+        {
+            var config = sp.GetRequiredService<IConfiguration>();
+            var connStr = config.GetConnectionString("iiot-db")
+                ?? throw new InvalidOperationException("缺少 iiot-db 连接字符串");
+            return new NpgsqlConnectionFactory(connStr);
+        });
 
         builder.Services.AddScoped<IPassStationQueryService, PassStationQueryService>();
         builder.Services.AddScoped<ICapacityQueryService, CapacityQueryService>();

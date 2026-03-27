@@ -47,6 +47,24 @@ const routes: Array<RouteRecordRaw> = [
         meta: { requiresAuth: true, requiredPermission: Permissions.Recipe.Read, title: '配方管理' }
       },
       {
+        path: 'pass-station',
+        name: 'PassStation',
+        component: () => import('../views/passstation/PassStationList.vue'),
+        meta: { requiresAuth: true, requiredPermission: Permissions.Device.Read, title: '过站追溯' }
+      },
+      {
+        path: 'capacity',
+        name: 'Capacity',
+        component: () => import('../views/capacity/CapacityDashboard.vue'),
+        meta: { requiresAuth: true, requiredPermission: Permissions.Device.Read, title: '产能看板' }
+      },
+      {
+        path: 'device-logs',
+        name: 'DeviceLogs',
+        component: () => import('../views/devicelogs/DeviceLogList.vue'),
+        meta: { requiresAuth: true, requiredPermission: Permissions.Device.Read, title: '设备日志' }
+      },
+      {
         path: 'roles',
         name: 'Roles',
         component: () => import('../views/roles/RoleList.vue'),

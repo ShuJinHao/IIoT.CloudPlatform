@@ -131,14 +131,13 @@ import { useAuthStore } from '../stores/auth';
 import { Permissions } from '../types/permissions';
 import { changePasswordApi } from '../api/identity';
 
-// 🌟 定义导航项接口，解决 badge 属性报错问题
 interface NavItem {
   name: string;
   path: string;
   label: string;
   icon: string;
   permission: string | null;
-  badge?: string | number; // 可选属性
+  badge?: string | number;
 }
 
 const router = useRouter();
@@ -155,7 +154,6 @@ const avatarChar = computed(() => {
   return authStore.employeeNo?.charAt(0)?.toUpperCase() || 'U';
 });
 
-// 🌟 明确 navItems 的类型为 NavItem[]
 const navItems: NavItem[] = [
   {
     name: 'Dashboard', path: '/', label: '系统概览', permission: null,
@@ -176,6 +174,18 @@ const navItems: NavItem[] = [
   {
     name: 'Recipes', path: '/recipes', label: '配方管理', permission: Permissions.Recipe.Read,
     icon: `<svg viewBox="0 0 20 20" fill="none"><path d="M4 4h12v2H4zM4 9h8M4 13h10M4 17h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="15" cy="14" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M15 13v1.5l1 1" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>`
+  },
+  {
+    name: 'PassStation', path: '/pass-station', label: '过站追溯', permission: Permissions.Device.Read,
+    icon: `<svg viewBox="0 0 20 20" fill="none"><path d="M3 10h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="6" cy="10" r="2.5" stroke="currentColor" stroke-width="1.3"/><circle cx="14" cy="10" r="2.5" stroke="currentColor" stroke-width="1.3"/><path d="M10 4v12" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-dasharray="2 2"/></svg>`
+  },
+  {
+    name: 'Capacity', path: '/capacity', label: '产能看板', permission: Permissions.Device.Read,
+    icon: `<svg viewBox="0 0 20 20" fill="none"><rect x="3" y="11" width="3" height="6" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="8.5" y="7" width="3" height="10" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="14" y="3" width="3" height="14" rx="1" stroke="currentColor" stroke-width="1.2"/></svg>`
+  },
+  {
+    name: 'DeviceLogs', path: '/device-logs', label: '设备日志', permission: Permissions.Device.Read,
+    icon: `<svg viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M6 7h8M6 10h6M6 13h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>`
   },
   {
     name: 'Roles', path: '/roles', label: '角色与权限', permission: Permissions.Role.Define,
