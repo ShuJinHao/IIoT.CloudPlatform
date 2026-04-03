@@ -12,7 +12,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace IIoT.EntityFrameworkCore.Migrations
 {
     [DbContext(typeof(IIoTDbContext))]
-    [Migration("20260401075519_InitialCreate")]
+    [Migration("20260402005307_InitialCreate")]
     partial class InitialCreate
     {
         /// <inheritdoc />
@@ -120,7 +120,7 @@ namespace IIoT.EntityFrameworkCore.Migrations
                     b.ToTable("mfg_processes", (string)null);
                 });
 
-            modelBuilder.Entity("IIoT.Core.Production.Aggregates.Capacities.DailyCapacity", b =>
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.Capacities.HourlyCapacity", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -134,6 +134,14 @@ namespace IIoT.EntityFrameworkCore.Migrations
                     b.Property<Guid>("DeviceId")
                         .HasColumnType("uuid")
                         .HasColumnName("device_id");
+
+                    b.Property<int>("Hour")
+                        .HasColumnType("integer")
+                        .HasColumnName("hour");
+
+                    b.Property<int>("Minute")
+                        .HasColumnType("integer")
+                        .HasColumnName("minute");
 
                     b.Property<int>("NgCount")
                         .HasColumnType("integer")
@@ -153,17 +161,23 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .HasColumnType("character varying(20)")
                         .HasColumnName("shift_code");
 
+                    b.Property<string>("TimeLabel")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("time_label");
+
                     b.Property<int>("TotalCount")
                         .HasColumnType("integer")
                         .HasColumnName("total_count");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("DeviceId", "Date", "ShiftCode")
+                    b.HasIndex("DeviceId", "Date", "Hour", "Minute", "ShiftCode")
                         .IsUnique()
-                        .HasDatabaseName("ix_daily_capacity_device_date_shift");
+                        .HasDatabaseName("ix_hourly_capacity_device_date_hour_minute_shift");
 
-                    b.ToTable("daily_capacity", (string)null);
+                    b.ToTable("hourly_capacity", (string)null);
                 });
 
             modelBuilder.Entity("IIoT.Core.Production.Aggregates.DeviceLogs.DeviceLog", b =>

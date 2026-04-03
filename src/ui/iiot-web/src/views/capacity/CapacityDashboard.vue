@@ -1,14 +1,12 @@
 <template>
   <div class="capacity-page">
-    <!-- 页头 -->
     <div class="page-header">
       <div>
         <h1 class="page-title">产能看板</h1>
-        <p class="page-sub">查看所有机台每日产能汇总，支持按设备查看趋势</p>
+        <p class="page-sub">查看所有机台每日产能汇总，点击设备查看详细报表</p>
       </div>
     </div>
 
-    <!-- 筛选栏 -->
     <div class="filter-bar">
       <div class="filter-field">
         <label>筛选设备</label>
@@ -24,12 +22,34 @@
       <button class="btn btn-ghost" @click="clearFilters">清空筛选</button>
     </div>
 
-    <!-- 产能表格 -->
+    <!-- 统计卡片 -->
+    <div class="stat-cards">
+      <div class="stat-card">
+        <span class="stat-label">总产出</span>
+        <span class="stat-value">{{ totalStats.total }}</span>
+      </div>
+      <div class="stat-card ok">
+        <span class="stat-label">良品</span>
+        <span class="stat-value">{{ totalStats.ok }}</span>
+      </div>
+      <div class="stat-card ng">
+        <span class="stat-label">不良品</span>
+        <span class="stat-value">{{ totalStats.ng }}</span>
+      </div>
+      <div class="stat-card rate">
+        <span class="stat-label">综合良率</span>
+        <span class="stat-value">{{ totalStats.rate }}</span>
+      </div>
+    </div>
+
     <div class="table-wrap">
       <div v-if="loading" class="skeleton-rows">
         <div v-for="i in 5" :key="i" class="skeleton-row">
-          <div class="skel skel-md"></div><div class="skel skel-sm"></div>
-          <div class="skel skel-sm"></div><div class="skel skel-sm"></div><div class="skel skel-md"></div>
+          <div class="skel skel-md"></div>
+          <div class="skel skel-sm"></div>
+          <div class="skel skel-sm"></div>
+          <div class="skel skel-sm"></div>
+          <div class="skel skel-md"></div>
         </div>
       </div>
       <table v-else-if="records.length > 0" class="data-table">
@@ -37,8 +57,6 @@
           <tr>
             <th>设备</th>
             <th>日期</th>
-            <th>时间槽</th>
-            <th>班次</th>
             <th>总产出</th>
             <th>良品</th>
             <th>不良品</th>
@@ -47,27 +65,25 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="r in records" :key="r.id" class="table-row">
-            <td>
-              <div class="device-cell">
-                <span class="device-name">{{ r.DeviceName }}</span>
-              </div>
-            </td>
+          <tr v-for="r in records" :key="r.device_id + r.date" class="table-row">
+            <td><span class="device-name">{{ r.device_name }}</span></td>
             <td>{{ r.date }}</td>
-            <td><span class="time-label-tag">{{ r.timeLabel }}</span></td>
-            <td><span class="shift-tag">{{ r.ShiftCode }}</span></td>
-            <td class="mono">{{ r.TotalCount }}</td>
-            <td class="mono ok-num">{{ r.OkCount }}</td>
-            <td class="mono ng-num">{{ r.NgCount }}</td>
+            <td class="mono">{{ r.total_count }}</td>
+            <td class="mono ok-num">{{ r.ok_count }}</td>
+            <td class="mono ng-num">{{ r.ng_count }}</td>
             <td>
               <div class="rate-bar-wrap">
-                <div class="rate-bar" :style="{ width: r.okRate + '%' }" :class="rateClass(r.okRate)"></div>
-                <span class="rate-text">{{ r.okRate }}%</span>
+                <div class="rate-bar" :style="{ width: r.ok_rate + '%' }" :class="rateClass(r.ok_rate)"></div>
+                <span class="rate-text" :class="rateClass(r.ok_rate)">{{ r.ok_rate }}%</span>
               </div>
             </td>
             <td>
-              <button class="icon-btn trend" title="查看趋势" @click="loadTrend(r.DeviceId, r.DeviceName)">
-                <svg viewBox="0 0 16 16" fill="none"><path d="M2 12l4-4 3 2 5-6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <button class="icon-btn detail" title="查看详细报表"
+                @click="goDetail(r.device_id, r.device_name)">
+                <svg viewBox="0 0 16 16" fill="none">
+                  <path d="M2 12l4-4 3 2 5-6" stroke="currentColor" stroke-width="1.3"
+                    stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
               </button>
             </td>
           </tr>
@@ -75,116 +91,66 @@
       </table>
       <div v-else class="empty-cell">
         <div class="empty-state">
-          <svg viewBox="0 0 48 48" fill="none"><rect x="6" y="20" width="8" height="18" rx="1" stroke="currentColor" stroke-width="1.5" opacity="0.25"/><rect x="18" y="12" width="8" height="26" rx="1" stroke="currentColor" stroke-width="1.5" opacity="0.25"/><rect x="30" y="6" width="8" height="32" rx="1" stroke="currentColor" stroke-width="1.5" opacity="0.25"/></svg>
+          <svg viewBox="0 0 48 48" fill="none">
+            <rect x="6"  y="20" width="8" height="18" rx="1" stroke="currentColor" stroke-width="1.5" opacity="0.25"/>
+            <rect x="18" y="12" width="8" height="26" rx="1" stroke="currentColor" stroke-width="1.5" opacity="0.25"/>
+            <rect x="30" y="6"  width="8" height="32" rx="1" stroke="currentColor" stroke-width="1.5" opacity="0.25"/>
+          </svg>
           <p>暂无产能数据</p>
         </div>
       </div>
     </div>
 
-    <!-- 分页 -->
     <div class="pagination" v-if="metaData.totalPages > 1">
       <button class="page-btn" :disabled="currentPage===1" @click="goPage(currentPage-1)">
         <svg viewBox="0 0 12 12" fill="none"><path d="M8 2L4 6l4 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
       </button>
-      <button v-for="p in pageNumbers" :key="p" class="page-btn" :class="{active:p===currentPage}" @click="goPage(p)">{{ p }}</button>
+      <button v-for="p in pageNumbers" :key="p" class="page-btn"
+        :class="{ active: p === currentPage }" @click="goPage(p)">{{ p }}</button>
       <button class="page-btn" :disabled="currentPage===metaData.totalPages" @click="goPage(currentPage+1)">
         <svg viewBox="0 0 12 12" fill="none"><path d="M4 2l4 4-4 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
       </button>
       <span class="total-badge">共 {{ metaData.totalCount }} 条</span>
     </div>
-
-    <!-- 趋势面板 -->
-    <Teleport to="body">
-      <div v-if="showTrend" class="detail-overlay" @click.self="showTrend=false">
-        <div class="trend-panel">
-          <div class="trend-header">
-            <div>
-              <span class="trend-title">产能趋势</span>
-              <span class="trend-subtitle">{{ trendDeviceName }} · {{ trendPeriod === 'last-month' ? '最近一个月' : '最近7天' }}</span>
-            </div>
-            <div class="trend-period-toggle">
-              <button class="period-btn" :class="{ active: trendPeriod === '7days' }" @click="switchTrendPeriod('7days')">7天</button>
-              <button class="period-btn" :class="{ active: trendPeriod === 'last-month' }" @click="switchTrendPeriod('last-month')">30天</button>
-            </div>
-            <button class="modal-close" @click="showTrend=false">✕</button>
-          </div>
-          <div class="trend-body" v-if="trendLoading">
-            <div class="detail-loading"><div class="loading-ring"></div><span>加载中...</span></div>
-          </div>
-          <div class="trend-body" v-else-if="trendData.length > 0">
-            <!-- 简易柱状图 -->
-            <div class="chart-area">
-              <div class="chart-bars">
-                <div class="chart-col" v-for="item in trendData" :key="(item.date ?? '') + (item.timeLabel ?? '')">
-                  <div class="bar-stack">
-                    <div class="bar ok" :style="{ height: barHeight(item.OkCount) + 'px' }" :title="'良品: ' + item.OkCount"></div>
-                    <div class="bar ng" :style="{ height: barHeight(item.NgCount) + 'px' }" :title="'不良: ' + item.NgCount"></div>
-                  </div>
-                  <span class="bar-label">{{ item.timeLabel ?? formatDate(item.date) }}</span>
-                  <span class="bar-total">{{ item.TotalCount }}</span>
-                </div>
-              </div>
-              <div class="chart-legend">
-                <span class="legend-item"><span class="legend-dot ok"></span>良品</span>
-                <span class="legend-item"><span class="legend-dot ng"></span>不良品</span>
-              </div>
-            </div>
-            <!-- 趋势数据表 -->
-            <div class="trend-table">
-              <div class="trend-table-header">
-                <span>日期/时间槽</span><span>班次</span><span>总产出</span><span>良品</span><span>不良</span><span>良率</span>
-              </div>
-              <div class="trend-table-row" v-for="item in trendData" :key="(item.date ?? '') + (item.timeLabel ?? '') + (item.ShiftCode ?? '')">
-                <span>{{ item.timeLabel ?? item.date }}</span>
-                <span><span class="shift-tag sm">{{ item.ShiftCode }}</span></span>
-                <span class="mono">{{ item.TotalCount }}</span>
-                <span class="mono ok-num">{{ item.OkCount }}</span>
-                <span class="mono ng-num">{{ item.NgCount }}</span>
-                <span class="mono" :class="rateClass(item.okRate)">{{ item.okRate }}%</span>
-              </div>
-            </div>
-          </div>
-          <div class="trend-body" v-else>
-            <div class="empty-state" style="padding-top: 40px;">
-              <p>该设备暂无产能数据</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
-import { getHourlyCapacityPagedApi, getDeviceCapacityTrendApi } from '../../api/capacity';
+import { useRouter } from 'vue-router';
+import { getDailyPagedApi, type DailyCapacityItem } from '../../api/capacity';
 import { getAllActiveDevicesApi, type DeviceSelectDto } from '../../api/device';
 import type { PagedMetaData } from '../../api/employee';
 
-const loading = ref(false);
-const records = ref<any[]>([]);
-const currentPage = ref(1);
-const metaData = ref<PagedMetaData>({ totalCount: 0, pageSize: 10, currentPage: 1, totalPages: 1 });
+const router = useRouter();
 
-const allDevices = ref<DeviceSelectDto[]>([]);
+const loading     = ref(false);
+const records     = ref<DailyCapacityItem[]>([]);
+const currentPage = ref(1);
+const metaData    = ref<PagedMetaData>({ totalCount: 0, pageSize: 10, currentPage: 1, totalPages: 1 });
+const allDevices  = ref<DeviceSelectDto[]>([]);
 const filterDeviceId = ref('');
 
-// 取本地日期 YYYY-MM-DD（避免 toISOString 在 UTC+8 早于 8:00 时取到昨天）
-const todayLocalDate = () => {
+const todayLocal = () => {
   const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 };
-// 发给后端时加 T00:00:00.000Z，后端 .NET 解析到 Kind=Utc，不会再 -8h
-const toUtcDateParam = (localDate: string) => localDate || undefined;
-
-const filterDate = ref(todayLocalDate());
+const filterDate = ref(todayLocal());
 
 const pageNumbers = computed(() => {
   const total = metaData.value.totalPages;
-  const cur = currentPage.value;
+  const cur   = currentPage.value;
   const range: number[] = [];
-  for (let i = Math.max(1, cur - 2); i <= Math.min(total, cur + 2); i++) range.push(i);
+  for (let i = Math.max(1, cur-2); i <= Math.min(total, cur+2); i++) range.push(i);
   return range;
+});
+
+const totalStats = computed(() => {
+  const total = records.value.reduce((s, r) => s + r.total_count, 0);
+  const ok    = records.value.reduce((s, r) => s + r.ok_count,    0);
+  const ng    = records.value.reduce((s, r) => s + r.ng_count,    0);
+  const rate  = total > 0 ? (ok * 100 / total).toFixed(1) + '%' : '0%';
+  return { total, ok, ng, rate };
 });
 
 const rateClass = (rate: number) => {
@@ -194,23 +160,25 @@ const rateClass = (rate: number) => {
 };
 
 const onFilterChange = () => { currentPage.value = 1; fetchData(); };
-const clearFilters = () => { filterDeviceId.value = ''; filterDate.value = todayLocalDate(); currentPage.value = 1; fetchData(); };
+const clearFilters   = () => {
+  filterDeviceId.value = '';
+  filterDate.value = todayLocal();
+  currentPage.value = 1;
+  fetchData();
+};
 
 const fetchData = async () => {
   loading.value = true;
   try {
-    const raw = await getHourlyCapacityPagedApi({
+    const raw = await getDailyPagedApi({
       PageNumber: currentPage.value,
-      PageSize: 10,
-      date: toUtcDateParam(filterDate.value),
-      deviceId: filterDeviceId.value || undefined,
+      PageSize:   10,
+      date:       filterDate.value || undefined,
+      deviceId:   filterDeviceId.value || undefined,
     }) as any;
-
-    if (raw && raw.metaData) {
-      metaData.value = raw.metaData as PagedMetaData;
-      records.value = Array.isArray(raw.items) ? raw.items : [];
-    } else if (Array.isArray(raw)) {
-      records.value = raw;
+    if (raw?.metaData) {
+      metaData.value = raw.metaData;
+      records.value  = Array.isArray(raw.items) ? raw.items : [];
     } else {
       records.value = [];
     }
@@ -221,59 +189,9 @@ const fetchData = async () => {
   }
 };
 
-const goPage = (page: number) => { currentPage.value = page; fetchData(); };
-
-// ── 趋势面板 ──
-const showTrend = ref(false);
-const trendLoading = ref(false);
-const trendData = ref<any[]>([]);
-const trendDeviceName = ref('');
-const trendDeviceId = ref('');
-const trendPeriod = ref<'7days' | 'last-month'>('7days');
-
-const loadTrend = async (deviceId: string, deviceName: string) => {
-  trendDeviceName.value = deviceName;
-  trendDeviceId.value = deviceId;
-  showTrend.value = true;
-  trendLoading.value = true;
-  trendData.value = [];
-
-  try {
-    const today = new Date();
-    const pad = (n: number) => String(n).padStart(2, '0');
-    const localDate = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-    const endDate = localDate(today);
-    const start = new Date(today);
-    start.setDate(start.getDate() - (trendPeriod.value === 'last-month' ? 29 : 6));
-    const startDate = localDate(start);
-    const raw = await getDeviceCapacityTrendApi({ deviceId, startDate, endDate });
-    trendData.value = Array.isArray(raw) ? raw : [];
-  } catch {
-    trendData.value = [];
-  } finally {
-    trendLoading.value = false;
-  }
-};
-
-const switchTrendPeriod = (period: '7days' | 'last-month') => {
-  trendPeriod.value = period;
-  loadTrend(trendDeviceId.value, trendDeviceName.value);
-};
-
-const trendMaxCount = computed(() => {
-  if (trendData.value.length === 0) return 1;
-  return Math.max(...trendData.value.map((d: any) => d.TotalCount || 1), 1);
-});
-
-const barHeight = (count: number) => {
-  const maxH = 140;
-  return Math.max(2, Math.round((count / trendMaxCount.value) * maxH));
-};
-
-const formatDate = (d: string) => {
-  if (!d) return '';
-  const parts = d.split('-');
-  return parts.length >= 3 ? `${parts[1]}/${parts[2]}` : d;
+const goPage   = (page: number) => { currentPage.value = page; fetchData(); };
+const goDetail = (deviceId: string, deviceName: string) => {
+  router.push({ name: 'CapacityDetail', query: { deviceId, deviceName } });
 };
 
 onMounted(async () => {
@@ -285,21 +203,29 @@ onMounted(async () => {
 <style scoped>
 * { box-sizing: border-box; }
 .capacity-page { font-family: 'Noto Sans SC', sans-serif; color: #e0e4ef; }
-
-.page-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; }
+.page-header { margin-bottom: 20px; }
 .page-title { font-size: 22px; font-weight: 600; color: #fff; margin: 0 0 4px; }
 .page-sub { font-size: 13px; color: rgba(255,255,255,0.35); margin: 0; }
 
-/* 筛选栏 */
 .filter-bar { display: flex; align-items: flex-end; gap: 12px; margin-bottom: 16px; padding: 14px 16px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; }
 .filter-field { display: flex; flex-direction: column; gap: 5px; min-width: 180px; }
 .filter-field label { font-size: 11px; color: rgba(255,255,255,0.35); font-weight: 500; }
-.filter-input { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 3px; padding: 8px 10px; color: rgba(255,255,255,0.8); font-size: 13px; font-family: 'Noto Sans SC', sans-serif; outline: none; transition: border-color 0.2s; }
+.filter-input { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 3px; padding: 8px 10px; color: rgba(255,255,255,0.8); font-size: 13px; outline: none; transition: border-color 0.2s; }
 .filter-input:focus { border-color: rgba(0,229,255,0.4); }
 select.filter-input { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' stroke='%2300e5ff' stroke-width='1.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; padding-right: 28px; cursor: pointer; }
 select.filter-input option { background: #0f1525; color: #e0e4ef; }
 
-/* 表格 */
+.stat-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+.stat-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; padding: 16px 18px; display: flex; flex-direction: column; gap: 6px; }
+.stat-card.ok  { border-color: rgba(0,229,160,0.15); }
+.stat-card.ng  { border-color: rgba(255,77,79,0.15); }
+.stat-card.rate { border-color: rgba(0,229,255,0.15); }
+.stat-label { font-size: 11px; color: rgba(255,255,255,0.35); }
+.stat-value { font-size: 24px; font-weight: 600; color: #fff; font-family: 'Courier New', monospace; }
+.stat-card.ok  .stat-value { color: #00e5a0; }
+.stat-card.ng  .stat-value { color: #ff8888; }
+.stat-card.rate .stat-value { color: #00e5ff; }
+
 .table-wrap { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; overflow: hidden; }
 .data-table { width: 100%; border-collapse: collapse; }
 .data-table thead tr { background: rgba(255,255,255,0.03); border-bottom: 1px solid rgba(255,255,255,0.06); }
@@ -311,31 +237,26 @@ select.filter-input option { background: #0f1525; color: #e0e4ef; }
 .mono { font-family: 'Courier New', monospace; font-size: 12px; }
 .ok-num { color: #00e5a0; }
 .ng-num { color: #ff8888; }
+.device-name { font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.85); }
 
-.device-cell { display: flex; flex-direction: column; gap: 2px; }
-.device-code { font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.8); }
-.device-name { font-size: 11px; color: rgba(255,255,255,0.35); }
-
-.shift-tag { font-size: 10px; background: rgba(0,229,255,0.08); color: rgba(0,229,255,0.7); padding: 2px 8px; border-radius: 3px; border: 1px solid rgba(0,229,255,0.15); font-weight: 500; }
-.shift-tag.sm { font-size: 10px; padding: 1px 6px; }
-.time-label-tag { font-size: 11px; background: rgba(120,80,255,0.1); color: rgba(160,130,255,0.9); padding: 2px 8px; border-radius: 3px; border: 1px solid rgba(120,80,255,0.2); font-family: 'Courier New', monospace; white-space: nowrap; }
-
-/* 良率条 */
-.rate-bar-wrap { display: flex; align-items: center; gap: 8px; min-width: 100px; }
-.rate-bar { height: 6px; border-radius: 3px; transition: width 0.3s; }
+.rate-bar-wrap { display: flex; align-items: center; gap: 8px; min-width: 110px; }
+.rate-bar { height: 6px; border-radius: 3px; transition: width 0.3s; min-width: 2px; }
 .rate-text { font-size: 12px; font-family: 'Courier New', monospace; white-space: nowrap; }
-.rate-good, .rate-good .rate-bar { background: rgba(0,229,160,0.6); color: #00e5a0; }
-.rate-warn, .rate-warn .rate-bar { background: rgba(255,179,0,0.5); color: #ffb300; }
-.rate-bad, .rate-bad .rate-bar { background: rgba(255,77,79,0.5); color: #ff8888; }
+.rate-good .rate-bar { background: rgba(0,229,160,0.6); }
+.rate-warn .rate-bar { background: rgba(255,179,0,0.5); }
+.rate-bad  .rate-bar { background: rgba(255,77,79,0.5); }
+.rate-good { color: #00e5a0; }
+.rate-warn { color: #ffb300; }
+.rate-bad  { color: #ff8888; }
 
 .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 3px; border: none; cursor: pointer; background: rgba(255,255,255,0.04); color: rgba(255,255,255,0.4); transition: all 0.15s; }
 .icon-btn svg { width: 14px; height: 14px; }
-.icon-btn.trend:hover { background: rgba(0,229,255,0.12); color: #00e5ff; }
+.icon-btn.detail:hover { background: rgba(0,229,255,0.12); color: #00e5ff; }
 
 .skeleton-rows { padding: 8px 0; }
 .skeleton-row { display: flex; gap: 16px; padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,0.04); }
 .skel { background: rgba(255,255,255,0.06); border-radius: 3px; height: 14px; animation: shimmer 1.5s infinite; }
-.skel-sm { width: 70px; } .skel-md { width: 120px; } .skel-lg { width: 200px; }
+.skel-sm { width: 70px; } .skel-md { width: 120px; }
 @keyframes shimmer { 0%,100% { opacity:0.5; } 50% { opacity:1; } }
 
 .empty-cell { text-align: center; padding: 56px 0; }
@@ -343,7 +264,6 @@ select.filter-input option { background: #0f1525; color: #e0e4ef; }
 .empty-state svg { width: 52px; height: 52px; color: rgba(255,255,255,0.2); }
 .empty-state p { font-size: 13px; color: rgba(255,255,255,0.25); margin: 0; }
 
-/* 分页 */
 .pagination { display: flex; justify-content: center; align-items: center; gap: 6px; margin-top: 20px; }
 .page-btn { width: 32px; height: 32px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03); color: rgba(255,255,255,0.45); font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
 .page-btn:hover:not(:disabled) { border-color: rgba(0,229,255,0.3); color: #00e5ff; }
@@ -352,49 +272,7 @@ select.filter-input option { background: #0f1525; color: #e0e4ef; }
 .page-btn svg { width: 12px; height: 12px; }
 .total-badge { font-size: 12px; color: rgba(255,255,255,0.3); margin-left: 8px; }
 
-/* 按钮 */
 .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 3px; border: none; font-size: 13px; font-family: 'Noto Sans SC', sans-serif; font-weight: 500; cursor: pointer; transition: all 0.18s; }
 .btn-ghost { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.55); border: 1px solid rgba(255,255,255,0.1); }
 .btn-ghost:hover { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.75); }
-
-/* 趋势面板 */
-.detail-overlay { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,0.5); display: flex; align-items: stretch; justify-content: flex-end; }
-.trend-panel { width: 520px; background: #0f1525; border-left: 1px solid rgba(255,255,255,0.08); display: flex; flex-direction: column; animation: slideIn 0.22s cubic-bezier(0.4,0,0.2,1); }
-@keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
-.trend-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 22px; border-bottom: 1px solid rgba(255,255,255,0.06); }
-.trend-title { font-size: 15px; font-weight: 600; color: #fff; display: block; }
-.trend-subtitle { font-size: 12px; color: rgba(255,255,255,0.35); display: block; margin-top: 2px; }
-.trend-period-toggle { display: flex; gap: 4px; }
-.period-btn { padding: 4px 10px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.03); color: rgba(255,255,255,0.4); font-size: 12px; cursor: pointer; transition: all 0.15s; }
-.period-btn:hover { border-color: rgba(0,229,255,0.25); color: rgba(255,255,255,0.7); }
-.period-btn.active { background: rgba(0,229,255,0.1); border-color: rgba(0,229,255,0.35); color: #00e5ff; }
-.modal-close { background: none; border: none; color: rgba(255,255,255,0.3); font-size: 16px; cursor: pointer; flex-shrink: 0; }
-.modal-close:hover { color: rgba(255,255,255,0.7); }
-.trend-body { padding: 20px 22px; flex: 1; overflow-y: auto; }
-.detail-loading { display: flex; flex-direction: column; align-items: center; gap: 14px; padding-top: 60px; color: rgba(255,255,255,0.3); font-size: 13px; }
-.loading-ring { width: 32px; height: 32px; border: 2px solid rgba(0,229,255,0.15); border-top-color: #00e5ff; border-radius: 50%; animation: spin 0.8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-
-/* 柱状图 */
-.chart-area { margin-bottom: 24px; }
-.chart-bars { display: flex; align-items: flex-end; justify-content: space-around; height: 180px; padding: 0 8px; gap: 8px; border-bottom: 1px solid rgba(255,255,255,0.08); overflow-x: auto; }
-.chart-col { display: flex; flex-direction: column; align-items: center; gap: 6px; flex: 1; }
-.bar-stack { display: flex; flex-direction: column-reverse; align-items: center; }
-.bar { width: 28px; border-radius: 3px 3px 0 0; transition: height 0.4s ease; }
-.bar.ok { background: rgba(0,229,160,0.6); }
-.bar.ng { background: rgba(255,77,79,0.5); border-radius: 0; }
-.bar-label { font-size: 10px; color: rgba(255,255,255,0.35); margin-top: 4px; }
-.bar-total { font-size: 11px; font-family: 'Courier New', monospace; color: rgba(255,255,255,0.5); }
-.chart-legend { display: flex; gap: 16px; justify-content: center; margin-top: 12px; }
-.legend-item { display: flex; align-items: center; gap: 5px; font-size: 11px; color: rgba(255,255,255,0.4); }
-.legend-dot { width: 8px; height: 8px; border-radius: 2px; }
-.legend-dot.ok { background: rgba(0,229,160,0.6); }
-.legend-dot.ng { background: rgba(255,77,79,0.5); }
-
-/* 趋势数据表 */
-.trend-table { border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; overflow: hidden; }
-.trend-table-header { display: grid; grid-template-columns: 1.2fr 0.8fr 1fr 0.8fr 0.8fr 0.8fr; padding: 9px 12px; background: rgba(255,255,255,0.03); border-bottom: 1px solid rgba(255,255,255,0.06); }
-.trend-table-header span { font-size: 11px; color: rgba(255,255,255,0.3); font-weight: 500; }
-.trend-table-row { display: grid; grid-template-columns: 1.2fr 0.8fr 1fr 0.8fr 0.8fr 0.8fr; padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 12px; color: rgba(255,255,255,0.7); }
-.trend-table-row:last-child { border-bottom: none; }
 </style>

@@ -350,8 +350,8 @@ select.filter-input option { background: #0f1525; color: #e0e4ef; }
 .level-tag.error { background: rgba(255,77,79,0.12); color: #ff8888; border: 1px solid rgba(255,77,79,0.2); }
 
 /* 日志消息（点击展开） */
-.msg-cell { font-size: 12px; color: rgba(255,255,255,0.65); line-height: 1.5; max-height: 40px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; transition: max-height 0.3s; word-break: break-all; }
-.msg-cell.expanded { max-height: 400px; -webkit-line-clamp: unset; }
+.msg-cell { font-size: 12px; color: rgba(255,255,255,0.65); line-height: 1.5; max-height: 40px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; transition: max-height 0.3s; word-break: break-all; }
+.msg-cell.expanded { max-height: 400px; line-clamp: unset; -webkit-line-clamp: unset; }
 
 .skeleton-rows { padding: 8px 0; }
 .skeleton-row { display: flex; gap: 16px; padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,0.04); }

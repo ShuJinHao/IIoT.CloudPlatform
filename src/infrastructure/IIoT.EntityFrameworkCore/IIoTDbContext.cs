@@ -12,7 +12,6 @@ using Microsoft.EntityFrameworkCore;
 
 namespace IIoT.EntityFrameworkCore;
 
-// 🌟 核心改造：继承 IdentityDbContext，并指定 ApplicationUser, IdentityRole<Guid>, Guid 主键
 public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)
     : IdentityDbContext<ApplicationUser, IdentityRole<Guid>, Guid>(options)
 {
@@ -24,7 +23,7 @@ public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)
     // === 过站数据（按工序分表，每新增工序加一行）===
     public DbSet<PassDataInjection> PassDataInjection => Set<PassDataInjection>();
 
-    // === 产能汇总 ===
+    // === 产能（半小时明细，唯一数据源）===
     public DbSet<HourlyCapacity> HourlyCapacities => Set<HourlyCapacity>();
 
     // === 设备日志 ===
@@ -32,10 +31,7 @@ public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        // 🌟 关键：必须先调用 base，否则 Identity 内置的 AspNetUsers 等表无法生成
         base.OnModelCreating(modelBuilder);
-
-        // 丝滑加载领域配置
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(IIoTDbContext).Assembly);
     }
 }

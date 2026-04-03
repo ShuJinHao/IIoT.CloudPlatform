@@ -52,24 +52,6 @@ namespace IIoT.EntityFrameworkCore.Migrations
                 });
 
             migrationBuilder.CreateTable(
-                name: "daily_capacity",
-                columns: table => new
-                {
-                    id = table.Column<Guid>(type: "uuid", nullable: false),
-                    device_id = table.Column<Guid>(type: "uuid", nullable: false),
-                    date = table.Column<DateOnly>(type: "date", nullable: false),
-                    shift_code = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false),
-                    total_count = table.Column<int>(type: "integer", nullable: false),
-                    ok_count = table.Column<int>(type: "integer", nullable: false),
-                    ng_count = table.Column<int>(type: "integer", nullable: false),
-                    reported_at = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_daily_capacity", x => x.id);
-                });
-
-            migrationBuilder.CreateTable(
                 name: "device_logs",
                 columns: table => new
                 {
@@ -98,6 +80,27 @@ namespace IIoT.EntityFrameworkCore.Migrations
                 constraints: table =>
                 {
                     table.PrimaryKey("PK_devices", x => x.id);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "hourly_capacity",
+                columns: table => new
+                {
+                    id = table.Column<Guid>(type: "uuid", nullable: false),
+                    device_id = table.Column<Guid>(type: "uuid", nullable: false),
+                    date = table.Column<DateOnly>(type: "date", nullable: false),
+                    shift_code = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false),
+                    hour = table.Column<int>(type: "integer", nullable: false),
+                    minute = table.Column<int>(type: "integer", nullable: false),
+                    time_label = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false),
+                    total_count = table.Column<int>(type: "integer", nullable: false),
+                    ok_count = table.Column<int>(type: "integer", nullable: false),
+                    ng_count = table.Column<int>(type: "integer", nullable: false),
+                    reported_at = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_hourly_capacity", x => x.id);
                 });
 
             migrationBuilder.CreateTable(
@@ -351,12 +354,6 @@ namespace IIoT.EntityFrameworkCore.Migrations
                 unique: true);
 
             migrationBuilder.CreateIndex(
-                name: "ix_daily_capacity_device_date_shift",
-                table: "daily_capacity",
-                columns: new[] { "device_id", "date", "shift_code" },
-                unique: true);
-
-            migrationBuilder.CreateIndex(
                 name: "ix_device_logs_device_time",
                 table: "device_logs",
                 columns: new[] { "device_id", "log_time" });
@@ -391,6 +388,12 @@ namespace IIoT.EntityFrameworkCore.Migrations
                 name: "ix_employees_employee_no",
                 table: "employees",
                 column: "employee_no",
+                unique: true);
+
+            migrationBuilder.CreateIndex(
+                name: "ix_hourly_capacity_device_date_hour_minute_shift",
+                table: "hourly_capacity",
+                columns: new[] { "device_id", "date", "hour", "minute", "shift_code" },
                 unique: true);
 
             migrationBuilder.CreateIndex(
@@ -444,9 +447,6 @@ namespace IIoT.EntityFrameworkCore.Migrations
                 name: "AspNetUserTokens");
 
             migrationBuilder.DropTable(
-                name: "daily_capacity");
-
-            migrationBuilder.DropTable(
                 name: "device_logs");
 
             migrationBuilder.DropTable(
@@ -457,6 +457,9 @@ namespace IIoT.EntityFrameworkCore.Migrations
 
             migrationBuilder.DropTable(
                 name: "employee_process_accesses");
+
+            migrationBuilder.DropTable(
+                name: "hourly_capacity");
 
             migrationBuilder.DropTable(
                 name: "mfg_processes");

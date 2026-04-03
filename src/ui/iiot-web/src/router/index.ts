@@ -1,4 +1,3 @@
-// src/router/index.ts
 import { createRouter, createWebHistory } from 'vue-router';
 import type { RouteRecordRaw } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
@@ -57,6 +56,13 @@ const routes: Array<RouteRecordRaw> = [
         name: 'Capacity',
         component: () => import('../views/capacity/CapacityDashboard.vue'),
         meta: { requiresAuth: true, requiredPermission: Permissions.Device.Read, title: '产能看板' }
+      },
+      {
+        // 单设备产能详情报表，从看板点击进入
+        path: 'capacity/detail',
+        name: 'CapacityDetail',
+        component: () => import('../views/capacity/CapacityDetail.vue'),
+        meta: { requiresAuth: true, requiredPermission: Permissions.Device.Read, title: '产能详情' }
       },
       {
         path: 'device-logs',

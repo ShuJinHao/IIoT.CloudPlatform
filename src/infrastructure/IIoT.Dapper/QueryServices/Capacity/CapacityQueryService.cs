@@ -6,6 +6,141 @@ namespace IIoT.Dapper.QueryServices.Capacity;
 
 public class CapacityQueryService(IDbConnectionFactory connectionFactory) : ICapacityQueryService
 {
+    // ── 1. 按日半小时明细 ────────────────────────────────────────────────
+
+    public async Task<List<HourlyCapacityDto>> GetHourlyByDeviceIdAsync(
+        Guid deviceId,
+        DateOnly date,
+        CancellationToken cancellationToken = default)
+    {
+        using var connection = connectionFactory.CreateConnection();
+
+        const string sql = @"
+            SELECT
+                h.hour        AS Hour,
+                h.minute      AS Minute,
+                h.time_label  AS TimeLabel,
+                h.shift_code  AS ShiftCode,
+                h.total_count AS TotalCount,
+                h.ok_count    AS OkCount,
+                h.ng_count    AS NgCount
+            FROM hourly_capacity h
+            WHERE h.device_id = @DeviceId
+              AND h.date = @Date
+            ORDER BY h.hour, h.minute";
+
+        var cmd = new CommandDefinition(sql, new { DeviceId = deviceId, Date = date }, cancellationToken: cancellationToken);
+        var rows = await connection.QueryAsync<HourlyCapacityDto>(cmd);
+        return rows.ToList();
+    }
+
+    // ── 2. 按日汇总（白班+夜班合并）──────────────────────────────────────
+
+    public async Task<DailySummaryDto?> GetSummaryByDeviceIdAsync(
+        Guid deviceId,
+        DateOnly date,
+        CancellationToken cancellationToken = default)
+    {
+        using var connection = connectionFactory.CreateConnection();
+
+        const string sql = @"
+            SELECT
+                h.shift_code                    AS ShiftCode,
+                COALESCE(SUM(h.total_count), 0) AS TotalCount,
+                COALESCE(SUM(h.ok_count),    0) AS OkCount,
+                COALESCE(SUM(h.ng_count),    0) AS NgCount
+            FROM hourly_capacity h
+            WHERE h.device_id = @DeviceId
+              AND h.date = @Date
+            GROUP BY h.shift_code";
+
+        var cmd = new CommandDefinition(sql, new { DeviceId = deviceId, Date = date }, cancellationToken: cancellationToken);
+        var rows = (await connection.QueryAsync(cmd)).ToList();
+        if (rows.Count == 0) return null;
+
+        return MergeSummaryRows(rows);
+    }
+
+    // ── 3. 按日期范围汇总（月/年查询，一次请求替代循环N次）──────────────
+
+    private sealed class DailyRangeRow
+    {
+        public DateOnly Date { get; set; }
+        public string ShiftCode { get; set; } = string.Empty;
+        public int TotalCount { get; set; }
+        public int OkCount { get; set; }
+        public int NgCount { get; set; }
+    }
+
+    public async Task<List<DailyRangeSummaryDto>> GetSummaryRangeAsync(
+        Guid deviceId,
+        DateOnly startDate,
+        DateOnly endDate,
+        CancellationToken cancellationToken = default)
+    {
+        using var connection = connectionFactory.CreateConnection();
+
+        const string sql = @"
+            SELECT
+                h.date                          AS Date,
+                h.shift_code                    AS ShiftCode,
+                COALESCE(SUM(h.total_count), 0) AS TotalCount,
+                COALESCE(SUM(h.ok_count),    0) AS OkCount,
+                COALESCE(SUM(h.ng_count),    0) AS NgCount
+            FROM hourly_capacity h
+            WHERE h.device_id = @DeviceId
+              AND h.date >= @StartDate
+              AND h.date <= @EndDate
+            GROUP BY h.date, h.shift_code
+            ORDER BY h.date ASC, h.shift_code ASC";
+
+        var cmd = new CommandDefinition(
+            sql,
+            new { DeviceId = deviceId, StartDate = startDate, EndDate = endDate },
+            cancellationToken: cancellationToken);
+
+        var rows = (await connection.QueryAsync<DailyRangeRow>(cmd)).ToList();
+        if (rows.Count == 0)
+        {
+            return [];
+        }
+
+        var result = rows
+            .GroupBy(r => r.Date)
+            .Select(g =>
+            {
+                var day = g.FirstOrDefault(x => x.ShiftCode.Equals("D", StringComparison.OrdinalIgnoreCase));
+                var night = g.FirstOrDefault(x => x.ShiftCode.Equals("N", StringComparison.OrdinalIgnoreCase));
+
+                var dayTotal = day?.TotalCount ?? 0;
+                var dayOk = day?.OkCount ?? 0;
+                var dayNg = day?.NgCount ?? 0;
+
+                var nightTotal = night?.TotalCount ?? 0;
+                var nightOk = night?.OkCount ?? 0;
+                var nightNg = night?.NgCount ?? 0;
+
+                return new DailyRangeSummaryDto(
+                    Date: g.Key,
+                    TotalCount: dayTotal + nightTotal,
+                    OkCount: dayOk + nightOk,
+                    NgCount: dayNg + nightNg,
+                    DayShiftTotal: dayTotal,
+                    DayShiftOk: dayOk,
+                    DayShiftNg: dayNg,
+                    NightShiftTotal: nightTotal,
+                    NightShiftOk: nightOk,
+                    NightShiftNg: nightNg
+                );
+            })
+            .OrderBy(x => x.Date)
+            .ToList();
+
+        return result;
+    }
+
+    // ── 4. 云端后台分页 ──────────────────────────────────────────────────
+
     public async Task<(List<dynamic> Items, int TotalCount)> GetDailyPagedAsync(
         Pagination pagination,
         DateOnly? date = null,
@@ -19,116 +154,86 @@ public class CapacityQueryService(IDbConnectionFactory connectionFactory) : ICap
 
         if (date.HasValue)
         {
-            conditions += " AND c.date = @Date";
+            conditions += " AND h.date = @Date";
             parameters.Add("Date", date.Value);
         }
 
         if (deviceId.HasValue)
         {
-            conditions += " AND c.device_id = @DeviceId";
+            conditions += " AND h.device_id = @DeviceId";
             parameters.Add("DeviceId", deviceId.Value);
         }
 
         var dataSql = $@"
-    SELECT c.id, c.device_id, d.device_name,
-           c.date, c.shift_code, c.total_count, c.ok_count, c.ng_count,
-           CASE WHEN c.total_count > 0 
-                THEN ROUND(c.ok_count * 100.0 / c.total_count, 2) 
-                ELSE 0 END AS ok_rate,
-           c.reported_at
-    FROM daily_capacity c
-    INNER JOIN devices d ON c.device_id = d.id
-    {conditions}
-    ORDER BY c.date DESC, d.device_name
-    OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY";
+            SELECT
+                h.device_id,
+                d.device_name,
+                h.date,
+                COALESCE(SUM(h.total_count), 0) AS total_count,
+                COALESCE(SUM(h.ok_count),    0) AS ok_count,
+                COALESCE(SUM(h.ng_count),    0) AS ng_count,
+                CASE WHEN SUM(h.total_count) > 0
+                     THEN ROUND(SUM(h.ok_count) * 100.0 / SUM(h.total_count), 2)
+                     ELSE 0 END AS ok_rate,
+                MAX(h.reported_at) AS reported_at
+            FROM hourly_capacity h
+            INNER JOIN devices d ON h.device_id = d.id
+            {conditions}
+            GROUP BY h.device_id, d.device_name, h.date
+            ORDER BY h.date DESC, d.device_name
+            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY";
 
         var countSql = $@"
-            SELECT COUNT(*) 
-            FROM daily_capacity c
-            INNER JOIN devices d ON c.device_id = d.id
-            {conditions}";
+            SELECT COUNT(*) FROM (
+                SELECT h.device_id, h.date
+                FROM hourly_capacity h
+                {conditions}
+                GROUP BY h.device_id, h.date
+            ) AS sub";
 
         var offset = (pagination.PageNumber - 1) * pagination.PageSize;
         parameters.Add("Offset", offset);
         parameters.Add("PageSize", pagination.PageSize);
 
-        var command = new CommandDefinition(dataSql, parameters, cancellationToken: cancellationToken);
-        var countCommand = new CommandDefinition(countSql, parameters, cancellationToken: cancellationToken);
+        var dataCmd = new CommandDefinition(dataSql, parameters, cancellationToken: cancellationToken);
+        var countCmd = new CommandDefinition(countSql, parameters, cancellationToken: cancellationToken);
 
-        var items = (await connection.QueryAsync(command)).ToList();
-        var totalCount = await connection.ExecuteScalarAsync<int>(countCommand);
+        var items = (await connection.QueryAsync(dataCmd)).ToList();
+        var totalCount = await connection.ExecuteScalarAsync<int>(countCmd);
 
         return (items, totalCount);
     }
 
-    public async Task<List<dynamic>> GetDeviceSummaryAsync(
-        Guid deviceId,
-        DateOnly startDate,
-        DateOnly endDate,
-        CancellationToken cancellationToken = default)
+    // ── 私有辅助 ─────────────────────────────────────────────────────────
+
+    private static DailySummaryDto MergeSummaryRows(List<dynamic> rows)
     {
-        using var connection = connectionFactory.CreateConnection();
+        int dayTotal = 0, dayOk = 0, dayNg = 0;
+        int nightTotal = 0, nightOk = 0, nightNg = 0;
 
-        var sql = @"
-            SELECT c.date, c.shift_code, c.total_count, c.ok_count, c.ng_count,
-                   CASE WHEN c.total_count > 0 
-                        THEN ROUND(c.ok_count * 100.0 / c.total_count, 2) 
-                        ELSE 0 END AS ok_rate,
-                   d.device_name,
-                   c.reported_at
-            FROM daily_capacity c
-            INNER JOIN devices d ON c.device_id = d.id
-            WHERE c.device_id = @DeviceId
-              AND c.date >= @StartDate
-              AND c.date <= @EndDate
-            ORDER BY c.date DESC, c.shift_code";
+        foreach (var row in rows)
+        {
+            string shift = (string?)row.ShiftCode ?? "";
+            int t = (int)(row.TotalCount ?? 0);
+            int o = (int)(row.OkCount ?? 0);
+            int n = (int)(row.NgCount ?? 0);
 
-        var command = new CommandDefinition(sql, new { DeviceId = deviceId, StartDate = startDate, EndDate = endDate }, cancellationToken: cancellationToken);
+            if (shift.Equals("D", StringComparison.OrdinalIgnoreCase))
+            { dayTotal = t; dayOk = o; dayNg = n; }
+            else
+            { nightTotal = t; nightOk = o; nightNg = n; }
+        }
 
-        return (await connection.QueryAsync(command)).ToList();
-    }
-
-    public async Task<(List<dynamic> Items, int TotalCount)> GetLastMonthByDeviceAsync(
-        Guid deviceId,
-        Pagination pagination,
-        CancellationToken cancellationToken = default)
-    {
-        using var connection = connectionFactory.CreateConnection();
-
-        var endDate   = DateOnly.FromDateTime(DateTime.UtcNow);
-        var startDate = endDate.AddMonths(-1);
-
-        var dataSql = @"
-            SELECT c.id, c.device_id, d.device_name,
-                   c.date, c.shift_code, c.total_count, c.ok_count, c.ng_count,
-                   CASE WHEN c.total_count > 0
-                        THEN ROUND(c.ok_count * 100.0 / c.total_count, 2)
-                        ELSE 0 END AS ok_rate,
-                   c.reported_at
-            FROM daily_capacity c
-            INNER JOIN devices d ON c.device_id = d.id
-            WHERE c.device_id = @DeviceId
-              AND c.date >= @StartDate
-              AND c.date <= @EndDate
-            ORDER BY c.date DESC, c.shift_code
-            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY";
-
-        var countSql = @"
-            SELECT COUNT(*)
-            FROM daily_capacity
-            WHERE device_id = @DeviceId
-              AND date >= @StartDate
-              AND date <= @EndDate";
-
-        var offset = (pagination.PageNumber - 1) * pagination.PageSize;
-        var parameters = new { DeviceId = deviceId, StartDate = startDate, EndDate = endDate, Offset = offset, PageSize = pagination.PageSize };
-
-        var command      = new CommandDefinition(dataSql, parameters, cancellationToken: cancellationToken);
-        var countCommand = new CommandDefinition(countSql, new { DeviceId = deviceId, StartDate = startDate, EndDate = endDate }, cancellationToken: cancellationToken);
-
-        var items      = (await connection.QueryAsync(command)).ToList();
-        var totalCount = await connection.ExecuteScalarAsync<int>(countCommand);
-
-        return (items, totalCount);
+        return new DailySummaryDto(
+            TotalCount: dayTotal + nightTotal,
+            OkCount: dayOk + nightOk,
+            NgCount: dayNg + nightNg,
+            DayShiftTotal: dayTotal,
+            DayShiftOk: dayOk,
+            DayShiftNg: dayNg,
+            NightShiftTotal: nightTotal,
+            NightShiftOk: nightOk,
+            NightShiftNg: nightNg
+        );
     }
 }
