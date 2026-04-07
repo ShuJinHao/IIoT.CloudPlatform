@@ -1,7 +1,7 @@
 ﻿using Dapper;
-using IIoT.Services.Common.Contracts.RecordRepositories;
+using IIoT.Core.Production.Contracts.RecordRepositories;
 
-namespace IIoT.Dapper.Repositories.DeviceLogs;
+namespace IIoT.Dapper.Production.Repositories.DeviceLogs;
 
 public sealed class DeviceLogRecordRepository(IDbConnectionFactory connectionFactory)
     : IDeviceLogRecordRepository
@@ -37,8 +37,21 @@ public sealed class DeviceLogRecordRepository(IDbConnectionFactory connectionFac
             );
             """;
 
+        // 值对象在绑参一刻拆成扁平列,保持 SQL 视角干净
+        var rows = items.Select(x => new
+        {
+            x.Id,
+            x.DeviceId,
+            MacAddress = x.Instance.MacAddress,
+            ClientCode = x.Instance.ClientCode,
+            x.Level,
+            x.Message,
+            x.LogTime,
+            x.ReceivedAt
+        });
+
         using var connection = connectionFactory.CreateConnection();
-        var command = new CommandDefinition(sql, items, cancellationToken: cancellationToken);
+        var command = new CommandDefinition(sql, rows, cancellationToken: cancellationToken);
         await connection.ExecuteAsync(command);
     }
 }

@@ -1,21 +1,16 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+﻿using IIoT.Core.Production.ValueObjects;
 
 namespace IIoT.Core.Production.Contracts.RecordRepositories;
 
-public interface IPassDataInjectionRecordRepository
-{
-    Task InsertAsync(
-        PassDataInjectionWriteModel item,
-        CancellationToken cancellationToken = default);
-}
-
+/// <summary>
+/// 注液过站记录写入模型。
+/// 幂等性由表层唯一索引 (device_id, barcode, completed_time) + ON CONFLICT DO NOTHING 保证,
+/// 调用方无需先查后写。
+/// </summary>
 public sealed record PassDataInjectionWriteModel(
     Guid Id,
     Guid DeviceId,
-    string MacAddress,
-    string ClientCode,
+    ClientInstanceId Instance,
     string CellResult,
     DateTime CompletedTime,
     DateTime ReceivedAt,
@@ -25,3 +20,10 @@ public sealed record PassDataInjectionWriteModel(
     DateTime PostInjectionTime,
     decimal PostInjectionWeight,
     decimal InjectionVolume);
+
+public interface IPassDataInjectionRecordRepository
+{
+    Task InsertAsync(
+        PassDataInjectionWriteModel item,
+        CancellationToken cancellationToken = default);
+}

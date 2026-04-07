@@ -1,6 +1,6 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using IIoT.Core.Production.Aggregates.Devices;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
-using IIoT.Core.Production.Aggregates.Devices;
 
 namespace IIoT.EntityFrameworkCore.Configuration.Production;
 
@@ -9,6 +9,7 @@ public class DeviceConfiguration : IEntityTypeConfiguration<Device>
     public void Configure(EntityTypeBuilder<Device> builder)
     {
         builder.ToTable("devices");
+
         builder.HasKey(d => d.Id);
         builder.Property(d => d.Id).HasColumnName("id");
 
@@ -17,15 +18,19 @@ public class DeviceConfiguration : IEntityTypeConfiguration<Device>
             .HasMaxLength(100)
             .HasColumnName("device_name");
 
-        builder.Property(d => d.MacAddress)
-            .IsRequired()
-            .HasMaxLength(50)
-            .HasColumnName("mac_address");
+        // 值对象 ClientInstanceId → 两列(mac_address, client_code)
+        builder.ComplexProperty(d => d.Instance, instance =>
+        {
+            instance.Property(i => i.MacAddress)
+                .IsRequired()
+                .HasMaxLength(50)
+                .HasColumnName("mac_address");
 
-        builder.Property(d => d.ClientCode)
-            .IsRequired()
-            .HasMaxLength(50)
-            .HasColumnName("client_code");
+            instance.Property(i => i.ClientCode)
+                .IsRequired()
+                .HasMaxLength(50)
+                .HasColumnName("client_code");
+        });
 
         builder.Property(d => d.ProcessId)
             .IsRequired()
@@ -35,7 +40,8 @@ public class DeviceConfiguration : IEntityTypeConfiguration<Device>
             .IsRequired()
             .HasColumnName("is_active");
 
-        builder.HasIndex(d => new { d.MacAddress, d.ClientCode })
+        // 联合唯一:同一宿主机上同一 ClientCode 的实例只有一个
+        builder.HasIndex(d => new { d.Instance.MacAddress, d.Instance.ClientCode })
             .IsUnique()
             .HasDatabaseName("ix_devices_mac_address_client_code");
 

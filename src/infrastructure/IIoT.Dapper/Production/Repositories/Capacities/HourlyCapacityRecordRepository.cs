@@ -1,7 +1,7 @@
 ﻿using Dapper;
-using IIoT.Services.Common.Contracts.RecordRepositories;
+using IIoT.Core.Production.Contracts.RecordRepositories;
 
-namespace IIoT.Dapper.Repositories.Capacities;
+namespace IIoT.Dapper.Production.Repositories.Capacities;
 
 public sealed class HourlyCapacityRecordRepository(IDbConnectionFactory connectionFactory)
     : IHourlyCapacityRecordRepository
@@ -55,13 +55,27 @@ public sealed class HourlyCapacityRecordRepository(IDbConnectionFactory connecti
                 reported_at = excluded.reported_at;
             """;
 
-        var normalized = item with
+        // 值对象拆列 + PlcName 空值兜底(避开 PostgreSQL 唯一索引对 NULL 的"NULL 不等于 NULL"陷阱)
+        var row = new
         {
-            PlcName = item.PlcName ?? string.Empty
+            item.Id,
+            item.DeviceId,
+            MacAddress = item.Instance.MacAddress,
+            ClientCode = item.Instance.ClientCode,
+            item.Date,
+            item.ShiftCode,
+            item.Hour,
+            item.Minute,
+            item.TimeLabel,
+            item.TotalCount,
+            item.OkCount,
+            item.NgCount,
+            PlcName = item.PlcName ?? string.Empty,
+            item.ReportedAt
         };
 
         using var connection = connectionFactory.CreateConnection();
-        var command = new CommandDefinition(sql, normalized, cancellationToken: cancellationToken);
+        var command = new CommandDefinition(sql, row, cancellationToken: cancellationToken);
         await connection.ExecuteAsync(command);
     }
 }

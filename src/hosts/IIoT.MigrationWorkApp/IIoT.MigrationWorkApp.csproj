@@ -22,6 +22,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\infrastructure\IIoT.Dapper\IIoT.Dapper.csproj" />
     <ProjectReference Include="..\..\infrastructure\IIoT.EntityFrameworkCore\IIoT.EntityFrameworkCore.csproj" />
     <ProjectReference Include="..\..\infrastructure\IIoT.Infrastructure\IIoT.Infrastructure.csproj" />
     <ProjectReference Include="..\IIoT.ServiceDefaults\IIoT.ServiceDefaults.csproj" />

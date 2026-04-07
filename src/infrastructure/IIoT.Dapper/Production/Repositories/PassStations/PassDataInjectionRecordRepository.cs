@@ -1,7 +1,7 @@
 ﻿using Dapper;
-using IIoT.Services.Common.Contracts.RecordRepositories;
+using IIoT.Core.Production.Contracts.RecordRepositories;
 
-namespace IIoT.Dapper.Repositories.PassStations;
+namespace IIoT.Dapper.Production.Repositories.PassStations;
 
 public sealed class PassDataInjectionRecordRepository(IDbConnectionFactory connectionFactory)
     : IPassDataInjectionRecordRepository
@@ -42,11 +42,29 @@ public sealed class PassDataInjectionRecordRepository(IDbConnectionFactory conne
                 @PostInjectionTime,
                 @PostInjectionWeight,
                 @InjectionVolume
-            );
+            )
+            on conflict (device_id, barcode, completed_time) do nothing;
             """;
 
+        var row = new
+        {
+            item.Id,
+            item.DeviceId,
+            MacAddress = item.Instance.MacAddress,
+            ClientCode = item.Instance.ClientCode,
+            item.CellResult,
+            item.CompletedTime,
+            item.ReceivedAt,
+            item.Barcode,
+            item.PreInjectionTime,
+            item.PreInjectionWeight,
+            item.PostInjectionTime,
+            item.PostInjectionWeight,
+            item.InjectionVolume
+        };
+
         using var connection = connectionFactory.CreateConnection();
-        var command = new CommandDefinition(sql, item, cancellationToken: cancellationToken);
+        var command = new CommandDefinition(sql, row, cancellationToken: cancellationToken);
         await connection.ExecuteAsync(command);
     }
 }

@@ -1,89 +1,52 @@
-﻿using IIoT.SharedKernel.Domain;
+﻿using System.Linq.Expressions;
+using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Specification;
-using System.Linq.Expressions;
 
 namespace IIoT.SharedKernel.Repository;
 
 /// <summary>
-///     <para>
-///         <see cref="T" /> 用于查询 <typeparamref name="T" />.
-///     </para>
+/// 聚合根只读仓储。
+/// 
+/// 查询入口分两类:
+/// 1. Specification 重载 - 用于有业务语义的查询,查询意图应当被命名和复用
+/// 2. Expression 重载    - 仅用于命令端的退化查询(存在性检查、计数),
+///                         返回类型限定为 bool/int/T?,不暴露 IQueryable
 /// </summary>
-/// <typeparam name="T">该仓储操作的实体类型</typeparam>
 public interface IReadRepository<T> where T : class, IAggregateRoot
 {
-    /// <summary>
-    ///     获取 Queryable 查询表达式
-    /// </summary>
-    /// <returns></returns>
-    IQueryable<T> GetQueryable();
+    // ── Specification 路径(取出实体)─────────────────────────────
 
-    /// <summary>
-    ///     查询具有指定主键的实体
-    /// </summary>
-    /// <typeparam name="TKey">主键的类型</typeparam>
-    /// <param name="id">要查找的实体的主键值</param>
-    /// <param name="cancellationToken"></param>
-    /// <returns></returns>
-    Task<T?> GetByIdAsync<TKey>(TKey id, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    ///     查询实体集合
-    /// </summary>
-    /// <param name="expression"></param>
-    /// <param name="cancellationToken"></param>
-    /// <returns></returns>
-    Task<List<T>> GetListAsync(Expression<Func<T, bool>> expression, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    ///     统计符合条件的记录总数
-    /// </summary>
-    /// <param name="expression"></param>
-    /// <param name="cancellationToken"></param>
-    /// <returns></returns>
-    Task<int> GetCountAsync(Expression<Func<T, bool>> expression, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// 根据条件获取单条实体，并包含指定的导航属性
-    /// </summary>
-    /// <param name="expression">查询条件</param>
-    /// <param name="includes">需要加载的导航属性表达式数组</param>
-    /// <param name="cancellationToken"></param>
-    /// <returns></returns>
-    Task<T?> GetAsync(
-        Expression<Func<T, bool>> expression,
-        Expression<Func<T, object>>[]? includes = null,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// 根据条件获取实体列表，并包含指定的导航属性
-    /// </summary>
-    /// <param name="expression">查询条件</param>
-    /// <param name="includes">需要加载的导航属性表达式数组</param>
-    /// <param name="cancellationToken"></param>
-    /// <returns></returns>
     Task<List<T>> GetListAsync(
-        Expression<Func<T, bool>> expression,
-        Expression<Func<T, object>>[]? includes = null,
+        ISpecification<T>? specification = null,
+        CancellationToken cancellationToken = default);
+
+    Task<T?> GetSingleOrDefaultAsync(
+        ISpecification<T>? specification = null,
+        CancellationToken cancellationToken = default);
+
+    Task<int> CountAsync(
+        ISpecification<T>? specification = null,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> AnyAsync(
+        ISpecification<T>? specification = null,
+        CancellationToken cancellationToken = default);
+
+    // ── 退化查询路径(命令端快捷方式,仅返回 bool/int)────────────
+
+    /// <summary>
+    /// 命令端快捷存在性检查。不返回实体,只返回是否存在。
+    /// 用于 Handler 里守护"不重复"之类的不变量,避免为每个一次性检查建 Spec。
+    /// 需要取出实体时,必须走 Specification 重载。
+    /// </summary>
+    Task<bool> AnyAsync(
+        Expression<Func<T, bool>> predicate,
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// 使用规约模式查询单条实体
+    /// 命令端快捷计数。
     /// </summary>
-    Task<T?> GetSingleOrDefaultAsync(ISpecification<T>? specification = null, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// 使用规约模式查询实体列表
-    /// </summary>
-    Task<List<T>> GetListAsync(ISpecification<T>? specification = null, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// 使用规约模式统计数量
-    /// </summary>
-    Task<int> CountAsync(ISpecification<T>? specification = null, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// 使用规约模式判断是否存在
-    /// </summary>
-    Task<bool> AnyAsync(ISpecification<T>? specification = null, CancellationToken cancellationToken = default);
+    Task<int> CountAsync(
+        Expression<Func<T, bool>> predicate,
+        CancellationToken cancellationToken = default);
 }

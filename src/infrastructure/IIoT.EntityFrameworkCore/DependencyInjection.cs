@@ -14,27 +14,25 @@ public static class DependencyInjection
     public static void AddEfCore(this IHostApplicationBuilder builder)
     {
         builder.AddNpgsqlDbContext<IIoTDbContext>("iiot-db");
-        // 在这里注册业务级的配置和实现
-        builder.Services.Configure<PermissionCacheOptions>(builder.Configuration.GetSection("PermissionCache")); // 配置注入
-        builder.Services.AddScoped<IPermissionProvider, PermissionProvider>(); // 业务注入
+
+        builder.Services.Configure<PermissionCacheOptions>(builder.Configuration.GetSection("PermissionCache"));
+        builder.Services.AddScoped<IPermissionProvider, PermissionProvider>();
 
         builder.Services.AddScoped(typeof(IReadRepository<>), typeof(EfReadRepository<>));
         builder.Services.AddScoped(typeof(IRepository<>), typeof(EfRepository<>));
-        builder.Services.AddScoped<IDataQueryService, DataQueryService>();
 
-        // 🌟 核心改造：一个实现类注册三个接口，共享同一个 Scoped 实例
+        // 一个实现类注册三个接口,共享同一个 Scoped 实例
         builder.Services.AddScoped<IdentityService>();
         builder.Services.AddScoped<IAccountService>(sp => sp.GetRequiredService<IdentityService>());
         builder.Services.AddScoped<IRolePolicyService>(sp => sp.GetRequiredService<IdentityService>());
         builder.Services.AddScoped<IUserQueryService>(sp => sp.GetRequiredService<IdentityService>());
 
-        // 🌟 核心改造：使用 ApplicationUser 和 Guid 版本的 Role 进行注册
         builder.Services.AddIdentityCore<ApplicationUser>(options =>
         {
             options.Password.RequireNonAlphanumeric = false;
             options.Password.RequiredLength = 8;
         })
-            .AddRoles<IdentityRole<Guid>>() // 指定 Role 也是 Guid 主键
+            .AddRoles<IdentityRole<Guid>>()
             .AddEntityFrameworkStores<IIoTDbContext>();
     }
 }

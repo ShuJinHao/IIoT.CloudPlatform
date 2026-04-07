@@ -1,25 +1,28 @@
-using IIoT.Dapper;
+using IIoT.Dapper.Bootstrap;
+using IIoT.Dapper.Initializers;
 using IIoT.EntityFrameworkCore;
-using IIoT.Infrastructure;
-using IIoT.Infrastructure.Logging;
 using IIoT.MigrationWorkApp;
-using Serilog;
 
 var builder = Host.CreateApplicationBuilder(args);
 
-// 1. Serilog 日志
-builder.AddSerilog("migration");
-
-// 2. 基础设施
 builder.AddServiceDefaults();
+
+// EF Core 负责聚合根 schema (由 EF Migration 执行)
+builder.AddEfCore();
+
+// Dapper 负责记录表 schema (由 RecordSchemaInitializer 执行)
+builder.AddDapper();
+
+// 注册 Worker(如果有)
 builder.Services.AddHostedService<Worker>();
 
-builder.AddEfCore();
-builder.AddDapper();
-builder.AddInfrastructures();
+var app = builder.Build();
 
-builder.Services.AddOpenTelemetry()
-    .WithTracing(tracing => tracing.AddSource(Worker.ActivitySourceName));
+// 在启动时执行一次记录表 schema 初始化
+using (var scope = app.Services.CreateScope())
+{
+    var initializer = scope.ServiceProvider.GetRequiredService<RecordSchemaInitializer>();
+    await initializer.InitializeAsync();
+}
 
-var host = builder.Build();
-host.Run();
+app.Run();

@@ -1,103 +1,75 @@
-﻿using IIoT.EntityFrameworkCore;
+﻿using System.Linq.Expressions;
+using IIoT.EntityFrameworkCore.Specification;
 using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Specification;
-using Microsoft.EntityFrameworkCore; // 🌟 修复那堆红线报错的唯一关键！
-using System.Linq.Expressions;
-using IIoT.EntityFrameworkCore.Specification;
+using Microsoft.EntityFrameworkCore;
 
 namespace IIoT.EntityFrameworkCore.Repository;
 
-// 保留极简的主构造函数写法！
+/// <summary>
+/// 聚合根的只读仓储。
+/// 查询入口只暴露 Specification 和退化谓词两种,不暴露 IQueryable,
+/// 避免基础设施细节泄漏到上层。
+/// </summary>
 public class EfReadRepository<T>(IIoTDbContext dbContext) : IReadRepository<T>
     where T : class, IAggregateRoot
 {
-    public IQueryable<T> GetQueryable()
-    {
-        return dbContext.Set<T>().AsQueryable();
-    }
-
-    public async Task<T?> GetByIdAsync<TKey>(TKey id, CancellationToken cancellationToken = default)
-        where TKey : notnull
-    {
-        // 保留极简的集合表达式 [id]
-        return await dbContext.Set<T>().FindAsync([id], cancellationToken);
-    }
-
-    public async Task<List<T>> GetListAsync(Expression<Func<T, bool>> expression,
-        CancellationToken cancellationToken = default)
-    {
-        return await dbContext.Set<T>().Where(expression).ToListAsync(cancellationToken);
-    }
-
-    public async Task<int> GetCountAsync(Expression<Func<T, bool>> expression,
-        CancellationToken cancellationToken = default)
-    {
-        return await dbContext.Set<T>().Where(expression).CountAsync(cancellationToken);
-    }
-
-    public async Task<T?> GetAsync(
-        Expression<Func<T, bool>> expression,
-        Expression<Func<T, object>>[]? includes = null,
-        CancellationToken cancellationToken = default)
-    {
-        var query = dbContext.Set<T>().AsQueryable();
-
-        if (includes != null)
-        {
-            foreach (var include in includes)
-            {
-                query = query.Include(include); // Include 报错就是因为没引用 EF Core 命名空间
-            }
-        }
-
-        return await query.FirstOrDefaultAsync(expression, cancellationToken);
-    }
+    // ── Specification 路径 ──────────────────────────────────────
 
     public async Task<List<T>> GetListAsync(
-        Expression<Func<T, bool>> expression,
-        Expression<Func<T, object>>[]? includes = null,
+        ISpecification<T>? specification = null,
         CancellationToken cancellationToken = default)
     {
-        var query = dbContext.Set<T>().AsQueryable();
-
-        if (includes != null)
-        {
-            foreach (var include in includes)
-            {
-                query = query.Include(include);
-            }
-        }
-
-        return await query.Where(expression).ToListAsync(cancellationToken);
-    }
-
-    public async Task<List<T>> GetListAsync(ISpecification<T>? specification = null, CancellationToken cancellationToken = default)
-    {
-        // 🌟 核心修复：使用 dbContext.Set<T>().AsQueryable() 替代未定义的 DbSet
         return await SpecificationEvaluator
             .GetQuery(dbContext.Set<T>().AsQueryable(), specification)
             .ToListAsync(cancellationToken);
     }
 
-    public async Task<T?> GetSingleOrDefaultAsync(ISpecification<T>? specification = null, CancellationToken cancellationToken = default)
+    public async Task<T?> GetSingleOrDefaultAsync(
+        ISpecification<T>? specification = null,
+        CancellationToken cancellationToken = default)
     {
         return await SpecificationEvaluator
             .GetQuery(dbContext.Set<T>().AsQueryable(), specification)
             .FirstOrDefaultAsync(cancellationToken);
     }
 
-    public async Task<int> CountAsync(ISpecification<T>? specification = null, CancellationToken cancellationToken = default)
+    public async Task<int> CountAsync(
+        ISpecification<T>? specification = null,
+        CancellationToken cancellationToken = default)
     {
         return await SpecificationEvaluator
             .GetQuery(dbContext.Set<T>().AsQueryable(), specification)
             .CountAsync(cancellationToken);
     }
 
-    public async Task<bool> AnyAsync(ISpecification<T>? specification = null, CancellationToken cancellationToken = default)
+    public async Task<bool> AnyAsync(
+        ISpecification<T>? specification = null,
+        CancellationToken cancellationToken = default)
     {
         return await SpecificationEvaluator
             .GetQuery(dbContext.Set<T>().AsQueryable(), specification)
             .AnyAsync(cancellationToken);
+    }
+
+    // ── 退化查询路径(命令端快捷方式)───────────────────────────
+
+    public async Task<bool> AnyAsync(
+        Expression<Func<T, bool>> predicate,
+        CancellationToken cancellationToken = default)
+    {
+        return await dbContext.Set<T>()
+            .AsNoTracking()
+            .AnyAsync(predicate, cancellationToken);
+    }
+
+    public async Task<int> CountAsync(
+        Expression<Func<T, bool>> predicate,
+        CancellationToken cancellationToken = default)
+    {
+        return await dbContext.Set<T>()
+            .AsNoTracking()
+            .CountAsync(predicate, cancellationToken);
     }
 }
