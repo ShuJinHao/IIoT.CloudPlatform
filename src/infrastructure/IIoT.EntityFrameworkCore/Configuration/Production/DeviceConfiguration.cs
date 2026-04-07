@@ -22,6 +22,11 @@ public class DeviceConfiguration : IEntityTypeConfiguration<Device>
             .HasMaxLength(50)
             .HasColumnName("mac_address");
 
+        builder.Property(d => d.ClientCode)
+            .IsRequired()
+            .HasMaxLength(50)
+            .HasColumnName("client_code");
+
         builder.Property(d => d.ProcessId)
             .IsRequired()
             .HasColumnName("process_id");
@@ -30,9 +35,9 @@ public class DeviceConfiguration : IEntityTypeConfiguration<Device>
             .IsRequired()
             .HasColumnName("is_active");
 
-        builder.HasIndex(d => d.MacAddress)
+        builder.HasIndex(d => new { d.MacAddress, d.ClientCode })
             .IsUnique()
-            .HasDatabaseName("ix_devices_mac_address");
+            .HasDatabaseName("ix_devices_mac_address_client_code");
 
         builder.HasIndex(d => d.ProcessId)
             .HasDatabaseName("ix_devices_process_id");

@@ -4,22 +4,28 @@ using IIoT.Core.Production.Aggregates.DeviceLogs;
 
 namespace IIoT.EntityFrameworkCore.Configuration.Production;
 
-/// <summary>
-/// 设备运行日志的 EF Core 数据库映射配置
-/// </summary>
 public class DeviceLogConfiguration : IEntityTypeConfiguration<DeviceLog>
 {
     public void Configure(EntityTypeBuilder<DeviceLog> builder)
     {
         builder.ToTable("device_logs");
 
-        // TimescaleDB 超表要求：主键必须包含分区列 log_time
         builder.HasKey(l => new { l.Id, l.LogTime });
         builder.Property(l => l.Id).HasColumnName("id");
 
         builder.Property(l => l.DeviceId)
             .IsRequired()
             .HasColumnName("device_id");
+
+        builder.Property(l => l.MacAddress)
+            .IsRequired()
+            .HasMaxLength(50)
+            .HasColumnName("mac_address");
+
+        builder.Property(l => l.ClientCode)
+            .IsRequired()
+            .HasMaxLength(50)
+            .HasColumnName("client_code");
 
         builder.Property(l => l.Level)
             .IsRequired()
@@ -38,9 +44,11 @@ public class DeviceLogConfiguration : IEntityTypeConfiguration<DeviceLog>
             .IsRequired()
             .HasColumnName("received_at");
 
-        // 索引配置
         builder.HasIndex(l => new { l.DeviceId, l.LogTime })
             .HasDatabaseName("ix_device_logs_device_time");
+
+        builder.HasIndex(l => new { l.MacAddress, l.ClientCode, l.LogTime })
+            .HasDatabaseName("ix_device_logs_mac_client_time");
 
         builder.HasIndex(l => l.Level)
             .HasDatabaseName("ix_device_logs_level");
