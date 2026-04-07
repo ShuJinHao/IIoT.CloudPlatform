@@ -10,7 +10,7 @@ using IIoT.Services.Common.Contracts;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
-using IIoT.Dapper;
+using IIoT.Dapper.Bootstrap;
 
 namespace IIoT.HttpApi;
 

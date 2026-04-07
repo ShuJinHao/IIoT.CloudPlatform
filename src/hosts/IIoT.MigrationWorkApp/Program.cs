@@ -1,3 +1,4 @@
+using IIoT.Dapper;
 using IIoT.EntityFrameworkCore;
 using IIoT.Infrastructure;
 using IIoT.Infrastructure.Logging;
@@ -14,6 +15,7 @@ builder.AddServiceDefaults();
 builder.Services.AddHostedService<Worker>();
 
 builder.AddEfCore();
+builder.AddDapper();
 builder.AddInfrastructures();
 
 builder.Services.AddOpenTelemetry()

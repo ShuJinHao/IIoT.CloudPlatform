@@ -7,6 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="Sql\Schemas\001_device_logs.sql" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Dapper" Version="2.1.72" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.5" />
     <PackageReference Include="Npgsql" Version="10.0.2" />
@@ -14,6 +18,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\services\IIoT.Services.Common\IIoT.Services.Common.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Sql\Schemas\*.sql" />
   </ItemGroup>
 
 </Project>

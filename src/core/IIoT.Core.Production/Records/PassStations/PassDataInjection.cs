@@ -1,4 +1,4 @@
-﻿namespace IIoT.Core.Production.Aggregates.PassStations;
+﻿namespace IIoT.Core.Production.Records.PassStations;
 
 public class PassDataInjection : PassDataBase
 {

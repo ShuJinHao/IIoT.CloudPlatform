@@ -1,26 +1,31 @@
 ﻿using IIoT.SharedKernel.Domain;
 
-namespace IIoT.Core.Production.Aggregates.PassStations;
+namespace IIoT.Core.Production.Records.DeviceLogs;
 
-public abstract class PassDataBase : IAggregateRoot
+/// <summary>
+/// 设备运行日志
+/// </summary>
+public class DeviceLog
 {
-    protected PassDataBase()
+    protected DeviceLog()
     {
     }
 
-    protected PassDataBase(
+    public DeviceLog(
         Guid deviceId,
         string macAddress,
         string clientCode,
-        string cellResult,
-        DateTime completedTime)
+        string level,
+        string message,
+        DateTime logTime)
     {
         Id = Guid.NewGuid();
         DeviceId = deviceId;
         MacAddress = macAddress;
         ClientCode = clientCode;
-        CellResult = cellResult;
-        CompletedTime = completedTime;
+        Level = level;
+        Message = message;
+        LogTime = logTime;
         ReceivedAt = DateTime.UtcNow;
     }
 
@@ -32,9 +37,11 @@ public abstract class PassDataBase : IAggregateRoot
 
     public string ClientCode { get; set; } = null!;
 
-    public string CellResult { get; set; } = null!;
+    public string Level { get; set; } = null!;
 
-    public DateTime CompletedTime { get; set; }
+    public string Message { get; set; } = null!;
+
+    public DateTime LogTime { get; set; }
 
     public DateTime ReceivedAt { get; set; }
 }

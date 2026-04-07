@@ -2,7 +2,7 @@
 using IIoT.Services.Common.Contracts.DapperQueries;
 using IIoT.SharedKernel.Paging;
 
-namespace IIoT.Dapper.QueryServices.PassStation;
+namespace IIoT.Dapper.Production.QueryServices.PassStation;
 
 public class PassStationQueryService(IDbConnectionFactory connectionFactory) : IPassStationQueryService
 {

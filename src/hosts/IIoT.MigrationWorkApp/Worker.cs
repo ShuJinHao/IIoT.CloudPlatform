@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using IIoT.Dapper.Initializers;
 using IIoT.EntityFrameworkCore;
 using IIoT.EntityFrameworkCore.Identity;
 using IIoT.MigrationWorkApp.SeedData;
@@ -26,14 +27,18 @@ public class Worker(
             var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
             var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
             var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
+            var recordSchemaInitializer = scope.ServiceProvider.GetRequiredService<RecordSchemaInitializer>();
 
-            // 1. 执行数据库迁移建表
+            // 1. 执行 EF Core 迁移建表（仅聚合根/身份相关）
             await RunMigrationAsync(dbContext, cancellationToken);
 
-            // 2. 初始化 TimescaleDB 扩展和时序表
+            // 2. 执行 Dapper 记录表建表
+            await InitializeRecordSchemasAsync(recordSchemaInitializer, cancellationToken);
+
+            // 3. 初始化 TimescaleDB 扩展和时序表
             await InitializeTimescaleDbAsync(dbContext, cancellationToken);
 
-            // 3. 集中执行所有种子数据的播种
+            // 4. 播种初始数据
             await SeedDataAsync(dbContext, userManager, roleManager, cancellationToken);
         }
         catch (Exception ex)
@@ -59,10 +64,15 @@ public class Worker(
         logger.LogInformation("数据库迁移应用完成！");
     }
 
-    /// <summary>
-    /// 初始化 TimescaleDB：启用扩展 + 将过站数据表转为时序表
-    /// 幂等设计：重复执行不会报错
-    /// </summary>
+    private async Task InitializeRecordSchemasAsync(
+        RecordSchemaInitializer recordSchemaInitializer,
+        CancellationToken cancellationToken)
+    {
+        logger.LogInformation("开始初始化记录表 Schema...");
+        await recordSchemaInitializer.InitializeAsync(cancellationToken);
+        logger.LogInformation("记录表 Schema 初始化完成！");
+    }
+
     private async Task InitializeTimescaleDbAsync(IIoTDbContext dbContext, CancellationToken cancellationToken)
     {
         logger.LogInformation("开始初始化 TimescaleDB...");
@@ -70,13 +80,10 @@ public class Worker(
         var strategy = dbContext.Database.CreateExecutionStrategy();
         await strategy.ExecuteAsync(async () =>
         {
-            // 1. 启用 TimescaleDB 扩展（幂等，已存在不会报错）
             await dbContext.Database.ExecuteSqlRawAsync(
                 "CREATE EXTENSION IF NOT EXISTS timescaledb;", cancellationToken);
 
-            // 2. 将过站数据表转为时序表
-            // 先检查是否已经是 hypertable，避免重复转换报错
-            var isHypertable = await dbContext.Database.ExecuteSqlRawAsync(@"
+            await dbContext.Database.ExecuteSqlRawAsync(@"
                 DO $$
                 BEGIN
                     IF NOT EXISTS (
@@ -87,7 +94,6 @@ public class Worker(
                     END IF;
                 END $$;", cancellationToken);
 
-            // 3. 设备日志表也转为时序表（日志量大，同样受益于时间分区）
             await dbContext.Database.ExecuteSqlRawAsync(@"
                 DO $$
                 BEGIN

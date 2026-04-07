@@ -2,7 +2,7 @@
 using IIoT.Services.Common.Contracts.DapperQueries;
 using IIoT.SharedKernel.Paging;
 
-namespace IIoT.Dapper.QueryServices.Capacity;
+namespace IIoT.Dapper.Production.QueryServices.Capacity;
 
 public class CapacityQueryService(IDbConnectionFactory connectionFactory) : ICapacityQueryService
 {

@@ -2,7 +2,7 @@
 using IIoT.Services.Common.Contracts.DapperQueries;
 using IIoT.SharedKernel.Paging;
 
-namespace IIoT.Dapper.QueryServices.DeviceLog;
+namespace IIoT.Dapper.Production.QueryServices.DeviceLog;
 
 public class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : IDeviceLogQueryService
 {
