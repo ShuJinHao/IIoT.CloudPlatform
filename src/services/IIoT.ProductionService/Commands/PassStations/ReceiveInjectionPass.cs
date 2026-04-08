@@ -1,18 +1,21 @@
-﻿using IIoT.Services.Common.Events;
+﻿using IIoT.Core.Production.Aggregates.Devices;
+using IIoT.Services.Common.Events;
 using IIoT.SharedKernel.Messaging;
+using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
 using AutoMapper;
 using MassTransit;
-using IIoT.Services.Common.Contracts;
 
 namespace IIoT.ProductionService.Commands.PassStations;
 
 /// <summary>
-/// 业务指令：接收注液工序过站数据
-/// 边缘端 CloudConsumer 上报，校验通过后发布事件到 MQ，DataWorker 异步写库
+/// 业务指令:接收注液工序过站数据(单条)。
+/// 上位机推送到 HttpApi → 校验设备存在且活跃 → 发布到 MQ → DataWorker 消费落库。
 /// </summary>
 public record ReceiveInjectionPassCommand(
     Guid DeviceId,
+    string MacAddress,
+    string ClientCode,
     string Barcode,
     string CellResult,
     DateTime CompletedTime,
@@ -24,22 +27,26 @@ public record ReceiveInjectionPassCommand(
 ) : ICommand<Result<bool>>;
 
 public class ReceiveInjectionPassHandler(
-    IDataQueryService dataQueryService,
+    IReadRepository<Device> deviceRepository,
     IMapper mapper,
     IPublishEndpoint publishEndpoint
 ) : ICommandHandler<ReceiveInjectionPassCommand, Result<bool>>
 {
-    public async Task<Result<bool>> Handle(ReceiveInjectionPassCommand request, CancellationToken cancellationToken)
+    public async Task<Result<bool>> Handle(
+        ReceiveInjectionPassCommand request,
+        CancellationToken cancellationToken)
     {
-        // 1. 校验设备是否存在且激活
-        var deviceExists = await dataQueryService.AnyAsync(
-            dataQueryService.Devices.Where(d => d.Id == request.DeviceId && d.IsActive)
-        );
+        if (string.IsNullOrWhiteSpace(request.MacAddress) || string.IsNullOrWhiteSpace(request.ClientCode))
+            return Result.Failure("数据接收失败:身份信息不完整(MacAddress + ClientCode 必填)");
+
+        var deviceExists = await deviceRepository.AnyAsync(
+            d => d.Id == request.DeviceId && d.IsActive,
+            cancellationToken);
 
         if (!deviceExists)
-            return Result.Failure("数据接收失败：设备不存在或已停用");
+            return Result.Failure("数据接收失败:设备不存在或已停用");
 
-        // 2. 统一将边缘端时间戳转为 UTC（Npgsql timestamptz 只接受 Kind=Utc）
+        // 边缘端时间戳统一转 UTC(Npgsql timestamptz 仅接受 Kind=Utc)
         var utcRequest = request with
         {
             CompletedTime = request.CompletedTime.ToUniversalTime(),
@@ -47,7 +54,6 @@ public class ReceiveInjectionPassHandler(
             PostInjectionTime = request.PostInjectionTime.ToUniversalTime(),
         };
 
-        // 3. 转换为事件并发布到 MQ
         var @event = mapper.Map<PassDataInjectionReceivedEvent>(utcRequest);
         await publishEndpoint.Publish(@event, cancellationToken);
 

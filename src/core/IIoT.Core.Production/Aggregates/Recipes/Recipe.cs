@@ -8,76 +8,126 @@ namespace IIoT.Core.Production.Aggregates.Recipes;
 public enum RecipeStatus
 {
     /// <summary>
-    /// 当前启用版本（同一配方同一时间只有一个）
+    /// 当前启用版本(同一配方同一时间只有一个)
     /// </summary>
     Active,
 
     /// <summary>
-    /// 已归档（被新版本替代后自动归档，保留追溯）
+    /// 已归档(被新版本替代后自动归档,保留追溯)
     /// </summary>
     Archived
 }
 
 /// <summary>
-/// 聚合根：工艺配方
-/// 支持版本管理：修改配方 = 创建新版本，旧版本自动归档
+/// 聚合根:工艺配方
+/// 支持版本管理:修改配方 = 创建新版本,旧版本由用例显式归档。
 /// </summary>
 public class Recipe : IAggregateRoot
 {
-    protected Recipe()
-    {
-    }
+    /// <summary>
+    /// 仅供 EF Core 物化使用,业务代码不要调用。
+    /// </summary>
+    protected Recipe() { }
 
-    public Recipe(string recipeName, Guid processId, string parametersJsonb, Guid? deviceId = null)
+    /// <summary>
+    /// 创建配方的初始版本(V1.0)。
+    /// 后续版本必须通过 <see cref="CreateNextVersion"/> 派生。
+    /// </summary>
+    public Recipe(
+        string recipeName,
+        Guid processId,
+        string parametersJsonb,
+        Guid? deviceId = null)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(recipeName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(parametersJsonb);
+        if (processId == Guid.Empty)
+            throw new ArgumentException("ProcessId 不能为空。", nameof(processId));
+
         Id = Guid.NewGuid();
-        RecipeName = recipeName;
+        RecipeName = recipeName.Trim();
         ProcessId = processId;
-        ParametersJsonb = parametersJsonb;
         DeviceId = deviceId;
+        ParametersJsonb = parametersJsonb;
         Version = "V1.0";
         Status = RecipeStatus.Active;
     }
 
     /// <summary>
-    /// 配方全局唯一标识 (UUID)
+    /// 私有构造,用于 <see cref="CreateNextVersion"/> 派生新版本。
     /// </summary>
-    public Guid Id { get; set; }
+    private Recipe(
+        string recipeName,
+        Guid processId,
+        Guid? deviceId,
+        string parametersJsonb,
+        string version)
+    {
+        Id = Guid.NewGuid();
+        RecipeName = recipeName;
+        ProcessId = processId;
+        DeviceId = deviceId;
+        ParametersJsonb = parametersJsonb;
+        Version = version;
+        Status = RecipeStatus.Active;
+    }
+
+    public Guid Id { get; private set; }
 
     /// <summary>
-    /// 配方名称 (如：A型号冬季特调配方)
+    /// 配方名称 (如:A型号冬季特调配方)
     /// </summary>
-    public string RecipeName { get; set; } = null!;
+    public string RecipeName { get; private set; } = null!;
 
     /// <summary>
     /// 配方版本号 (用于追溯和变更管理)
     /// </summary>
-    public string Version { get; set; } = null!;
+    public string Version { get; private set; } = null!;
 
     /// <summary>
     /// 归属工序 (关联 MfgProcess 的 UUID)
     /// </summary>
-    public Guid ProcessId { get; set; }
+    public Guid ProcessId { get; private set; }
 
     /// <summary>
     /// 可空专属设备 UUID
-    /// null = 该工序下通用配方，有值 = 特定机器专属配方
+    /// null = 该工序下通用配方,有值 = 特定机器专属配方
     /// </summary>
-    public Guid? DeviceId { get; set; }
+    public Guid? DeviceId { get; private set; }
 
     /// <summary>
     /// 配方参数 (JSONB)
-    /// 结构：[{ id, name, unit, min, max }, ...]
+    /// 结构:[{ id, name, unit, min, max }, ...]
     /// </summary>
-    public string ParametersJsonb { get; set; } = null!;
+    public string ParametersJsonb { get; private set; } = null!;
 
     /// <summary>
     /// 配方状态 (Active = 启用, Archived = 已归档)
     /// </summary>
-    public RecipeStatus Status { get; set; }
+    public RecipeStatus Status { get; private set; }
+
+    // ── 行为 ──────────────────────────────────────────────
 
     /// <summary>
-    /// 领域行为：归档此版本（被新版本替代时调用）
+    /// 基于当前实例派生一个新版本配方。
+    /// 新版本继承 RecipeName / ProcessId / DeviceId,版本号和参数由调用方指定。
+    /// 注意:本方法不会副作用地归档当前实例 — 旧版本的归档由用例显式调用 <see cref="Archive"/>。
+    /// </summary>
+    public Recipe CreateNextVersion(string newVersion, string newParametersJsonb)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(newVersion);
+        ArgumentException.ThrowIfNullOrWhiteSpace(newParametersJsonb);
+
+        return new Recipe(
+            RecipeName,
+            ProcessId,
+            DeviceId,
+            newParametersJsonb,
+            newVersion.Trim());
+    }
+
+    /// <summary>
+    /// 归档此版本(被新版本替代时由用例调用)
     /// </summary>
     public void Archive()
     {

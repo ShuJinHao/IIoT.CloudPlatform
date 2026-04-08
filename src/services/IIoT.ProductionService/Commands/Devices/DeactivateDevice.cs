@@ -1,19 +1,17 @@
 ﻿using IIoT.Core.Employee.Aggregates.Employees;
+using IIoT.Core.Employee.Specifications;
 using IIoT.Core.Production.Aggregates.Devices;
+using IIoT.Core.Production.Specifications.Devices;
 using IIoT.Services.Common.Attributes;
 using IIoT.Services.Common.Contracts;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
-using System;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace IIoT.ProductionService.Commands.Devices;
 
 /// <summary>
-/// 软删除/停用设备 (设备一旦停用，将无法从云端拉取配方)
+/// 停用设备(软删除)。设备一旦停用,边缘端将无法从云端拉取配方。
 /// </summary>
 [AuthorizeRequirement("Device.Deactivate")]
 public record DeactivateDeviceCommand(Guid DeviceId) : ICommand<Result<bool>>;
@@ -25,40 +23,50 @@ public class DeactivateDeviceHandler(
     ICacheService cacheService
 ) : ICommandHandler<DeactivateDeviceCommand, Result<bool>>
 {
-    public async Task<Result<bool>> Handle(DeactivateDeviceCommand request, CancellationToken cancellationToken)
+    public async Task<Result<bool>> Handle(
+        DeactivateDeviceCommand request,
+        CancellationToken cancellationToken)
     {
-        var device = await deviceRepository.GetByIdAsync(request.DeviceId, cancellationToken);
-        if (device == null) return Result.Failure("目标设备不存在");
+        var device = await deviceRepository.GetSingleOrDefaultAsync(
+            new DeviceByIdSpec(request.DeviceId),
+            cancellationToken);
 
-        // 已经是停用状态，直接返回成功 (幂等性)
-        if (!device.IsActive) return Result.Success(true);
+        if (device is null)
+            return Result.Failure("目标设备不存在");
 
-        // 🌟 第二道门：ABAC 管辖权拦截
+        // 已停用直接返回成功(幂等)
+        if (!device.IsActive)
+            return Result.Success(true);
+
+        // ABAC:非 Admin 必须有该工序的管辖权
         if (currentUser.Role != "Admin")
         {
-            if (!Guid.TryParse(currentUser.Id, out var userId)) return Result.Failure("用户凭证异常");
+            if (!Guid.TryParse(currentUser.Id, out var userId))
+                return Result.Failure("用户凭证异常");
 
-            var employee = await employeeRepository.GetAsync(
-                e => e.Id == userId,
-                [e => e.ProcessAccesses],
+            var employee = await employeeRepository.GetSingleOrDefaultAsync(
+                new EmployeeWithAccessesSpec(userId),
                 cancellationToken);
 
-            if (employee == null) return Result.Failure("系统中未找到您的员工档案");
+            if (employee is null)
+                return Result.Failure("系统中未找到您的员工档案");
 
             var hasAccess = employee.ProcessAccesses.Any(pa => pa.ProcessId == device.ProcessId);
-            if (!hasAccess) return Result.Failure("越权警告：您无权停用其他车间/工序的设备！");
+            if (!hasAccess)
+                return Result.Failure("越权:您无权停用其他车间/工序的设备");
         }
 
-        device.IsActive = false;
+        device.Deactivate();
 
         deviceRepository.Update(device);
         var affected = await deviceRepository.SaveChangesAsync(cancellationToken);
 
-        // 🌟 缓存爆破：停用的设备绝不能再被命中
         if (affected > 0)
         {
-            await cacheService.RemoveAsync($"iiot:device:mac:v1:{device.MacAddress}", cancellationToken);
-            await cacheService.RemoveAsync($"iiot:devices:process:v1:{device.ProcessId}", cancellationToken);
+            await cacheService.RemoveAsync(
+                $"iiot:device:instance:v1:{device.Instance}", cancellationToken);
+            await cacheService.RemoveAsync(
+                $"iiot:devices:process:v1:{device.ProcessId}", cancellationToken);
             await cacheService.RemoveAsync("iiot:devices:v1:all-active", cancellationToken);
         }
 

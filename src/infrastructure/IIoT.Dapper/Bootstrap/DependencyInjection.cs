@@ -1,8 +1,10 @@
 ﻿using Dapper;
 using IIoT.Core.Production.Contracts.RecordRepositories;
 using IIoT.Dapper.Initializers;
+using IIoT.Dapper.Production.QueryServices;
 using IIoT.Dapper.Production.QueryServices.Capacity;
 using IIoT.Dapper.Production.QueryServices.DeviceLog;
+using IIoT.Dapper.Production.QueryServices.MfgProcess;
 using IIoT.Dapper.Production.QueryServices.PassStation;
 using IIoT.Dapper.Production.Repositories.Capacities;
 using IIoT.Dapper.Production.Repositories.DeviceLogs;
@@ -36,6 +38,7 @@ public static class DependencyInjection
         builder.Services.AddScoped<IDeviceLogQueryService, DeviceLogQueryService>();
         builder.Services.AddScoped<ICapacityQueryService, CapacityQueryService>();
         builder.Services.AddScoped<IPassStationQueryService, PassStationQueryService>();
+        builder.Services.AddScoped<IProcessUsageQueryService, ProcessUsageQueryService>();
 
         // 记录类写入仓储(由 Application 层用例调用)
         builder.Services.AddScoped<IDeviceLogRecordRepository, DeviceLogRecordRepository>();

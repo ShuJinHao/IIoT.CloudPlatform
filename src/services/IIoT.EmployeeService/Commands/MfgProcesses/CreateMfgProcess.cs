@@ -8,7 +8,7 @@ using IIoT.SharedKernel.Result;
 namespace IIoT.EmployeeService.Commands.MfgProcesses;
 
 /// <summary>
-/// 业务指令：创建新的制造工序
+/// 业务指令:创建新的制造工序
 /// </summary>
 [AuthorizeRequirement("Process.Create")]
 [DistributedLock("iiot:lock:mfg-process-code:{ProcessCode}", TimeoutSeconds = 5)]
@@ -18,37 +18,34 @@ public record CreateMfgProcessCommand(
 ) : ICommand<Result<Guid>>;
 
 public class CreateMfgProcessHandler(
-    IDataQueryService dataQueryService,
     IRepository<MfgProcess> processRepository,
     ICacheService cacheService
 ) : ICommandHandler<CreateMfgProcessCommand, Result<Guid>>
 {
-    public async Task<Result<Guid>> Handle(CreateMfgProcessCommand request, CancellationToken cancellationToken)
+    public async Task<Result<Guid>> Handle(
+        CreateMfgProcessCommand request,
+        CancellationToken cancellationToken)
     {
-        // ==========================================
-        // 🌟 1. 极速无锁校验区 (压榨性能)
-        // ==========================================
+        var code = request.ProcessCode?.Trim() ?? string.Empty;
+        var name = request.ProcessName?.Trim() ?? string.Empty;
 
-        var codeExists = await dataQueryService.AnyAsync(
-            dataQueryService.MfgProcesses.Where(p => p.ProcessCode == request.ProcessCode)
-        );
+        if (string.IsNullOrEmpty(code))
+            return Result.Failure("工序编码不能为空");
+        if (string.IsNullOrEmpty(name))
+            return Result.Failure("工序名称不能为空");
+
+        var codeExists = await processRepository.AnyAsync(
+            p => p.ProcessCode == code,
+            cancellationToken);
+
         if (codeExists)
-        {
-            return Result.Failure($"工序创建失败：编码 [{request.ProcessCode}] 已存在");
-        }
+            return Result.Failure($"工序创建失败:编码 [{code}] 已存在");
 
-        // ==========================================
-        // 🌟 2. 领域对象构建与持久化
-        // ==========================================
-
-        var process = new MfgProcess(request.ProcessCode, request.ProcessName);
+        var process = new MfgProcess(code, name);
 
         processRepository.Add(process);
         var affected = await processRepository.SaveChangesAsync(cancellationToken);
 
-        // ==========================================
-        // 🌟 3. 缓存双杀：新工序入库后爆破全量缓存
-        // ==========================================
         if (affected > 0)
         {
             await cacheService.RemoveAsync("iiot:mfgprocess:v1:all", cancellationToken);

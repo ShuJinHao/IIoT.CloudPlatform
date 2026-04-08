@@ -8,37 +8,43 @@ using IIoT.SharedKernel.Result;
 
 namespace IIoT.EmployeeService.Queries.Employees;
 
-// 列表展示 DTO：带双维管辖权计数，前端无需再发 N 个额外请求
+/// <summary>
+/// 列表展示 DTO:带双维管辖权计数,前端无需再发 N 个额外请求
+/// </summary>
 public record EmployeeListItemDto(
     Guid Id,
     string EmployeeNo,
     string RealName,
     bool IsActive,
-    int ProcessCount,  // 工序管辖数量
-    int DeviceCount    // 机台管辖数量
+    int ProcessCount,
+    int DeviceCount
 );
 
 [AuthorizeRequirement("Employee.Read")]
-public record GetEmployeePagedListQuery(Pagination PaginationParams, string? Keyword = null) : IQuery<Result<PagedList<EmployeeListItemDto>>>;
+public record GetEmployeePagedListQuery(
+    Pagination PaginationParams,
+    string? Keyword = null
+) : IQuery<Result<PagedList<EmployeeListItemDto>>>;
 
 public class GetEmployeePagedListHandler(
     IReadRepository<Employee> employeeRepository
 ) : IQueryHandler<GetEmployeePagedListQuery, Result<PagedList<EmployeeListItemDto>>>
 {
-    public async Task<Result<PagedList<EmployeeListItemDto>>> Handle(GetEmployeePagedListQuery request, CancellationToken cancellationToken)
+    public async Task<Result<PagedList<EmployeeListItemDto>>> Handle(
+        GetEmployeePagedListQuery request,
+        CancellationToken cancellationToken)
     {
         var skip = (request.PaginationParams.PageNumber - 1) * request.PaginationParams.PageSize;
         var take = request.PaginationParams.PageSize;
 
-        // 统计总数：不启用分页
+        // 先统计总数(不启用分页)
         var countSpec = new EmployeePagedSpec(0, 0, request.Keyword, isPaging: false);
         var totalCount = await employeeRepository.CountAsync(countSpec, cancellationToken);
 
+        // 再按需加载分页数据,Include 双维管辖权,在内存里统计避免 N+1
         List<Employee> list = [];
         if (totalCount > 0)
         {
-            // 🌟 使用 EmployeeWithAccessesSpec 变体：同时 Include 两个导航属性
-            // 一次查询拿到员工 + 工序管辖 + 机台管辖，在内存里统计数量，彻底消灭 N+1
             var pagedSpec = new EmployeePagedWithAccessesSpec(skip, take, request.Keyword);
             list = await employeeRepository.GetListAsync(pagedSpec, cancellationToken);
         }

@@ -3,56 +3,73 @@
 namespace IIoT.Core.Employee.Aggregates.Employees;
 
 /// <summary>
-/// 聚合根：员工/操作员
-/// (包含第一维度：工序级管辖权；第二维度：精确机台级管辖权)
+/// 聚合根:员工/操作员
+/// 包含两级管辖权:工序级(粗颗粒)+ 机台级(精细颗粒)。
 /// </summary>
 public class Employee : IAggregateRoot
 {
-    // 员工关联的【工序】权限私有集合 (粗颗粒度)
     private readonly List<EmployeeProcessAccess> _processAccesses = [];
-
-    // 🌟 新增：员工关联的【具体设备】权限私有集合 (精细颗粒度)
     private readonly List<EmployeeDeviceAccess> _deviceAccesses = [];
 
-    // 给 EF Core 预留的无参构造函数
-    protected Employee()
-    {
-    }
+    /// <summary>
+    /// 仅供 EF Core 物化使用,业务代码不要调用。
+    /// </summary>
+    protected Employee() { }
 
     /// <summary>
-    /// 领域工厂：创建新员工
+    /// 创建新员工。
+    /// Id 由调用方传入(因为 Employee 与 IdentityService 的 User 共用 Id)。
     /// </summary>
     public Employee(Guid id, string employeeNo, string realName)
     {
+        if (id == Guid.Empty)
+            throw new ArgumentException("Employee Id 不能为空。", nameof(id));
+        ArgumentException.ThrowIfNullOrWhiteSpace(employeeNo);
+        ArgumentException.ThrowIfNullOrWhiteSpace(realName);
+
         Id = id;
-        EmployeeNo = employeeNo;
-        RealName = realName;
+        EmployeeNo = employeeNo.Trim();
+        RealName = realName.Trim();
         IsActive = true;
     }
 
-    /// <summary>
-    /// 员工全局唯一标识 (UUID)
-    /// </summary>
-    public Guid Id { get; set; }
+    public Guid Id { get; private set; }
 
     /// <summary>
     /// 员工工号 (车间设备的登录账号)
     /// </summary>
-    public string EmployeeNo { get; set; } = null!;
+    public string EmployeeNo { get; private set; } = null!;
 
     /// <summary>
-    /// 员工真实姓名 (如：张三，用于报表和系统日志显示)
+    /// 员工真实姓名
     /// </summary>
-    public string RealName { get; set; } = null!;
+    public string RealName { get; private set; } = null!;
 
     /// <summary>
-    /// 账号状态标识 (true: 正常启用; false: 已离职或冻结，禁止登录设备)
+    /// 账号状态 (true: 正常启用; false: 已离职或冻结,禁止登录设备)
     /// </summary>
-    public bool IsActive { get; set; }
+    public bool IsActive { get; private set; }
 
-    // ==========================================
-    // 工序管辖权逻辑 (保持原样)
-    // ==========================================
+    // ── 基础档案行为 ──────────────────────────────────────
+
+    /// <summary>
+    /// 修改员工的工号和姓名。
+    /// </summary>
+    public void Rename(string newEmployeeNo, string newRealName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(newEmployeeNo);
+        ArgumentException.ThrowIfNullOrWhiteSpace(newRealName);
+
+        EmployeeNo = newEmployeeNo.Trim();
+        RealName = newRealName.Trim();
+    }
+
+    public void Activate() => IsActive = true;
+
+    public void Deactivate() => IsActive = false;
+
+    // ── 工序级管辖权 ──────────────────────────────────────
+
     public IReadOnlyCollection<EmployeeProcessAccess> ProcessAccesses => _processAccesses.AsReadOnly();
 
     public void AddProcessAccess(Guid processId)
@@ -72,32 +89,21 @@ public class Employee : IAggregateRoot
         }
     }
 
-    // ==========================================
-    // 🌟 新增：具体机台设备管辖权逻辑
-    // ==========================================
+    // ── 机台级管辖权 ──────────────────────────────────────
 
     /// <summary>
-    /// 该员工允许操作的具体设备列表 (对外暴露为只读，保证聚合根数据的一致性)
+    /// 该员工允许操作的具体设备列表(对外暴露为只读,保证聚合根数据一致性)
     /// </summary>
     public IReadOnlyCollection<EmployeeDeviceAccess> DeviceAccesses => _deviceAccesses.AsReadOnly();
 
-    /// <summary>
-    /// 为该员工分配特定机台设备的管辖权
-    /// </summary>
-    /// <param name="deviceId">具体设备/机台的 UUID</param>
     public void AddDeviceAccess(Guid deviceId)
     {
-        // 避免重复添加权限 (幂等性校验)
         if (!_deviceAccesses.Any(x => x.DeviceId == deviceId))
         {
             _deviceAccesses.Add(new EmployeeDeviceAccess(this, deviceId));
         }
     }
 
-    /// <summary>
-    /// 移除该员工对某个具体设备的管辖权
-    /// </summary>
-    /// <param name="deviceId">具体设备/机台的 UUID</param>
     public void RemoveDeviceAccess(Guid deviceId)
     {
         var access = _deviceAccesses.FirstOrDefault(x => x.DeviceId == deviceId);
