@@ -21,6 +21,9 @@ public static class DependencyInjection
         builder.Services.AddScoped(typeof(IReadRepository<>), typeof(EfReadRepository<>));
         builder.Services.AddScoped(typeof(IRepository<>), typeof(EfRepository<>));
 
+        // 跨聚合的轻量只读查询入口
+        builder.Services.AddScoped<IDataQueryService, DataQueryService>();
+
         // 一个实现类注册三个接口,共享同一个 Scoped 实例
         builder.Services.AddScoped<IdentityService>();
         builder.Services.AddScoped<IAccountService>(sp => sp.GetRequiredService<IdentityService>());

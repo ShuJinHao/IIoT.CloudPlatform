@@ -19,6 +19,7 @@ public record CreateMfgProcessCommand(
 
 public class CreateMfgProcessHandler(
     IRepository<MfgProcess> processRepository,
+    IDataQueryService dataQueryService,
     ICacheService cacheService
 ) : ICommandHandler<CreateMfgProcessCommand, Result<Guid>>
 {
@@ -34,9 +35,8 @@ public class CreateMfgProcessHandler(
         if (string.IsNullOrEmpty(name))
             return Result.Failure("工序名称不能为空");
 
-        var codeExists = await processRepository.AnyAsync(
-            p => p.ProcessCode == code,
-            cancellationToken);
+        var codeExists = await dataQueryService.AnyAsync(
+            dataQueryService.MfgProcesses.Where(p => p.ProcessCode == code));
 
         if (codeExists)
             return Result.Failure($"工序创建失败:编码 [{code}] 已存在");

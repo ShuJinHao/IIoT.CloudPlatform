@@ -27,4 +27,8 @@
     <ProjectReference Include="..\..\services\IIoT.ProductionService\IIoT.ProductionService.csproj" />
     <ProjectReference Include="..\IIoT.ServiceDefaults\IIoT.ServiceDefaults.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Consumers\" />
+  </ItemGroup>
 </Project>

@@ -24,7 +24,7 @@ public record RegisterDeviceCommand(
 
 public class RegisterDeviceHandler(
     IRepository<Device> deviceRepository,
-    IRepository<IIoT.Core.Employee.Aggregates.MfgProcesses.MfgProcess> processRepository,
+    IDataQueryService dataQueryService,
     ICacheService cacheService
 ) : ICommandHandler<RegisterDeviceCommand, Result<Guid>>
 {
@@ -45,18 +45,17 @@ public class RegisterDeviceHandler(
             return Result.Failure("设备身份信息不完整:MacAddress 与 ClientCode 都必须提供");
 
         // 校验 A:归属工序必须合法存在
-        var processExists = await processRepository.AnyAsync(
-            p => p.Id == request.ProcessId,
-            cancellationToken);
+        var processExists = await dataQueryService.AnyAsync(
+            dataQueryService.MfgProcesses.Where(p => p.Id == request.ProcessId));
 
         if (!processExists)
             return Result.Failure("设备注册失败:指定的归属工序不存在");
 
         // 校验 B:MacAddress + ClientCode 联合身份在全厂必须唯一
-        var instanceOccupied = await deviceRepository.AnyAsync(
-            d => d.Instance.MacAddress == instance.MacAddress
-              && d.Instance.ClientCode == instance.ClientCode,
-            cancellationToken);
+        var instanceOccupied = await dataQueryService.AnyAsync(
+            dataQueryService.Devices.Where(d =>
+                d.Instance.MacAddress == instance.MacAddress
+             && d.Instance.ClientCode == instance.ClientCode));
 
         if (instanceOccupied)
             return Result.Failure(

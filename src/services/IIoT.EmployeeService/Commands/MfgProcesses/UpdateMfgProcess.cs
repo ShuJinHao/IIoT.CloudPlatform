@@ -21,6 +21,7 @@ public record UpdateMfgProcessCommand(
 
 public class UpdateMfgProcessHandler(
     IRepository<MfgProcess> processRepository,
+    IDataQueryService dataQueryService,
     ICacheService cacheService
 ) : ICommandHandler<UpdateMfgProcessCommand, Result<bool>>
 {
@@ -43,9 +44,9 @@ public class UpdateMfgProcessHandler(
         if (process is null)
             return Result.Failure("未找到目标工序档案");
 
-        var codeOccupied = await processRepository.AnyAsync(
-            p => p.ProcessCode == code && p.Id != request.ProcessId,
-            cancellationToken);
+        var codeOccupied = await dataQueryService.AnyAsync(
+            dataQueryService.MfgProcesses.Where(p =>
+                p.ProcessCode == code && p.Id != request.ProcessId));
 
         if (codeOccupied)
             return Result.Failure($"工序编码 [{code}] 已被其他工序占用");

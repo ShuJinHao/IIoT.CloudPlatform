@@ -1,6 +1,5 @@
 ﻿using IIoT.Core.Employee.Aggregates.Employees;
 using IIoT.Core.Employee.Specifications;
-using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.Services.Common.Attributes;
 using IIoT.Services.Common.Contracts;
@@ -25,9 +24,8 @@ public record CreateRecipeCommand(
 public class CreateRecipeHandler(
     ICurrentUser currentUser,
     IReadRepository<Employee> employeeRepository,
-    IRepository<IIoT.Core.Employee.Aggregates.MfgProcesses.MfgProcess> processRepository,
-    IReadRepository<Device> deviceRepository,
     IRepository<Recipe> recipeRepository,
+    IDataQueryService dataQueryService,
     ICacheService cacheService
 ) : ICommandHandler<CreateRecipeCommand, Result<Guid>>
 {
@@ -46,9 +44,8 @@ public class CreateRecipeHandler(
             return Result.Failure("归属工序不能为空");
 
         // 校验 A:归属工序必须存在
-        var processExists = await processRepository.AnyAsync(
-            p => p.Id == request.ProcessId,
-            cancellationToken);
+        var processExists = await dataQueryService.AnyAsync(
+            dataQueryService.MfgProcesses.Where(p => p.Id == request.ProcessId));
 
         if (!processExists)
             return Result.Failure("配方创建失败:指定的归属工序不存在");
@@ -56,21 +53,21 @@ public class CreateRecipeHandler(
         // 校验 B:如指定设备,该设备必须存在且属于当前工序
         if (request.DeviceId.HasValue)
         {
-            var deviceValid = await deviceRepository.AnyAsync(
-                d => d.Id == request.DeviceId.Value && d.ProcessId == request.ProcessId,
-                cancellationToken);
+            var deviceValid = await dataQueryService.AnyAsync(
+                dataQueryService.Devices.Where(d =>
+                    d.Id == request.DeviceId.Value && d.ProcessId == request.ProcessId));
 
             if (!deviceValid)
                 return Result.Failure("配方创建失败:指定的机台不存在或不属于当前工序");
         }
 
         // 校验 C:防重 — 同工序、同设备、同名的 V1.0 初始版本不能重复
-        var duplicateExists = await recipeRepository.AnyAsync(
-            r => r.ProcessId == request.ProcessId
-              && r.DeviceId == request.DeviceId
-              && r.RecipeName == recipeName
-              && r.Version == "V1.0",
-            cancellationToken);
+        var duplicateExists = await dataQueryService.AnyAsync(
+            dataQueryService.Recipes.Where(r =>
+                r.ProcessId == request.ProcessId
+             && r.DeviceId == request.DeviceId
+             && r.RecipeName == recipeName
+             && r.Version == "V1.0"));
 
         if (duplicateExists)
             return Result.Failure($"配方创建失败:已存在同名的 V1.0 初始版本配方 [{recipeName}]");

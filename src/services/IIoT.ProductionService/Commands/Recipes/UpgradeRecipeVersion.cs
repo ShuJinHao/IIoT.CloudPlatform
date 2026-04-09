@@ -26,6 +26,7 @@ public class UpgradeRecipeVersionHandler(
     ICurrentUser currentUser,
     IReadRepository<Employee> employeeRepository,
     IRepository<Recipe> recipeRepository,
+    IDataQueryService dataQueryService,
     ICacheService cacheService
 ) : ICommandHandler<UpgradeRecipeVersionCommand, Result<Guid>>
 {
@@ -41,7 +42,7 @@ public class UpgradeRecipeVersionHandler(
         if (string.IsNullOrEmpty(parametersJsonb))
             return Result.Failure("配方参数不能为空");
 
-        // 1. 取源版本
+        // 1. 取源版本(写入路径,必须走 Repository + EF Core Change Tracking)
         var source = await recipeRepository.GetSingleOrDefaultAsync(
             new RecipeByIdSpec(request.SourceRecipeId),
             cancellationToken);
@@ -78,18 +79,19 @@ public class UpgradeRecipeVersionHandler(
             }
         }
 
-        // 3. 版本号防重(同名同工序同设备下不能存在相同版本号)
-        var duplicateExists = await recipeRepository.AnyAsync(
-            r => r.RecipeName == source.RecipeName
-              && r.ProcessId == source.ProcessId
-              && r.DeviceId == source.DeviceId
-              && r.Version == newVersion,
-            cancellationToken);
+        // 3. 版本号防重(只读校验,走 IDataQueryService)
+        var duplicateExists = await dataQueryService.AnyAsync(
+            dataQueryService.Recipes.Where(r =>
+                r.RecipeName == source.RecipeName
+             && r.ProcessId == source.ProcessId
+             && r.DeviceId == source.DeviceId
+             && r.Version == newVersion));
 
         if (duplicateExists)
             return Result.Failure($"升级失败:版本号 [{newVersion}] 已存在");
 
         // 4. 归档同名同工序同设备下所有当前 Active 版本
+        //    (写入路径,必须从 Repository 取出实体进入 Change Tracking 才能 Archive)
         var activeVersions = await recipeRepository.GetListAsync(
             new RecipeActiveVersionsSpec(source.RecipeName, source.ProcessId, source.DeviceId),
             cancellationToken);
