@@ -6,8 +6,8 @@ using Microsoft.Extensions.Options;
 namespace IIoT.EntityFrameworkCore.Identity;
 
 public class PermissionProvider(
-    UserManager<ApplicationUser> userManager,     // 🌟 新增：注入 UserManager 查人
-    RoleManager<IdentityRole<Guid>> roleManager,  // 🌟 注意：这里必须是 IdentityRole<Guid>
+    UserManager<ApplicationUser> userManager,
+    RoleManager<IdentityRole<Guid>> roleManager,  // 必须是 IdentityRole<Guid>
     ICacheService cacheService,
     IOptions<PermissionCacheOptions> options) : IPermissionProvider
 {
@@ -15,10 +15,10 @@ public class PermissionProvider(
 
     public async Task<IList<string>> GetPermissionsAsync(Guid userId, CancellationToken cancellationToken = default)
     {
-        // 🌟 缓存 Key 升级：现在是按用户 ID 隔离缓存 (例如: "iiot:permissions:v1:user:1234-5678-...")
+        // 缓存 key 按用户 ID 隔离
         var cacheKey = $"{_options.KeyPrefix}user:{userId}";
 
-        // 1. 极速读缓存
+        // 1. 读缓存
         var cachedPermissions = await cacheService.GetAsync<List<string>>(cacheKey, cancellationToken);
         if (cachedPermissions != null) return cachedPermissions;
 
@@ -26,7 +26,7 @@ public class PermissionProvider(
         var user = await userManager.FindByIdAsync(userId.ToString());
         if (user == null) return [];
 
-        // 🌟 核心：使用 HashSet 去重合并权限
+        // HashSet 去重合并
         var allPermissions = new HashSet<string>();
 
         // 【维度 A】：获取该用户被“特批”的个人专属权限 (AspNetUserClaims 表)

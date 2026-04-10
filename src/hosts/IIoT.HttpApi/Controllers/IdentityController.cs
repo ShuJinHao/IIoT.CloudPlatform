@@ -14,7 +14,7 @@ namespace IIoT.HttpApi.Controllers;
 public class IdentityController : ApiControllerBase
 {
     /// <summary>
-    /// 极速登录并获取 JWT 令牌
+    /// 登录并获取 JWT 令牌
     /// </summary>
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginUserCommand command)

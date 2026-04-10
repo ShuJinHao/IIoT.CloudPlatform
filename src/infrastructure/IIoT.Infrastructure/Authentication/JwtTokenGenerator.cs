@@ -32,7 +32,7 @@ public class JwtTokenGenerator(IOptions<JwtSettings> jwtOptions) : IJwtTokenGene
             claims.Add(new Claim(ClaimTypes.Role, role));
         }
 
-        // 🌟 3. 将权限点循环加入声明中 (前端从 Token 解析 "Permission" claim)
+        // 3. 将权限点加入 claims(前端从 Token 解析 "Permission" claim)
         foreach (var permission in permissions)
         {
             claims.Add(new Claim("Permission", permission));

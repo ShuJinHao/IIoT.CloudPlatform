@@ -36,9 +36,7 @@ public class GetAllMfgProcessesHandler(
 
     public async Task<Result<List<MfgProcessSelectDto>>> Handle(GetAllMfgProcessesQuery request, CancellationToken cancellationToken)
     {
-        // ==========================================
-        // 🌟 读链路：缓存绝对优先 (Cache-Aside 模式)
-        // ==========================================
+        // Cache-Aside
         var cached = await cacheService.GetAsync<List<MfgProcessSelectDto>>(CacheKey, cancellationToken);
         if (cached != null) return Result.Success(cached);
 

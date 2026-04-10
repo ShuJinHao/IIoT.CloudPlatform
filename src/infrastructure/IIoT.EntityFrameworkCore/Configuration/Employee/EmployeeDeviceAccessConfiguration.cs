@@ -14,7 +14,7 @@ public class EmployeeDeviceAccessConfiguration : IEntityTypeConfiguration<Employ
         // 1. 配置物理表名 (小写复数下划线)
         builder.ToTable("employee_device_accesses");
 
-        // 2. 🌟 核心杀招：配置基于 Guid 的联合主键，确保一个员工不会重复绑定同一台设备
+        // 2. 联合主键，同一员工不会重复绑定同一设备
         builder.HasKey(eda => new { eda.EmployeeId, eda.DeviceId });
 
         // 3. 配置外键列名

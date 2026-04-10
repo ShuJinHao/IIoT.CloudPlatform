@@ -8,7 +8,7 @@ namespace IIoT.HttpApi.Infrastructure;
 [ApiController]
 public abstract class ApiControllerBase : ControllerBase
 {
-    // 动态获取 ISender，保持子类极致干净
+    // 动态获取 ISender，保持子类干净
     public ISender Sender => HttpContext.RequestServices.GetRequiredService<ISender>();
 
     [NonAction]

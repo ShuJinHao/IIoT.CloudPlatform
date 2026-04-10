@@ -74,13 +74,9 @@ public class EmployeeController : ApiControllerBase
         var result = await Sender.Send(command with { EmployeeId = id });
         return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
     }
-
     /// <summary>
-    /// 🌟 核心：分配员工的双维数据管辖权 (ABAC 赋权)
+    /// 决定该员工能操作哪些机台。
     /// </summary>
-    /// <remarks>
-    /// 决定该员工能在系统中看到并操作哪些工序 (通用配方) 和哪些机台 (特调配方)。
-    /// </remarks>
     /// <param name="id">员工 ID</param>
     /// <param name="command">包含允许访问的 ProcessId 列表和 DeviceId 列表</param>
     [HttpPut("{id}/access")]

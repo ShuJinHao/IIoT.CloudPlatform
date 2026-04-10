@@ -19,7 +19,7 @@ public static class SpecificationEvaluator
     public static IQueryable<T> GetQuery<T>(IQueryable<T> inputQuery, ISpecification<T>? specification)
         where T : class, IEntity
     {
-        // 🌟 允许传入空的规约，直接返回原查询，非常优雅
+        // 允许传入空规约，直接返回原查询
         if (specification == null) return inputQuery;
 
         var query = inputQuery;

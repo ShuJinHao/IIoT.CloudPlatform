@@ -36,10 +36,10 @@ public static class SystemInitData
             return;
         }
 
-        // 🌟 核心防线 1：获取云原生执行策略（应对断网重试和 Aspire 底层限制）
+        // 1. 获取执行策略(应对断网重试)
         var strategy = dbContext.Database.CreateExecutionStrategy();
 
-        // 🌟 核心防线 2：将所有事务包裹在执行策略中
+        // 2. 将事务包裹在执行策略中
         await strategy.ExecuteAsync(async () =>
         {
             // 在策略内部合法开启强事务
@@ -79,13 +79,13 @@ public static class SystemInitData
                 dbContext.Employees.Add(employee);
                 await dbContext.SaveChangesAsync();
 
-                // 🌟 核心防线 3：所有操作全部成功，最终提交！
+                // 3. 全部成功，提交事务
                 await transaction.CommitAsync();
                 Console.WriteLine($"✅ 事务提交成功！账号 [{targetEmployeeNo}] 及员工业务数据已完整播种！");
             }
             catch (Exception ex)
             {
-                // 🚨 发生任何异常，立刻执行时光倒流，撤销刚才所有的写入！
+                // 任何异常都回滚
                 await transaction.RollbackAsync();
                 Console.WriteLine($"⛔ 发生致命错误，已触发事务回滚！所有脏数据已清除。错误信息: {ex.Message}");
                 // 将异常继续抛出，让外层的重试机制知道失败了

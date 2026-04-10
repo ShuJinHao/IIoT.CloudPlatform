@@ -14,8 +14,7 @@ namespace IIoT.HttpApi.Controllers;
 public class DeviceController : ApiControllerBase
 {
     /// <summary>
-    /// 开机极速寻址 (上位机实例向云端自证身份)
-    /// 联合身份 = MacAddress + ClientCode
+    /// 上位机轮询认证(凭 MAC + ClientCode 换取 DeviceId)
     /// </summary>
     [HttpGet("instance")]
     public async Task<IActionResult> GetByInstance(
