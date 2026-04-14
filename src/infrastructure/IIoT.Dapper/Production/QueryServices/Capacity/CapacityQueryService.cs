@@ -159,6 +159,7 @@ public class CapacityQueryService(IDbConnectionFactory connectionFactory) : ICap
         Pagination pagination,
         DateOnly? date = null,
         Guid? deviceId = null,
+        IReadOnlyCollection<Guid>? deviceIds = null,
         CancellationToken cancellationToken = default)
     {
         using var connection = connectionFactory.CreateConnection();
@@ -176,6 +177,12 @@ public class CapacityQueryService(IDbConnectionFactory connectionFactory) : ICap
         {
             conditions += " AND h.device_id = @DeviceId";
             parameters.Add("DeviceId", deviceId.Value);
+        }
+
+        if (deviceIds is { Count: > 0 })
+        {
+            conditions += " AND h.device_id = ANY(@DeviceIds)";
+            parameters.Add("DeviceIds", deviceIds.ToArray());
         }
 
         var dataSql = $@"

@@ -75,7 +75,7 @@ namespace IIoT.EntityFrameworkCore.Migrations
                     b.ToTable("employee_device_accesses", (string)null);
                 });
 
-            modelBuilder.Entity("IIoT.Core.Employee.Aggregates.MfgProcesses.MfgProcess", b =>
+            modelBuilder.Entity("IIoT.Core.MasterData.Aggregates.MfgProcesses.MfgProcess", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()

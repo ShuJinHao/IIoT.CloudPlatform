@@ -8,7 +8,13 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\core\IIoT.Core.Production\IIoT.Core.Production.csproj" />
+    <ProjectReference Include="..\..\core\IIoT.Core.MasterData\IIoT.Core.MasterData.csproj" />
+    <ProjectReference Include="..\..\core\IIoT.Core.Identity\IIoT.Core.Identity.csproj" />
     <ProjectReference Include="..\..\core\IIoT.Employee\IIoT.Core.Employees.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
 </Project>

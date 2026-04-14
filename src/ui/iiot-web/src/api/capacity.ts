@@ -8,121 +8,111 @@ export interface PagedList<T> {
   metaData: PagedMetaData;
 }
 
-// 日汇总记录（总览表格用）
 export interface DailyCapacityItem {
-  deviceId:   string;
+  deviceId: string;
   deviceName: string;
-  date:       string;
+  date: string;
   totalCount: number;
-  okCount:    number;
-  ngCount:    number;
-  okRate:     number;
+  okCount: number;
+  ngCount: number;
+  okRate: number;
   reportedAt: string;
 }
 
-// 半小时明细记录（日视图用）
 export interface HourlyCapacityItem {
-  hour:       number;
-  minute:     number;
-  timeLabel:  string;
-  shiftCode:  string;
+  hour: number;
+  minute: number;
+  timeLabel: string;
+  shiftCode: string;
   totalCount: number;
-  okCount:    number;
-  ngCount:    number;
-  plcName?:   string | null;
+  okCount: number;
+  ngCount: number;
+  plcName?: string | null;
 }
 
-// 日汇总对象（月/年聚合基础）
 export interface DailySummaryItem {
-  totalCount:       number;
-  okCount:          number;
-  ngCount:          number;
-  dayShiftTotal:    number;
-  dayShiftOk:       number;
-  dayShiftNg:       number;
-  nightShiftTotal:  number;
-  nightShiftOk:     number;
-  nightShiftNg:     number;
+  totalCount: number;
+  okCount: number;
+  ngCount: number;
+  dayShiftTotal: number;
+  dayShiftOk: number;
+  dayShiftNg: number;
+  nightShiftTotal: number;
+  nightShiftOk: number;
+  nightShiftNg: number;
 }
 
-// 区间汇总记录（月/年视图用）
 export interface DailyRangeSummaryDto {
-  date:              string;
-  totalCount:        number;
-  okCount:           number;
-  ngCount:           number;
-  dayShiftTotal:     number;
-  dayShiftOk:        number;
-  dayShiftNg:        number;
-  nightShiftTotal:   number;
-  nightShiftOk:      number;
-  nightShiftNg:      number;
+  date: string;
+  totalCount: number;
+  okCount: number;
+  ngCount: number;
+  dayShiftTotal: number;
+  dayShiftOk: number;
+  dayShiftNg: number;
+  nightShiftTotal: number;
+  nightShiftOk: number;
+  nightShiftNg: number;
 }
 
-// ── 1. 总览分页（所有设备某日汇总）────────────────────────────────
-// GET /api/v1/Capacity/daily
+const basePath = '/human/capacity';
+
 export const getDailyPagedApi = (params: {
   PageNumber?: number;
-  PageSize?:   number;
-  date?:       string;
-  deviceId?:   string;
+  PageSize?: number;
+  date?: string;
+  deviceId?: string;
 }) => {
-  return http.get<PagedList<DailyCapacityItem>>('/Capacity/daily', {
+  return http.get<PagedList<DailyCapacityItem>>(`${basePath}/daily`, {
     params: {
       PageNumber: params.PageNumber ?? 1,
-      PageSize:   params.PageSize   ?? 10,
-      date:       params.date       || undefined,
-      deviceId:   params.deviceId   || undefined,
+      PageSize: params.PageSize ?? 10,
+      date: params.date || undefined,
+      deviceId: params.deviceId || undefined,
     },
   });
 };
 
-// ── 2. 半小时明细（日视图优先调用）────────────────────────────────
-// GET /api/v1/Capacity/hourly?deviceId=&date=
 export const getHourlyByDeviceApi = (params: {
   deviceId: string;
-  date:     string;
+  date: string;
   plcName?: string;
 }) => {
-  return http.get<HourlyCapacityItem[]>('/Capacity/hourly', {
+  return http.get<HourlyCapacityItem[]>(`${basePath}/hourly`, {
     params: {
       deviceId: params.deviceId,
-      date:     params.date,
-      plcName:  params.plcName || undefined,
+      date: params.date,
+      plcName: params.plcName || undefined,
     },
   });
 };
 
-// ── 3. 单日汇总（日视图兜底）─────────────────────────────────────
-// GET /api/v1/Capacity/summary?deviceId=&date=
 export const getDailySummaryApi = (params: {
   deviceId: string;
-  date:     string;
+  date: string;
   plcName?: string;
 }) => {
-  return http.get<DailySummaryItem | null>('/Capacity/summary', {
+  return http.get<DailySummaryItem | null>(`${basePath}/summary`, {
     params: {
       deviceId: params.deviceId,
-      date:     params.date,
-      plcName:  params.plcName || undefined,
+      date: params.date,
+      plcName: params.plcName || undefined,
     },
   });
 };
 
-// ── 4. 区间汇总（月/年视图，单次请求）─────────────────────────────
-// GET /api/v1/Capacity/summary/range?deviceId=&startDate=&endDate=
 export const getSummaryRangeApi = (params: {
-  deviceId:  string;
+  deviceId: string;
   startDate: string;
-  endDate:   string;
-  plcName?:  string;
+  endDate: string;
+  plcName?: string;
 }) => {
-  return http.get<DailyRangeSummaryDto[]>('/Capacity/summary/range', {
+  return http.get<DailyRangeSummaryDto[]>(`${basePath}/summary/range`, {
     params: {
-      deviceId:  params.deviceId,
+      deviceId: params.deviceId,
       startDate: params.startDate,
-      endDate:   params.endDate,
-      plcName:   params.plcName || undefined,
+      endDate: params.endDate,
+      plcName: params.plcName || undefined,
     },
   });
 };

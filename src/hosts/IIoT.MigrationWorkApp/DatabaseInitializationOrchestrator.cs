@@ -36,12 +36,24 @@ public sealed class DatabaseInitializationOrchestrator(
         await strategy.ExecuteAsync(async () =>
         {
             await dbContext.Database.MigrateAsync(cancellationToken);
+            await EnsureIdentitySchemaCompatibilityAsync(cancellationToken);
             await dbContext.Database.ExecuteSqlRawAsync(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ix_devices_mac_address_client_code ON devices (mac_address, client_code);",
                 cancellationToken);
         });
 
         logger.LogInformation("EF Core 迁移完成。");
+    }
+
+    private async Task EnsureIdentitySchemaCompatibilityAsync(CancellationToken cancellationToken)
+    {
+        // Repair drifted dev databases whose migration history is ahead of the actual schema.
+        await dbContext.Database.ExecuteSqlRawAsync(
+            """
+            ALTER TABLE "AspNetUsers"
+            ADD COLUMN IF NOT EXISTS "IsEnabled" boolean NOT NULL DEFAULT TRUE;
+            """,
+            cancellationToken);
     }
 
     private async Task InitializeRecordSchemasAsync(CancellationToken cancellationToken)

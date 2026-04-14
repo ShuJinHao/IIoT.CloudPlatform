@@ -1,10 +1,8 @@
-// src/api/deviceLog.ts
 import http from '../utils/http';
 import type { Pagination, PagedMetaData } from './employee';
 
 export type { Pagination, PagedMetaData };
 
-/** 分页返回包装 */
 export interface PagedList<T> {
   items: T[];
   metaData: PagedMetaData;
@@ -20,13 +18,14 @@ export interface DeviceLogListItemDto {
   receivedAt: string;
 }
 
-/** 日志查询一：设备 + 级别 — GET /api/v1/devicelog/by-level */
+const basePath = '/human/device-logs';
+
 export const getLogsByDeviceAndLevelApi = (params: {
   pagination?: Pagination;
   deviceId: string;
   level?: string;
 }) => {
-  return http.get<PagedList<DeviceLogListItemDto>>('/DeviceLog/by-level', {
+  return http.get<PagedList<DeviceLogListItemDto>>(`${basePath}/by-level`, {
     params: {
       PageNumber: params.pagination?.PageNumber ?? 1,
       PageSize: params.pagination?.PageSize ?? 10,
@@ -36,13 +35,12 @@ export const getLogsByDeviceAndLevelApi = (params: {
   });
 };
 
-/** 日志查询二：设备 + 关键字 — GET /api/v1/devicelog/by-keyword */
 export const getLogsByDeviceAndKeywordApi = (params: {
   pagination?: Pagination;
   deviceId: string;
   keyword: string;
 }) => {
-  return http.get<PagedList<DeviceLogListItemDto>>('/DeviceLog/by-keyword', {
+  return http.get<PagedList<DeviceLogListItemDto>>(`${basePath}/by-keyword`, {
     params: {
       PageNumber: params.pagination?.PageNumber ?? 1,
       PageSize: params.pagination?.PageSize ?? 10,
@@ -52,13 +50,12 @@ export const getLogsByDeviceAndKeywordApi = (params: {
   });
 };
 
-/** 日志查询三：设备 + 日期 — GET /api/v1/devicelog/by-date */
 export const getLogsByDeviceAndDateApi = (params: {
   pagination?: Pagination;
   deviceId: string;
   date: string;
 }) => {
-  return http.get<PagedList<DeviceLogListItemDto>>('/DeviceLog/by-date', {
+  return http.get<PagedList<DeviceLogListItemDto>>(`${basePath}/by-date`, {
     params: {
       PageNumber: params.pagination?.PageNumber ?? 1,
       PageSize: params.pagination?.PageSize ?? 10,
@@ -68,14 +65,13 @@ export const getLogsByDeviceAndDateApi = (params: {
   });
 };
 
-/** 日志查询四：设备 + 时间范围 — GET /api/v1/devicelog/by-time-range */
 export const getLogsByDeviceAndTimeRangeApi = (params: {
   pagination?: Pagination;
   deviceId: string;
   startTime: string;
   endTime: string;
 }) => {
-  return http.get<PagedList<DeviceLogListItemDto>>('/DeviceLog/by-time-range', {
+  return http.get<PagedList<DeviceLogListItemDto>>(`${basePath}/by-time-range`, {
     params: {
       PageNumber: params.pagination?.PageNumber ?? 1,
       PageSize: params.pagination?.PageSize ?? 10,
@@ -86,14 +82,13 @@ export const getLogsByDeviceAndTimeRangeApi = (params: {
   });
 };
 
-/** 日志查询五：设备 + 日期 + 关键字 — GET /api/v1/devicelog/by-date-keyword */
 export const getLogsByDeviceDateAndKeywordApi = (params: {
   pagination?: Pagination;
   deviceId: string;
   date: string;
   keyword: string;
 }) => {
-  return http.get<PagedList<DeviceLogListItemDto>>('/DeviceLog/by-date-keyword', {
+  return http.get<PagedList<DeviceLogListItemDto>>(`${basePath}/by-date-keyword`, {
     params: {
       PageNumber: params.pagination?.PageNumber ?? 1,
       PageSize: params.pagination?.PageSize ?? 10,

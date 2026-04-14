@@ -125,21 +125,10 @@
               </div>
             </div>
             <div class="form-section-label" style="margin-top:20px">
-              设备管辖权 <span class="section-hint">（可选，入职后也可单独配置）</span>
+              设备授权说明
             </div>
-            <div class="dual-access-grid">
-              <div class="access-panel">
-                <div class="access-panel-title">可访问设备</div>
-                <div class="access-hint">选中设备后，员工可查看该设备相关的日志、过站和配方数据</div>
-                <div class="access-checklist">
-                  <label v-for="d in allDevices" :key="d.id" class="access-check-item">
-                    <input type="checkbox" :value="d.id" v-model="onboardDeviceIds" />
-                    <span class="ck-box"></span>
-                    <span class="ck-name">{{ d.deviceName }}</span>
-                  </label>
-                  <div v-if="allDevices.length===0" class="access-empty">暂无设备，请先前往设备台账注册</div>
-                </div>
-              </div>
+            <div class="section-hint">
+              员工入职只创建账号、员工档案和初始角色。设备授权请在入职完成后，通过“权限配置”单独维护。
             </div>
           </div>
           <div class="modal-footer">
@@ -391,17 +380,14 @@ const goPage = (page: number) => { currentPage.value = page; fetchList(); };
 // ── 入职弹窗 ──
 const showOnboardModal = ref(false);
 const onboardForm = reactive({ EmployeeNo: '', RealName: '', Password: '', RoleName: '' });
-const onboardDeviceIds = ref<string[]>([]);
 
 const openOnboardModal = async () => {
   Object.assign(onboardForm, { EmployeeNo: '', RealName: '', Password: '', RoleName: '' });
-  onboardDeviceIds.value = [];
   showOnboardModal.value = true;
   try {
     const roles = await getAllRolesApi();
     availableRoles.value = roles.filter(r => r !== 'Admin');
   } catch { availableRoles.value = []; }
-  await fetchSelectData();
 };
 
 const submitOnboard = async () => {
@@ -415,7 +401,6 @@ const submitOnboard = async () => {
       realName: onboardForm.RealName,
       password: onboardForm.Password,
       roleName: onboardForm.RoleName || undefined,
-      deviceIds: onboardDeviceIds.value.length ? onboardDeviceIds.value : undefined,
     });
     showOnboardModal.value = false; fetchList();
   } catch { } finally { submitting.value = false; }

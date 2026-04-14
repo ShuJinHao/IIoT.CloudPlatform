@@ -1,24 +1,17 @@
-// src/api/recipe.ts
 import http from '../utils/http';
 import type { Pagination, PagedMetaData } from './employee';
 
 export type { Pagination, PagedMetaData };
 
-// ==========================================
-// DTO 类型定义（完全对齐后端 C# Record）
-// ==========================================
-
-/** 配方列表项 DTO — 对齐 RecipeListItemDto */
 export interface RecipeListItemDto {
   id: string;
   recipeName: string;
   version: string;
   processId: string;
   deviceId: string;
-  status: string;  // "Active" | "Archived"
+  status: string;
 }
 
-/** 配方详情 DTO — 对齐 RecipeDetailDto（含完整 JSONB） */
 export interface RecipeDetailDto {
   id: string;
   recipeName: string;
@@ -29,7 +22,6 @@ export interface RecipeDetailDto {
   status: string;
 }
 
-/** 配方参数结构 */
 export interface RecipeParameter {
   id: string;
   name: string;
@@ -38,7 +30,6 @@ export interface RecipeParameter {
   max: number;
 }
 
-/** 创建配方指令 — 对齐 CreateRecipeCommand */
 export interface CreateRecipePayload {
   recipeName: string;
   processId: string;
@@ -46,29 +37,24 @@ export interface CreateRecipePayload {
   parametersJsonb: string;
 }
 
-/** 升级配方版本指令 — 对齐 UpgradeRecipeVersionCommand */
 export interface UpgradeRecipeVersionPayload {
   sourceRecipeId: string;
   newVersion: string;
   parametersJsonb: string;
 }
 
-/** 分页返回包装 */
 export interface PagedList<T> {
   items: T[];
   metaData: PagedMetaData;
 }
 
-// ==========================================
-// API 调用函数
-// ==========================================
+const basePath = '/human/recipes';
 
-/** 获取我管辖范围内的配方分页列表 — GET /api/v1/recipe */
 export const getRecipePagedListApi = (params: {
   pagination?: Pagination;
   keyword?: string;
 }) => {
-  return http.get<PagedList<RecipeListItemDto>>('/Recipe', {
+  return http.get<PagedList<RecipeListItemDto>>(basePath, {
     params: {
       PageNumber: params.pagination?.PageNumber ?? 1,
       PageSize: params.pagination?.PageSize ?? 10,
@@ -77,22 +63,18 @@ export const getRecipePagedListApi = (params: {
   });
 };
 
-/** 获取配方详情（含 JSONB）— GET /api/v1/recipe/{id} */
 export const getRecipeDetailApi = (id: string) => {
-  return http.get<RecipeDetailDto>(`/Recipe/${id}`);
+  return http.get<RecipeDetailDto>(`${basePath}/${id}`);
 };
 
-/** 创建新配方 — POST /api/v1/recipe */
 export const createRecipeApi = (payload: CreateRecipePayload) => {
-  return http.post<string>('/Recipe', payload);
+  return http.post<string>(basePath, payload);
 };
 
-/** 升级配方版本 — POST /api/v1/recipe/{id}/upgrade */
 export const upgradeRecipeVersionApi = (id: string, payload: UpgradeRecipeVersionPayload) => {
-  return http.post<string>(`/Recipe/${id}/upgrade`, payload);
+  return http.post<string>(`${basePath}/${id}/upgrade`, payload);
 };
 
-/** 物理删除配方 — DELETE /api/v1/recipe/{id} */
 export const deleteRecipeApi = (id: string) => {
-  return http.delete<boolean>(`/Recipe/${id}`);
+  return http.delete<boolean>(`${basePath}/${id}`);
 };

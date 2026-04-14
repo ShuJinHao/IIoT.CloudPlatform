@@ -1,5 +1,5 @@
 using IIoT.Core.Production.Contracts.PassStation;
-using IIoT.Dapper.Bootstrap;
+using IIoT.Dapper;
 using IIoT.DataWorker.Consumers;
 using IIoT.Infrastructure;
 using IIoT.Infrastructure.Logging;
@@ -7,7 +7,7 @@ using IIoT.ProductionService;
 using IIoT.ProductionService.Commands.Capacities;
 using IIoT.ProductionService.Commands.PassStations;
 using IIoT.Services.Common.Behaviors;
-using IIoT.Services.Common.Events;
+using IIoT.Services.Common.Events.PassStations;
 using MassTransit;
 using MediatR;
 using Microsoft.Extensions.DependencyInjection;

@@ -53,7 +53,8 @@ public static class SystemInitData
                 var identityUser = new ApplicationUser
                 {
                     Id = sharedId,
-                    UserName = targetEmployeeNo
+                    UserName = targetEmployeeNo,
+                    IsEnabled = true
                 };
 
                 // 4. 创建底层身份认证账号

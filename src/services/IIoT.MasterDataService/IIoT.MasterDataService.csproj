@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\core\IIoT.Core.MasterData\IIoT.Core.MasterData.csproj" />
+    <ProjectReference Include="..\IIoT.Services.Common\IIoT.Services.Common.csproj" />
+  </ItemGroup>
+
+</Project>

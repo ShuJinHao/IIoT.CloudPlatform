@@ -1,5 +1,5 @@
 ﻿using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Options;
+using IIoT.Services.Common.Caching.Options;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Options;
 

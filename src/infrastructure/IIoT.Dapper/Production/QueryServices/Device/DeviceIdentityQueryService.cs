@@ -1,4 +1,5 @@
 using Dapper;
+using IIoT.Services.Common.Caching;
 using IIoT.Services.Common.Contracts;
 using IIoT.Services.Common.Contracts.RecordQueries;
 
@@ -8,7 +9,6 @@ public class DeviceIdentityQueryService(
     IDbConnectionFactory connectionFactory,
     ICacheService cacheService) : IDeviceIdentityQueryService
 {
-    private const string CacheKeyPrefix = "iiot:device:identity:v1:";
     private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(2);
 
     public async Task<DeviceIdentitySnapshot?> GetByDeviceIdAsync(
@@ -17,7 +17,7 @@ public class DeviceIdentityQueryService(
     {
         if (deviceId == Guid.Empty) return null;
 
-        var cacheKey = CacheKeyPrefix + deviceId;
+        var cacheKey = CacheKeys.DeviceIdentity(deviceId);
 
         var cached = await cacheService.GetAsync<DeviceIdentitySnapshot>(
             cacheKey, cancellationToken);

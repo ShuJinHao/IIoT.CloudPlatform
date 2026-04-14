@@ -1,9 +1,4 @@
-// src/api/identity.ts
 import http from '../utils/http';
-
-// ==========================================
-// DTO 类型定义
-// ==========================================
 
 export interface RolePermissionsDto {
   roleName: string;
@@ -36,44 +31,30 @@ export interface UpdateUserPermissionsPayload {
   permissions: string[];
 }
 
-// ==========================================
-// API 调用函数
-// ==========================================
+const basePath = '/human/identity';
 
-export const getAllRolesApi = () => {
-  return http.get<string[]>('/Identity/roles');
-};
+export const getAllRolesApi = () => http.get<string[]>(`${basePath}/roles`);
 
-export const defineRolePolicyApi = (payload: DefineRolePolicyPayload) => {
-  return http.post<boolean>('/Identity/roles', payload);
-};
+export const defineRolePolicyApi = (payload: DefineRolePolicyPayload) =>
+  http.post<boolean>(`${basePath}/roles`, payload);
 
-export const getRolePermissionsApi = (roleName: string) => {
-  return http.get<RolePermissionsDto>(`/Identity/roles/${roleName}/permissions`);
-};
+export const getRolePermissionsApi = (roleName: string) =>
+  http.get<RolePermissionsDto>(`${basePath}/roles/${roleName}/permissions`);
 
-export const updateRolePermissionsApi = (roleName: string, permissions: string[]) => {
-  return http.put<boolean>(`/Identity/roles/${roleName}/permissions`, permissions);
-};
+export const updateRolePermissionsApi = (roleName: string, permissions: string[]) =>
+  http.put<boolean>(`${basePath}/roles/${roleName}/permissions`, permissions);
 
-export const getAllDefinedPermissionsApi = () => {
-  return http.get<PermissionGroupDto[]>('/Identity/permissions/all');
-};
+export const getAllDefinedPermissionsApi = () =>
+  http.get<PermissionGroupDto[]>(`${basePath}/permissions`);
 
-export const changePasswordApi = (payload: ChangePasswordPayload) => {
-  return http.put<boolean>('/Identity/password', payload);
-};
+export const changePasswordApi = (payload: ChangePasswordPayload) =>
+  http.put<boolean>(`${basePath}/password`, payload);
 
-export const resetPasswordApi = (payload: ResetPasswordPayload) => {
-  return http.put<boolean>('/Identity/password/reset', payload);
-};
+export const resetPasswordApi = (payload: ResetPasswordPayload) =>
+  http.put<boolean>(`${basePath}/password/reset`, payload);
 
-/** 获取指定员工的个人特批权限 — GET /api/v1/identity/users/{userId}/permissions */
-export const getUserPersonalPermissionsApi = (userId: string) => {
-  return http.get<string[]>(`/Identity/users/${userId}/permissions`);
-};
+export const getUserPersonalPermissionsApi = (userId: string) =>
+  http.get<string[]>(`${basePath}/users/${userId}/permissions`);
 
-/** 更新指定员工的个人特批权限 — PUT /api/v1/identity/users/{userId}/permissions */
-export const updateUserPermissionsApi = (userId: string, payload: UpdateUserPermissionsPayload) => {
-  return http.put<boolean>(`/Identity/users/${userId}/permissions`, payload);
-};
+export const updateUserPermissionsApi = (userId: string, payload: UpdateUserPermissionsPayload) =>
+  http.put<boolean>(`${basePath}/users/${userId}/permissions`, payload);

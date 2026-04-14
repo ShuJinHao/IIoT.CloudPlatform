@@ -2,7 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
-using IIoT.Services.Common.Events;
+using IIoT.Services.Common.Events.DeviceLogs;
 using MassTransit;
 using RabbitMQ.Client;
 using Xunit;
@@ -167,6 +167,138 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         finalCount.Should().Be(initialCount + 1);
     }
 
+    [Fact]
+    public async Task HumanIdentity_NewRoutes_ShouldMatchLegacyAliases()
+    {
+        await AuthenticateAsAdminAsync();
+
+        var legacyRoles = await GetFromJsonAsync<List<string>>("/api/v1/Identity/roles");
+        var humanRoles = await GetFromJsonAsync<List<string>>("/api/v1/human/identity/roles");
+        var legacyPermissions = await GetFromJsonAsync<List<PermissionGroupDto>>("/api/v1/Identity/permissions/all");
+        var humanPermissions = await GetFromJsonAsync<List<PermissionGroupDto>>("/api/v1/human/identity/permissions");
+
+        humanRoles.Should().BeEquivalentTo(legacyRoles);
+        humanPermissions.Should().BeEquivalentTo(legacyPermissions);
+    }
+
+    [Fact]
+    public async Task MasterDataProcess_NewRoutes_ShouldMatchLegacyAliases()
+    {
+        await AuthenticateAsAdminAsync();
+
+        var code = $"PROC-{Guid.NewGuid():N}"[..12];
+        await PostJsonAsync<Guid>("/api/v1/human/master-data/processes", new
+        {
+            ProcessCode = code,
+            ProcessName = $"{code}-name"
+        });
+
+        var legacy = await GetFromJsonAsync<List<ProcessSelectDto>>("/api/v1/MfgProcess/all");
+        var human = await GetFromJsonAsync<List<ProcessSelectDto>>("/api/v1/human/master-data/processes/all");
+
+        human.Should().BeEquivalentTo(legacy);
+        human.Should().Contain(x => x.ProcessCode == code);
+    }
+
+    [Fact]
+    public async Task EdgeBootstrap_NewAndLegacyRoutes_ShouldReturnSameDeviceIdentity()
+    {
+        await AuthenticateAsAdminAsync();
+
+        var device = await CreateTestDeviceRegistrationAsync("bootstrap");
+        _fixture.ClearAuthToken();
+
+        var legacy = await GetFromJsonAsync<DeviceIdentityDto>(
+            $"/api/v1/Device/instance?macAddress={Uri.EscapeDataString(device.MacAddress)}&clientCode={Uri.EscapeDataString(device.ClientCode)}");
+        var edge = await GetFromJsonAsync<DeviceIdentityDto>(
+            $"/api/v1/edge/bootstrap/device-instance?macAddress={Uri.EscapeDataString(device.MacAddress)}&clientCode={Uri.EscapeDataString(device.ClientCode)}");
+
+        edge.Should().BeEquivalentTo(legacy);
+        edge.Id.Should().Be(device.DeviceId);
+    }
+
+    [Fact]
+    public async Task EdgeCapacity_NewRoutes_ShouldWorkWithoutJwt()
+    {
+        await AuthenticateAsAdminAsync();
+
+        var device = await CreateTestDeviceRegistrationAsync("edge-capacity");
+        var date = DateOnly.FromDateTime(DateTime.UtcNow);
+        var plcName = $"PLC-{Guid.NewGuid():N}"[..10];
+
+        _fixture.ClearAuthToken();
+
+        await PostJsonAsync("/api/v1/edge/capacity/hourly", new
+        {
+            DeviceId = device.DeviceId,
+            Date = date,
+            ShiftCode = "D",
+            Hour = 10,
+            Minute = 0,
+            TimeLabel = "10:00",
+            TotalCount = 12,
+            OkCount = 11,
+            NgCount = 1,
+            PlcName = plcName
+        });
+
+        var result = await EventuallyAsync(async () =>
+            await GetFromJsonAsync<List<HourlyCapacityDto>>(
+                $"/api/v1/edge/capacity/hourly?deviceId={device.DeviceId}&date={date:yyyy-MM-dd}&plcName={Uri.EscapeDataString(plcName)}"),
+            response => response.Count == 1 && response[0].TotalCount == 12);
+
+        result.Should().ContainSingle();
+        result[0].OkCount.Should().Be(11);
+    }
+
+    [Fact]
+    public async Task EdgeRecipe_NewRoute_ShouldWorkWithoutJwt()
+    {
+        await AuthenticateAsAdminAsync();
+
+        var device = await CreateTestDeviceRegistrationAsync("edge-recipe");
+        var recipeName = $"recipe-{Guid.NewGuid():N}"[..14];
+
+        await PostJsonAsync<Guid>("/api/v1/human/recipes", new
+        {
+            RecipeName = recipeName,
+            Version = "V1.0.0",
+            ProcessId = device.ProcessId,
+            DeviceId = device.DeviceId,
+            ParametersJsonb = "{\"speed\":120}",
+            Status = 1
+        });
+
+        _fixture.ClearAuthToken();
+
+        var recipes = await EventuallyAsync(
+            async () => await GetFromJsonAsync<List<RecipeForDeviceDto>>($"/api/v1/edge/recipes/device/{device.DeviceId}"),
+            response => response.Any(x => x.RecipeName == recipeName));
+
+        recipes.Should().Contain(x => x.RecipeName == recipeName && x.DeviceId == device.DeviceId);
+    }
+
+    [Fact]
+    public async Task HumanIdentity_EdgeLogin_NewRoute_ShouldReturnJwt()
+    {
+        await AuthenticateAsAdminAsync();
+
+        var device = await CreateTestDeviceRegistrationAsync("edge-login");
+        _fixture.ClearAuthToken();
+
+        using var response = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/human/identity/edge-login", new
+        {
+            EmployeeNo = "101650",
+            Password = "Ljh123456!",
+            DeviceId = device.DeviceId
+        });
+
+        var token = await response.Content.ReadFromJsonAsync<string>(JsonOptions);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        token.Should().NotBeNullOrWhiteSpace();
+    }
+
     private async Task AuthenticateAsAdminAsync()
     {
         using var response = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/Identity/login", new
@@ -185,24 +317,33 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
 
     private async Task<Guid> CreateTestDeviceAsync(string prefix)
     {
+        var device = await CreateTestDeviceRegistrationAsync(prefix);
+        return device.DeviceId;
+    }
+
+    private async Task<TestDeviceRegistration> CreateTestDeviceRegistrationAsync(string prefix)
+    {
         var suffix = Guid.NewGuid().ToString("N")[..8];
         var processId = await CreateProcessAsync($"{prefix.ToUpperInvariant()}-{suffix}");
+        var macAddress = BuildMacAddress(suffix);
+        var clientCode = $"CLIENT-{suffix}";
 
         var deviceId = await PostJsonAsync<Guid>("/api/v1/Device", new
         {
             DeviceName = $"{prefix}-device-{suffix}",
-            MacAddress = BuildMacAddress(suffix),
-            ClientCode = $"CLIENT-{suffix}",
+            MacAddress = macAddress,
+            ClientCode = clientCode,
             ProcessId = processId
         });
 
         deviceId.Should().NotBe(Guid.Empty);
-        return deviceId;
+
+        return new TestDeviceRegistration(deviceId, processId, macAddress, clientCode);
     }
 
     private async Task<Guid> CreateProcessAsync(string code)
     {
-        var processId = await PostJsonAsync<Guid>("/api/v1/MfgProcess", new
+        var processId = await PostJsonAsync<Guid>("/api/v1/human/master-data/processes", new
         {
             ProcessCode = code,
             ProcessName = $"{code}-name"
@@ -371,3 +512,32 @@ public sealed record InjectionPassListItemDto(
     decimal InjectionVolume,
     DateTime CompletedTime,
     DateTime ReceivedAt);
+
+public sealed record PermissionGroupDto(
+    string GroupName,
+    List<string> Permissions);
+
+public sealed record DeviceIdentityDto(
+    Guid Id,
+    string DeviceName,
+    Guid ProcessId);
+
+public sealed record ProcessSelectDto(
+    Guid Id,
+    string ProcessCode,
+    string ProcessName);
+
+public sealed record RecipeForDeviceDto(
+    Guid Id,
+    string RecipeName,
+    string Version,
+    Guid ProcessId,
+    Guid DeviceId,
+    string ParametersJsonb,
+    string Status);
+
+public sealed record TestDeviceRegistration(
+    Guid DeviceId,
+    Guid ProcessId,
+    string MacAddress,
+    string ClientCode);

@@ -5,17 +5,18 @@ using IIoT.EventBus;
 using IIoT.HttpApi.Infrastructure;
 using IIoT.Infrastructure;
 using IIoT.Infrastructure.Authentication;
+using IIoT.MasterDataService.Commands.Processes;
 using IIoT.ProductionService;
 using IIoT.ProductionService.Commands.PassStations;
 using IIoT.ProductionService.Profiles;
 using IIoT.Services.Common.Behaviors;
 using IIoT.Services.Common.Contracts;
 using IIoT.Services.Common.Contracts.RecordQueries;
-using IIoT.Services.Common.Events;
+using IIoT.Services.Common.Events.PassStations;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
-using IIoT.Dapper.Bootstrap;
+using IIoT.Dapper;
 
 namespace IIoT.HttpApi;
 
@@ -37,8 +38,10 @@ public static class DependencyInjection
             cfg.RegisterServicesFromAssemblies(
                 typeof(IIoT.IdentityService.Commands.LoginUserCommand).Assembly,
                 typeof(OnboardEmployeeCommand).Assembly,
+                typeof(CreateProcessCommand).Assembly,
                 typeof(IIoT.ProductionService.Commands.Recipes.CreateRecipeCommand).Assembly
             );
+            cfg.AddOpenBehavior(typeof(RequestKindGuardBehavior<,>));
             cfg.AddOpenBehavior(typeof(AuthorizationBehavior<,>));
             cfg.AddOpenBehavior(typeof(DistributedLockBehavior<,>));
         });

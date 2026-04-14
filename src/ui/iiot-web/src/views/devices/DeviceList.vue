@@ -123,7 +123,7 @@ import {
   getDevicePagedListApi, registerDeviceApi, updateDeviceProfileApi, deleteDeviceApi,
   type DeviceListItemDto, type PagedMetaData,
 } from '../../api/device';
-import { getAllMfgProcessesApi, type MfgProcessSelectDto } from '../../api/mfgProcess';
+import { getAllProcessesApi, type ProcessSelectDto } from '../../api/masterData/processes';
 
 const devices = ref<DeviceListItemDto[]>([]);
 const loading = ref(false);
@@ -133,14 +133,14 @@ const metaData = ref<PagedMetaData>({ totalCount: 0, pageSize: 10, currentPage: 
 const submitting = ref(false);
 
 // 🌟 全量工序列表
-const allProcesses = ref<MfgProcessSelectDto[]>([]);
+const allProcesses = ref<ProcessSelectDto[]>([]);
 const processNameMap = computed(() => {
   const m: Record<string, string> = {};
   for (const p of allProcesses.value) m[p.id] = `${p.processCode} · ${p.processName}`;
   return m;
 });
 const fetchProcesses = async () => {
-  try { allProcesses.value = await getAllMfgProcessesApi(); } catch { allProcesses.value = []; }
+  try { allProcesses.value = await getAllProcessesApi(); } catch { allProcesses.value = []; }
 };
 
 const pageNumbers = computed(() => { const t = metaData.value.totalPages; const c = currentPage.value; const r: number[] = []; for (let i = Math.max(1, c - 2); i <= Math.min(t, c + 2); i++) r.push(i); return r; });

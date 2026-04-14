@@ -50,6 +50,11 @@ public sealed class IIoTAppFixture : IAsyncDisposable
         HttpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
     }
 
+    public void ClearAuthToken()
+    {
+        HttpClient.DefaultRequestHeaders.Authorization = null;
+    }
+
     public async Task<string> GetConnectionStringAsync(
         string resourceName,
         CancellationToken cancellationToken = default)

@@ -1,6 +1,8 @@
 <Solution>
   <Folder Name="/src/" />
   <Folder Name="/src/core/">
+    <Project Path="src/core/IIoT.Core.Identity/IIoT.Core.Identity.csproj" />
+    <Project Path="src/core/IIoT.Core.MasterData/IIoT.Core.MasterData.csproj" />
     <Project Path="src/core/IIoT.Core.Production/IIoT.Core.Production.csproj" />
     <Project Path="src/core/IIoT.Employee/IIoT.Core.Employees.csproj" />
   </Folder>
@@ -20,6 +22,7 @@
   <Folder Name="/src/services/">
     <Project Path="src/services/IIoT.EmployeeService/IIoT.EmployeeService.csproj" Id="52935f82-b6bc-4224-8900-c4416cf179ed" />
     <Project Path="src/services/IIoT.IdentityService/IIoT.IdentityService.csproj" Id="08710ea8-cb5b-4e6a-a5a8-a680f582b1d8" />
+    <Project Path="src/services/IIoT.MasterDataService/IIoT.MasterDataService.csproj" />
     <Project Path="src/services/IIoT.ProductionService/IIoT.ProductionService.csproj" Id="677204e9-461c-4251-96ba-6341b8022969" />
     <Project Path="src/services/IIoT.Services.Common/IIoT.Services.Common.csproj" />
   </Folder>

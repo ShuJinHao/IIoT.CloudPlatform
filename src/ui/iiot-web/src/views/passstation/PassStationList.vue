@@ -292,7 +292,7 @@ import {
   type InjectionPassListItemDto,
 } from '../../api/passStation';
 import type { PagedMetaData } from '../../api/employee';
-import { getAllMfgProcessesApi, type MfgProcessSelectDto } from '../../api/mfgProcess';
+import { getAllProcessesApi, type ProcessSelectDto } from '../../api/masterData/processes';
 import { getAllActiveDevicesApi, type DeviceSelectDto } from '../../api/device';
 
 type QueryMode =
@@ -357,7 +357,7 @@ const currentPage = ref(1);
 const records = ref<InjectionPassListItemDto[]>([]);
 const metaData = ref<PagedMetaData>({ totalCount: 0, pageSize: PAGE_SIZE, currentPage: 1, totalPages: 1 });
 
-const allProcesses = ref<MfgProcessSelectDto[]>([]);
+const allProcesses = ref<ProcessSelectDto[]>([]);
 const allDevices = ref<DeviceSelectDto[]>([]);
 
 const filters = reactive({
@@ -519,7 +519,7 @@ const openDetail = async (id: string) => {
 
 const fetchSelectData = async () => {
   const [processes, devices] = await Promise.all([
-    getAllMfgProcessesApi().catch(() => [] as MfgProcessSelectDto[]),
+    getAllProcessesApi().catch(() => [] as ProcessSelectDto[]),
     getAllActiveDevicesApi().catch(() => [] as DeviceSelectDto[]),
   ]);
 

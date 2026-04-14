@@ -15,6 +15,8 @@
   </ItemGroup>
   
   <ItemGroup>
+    <ProjectReference Include="..\..\core\IIoT.Core.Identity\IIoT.Core.Identity.csproj" />
+    <ProjectReference Include="..\..\core\IIoT.Core.MasterData\IIoT.Core.MasterData.csproj" />
     <ProjectReference Include="..\..\services\IIoT.Services.Common\IIoT.Services.Common.csproj" />
   </ItemGroup>
 

@@ -301,7 +301,7 @@ import {
   upgradeRecipeVersionApi, deleteRecipeApi,
   type RecipeListItemDto, type RecipeDetailDto, type RecipeParameter, type PagedMetaData,
 } from '../../api/recipe';
-import { getAllMfgProcessesApi, type MfgProcessSelectDto } from '../../api/mfgProcess';
+import { getAllProcessesApi, type ProcessSelectDto } from '../../api/masterData/processes';
 import { getAllActiveDevicesApi, type DeviceSelectDto } from '../../api/device';
 
 const recipes = ref<RecipeListItemDto[]>([]);
@@ -311,7 +311,7 @@ const currentPage = ref(1);
 const metaData = ref<PagedMetaData>({ totalCount: 0, pageSize: 10, currentPage: 1, totalPages: 1 });
 const submitting = ref(false);
 
-const allProcesses = ref<MfgProcessSelectDto[]>([]);
+const allProcesses = ref<ProcessSelectDto[]>([]);
 const allDevices = ref<DeviceSelectDto[]>([]);
 const EMPTY_GUID = '00000000-0000-0000-0000-000000000000';
 
@@ -325,7 +325,7 @@ const isRecipeDetailDto = (value: unknown): value is RecipeDetailDto => {
 };
 
 const fetchSelectData = async () => {
-  try { allProcesses.value = await getAllMfgProcessesApi(); } catch { allProcesses.value = []; }
+  try { allProcesses.value = await getAllProcessesApi(); } catch { allProcesses.value = []; }
   try { allDevices.value = await getAllActiveDevicesApi(); } catch { allDevices.value = []; }
 };
 

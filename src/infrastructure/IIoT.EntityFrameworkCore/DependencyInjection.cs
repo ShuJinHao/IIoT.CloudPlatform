@@ -1,7 +1,7 @@
 ﻿using IIoT.EntityFrameworkCore.Identity;
 using IIoT.EntityFrameworkCore.Repository;
 using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Options;
+using IIoT.Services.Common.Caching.Options;
 using IIoT.SharedKernel.Repository;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,7 +24,8 @@ public static class DependencyInjection
         // 跨聚合的轻量只读查询入口
         builder.Services.AddScoped<IDataQueryService, DataQueryService>();
 
-        builder.Services.AddScoped<IAccountService, AccountService>();
+        builder.Services.AddScoped<IIdentityAccountStore, IdentityAccountStore>();
+        builder.Services.AddScoped<IIdentityPasswordService, IdentityPasswordService>();
         builder.Services.AddScoped<IRolePolicyService, RolePolicyService>();
         builder.Services.AddScoped<IUserQueryService, UserQueryService>();
 

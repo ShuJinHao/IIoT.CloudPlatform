@@ -10,7 +10,7 @@ namespace IIoT.Dapper.Initializers;
 /// 由 MigrationWorkApp 在启动时显式调用一次。
 /// 
 /// 与 EF Core Migration 的分工:
-///   - EF Core 负责聚合根的 schema (Device / Recipe / Employee / MfgProcess / Identity)
+///   - EF Core 负责聚合根的 schema (Device / Recipe / Employee / MasterData / Identity)
 ///   - 本初始化器负责记录类的 schema (device_logs / hourly_capacity / pass_data_injection ...)
 /// 两者边界由 DDD 分层决定,物理上互不相交。
 /// </summary>

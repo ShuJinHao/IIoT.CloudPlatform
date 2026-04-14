@@ -28,10 +28,14 @@ const routes: Array<RouteRecordRaw> = [
         meta: { requiresAuth: true, requiredPermission: Permissions.Employee.Read, title: '员工花名册' }
       },
       {
-        path: 'processes',
-        name: 'Processes',
-        component: () => import('../views/mfgprocess/MfgProcessList.vue'),
+        path: 'master-data/processes',
+        name: 'MasterDataProcesses',
+        component: () => import('../views/masterData/ProcessList.vue'),
         meta: { requiresAuth: true, requiredPermission: Permissions.Process.Read, title: '工序管理' }
+      },
+      {
+        path: 'processes',
+        redirect: { name: 'MasterDataProcesses' }
       },
       {
         path: 'devices',
@@ -58,7 +62,6 @@ const routes: Array<RouteRecordRaw> = [
         meta: { requiresAuth: true, requiredPermission: Permissions.Device.Read, title: '产能看板' }
       },
       {
-        // 单设备产能详情报表，从看板点击进入
         path: 'capacity/detail',
         name: 'CapacityDetail',
         component: () => import('../views/capacity/CapacityDetail.vue'),

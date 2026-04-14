@@ -1,5 +1,5 @@
 ﻿using IIoT.Core.Employee.Aggregates.Employees;
-using IIoT.Core.Employee.Aggregates.MfgProcesses;
+using IIoT.Core.MasterData.Aggregates.MfgProcesses;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.EntityFrameworkCore.Identity;

@@ -6,26 +6,26 @@ namespace IIoT.EntityFrameworkCore.Identity;
 
 public sealed class UserQueryService(UserManager<ApplicationUser> userManager) : IUserQueryService
 {
-    public async Task<IList<IdentityUserDto>> GetAllUsersAsync()
+    public async Task<IList<IdentityAccountDto>> GetAllUsersAsync()
     {
         var users = await userManager.Users.AsNoTracking().ToListAsync();
-        var userDtos = new List<IdentityUserDto>();
+        var userDtos = new List<IdentityAccountDto>();
 
         foreach (var user in users)
         {
             var roles = await userManager.GetRolesAsync(user);
-            userDtos.Add(new IdentityUserDto(user.Id, user.UserName!, roles));
+            userDtos.Add(new IdentityAccountDto(user.Id, user.UserName!, user.IsEnabled, roles));
         }
 
         return userDtos;
     }
 
-    public async Task<IdentityUserDto?> GetUserByEmployeeNoAsync(string employeeNo)
+    public async Task<IdentityAccountDto?> GetUserByEmployeeNoAsync(string employeeNo)
     {
         var user = await userManager.FindByNameAsync(employeeNo);
         if (user == null) return null;
 
         var roles = await userManager.GetRolesAsync(user);
-        return new IdentityUserDto(user.Id, user.UserName!, roles);
+        return new IdentityAccountDto(user.Id, user.UserName!, user.IsEnabled, roles);
     }
 }

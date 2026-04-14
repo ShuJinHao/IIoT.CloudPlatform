@@ -1,4 +1,4 @@
-using IIoT.Dapper.Bootstrap;
+using IIoT.Dapper;
 using IIoT.EntityFrameworkCore;
 using IIoT.Infrastructure;
 using IIoT.MigrationWorkApp;

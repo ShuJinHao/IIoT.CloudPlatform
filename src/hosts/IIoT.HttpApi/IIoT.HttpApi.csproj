@@ -13,6 +13,7 @@
     <ProjectReference Include="..\..\infrastructure\IIoT.Infrastructure\IIoT.Infrastructure.csproj" />
     <ProjectReference Include="..\..\services\IIoT.EmployeeService\IIoT.EmployeeService.csproj" />
     <ProjectReference Include="..\..\services\IIoT.IdentityService\IIoT.IdentityService.csproj" />
+    <ProjectReference Include="..\..\services\IIoT.MasterDataService\IIoT.MasterDataService.csproj" />
     <ProjectReference Include="..\..\services\IIoT.ProductionService\IIoT.ProductionService.csproj" />
     <ProjectReference Include="..\IIoT.ServiceDefaults\IIoT.ServiceDefaults.csproj" />
   </ItemGroup>
