@@ -1,13 +1,20 @@
 using IIoT.Services.Common.Caching;
+using IIoT.Services.Common.Caching.Options;
 using IIoT.Services.Common.Contracts;
 using IIoT.Services.Common.Contracts.Authorization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace IIoT.EntityFrameworkCore.Identity;
 
-public sealed class DevicePermissionService(IIoTDbContext dbContext, ICacheService cacheService)
+public sealed class DevicePermissionService(
+    IIoTDbContext dbContext,
+    ICacheService cacheService,
+    IOptions<PermissionCacheOptions> options)
     : IDevicePermissionService
 {
+    private readonly PermissionCacheOptions _options = options.Value;
+
     public async Task<IReadOnlyList<Guid>?> GetAccessibleDeviceIdsAsync(
         Guid userId,
         bool isAdmin,
@@ -31,7 +38,12 @@ public sealed class DevicePermissionService(IIoTDbContext dbContext, ICacheServi
             .Distinct()
             .ToListAsync(cancellationToken);
 
-        await cacheService.SetAsync(cacheKey, accessibleDeviceIds, TimeSpan.FromMinutes(10), cancellationToken);
+        var expirationHours = _options.ExpirationHours < 1 ? 1 : _options.ExpirationHours;
+        await cacheService.SetAsync(
+            cacheKey,
+            accessibleDeviceIds,
+            TimeSpan.FromHours(expirationHours),
+            cancellationToken);
 
         return accessibleDeviceIds;
     }

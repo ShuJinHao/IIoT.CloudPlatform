@@ -6,6 +6,7 @@ using IIoT.EmployeeService.Commands.Employees;
 using IIoT.MasterDataService.Commands.Processes;
 using IIoT.ProductionService.Commands.Devices;
 using IIoT.ProductionService.Commands.Recipes;
+using IIoT.Core.Production.ValueObjects;
 using IIoT.Services.Common.Caching;
 using Xunit;
 
@@ -126,5 +127,94 @@ public sealed class ServiceFlowGuardTests
         Assert.Equal(1, unitOfWork.BeginCalls);
         Assert.Equal(1, unitOfWork.CommitCalls);
         Assert.Equal(0, unitOfWork.RollbackCalls);
+    }
+
+    [Fact]
+    public async Task UpdateEmployeeAccessHandler_ShouldClearDeviceAccessCacheWhenAccessChanges()
+    {
+        var employeeId = Guid.NewGuid();
+        var originalDeviceId = Guid.NewGuid();
+        var updatedDeviceId = Guid.NewGuid();
+        var employee = new Employee(employeeId, "E002", "Access Owner");
+        employee.AddDeviceAccess(originalDeviceId);
+
+        var repository = new InMemoryRepository<Employee>
+        {
+            SingleOrDefaultResult = employee
+        };
+        var cache = new RecordingCacheService();
+        var handler = new UpdateEmployeeAccessHandler(repository, cache);
+
+        var result = await handler.Handle(
+            new UpdateEmployeeAccessCommand(employeeId, [updatedDeviceId]),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Contains(CacheKeys.DeviceAccessesByUser(employeeId), cache.RemovedKeys);
+    }
+
+    [Fact]
+    public async Task UpdateDeviceProfileHandler_ShouldClearDeviceIdentityCache()
+    {
+        var processId = Guid.NewGuid();
+        var instance = ClientInstanceId.Create("AA:BB:CC:DD:EE:11", "CLIENT-UPDATE");
+        var device = new Device("Device-01", instance, processId);
+        var repository = new InMemoryRepository<Device>
+        {
+            SingleOrDefaultResult = device
+        };
+        var cache = new RecordingCacheService();
+        var handler = new UpdateDeviceProfileHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                Role = "Admin",
+                UserName = "admin",
+                IsAuthenticated = true
+            },
+            repository,
+            cache,
+            new StubDevicePermissionService());
+
+        var result = await handler.Handle(
+            new UpdateDeviceProfileCommand(device.Id, "Device-02"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Contains(CacheKeys.DeviceIdentity(device.Id), cache.RemovedKeys);
+    }
+
+    [Fact]
+    public async Task DeleteDeviceHandler_ShouldClearDeviceIdentityCacheAndCapacityPatterns()
+    {
+        var processId = Guid.NewGuid();
+        var instance = ClientInstanceId.Create("AA:BB:CC:DD:EE:22", "CLIENT-DELETE");
+        var device = new Device("Device-Delete", instance, processId);
+        var repository = new InMemoryRepository<Device>
+        {
+            SingleOrDefaultResult = device
+        };
+        var cache = new RecordingCacheService();
+        var dependencyQuery = new StubDeviceDeletionDependencyQueryService();
+        var handler = new DeleteDeviceHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                Role = "Admin",
+                UserName = "admin",
+                IsAuthenticated = true
+            },
+            repository,
+            dependencyQuery,
+            cache,
+            new StubDevicePermissionService());
+
+        var result = await handler.Handle(new DeleteDeviceCommand(device.Id), CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Contains(CacheKeys.DeviceIdentity(device.Id), cache.RemovedKeys);
+        Assert.Contains(CacheKeys.CapacityHourlyPattern(device.Id), cache.RemovedPatterns);
+        Assert.Contains(CacheKeys.CapacitySummaryPattern(device.Id), cache.RemovedPatterns);
+        Assert.Contains(CacheKeys.CapacityRangePattern(device.Id), cache.RemovedPatterns);
     }
 }

@@ -1,9 +1,12 @@
 using IIoT.Services.Common.Contracts;
 using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Extensions.Logging;
 
 namespace IIoT.EntityFrameworkCore.Persistence;
 
-public class EfUnitOfWork(IIoTDbContext dbContext) : IUnitOfWork
+public class EfUnitOfWork(
+    IIoTDbContext dbContext,
+    ILogger<EfUnitOfWork> logger) : IUnitOfWork
 {
     private IDbContextTransaction? _transaction;
 
@@ -24,11 +27,32 @@ public class EfUnitOfWork(IIoTDbContext dbContext) : IUnitOfWork
             return;
         }
 
-        await _transaction.CommitAsync(cancellationToken);
-        await _transaction.DisposeAsync();
-        _transaction = null;
+        var committed = false;
+        try
+        {
+            await _transaction.CommitAsync(cancellationToken);
+            committed = true;
+        }
+        finally
+        {
+            await _transaction.DisposeAsync();
+            _transaction = null;
 
-        await dbContext.FlushDomainEventsAsync(cancellationToken);
+            if (!committed)
+            {
+                dbContext.DiscardPendingDomainEvents();
+            }
+        }
+
+        try
+        {
+            await dbContext.FlushDomainEventsAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Transaction committed but domain event dispatch failed.");
+            throw;
+        }
     }
 
     public async Task RollbackAsync(CancellationToken cancellationToken = default)

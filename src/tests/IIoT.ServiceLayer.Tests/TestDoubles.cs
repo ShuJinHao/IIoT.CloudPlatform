@@ -97,6 +97,7 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
 internal sealed class RecordingCacheService : ICacheService
 {
     public List<string> RemovedKeys { get; } = [];
+    public List<string> RemovedPatterns { get; } = [];
 
     public Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default)
     {
@@ -120,6 +121,7 @@ internal sealed class RecordingCacheService : ICacheService
 
     public Task RemoveByPatternAsync(string pattern, CancellationToken cancellationToken = default)
     {
+        RemovedPatterns.Add(pattern);
         return Task.CompletedTask;
     }
 }
@@ -317,5 +319,17 @@ internal sealed class StubDevicePermissionService : IDevicePermissionService
         CancellationToken cancellationToken = default)
     {
         return Task.FromResult(AccessibleDeviceIds);
+    }
+}
+
+internal sealed class StubDeviceDeletionDependencyQueryService : IDeviceDeletionDependencyQueryService
+{
+    public DeviceDeletionDependencies Dependencies { get; set; } = new(false, false, false, false);
+
+    public Task<DeviceDeletionDependencies> GetDependenciesAsync(
+        Guid deviceId,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(Dependencies);
     }
 }
