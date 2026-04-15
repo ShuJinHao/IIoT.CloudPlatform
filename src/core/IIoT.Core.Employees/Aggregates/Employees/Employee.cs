@@ -32,8 +32,6 @@ public class Employee : BaseEntity<Guid>
         IsActive = true;
     }
 
-    public override Guid Id { get; set; }
-
     /// <summary>
     /// 员工工号 (车间设备的登录账号)
     /// </summary>

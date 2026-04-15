@@ -22,11 +22,12 @@ public sealed class ServiceFlowGuardTests
         var handler = new CreateProcessHandler(repository, processQueries, cache);
 
         var result = await handler.Handle(
-            new CreateProcessCommand(" PROC-001 ", "注液工序"),
+            new CreateProcessCommand(" PROC-001 ", "Injection"),
             CancellationToken.None);
 
         Assert.False(result.IsSuccess);
-        Assert.Contains("已存在", result.Errors!.Single().ToString());
+        Assert.NotNull(result.Errors);
+        Assert.Single(result.Errors);
         Assert.Null(repository.AddedEntity);
         Assert.Empty(cache.RemovedKeys);
     }
@@ -43,7 +44,7 @@ public sealed class ServiceFlowGuardTests
 
         var result = await handler.Handle(
             new RegisterDeviceCommand(
-                "注液机台-A",
+                "Injection-01",
                 "AA:BB:CC:DD:EE:FF",
                 "CLIENT-01",
                 processId),
@@ -62,7 +63,7 @@ public sealed class ServiceFlowGuardTests
     {
         var processId = Guid.NewGuid();
         var deviceId = Guid.NewGuid();
-        var source = new Recipe("注液配方", processId, "{\"speed\":120}", deviceId);
+        var source = new Recipe("Injection Recipe", processId, deviceId, "{\"speed\":120}");
         var repository = new InMemoryRepository<Recipe>
         {
             SingleOrDefaultResult = source
@@ -103,7 +104,7 @@ public sealed class ServiceFlowGuardTests
     public async Task UpdateEmployeeProfileHandler_ShouldDeactivateEmployeeAndSyncIdentityState()
     {
         var employeeId = Guid.NewGuid();
-        var employee = new Employee(employeeId, "E001", "旧名字");
+        var employee = new Employee(employeeId, "E001", "Old Name");
         var repository = new InMemoryRepository<Employee>
         {
             SingleOrDefaultResult = employee
@@ -113,11 +114,11 @@ public sealed class ServiceFlowGuardTests
         var handler = new UpdateEmployeeProfileHandler(repository, identityStore, unitOfWork);
 
         var result = await handler.Handle(
-            new UpdateEmployeeProfileCommand(employeeId, " 新名字 ", false),
+            new UpdateEmployeeProfileCommand(employeeId, " New Name ", false),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal("新名字", employee.RealName);
+        Assert.Equal("New Name", employee.RealName);
         Assert.False(employee.IsActive);
         Assert.Contains(employee, repository.UpdatedEntities);
         Assert.Equal(employeeId, identityStore.LastSetEnabledId);

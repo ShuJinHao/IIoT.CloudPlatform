@@ -23,11 +23,6 @@ public class MfgProcess : BaseEntity<Guid>
     }
 
     /// <summary>
-    /// 工序全局唯一标识 (UUID)
-    /// </summary>
-    public override Guid Id { get; set; }
-
-    /// <summary>
     /// 工序系统编码 (如:Stacking, Injection 等)
     /// </summary>
     public string ProcessCode { get; private set; } = null!;

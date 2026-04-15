@@ -36,23 +36,18 @@ public class Recipe : BaseEntity<Guid>
     public Recipe(
         string recipeName,
         Guid processId,
-        string parametersJsonb,
-        Guid deviceId)
+        Guid deviceId,
+        string parametersJsonb)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(recipeName);
-        ArgumentException.ThrowIfNullOrWhiteSpace(parametersJsonb);
-        if (processId == Guid.Empty)
-            throw new ArgumentException("ProcessId 不能为空。", nameof(processId));
-        if (deviceId == Guid.Empty)
-            throw new ArgumentException("DeviceId 不能为空。", nameof(deviceId));
-
         Id = Guid.NewGuid();
         RecipeName = recipeName.Trim();
         ProcessId = processId;
         DeviceId = deviceId;
-        ParametersJsonb = parametersJsonb;
+        ParametersJsonb = parametersJsonb.Trim();
         Version = "V1.0";
         Status = RecipeStatus.Active;
+
+        ValidateInvariants();
     }
 
     /// <summary>
@@ -66,15 +61,15 @@ public class Recipe : BaseEntity<Guid>
         string version)
     {
         Id = Guid.NewGuid();
-        RecipeName = recipeName;
+        RecipeName = recipeName.Trim();
         ProcessId = processId;
         DeviceId = deviceId;
-        ParametersJsonb = parametersJsonb;
-        Version = version;
+        ParametersJsonb = parametersJsonb.Trim();
+        Version = version.Trim();
         Status = RecipeStatus.Active;
-    }
 
-    public override Guid Id { get; set; }
+        ValidateInvariants();
+    }
 
     /// <summary>
     /// 配方名称
@@ -133,5 +128,16 @@ public class Recipe : BaseEntity<Guid>
     public void Archive()
     {
         Status = RecipeStatus.Archived;
+    }
+
+    private void ValidateInvariants()
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(RecipeName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ParametersJsonb);
+        ArgumentException.ThrowIfNullOrWhiteSpace(Version);
+        if (ProcessId == Guid.Empty)
+            throw new ArgumentException("ProcessId 不能为空。", nameof(ProcessId));
+        if (DeviceId == Guid.Empty)
+            throw new ArgumentException("DeviceId 不能为空。", nameof(DeviceId));
     }
 }

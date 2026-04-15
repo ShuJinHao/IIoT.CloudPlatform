@@ -6,7 +6,7 @@ public interface IDomainEvent : INotification;
 
 public abstract class BaseEntity<TId> : IEntity<TId>, IAggregateRoot<TId>
 {
-    public virtual TId Id { get; set; } = default!;
+    public TId Id { get; protected init; } = default!;
 
     private readonly List<IDomainEvent> _domainEvents = [];
 
