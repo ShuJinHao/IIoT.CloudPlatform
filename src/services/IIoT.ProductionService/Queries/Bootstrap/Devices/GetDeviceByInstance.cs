@@ -1,6 +1,7 @@
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Specifications.Devices;
 using IIoT.Services.Common.Caching;
+using IIoT.Services.Common.Contracts;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
