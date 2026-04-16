@@ -87,6 +87,8 @@ public sealed class IIoTAppFixture : IAsyncDisposable
 
     private void ConfigureSeedAdminEnvironment()
     {
+        SetEnvironmentVariable("Parameters__seed-admin-no", SeedAdminEmployeeNo);
+        SetEnvironmentVariable("Parameters__seed-admin-password", SeedAdminPassword);
         SetEnvironmentVariable("SEED_ADMIN_NO", SeedAdminEmployeeNo);
         SetEnvironmentVariable("SEED_ADMIN_PASSWORD", SeedAdminPassword);
         SetEnvironmentVariable("SEED_ADMIN_REAL_NAME", SeedAdminRealName);

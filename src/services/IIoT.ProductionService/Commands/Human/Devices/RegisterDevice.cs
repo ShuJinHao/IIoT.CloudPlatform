@@ -1,5 +1,5 @@
+using System.Security.Cryptography;
 using IIoT.Core.Production.Aggregates.Devices;
-using IIoT.Core.Production.ValueObjects;
 using IIoT.Services.Common.Attributes;
 using IIoT.Services.Common.Caching;
 using IIoT.Services.Common.Contracts;
@@ -11,22 +11,24 @@ using IIoT.SharedKernel.Result;
 namespace IIoT.ProductionService.Commands.Devices;
 
 [AuthorizeRequirement("Device.Create")]
-[DistributedLock("iiot:lock:device-register:{MacAddress}:{ClientCode}", TimeoutSeconds = 5)]
+[DistributedLock("iiot:lock:device-create:{ProcessId}:{DeviceName}", TimeoutSeconds = 5)]
 public record RegisterDeviceCommand(
     string DeviceName,
-    string MacAddress,
-    string ClientCode,
     Guid ProcessId
-) : IHumanCommand<Result<Guid>>;
+) : IHumanCommand<Result<CreateDeviceResultDto>>;
+
+public sealed record CreateDeviceResultDto(
+    Guid Id,
+    string Code);
 
 public class RegisterDeviceHandler(
     IRepository<Device> deviceRepository,
     IProcessReadQueryService processReadQueryService,
     IDeviceReadQueryService deviceReadQueryService,
     ICacheService cacheService
-) : ICommandHandler<RegisterDeviceCommand, Result<Guid>>
+) : ICommandHandler<RegisterDeviceCommand, Result<CreateDeviceResultDto>>
 {
-    public async Task<Result<Guid>> Handle(
+    public async Task<Result<CreateDeviceResultDto>> Handle(
         RegisterDeviceCommand request,
         CancellationToken cancellationToken)
     {
@@ -35,27 +37,20 @@ public class RegisterDeviceHandler(
         if (string.IsNullOrEmpty(deviceName))
             return Result.Failure("设备名称不能为空");
         if (request.ProcessId == Guid.Empty)
-            return Result.Failure("所属工序不能为空");
-
-        if (!ClientInstanceId.TryCreate(request.MacAddress, request.ClientCode, out var instance))
-            return Result.Failure("设备身份信息不完整: MacAddress 与 ClientCode 都必须提供");
+            return Result.Failure("ProcessId 不能为空");
 
         var processExists = await processReadQueryService.ExistsAsync(
             request.ProcessId,
             cancellationToken);
 
         if (!processExists)
-            return Result.Failure("设备注册失败: 指定的归属工序不存在");
+            return Result.Failure("设备创建失败：指定工序不存在");
 
-        var instanceOccupied = await deviceReadQueryService.InstanceExistsAsync(
-            instance.MacAddress,
-            instance.ClientCode,
-            cancellationToken: cancellationToken);
+        var code = await GenerateUniqueCodeAsync(deviceReadQueryService, cancellationToken);
+        if (code is null)
+            return Result.Failure("设备创建失败：无法分配唯一设备 Code");
 
-        if (instanceOccupied)
-            return Result.Failure($"设备注册失败: 实例 [{instance}] 已被其他设备占用");
-
-        var device = new Device(deviceName, instance, request.ProcessId);
+        var device = new Device(deviceName, code, request.ProcessId);
 
         deviceRepository.Add(device);
         var affected = await deviceRepository.SaveChangesAsync(cancellationToken);
@@ -67,6 +62,45 @@ public class RegisterDeviceHandler(
                 CacheKeys.DevicesByProcess(device.ProcessId), cancellationToken);
         }
 
-        return Result.Success(device.Id);
+        return Result.Success(new CreateDeviceResultDto(device.Id, device.Code));
+    }
+
+    private static async Task<string?> GenerateUniqueCodeAsync(
+        IDeviceReadQueryService deviceReadQueryService,
+        CancellationToken cancellationToken)
+    {
+        const int maxAttempts = 20;
+
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            var candidate = DeviceCodeGenerator.Generate();
+            var occupied = await deviceReadQueryService.CodeExistsAsync(
+                candidate,
+                cancellationToken: cancellationToken);
+            if (!occupied)
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+}
+
+internal static class DeviceCodeGenerator
+{
+    private const string Prefix = "DEV-";
+    private const string Alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    private const int RandomPartLength = 10;
+
+    public static string Generate()
+    {
+        Span<char> chars = stackalloc char[RandomPartLength];
+        for (var i = 0; i < chars.Length; i++)
+        {
+            chars[i] = Alphabet[RandomNumberGenerator.GetInt32(Alphabet.Length)];
+        }
+
+        return string.Concat(Prefix, new string(chars));
     }
 }

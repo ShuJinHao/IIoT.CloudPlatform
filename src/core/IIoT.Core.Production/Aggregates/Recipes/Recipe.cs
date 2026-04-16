@@ -40,10 +40,10 @@ public class Recipe : BaseEntity<Guid>
         string parametersJsonb)
     {
         Id = Guid.NewGuid();
-        RecipeName = recipeName.Trim();
+        RecipeName = NormalizeRequired(recipeName, nameof(recipeName));
         ProcessId = processId;
         DeviceId = deviceId;
-        ParametersJsonb = parametersJsonb.Trim();
+        ParametersJsonb = NormalizeRequired(parametersJsonb, nameof(parametersJsonb));
         Version = "V1.0";
         Status = RecipeStatus.Active;
 
@@ -61,11 +61,11 @@ public class Recipe : BaseEntity<Guid>
         string version)
     {
         Id = Guid.NewGuid();
-        RecipeName = recipeName.Trim();
+        RecipeName = NormalizeRequired(recipeName, nameof(recipeName));
         ProcessId = processId;
         DeviceId = deviceId;
-        ParametersJsonb = parametersJsonb.Trim();
-        Version = version.Trim();
+        ParametersJsonb = NormalizeRequired(parametersJsonb, nameof(parametersJsonb));
+        Version = NormalizeRequired(version, nameof(version));
         Status = RecipeStatus.Active;
 
         ValidateInvariants();
@@ -111,15 +111,12 @@ public class Recipe : BaseEntity<Guid>
     /// </summary>
     public Recipe CreateNextVersion(string newVersion, string newParametersJsonb)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(newVersion);
-        ArgumentException.ThrowIfNullOrWhiteSpace(newParametersJsonb);
-
         return new Recipe(
             RecipeName,
             ProcessId,
             DeviceId,
             newParametersJsonb,
-            newVersion.Trim());
+            newVersion);
     }
 
     /// <summary>
@@ -139,5 +136,11 @@ public class Recipe : BaseEntity<Guid>
             throw new ArgumentException("ProcessId 不能为空。", nameof(ProcessId));
         if (DeviceId == Guid.Empty)
             throw new ArgumentException("DeviceId 不能为空。", nameof(DeviceId));
+    }
+
+    private static string NormalizeRequired(string value, string paramName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value, paramName);
+        return value.Trim();
     }
 }

@@ -11,9 +11,8 @@ public interface IDeviceReadQueryService
         Guid processId,
         CancellationToken cancellationToken = default);
 
-    Task<bool> InstanceExistsAsync(
-        string macAddress,
-        string clientCode,
+    Task<bool> CodeExistsAsync(
+        string code,
         Guid? excludingDeviceId = null,
         CancellationToken cancellationToken = default);
 }

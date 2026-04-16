@@ -22,6 +22,7 @@ public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)
     public DbSet<Recipe> Recipes => Set<Recipe>();
 
     private readonly List<IDomainEvent> _pendingDomainEvents = [];
+    public bool HasPendingDomainEvents => _pendingDomainEvents.Count > 0;
 
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {

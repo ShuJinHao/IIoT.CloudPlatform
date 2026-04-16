@@ -12,6 +12,7 @@ namespace IIoT.ProductionService.Queries.Devices;
 public record DeviceSelectDto(
     Guid Id,
     string DeviceName,
+    string Code,
     Guid ProcessId
 );
 
@@ -37,7 +38,7 @@ public class GetAllDevicesHandler(
         var list = await deviceRepository.GetListAsync(cancellationToken: cancellationToken);
 
         var dtos = list.Select(d => new DeviceSelectDto(
-            d.Id, d.DeviceName, d.ProcessId
+            d.Id, d.DeviceName, d.Code, d.ProcessId
         )).ToList();
 
         await cacheService.SetAsync(cacheKey, dtos, TimeSpan.FromHours(2), cancellationToken);

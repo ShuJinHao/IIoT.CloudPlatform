@@ -1,3 +1,5 @@
+using System.Data;
+using System.Text;
 using IIoT.Dapper.Initializers;
 using IIoT.EntityFrameworkCore;
 using IIoT.EntityFrameworkCore.Identity;
@@ -22,6 +24,32 @@ public sealed class DatabaseInitializationOrchestrator(
     ILogger<DatabaseInitializationOrchestrator> logger)
     : IDatabaseInitializationOrchestrator
 {
+    private const string DuplicateNormalizedDeviceCodeCheckSql =
+        """
+        SELECT normalized_code, duplicate_count
+        FROM (
+            SELECT
+                COALESCE(NULLIF(UPPER(BTRIM(client_code)), ''), '<EMPTY>') AS normalized_code,
+                COUNT(*) AS duplicate_count
+            FROM devices
+            GROUP BY COALESCE(NULLIF(UPPER(BTRIM(client_code)), ''), '<EMPTY>')
+            HAVING COUNT(*) > 1
+        ) conflicts
+        ORDER BY normalized_code;
+        """;
+
+    private const string NormalizeAndRebuildDeviceCodeIndexSql =
+        """
+        UPDATE devices
+        SET client_code = UPPER(BTRIM(client_code))
+        WHERE client_code IS NOT NULL
+          AND client_code <> UPPER(BTRIM(client_code));
+
+        DROP INDEX IF EXISTS ix_devices_mac_address_client_code;
+        CREATE UNIQUE INDEX IF NOT EXISTS ix_devices_client_code ON devices (client_code);
+        ALTER TABLE devices DROP COLUMN IF EXISTS mac_address;
+        """;
+
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
         await RunEfMigrationsAsync(cancellationToken);
@@ -39,12 +67,74 @@ public sealed class DatabaseInitializationOrchestrator(
         {
             await dbContext.Database.MigrateAsync(cancellationToken);
             await EnsureIdentitySchemaCompatibilityAsync(cancellationToken);
-            await dbContext.Database.ExecuteSqlRawAsync(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ix_devices_mac_address_client_code ON devices (mac_address, client_code);",
-                cancellationToken);
+            await EnsureDeviceCodeSchemaCompatibilityAsync(cancellationToken);
         });
 
         logger.LogInformation("EF Core 迁移完成。");
+    }
+
+    private async Task EnsureDeviceCodeSchemaCompatibilityAsync(CancellationToken cancellationToken)
+    {
+        logger.LogInformation("Checking legacy device code compatibility before rebuilding the unique index.");
+
+        var conflicts = await GetNormalizedClientCodeConflictsAsync(cancellationToken);
+        if (conflicts.Count > 0)
+        {
+            throw new InvalidOperationException(BuildNormalizedClientCodeConflictMessage(conflicts));
+        }
+
+        await dbContext.Database.ExecuteSqlRawAsync(
+            NormalizeAndRebuildDeviceCodeIndexSql,
+            cancellationToken);
+    }
+
+    private async Task<List<NormalizedClientCodeConflict>> GetNormalizedClientCodeConflictsAsync(
+        CancellationToken cancellationToken)
+    {
+        var connection = dbContext.Database.GetDbConnection();
+        var shouldCloseConnection = connection.State != ConnectionState.Open;
+
+        if (shouldCloseConnection)
+        {
+            await connection.OpenAsync(cancellationToken);
+        }
+
+        try
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = DuplicateNormalizedDeviceCodeCheckSql;
+
+            var conflicts = new List<NormalizedClientCodeConflict>();
+            using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                conflicts.Add(new NormalizedClientCodeConflict(
+                    reader.GetString(0),
+                    reader.GetFieldValue<long>(1)));
+            }
+
+            return conflicts;
+        }
+        finally
+        {
+            if (shouldCloseConnection)
+            {
+                await connection.CloseAsync();
+            }
+        }
+    }
+
+    private static string BuildNormalizedClientCodeConflictMessage(
+        IReadOnlyCollection<NormalizedClientCodeConflict> conflicts)
+    {
+        var builder = new StringBuilder(
+            "设备 Code 升级已被阻止：标准化后的 client_code 存在重复，无法创建唯一索引。");
+        builder.Append(" 请先清理以下冲突后再重新启动迁移：");
+        builder.Append(string.Join(
+            ", ",
+            conflicts.Select(conflict => $"{conflict.NormalizedCode} ({conflict.DuplicateCount})")));
+
+        return builder.ToString();
     }
 
     private async Task EnsureIdentitySchemaCompatibilityAsync(CancellationToken cancellationToken)
@@ -147,4 +237,8 @@ public sealed class DatabaseInitializationOrchestrator(
             cancellationToken);
         logger.LogInformation("系统初始化数据播种完成。");
     }
+
+    private sealed record NormalizedClientCodeConflict(
+        string NormalizedCode,
+        long DuplicateCount);
 }

@@ -38,11 +38,10 @@ public sealed class DevicePermissionService(
             .Distinct()
             .ToListAsync(cancellationToken);
 
-        var expirationHours = _options.ExpirationHours < 1 ? 1 : _options.ExpirationHours;
         await cacheService.SetAsync(
             cacheKey,
             accessibleDeviceIds,
-            TimeSpan.FromHours(expirationHours),
+            _options.ResolveExpiration(),
             cancellationToken);
 
         return accessibleDeviceIds;

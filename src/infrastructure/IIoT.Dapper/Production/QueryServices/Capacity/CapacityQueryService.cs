@@ -6,6 +6,13 @@ namespace IIoT.Dapper.Production.QueryServices.Capacity;
 
 public class CapacityQueryService(IDbConnectionFactory connectionFactory) : ICapacityQueryService
 {
+    private sealed class DailySummaryRow
+    {
+        public string ShiftCode { get; set; } = string.Empty;
+        public int TotalCount { get; set; }
+        public int OkCount { get; set; }
+        public int NgCount { get; set; }
+    }
     // 指定设备某天的小时明细。
 
     public async Task<List<HourlyCapacityDto>> GetHourlyByDeviceIdAsync(
@@ -67,7 +74,7 @@ public class CapacityQueryService(IDbConnectionFactory connectionFactory) : ICap
             new { DeviceId = deviceId, Date = date, PlcName = plcName },
             cancellationToken: cancellationToken);
 
-        var rows = (await connection.QueryAsync(cmd)).ToList();
+        var rows = (await connection.QueryAsync<DailySummaryRow>(cmd)).ToList();
         if (rows.Count == 0) return null;
 
         return MergeSummaryRows(rows);
@@ -227,17 +234,17 @@ public class CapacityQueryService(IDbConnectionFactory connectionFactory) : ICap
 
     // 合并白班/夜班汇总结果。
 
-    private static DailySummaryDto MergeSummaryRows(List<dynamic> rows)
+    private static DailySummaryDto MergeSummaryRows(List<DailySummaryRow> rows)
     {
         int dayTotal = 0, dayOk = 0, dayNg = 0;
         int nightTotal = 0, nightOk = 0, nightNg = 0;
 
         foreach (var row in rows)
         {
-            string shift = (string?)row.ShiftCode ?? "";
-            int t = (int)(row.TotalCount ?? 0);
-            int o = (int)(row.OkCount ?? 0);
-            int n = (int)(row.NgCount ?? 0);
+            var shift = row.ShiftCode ?? string.Empty;
+            var t = row.TotalCount;
+            var o = row.OkCount;
+            var n = row.NgCount;
 
             if (shift.Equals("D", StringComparison.OrdinalIgnoreCase))
             { dayTotal = t; dayOk = o; dayNg = n; }

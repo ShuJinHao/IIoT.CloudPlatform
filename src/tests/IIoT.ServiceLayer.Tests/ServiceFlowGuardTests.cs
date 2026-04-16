@@ -2,12 +2,15 @@ using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.MasterData.Aggregates.MfgProcesses;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.Recipes;
+using IIoT.ProductionService.Commands.Capacities;
 using IIoT.EmployeeService.Commands.Employees;
 using IIoT.MasterDataService.Commands.Processes;
 using IIoT.ProductionService.Commands.Devices;
 using IIoT.ProductionService.Commands.Recipes;
-using IIoT.Core.Production.ValueObjects;
+using IIoT.ProductionService.Queries.Devices;
+using IIoT.Services.Common.Events.Capacities;
 using IIoT.Services.Common.Caching;
+using IIoT.SharedKernel.Specification;
 using Xunit;
 
 namespace IIoT.ServiceLayer.Tests;
@@ -46,17 +49,35 @@ public sealed class ServiceFlowGuardTests
         var result = await handler.Handle(
             new RegisterDeviceCommand(
                 "Injection-01",
-                "AA:BB:CC:DD:EE:FF",
-                "CLIENT-01",
                 processId),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        Assert.NotEqual(Guid.Empty, result.Value);
+        var created = Assert.IsType<CreateDeviceResultDto>(result.Value);
+        Assert.NotEqual(Guid.Empty, created.Id);
         Assert.NotNull(repository.AddedEntity);
         Assert.Equal(processId, repository.AddedEntity!.ProcessId);
+        Assert.StartsWith("DEV-", repository.AddedEntity.Code);
+        Assert.Equal(repository.AddedEntity.Code, created.Code);
         Assert.Contains(CacheKeys.AllDevices(), cache.RemovedKeys);
         Assert.Contains(CacheKeys.DevicesByProcess(processId), cache.RemovedKeys);
+    }
+
+    [Fact]
+    public async Task RegisterDeviceHandler_ShouldFailWhenUniqueCodeCannotBeAllocated()
+    {
+        var repository = new InMemoryRepository<Device>();
+        var processQueries = new StubProcessReadQueryService { Exists = true };
+        var deviceQueries = new StubDeviceReadQueryService { CodeExists = true };
+        var cache = new RecordingCacheService();
+        var handler = new RegisterDeviceHandler(repository, processQueries, deviceQueries, cache);
+
+        var result = await handler.Handle(
+            new RegisterDeviceCommand("Injection-01", Guid.NewGuid()),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Null(repository.AddedEntity);
     }
 
     [Fact]
@@ -157,8 +178,7 @@ public sealed class ServiceFlowGuardTests
     public async Task UpdateDeviceProfileHandler_ShouldClearDeviceIdentityCache()
     {
         var processId = Guid.NewGuid();
-        var instance = ClientInstanceId.Create("AA:BB:CC:DD:EE:11", "CLIENT-UPDATE");
-        var device = new Device("Device-01", instance, processId);
+        var device = new Device("Device-01", "DEV-UPDATE001", processId);
         var repository = new InMemoryRepository<Device>
         {
             SingleOrDefaultResult = device
@@ -188,8 +208,7 @@ public sealed class ServiceFlowGuardTests
     public async Task DeleteDeviceHandler_ShouldClearDeviceIdentityCacheAndCapacityPatterns()
     {
         var processId = Guid.NewGuid();
-        var instance = ClientInstanceId.Create("AA:BB:CC:DD:EE:22", "CLIENT-DELETE");
-        var device = new Device("Device-Delete", instance, processId);
+        var device = new Device("Device-Delete", "DEV-DELETE001", processId);
         var repository = new InMemoryRepository<Device>
         {
             SingleOrDefaultResult = device
@@ -216,5 +235,67 @@ public sealed class ServiceFlowGuardTests
         Assert.Contains(CacheKeys.CapacityHourlyPattern(device.Id), cache.RemovedPatterns);
         Assert.Contains(CacheKeys.CapacitySummaryPattern(device.Id), cache.RemovedPatterns);
         Assert.Contains(CacheKeys.CapacityRangePattern(device.Id), cache.RemovedPatterns);
+    }
+
+    [Fact]
+    public async Task PersistHourlyCapacityHandler_ShouldUpsertRecordAndClearCapacityCaches()
+    {
+        var deviceId = Guid.NewGuid();
+        var repository = new RecordingHourlyCapacityRecordRepository();
+        var cache = new RecordingCacheService();
+        var handler = new PersistHourlyCapacityHandler(
+            new StubDeviceIdentityQueryService { Exists = true },
+            repository,
+            cache);
+
+        var result = await handler.Handle(
+            new PersistHourlyCapacityCommand(
+                new HourlyCapacityReceivedEvent
+                {
+                    DeviceId = deviceId,
+                    Date = DateOnly.FromDateTime(DateTime.UtcNow),
+                    ShiftCode = "D",
+                    Hour = 9,
+                    Minute = 30,
+                    TimeLabel = "09:30",
+                    TotalCount = 16,
+                    OkCount = 15,
+                    NgCount = 1,
+                    PlcName = "PLC-01"
+                }),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(repository.LastUpsert);
+        Assert.Equal(deviceId, repository.LastUpsert!.DeviceId);
+        Assert.Contains(CacheKeys.CapacityHourlyPattern(deviceId), cache.RemovedPatterns);
+        Assert.Contains(CacheKeys.CapacitySummaryPattern(deviceId), cache.RemovedPatterns);
+        Assert.Contains(CacheKeys.CapacityRangePattern(deviceId), cache.RemovedPatterns);
+        Assert.Contains(CacheKeys.CapacityPagedByDevicePattern(deviceId), cache.RemovedPatterns);
+    }
+
+    [Fact]
+    public async Task GetDeviceByInstanceHandler_ShouldNormalizeIncomingCodeAndCacheByNormalizedCode()
+    {
+        var device = new Device("Device-Bootstrap", "DEV-BOOTSTRAP1", Guid.NewGuid());
+        var repository = new InMemoryRepository<Device>
+        {
+            SingleOrDefaultResult = device
+        };
+        var cache = new RecordingCacheService();
+        var handler = new GetDeviceByInstanceHandler(repository, cache);
+
+        var result = await handler.Handle(
+            new GetDeviceByInstanceQuery($"  {device.Code.ToLowerInvariant()}  "),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var identity = Assert.IsType<DeviceIdentityDto>(result.Value);
+        Assert.Equal(device.Id, identity.Id);
+        Assert.Equal(CacheKeys.DeviceCode(device.Code), cache.LastSetKey);
+
+        var specification = Assert.IsAssignableFrom<ISpecification<Device>>(repository.LastGetSingleOrDefaultSpecification);
+        Assert.NotNull(specification.FilterCondition);
+        Assert.True(specification.FilterCondition!.Compile()(device));
     }
 }

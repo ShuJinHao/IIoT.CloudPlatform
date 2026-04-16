@@ -13,6 +13,7 @@ namespace IIoT.ProductionService.Queries.Devices;
 public record DeviceListItemDto(
     Guid Id,
     string DeviceName,
+    string Code,
     Guid ProcessId
 );
 
@@ -65,6 +66,7 @@ public class GetMyDevicesPagedHandler(
         var dtos = list.Select(d => new DeviceListItemDto(
             d.Id,
             d.DeviceName,
+            d.Code,
             d.ProcessId
         )).ToList();
 

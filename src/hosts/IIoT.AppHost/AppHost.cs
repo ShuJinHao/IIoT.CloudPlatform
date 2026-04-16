@@ -8,6 +8,8 @@ var redis = builder.AddResource(new CleanRedisResource("redis-cache"))
                    .WithEndpoint(targetPort: 6379, name: "tcp");
 
 var password = builder.AddParameter("pg-password", secret: true);
+var seedAdminNo = builder.AddParameter("seed-admin-no");
+var seedAdminPassword = builder.AddParameter("seed-admin-password", secret: true);
 
 var postgres = builder.AddPostgres("postgres", password: password)
     .WithImage("timescale/timescaledb", "latest-pg17")
@@ -23,7 +25,9 @@ var rabbitmq = builder.AddRabbitMQ("eventbus")
 var migration = builder.AddProject<Projects.IIoT_MigrationWorkApp>("iiot-migrationworkapp")
     .WithReference(postgres)
     .WaitFor(postgres)
-    .WithReference(redis);
+    .WithReference(redis)
+    .WithEnvironment("SEED_ADMIN_NO", seedAdminNo)
+    .WithEnvironment("SEED_ADMIN_PASSWORD", seedAdminPassword);
 
 var apiService = builder.AddProject<Projects.IIoT_HttpApi>("iiot-httpapi")
     .WithReference(postgres)

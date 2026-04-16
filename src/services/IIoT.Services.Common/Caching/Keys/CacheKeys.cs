@@ -1,5 +1,3 @@
-using IIoT.Core.Production.ValueObjects;
-
 namespace IIoT.Services.Common.Caching;
 
 public static class CacheKeys
@@ -12,7 +10,7 @@ public static class CacheKeys
 
     public static string ProcessesAll() => "iiot:master-data:processes:v1:all";
 
-    public static string DeviceInstance(ClientInstanceId instance) => $"iiot:device:instance:v1:{instance}";
+    public static string DeviceCode(string code) => $"iiot:device:code:v1:{code.Trim().ToUpperInvariant()}";
 
     public static string DeviceIdentity(Guid deviceId) => $"iiot:device:identity:v1:{deviceId}";
 

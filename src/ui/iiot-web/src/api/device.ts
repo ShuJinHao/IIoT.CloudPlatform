@@ -6,20 +6,25 @@ export type { Pagination, PagedMetaData };
 export interface DeviceListItemDto {
   id: string;
   deviceName: string;
+  code: string;
   processId: string;
 }
 
 export interface DeviceSelectDto {
   id: string;
   deviceName: string;
+  code: string;
   processId: string;
 }
 
 export interface RegisterDevicePayload {
   deviceName: string;
-  macAddress: string;
-  clientCode: string;
   processId: string;
+}
+
+export interface CreateDeviceResultDto {
+  id: string;
+  code: string;
 }
 
 export interface UpdateDeviceProfilePayload {
@@ -51,7 +56,7 @@ export const getAllActiveDevicesApi = () => {
 };
 
 export const registerDeviceApi = (payload: RegisterDevicePayload) => {
-  return http.post<string>(basePath, payload);
+  return http.post<CreateDeviceResultDto>(basePath, payload);
 };
 
 export const updateDeviceProfileApi = (id: string, payload: UpdateDeviceProfilePayload) => {

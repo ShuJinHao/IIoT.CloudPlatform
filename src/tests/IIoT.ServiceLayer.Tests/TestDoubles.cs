@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using IIoT.Core.Production.Contracts.RecordRepositories;
 using IIoT.Core.Identity.Aggregates.IdentityAccounts;
 using IIoT.Services.Common.Contracts;
 using IIoT.Services.Common.Contracts.Authorization;
@@ -18,6 +19,14 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
     public T? SingleOrDefaultResult { get; set; }
 
     public List<T> ListResult { get; } = [];
+
+    public ISpecification<T>? LastGetListSpecification { get; private set; }
+
+    public ISpecification<T>? LastGetSingleOrDefaultSpecification { get; private set; }
+
+    public ISpecification<T>? LastCountSpecification { get; private set; }
+
+    public ISpecification<T>? LastAnySpecification { get; private set; }
 
     public T? AddedEntity { get; private set; }
 
@@ -55,6 +64,7 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
         ISpecification<T>? specification = null,
         CancellationToken cancellationToken = default)
     {
+        LastGetListSpecification = specification;
         return Task.FromResult(ListResult.ToList());
     }
 
@@ -62,6 +72,7 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
         ISpecification<T>? specification = null,
         CancellationToken cancellationToken = default)
     {
+        LastGetSingleOrDefaultSpecification = specification;
         return Task.FromResult(SingleOrDefaultResult);
     }
 
@@ -69,6 +80,7 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
         ISpecification<T>? specification = null,
         CancellationToken cancellationToken = default)
     {
+        LastCountSpecification = specification;
         return Task.FromResult(ListResult.Count);
     }
 
@@ -76,6 +88,7 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
         ISpecification<T>? specification = null,
         CancellationToken cancellationToken = default)
     {
+        LastAnySpecification = specification;
         return Task.FromResult(ListResult.Count > 0);
     }
 
@@ -98,9 +111,17 @@ internal sealed class RecordingCacheService : ICacheService
 {
     public List<string> RemovedKeys { get; } = [];
     public List<string> RemovedPatterns { get; } = [];
+    public string? LastSetKey { get; private set; }
+    public TimeSpan? LastAbsoluteExpireTime { get; private set; }
+    public Dictionary<string, object?> Values { get; } = [];
 
     public Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default)
     {
+        if (Values.TryGetValue(key, out var value) && value is T typedValue)
+        {
+            return Task.FromResult<T?>(typedValue);
+        }
+
         return Task.FromResult(default(T));
     }
 
@@ -110,6 +131,9 @@ internal sealed class RecordingCacheService : ICacheService
         TimeSpan? absoluteExpireTime = null,
         CancellationToken cancellationToken = default)
     {
+        LastSetKey = key;
+        LastAbsoluteExpireTime = absoluteExpireTime;
+        Values[key] = value;
         return Task.CompletedTask;
     }
 
@@ -123,6 +147,40 @@ internal sealed class RecordingCacheService : ICacheService
     {
         RemovedPatterns.Add(pattern);
         return Task.CompletedTask;
+    }
+}
+
+internal sealed class RecordingHourlyCapacityRecordRepository : IHourlyCapacityRecordRepository
+{
+    public HourlyCapacityWriteModel? LastUpsert { get; private set; }
+
+    public Task UpsertAsync(
+        HourlyCapacityWriteModel item,
+        CancellationToken cancellationToken = default)
+    {
+        LastUpsert = item;
+        return Task.CompletedTask;
+    }
+}
+
+internal sealed class StubDeviceIdentityQueryService : IDeviceIdentityQueryService
+{
+    public bool Exists { get; set; }
+
+    public DeviceIdentitySnapshot? Snapshot { get; set; }
+
+    public Task<DeviceIdentitySnapshot?> GetByDeviceIdAsync(
+        Guid deviceId,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(Snapshot);
+    }
+
+    public Task<bool> ExistsAsync(
+        Guid deviceId,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(Exists);
     }
 }
 
@@ -175,7 +233,7 @@ internal sealed class StubDeviceReadQueryService : IDeviceReadQueryService
 
     public bool ExistsInProcess { get; set; }
 
-    public bool InstanceExists { get; set; }
+    public bool CodeExists { get; set; }
 
     public Task<bool> ExistsAsync(Guid deviceId, CancellationToken cancellationToken = default)
     {
@@ -190,13 +248,12 @@ internal sealed class StubDeviceReadQueryService : IDeviceReadQueryService
         return Task.FromResult(ExistsInProcess);
     }
 
-    public Task<bool> InstanceExistsAsync(
-        string macAddress,
-        string clientCode,
+    public Task<bool> CodeExistsAsync(
+        string code,
         Guid? excludingDeviceId = null,
         CancellationToken cancellationToken = default)
     {
-        return Task.FromResult(InstanceExists);
+        return Task.FromResult(CodeExists);
     }
 }
 

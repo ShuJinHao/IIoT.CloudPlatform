@@ -54,8 +54,7 @@ public class PermissionProvider(
         var permissionsList = allPermissions.ToList();
 
         // 3. 回写缓存
-        var expireTime = TimeSpan.FromHours(_options.ExpirationHours);
-        await cacheService.SetAsync(cacheKey, permissionsList, expireTime, cancellationToken);
+        await cacheService.SetAsync(cacheKey, permissionsList, _options.ResolveExpiration(), cancellationToken);
 
         return permissionsList;
     }

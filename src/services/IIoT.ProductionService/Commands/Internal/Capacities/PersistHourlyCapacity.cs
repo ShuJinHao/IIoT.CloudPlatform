@@ -1,3 +1,5 @@
+using IIoT.Services.Common.Caching;
+using IIoT.Services.Common.Contracts;
 using IIoT.Core.Production.Contracts.RecordRepositories;
 using IIoT.Services.Common.Contracts.RecordQueries;
 using IIoT.Services.Common.Events.Capacities;
@@ -15,7 +17,8 @@ public record PersistHourlyCapacityCommand(
 
 public class PersistHourlyCapacityHandler(
     IDeviceIdentityQueryService deviceIdentityQuery,
-    IHourlyCapacityRecordRepository repository
+    IHourlyCapacityRecordRepository repository,
+    ICacheService cacheService
 ) : ICommandHandler<PersistHourlyCapacityCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(
@@ -45,6 +48,18 @@ public class PersistHourlyCapacityHandler(
             ReportedAt: DateTime.UtcNow);
 
         await repository.UpsertAsync(writeModel, cancellationToken);
+        await cacheService.RemoveByPatternAsync(
+            CacheKeys.CapacityHourlyPattern(evt.DeviceId),
+            cancellationToken);
+        await cacheService.RemoveByPatternAsync(
+            CacheKeys.CapacitySummaryPattern(evt.DeviceId),
+            cancellationToken);
+        await cacheService.RemoveByPatternAsync(
+            CacheKeys.CapacityRangePattern(evt.DeviceId),
+            cancellationToken);
+        await cacheService.RemoveByPatternAsync(
+            CacheKeys.CapacityPagedByDevicePattern(evt.DeviceId),
+            cancellationToken);
 
         return Result.Success(true);
     }
