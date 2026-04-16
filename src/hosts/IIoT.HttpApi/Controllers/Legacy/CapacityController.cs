@@ -2,6 +2,7 @@
 using IIoT.ProductionService.Commands.Capacities;
 using IIoT.ProductionService.Queries.Capacities;
 using IIoT.SharedKernel.Paging;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IIoT.HttpApi.Controllers;
@@ -9,6 +10,7 @@ namespace IIoT.HttpApi.Controllers;
 /// <summary>
 /// 产能接口。
 /// </summary>
+[Authorize]
 [Route("api/v1/[controller]")]
 [ApiController]
 [ApiExplorerSettings(IgnoreApi = true)]
@@ -34,9 +36,7 @@ public class CapacityController : ApiControllerBase
         [FromQuery] DateOnly date,
         [FromQuery] string? plcName = null)
     {
-        var result = Request.Headers.Authorization.Count > 0
-            ? await Sender.Send(new GetHourlyByDeviceIdQuery(deviceId, date, plcName))
-            : await Sender.Send(new GetEdgeHourlyByDeviceIdQuery(deviceId, date, plcName));
+        var result = await Sender.Send(new GetHourlyByDeviceIdQuery(deviceId, date, plcName));
         return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
     }
 
@@ -49,9 +49,7 @@ public class CapacityController : ApiControllerBase
         [FromQuery] DateOnly date,
         [FromQuery] string? plcName = null)
     {
-        var result = Request.Headers.Authorization.Count > 0
-            ? await Sender.Send(new GetSummaryByDeviceIdQuery(deviceId, date, plcName))
-            : await Sender.Send(new GetEdgeSummaryByDeviceIdQuery(deviceId, date, plcName));
+        var result = await Sender.Send(new GetSummaryByDeviceIdQuery(deviceId, date, plcName));
 
         if (!result.IsSuccess)
             return BadRequest(result.Errors);
@@ -69,9 +67,7 @@ public class CapacityController : ApiControllerBase
         [FromQuery] DateOnly endDate,
         [FromQuery] string? plcName = null)
     {
-        var result = Request.Headers.Authorization.Count > 0
-            ? await Sender.Send(new GetSummaryRangeQuery(deviceId, startDate, endDate, plcName))
-            : await Sender.Send(new GetEdgeSummaryRangeQuery(deviceId, startDate, endDate, plcName));
+        var result = await Sender.Send(new GetSummaryRangeQuery(deviceId, startDate, endDate, plcName));
         return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
     }
 

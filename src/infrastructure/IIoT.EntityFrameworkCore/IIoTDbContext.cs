@@ -51,15 +51,12 @@ public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)
 
     public async Task FlushDomainEventsAsync(CancellationToken cancellationToken = default)
     {
-        if (_pendingDomainEvents.Count <= 0)
+        while (_pendingDomainEvents.Count > 0)
         {
-            return;
+            var domainEvent = _pendingDomainEvents[0];
+            await PublishDomainEventsAsync([domainEvent], cancellationToken);
+            _pendingDomainEvents.RemoveAt(0);
         }
-
-        var events = _pendingDomainEvents.ToList();
-        _pendingDomainEvents.Clear();
-
-        await PublishDomainEventsAsync(events, cancellationToken);
     }
 
     public void DiscardPendingDomainEvents()

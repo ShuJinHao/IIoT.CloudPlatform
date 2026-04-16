@@ -1,10 +1,12 @@
 using IIoT.EmployeeService.Commands.Employees;
 using IIoT.EmployeeService.Queries.Employees;
 using IIoT.HttpApi.Infrastructure;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IIoT.HttpApi.Controllers;
 
+[Authorize]
 [Route("api/v1/human/employees")]
 [ApiController]
 [Tags("Human Employees")]

@@ -8,8 +8,13 @@ namespace IIoT.EndToEndTests;
 
 public sealed class IIoTAppFixture : IAsyncDisposable
 {
+    public const string SeedAdminEmployeeNo = "101650";
+    public const string SeedAdminPassword = "Ljh123456!";
+    public const string SeedAdminRealName = "\u7CFB\u7EDF\u7BA1\u7406\u5458";
+
     private DistributedApplication? _app;
     private HttpClient? _httpClient;
+    private readonly Dictionary<string, string?> _originalEnvironment = new(StringComparer.Ordinal);
 
     public HttpClient HttpClient => _httpClient ?? throw new InvalidOperationException("环境未启动。");
 
@@ -17,6 +22,8 @@ public sealed class IIoTAppFixture : IAsyncDisposable
     {
         try
         {
+            ConfigureSeedAdminEnvironment();
+
             var builder = await DistributedApplicationTestingBuilder.CreateAsync<Projects.IIoT_AppHost>();
             builder.Services.AddLogging(logging =>
             {
@@ -71,5 +78,27 @@ public sealed class IIoTAppFixture : IAsyncDisposable
         _httpClient?.Dispose();
         if (_app is not null)
             await _app.DisposeAsync();
+
+        foreach (var entry in _originalEnvironment)
+        {
+            Environment.SetEnvironmentVariable(entry.Key, entry.Value);
+        }
+    }
+
+    private void ConfigureSeedAdminEnvironment()
+    {
+        SetEnvironmentVariable("SEED_ADMIN_NO", SeedAdminEmployeeNo);
+        SetEnvironmentVariable("SEED_ADMIN_PASSWORD", SeedAdminPassword);
+        SetEnvironmentVariable("SEED_ADMIN_REAL_NAME", SeedAdminRealName);
+    }
+
+    private void SetEnvironmentVariable(string name, string value)
+    {
+        if (!_originalEnvironment.ContainsKey(name))
+        {
+            _originalEnvironment[name] = Environment.GetEnvironmentVariable(name);
+        }
+
+        Environment.SetEnvironmentVariable(name, value);
     }
 }

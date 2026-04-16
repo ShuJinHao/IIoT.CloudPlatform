@@ -1,6 +1,7 @@
 using IIoT.HttpApi.Infrastructure;
 using IIoT.IdentityService.Commands;
 using IIoT.IdentityService.Queries;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IIoT.HttpApi.Controllers;
@@ -8,6 +9,7 @@ namespace IIoT.HttpApi.Controllers;
 /// <summary>
 /// 身份与权限接口。
 /// </summary>
+[Authorize]
 [Route("api/v1/[controller]")]
 [ApiController]
 [ApiExplorerSettings(IgnoreApi = true)]
@@ -17,6 +19,7 @@ public class IdentityController : ApiControllerBase
     /// <summary>
     /// 登录并获取 JWT。
     /// </summary>
+    [AllowAnonymous]
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginUserCommand command)
     {
@@ -124,6 +127,7 @@ public class IdentityController : ApiControllerBase
     /// <summary>
     /// 边缘端登录。
     /// </summary>
+    [AllowAnonymous]
     [HttpPost("device-login")]
     public async Task<IActionResult> DeviceLogin([FromBody] EdgeOperatorLoginCommand command)
     {

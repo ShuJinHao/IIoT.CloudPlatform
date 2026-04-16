@@ -1,6 +1,7 @@
 using IIoT.EmployeeService.Commands.Employees;
 using IIoT.EmployeeService.Queries.Employees;
 using IIoT.HttpApi.Infrastructure;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IIoT.HttpApi.Controllers;
@@ -8,6 +9,7 @@ namespace IIoT.HttpApi.Controllers;
 /// <summary>
 /// 员工档案与权限接口。
 /// </summary>
+[Authorize]
 [Route("api/v1/[controller]")]
 [ApiController]
 [ApiExplorerSettings(IgnoreApi = true)]

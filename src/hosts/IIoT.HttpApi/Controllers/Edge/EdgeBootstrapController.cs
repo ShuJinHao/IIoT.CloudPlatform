@@ -1,9 +1,11 @@
 using IIoT.HttpApi.Infrastructure;
 using IIoT.ProductionService.Queries.Devices;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IIoT.HttpApi.Controllers;
 
+[AllowAnonymous]
 [Route("api/v1/edge/bootstrap")]
 [ApiController]
 [Tags("Edge Bootstrap")]

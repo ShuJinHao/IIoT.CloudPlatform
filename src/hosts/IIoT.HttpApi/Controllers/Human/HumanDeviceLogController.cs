@@ -1,10 +1,12 @@
 using IIoT.HttpApi.Infrastructure;
 using IIoT.ProductionService.Queries.DeviceLogs;
 using IIoT.SharedKernel.Paging;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IIoT.HttpApi.Controllers;
 
+[Authorize]
 [Route("api/v1/human/device-logs")]
 [ApiController]
 [Tags("Human Device Logs")]

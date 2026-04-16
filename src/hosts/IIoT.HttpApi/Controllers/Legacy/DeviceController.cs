@@ -1,6 +1,7 @@
 ﻿using IIoT.HttpApi.Infrastructure;
 using IIoT.ProductionService.Commands.Devices;
 using IIoT.ProductionService.Queries.Devices;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IIoT.HttpApi.Controllers;
@@ -8,6 +9,7 @@ namespace IIoT.HttpApi.Controllers;
 /// <summary>
 /// 设备接口。
 /// </summary>
+[Authorize]
 [Route("api/v1/[controller]")]
 [ApiController]
 [ApiExplorerSettings(IgnoreApi = true)]

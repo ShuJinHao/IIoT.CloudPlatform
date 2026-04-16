@@ -80,7 +80,7 @@ public class CreateRecipeHandler(
                 return Result.Failure("越权: 未授权该设备");
         }
 
-        var recipe = new Recipe(recipeName, request.ProcessId, parametersJsonb, request.DeviceId);
+        var recipe = new Recipe(recipeName, request.ProcessId, request.DeviceId, parametersJsonb);
         recipeRepository.Add(recipe);
         var affected = await recipeRepository.SaveChangesAsync(cancellationToken);
 

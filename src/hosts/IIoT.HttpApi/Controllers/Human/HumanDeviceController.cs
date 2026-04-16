@@ -1,10 +1,12 @@
 using IIoT.HttpApi.Infrastructure;
 using IIoT.ProductionService.Commands.Devices;
 using IIoT.ProductionService.Queries.Devices;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IIoT.HttpApi.Controllers;
 
+[Authorize]
 [Route("api/v1/human/devices")]
 [ApiController]
 [Tags("Human Devices")]

@@ -20,7 +20,7 @@ public class Result<T> : IResult
 
     public bool IsSuccess => Status == ResultStatus.Ok;
 
-    public IEnumerable<object>? Errors { get; protected set; }
+    public IEnumerable<string>? Errors { get; protected set; }
 
     public ResultStatus Status { get; protected set; } = ResultStatus.Ok;
 
@@ -31,8 +31,9 @@ public class Result<T> : IResult
 
     public static implicit operator Result<T>(Result result)
     {
-        return new Result<T>((T)default!)
+        return new Result<T>(result.Status)
         {
+            Value = default,
             Status = result.Status,
             Errors = result.Errors
         };
@@ -72,11 +73,11 @@ public class Result : Result<Result>
         return new Result(ResultStatus.Error);
     }
 
-    public static Result Failure(params object[] errors)
+    public static Result Failure(params string[] errors)
     {
         return new Result(ResultStatus.Error)
         {
-            Errors = errors.AsEnumerable()
+            Errors = errors
         };
     }
 
@@ -89,7 +90,7 @@ public class Result : Result<Result>
     {
         return new Result(ResultStatus.NotFound)
         {
-            Errors = error.AsEnumerable()
+            Errors = error
         };
     }
 
@@ -102,7 +103,7 @@ public class Result : Result<Result>
     {
         return new Result(ResultStatus.Unauthorized)
         {
-            Errors = error.AsEnumerable()
+            Errors = error
         };
     }
 

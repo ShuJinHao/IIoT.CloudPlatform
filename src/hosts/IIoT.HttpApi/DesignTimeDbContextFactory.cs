@@ -13,7 +13,7 @@ public class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<IIoTDbCont
     public IIoTDbContext CreateDbContext(string[] args)
     {
         var optionsBuilder = new DbContextOptionsBuilder<IIoTDbContext>();
-        optionsBuilder.UseNpgsql("Host=localhost;Database=iiot-db;Username=postgres;Password=123456");
+        optionsBuilder.UseNpgsql(DesignTimeConnectionStringResolver.Resolve());
 
         return new IIoTDbContext(optionsBuilder.Options);
     }

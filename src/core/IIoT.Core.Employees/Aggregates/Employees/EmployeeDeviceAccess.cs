@@ -20,6 +20,10 @@ public class EmployeeDeviceAccess : IEntity
     /// <param name="deviceId">具体设备/机台的 UUID</param>
     public EmployeeDeviceAccess(Employee employee, Guid deviceId)
     {
+        ArgumentNullException.ThrowIfNull(employee);
+        if (deviceId == Guid.Empty)
+            throw new ArgumentException("DeviceId 不能为空。", nameof(deviceId));
+
         Employee = employee;
         EmployeeId = employee.Id; // 自动提取员工的 Guid
         DeviceId = deviceId;
@@ -28,15 +32,15 @@ public class EmployeeDeviceAccess : IEntity
     /// <summary>
     /// 关联的员工 UUID (联合主键之一)
     /// </summary>
-    public Guid EmployeeId { get; set; }
+    public Guid EmployeeId { get; private set; }
 
     /// <summary>
     /// 关联的具体设备/机台 UUID (联合主键之一)
     /// </summary>
-    public Guid DeviceId { get; set; }
+    public Guid DeviceId { get; private set; }
 
     /// <summary>
     /// 导航属性：关联的员工聚合根引用
     /// </summary>
-    public Employee Employee { get; set; } = null!;
+    public Employee Employee { get; private set; } = null!;
 }

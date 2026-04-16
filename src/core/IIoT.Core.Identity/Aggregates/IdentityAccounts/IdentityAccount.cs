@@ -20,8 +20,6 @@ public class IdentityAccount : BaseEntity<Guid>
         IsEnabled = isEnabled;
     }
 
-    public override Guid Id { get; set; }
-
     public string EmployeeNo { get; private set; } = null!;
 
     public bool IsEnabled { get; private set; }

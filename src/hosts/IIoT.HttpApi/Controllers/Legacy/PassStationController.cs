@@ -3,10 +3,12 @@ using IIoT.ProductionService.Commands.PassStations;
 using IIoT.ProductionService.Queries.PassStations;
 using IIoT.Services.Common.Contracts.RecordQueries;
 using IIoT.SharedKernel.Paging;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IIoT.HttpApi.Controllers;
 
+[Authorize]
 [Route("api/v1/[controller]")]
 [ApiController]
 [ApiExplorerSettings(IgnoreApi = true)]

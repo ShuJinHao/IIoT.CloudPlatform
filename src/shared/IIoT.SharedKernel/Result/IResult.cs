@@ -6,7 +6,7 @@ namespace IIoT.SharedKernel.Result;
 
 public interface IResult
 {
-    IEnumerable<object>? Errors { get; }
+    IEnumerable<string>? Errors { get; }
 
     bool IsSuccess { get; }
 

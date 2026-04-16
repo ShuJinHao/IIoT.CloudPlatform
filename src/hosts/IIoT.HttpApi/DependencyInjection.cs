@@ -16,6 +16,7 @@ using IIoT.Services.Common.Contracts.RecordQueries;
 using IIoT.Services.Common.DependencyInjection;
 using IIoT.Services.Common.Events.PassStations;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.IdentityModel.Tokens;
 
 namespace IIoT.HttpApi;
@@ -54,6 +55,9 @@ public static class DependencyInjection
         var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>()
                           ?? throw new NullReferenceException("JwtSettings is missing");
         var jwtSecret = JwtSecretResolver.Resolve(builder.Environment, jwtSettings.Secret);
+        var authenticatedUserPolicy = new AuthorizationPolicyBuilder()
+            .RequireAuthenticatedUser()
+            .Build();
 
         builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddJwtBearer(options =>
@@ -70,6 +74,9 @@ public static class DependencyInjection
                     ClockSkew = TimeSpan.Zero
                 };
             });
+        builder.Services.AddAuthorizationBuilder()
+            .SetDefaultPolicy(authenticatedUserPolicy)
+            .SetFallbackPolicy(authenticatedUserPolicy);
 
         builder.Services.AddScoped<ICurrentUser, CurrentUser>();
         builder.Services.AddHttpContextAccessor();

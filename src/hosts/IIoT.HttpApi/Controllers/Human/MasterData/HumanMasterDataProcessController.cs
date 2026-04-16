@@ -2,10 +2,12 @@ using IIoT.HttpApi.Infrastructure;
 using IIoT.MasterDataService.Commands.Processes;
 using IIoT.MasterDataService.Queries.Processes;
 using IIoT.SharedKernel.Paging;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IIoT.HttpApi.Controllers;
 
+[Authorize]
 [Route("api/v1/human/master-data/processes")]
 [ApiController]
 [Tags("Human Master Data Processes")]

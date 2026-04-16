@@ -2,6 +2,7 @@
 using IIoT.ProductionService.Commands.DeviceLogs;
 using IIoT.ProductionService.Queries.DeviceLogs;
 using IIoT.SharedKernel.Paging;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IIoT.HttpApi.Controllers;
@@ -9,6 +10,7 @@ namespace IIoT.HttpApi.Controllers;
 /// <summary>
 /// 设备日志接口。
 /// </summary>
+[Authorize]
 [Route("api/v1/[controller]")]
 [ApiController]
 [ApiExplorerSettings(IgnoreApi = true)]

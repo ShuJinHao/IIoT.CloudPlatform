@@ -2,10 +2,12 @@ using IIoT.HttpApi.Infrastructure;
 using IIoT.ProductionService.Commands.Recipes;
 using IIoT.ProductionService.Queries.Recipes;
 using IIoT.SharedKernel.Paging;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IIoT.HttpApi.Controllers;
 
+[Authorize]
 [Route("api/v1/human/recipes")]
 [ApiController]
 [Tags("Human Recipes")]

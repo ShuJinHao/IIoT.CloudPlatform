@@ -4,6 +4,7 @@ using IIoT.EntityFrameworkCore.Identity;
 using IIoT.MigrationWorkApp.SeedData;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace IIoT.MigrationWorkApp;
 
@@ -17,6 +18,7 @@ public sealed class DatabaseInitializationOrchestrator(
     UserManager<ApplicationUser> userManager,
     RoleManager<IdentityRole<Guid>> roleManager,
     IRecordSchemaInitializer recordSchemaInitializer,
+    IConfiguration configuration,
     ILogger<DatabaseInitializationOrchestrator> logger)
     : IDatabaseInitializationOrchestrator
 {
@@ -137,7 +139,12 @@ public sealed class DatabaseInitializationOrchestrator(
     private async Task SeedSystemDataAsync(CancellationToken cancellationToken)
     {
         logger.LogInformation("开始播种系统初始化数据。");
-        await SystemInitData.SeedAsync(dbContext, userManager, roleManager, cancellationToken);
+        await SystemInitData.SeedAsync(
+            dbContext,
+            userManager,
+            roleManager,
+            configuration,
+            cancellationToken);
         logger.LogInformation("系统初始化数据播种完成。");
     }
 }

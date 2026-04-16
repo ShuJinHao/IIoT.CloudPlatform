@@ -1,15 +1,18 @@
 using IIoT.HttpApi.Infrastructure;
 using IIoT.IdentityService.Commands;
 using IIoT.IdentityService.Queries;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IIoT.HttpApi.Controllers;
 
+[Authorize]
 [Route("api/v1/human/identity")]
 [ApiController]
 [Tags("Human Identity")]
 public class HumanIdentityController : ApiControllerBase
 {
+    [AllowAnonymous]
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginUserCommand command)
     {
@@ -17,6 +20,7 @@ public class HumanIdentityController : ApiControllerBase
         return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
     }
 
+    [AllowAnonymous]
     [HttpPost("edge-login")]
     public async Task<IActionResult> EdgeLogin([FromBody] EdgeOperatorLoginCommand command)
     {

@@ -8,9 +8,12 @@ namespace IIoT.SharedKernel.Specification;
 
 public abstract class Specification<T> : ISpecification<T> where T : class, IEntity
 {
+    private readonly List<Expression<Func<T, object>>> _includes = [];
+    private readonly List<string> _includeStrings = [];
+
     public Expression<Func<T, bool>>? FilterCondition { get; protected init; }
-    public List<Expression<Func<T, object>>> Includes { get; } = [];
-    public List<string> IncludeStrings { get; } = [];
+    public IReadOnlyList<Expression<Func<T, object>>> Includes => _includes;
+    public IReadOnlyList<string> IncludeStrings => _includeStrings;
     public Expression<Func<T, object>>? OrderBy { get; private set; }
     public Expression<Func<T, object>>? OrderByDescending { get; private set; }
     public Expression<Func<T, object>>? GroupBy { get; private set; }
@@ -20,12 +23,12 @@ public abstract class Specification<T> : ISpecification<T> where T : class, IEnt
 
     protected void AddInclude(Expression<Func<T, object>> includeExpression)
     {
-        Includes.Add(includeExpression);
+        _includes.Add(includeExpression);
     }
 
     protected void AddInclude(string includeString)
     {
-        IncludeStrings.Add(includeString);
+        _includeStrings.Add(includeString);
     }
 
     protected void SetPaging(int skip, int take)

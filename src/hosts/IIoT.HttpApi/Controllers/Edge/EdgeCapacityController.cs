@@ -1,10 +1,12 @@
 using IIoT.HttpApi.Infrastructure;
 using IIoT.ProductionService.Commands.Capacities;
 using IIoT.ProductionService.Queries.Capacities;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IIoT.HttpApi.Controllers;
 
+[Authorize]
 [Route("api/v1/edge/capacity")]
 [ApiController]
 [Tags("Edge Capacity")]

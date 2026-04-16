@@ -1,9 +1,11 @@
 using IIoT.HttpApi.Infrastructure;
 using IIoT.ProductionService.Queries.Recipes;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IIoT.HttpApi.Controllers;
 
+[Authorize]
 [Route("api/v1/edge/recipes")]
 [ApiController]
 [Tags("Edge Recipes")]

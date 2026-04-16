@@ -32,8 +32,6 @@ public class Device : BaseEntity<Guid>
         ProcessId = processId;
     }
 
-    public override Guid Id { get; set; }
-
     public string DeviceName { get; private set; } = null!;
 
     /// <summary>

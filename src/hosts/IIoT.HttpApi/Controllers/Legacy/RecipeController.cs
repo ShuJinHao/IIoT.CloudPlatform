@@ -2,6 +2,7 @@ using IIoT.HttpApi.Infrastructure;
 using IIoT.ProductionService.Commands.Recipes;
 using IIoT.ProductionService.Queries.Recipes;
 using IIoT.SharedKernel.Paging;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IIoT.HttpApi.Controllers;
@@ -9,6 +10,7 @@ namespace IIoT.HttpApi.Controllers;
 /// <summary>
 /// 配方接口。
 /// </summary>
+[Authorize]
 [Route("api/v1/[controller]")]
 [ApiController]
 [ApiExplorerSettings(IgnoreApi = true)]
