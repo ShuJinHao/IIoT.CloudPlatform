@@ -1,7 +1,7 @@
 namespace IIoT.Core.Production.Contracts.RecordRepositories;
 
 /// <summary>
-/// Write model for device logs. Identity is represented only by device_id.
+/// 设备日志写模型约定，身份仅由 device_id 表示。
 /// </summary>
 public sealed record DeviceLogWriteModel(
     Guid Id,

@@ -1,16 +1,21 @@
+using AutoMapper;
 using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.MasterData.Aggregates.MfgProcesses;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.ProductionService.Commands.Capacities;
+using IIoT.ProductionService.Profiles;
 using IIoT.EmployeeService.Commands.Employees;
 using IIoT.MasterDataService.Commands.Processes;
 using IIoT.ProductionService.Commands.Devices;
 using IIoT.ProductionService.Commands.Recipes;
+using IIoT.ProductionService.Queries.Capacities;
 using IIoT.ProductionService.Queries.Devices;
 using IIoT.Services.Common.Events.Capacities;
 using IIoT.Services.Common.Caching;
+using IIoT.Services.Common.Contracts.RecordQueries;
 using IIoT.SharedKernel.Specification;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace IIoT.ServiceLayer.Tests;
@@ -241,6 +246,7 @@ public sealed class ServiceFlowGuardTests
     public async Task PersistHourlyCapacityHandler_ShouldUpsertRecordAndClearCapacityCaches()
     {
         var deviceId = Guid.NewGuid();
+        var reportedAt = DateTime.SpecifyKind(DateTime.UtcNow.AddSeconds(-5), DateTimeKind.Utc);
         var repository = new RecordingHourlyCapacityRecordRepository();
         var cache = new RecordingCacheService();
         var handler = new PersistHourlyCapacityHandler(
@@ -261,17 +267,125 @@ public sealed class ServiceFlowGuardTests
                     TotalCount = 16,
                     OkCount = 15,
                     NgCount = 1,
-                    PlcName = "PLC-01"
+                    PlcName = "PLC-01",
+                    ReceivedAtUtc = reportedAt
                 }),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
         Assert.NotNull(repository.LastUpsert);
         Assert.Equal(deviceId, repository.LastUpsert!.DeviceId);
+        Assert.Equal(reportedAt, repository.LastUpsert.ReportedAt);
+        Assert.Contains(
+            CacheKeys.CapacityHourly(repository.LastUpsert.DeviceId, repository.LastUpsert.Date, repository.LastUpsert.PlcName),
+            cache.RemovedKeys);
+        Assert.Contains(
+            CacheKeys.CapacitySummary(repository.LastUpsert.DeviceId, repository.LastUpsert.Date, repository.LastUpsert.PlcName),
+            cache.RemovedKeys);
+        Assert.Contains(
+            CacheKeys.CapacityRange(repository.LastUpsert.DeviceId, repository.LastUpsert.Date, repository.LastUpsert.Date, repository.LastUpsert.PlcName),
+            cache.RemovedKeys);
         Assert.Contains(CacheKeys.CapacityHourlyPattern(deviceId), cache.RemovedPatterns);
         Assert.Contains(CacheKeys.CapacitySummaryPattern(deviceId), cache.RemovedPatterns);
         Assert.Contains(CacheKeys.CapacityRangePattern(deviceId), cache.RemovedPatterns);
         Assert.Contains(CacheKeys.CapacityPagedByDevicePattern(deviceId), cache.RemovedPatterns);
+    }
+
+    [Fact]
+    public async Task ReceiveHourlyCapacityHandler_ShouldClearCapacityCachesBeforePublishing()
+    {
+        var deviceId = Guid.NewGuid();
+        var cache = new RecordingCacheService();
+        var publisher = new RecordingEventPublisher();
+        var mapperServices = new ServiceCollection();
+        mapperServices.AddLogging();
+        mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
+        var mapper = mapperServices.BuildServiceProvider().GetRequiredService<IMapper>();
+        var handler = new ReceiveHourlyCapacityHandler(
+            new StubDeviceIdentityQueryService { Exists = true },
+            mapper,
+            publisher,
+            cache);
+
+        var request = new ReceiveHourlyCapacityCommand(
+            deviceId,
+            DateOnly.FromDateTime(DateTime.UtcNow),
+            "D",
+            9,
+            30,
+            "09:30",
+            16,
+            15,
+            1,
+            "PLC-01");
+
+        var result = await handler.Handle(request, CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var published = Assert.IsType<HourlyCapacityReceivedEvent>(publisher.LastPublishedEvent);
+        Assert.Equal(deviceId, published.DeviceId);
+        Assert.True(published.ReceivedAtUtc > DateTime.UtcNow.AddMinutes(-1));
+        Assert.Equal(DateTimeKind.Utc, published.ReceivedAtUtc.Kind);
+        Assert.Contains(CacheKeys.CapacityHourly(deviceId, request.Date, request.PlcName), cache.RemovedKeys);
+        Assert.Contains(CacheKeys.CapacitySummary(deviceId, request.Date, request.PlcName), cache.RemovedKeys);
+        Assert.Contains(CacheKeys.CapacityRange(deviceId, request.Date, request.Date, request.PlcName), cache.RemovedKeys);
+        Assert.Contains(CacheKeys.CapacityHourlyPattern(deviceId), cache.RemovedPatterns);
+        Assert.Contains(CacheKeys.CapacitySummaryPattern(deviceId), cache.RemovedPatterns);
+        Assert.Contains(CacheKeys.CapacityRangePattern(deviceId), cache.RemovedPatterns);
+        Assert.Contains(CacheKeys.CapacityPagedByDevicePattern(deviceId), cache.RemovedPatterns);
+    }
+
+    [Fact]
+    public async Task GetHourlyByDeviceIdHandler_ShouldBypassCacheForFreshReads()
+    {
+        var deviceId = Guid.NewGuid();
+        var date = DateOnly.FromDateTime(DateTime.UtcNow);
+        var queryService = new StubCapacityQueryService
+        {
+            HourlyResult =
+            [
+                new HourlyCapacityDto(9, 30, "09:30", "D", 16, 15, 1)
+            ]
+        };
+        var handler = new GetHourlyByDeviceIdHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                Role = "Admin",
+                UserName = "admin",
+                IsAuthenticated = true
+            },
+            new StubDevicePermissionService(),
+            queryService);
+
+        var first = await handler.Handle(new GetHourlyByDeviceIdQuery(deviceId, date, "PLC-01"), CancellationToken.None);
+        var second = await handler.Handle(new GetHourlyByDeviceIdQuery(deviceId, date, "PLC-01"), CancellationToken.None);
+
+        Assert.True(first.IsSuccess);
+        Assert.True(second.IsSuccess);
+        Assert.Equal(2, queryService.HourlyCalls);
+    }
+
+    [Fact]
+    public async Task GetEdgeHourlyByDeviceIdHandler_ShouldBypassCacheForFreshReads()
+    {
+        var deviceId = Guid.NewGuid();
+        var date = DateOnly.FromDateTime(DateTime.UtcNow);
+        var queryService = new StubCapacityQueryService
+        {
+            HourlyResult =
+            [
+                new HourlyCapacityDto(9, 30, "09:30", "D", 16, 15, 1)
+            ]
+        };
+        var handler = new GetEdgeHourlyByDeviceIdHandler(queryService);
+
+        var first = await handler.Handle(new GetEdgeHourlyByDeviceIdQuery(deviceId, date, "PLC-01"), CancellationToken.None);
+        var second = await handler.Handle(new GetEdgeHourlyByDeviceIdQuery(deviceId, date, "PLC-01"), CancellationToken.None);
+
+        Assert.True(first.IsSuccess);
+        Assert.True(second.IsSuccess);
+        Assert.Equal(2, queryService.HourlyCalls);
     }
 
     [Fact]

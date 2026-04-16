@@ -45,6 +45,7 @@ public static class DependencyInjection
         builder.Services.AddScoped<IPassStationReceiveService, PassStationReceiveService>();
         builder.Services
             .AddPassStationType<PassDataInjectionReceivedEvent, InjectionWriteModel, InjectionMapper>()
+            .AddPassStationType<PassDataStackingReceivedEvent, StackingWriteModel, StackingMapper>()
             .AddPassStationQuery<InjectionPassListItemDto, InjectionPassDetailDto>();
 
         builder.Services.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });

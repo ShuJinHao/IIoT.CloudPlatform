@@ -6,7 +6,11 @@ public interface IRolePolicyService
 {
     Task<IList<string>> GetAllRolesAsync();
 
+    Task<bool> RoleExistsAsync(string roleName);
+
     Task<Result> CreateRoleAsync(string roleName);
+
+    Task<Result> DeleteRoleAsync(string roleName);
 
     Task<Result> RemoveRoleFromUserAsync(string employeeNo, string roleName);
 

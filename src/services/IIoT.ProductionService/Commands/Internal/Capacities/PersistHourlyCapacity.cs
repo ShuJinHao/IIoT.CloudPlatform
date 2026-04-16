@@ -33,6 +33,10 @@ public class PersistHourlyCapacityHandler(
         if (!exists)
             return Result.Failure($"Persist failed: DeviceId {evt.DeviceId} does not exist.");
 
+        var reportedAt = evt.ReceivedAtUtc == default
+            ? DateTime.UtcNow
+            : DateTime.SpecifyKind(evt.ReceivedAtUtc, DateTimeKind.Utc);
+
         var writeModel = new HourlyCapacityWriteModel(
             Id: Guid.NewGuid(),
             DeviceId: evt.DeviceId,
@@ -45,9 +49,18 @@ public class PersistHourlyCapacityHandler(
             OkCount: evt.OkCount,
             NgCount: evt.NgCount,
             PlcName: evt.PlcName ?? string.Empty,
-            ReportedAt: DateTime.UtcNow);
+            ReportedAt: reportedAt);
 
         await repository.UpsertAsync(writeModel, cancellationToken);
+        await cacheService.RemoveAsync(
+            CacheKeys.CapacityHourly(evt.DeviceId, evt.Date, evt.PlcName),
+            cancellationToken);
+        await cacheService.RemoveAsync(
+            CacheKeys.CapacitySummary(evt.DeviceId, evt.Date, evt.PlcName),
+            cancellationToken);
+        await cacheService.RemoveAsync(
+            CacheKeys.CapacityRange(evt.DeviceId, evt.Date, evt.Date, evt.PlcName),
+            cancellationToken);
         await cacheService.RemoveByPatternAsync(
             CacheKeys.CapacityHourlyPattern(evt.DeviceId),
             cancellationToken);

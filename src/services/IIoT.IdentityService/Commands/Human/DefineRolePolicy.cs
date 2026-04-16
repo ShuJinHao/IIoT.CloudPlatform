@@ -22,7 +22,10 @@ public class DefineRolePolicyHandler(
 {
     public async Task<Result<bool>> Handle(DefineRolePolicyCommand request, CancellationToken cancellationToken)
     {
-        var createResult = await rolePolicyService.CreateRoleAsync(request.RoleName);
+        var roleAlreadyExists = await rolePolicyService.RoleExistsAsync(request.RoleName);
+        var createResult = roleAlreadyExists
+            ? Result.Success()
+            : await rolePolicyService.CreateRoleAsync(request.RoleName);
 
         if (!createResult.IsSuccess)
         {
@@ -35,8 +38,10 @@ public class DefineRolePolicyHandler(
 
             if (!updateResult.IsSuccess || !updateResult.Value)
             {
-                await rolePolicyService.RemoveRoleFromUserAsync(string.Empty, request.RoleName);
-                return Result.Failure(updateResult.Errors?.ToArray() ?? ["角色权限分配失败，已撤销角色创建"]);
+                if (!roleAlreadyExists)
+                    await rolePolicyService.DeleteRoleAsync(request.RoleName);
+
+                return Result.Failure(updateResult.Errors?.ToArray() ?? ["角色权限分配失败"]);
             }
 
             await cacheService.RemoveByPatternAsync(
@@ -50,8 +55,12 @@ public class DefineRolePolicyHandler(
         }
         catch (Exception ex)
         {
-            await rolePolicyService.RemoveRoleFromUserAsync(string.Empty, request.RoleName);
-            return Result.Failure($"定义角色策略时发生异常，已执行回滚删除空壳角色。错误: {ex.Message}");
+            if (!roleAlreadyExists)
+                await rolePolicyService.DeleteRoleAsync(request.RoleName);
+
+            return Result.Failure(roleAlreadyExists
+                ? $"定义角色策略时发生异常。错误: {ex.Message}"
+                : $"定义角色策略时发生异常，已执行回滚删除空壳角色。错误: {ex.Message}");
         }
     }
 }

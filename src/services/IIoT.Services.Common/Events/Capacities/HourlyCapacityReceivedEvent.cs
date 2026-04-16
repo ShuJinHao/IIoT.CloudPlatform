@@ -20,4 +20,6 @@ public record HourlyCapacityReceivedEvent
     /// 产生该产能数据的 PLC 名称。
     /// </summary>
     public string? PlcName { get; init; }
+
+    public DateTime ReceivedAtUtc { get; init; }
 }

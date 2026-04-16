@@ -36,12 +36,17 @@ builder.Services.AddPassStationType<
     PassDataInjectionReceivedEvent,
     InjectionWriteModel,
     InjectionMapper>();
+builder.Services.AddPassStationType<
+    PassDataStackingReceivedEvent,
+    StackingWriteModel,
+    StackingMapper>();
 
 builder.Services.AddMassTransit(x =>
 {
     x.SetKebabCaseEndpointNameFormatter();
 
     x.AddConsumer<PassStationConsumer<PassDataInjectionReceivedEvent>>(cfg => { cfg.ConcurrentMessageLimit = 4; });
+    x.AddConsumer<PassStationConsumer<PassDataStackingReceivedEvent>>(cfg => { cfg.ConcurrentMessageLimit = 4; });
     x.AddConsumer<DeviceLogConsumer>(cfg => { cfg.ConcurrentMessageLimit = 3; });
     x.AddConsumer<HourlyCapacityConsumer>(cfg => { cfg.ConcurrentMessageLimit = 1; });
 

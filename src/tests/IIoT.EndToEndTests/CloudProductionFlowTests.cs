@@ -4,6 +4,7 @@ using System.Text.Json;
 using FluentAssertions;
 using IIoT.Services.Common.Events.DeviceLogs;
 using MassTransit;
+using Npgsql;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Exceptions;
 using Xunit;
@@ -148,6 +149,45 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
             response => response.Items.Count(x => x.Barcode == barcode) == 1);
 
         result.Items.Should().ContainSingle(x => x.Barcode == barcode);
+    }
+
+    [Fact]
+    public async Task PassDataStacking_DuplicateConsume_ShouldPersistOneRow()
+    {
+        await AuthenticateAsAdminAsync();
+
+        var deviceId = await CreateTestDeviceAsync("stacking-pass");
+        var connectionString = await _fixture.GetConnectionStringAsync("iiot-db");
+        var completedTime = DateTime.SpecifyKind(DateTime.UtcNow.AddMinutes(-4), DateTimeKind.Utc);
+        var barcode = $"ST-{Guid.NewGuid():N}"[..14];
+
+        var request = new
+        {
+            DeviceId = deviceId,
+            Item = new
+            {
+                Barcode = barcode,
+                TrayCode = "TRAY-STACK-01",
+                LayerCount = 16,
+                SequenceNo = 9,
+                CellResult = "OK",
+                CompletedTime = completedTime
+            }
+        };
+
+        await PostJsonAsync("/api/v1/edge/pass-stations/stacking", request);
+        await PostJsonAsync("/api/v1/edge/pass-stations/stacking", request);
+
+        var rows = await EventuallyAsync(
+            async () => await GetStackingPassRowsAsync(connectionString, deviceId, barcode),
+            response => response.Count == 1);
+
+        rows.Should().ContainSingle();
+        rows[0].TrayCode.Should().Be("TRAY-STACK-01");
+        rows[0].LayerCount.Should().Be(16);
+        rows[0].SequenceNo.Should().Be(9);
+        rows[0].CellResult.Should().Be("OK");
+        rows[0].CompletedTime.ToUniversalTime().Should().BeCloseTo(completedTime, TimeSpan.FromMilliseconds(1));
     }
 
     [Fact]
@@ -393,6 +433,23 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         {
             passStationUnauthorized.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         }
+
+        using (var stackingUnauthorized = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/edge/pass-stations/stacking", new
+               {
+                   DeviceId = device.DeviceId,
+                   Item = new
+                   {
+                       Barcode = $"ST-{Guid.NewGuid():N}"[..14],
+                       TrayCode = "TRAY-EDGE-01",
+                       LayerCount = 8,
+                       SequenceNo = 3,
+                       CellResult = "Unknown",
+                       CompletedTime = completedTime
+                   }
+               }))
+        {
+            stackingUnauthorized.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        }
     }
 
     [Fact]
@@ -444,7 +501,7 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         }
         catch (JsonException)
         {
-            // Some hosts return JWTs as text/plain instead of a JSON string.
+        // 部分宿主会直接返回 text/plain 的 JWT，而不是 JSON 字符串。
         }
 
         return body.Trim();
@@ -600,6 +657,40 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
 
         throw new TimeoutException("Condition was not satisfied before timeout.");
     }
+
+    private static async Task<List<StackingPassRow>> GetStackingPassRowsAsync(
+        string connectionString,
+        Guid deviceId,
+        string barcode)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+
+        await using var command = new NpgsqlCommand(
+            """
+            select tray_code, layer_count, sequence_no, cell_result, completed_time
+            from pass_data_stacking
+            where device_id = @deviceId and barcode = @barcode
+            order by completed_time desc
+            """,
+            connection);
+        command.Parameters.AddWithValue("deviceId", deviceId);
+        command.Parameters.AddWithValue("barcode", barcode);
+
+        var rows = new List<StackingPassRow>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            rows.Add(new StackingPassRow(
+                TrayCode: reader.GetString(0),
+                LayerCount: reader.GetInt32(1),
+                SequenceNo: reader.GetInt32(2),
+                CellResult: reader.GetString(3),
+                CompletedTime: reader.GetDateTime(4)));
+        }
+
+        return rows;
+    }
 }
 
 public sealed record PagedResponse<T>
@@ -669,6 +760,13 @@ public sealed record InjectionPassListItemDto(
     decimal InjectionVolume,
     DateTime CompletedTime,
     DateTime ReceivedAt);
+
+public sealed record StackingPassRow(
+    string TrayCode,
+    int LayerCount,
+    int SequenceNo,
+    string CellResult,
+    DateTime CompletedTime);
 
 public sealed record PermissionGroupDto(
     string GroupName,

@@ -1,7 +1,7 @@
 namespace IIoT.Core.Production.Contracts.RecordRepositories;
 
 /// <summary>
-/// Write model for half-hour capacity records.
+/// 半小时产能记录写模型约定。
 /// </summary>
 public sealed record HourlyCapacityWriteModel(
     Guid Id,

@@ -17,4 +17,11 @@ public class EdgePassStationController : ApiControllerBase
         var result = await Sender.Send(command);
         return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
     }
+
+    [HttpPost("stacking")]
+    public async Task<IActionResult> ReceiveStacking([FromBody] ReceiveStackingPassCommand command)
+    {
+        var result = await Sender.Send(command);
+        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+    }
 }

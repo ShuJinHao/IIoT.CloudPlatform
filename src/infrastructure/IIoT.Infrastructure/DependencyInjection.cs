@@ -3,9 +3,9 @@ using IIoT.Infrastructure.Caching;
 using IIoT.Infrastructure.Locking;
 using IIoT.Services.Common.Contracts;
 using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using StackExchange.Redis;
 using ZiggyCreatures.Caching.Fusion;
 using ZiggyCreatures.Caching.Fusion.Backplane.StackExchangeRedis;
 using ZiggyCreatures.Caching.Fusion.Serialization.SystemTextJson;
@@ -17,6 +17,7 @@ public static class DependencyInjection
     public static void AddInfrastructures(this IHostApplicationBuilder builder)
     {
         builder.AddRedisDistributedCache("redis-cache");
+        var redisConnectionString = builder.Configuration.GetConnectionString("redis-cache");
 
         builder.Services.AddFusionCache()
             .WithDefaultEntryOptions(new FusionCacheEntryOptions
@@ -28,11 +29,13 @@ public static class DependencyInjection
             })
             .WithSystemTextJsonSerializer()
             .WithDistributedCache(provider => provider.GetRequiredService<IDistributedCache>())
-            .WithStackExchangeRedisBackplane(_ => { });
+            .WithStackExchangeRedisBackplane(options =>
+            {
+                if (string.IsNullOrWhiteSpace(redisConnectionString))
+                    throw new InvalidOperationException("Connection string 'redis-cache' is required for FusionCache backplane.");
 
-        builder.Services.AddOptions<RedisBackplaneOptions>()
-            .Configure<IConnectionMultiplexer>((opt, cm) =>
-                opt.ConnectionMultiplexerFactory = async () => cm);
+                options.Configuration = redisConnectionString;
+            });
 
         builder.Services.Configure<JwtSettings>(
             builder.Configuration.GetSection(JwtSettings.SectionName));

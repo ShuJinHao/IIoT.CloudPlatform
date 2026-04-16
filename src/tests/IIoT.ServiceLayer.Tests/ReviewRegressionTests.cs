@@ -3,11 +3,17 @@ using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.EntityFrameworkCore;
 using IIoT.EntityFrameworkCore.Identity;
+using IIoT.IdentityService.Commands;
+using IIoT.IdentityService.Queries;
 using IIoT.EntityFrameworkCore.Persistence;
+using IIoT.Services.Common.Attributes;
+using IIoT.Services.Common.Caching;
 using IIoT.Services.Common.Caching.Options;
 using IIoT.Services.Common.Contracts;
 using IIoT.SharedKernel.Domain;
+using IIoT.SharedKernel.Result;
 using MediatR;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
@@ -112,6 +118,144 @@ public sealed class ReviewRegressionTests
         Assert.Equal(TimeSpan.FromMinutes(10), cacheService.LastAbsoluteExpireTime);
     }
 
+    [Fact]
+    public async Task PermissionProvider_ShouldUseSharedCacheKeyForInvalidationCompatibility()
+    {
+        using var provider = CreateIdentityServiceProvider();
+        using var scope = provider.CreateScope();
+
+        var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
+        var cacheService = new RecordingCacheService();
+        var permissionProvider = new PermissionProvider(
+            userManager,
+            roleManager,
+            cacheService,
+            Options.Create(new PermissionCacheOptions
+            {
+                KeyPrefix = "custom-prefix:",
+                ExpirationMinutes = 10
+            }));
+
+        var role = "Supervisor";
+        await roleManager.CreateAsync(new IdentityRole<Guid>(role));
+        await roleManager.AddClaimAsync(
+            await roleManager.FindByNameAsync(role) ?? throw new InvalidOperationException("Role was not created."),
+            new System.Security.Claims.Claim("Permission", "Device.Read"));
+
+        var user = new ApplicationUser
+        {
+            Id = Guid.NewGuid(),
+            UserName = "user-001",
+            IsEnabled = true
+        };
+
+        var createUser = await userManager.CreateAsync(user, "Password123");
+        Assert.True(createUser.Succeeded);
+        var addRole = await userManager.AddToRoleAsync(user, role);
+        Assert.True(addRole.Succeeded);
+
+        var permissions = await permissionProvider.GetPermissionsAsync(user.Id);
+
+        Assert.Contains("Device.Read", permissions);
+        Assert.Equal(CacheKeys.PermissionByUser(user.Id), cacheService.LastSetKey);
+    }
+
+    [Fact]
+    public async Task DefineRolePolicyHandler_ShouldDeleteRoleWhenPermissionAssignmentFails()
+    {
+        var rolePolicyService = new StubRolePolicyService
+        {
+            UpdateRolePermissionsResult = Result.Failure("permission update failed")
+        };
+        var cacheService = new RecordingCacheService();
+        var handler = new DefineRolePolicyHandler(rolePolicyService, cacheService);
+
+        var result = await handler.Handle(
+            new DefineRolePolicyCommand("Auditor", ["Device.Read"]),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("Auditor", rolePolicyService.DeletedRoleName);
+    }
+
+    [Fact]
+    public async Task DefineRolePolicyHandler_ShouldNotDeleteExistingRoleWhenPermissionAssignmentFails()
+    {
+        var rolePolicyService = new StubRolePolicyService
+        {
+            RoleExists = true,
+            UpdateRolePermissionsResult = Result.Failure("permission update failed")
+        };
+        var cacheService = new RecordingCacheService();
+        var handler = new DefineRolePolicyHandler(rolePolicyService, cacheService);
+
+        var result = await handler.Handle(
+            new DefineRolePolicyCommand("Auditor", ["Device.Read"]),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Null(rolePolicyService.DeletedRoleName);
+    }
+
+    [Fact]
+    public async Task ChangePasswordHandler_ShouldRejectCrossUserPasswordChange()
+    {
+        var passwordService = new StubIdentityPasswordService();
+        var currentUserId = Guid.NewGuid();
+        var handler = new ChangePasswordHandler(
+            passwordService,
+            new TestCurrentUser
+            {
+                Id = currentUserId.ToString(),
+                Role = "Operator",
+                UserName = "operator-001",
+                IsAuthenticated = true
+            });
+
+        var result = await handler.Handle(
+            new ChangePasswordCommand(Guid.NewGuid(), "OldPassword123!", "NewPassword123!"),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Null(passwordService.LastChangedUserId);
+    }
+
+    [Fact]
+    public async Task ChangePasswordHandler_ShouldAllowCurrentUserToChangeOwnPassword()
+    {
+        var currentUserId = Guid.NewGuid();
+        var passwordService = new StubIdentityPasswordService();
+        var handler = new ChangePasswordHandler(
+            passwordService,
+            new TestCurrentUser
+            {
+                Id = currentUserId.ToString(),
+                Role = "Operator",
+                UserName = "operator-001",
+                IsAuthenticated = true
+            });
+
+        var result = await handler.Handle(
+            new ChangePasswordCommand(currentUserId, "OldPassword123!", "NewPassword123!"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(currentUserId, passwordService.LastChangedUserId);
+    }
+
+    [Fact]
+    public void GetAllRolesQuery_ShouldRequireRoleDefinePermission()
+    {
+        var attribute = typeof(GetAllRolesQuery)
+            .GetCustomAttributes(typeof(AuthorizeRequirementAttribute), inherit: false)
+            .Cast<AuthorizeRequirementAttribute>()
+            .SingleOrDefault();
+
+        Assert.NotNull(attribute);
+        Assert.Equal("Role.Define", attribute!.Permission);
+    }
+
     private static ServiceProvider CreateServiceProvider(IMediator mediator)
     {
         var services = new ServiceCollection();
@@ -120,6 +264,23 @@ public sealed class ReviewRegressionTests
         services.AddSingleton<IMediator>(mediator);
         services.AddDbContext<IIoTDbContext>(options =>
             options.UseInMemoryDatabase(Guid.NewGuid().ToString("N")));
+
+        return services.BuildServiceProvider();
+    }
+
+    private static ServiceProvider CreateIdentityServiceProvider()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddDbContext<IIoTDbContext>(options =>
+            options.UseInMemoryDatabase(Guid.NewGuid().ToString("N")));
+        services.AddIdentityCore<ApplicationUser>(options =>
+            {
+                options.Password.RequireNonAlphanumeric = false;
+                options.Password.RequiredLength = 8;
+            })
+            .AddRoles<IdentityRole<Guid>>()
+            .AddEntityFrameworkStores<IIoTDbContext>();
 
         return services.BuildServiceProvider();
     }
@@ -266,6 +427,8 @@ public sealed class ReviewRegressionTests
 
     private sealed class RecordingCacheService : ICacheService
     {
+        public string? LastSetKey { get; private set; }
+
         public TimeSpan? LastAbsoluteExpireTime { get; private set; }
 
         public Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default)
@@ -279,6 +442,7 @@ public sealed class ReviewRegressionTests
             TimeSpan? absoluteExpireTime = null,
             CancellationToken cancellationToken = default)
         {
+            LastSetKey = key;
             LastAbsoluteExpireTime = absoluteExpireTime;
             return Task.CompletedTask;
         }

@@ -92,7 +92,17 @@ public static class SystemInitData
                 }
 
                 // 8. 赋予 Admin 角色
-                await userManager.AddToRoleAsync(identityUser, adminRoleName);
+                var addRoleResult = await userManager.AddToRoleAsync(identityUser, adminRoleName);
+                if (!addRoleResult.Succeeded)
+                {
+                    Console.WriteLine($"❌ 账号 [{seedAdmin.EmployeeNo}] 授予 Admin 角色失败！");
+                    foreach (var error in addRoleResult.Errors)
+                    {
+                        Console.WriteLine($"   - [{error.Code}]: {error.Description}");
+                    }
+
+                    throw new Exception("Admin 角色授予失败，事务终止！");
+                }
 
                 // 9. 创建核心业务聚合根 (员工)
                 var employee = new Employee(sharedId, seedAdmin.EmployeeNo, seedAdmin.RealName);

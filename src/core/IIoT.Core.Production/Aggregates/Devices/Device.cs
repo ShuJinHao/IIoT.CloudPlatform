@@ -3,7 +3,7 @@ using IIoT.SharedKernel.Domain;
 namespace IIoT.Core.Production.Aggregates.Devices;
 
 /// <summary>
-/// Cloud-managed edge device profile.
+/// 云端管理的设备档案聚合根。
 /// </summary>
 public class Device : BaseEntity<Guid>
 {

@@ -17,11 +17,25 @@ public sealed class RolePolicyService(
         return await roleManager.Roles.Select(r => r.Name!).ToListAsync();
     }
 
+    public Task<bool> RoleExistsAsync(string roleName)
+    {
+        return roleManager.RoleExistsAsync(roleName);
+    }
+
     public async Task<Result> CreateRoleAsync(string roleName)
     {
         if (await roleManager.RoleExistsAsync(roleName)) return Result.Success();
 
         var result = await roleManager.CreateAsync(new IdentityRole<Guid>(roleName));
+        return result.ToResult();
+    }
+
+    public async Task<Result> DeleteRoleAsync(string roleName)
+    {
+        var role = await roleManager.FindByNameAsync(roleName);
+        if (role == null) return Result.Success();
+
+        var result = await roleManager.DeleteAsync(role);
         return result.ToResult();
     }
 
@@ -55,10 +69,18 @@ public sealed class RolePolicyService(
         var existingPermissions = claims.Where(c => c.Type == PermissionClaimType).ToList();
 
         foreach (var claim in existingPermissions.Where(c => !permissions.Contains(c.Value)))
-            await roleManager.RemoveClaimAsync(role, claim);
+        {
+            var removeResult = await roleManager.RemoveClaimAsync(role, claim);
+            if (!removeResult.Succeeded)
+                return Result.Failure(removeResult.Errors.Select(error => error.Description).ToArray());
+        }
 
         foreach (var permission in permissions.Where(p => !existingPermissions.Any(c => c.Value == p)))
-            await roleManager.AddClaimAsync(role, new Claim(PermissionClaimType, permission));
+        {
+            var addResult = await roleManager.AddClaimAsync(role, new Claim(PermissionClaimType, permission));
+            if (!addResult.Succeeded)
+                return Result.Failure(addResult.Errors.Select(error => error.Description).ToArray());
+        }
 
         return Result.Success(true);
     }
@@ -72,10 +94,18 @@ public sealed class RolePolicyService(
         var existingPermissions = claims.Where(c => c.Type == PermissionClaimType).ToList();
 
         foreach (var claim in existingPermissions.Where(c => !permissions.Contains(c.Value)))
-            await userManager.RemoveClaimAsync(user, claim);
+        {
+            var removeResult = await userManager.RemoveClaimAsync(user, claim);
+            if (!removeResult.Succeeded)
+                return Result.Failure(removeResult.Errors.Select(error => error.Description).ToArray());
+        }
 
         foreach (var permission in permissions.Where(p => !existingPermissions.Any(c => c.Value == p)))
-            await userManager.AddClaimAsync(user, new Claim(PermissionClaimType, permission));
+        {
+            var addResult = await userManager.AddClaimAsync(user, new Claim(PermissionClaimType, permission));
+            if (!addResult.Succeeded)
+                return Result.Failure(addResult.Errors.Select(error => error.Description).ToArray());
+        }
 
         return Result.Success(true);
     }

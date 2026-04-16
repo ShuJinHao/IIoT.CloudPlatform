@@ -93,7 +93,7 @@ public sealed class ConfigurationGuardTests
             FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Edge", "EdgeBootstrapController.cs"));
 
         controllerSource.Should().Contain("[FromQuery] string clientCode");
-        controllerSource.Should().Contain("existing edge clients");
+        controllerSource.Should().Contain("暂时保留 legacy 查询参数名");
     }
 
     [Fact]
@@ -130,6 +130,17 @@ public sealed class ConfigurationGuardTests
             .Build();
 
         configuration.GetValue<int>("PermissionCache:ExpirationMinutes").Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public void InfrastructureDependencyInjection_ShouldConfigureFusionCacheBackplaneWithRedisConnectionString()
+    {
+        var infrastructureSource = File.ReadAllText(
+            FindRepoFile("src", "infrastructure", "IIoT.Infrastructure", "DependencyInjection.cs"));
+
+        infrastructureSource.Should().Contain("GetConnectionString(\"redis-cache\")");
+        infrastructureSource.Should().Contain("WithStackExchangeRedisBackplane(options =>");
+        infrastructureSource.Should().Contain("options.Configuration = redisConnectionString;");
     }
 
     private static string FindRepoFile(params string[] relativeSegments)

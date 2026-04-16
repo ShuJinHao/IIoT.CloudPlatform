@@ -1,4 +1,5 @@
 ﻿using IIoT.Services.Common.Contracts;
+using IIoT.Services.Common.Caching;
 using IIoT.Services.Common.Caching.Options;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Options;
@@ -15,8 +16,7 @@ public class PermissionProvider(
 
     public async Task<IList<string>> GetPermissionsAsync(Guid userId, CancellationToken cancellationToken = default)
     {
-        // 缓存 key 按用户 ID 隔离
-        var cacheKey = $"{_options.KeyPrefix}user:{userId}";
+        var cacheKey = CacheKeys.PermissionByUser(userId);
 
         // 1. 读缓存
         var cachedPermissions = await cacheService.GetAsync<List<string>>(cacheKey, cancellationToken);

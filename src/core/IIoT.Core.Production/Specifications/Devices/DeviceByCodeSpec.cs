@@ -4,7 +4,7 @@ using IIoT.SharedKernel.Specification;
 namespace IIoT.Core.Production.Specifications.Devices;
 
 /// <summary>
-/// Finds a device by its cloud-issued code.
+/// 按云端下发的设备 Code 查询单个设备。
 /// </summary>
 public sealed class DeviceByCodeSpec : Specification<Device>
 {
