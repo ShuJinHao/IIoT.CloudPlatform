@@ -2,8 +2,7 @@ namespace IIoT.Services.Common.Contracts.RecordQueries;
 
 public sealed record DeviceIdentitySnapshot(
     Guid DeviceId,
-    string MacAddress,
-    string ClientCode);
+    string Code);
 
 public interface IDeviceIdentityQueryService
 {

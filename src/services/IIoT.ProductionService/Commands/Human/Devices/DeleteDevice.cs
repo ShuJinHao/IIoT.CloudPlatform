@@ -76,7 +76,7 @@ public class DeleteDeviceHandler(
         }
 
         await cacheService.RemoveAsync(
-            CacheKeys.DeviceInstance(device.Instance), cancellationToken);
+            CacheKeys.DeviceCode(device.Code), cancellationToken);
         await cacheService.RemoveAsync(
             CacheKeys.DevicesByProcess(device.ProcessId), cancellationToken);
         await cacheService.RemoveAsync(CacheKeys.AllDevices(), cancellationToken);

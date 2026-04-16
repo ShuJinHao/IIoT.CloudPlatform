@@ -6,7 +6,6 @@ using IIoT.EmployeeService.Commands.Employees;
 using IIoT.MasterDataService.Commands.Processes;
 using IIoT.ProductionService.Commands.Devices;
 using IIoT.ProductionService.Commands.Recipes;
-using IIoT.Core.Production.ValueObjects;
 using IIoT.Services.Common.Caching;
 using Xunit;
 
@@ -46,17 +45,34 @@ public sealed class ServiceFlowGuardTests
         var result = await handler.Handle(
             new RegisterDeviceCommand(
                 "Injection-01",
-                "AA:BB:CC:DD:EE:FF",
-                "CLIENT-01",
                 processId),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        Assert.NotEqual(Guid.Empty, result.Value);
+        Assert.NotEqual(Guid.Empty, result.Value.Id);
         Assert.NotNull(repository.AddedEntity);
         Assert.Equal(processId, repository.AddedEntity!.ProcessId);
+        Assert.StartsWith("DEV-", repository.AddedEntity.Code);
+        Assert.Equal(repository.AddedEntity.Code, result.Value.Code);
         Assert.Contains(CacheKeys.AllDevices(), cache.RemovedKeys);
         Assert.Contains(CacheKeys.DevicesByProcess(processId), cache.RemovedKeys);
+    }
+
+    [Fact]
+    public async Task RegisterDeviceHandler_ShouldFailWhenUniqueCodeCannotBeAllocated()
+    {
+        var repository = new InMemoryRepository<Device>();
+        var processQueries = new StubProcessReadQueryService { Exists = true };
+        var deviceQueries = new StubDeviceReadQueryService { CodeExists = true };
+        var cache = new RecordingCacheService();
+        var handler = new RegisterDeviceHandler(repository, processQueries, deviceQueries, cache);
+
+        var result = await handler.Handle(
+            new RegisterDeviceCommand("Injection-01", Guid.NewGuid()),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Null(repository.AddedEntity);
     }
 
     [Fact]
@@ -157,8 +173,7 @@ public sealed class ServiceFlowGuardTests
     public async Task UpdateDeviceProfileHandler_ShouldClearDeviceIdentityCache()
     {
         var processId = Guid.NewGuid();
-        var instance = ClientInstanceId.Create("AA:BB:CC:DD:EE:11", "CLIENT-UPDATE");
-        var device = new Device("Device-01", instance, processId);
+        var device = new Device("Device-01", "DEV-UPDATE001", processId);
         var repository = new InMemoryRepository<Device>
         {
             SingleOrDefaultResult = device
@@ -188,8 +203,7 @@ public sealed class ServiceFlowGuardTests
     public async Task DeleteDeviceHandler_ShouldClearDeviceIdentityCacheAndCapacityPatterns()
     {
         var processId = Guid.NewGuid();
-        var instance = ClientInstanceId.Create("AA:BB:CC:DD:EE:22", "CLIENT-DELETE");
-        var device = new Device("Device-Delete", instance, processId);
+        var device = new Device("Device-Delete", "DEV-DELETE001", processId);
         var repository = new InMemoryRepository<Device>
         {
             SingleOrDefaultResult = device

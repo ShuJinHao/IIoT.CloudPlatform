@@ -44,12 +44,12 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
             }
         };
 
-        await PostJsonAsync("/api/v1/DeviceLog", request);
-        await PostJsonAsync("/api/v1/DeviceLog", request);
+        await PostJsonAsync("/api/v1/edge/device-logs", request);
+        await PostJsonAsync("/api/v1/edge/device-logs", request);
 
         var result = await EventuallyAsync(async () =>
             await GetFromJsonAsync<PagedResponse<DeviceLogListItemDto>>(
-                $"/api/v1/DeviceLog/by-time-range?PageNumber=1&PageSize=20&deviceId={deviceId}" +
+                $"/api/v1/human/device-logs/by-time-range?PageNumber=1&PageSize=20&deviceId={deviceId}" +
                 $"&startTime={Uri.EscapeDataString(logTime.AddMinutes(-1).ToString("O"))}" +
                 $"&endTime={Uri.EscapeDataString(logTime.AddMinutes(1).ToString("O"))}"),
             response => response.Items.Count(x => x.Message == message) == 1);
@@ -94,12 +94,12 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
             PlcName = plcName
         };
 
-        await PostJsonAsync("/api/v1/Capacity/hourly", first);
-        await PostJsonAsync("/api/v1/Capacity/hourly", second);
+        await PostJsonAsync("/api/v1/edge/capacity/hourly", first);
+        await PostJsonAsync("/api/v1/edge/capacity/hourly", second);
 
         var result = await EventuallyAsync(async () =>
             await GetFromJsonAsync<List<HourlyCapacityDto>>(
-                $"/api/v1/Capacity/hourly?deviceId={deviceId}&date={date:yyyy-MM-dd}&plcName={Uri.EscapeDataString(plcName)}"),
+                $"/api/v1/human/capacity/hourly?deviceId={deviceId}&date={date:yyyy-MM-dd}&plcName={Uri.EscapeDataString(plcName)}"),
             response => response.Count == 1 && response[0].TotalCount == 16 && response[0].OkCount == 15);
 
         result.Should().ContainSingle();
@@ -136,12 +136,12 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
             }
         };
 
-        await PostJsonAsync("/api/v1/PassStation/injection/batch", request);
-        await PostJsonAsync("/api/v1/PassStation/injection/batch", request);
+        await PostJsonAsync("/api/v1/edge/pass-stations/injection/batch", request);
+        await PostJsonAsync("/api/v1/edge/pass-stations/injection/batch", request);
 
         var result = await EventuallyAsync(async () =>
             await GetFromJsonAsync<PagedResponse<InjectionPassListItemDto>>(
-                $"/api/v1/PassStation/injection/by-device-time?PageNumber=1&PageSize=20&deviceId={deviceId}" +
+                $"/api/v1/human/pass-stations/injection/by-device-time?PageNumber=1&PageSize=20&deviceId={deviceId}" +
                 $"&startTime={Uri.EscapeDataString(completedTime.AddMinutes(-1).ToString("O"))}" +
                 $"&endTime={Uri.EscapeDataString(completedTime.AddMinutes(1).ToString("O"))}"),
             response => response.Items.Count(x => x.Barcode == barcode) == 1);
@@ -168,35 +168,33 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HumanIdentity_NewRoutes_ShouldMatchLegacyAliases()
+    public async Task HumanIdentity_RolesAndPermissions_ShouldLoad()
     {
         await AuthenticateAsAdminAsync();
 
-        var legacyRoles = await GetFromJsonAsync<List<string>>("/api/v1/Identity/roles");
-        var humanRoles = await GetFromJsonAsync<List<string>>("/api/v1/human/identity/roles");
-        var legacyPermissions = await GetFromJsonAsync<List<PermissionGroupDto>>("/api/v1/Identity/permissions/all");
-        var humanPermissions = await GetFromJsonAsync<List<PermissionGroupDto>>("/api/v1/human/identity/permissions");
+        var roles = await GetFromJsonAsync<List<string>>("/api/v1/human/identity/roles");
+        var permissions = await GetFromJsonAsync<List<PermissionGroupDto>>("/api/v1/human/identity/permissions");
 
-        humanRoles.Should().BeEquivalentTo(legacyRoles);
-        humanPermissions.Should().BeEquivalentTo(legacyPermissions);
+        roles.Should().NotBeEmpty();
+        permissions.Should().NotBeEmpty();
     }
 
     [Fact]
-    public async Task HumanAndLegacyProtectedRoutes_ShouldRequireJwt()
+    public async Task HumanProtectedRoutes_ShouldRequireJwt()
     {
         _fixture.ClearAuthToken();
 
         using var employeeResponse = await _fixture.HttpClient.GetAsync("/api/v1/human/employees?PageNumber=1&PageSize=10");
-        using var humanResponse = await _fixture.HttpClient.GetAsync("/api/v1/human/identity/roles");
-        using var legacyResponse = await _fixture.HttpClient.GetAsync("/api/v1/Identity/roles");
+        using var identityResponse = await _fixture.HttpClient.GetAsync("/api/v1/human/identity/roles");
+        using var processResponse = await _fixture.HttpClient.GetAsync("/api/v1/human/master-data/processes/all");
 
         employeeResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
-        humanResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
-        legacyResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        identityResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        processResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
     [Fact]
-    public async Task MasterDataProcess_NewRoutes_ShouldMatchLegacyAliases()
+    public async Task MasterDataProcess_HumanRoutes_ShouldReturnCreatedProcess()
     {
         await AuthenticateAsAdminAsync();
 
@@ -207,34 +205,21 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
             ProcessName = $"{code}-name"
         });
 
-        var legacy = await GetFromJsonAsync<List<ProcessSelectDto>>("/api/v1/MfgProcess/all");
-        var human = await GetFromJsonAsync<List<ProcessSelectDto>>("/api/v1/human/master-data/processes/all");
+        var processes = await GetFromJsonAsync<List<ProcessSelectDto>>("/api/v1/human/master-data/processes/all");
 
-        human.Should().BeEquivalentTo(legacy);
-        human.Should().Contain(x => x.ProcessCode == code);
+        processes.Should().Contain(x => x.ProcessCode == code);
     }
 
     [Fact]
-    public async Task EdgeBootstrap_NewRoute_ShouldAllowAnonymous_AndLegacyAlias_ShouldRequireJwt()
+    public async Task EdgeBootstrap_ShouldAllowAnonymous_AndResolveByCode()
     {
         await AuthenticateAsAdminAsync();
 
         var device = await CreateTestDeviceRegistrationAsync("bootstrap");
         _fixture.ClearAuthToken();
 
-        using var legacyUnauthorized = await _fixture.HttpClient.GetAsync(
-            $"/api/v1/Device/instance?macAddress={Uri.EscapeDataString(device.MacAddress)}&clientCode={Uri.EscapeDataString(device.ClientCode)}");
-        legacyUnauthorized.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
-
         var edge = await GetFromJsonAsync<DeviceIdentityDto>(
-            $"/api/v1/edge/bootstrap/device-instance?macAddress={Uri.EscapeDataString(device.MacAddress)}&clientCode={Uri.EscapeDataString(device.ClientCode)}");
-
-        await AuthenticateAsAdminAsync();
-
-        var legacy = await GetFromJsonAsync<DeviceIdentityDto>(
-            $"/api/v1/Device/instance?macAddress={Uri.EscapeDataString(device.MacAddress)}&clientCode={Uri.EscapeDataString(device.ClientCode)}");
-
-        edge.Should().BeEquivalentTo(legacy);
+            $"/api/v1/edge/bootstrap/device-instance?clientCode={Uri.EscapeDataString(device.Code)}");
         edge.Id.Should().Be(device.DeviceId);
     }
 
@@ -315,15 +300,15 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task LegacyCapacity_GetRoutes_ShouldMatchHumanRoutes()
+    public async Task HumanCapacity_QueryRoutes_ShouldReturnComputedAggregates()
     {
         await AuthenticateAsAdminAsync();
 
-        var deviceId = await CreateTestDeviceAsync("legacy-capacity");
+        var deviceId = await CreateTestDeviceAsync("human-capacity");
         var date = DateOnly.FromDateTime(DateTime.UtcNow);
         var plcName = $"PLC-{Guid.NewGuid():N}"[..10];
 
-        await PostJsonAsync("/api/v1/Capacity/hourly", new
+        await PostJsonAsync("/api/v1/edge/capacity/hourly", new
         {
             DeviceId = deviceId,
             Date = date,
@@ -342,20 +327,17 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
                 $"/api/v1/human/capacity/hourly?deviceId={deviceId}&date={date:yyyy-MM-dd}&plcName={Uri.EscapeDataString(plcName)}"),
             response => response.Count == 1 && response[0].TotalCount == 20);
 
-        var legacyHourly = await GetFromJsonAsync<List<HourlyCapacityDto>>(
-            $"/api/v1/Capacity/hourly?deviceId={deviceId}&date={date:yyyy-MM-dd}&plcName={Uri.EscapeDataString(plcName)}");
         var humanSummary = await GetFromJsonAsync<DailySummaryDto>(
             $"/api/v1/human/capacity/summary?deviceId={deviceId}&date={date:yyyy-MM-dd}&plcName={Uri.EscapeDataString(plcName)}");
-        var legacySummary = await GetFromJsonAsync<DailySummaryDto>(
-            $"/api/v1/Capacity/summary?deviceId={deviceId}&date={date:yyyy-MM-dd}&plcName={Uri.EscapeDataString(plcName)}");
         var humanRange = await GetFromJsonAsync<List<DailyRangeSummaryDto>>(
             $"/api/v1/human/capacity/summary/range?deviceId={deviceId}&startDate={date:yyyy-MM-dd}&endDate={date:yyyy-MM-dd}&plcName={Uri.EscapeDataString(plcName)}");
-        var legacyRange = await GetFromJsonAsync<List<DailyRangeSummaryDto>>(
-            $"/api/v1/Capacity/summary/range?deviceId={deviceId}&startDate={date:yyyy-MM-dd}&endDate={date:yyyy-MM-dd}&plcName={Uri.EscapeDataString(plcName)}");
 
-        legacyHourly.Should().BeEquivalentTo(humanHourly);
-        legacySummary.Should().BeEquivalentTo(humanSummary);
-        legacyRange.Should().BeEquivalentTo(humanRange);
+        humanHourly.Should().ContainSingle();
+        humanSummary.TotalCount.Should().Be(20);
+        humanSummary.OkCount.Should().Be(18);
+        humanSummary.NgCount.Should().Be(2);
+        humanRange.Should().ContainSingle();
+        humanRange[0].TotalCount.Should().Be(20);
     }
 
     [Fact]
@@ -429,30 +411,9 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         token.Should().NotBeNullOrWhiteSpace();
     }
 
-    [Fact]
-    public async Task LegacyIdentity_DeviceLogin_ShouldAllowAnonymous()
-    {
-        await AuthenticateAsAdminAsync();
-
-        var device = await CreateTestDeviceRegistrationAsync("legacy-device-login");
-        _fixture.ClearAuthToken();
-
-        using var response = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/Identity/device-login", new
-        {
-            EmployeeNo = IIoTAppFixture.SeedAdminEmployeeNo,
-            Password = IIoTAppFixture.SeedAdminPassword,
-            DeviceId = device.DeviceId
-        });
-
-        var token = await response.Content.ReadFromJsonAsync<string>(JsonOptions);
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        token.Should().NotBeNullOrWhiteSpace();
-    }
-
     private async Task AuthenticateAsAdminAsync()
     {
-        using var response = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/Identity/login", new
+        using var response = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/human/identity/login", new
         {
             EmployeeNo = IIoTAppFixture.SeedAdminEmployeeNo,
             Password = IIoTAppFixture.SeedAdminPassword
@@ -476,20 +437,18 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
     {
         var suffix = Guid.NewGuid().ToString("N")[..8];
         var processId = await CreateProcessAsync($"{prefix.ToUpperInvariant()}-{suffix}");
-        var macAddress = BuildMacAddress(suffix);
-        var clientCode = $"CLIENT-{suffix}";
 
-        var deviceId = await PostJsonAsync<Guid>("/api/v1/Device", new
+        var created = await PostJsonAsync<CreateDeviceResultDto>("/api/v1/human/devices", new
         {
             DeviceName = $"{prefix}-device-{suffix}",
-            MacAddress = macAddress,
-            ClientCode = clientCode,
             ProcessId = processId
         });
 
-        deviceId.Should().NotBe(Guid.Empty);
+        created.Id.Should().NotBe(Guid.Empty);
+        created.Code.Should().StartWith("DEV-");
+        created.Code.Should().NotBeNullOrWhiteSpace();
 
-        return new TestDeviceRegistration(deviceId, processId, macAddress, clientCode);
+        return new TestDeviceRegistration(created.Id, processId, created.Code);
     }
 
     private async Task<Guid> CreateProcessAsync(string code)
@@ -502,12 +461,6 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
 
         processId.Should().NotBe(Guid.Empty);
         return processId;
-    }
-
-    private static string BuildMacAddress(string seed)
-    {
-        var hex = seed.ToUpperInvariant().PadLeft(12, '0')[..12];
-        return string.Join(":", Enumerable.Range(0, 6).Select(i => hex.Substring(i * 2, 2)));
     }
 
     private async Task PostJsonAsync(string path, object request)
@@ -696,6 +649,10 @@ public sealed record DeviceIdentityDto(
     string DeviceName,
     Guid ProcessId);
 
+public sealed record CreateDeviceResultDto(
+    Guid Id,
+    string Code);
+
 public sealed record ProcessSelectDto(
     Guid Id,
     string ProcessCode,
@@ -713,5 +670,4 @@ public sealed record RecipeForDeviceDto(
 public sealed record TestDeviceRegistration(
     Guid DeviceId,
     Guid ProcessId,
-    string MacAddress,
-    string ClientCode);
+    string Code);

@@ -26,17 +26,15 @@ public sealed class DeviceReadQueryService(IIoTDbContext dbContext) : IDeviceRea
                 cancellationToken);
     }
 
-    public Task<bool> InstanceExistsAsync(
-        string macAddress,
-        string clientCode,
+    public Task<bool> CodeExistsAsync(
+        string code,
         Guid? excludingDeviceId = null,
         CancellationToken cancellationToken = default)
     {
+        var normalizedCode = code.Trim().ToUpperInvariant();
         var query = dbContext.Devices
             .AsNoTracking()
-            .Where(device =>
-                device.Instance.MacAddress == macAddress &&
-                device.Instance.ClientCode == clientCode);
+            .Where(device => device.Code == normalizedCode);
 
         if (excludingDeviceId.HasValue)
         {

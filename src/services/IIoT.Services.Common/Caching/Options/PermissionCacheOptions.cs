@@ -6,7 +6,7 @@ public class PermissionCacheOptions
 
     public string KeyPrefix { get; set; } = "iiot:permissions:v1:";
 
-    public int ExpirationMinutes { get; set; } = 10;
+    public int ExpirationMinutes { get; set; }
 
     public int ExpirationHours { get; set; }
 

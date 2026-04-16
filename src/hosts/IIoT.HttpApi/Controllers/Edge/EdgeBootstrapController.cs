@@ -13,10 +13,9 @@ public class EdgeBootstrapController : ApiControllerBase
 {
     [HttpGet("device-instance")]
     public async Task<IActionResult> GetDeviceByInstance(
-        [FromQuery] string macAddress,
         [FromQuery] string clientCode)
     {
-        var result = await Sender.Send(new GetDeviceByInstanceQuery(macAddress, clientCode));
+        var result = await Sender.Send(new GetDeviceByInstanceQuery(clientCode));
         return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
     }
 }

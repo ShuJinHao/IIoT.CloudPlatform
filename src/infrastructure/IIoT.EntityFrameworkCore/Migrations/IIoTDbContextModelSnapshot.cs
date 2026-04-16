@@ -107,6 +107,12 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("client_code");
+
                     b.Property<string>("DeviceName")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -117,24 +123,11 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("process_id");
 
-                    b.ComplexProperty(typeof(Dictionary<string, object>), "Instance", "IIoT.Core.Production.Aggregates.Devices.Device.Instance#ClientInstanceId", b1 =>
-                        {
-                            b1.IsRequired();
-
-                            b1.Property<string>("ClientCode")
-                                .IsRequired()
-                                .HasMaxLength(50)
-                                .HasColumnType("character varying(50)")
-                                .HasColumnName("client_code");
-
-                            b1.Property<string>("MacAddress")
-                                .IsRequired()
-                                .HasMaxLength(50)
-                                .HasColumnType("character varying(50)")
-                                .HasColumnName("mac_address");
-                        });
-
                     b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique()
+                        .HasDatabaseName("ix_devices_client_code");
 
                     b.HasIndex("ProcessId")
                         .HasDatabaseName("ix_devices_process_id");

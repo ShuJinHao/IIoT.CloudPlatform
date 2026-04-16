@@ -175,7 +175,7 @@ internal sealed class StubDeviceReadQueryService : IDeviceReadQueryService
 
     public bool ExistsInProcess { get; set; }
 
-    public bool InstanceExists { get; set; }
+    public bool CodeExists { get; set; }
 
     public Task<bool> ExistsAsync(Guid deviceId, CancellationToken cancellationToken = default)
     {
@@ -190,13 +190,12 @@ internal sealed class StubDeviceReadQueryService : IDeviceReadQueryService
         return Task.FromResult(ExistsInProcess);
     }
 
-    public Task<bool> InstanceExistsAsync(
-        string macAddress,
-        string clientCode,
+    public Task<bool> CodeExistsAsync(
+        string code,
         Guid? excludingDeviceId = null,
         CancellationToken cancellationToken = default)
     {
-        return Task.FromResult(InstanceExists);
+        return Task.FromResult(CodeExists);
     }
 }
 

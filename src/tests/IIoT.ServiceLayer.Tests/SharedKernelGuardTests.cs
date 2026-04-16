@@ -4,6 +4,7 @@ using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Paging;
 using IIoT.SharedKernel.Result;
 using IIoT.SharedKernel.Specification;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace IIoT.ServiceLayer.Tests;
@@ -65,9 +66,8 @@ public sealed class SharedKernelGuardTests
             ExpirationMinutes = 10,
             ExpirationHours = 2
         };
-        var hoursFallback = new PermissionCacheOptions
+        var legacyHoursOnly = new PermissionCacheOptions
         {
-            ExpirationMinutes = 0,
             ExpirationHours = 2
         };
         var defaultFallback = new PermissionCacheOptions
@@ -77,8 +77,26 @@ public sealed class SharedKernelGuardTests
         };
 
         Assert.Equal(TimeSpan.FromMinutes(10), minutesPreferred.ResolveExpiration());
-        Assert.Equal(TimeSpan.FromHours(2), hoursFallback.ResolveExpiration());
+        Assert.Equal(TimeSpan.FromHours(2), legacyHoursOnly.ResolveExpiration());
         Assert.Equal(TimeSpan.FromMinutes(10), defaultFallback.ResolveExpiration());
+    }
+
+    [Fact]
+    public void PermissionCacheOptions_ShouldRespectLegacyHourOnlyConfiguration()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{PermissionCacheOptions.SectionName}:ExpirationHours"] = "2",
+            })
+            .Build();
+
+        var options = new PermissionCacheOptions();
+        configuration.GetSection(PermissionCacheOptions.SectionName).Bind(options);
+
+        Assert.Equal(0, options.ExpirationMinutes);
+        Assert.Equal(2, options.ExpirationHours);
+        Assert.Equal(TimeSpan.FromHours(2), options.ResolveExpiration());
     }
 
     private sealed class FakeEntitySpecification : Specification<FakeEntity>

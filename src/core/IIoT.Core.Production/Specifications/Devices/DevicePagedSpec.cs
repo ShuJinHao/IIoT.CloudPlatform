@@ -22,9 +22,14 @@ public class DevicePagedSpec : Specification<Device>
         string? keyword = null,
         bool isPaging = true)
     {
+        var keywordValue = keyword?.Trim();
+        var normalizedKeyword = keywordValue?.ToUpperInvariant();
+
         FilterCondition = d =>
             (allowedDeviceIds == null || allowedDeviceIds.Contains(d.Id))
-            && (string.IsNullOrEmpty(keyword) || d.DeviceName.Contains(keyword));
+            && (string.IsNullOrEmpty(normalizedKeyword)
+                || d.DeviceName.Contains(keywordValue!)
+                || d.Code.Contains(normalizedKeyword));
 
         SetOrderBy(d => d.DeviceName);
 

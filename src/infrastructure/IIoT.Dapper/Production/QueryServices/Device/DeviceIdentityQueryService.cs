@@ -26,8 +26,7 @@ public class DeviceIdentityQueryService(
         const string sql = @"
             SELECT
                 id           AS DeviceId,
-                mac_address  AS MacAddress,
-                client_code  AS ClientCode
+                client_code  AS Code
             FROM devices
             WHERE id = @DeviceId
             LIMIT 1";

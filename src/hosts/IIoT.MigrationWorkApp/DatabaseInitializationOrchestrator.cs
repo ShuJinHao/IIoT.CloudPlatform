@@ -40,7 +40,10 @@ public sealed class DatabaseInitializationOrchestrator(
             await dbContext.Database.MigrateAsync(cancellationToken);
             await EnsureIdentitySchemaCompatibilityAsync(cancellationToken);
             await dbContext.Database.ExecuteSqlRawAsync(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ix_devices_mac_address_client_code ON devices (mac_address, client_code);",
+                """
+                DROP INDEX IF EXISTS ix_devices_mac_address_client_code;
+                CREATE UNIQUE INDEX IF NOT EXISTS ix_devices_client_code ON devices (client_code);
+                """,
                 cancellationToken);
         });
 
