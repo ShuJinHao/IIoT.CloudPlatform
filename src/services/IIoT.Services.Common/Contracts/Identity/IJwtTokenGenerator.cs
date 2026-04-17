@@ -1,11 +1,19 @@
 namespace IIoT.Services.Common.Contracts.Identity;
 
+public sealed record JwtTokenResult(
+    string Token,
+    DateTimeOffset ExpiresAtUtc);
+
 public interface IJwtTokenGenerator
 {
-    string GenerateToken(
+    JwtTokenResult GenerateHumanToken(
         Guid userId,
         string userName,
         IEnumerable<string> roles,
-        IEnumerable<string> permissions,
-        Guid? deviceId = null);
+        IEnumerable<string> permissions);
+
+    JwtTokenResult GenerateEdgeDeviceToken(
+        Guid deviceId,
+        string clientCode,
+        Guid processId);
 }

@@ -5,6 +5,11 @@ namespace IIoT.Services.Common.Contracts.Identity;
 /// </summary>
 public static class IIoTClaimTypes
 {
+    public const string ActorType = "actor_type";
     public const string DeviceId = "device_id";
+    public const string ClientCode = "client_code";
+    public const string ProcessId = "process_id";
     public const string Permission = "Permission";
+    public const string EdgeDeviceActor = "edge-device";
+    public const string HumanActor = "human-user";
 }

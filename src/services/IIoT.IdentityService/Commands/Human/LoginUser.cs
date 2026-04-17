@@ -48,8 +48,8 @@ public class LoginUserHandler(
         await cacheService.RemoveAsync(CacheKeys.PermissionByUser(account.Id), cancellationToken);
 
         var permissions = await permissionProvider.GetPermissionsAsync(account.Id, cancellationToken);
-        var token = jwtTokenGenerator.GenerateToken(account.Id, request.EmployeeNo, roles, permissions);
+        var token = jwtTokenGenerator.GenerateHumanToken(account.Id, request.EmployeeNo, roles, permissions);
 
-        return Result.Success(token);
+        return Result.Success(token.Token);
     }
 }

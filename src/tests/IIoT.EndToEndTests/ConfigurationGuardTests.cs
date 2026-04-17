@@ -152,9 +152,18 @@ public sealed class ConfigurationGuardTests
             FindRepoFile("src", "hosts", "IIoT.HttpApi", "DependencyInjection.cs"));
         var programSource = File.ReadAllText(
             FindRepoFile("src", "hosts", "IIoT.HttpApi", "Program.cs"));
+        var forwardedHeadersIndex = programSource.IndexOf("app.UseForwardedHeaders();", StringComparison.Ordinal);
+        var authenticationIndex = programSource.IndexOf("app.UseAuthentication();", StringComparison.Ordinal);
+        var rateLimiterIndex = programSource.IndexOf("app.UseRateLimiter();", StringComparison.Ordinal);
 
         dependencyInjectionSource.Should().Contain("AddOpenBehavior(typeof(DeviceBindingBehavior<,>))");
         dependencyInjectionSource.Should().Contain("AddRateLimiter(options =>");
+        dependencyInjectionSource.Should().Contain("HttpApiForwardedHeadersOptions.SectionName");
+        dependencyInjectionSource.Should().Contain("forwardedHeaders.Validate();");
+        dependencyInjectionSource.Should().Contain("Configure<ForwardedHeadersOptions>");
+        forwardedHeadersIndex.Should().BeGreaterThanOrEqualTo(0);
+        forwardedHeadersIndex.Should().BeLessThan(authenticationIndex);
+        forwardedHeadersIndex.Should().BeLessThan(rateLimiterIndex);
         programSource.Should().Contain("app.UseRateLimiter();");
     }
 
@@ -186,6 +195,8 @@ public sealed class ConfigurationGuardTests
         httpApiConfiguration.GetValue<int>("DistributedLock:LeaseSeconds").Should().BeGreaterThan(0);
         httpApiConfiguration.GetValue<int>("DistributedLock:RenewalCadenceSeconds").Should().BeGreaterThan(0);
         httpApiConfiguration.GetValue<int>("CacheSafety:FailSafeMinutes").Should().Be(30);
+        httpApiConfiguration.GetValue<bool>("ForwardedHeaders:Enabled").Should().BeFalse();
+        httpApiConfiguration.GetValue<int>("ForwardedHeaders:ForwardLimit").Should().BeGreaterThan(0);
         httpApiConfiguration.GetValue<int>("RateLimiting:Login:PermitLimit").Should().BeGreaterThan(0);
         httpApiConfiguration.GetValue<int>("RateLimiting:EdgeUpload:TokenLimit").Should().BeGreaterThan(0);
 
@@ -206,9 +217,13 @@ public sealed class ConfigurationGuardTests
         gitIgnoreSource.Should().Contain("src/hosts/IIoT.AppHost/aspirate-output/.env");
         envExampleSource.Should().Contain("change-me-postgres-password");
         envExampleSource.Should().Contain("ASPIRE_DASHBOARD_FRONTEND_BROWSERTOKEN");
+        envExampleSource.Should().Contain("FORWARDED_HEADERS_ENABLED");
+        envExampleSource.Should().Contain("FORWARDED_HEADERS_KNOWNNETWORKS__0");
         composeSource.Should().Contain("DASHBOARD__FRONTEND__AUTHMODE: \"BrowserToken\"");
         composeSource.Should().Contain("DASHBOARD__OTLP__AUTHMODE: \"ApiKey\"");
         composeSource.Should().Contain("ASPIRE_DASHBOARD_OTLP_PRIMARYAPIKEY");
+        composeSource.Should().Contain("ForwardedHeaders__Enabled:");
+        composeSource.Should().Contain("ForwardedHeaders__KnownNetworks__0:");
         composeSource.Should().NotContain("ALLOW_ANONYMOUS: \"true\"");
     }
 
@@ -223,6 +238,9 @@ public sealed class ConfigurationGuardTests
         source.Should().Contain("Content-Security-Policy");
         source.Should().Contain("limit_req_zone");
         source.Should().Contain("return 301 https://$host$request_uri;");
+        source.Should().Contain("proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;");
+        source.Should().Contain("proxy_set_header X-Forwarded-Proto $scheme;");
+        source.Should().Contain("proxy_set_header X-Forwarded-Host $host;");
     }
 
     [Fact]

@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.RateLimiting;
 
 namespace IIoT.HttpApi.Controllers;
 
-[Authorize]
+[Authorize(Policy = HttpApiPolicies.RequireEdgeDeviceToken)]
 [Route("api/v1/edge/capacity")]
 [ApiController]
 [Tags("Edge Capacity")]

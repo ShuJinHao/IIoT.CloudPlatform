@@ -21,6 +21,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.IdentityModel.Tokens;
 
 namespace IIoT.HttpApi;
@@ -65,9 +66,15 @@ public static class DependencyInjection
                                .GetSection(HttpApiRateLimitingOptions.SectionName)
                                .Get<HttpApiRateLimitingOptions>()
                            ?? new HttpApiRateLimitingOptions();
+        var forwardedHeaders = builder.Configuration
+                                   .GetSection(HttpApiForwardedHeadersOptions.SectionName)
+                                   .Get<HttpApiForwardedHeadersOptions>()
+                               ?? new HttpApiForwardedHeadersOptions();
         var authenticatedUserPolicy = new AuthorizationPolicyBuilder()
             .RequireAuthenticatedUser()
             .Build();
+
+        forwardedHeaders.Validate();
 
         builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddJwtBearer(options =>
@@ -86,7 +93,17 @@ public static class DependencyInjection
             });
         builder.Services.AddAuthorizationBuilder()
             .SetDefaultPolicy(authenticatedUserPolicy)
-            .SetFallbackPolicy(authenticatedUserPolicy);
+            .SetFallbackPolicy(authenticatedUserPolicy)
+            .AddPolicy(HttpApiPolicies.RequireEdgeDeviceToken, policy =>
+                policy.RequireAuthenticatedUser()
+                    .RequireClaim(IIoTClaimTypes.ActorType, IIoTClaimTypes.EdgeDeviceActor)
+                    .RequireClaim(IIoTClaimTypes.DeviceId));
+        builder.Services.Configure<HttpApiForwardedHeadersOptions>(
+            builder.Configuration.GetSection(HttpApiForwardedHeadersOptions.SectionName));
+        builder.Services.Configure<ForwardedHeadersOptions>(options =>
+        {
+            forwardedHeaders.ApplyTo(options);
+        });
         builder.Services.Configure<HttpApiRateLimitingOptions>(
             builder.Configuration.GetSection(HttpApiRateLimitingOptions.SectionName));
         builder.Services.AddRateLimiter(options =>
@@ -107,21 +124,19 @@ public static class DependencyInjection
             };
             options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
                 RateLimitPartition.GetFixedWindowLimiter(
-                    context.Connection.RemoteIpAddress?.ToString() ?? "global-anonymous",
+                    RateLimitPartitionKeyResolver.ResolveClientPartitionKey(context, "global-anonymous"),
                     _ => rateLimiting.Global.ToRateLimiterOptions()));
             options.AddPolicy("login", context =>
                 RateLimitPartition.GetFixedWindowLimiter(
-                    context.Connection.RemoteIpAddress?.ToString() ?? "login-anonymous",
+                    RateLimitPartitionKeyResolver.ResolveClientPartitionKey(context, "login-anonymous"),
                     _ => rateLimiting.Login.ToRateLimiterOptions()));
             options.AddPolicy("bootstrap", context =>
                 RateLimitPartition.GetFixedWindowLimiter(
-                    context.Connection.RemoteIpAddress?.ToString() ?? "bootstrap-anonymous",
+                    RateLimitPartitionKeyResolver.ResolveClientPartitionKey(context, "bootstrap-anonymous"),
                     _ => rateLimiting.Bootstrap.ToRateLimiterOptions()));
             options.AddPolicy("edge-upload", context =>
                 RateLimitPartition.GetTokenBucketLimiter(
-                    context.User.FindFirst(IIoTClaimTypes.DeviceId)?.Value
-                    ?? context.Connection.RemoteIpAddress?.ToString()
-                    ?? "edge-anonymous",
+                    RateLimitPartitionKeyResolver.ResolveEdgeUploadPartitionKey(context),
                     _ => rateLimiting.EdgeUpload.ToRateLimiterOptions()));
         });
 

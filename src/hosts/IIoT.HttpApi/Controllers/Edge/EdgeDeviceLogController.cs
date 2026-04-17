@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.RateLimiting;
 
 namespace IIoT.HttpApi.Controllers;
 
-[Authorize]
+[Authorize(Policy = HttpApiPolicies.RequireEdgeDeviceToken)]
 [Route("api/v1/edge/device-logs")]
 [ApiController]
 [Tags("Edge Device Logs")]

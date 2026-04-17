@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace IIoT.HttpApi.Controllers;
 
-[Authorize]
+[Authorize(Policy = HttpApiPolicies.RequireEdgeDeviceToken)]
 [Route("api/v1/edge/recipes")]
 [ApiController]
 [Tags("Edge Recipes")]

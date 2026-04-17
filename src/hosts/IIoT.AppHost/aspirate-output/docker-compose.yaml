@@ -82,11 +82,14 @@ services:
   iiot-httpapi:
     image: ${IIOT_HTTPAPI_IMAGE}
     environment:
-      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
       HTTP_PORTS: "8080"
       ConnectionStrings__iiot-db: "Host=postgres;Port=5432;Username=postgres;Password=${PG_PASSWORD};Database=iiot-db"
       ConnectionStrings__redis-cache: "redis-cache:6379"
       ConnectionStrings__eventbus: "amqp://${RABBITMQ_DEFAULT_USER}:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672"
+      ForwardedHeaders__Enabled: "${FORWARDED_HEADERS_ENABLED:-true}"
+      ForwardedHeaders__ForwardLimit: "${FORWARDED_HEADERS_FORWARDLIMIT:-2}"
+      ForwardedHeaders__KnownNetworks__0: "${FORWARDED_HEADERS_KNOWNNETWORKS__0:-172.16.0.0/12}"
+      ForwardedHeaders__KnownNetworks__1: "${FORWARDED_HEADERS_KNOWNNETWORKS__1:-10.0.0.0/8}"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
       OTEL_EXPORTER_OTLP_HEADERS: "x-otlp-api-key=${ASPIRE_DASHBOARD_OTLP_PRIMARYAPIKEY}"
       OTEL_SERVICE_NAME: "iiot-httpapi"

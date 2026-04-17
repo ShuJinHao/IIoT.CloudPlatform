@@ -19,6 +19,7 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
     private static readonly TimeSpan EventuallyInterval = TimeSpan.FromMilliseconds(500);
 
     private readonly IIoTAppFixture _fixture = new();
+    private readonly Dictionary<Guid, string> _deviceCodes = new();
 
     public Task InitializeAsync() => _fixture.StartAsync();
 
@@ -270,9 +271,12 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         var device = await CreateTestDeviceRegistrationAsync("bootstrap");
         _fixture.ClearAuthToken();
 
-        var edge = await GetFromJsonAsync<DeviceIdentityDto>(
+        var edge = await GetFromJsonAsync<EdgeBootstrapDto>(
             $"/api/v1/edge/bootstrap/device-instance?clientCode={Uri.EscapeDataString(device.Code)}");
         edge.Id.Should().Be(device.DeviceId);
+        edge.ClientCode.Should().Be(device.Code);
+        edge.UploadAccessToken.Should().NotBeNullOrWhiteSpace();
+        edge.UploadAccessTokenExpiresAtUtc.Should().BeAfter(DateTimeOffset.UtcNow);
     }
 
     [Fact]
@@ -467,7 +471,7 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HumanIdentity_EdgeLogin_NewRoute_ShouldReturnJwt()
+    public async Task HumanIdentity_EdgeLogin_ShouldReturnHumanJwt_ThatCannotAccessEdgeRoutes()
     {
         await AuthenticateAsAdminAsync();
 
@@ -486,7 +490,25 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         token.Should().NotBeNullOrWhiteSpace();
 
         var jwt = new JwtSecurityTokenHandler().ReadJwtToken(token);
-        jwt.Claims.Should().Contain(claim => claim.Type == "device_id" && claim.Value == device.DeviceId.ToString());
+        jwt.Claims.Should().Contain(claim => claim.Type == "actor_type" && claim.Value == "human-user");
+        jwt.Claims.Should().NotContain(claim => claim.Type == "device_id");
+
+        _fixture.SetAuthToken(token!);
+        using var edgeResponse = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/edge/device-logs", new
+        {
+            DeviceId = device.DeviceId,
+            Logs = new[]
+            {
+                new
+                {
+                    Level = "INFO",
+                    Message = $"human-jwt-{Guid.NewGuid():N}",
+                    LogTime = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
+                }
+            }
+        });
+
+        edgeResponse.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
 
     private async Task AuthenticateAsAdminAsync()
@@ -509,19 +531,13 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
     {
         _fixture.ClearAuthToken();
 
-        using var response = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/human/identity/edge-login", new
-        {
-            EmployeeNo = IIoTAppFixture.SeedAdminEmployeeNo,
-            Password = IIoTAppFixture.SeedAdminPassword,
-            DeviceId = deviceId
-        });
+        _deviceCodes.TryGetValue(deviceId, out var code).Should().BeTrue($"device code for {deviceId} should be tracked during test setup");
+        var bootstrap = await GetFromJsonAsync<EdgeBootstrapDto>(
+            $"/api/v1/edge/bootstrap/device-instance?clientCode={Uri.EscapeDataString(code!)}");
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-
-        var token = await ReadJwtTokenAsync(response);
-        token.Should().NotBeNullOrWhiteSpace();
-
-        _fixture.SetAuthToken(token!);
+        bootstrap.Id.Should().Be(deviceId);
+        bootstrap.UploadAccessToken.Should().NotBeNullOrWhiteSpace();
+        _fixture.SetAuthToken(bootstrap.UploadAccessToken);
     }
 
     private static async Task<string> ReadJwtTokenAsync(HttpResponseMessage response)
@@ -563,6 +579,7 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         created.Id.Should().NotBe(Guid.Empty);
         created.Code.Should().StartWith("DEV-");
         created.Code.Should().NotBeNullOrWhiteSpace();
+        _deviceCodes[created.Id] = created.Code;
 
         return new TestDeviceRegistration(created.Id, processId, created.Code);
     }
@@ -808,10 +825,13 @@ public sealed record PermissionGroupDto(
     string GroupName,
     List<string> Permissions);
 
-public sealed record DeviceIdentityDto(
+public sealed record EdgeBootstrapDto(
     Guid Id,
     string DeviceName,
-    Guid ProcessId);
+    string ClientCode,
+    Guid ProcessId,
+    string UploadAccessToken,
+    DateTimeOffset UploadAccessTokenExpiresAtUtc);
 
 public sealed record CreateDeviceResultDto(
     Guid Id,
