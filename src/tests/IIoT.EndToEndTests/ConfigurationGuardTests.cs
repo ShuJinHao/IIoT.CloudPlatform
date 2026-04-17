@@ -238,6 +238,8 @@ public sealed class ConfigurationGuardTests
         source.Should().Contain("Content-Security-Policy");
         source.Should().Contain("limit_req_zone");
         source.Should().Contain("return 301 https://$host$request_uri;");
+        source.Should().NotContain("include /etc/nginx/proxy_params;");
+        source.Should().Contain("proxy_set_header X-Real-IP $remote_addr;");
         source.Should().Contain("proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;");
         source.Should().Contain("proxy_set_header X-Forwarded-Proto $scheme;");
         source.Should().Contain("proxy_set_header X-Forwarded-Host $host;");
