@@ -7,8 +7,9 @@ using MediatR;
 namespace IIoT.Services.Common.Behaviors;
 
 /// <summary>
-/// 分布式锁管道行为，与 AuthorizationBehavior 保持一致的 AOP 用法。
-/// 在 Command 类上标注 [DistributedLock("key:{PropA}:{PropB}")] 即可自动加锁。
+/// 分布式锁管道。
+/// 在请求类型上声明 <see cref="DistributedLockAttribute"/> 后，
+/// 管道会在执行 handler 前按模板解析锁键并自动申请 Redis 分布式锁。
 /// </summary>
 public class DistributedLockBehavior<TRequest, TResponse>(
     IDistributedLockService lockService) : IPipelineBehavior<TRequest, TResponse>
@@ -38,7 +39,13 @@ public class DistributedLockBehavior<TRequest, TResponse>(
             var prop = typeof(TRequest).GetProperty(
                 m.Groups[1].Value,
                 BindingFlags.Public | BindingFlags.Instance);
-            return prop?.GetValue(request)?.ToString() ?? m.Value;
+            if (prop is null)
+            {
+                throw new InvalidOperationException(
+                    $"DistributedLock template '{template}' references missing property '{m.Groups[1].Value}' on request '{typeof(TRequest).Name}'.");
+            }
+
+            return prop.GetValue(request)?.ToString() ?? string.Empty;
         });
     }
 }

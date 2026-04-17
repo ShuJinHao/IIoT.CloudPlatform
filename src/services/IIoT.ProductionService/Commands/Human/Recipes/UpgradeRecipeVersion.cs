@@ -46,7 +46,10 @@ public class UpgradeRecipeVersionHandler(
         if (source is null)
             return Result.Failure("升级失败: 源配方不存在");
 
-        if (currentUser.Role != "Admin")
+        if (!string.Equals(
+                currentUser.Role,
+                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                StringComparison.Ordinal))
         {
             if (!Guid.TryParse(currentUser.Id, out var userId))
                 return Result.Failure("用户凭证异常");

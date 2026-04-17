@@ -34,7 +34,10 @@ public class DeleteRecipeHandler(
         if (recipe is null)
             return Result.Failure("操作失败:目标配方不存在");
 
-        if (currentUser.Role != "Admin")
+        if (!string.Equals(
+                currentUser.Role,
+                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                StringComparison.Ordinal))
         {
             if (!Guid.TryParse(currentUser.Id, out var userId))
                 return Result.Failure("用户凭证异常");

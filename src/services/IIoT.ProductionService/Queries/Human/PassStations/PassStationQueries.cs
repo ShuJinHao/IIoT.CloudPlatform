@@ -31,7 +31,10 @@ public sealed class GetPassStationListHandler<TDto>(
     {
         List<Guid>? allowedDeviceIds = null;
 
-        if (currentUser.Role != "Admin")
+        if (!string.Equals(
+                currentUser.Role,
+                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                StringComparison.Ordinal))
         {
             if (!Guid.TryParse(currentUser.Id, out var userId))
                 return Result.Failure("用户凭证异常");
@@ -107,7 +110,10 @@ public sealed class GetPassStationDetailHandler<TDto>(
         if (detail is null)
             return Result.Failure("未找到该过站记录");
 
-        if (currentUser.Role != "Admin")
+        if (!string.Equals(
+                currentUser.Role,
+                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                StringComparison.Ordinal))
         {
             if (!Guid.TryParse(currentUser.Id, out var userId))
                 return Result.Failure("用户凭证异常");
@@ -154,7 +160,10 @@ public sealed class GetPassStationLatest200Handler<TDto>(
         GetPassStationLatest200Query<TDto> request,
         CancellationToken cancellationToken)
     {
-        if (currentUser.Role != "Admin")
+        if (!string.Equals(
+                currentUser.Role,
+                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                StringComparison.Ordinal))
         {
             if (!Guid.TryParse(currentUser.Id, out var userId))
                 return Result.Failure("用户凭证异常");

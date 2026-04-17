@@ -27,7 +27,10 @@ public class GetHourlyByDeviceIdHandler(
         GetHourlyByDeviceIdQuery request,
         CancellationToken cancellationToken)
     {
-        if (currentUser.Role != "Admin")
+        if (!string.Equals(
+                currentUser.Role,
+                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                StringComparison.Ordinal))
         {
             if (!Guid.TryParse(currentUser.Id, out var userId))
                 return Result.Failure("用户凭证异常");

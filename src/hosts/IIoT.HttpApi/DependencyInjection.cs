@@ -1,4 +1,5 @@
 using System.Text;
+using System.Threading.RateLimiting;
 using IIoT.Core.Production.Contracts.PassStation;
 using IIoT.Dapper;
 using IIoT.EmployeeService.Commands.Employees;
@@ -12,11 +13,14 @@ using IIoT.ProductionService;
 using IIoT.ProductionService.Commands.PassStations;
 using IIoT.ProductionService.Profiles;
 using IIoT.Services.Common.Behaviors;
+using IIoT.Services.Common.Contracts.Identity;
 using IIoT.Services.Common.Contracts.RecordQueries;
 using IIoT.Services.Common.DependencyInjection;
 using IIoT.Services.Common.Events.PassStations;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
 
 namespace IIoT.HttpApi;
@@ -38,6 +42,7 @@ public static class DependencyInjection
                 typeof(CreateProcessCommand).Assembly,
                 typeof(IIoT.ProductionService.Commands.Recipes.CreateRecipeCommand).Assembly);
             cfg.AddOpenBehavior(typeof(RequestKindGuardBehavior<,>));
+            cfg.AddOpenBehavior(typeof(DeviceBindingBehavior<,>));
             cfg.AddOpenBehavior(typeof(AuthorizationBehavior<,>));
             cfg.AddOpenBehavior(typeof(DistributedLockBehavior<,>));
         });
@@ -56,6 +61,10 @@ public static class DependencyInjection
         var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>()
                           ?? throw new NullReferenceException("JwtSettings is missing");
         var jwtSecret = JwtSecretResolver.Resolve(builder.Environment, jwtSettings.Secret);
+        var rateLimiting = builder.Configuration
+                               .GetSection(HttpApiRateLimitingOptions.SectionName)
+                               .Get<HttpApiRateLimitingOptions>()
+                           ?? new HttpApiRateLimitingOptions();
         var authenticatedUserPolicy = new AuthorizationPolicyBuilder()
             .RequireAuthenticatedUser()
             .Build();
@@ -78,6 +87,43 @@ public static class DependencyInjection
         builder.Services.AddAuthorizationBuilder()
             .SetDefaultPolicy(authenticatedUserPolicy)
             .SetFallbackPolicy(authenticatedUserPolicy);
+        builder.Services.Configure<HttpApiRateLimitingOptions>(
+            builder.Configuration.GetSection(HttpApiRateLimitingOptions.SectionName));
+        builder.Services.AddRateLimiter(options =>
+        {
+            options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+            options.OnRejected = async (context, token) =>
+            {
+                context.HttpContext.Response.ContentType = "application/problem+json";
+                await context.HttpContext.Response.WriteAsJsonAsync(
+                    new ProblemDetails
+                    {
+                        Status = StatusCodes.Status429TooManyRequests,
+                        Title = "Too Many Requests",
+                        Type = "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/429",
+                        Detail = "Too many requests. Please retry later."
+                    },
+                    token);
+            };
+            options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    context.Connection.RemoteIpAddress?.ToString() ?? "global-anonymous",
+                    _ => rateLimiting.Global.ToRateLimiterOptions()));
+            options.AddPolicy("login", context =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    context.Connection.RemoteIpAddress?.ToString() ?? "login-anonymous",
+                    _ => rateLimiting.Login.ToRateLimiterOptions()));
+            options.AddPolicy("bootstrap", context =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    context.Connection.RemoteIpAddress?.ToString() ?? "bootstrap-anonymous",
+                    _ => rateLimiting.Bootstrap.ToRateLimiterOptions()));
+            options.AddPolicy("edge-upload", context =>
+                RateLimitPartition.GetTokenBucketLimiter(
+                    context.User.FindFirst(IIoTClaimTypes.DeviceId)?.Value
+                    ?? context.Connection.RemoteIpAddress?.ToString()
+                    ?? "edge-anonymous",
+                    _ => rateLimiting.EdgeUpload.ToRateLimiterOptions()));
+        });
 
         builder.Services.AddScoped<ICurrentUser, CurrentUser>();
         builder.Services.AddHttpContextAccessor();

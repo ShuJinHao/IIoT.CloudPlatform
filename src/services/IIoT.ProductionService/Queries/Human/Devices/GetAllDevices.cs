@@ -27,7 +27,10 @@ public class GetAllDevicesHandler(
 {
     public async Task<Result<List<DeviceSelectDto>>> Handle(GetAllDevicesQuery request, CancellationToken cancellationToken)
     {
-        if (!string.Equals(currentUser.Role, "Admin", StringComparison.Ordinal))
+        if (!string.Equals(
+                currentUser.Role,
+                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                StringComparison.Ordinal))
             throw new ForbiddenException("仅管理员可查看全量设备列表");
 
         var cacheKey = CacheKeys.AllDevices();

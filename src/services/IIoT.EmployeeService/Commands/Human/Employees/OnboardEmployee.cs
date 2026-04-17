@@ -29,7 +29,9 @@ public class OnboardEmployeeHandler(
         CancellationToken cancellationToken)
     {
         if (!string.IsNullOrWhiteSpace(request.RoleName)
-            && request.RoleName.Equals("Admin", StringComparison.OrdinalIgnoreCase))
+            && request.RoleName.Equals(
+                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                StringComparison.OrdinalIgnoreCase))
         {
             return Result.Failure("管理员角色禁止通过该接口创建");
         }

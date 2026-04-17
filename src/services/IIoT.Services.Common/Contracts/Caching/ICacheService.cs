@@ -15,6 +15,15 @@ public interface ICacheService
     Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// 原子地读取缓存；未命中时仅由单个调用者执行回源工厂并回填缓存。
+    /// </summary>
+    Task<T?> GetOrSetAsync<T>(
+        string key,
+        Func<CancellationToken, Task<T?>> factory,
+        TimeSpan? absoluteExpireTime = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// 将对象序列化并写入缓存
     /// </summary>
     /// <param name="key">缓存键</param>

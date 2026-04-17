@@ -3,6 +3,7 @@ using IIoT.IdentityService.Commands;
 using IIoT.IdentityService.Queries;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace IIoT.HttpApi.Controllers;
 
@@ -13,6 +14,7 @@ namespace IIoT.HttpApi.Controllers;
 public class HumanIdentityController : ApiControllerBase
 {
     [AllowAnonymous]
+    [EnableRateLimiting("login")]
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginUserCommand command)
     {
@@ -21,6 +23,7 @@ public class HumanIdentityController : ApiControllerBase
     }
 
     [AllowAnonymous]
+    [EnableRateLimiting("login")]
     [HttpPost("edge-login")]
     public async Task<IActionResult> EdgeLogin([FromBody] EdgeOperatorLoginCommand command)
     {

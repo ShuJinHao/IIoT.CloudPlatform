@@ -6,5 +6,6 @@ public interface IJwtTokenGenerator
         Guid userId,
         string userName,
         IEnumerable<string> roles,
-        IEnumerable<string> permissions);
+        IEnumerable<string> permissions,
+        Guid? deviceId = null);
 }

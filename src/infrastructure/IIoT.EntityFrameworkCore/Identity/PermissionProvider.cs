@@ -1,14 +1,19 @@
-﻿using IIoT.Services.Common.Contracts;
 using IIoT.Services.Common.Caching;
 using IIoT.Services.Common.Caching.Options;
+using IIoT.Services.Common.Contracts;
+using IIoT.Services.Common.Contracts.Identity;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Options;
 
 namespace IIoT.EntityFrameworkCore.Identity;
 
+/// <summary>
+/// 用户权限提供器。
+/// 负责把用户个人权限和角色权限合并成最终权限集合，并按用户维度写入缓存。
+/// </summary>
 public class PermissionProvider(
     UserManager<ApplicationUser> userManager,
-    RoleManager<IdentityRole<Guid>> roleManager,  // 必须是 IdentityRole<Guid>
+    RoleManager<IdentityRole<Guid>> roleManager,
     ICacheService cacheService,
     IOptions<PermissionCacheOptions> options) : IPermissionProvider
 {
@@ -18,44 +23,46 @@ public class PermissionProvider(
     {
         var cacheKey = CacheKeys.PermissionByUser(userId);
 
-        // 1. 读缓存
-        var cachedPermissions = await cacheService.GetAsync<List<string>>(cacheKey, cancellationToken);
-        if (cachedPermissions != null) return cachedPermissions;
+        return await cacheService.GetOrSetAsync(
+                   cacheKey,
+                   async token =>
+                   {
+                       var user = await userManager.FindByIdAsync(userId.ToString());
+                       if (user == null)
+                       {
+                           return [];
+                       }
 
-        // 2. DB 兜底：先找人
-        var user = await userManager.FindByIdAsync(userId.ToString());
-        if (user == null) return [];
+                       var allPermissions = new HashSet<string>();
 
-        // HashSet 去重合并
-        var allPermissions = new HashSet<string>();
+                       var userClaims = await userManager.GetClaimsAsync(user);
+                       foreach (var claim in userClaims.Where(c => c.Type == IIoTClaimTypes.Permission))
+                       {
+                           allPermissions.Add(claim.Value);
+                       }
 
-        // 【维度 A】：获取该用户被“特批”的个人专属权限 (AspNetUserClaims 表)
-        var userClaims = await userManager.GetClaimsAsync(user);
-        foreach (var claim in userClaims.Where(c => c.Type == "Permission"))
-        {
-            allPermissions.Add(claim.Value);
-        }
+                       var roles = await userManager.GetRolesAsync(user);
+                       foreach (var roleName in roles)
+                       {
+                           token.ThrowIfCancellationRequested();
 
-        // 【维度 B】：获取该用户所属的所有角色，并将这些角色的权限一并拉取 (AspNetRoleClaims 表)
-        var roles = await userManager.GetRolesAsync(user);
-        foreach (var roleName in roles)
-        {
-            var role = await roleManager.FindByNameAsync(roleName);
-            if (role != null)
-            {
-                var roleClaims = await roleManager.GetClaimsAsync(role);
-                foreach (var claim in roleClaims.Where(c => c.Type == "Permission"))
-                {
-                    allPermissions.Add(claim.Value);
-                }
-            }
-        }
+                           var role = await roleManager.FindByNameAsync(roleName);
+                           if (role == null)
+                           {
+                               continue;
+                           }
 
-        var permissionsList = allPermissions.ToList();
+                           var roleClaims = await roleManager.GetClaimsAsync(role);
+                           foreach (var claim in roleClaims.Where(c => c.Type == IIoTClaimTypes.Permission))
+                           {
+                               allPermissions.Add(claim.Value);
+                           }
+                       }
 
-        // 3. 回写缓存
-        await cacheService.SetAsync(cacheKey, permissionsList, _options.ResolveExpiration(), cancellationToken);
-
-        return permissionsList;
+                       return allPermissions.ToList();
+                   },
+                   _options.ResolveExpiration(),
+                   cancellationToken)
+               ?? [];
     }
 }

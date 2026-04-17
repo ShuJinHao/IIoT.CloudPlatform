@@ -115,6 +115,7 @@ internal sealed class RecordingCacheService : ICacheService
     public string? LastSetKey { get; private set; }
     public TimeSpan? LastAbsoluteExpireTime { get; private set; }
     public Dictionary<string, object?> Values { get; } = [];
+    public int GetOrSetCalls { get; private set; }
 
     public Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default)
     {
@@ -124,6 +125,26 @@ internal sealed class RecordingCacheService : ICacheService
         }
 
         return Task.FromResult(default(T));
+    }
+
+    public async Task<T?> GetOrSetAsync<T>(
+        string key,
+        Func<CancellationToken, Task<T?>> factory,
+        TimeSpan? absoluteExpireTime = null,
+        CancellationToken cancellationToken = default)
+    {
+        GetOrSetCalls++;
+
+        if (Values.TryGetValue(key, out var value) && value is T typedValue)
+        {
+            return typedValue;
+        }
+
+        var created = await factory(cancellationToken);
+        LastSetKey = key;
+        LastAbsoluteExpireTime = absoluteExpireTime;
+        Values[key] = created;
+        return created;
     }
 
     public Task SetAsync<T>(
@@ -321,17 +342,26 @@ internal sealed class StubRecipeReadQueryService : IRecipeReadQueryService
 
 internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
 {
+    public Result<IdentityAccount> CreateResult { get; set; } = Result.Success(IdentityAccount.Create(Guid.NewGuid(), "E000"));
+
     public Guid? LastSetEnabledId { get; private set; }
 
     public bool LastSetEnabledValue { get; private set; }
 
     public Result<bool> SetEnabledResult { get; set; } = Result.Success(true);
 
+    public Result<bool> DeleteResult { get; set; } = Result.Success(true);
+
+    public Result<bool> AssignRoleResult { get; set; } = Result.Success(true);
+
     public Task<Result<IdentityAccount>> CreateAsync(
         IdentityAccount account,
         CancellationToken cancellationToken = default)
     {
-        return Task.FromResult(Result.Success(account));
+        return Task.FromResult(
+            CreateResult.IsSuccess
+                ? Result.Success(account)
+                : Result.Failure(CreateResult.Errors?.ToArray() ?? ["create failed"]));
     }
 
     public Task<IdentityAccount?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -358,7 +388,7 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
 
     public Task<Result<bool>> DeleteAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        return Task.FromResult(Result.Success(true));
+        return Task.FromResult(DeleteResult);
     }
 
     public Task<Result<bool>> AssignRoleAsync(
@@ -366,7 +396,7 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
         string roleName,
         CancellationToken cancellationToken = default)
     {
-        return Task.FromResult(Result.Success(true));
+        return Task.FromResult(AssignRoleResult);
     }
 
     public Task<IList<string>> GetRolesAsync(Guid id, CancellationToken cancellationToken = default)
@@ -377,6 +407,8 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
 
 internal sealed class StubIdentityPasswordService : IIdentityPasswordService
 {
+    public Result<bool> SetPasswordResult { get; set; } = Result.Success(true);
+
     public Guid? LastChangedUserId { get; private set; }
 
     public string? LastCurrentPassword { get; private set; }
@@ -398,7 +430,7 @@ internal sealed class StubIdentityPasswordService : IIdentityPasswordService
         string newPassword,
         CancellationToken cancellationToken = default)
     {
-        throw new NotSupportedException();
+        return Task.FromResult(SetPasswordResult);
     }
 
     public Task<Result> ChangePasswordAsync(
@@ -456,6 +488,8 @@ internal sealed class TestCurrentUser : ICurrentUser
     public string? UserName { get; init; }
 
     public string? Role { get; init; }
+
+    public Guid? DeviceId { get; init; }
 
     public bool IsAuthenticated { get; init; }
 }

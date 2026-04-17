@@ -33,6 +33,7 @@ if (app.Environment.IsDevelopment())
 app.UseExceptionHandler();
 app.UseSerilogRequestLogging();
 app.UseAuthentication();
+app.UseRateLimiter();
 app.UseAuthorization();
 app.MapControllers();
 app.MapDefaultEndpoints();

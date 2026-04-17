@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.IdentityModel.Tokens.Jwt;
 using System.Text.Json;
 using FluentAssertions;
 using IIoT.Services.Common.Events.DeviceLogs;
@@ -29,6 +30,7 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         await AuthenticateAsAdminAsync();
 
         var deviceId = await CreateTestDeviceAsync("log");
+        await AuthenticateAsEdgeAsync(deviceId);
         var logTime = DateTime.SpecifyKind(DateTime.UtcNow.AddMinutes(-2), DateTimeKind.Utc);
         var message = $"device-log-{Guid.NewGuid():N}";
 
@@ -49,6 +51,8 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         await PostJsonAsync("/api/v1/edge/device-logs", request);
         await PostJsonAsync("/api/v1/edge/device-logs", request);
 
+        await AuthenticateAsAdminAsync();
+
         var result = await EventuallyAsync(async () =>
             await GetFromJsonAsync<PagedResponse<DeviceLogListItemDto>>(
                 $"/api/v1/human/device-logs/by-time-range?PageNumber=1&PageSize=20&deviceId={deviceId}" +
@@ -65,6 +69,7 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         await AuthenticateAsAdminAsync();
 
         var deviceId = await CreateTestDeviceAsync("capacity");
+        await AuthenticateAsEdgeAsync(deviceId);
         var date = DateOnly.FromDateTime(DateTime.UtcNow);
         var plcName = $"PLC-{Guid.NewGuid():N}"[..10];
 
@@ -99,6 +104,8 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         await PostJsonAsync("/api/v1/edge/capacity/hourly", first);
         await PostJsonAsync("/api/v1/edge/capacity/hourly", second);
 
+        await AuthenticateAsAdminAsync();
+
         var result = await EventuallyAsync(async () =>
             await GetFromJsonAsync<List<HourlyCapacityDto>>(
                 $"/api/v1/human/capacity/hourly?deviceId={deviceId}&date={date:yyyy-MM-dd}&plcName={Uri.EscapeDataString(plcName)}"),
@@ -116,6 +123,7 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         await AuthenticateAsAdminAsync();
 
         var deviceId = await CreateTestDeviceAsync("pass");
+        await AuthenticateAsEdgeAsync(deviceId);
         var completedTime = DateTime.SpecifyKind(DateTime.UtcNow.AddMinutes(-3), DateTimeKind.Utc);
         var barcode = $"BC-{Guid.NewGuid():N}"[..14];
 
@@ -141,6 +149,8 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         await PostJsonAsync("/api/v1/edge/pass-stations/injection/batch", request);
         await PostJsonAsync("/api/v1/edge/pass-stations/injection/batch", request);
 
+        await AuthenticateAsAdminAsync();
+
         var result = await EventuallyAsync(async () =>
             await GetFromJsonAsync<PagedResponse<InjectionPassListItemDto>>(
                 $"/api/v1/human/pass-stations/injection/by-device-time?PageNumber=1&PageSize=20&deviceId={deviceId}" +
@@ -157,6 +167,7 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         await AuthenticateAsAdminAsync();
 
         var deviceId = await CreateTestDeviceAsync("stacking-pass");
+        await AuthenticateAsEdgeAsync(deviceId);
         var connectionString = await _fixture.GetConnectionStringAsync("iiot-db");
         var completedTime = DateTime.SpecifyKind(DateTime.UtcNow.AddMinutes(-4), DateTimeKind.Utc);
         var barcode = $"ST-{Guid.NewGuid():N}"[..14];
@@ -293,7 +304,7 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
             unauthorized.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         }
 
-        await AuthenticateAsAdminAsync();
+        await AuthenticateAsEdgeAsync(device.DeviceId);
 
         await PostJsonAsync("/api/v1/edge/capacity/hourly", request);
 
@@ -331,7 +342,7 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
             unauthorized.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         }
 
-        await AuthenticateAsAdminAsync();
+        await AuthenticateAsEdgeAsync(device.DeviceId);
 
         var recipes = await EventuallyAsync(
             async () => await GetFromJsonAsync<List<RecipeForDeviceDto>>($"/api/v1/edge/recipes/device/{device.DeviceId}"),
@@ -346,6 +357,7 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         await AuthenticateAsAdminAsync();
 
         var deviceId = await CreateTestDeviceAsync("human-capacity");
+        await AuthenticateAsEdgeAsync(deviceId);
         var date = DateOnly.FromDateTime(DateTime.UtcNow);
         var plcName = $"PLC-{Guid.NewGuid():N}"[..10];
 
@@ -362,6 +374,8 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
             NgCount = 2,
             PlcName = plcName
         });
+
+        await AuthenticateAsAdminAsync();
 
         var humanHourly = await EventuallyAsync(
             async () => await GetFromJsonAsync<List<HourlyCapacityDto>>(
@@ -470,6 +484,9 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var token = await ReadJwtTokenAsync(response);
         token.Should().NotBeNullOrWhiteSpace();
+
+        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(token);
+        jwt.Claims.Should().Contain(claim => claim.Type == "device_id" && claim.Value == device.DeviceId.ToString());
     }
 
     private async Task AuthenticateAsAdminAsync()
@@ -478,6 +495,25 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         {
             EmployeeNo = IIoTAppFixture.SeedAdminEmployeeNo,
             Password = IIoTAppFixture.SeedAdminPassword
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var token = await ReadJwtTokenAsync(response);
+        token.Should().NotBeNullOrWhiteSpace();
+
+        _fixture.SetAuthToken(token!);
+    }
+
+    private async Task AuthenticateAsEdgeAsync(Guid deviceId)
+    {
+        _fixture.ClearAuthToken();
+
+        using var response = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/human/identity/edge-login", new
+        {
+            EmployeeNo = IIoTAppFixture.SeedAdminEmployeeNo,
+            Password = IIoTAppFixture.SeedAdminPassword,
+            DeviceId = deviceId
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);

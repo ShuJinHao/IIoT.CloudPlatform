@@ -31,14 +31,18 @@ public class HumanRecipeController : ApiControllerBase
     public async Task<IActionResult> Create([FromBody] CreateRecipeCommand command)
     {
         var result = await Sender.Send(command);
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return result.IsSuccess
+            ? Created($"/api/v1/human/recipes/{result.Value}", result.Value)
+            : BadRequest(result.Errors);
     }
 
     [HttpPost("{id}/upgrade")]
     public async Task<IActionResult> UpgradeVersion([FromRoute] Guid id, [FromBody] UpgradeRecipeVersionCommand command)
     {
         var result = await Sender.Send(command with { SourceRecipeId = id });
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return result.IsSuccess
+            ? Created($"/api/v1/human/recipes/{result.Value}", result.Value)
+            : BadRequest(result.Errors);
     }
 
     [HttpDelete("{id}")]

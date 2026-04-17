@@ -30,7 +30,9 @@ public class HumanDeviceController : ApiControllerBase
     public async Task<IActionResult> Register([FromBody] RegisterDeviceCommand command)
     {
         var result = await Sender.Send(command);
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return result.IsSuccess
+            ? Created($"/api/v1/human/devices/{result.Value!.Id}", result.Value)
+            : BadRequest(result.Errors);
     }
 
     [HttpPut("{id}")]

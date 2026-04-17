@@ -19,7 +19,7 @@ public static class SystemInitData
         CancellationToken cancellationToken = default)
     {
         // 1. 确保超级管理员角色存在
-        var adminRoleName = "Admin";
+        var adminRoleName = IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin;
         if (!await roleManager.RoleExistsAsync(adminRoleName))
         {
             await roleManager.CreateAsync(new IdentityRole<Guid>(adminRoleName));

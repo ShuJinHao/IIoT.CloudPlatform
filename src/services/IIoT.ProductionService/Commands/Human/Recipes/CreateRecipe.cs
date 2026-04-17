@@ -67,7 +67,10 @@ public class CreateRecipeHandler(
         if (duplicateExists)
             return Result.Failure($"配方创建失败: 已存在同名初始版本配方 [{recipeName}]");
 
-        if (currentUser.Role != "Admin")
+        if (!string.Equals(
+                currentUser.Role,
+                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                StringComparison.Ordinal))
         {
             if (!Guid.TryParse(currentUser.Id, out var userId))
                 return Result.Failure("用户凭证异常");

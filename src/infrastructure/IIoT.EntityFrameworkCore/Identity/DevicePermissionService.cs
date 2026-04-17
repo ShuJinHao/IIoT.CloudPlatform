@@ -7,6 +7,11 @@ using Microsoft.Extensions.Options;
 
 namespace IIoT.EntityFrameworkCore.Identity;
 
+/// <summary>
+/// 设备访问范围服务。
+/// 返回某个用户当前可操作的设备 Id 集合，供生产域用例做设备级 ABAC 校验使用。
+/// Admin 返回 null，表示不受设备范围约束。
+/// </summary>
 public sealed class DevicePermissionService(
     IIoTDbContext dbContext,
     ICacheService cacheService,
@@ -26,24 +31,14 @@ public sealed class DevicePermissionService(
         }
 
         var cacheKey = CacheKeys.DeviceAccessesByUser(userId);
-        var cached = await cacheService.GetAsync<List<Guid>>(cacheKey, cancellationToken);
-        if (cached is not null)
-        {
-            return cached;
-        }
-
-        var accessibleDeviceIds = await dbContext.Employees
-            .Where(employee => employee.Id == userId)
-            .SelectMany(employee => employee.DeviceAccesses.Select(deviceAccess => deviceAccess.DeviceId))
-            .Distinct()
-            .ToListAsync(cancellationToken);
-
-        await cacheService.SetAsync(
+        return await cacheService.GetOrSetAsync(
             cacheKey,
-            accessibleDeviceIds,
+            async token => await dbContext.Employees
+                .Where(employee => employee.Id == userId)
+                .SelectMany(employee => employee.DeviceAccesses.Select(deviceAccess => deviceAccess.DeviceId))
+                .Distinct()
+                .ToListAsync(token),
             _options.ResolveExpiration(),
             cancellationToken);
-
-        return accessibleDeviceIds;
     }
 }

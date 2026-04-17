@@ -2,6 +2,7 @@
 using System.Security.Claims;
 using System.Text;
 using IIoT.Services.Common.Contracts;
+using IIoT.Services.Common.Contracts.Identity;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 
@@ -15,7 +16,8 @@ public class JwtTokenGenerator(IOptions<JwtSettings> jwtOptions) : IJwtTokenGene
         Guid userId,
         string employeeNo,
         IEnumerable<string> roles,
-        IEnumerable<string> permissions)
+        IEnumerable<string> permissions,
+        Guid? deviceId = null)
     {
         var claims = new List<Claim>
         {
@@ -31,7 +33,12 @@ public class JwtTokenGenerator(IOptions<JwtSettings> jwtOptions) : IJwtTokenGene
 
         foreach (var permission in permissions)
         {
-            claims.Add(new Claim("Permission", permission));
+            claims.Add(new Claim(IIoTClaimTypes.Permission, permission));
+        }
+
+        if (deviceId.HasValue)
+        {
+            claims.Add(new Claim(IIoTClaimTypes.DeviceId, deviceId.Value.ToString()));
         }
 
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtSettings.Secret));

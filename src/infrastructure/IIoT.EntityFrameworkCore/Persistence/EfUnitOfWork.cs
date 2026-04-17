@@ -14,6 +14,7 @@ public class EfUnitOfWork(
     {
         if (_transaction is not null)
         {
+            logger.LogWarning("BeginTransactionAsync was called while a transaction is already active.");
             return;
         }
 

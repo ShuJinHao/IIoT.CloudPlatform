@@ -3,7 +3,7 @@ using IIoT.Core.Production.Contracts.PassStation;
 
 namespace IIoT.Dapper.Production.Repositories.PassStations;
 
-public sealed class PassStationRepository<TWriteModel>(
+internal sealed class PassStationRepository<TWriteModel>(
     IDbConnectionFactory connectionFactory,
     IPassStationWriteSql<TWriteModel> sql)
     : IPassStationRepository<TWriteModel>

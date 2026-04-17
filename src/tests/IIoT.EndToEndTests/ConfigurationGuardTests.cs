@@ -1,9 +1,9 @@
+using System.IO;
+using System.Text.RegularExpressions;
 using FluentAssertions;
 using IIoT.HttpApi;
 using IIoT.MigrationWorkApp.SeedData;
 using Microsoft.Extensions.Configuration;
-using System.IO;
-using System.Text.RegularExpressions;
 
 namespace IIoT.EndToEndTests;
 
@@ -81,7 +81,7 @@ public sealed class ConfigurationGuardTests
 
         orchestratorSource.Should().Contain("UPPER(BTRIM(client_code))");
         orchestratorSource.Should().Contain("COUNT(*) AS duplicate_count");
-        orchestratorSource.Should().Contain("设备 Code 升级已被阻止");
+        orchestratorSource.Should().Contain("BuildNormalizedClientCodeConflictMessage");
         orchestratorSource.Should().Contain("CREATE UNIQUE INDEX IF NOT EXISTS ix_devices_client_code ON devices (client_code);");
         orchestratorSource.Should().Contain("ALTER TABLE devices DROP COLUMN IF EXISTS mac_address;");
     }
@@ -93,7 +93,7 @@ public sealed class ConfigurationGuardTests
             FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Edge", "EdgeBootstrapController.cs"));
 
         controllerSource.Should().Contain("[FromQuery] string clientCode");
-        controllerSource.Should().Contain("暂时保留 legacy 查询参数名");
+        controllerSource.Should().Contain("legacy");
     }
 
     [Fact]
@@ -141,7 +141,186 @@ public sealed class ConfigurationGuardTests
         infrastructureSource.Should().Contain("GetConnectionString(\"redis-cache\")");
         infrastructureSource.Should().Contain("WithStackExchangeRedisBackplane(options =>");
         infrastructureSource.Should().Contain("options.Configuration = redisConnectionString;");
+        infrastructureSource.Should().Contain("CacheSafetyOptions.SectionName");
+        infrastructureSource.Should().Contain("FailSafeMaxDuration = cacheSafetyOptions.ResolveFailSafeDuration()");
     }
+
+    [Fact]
+    public void HttpApi_ShouldRegisterDeviceBindingAndRateLimiting()
+    {
+        var dependencyInjectionSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.HttpApi", "DependencyInjection.cs"));
+        var programSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Program.cs"));
+
+        dependencyInjectionSource.Should().Contain("AddOpenBehavior(typeof(DeviceBindingBehavior<,>))");
+        dependencyInjectionSource.Should().Contain("AddRateLimiter(options =>");
+        programSource.Should().Contain("app.UseRateLimiter();");
+    }
+
+    [Fact]
+    public void UseCaseExceptionHandler_ShouldMapKnownRuntimeExceptions()
+    {
+        var source = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Infrastructure", "UseCaseExceptionHandler.cs"));
+
+        source.Should().Contain("TimeoutException");
+        source.Should().Contain("ArgumentException");
+        source.Should().Contain("InvalidOperationException");
+        source.Should().Contain("StatusCodes.Status500InternalServerError");
+        source.Should().Contain("The server encountered an unexpected error while processing the request.");
+    }
+
+    [Fact]
+    public void HttpApiAndDataWorkerAppSettings_ShouldDefineHardeningSections()
+    {
+        var httpApiAppSettingsPath = FindRepoFile("src", "hosts", "IIoT.HttpApi", "appsettings.json");
+        var httpApiConfiguration = new ConfigurationBuilder()
+            .AddJsonFile(httpApiAppSettingsPath)
+            .Build();
+        var dataWorkerAppSettingsPath = FindRepoFile("src", "hosts", "IIoT.DataWorker", "appsettings.json");
+        var dataWorkerConfiguration = new ConfigurationBuilder()
+            .AddJsonFile(dataWorkerAppSettingsPath)
+            .Build();
+
+        httpApiConfiguration.GetValue<int>("DistributedLock:LeaseSeconds").Should().BeGreaterThan(0);
+        httpApiConfiguration.GetValue<int>("DistributedLock:RenewalCadenceSeconds").Should().BeGreaterThan(0);
+        httpApiConfiguration.GetValue<int>("CacheSafety:FailSafeMinutes").Should().Be(30);
+        httpApiConfiguration.GetValue<int>("RateLimiting:Login:PermitLimit").Should().BeGreaterThan(0);
+        httpApiConfiguration.GetValue<int>("RateLimiting:EdgeUpload:TokenLimit").Should().BeGreaterThan(0);
+
+        dataWorkerConfiguration.GetValue<int>("Consumers:PassStationConcurrentMessageLimit").Should().BeGreaterThan(0);
+        dataWorkerConfiguration.GetValue<int>("Consumers:DeviceLogConcurrentMessageLimit").Should().BeGreaterThan(0);
+        dataWorkerConfiguration.GetValue<int>("Consumers:HourlyCapacityConcurrentMessageLimit").Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public void DeploymentTemplates_ShouldExternalizeSecretsAndSecureDashboard()
+    {
+        var gitIgnoreSource = File.ReadAllText(FindRepoFile(".gitignore"));
+        var envExampleSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.AppHost", "aspirate-output", ".env.example"));
+        var composeSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.AppHost", "aspirate-output", "docker-compose.yaml"));
+
+        gitIgnoreSource.Should().Contain("src/hosts/IIoT.AppHost/aspirate-output/.env");
+        envExampleSource.Should().Contain("change-me-postgres-password");
+        envExampleSource.Should().Contain("ASPIRE_DASHBOARD_FRONTEND_BROWSERTOKEN");
+        composeSource.Should().Contain("DASHBOARD__FRONTEND__AUTHMODE: \"BrowserToken\"");
+        composeSource.Should().Contain("DASHBOARD__OTLP__AUTHMODE: \"ApiKey\"");
+        composeSource.Should().Contain("ASPIRE_DASHBOARD_OTLP_PRIMARYAPIKEY");
+        composeSource.Should().NotContain("ALLOW_ANONYMOUS: \"true\"");
+    }
+
+    [Fact]
+    public void NginxTemplate_ShouldRequireHttpsSecurityHeadersAndRateLimits()
+    {
+        var source = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.AppHost", "aspirate-output", "nginx.conf"));
+
+        source.Should().Contain("listen 443 ssl http2;");
+        source.Should().Contain("Strict-Transport-Security");
+        source.Should().Contain("Content-Security-Policy");
+        source.Should().Contain("limit_req_zone");
+        source.Should().Contain("return 301 https://$host$request_uri;");
+    }
+
+    [Fact]
+    public void PassStationSqlContracts_ShouldRemainInternalToDapper()
+    {
+        var queryContractSource = File.ReadAllText(
+            FindRepoFile("src", "infrastructure", "IIoT.Dapper", "Production", "QueryServices", "PassStation", "IPassStationQuerySql.cs"));
+        var writeContractSource = File.ReadAllText(
+            FindRepoFile("src", "infrastructure", "IIoT.Dapper", "Production", "Repositories", "PassStations", "IPassStationWriteSql.cs"));
+
+        queryContractSource.Should().Contain("internal interface IPassStationQuerySql");
+        writeContractSource.Should().Contain("internal interface IPassStationWriteSql");
+    }
+
+    [Fact]
+    public void HumanRequestFolders_ShouldOnlyContainHumanCommandsAndQueries()
+    {
+        AssertRequestFolderConvention("Commands", "Human", "IHumanCommand");
+        AssertRequestFolderConvention("Queries", "Human", "IHumanQuery");
+    }
+
+    [Fact]
+    public void EdgeRequestFolders_ShouldOnlyContainDeviceCommandsAndQueries()
+    {
+        AssertRequestFolderConvention("Commands", "Edge", "IDeviceCommand");
+        AssertRequestFolderConvention("Queries", "Edge", "IDeviceQuery");
+    }
+
+    [Fact]
+    public void BootstrapRequestFolders_ShouldOnlyContainAnonymousBootstrapQueries()
+    {
+        AssertRequestFolderConvention("Queries", "Bootstrap", "IAnonymousBootstrapQuery");
+    }
+
+    [Fact]
+    public void InternalRequestFolders_ShouldOnlyContainBareCommandsAndQueries()
+    {
+        AssertRequestFolderConvention("Commands", "Internal", "ICommand");
+        AssertRequestFolderConvention("Queries", "Internal", "IQuery");
+    }
+
+    private static void AssertRequestFolderConvention(
+        string category,
+        string audience,
+        string expectedInterface)
+    {
+        var servicesRoot = FindRepoFile("src", "services");
+        var invalidDeclarations = new List<string>();
+
+        foreach (var file in Directory.GetFiles(servicesRoot, "*.cs", SearchOption.AllDirectories)
+                     .Where(path => IsUnderRequestFolder(path, category, audience)))
+        {
+            var source = File.ReadAllText(file);
+            var declarations = ParseRequestDeclarations(source);
+
+            if (declarations.Count == 0)
+            {
+                continue;
+            }
+
+            foreach (var declaration in declarations)
+            {
+                if (!string.Equals(declaration.InterfaceName, expectedInterface, StringComparison.Ordinal))
+                {
+                    invalidDeclarations.Add(
+                        $"{Path.GetFileName(file)}:{declaration.RecordName} -> {declaration.InterfaceName} (expected {expectedInterface})");
+                }
+            }
+        }
+
+        invalidDeclarations.Should().BeEmpty();
+    }
+
+    private static bool IsUnderRequestFolder(string filePath, string category, string audience)
+    {
+        var separator = Path.DirectorySeparatorChar;
+        var normalized = filePath.Replace(Path.AltDirectorySeparatorChar, separator);
+
+        return normalized.Contains($"{separator}{category}{separator}{audience}{separator}", StringComparison.Ordinal)
+               && !normalized.Contains($"{separator}bin{separator}", StringComparison.OrdinalIgnoreCase)
+               && !normalized.Contains($"{separator}obj{separator}", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static List<RequestDeclaration> ParseRequestDeclarations(string source)
+    {
+        var matches = Regex.Matches(
+            source,
+            @"public\s+(?:sealed\s+)?record\s+(?<name>\w+(?:<[^>]+>)?)\s*(?:\([^;]*?\))?\s*:\s*(?<iface>I\w+)\s*<",
+            RegexOptions.Singleline);
+
+        return matches
+            .Select(match => new RequestDeclaration(
+                match.Groups["name"].Value,
+                match.Groups["iface"].Value))
+            .ToList();
+    }
+
+    private sealed record RequestDeclaration(string RecordName, string InterfaceName);
 
     private static string FindRepoFile(params string[] relativeSegments)
     {
@@ -150,7 +329,7 @@ public sealed class ConfigurationGuardTests
         while (current is not null)
         {
             var candidate = Path.Combine(current.FullName, relativeSegments[0]);
-            if (Directory.Exists(candidate))
+            if (Directory.Exists(candidate) || File.Exists(candidate))
             {
                 return Path.Combine(current.FullName, Path.Combine(relativeSegments));
             }
@@ -158,7 +337,7 @@ public sealed class ConfigurationGuardTests
             current = current.Parent;
         }
 
-        throw new DirectoryNotFoundException("Could not locate repository root for AppHost source inspection.");
+        throw new DirectoryNotFoundException("Could not locate repository root for source inspection.");
     }
 
     private static string FindRepoDirectory(params string[] relativeSegments)

@@ -3,6 +3,7 @@ using IIoT.ProductionService.Commands.Capacities;
 using IIoT.ProductionService.Queries.Capacities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace IIoT.HttpApi.Controllers;
 
@@ -13,6 +14,7 @@ namespace IIoT.HttpApi.Controllers;
 public class EdgeCapacityController : ApiControllerBase
 {
     [HttpPost("hourly")]
+    [EnableRateLimiting("edge-upload")]
     public async Task<IActionResult> ReceiveHourly([FromBody] ReceiveHourlyCapacityCommand command)
     {
         var result = await Sender.Send(command);

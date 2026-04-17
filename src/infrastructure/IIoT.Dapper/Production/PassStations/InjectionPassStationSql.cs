@@ -5,7 +5,7 @@ using IIoT.Services.Common.Contracts.RecordQueries;
 
 namespace IIoT.Dapper.Production.PassStations;
 
-public sealed class InjectionPassStationSql :
+internal sealed class InjectionPassStationSql :
     IPassStationWriteSql<InjectionWriteModel>,
     IPassStationQuerySql<InjectionPassListItemDto>,
     IPassStationQuerySql<InjectionPassDetailDto>

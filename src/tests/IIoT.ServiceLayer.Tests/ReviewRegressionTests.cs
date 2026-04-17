@@ -7,10 +7,13 @@ using IIoT.IdentityService.Commands;
 using IIoT.IdentityService.Queries;
 using IIoT.EntityFrameworkCore.Persistence;
 using IIoT.Services.Common.Attributes;
+using IIoT.Services.Common.Behaviors;
 using IIoT.Services.Common.Caching;
 using IIoT.Services.Common.Caching.Options;
 using IIoT.Services.Common.Contracts;
+using IIoT.Services.Common.Contracts.Authorization;
 using IIoT.SharedKernel.Domain;
+using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 using MediatR;
 using Microsoft.AspNetCore.Identity;
@@ -44,6 +47,14 @@ public sealed class ReviewRegressionTests
 
         Assert.ThrowsAny<ArgumentException>(() => recipe.CreateNextVersion(null!, "{\"speed\":140}"));
         Assert.ThrowsAny<ArgumentException>(() => recipe.CreateNextVersion("V1.1", null!));
+    }
+
+    [Fact]
+    public void Recipe_ShouldRejectInvalidVersionFormat()
+    {
+        var recipe = new Recipe("Recipe", Guid.NewGuid(), Guid.NewGuid(), "{\"speed\":120}");
+
+        Assert.ThrowsAny<ArgumentException>(() => recipe.CreateNextVersion("1.1", "{\"speed\":140}"));
     }
 
     [Fact]
@@ -116,6 +127,7 @@ public sealed class ReviewRegressionTests
 
         Assert.Single(accessibleDeviceIds!);
         Assert.Equal(TimeSpan.FromMinutes(10), cacheService.LastAbsoluteExpireTime);
+        Assert.Equal(1, cacheService.GetOrSetCalls);
     }
 
     [Fact]
@@ -159,6 +171,7 @@ public sealed class ReviewRegressionTests
 
         Assert.Contains("Device.Read", permissions);
         Assert.Equal(CacheKeys.PermissionByUser(user.Id), cacheService.LastSetKey);
+        Assert.Equal(1, cacheService.GetOrSetCalls);
     }
 
     [Fact]
@@ -210,6 +223,7 @@ public sealed class ReviewRegressionTests
                 Id = currentUserId.ToString(),
                 Role = "Operator",
                 UserName = "operator-001",
+                DeviceId = null,
                 IsAuthenticated = true
             });
 
@@ -233,6 +247,7 @@ public sealed class ReviewRegressionTests
                 Id = currentUserId.ToString(),
                 Role = "Operator",
                 UserName = "operator-001",
+                DeviceId = null,
                 IsAuthenticated = true
             });
 
@@ -254,6 +269,62 @@ public sealed class ReviewRegressionTests
 
         Assert.NotNull(attribute);
         Assert.Equal("Role.Define", attribute!.Permission);
+    }
+
+    [Fact]
+    public async Task DeviceBindingBehavior_ShouldAllowMatchingDeviceId()
+    {
+        var deviceId = Guid.NewGuid();
+        var behavior = new DeviceBindingBehavior<DeviceScopedCommand, Result<bool>>(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "edge-operator",
+                Role = SystemRoles.Admin,
+                DeviceId = deviceId,
+                IsAuthenticated = true
+            });
+
+        var result = await behavior.Handle(
+            new DeviceScopedCommand(deviceId),
+            _ => Task.FromResult(Result.Success(true)),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+    }
+
+    [Fact]
+    public async Task DeviceBindingBehavior_ShouldRejectMismatchedDeviceId()
+    {
+        var behavior = new DeviceBindingBehavior<DeviceScopedCommand, Result<bool>>(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "edge-operator",
+                Role = SystemRoles.Admin,
+                DeviceId = Guid.NewGuid(),
+                IsAuthenticated = true
+            });
+
+        await Assert.ThrowsAsync<IIoT.Services.Common.Exceptions.ForbiddenException>(() =>
+            behavior.Handle(
+                new DeviceScopedCommand(Guid.NewGuid()),
+                _ => Task.FromResult(Result.Success(true)),
+                CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task DistributedLockBehavior_ShouldRejectMissingTemplateProperty()
+    {
+        var behavior = new DistributedLockBehavior<BrokenLockCommand, Result<bool>>(new NoopDistributedLockService());
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            behavior.Handle(
+                new BrokenLockCommand(Guid.NewGuid()),
+                _ => Task.FromResult(Result.Success(true)),
+                CancellationToken.None));
+
+        Assert.Contains("MissingProperty", exception.Message, StringComparison.Ordinal);
     }
 
     private static ServiceProvider CreateServiceProvider(IMediator mediator)
@@ -431,9 +502,24 @@ public sealed class ReviewRegressionTests
 
         public TimeSpan? LastAbsoluteExpireTime { get; private set; }
 
+        public int GetOrSetCalls { get; private set; }
+
         public Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default)
         {
             return Task.FromResult(default(T));
+        }
+
+        public async Task<T?> GetOrSetAsync<T>(
+            string key,
+            Func<CancellationToken, Task<T?>> factory,
+            TimeSpan? absoluteExpireTime = null,
+            CancellationToken cancellationToken = default)
+        {
+            GetOrSetCalls++;
+            var value = await factory(cancellationToken);
+            LastSetKey = key;
+            LastAbsoluteExpireTime = absoluteExpireTime;
+            return value;
         }
 
         public Task SetAsync<T>(
@@ -455,6 +541,30 @@ public sealed class ReviewRegressionTests
         public Task RemoveByPatternAsync(string pattern, CancellationToken cancellationToken = default)
         {
             return Task.CompletedTask;
+        }
+    }
+
+    [DistributedLock("iiot:lock:missing:{MissingProperty}")]
+    private sealed record BrokenLockCommand(Guid DeviceId) : ICommand<Result<bool>>;
+
+    private sealed record DeviceScopedCommand(Guid DeviceId) : IDeviceCommand<Result<bool>>;
+
+    private sealed class NoopDistributedLockService : IDistributedLockService
+    {
+        public Task<IAsyncDisposable> AcquireAsync(
+            string resource,
+            TimeSpan? acquireTimeout = null,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IAsyncDisposable>(new NoopAsyncDisposable());
+        }
+    }
+
+    private sealed class NoopAsyncDisposable : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync()
+        {
+            return ValueTask.CompletedTask;
         }
     }
 }

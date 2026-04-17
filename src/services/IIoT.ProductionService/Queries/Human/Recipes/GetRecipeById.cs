@@ -66,7 +66,10 @@ public class GetRecipeByIdHandler(
         }
 
         // ABAC 校验:无论数据来自 DB 还是缓存,都要在这里过一遍管辖权
-        if (currentUser.Role != "Admin")
+        if (!string.Equals(
+                currentUser.Role,
+                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                StringComparison.Ordinal))
         {
             if (!Guid.TryParse(currentUser.Id, out var userId))
                 return Result.Failure("用户凭证异常");

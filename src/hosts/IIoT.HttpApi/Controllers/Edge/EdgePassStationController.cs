@@ -2,6 +2,7 @@ using IIoT.HttpApi.Infrastructure;
 using IIoT.ProductionService.Commands.PassStations;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace IIoT.HttpApi.Controllers;
 
@@ -12,6 +13,7 @@ namespace IIoT.HttpApi.Controllers;
 public class EdgePassStationController : ApiControllerBase
 {
     [HttpPost("injection/batch")]
+    [EnableRateLimiting("edge-upload")]
     public async Task<IActionResult> ReceiveInjectionBatch([FromBody] ReceiveInjectionPassCommand command)
     {
         var result = await Sender.Send(command);
@@ -19,6 +21,7 @@ public class EdgePassStationController : ApiControllerBase
     }
 
     [HttpPost("stacking")]
+    [EnableRateLimiting("edge-upload")]
     public async Task<IActionResult> ReceiveStacking([FromBody] ReceiveStackingPassCommand command)
     {
         var result = await Sender.Send(command);

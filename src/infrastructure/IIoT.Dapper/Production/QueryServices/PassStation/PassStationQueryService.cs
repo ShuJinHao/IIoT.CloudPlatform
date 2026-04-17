@@ -4,7 +4,7 @@ using IIoT.SharedKernel.Paging;
 
 namespace IIoT.Dapper.Production.QueryServices.PassStation;
 
-public sealed class PassStationQueryService<TDto>(
+internal sealed class PassStationQueryService<TDto>(
     IDbConnectionFactory connectionFactory,
     IPassStationQuerySql<TDto> sql)
     : IPassStationQueryService<TDto>

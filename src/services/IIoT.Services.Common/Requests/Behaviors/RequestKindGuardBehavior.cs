@@ -5,6 +5,11 @@ using Microsoft.AspNetCore.Http;
 
 namespace IIoT.Services.Common.Behaviors;
 
+/// <summary>
+/// 请求分类守卫。
+/// 用来约束 HTTP 请求必须明确声明自己属于 human、edge 或匿名 bootstrap 三类之一，
+/// 同时防止把人端专用的授权特性错误地挂到设备端或 bootstrap 请求上。
+/// </summary>
 public sealed class RequestKindGuardBehavior<TRequest, TResponse>(
     IHttpContextAccessor httpContextAccessor) : IPipelineBehavior<TRequest, TResponse>
     where TRequest : IRequest<TResponse>

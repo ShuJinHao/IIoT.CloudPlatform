@@ -17,7 +17,9 @@ public class UpdateRolePermissionsHandler(
 {
     public async Task<Result<bool>> Handle(UpdateRolePermissionsCommand request, CancellationToken cancellationToken)
     {
-        if (request.RoleName.Equals("Admin", StringComparison.OrdinalIgnoreCase))
+        if (request.RoleName.Equals(
+                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                StringComparison.OrdinalIgnoreCase))
         {
             return Result.Failure("系统保护：内置 Admin 角色的权限由系统硬编码，禁止修改！");
         }

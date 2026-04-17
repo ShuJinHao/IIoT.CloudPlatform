@@ -1,35 +1,62 @@
-﻿using IIoT.Services.Common.Exceptions;
+using IIoT.Services.Common.Exceptions;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 
-public class UseCaseExceptionHandler : IExceptionHandler
-{
-    private readonly Dictionary<Type, Func<HttpContext, Exception, Task>> _exceptionHandlers = new()
-    {
-        { typeof(ForbiddenException), HandleForbiddenExceptionAsync }
-    };
+namespace IIoT.HttpApi.Infrastructure;
 
-    public async ValueTask<bool> TryHandleAsync(HttpContext httpContext, Exception exception,
+public sealed class UseCaseExceptionHandler : IExceptionHandler
+{
+    public async ValueTask<bool> TryHandleAsync(
+        HttpContext httpContext,
+        Exception exception,
         CancellationToken cancellationToken)
     {
-        var exceptionType = exception.GetType();
+        var problem = exception switch
+        {
+            ForbiddenException forbidden => CreateProblem(
+                StatusCodes.Status403Forbidden,
+                "Forbidden",
+                "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/403",
+                forbidden.Message),
+            TimeoutException timeout => CreateProblem(
+                StatusCodes.Status409Conflict,
+                "Conflict",
+                "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/409",
+                timeout.Message),
+            ArgumentException argument => CreateProblem(
+                StatusCodes.Status400BadRequest,
+                "Bad Request",
+                "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/400",
+                argument.Message),
+            InvalidOperationException invalidOperation => CreateProblem(
+                StatusCodes.Status400BadRequest,
+                "Bad Request",
+                "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/400",
+                invalidOperation.Message),
+            _ => CreateProblem(
+                StatusCodes.Status500InternalServerError,
+                "Internal Server Error",
+                "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/500",
+                "The server encountered an unexpected error while processing the request.")
+        };
 
-        if (!_exceptionHandlers.TryGetValue(exceptionType, out var handler)) return false;
-
-        await handler.Invoke(httpContext, exception);
+        httpContext.Response.StatusCode = problem.Status ?? StatusCodes.Status500InternalServerError;
+        await httpContext.Response.WriteAsJsonAsync(problem, cancellationToken);
         return true;
     }
 
-    private static async Task HandleForbiddenExceptionAsync(HttpContext httpContext, Exception exception)
+    private static ProblemDetails CreateProblem(
+        int status,
+        string title,
+        string type,
+        string detail)
     {
-        httpContext.Response.StatusCode = StatusCodes.Status403Forbidden;
-
-        await httpContext.Response.WriteAsJsonAsync(new ProblemDetails
+        return new ProblemDetails
         {
-            Status = StatusCodes.Status403Forbidden,
-            Title = "Forbidden",
-            Type = "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/403",
-            Detail = exception.Message
-        });
+            Status = status,
+            Title = title,
+            Type = type,
+            Detail = detail
+        };
     }
 }

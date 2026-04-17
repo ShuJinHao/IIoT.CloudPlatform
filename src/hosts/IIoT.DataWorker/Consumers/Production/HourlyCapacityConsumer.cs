@@ -6,8 +6,8 @@ using MediatR;
 namespace IIoT.DataWorker.Consumers;
 
 /// <summary>
-/// 半小时产能入库消费者。
-/// Handler 成功返回后确认消息；抛异常时交给 MassTransit 重试。
+/// 半小时产能事件消费者。
+/// 把事件转成内部落库命令；命令失败时抛异常，让 MassTransit 接管重试和错误队列。
 /// </summary>
 public sealed class HourlyCapacityConsumer(ISender sender)
     : IConsumer<HourlyCapacityReceivedEvent>

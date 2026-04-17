@@ -32,7 +32,9 @@ public class HumanMasterDataProcessController : ApiControllerBase
     public async Task<IActionResult> Create([FromBody] CreateProcessCommand command)
     {
         var result = await Sender.Send(command);
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return result.IsSuccess
+            ? Created($"/api/v1/human/master-data/processes/{result.Value}", result.Value)
+            : BadRequest(result.Errors);
     }
 
     [HttpPut("{id}")]

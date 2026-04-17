@@ -13,6 +13,7 @@ using IIoT.ProductionService.Queries.Capacities;
 using IIoT.ProductionService.Queries.Devices;
 using IIoT.Services.Common.Events.Capacities;
 using IIoT.Services.Common.Caching;
+using IIoT.Services.Common.Contracts.Authorization;
 using IIoT.Services.Common.Contracts.RecordQueries;
 using IIoT.SharedKernel.Specification;
 using Microsoft.Extensions.DependencyInjection;
@@ -102,7 +103,7 @@ public sealed class ServiceFlowGuardTests
             new TestCurrentUser
             {
                 Id = Guid.NewGuid().ToString(),
-                Role = "Admin",
+                Role = SystemRoles.Admin,
                 UserName = "admin",
                 IsAuthenticated = true
             },
@@ -156,6 +157,82 @@ public sealed class ServiceFlowGuardTests
     }
 
     [Fact]
+    public async Task OnboardEmployeeHandler_ShouldRollbackWhenRoleAssignmentFails()
+    {
+        var repository = new InMemoryRepository<Employee>();
+        var identityStore = new RecordingIdentityAccountStore
+        {
+            AssignRoleResult = IIoT.SharedKernel.Result.Result.Failure("role failed")
+        };
+        var passwordService = new StubIdentityPasswordService();
+        var unitOfWork = new RecordingUnitOfWork();
+        var handler = new OnboardEmployeeHandler(
+            identityStore,
+            passwordService,
+            repository,
+            unitOfWork);
+
+        var result = await handler.Handle(
+            new OnboardEmployeeCommand("E1003", "Operator", "Password123!", "Supervisor"),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Null(repository.AddedEntity);
+        Assert.Equal(1, unitOfWork.BeginCalls);
+        Assert.Equal(0, unitOfWork.CommitCalls);
+        Assert.Equal(1, unitOfWork.RollbackCalls);
+    }
+
+    [Fact]
+    public async Task DeactivateEmployeeHandler_ShouldRollbackWhenIdentityDisableFails()
+    {
+        var employeeId = Guid.NewGuid();
+        var employee = new Employee(employeeId, "E1004", "Rollback User");
+        var repository = new InMemoryRepository<Employee>
+        {
+            SingleOrDefaultResult = employee
+        };
+        var identityStore = new RecordingIdentityAccountStore
+        {
+            SetEnabledResult = IIoT.SharedKernel.Result.Result.Failure("disable failed")
+        };
+        var unitOfWork = new RecordingUnitOfWork();
+        var cache = new RecordingCacheService();
+        var handler = new DeactivateEmployeeHandler(repository, identityStore, unitOfWork, cache);
+
+        var result = await handler.Handle(new DeactivateEmployeeCommand(employeeId), CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(1, unitOfWork.BeginCalls);
+        Assert.Equal(0, unitOfWork.CommitCalls);
+        Assert.Equal(1, unitOfWork.RollbackCalls);
+    }
+
+    [Fact]
+    public async Task TerminateEmployeeHandler_ShouldRollbackWhenIdentityDeleteFails()
+    {
+        var employeeId = Guid.NewGuid();
+        var employee = new Employee(employeeId, "E1005", "Terminate User");
+        var repository = new InMemoryRepository<Employee>
+        {
+            SingleOrDefaultResult = employee
+        };
+        var identityStore = new RecordingIdentityAccountStore
+        {
+            DeleteResult = IIoT.SharedKernel.Result.Result.Failure("delete failed")
+        };
+        var unitOfWork = new RecordingUnitOfWork();
+        var handler = new TerminateEmployeeHandler(repository, identityStore, unitOfWork);
+
+        var result = await handler.Handle(new TerminateEmployeeCommand(employeeId), CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(1, unitOfWork.BeginCalls);
+        Assert.Equal(0, unitOfWork.CommitCalls);
+        Assert.Equal(1, unitOfWork.RollbackCalls);
+    }
+
+    [Fact]
     public async Task UpdateEmployeeAccessHandler_ShouldClearDeviceAccessCacheWhenAccessChanges()
     {
         var employeeId = Guid.NewGuid();
@@ -193,7 +270,7 @@ public sealed class ServiceFlowGuardTests
             new TestCurrentUser
             {
                 Id = Guid.NewGuid().ToString(),
-                Role = "Admin",
+                Role = SystemRoles.Admin,
                 UserName = "admin",
                 IsAuthenticated = true
             },
@@ -224,7 +301,7 @@ public sealed class ServiceFlowGuardTests
             new TestCurrentUser
             {
                 Id = Guid.NewGuid().ToString(),
-                Role = "Admin",
+                Role = SystemRoles.Admin,
                 UserName = "admin",
                 IsAuthenticated = true
             },
@@ -351,7 +428,7 @@ public sealed class ServiceFlowGuardTests
             new TestCurrentUser
             {
                 Id = Guid.NewGuid().ToString(),
-                Role = "Admin",
+                Role = SystemRoles.Admin,
                 UserName = "admin",
                 IsAuthenticated = true
             },

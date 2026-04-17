@@ -9,8 +9,15 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace IIoT.ProductionService;
 
+/// <summary>
+/// 过站类型注册扩展。
+/// 用来把不同过站事件的 mapper、持久化 handler 和查询 handler 统一接入 DI。
+/// </summary>
 public static class PassStationRegistration
 {
+    /// <summary>
+    /// 注册某一种过站事件的写入链路。
+    /// </summary>
     public static IServiceCollection AddPassStationType<TEvent, TWriteModel, TMapper>(
         this IServiceCollection services)
         where TEvent : class, IPassStationEvent
@@ -26,6 +33,9 @@ public static class PassStationRegistration
         return services;
     }
 
+    /// <summary>
+    /// 注册某一种过站类型的查询链路。
+    /// </summary>
     public static IServiceCollection AddPassStationQuery<TListDto, TDetailDto>(
         this IServiceCollection services)
         where TListDto : class

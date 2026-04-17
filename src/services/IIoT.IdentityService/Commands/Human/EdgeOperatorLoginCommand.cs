@@ -1,5 +1,6 @@
 using IIoT.Services.Common.Caching;
 using IIoT.Services.Common.Contracts;
+using IIoT.Services.Common.Contracts.Authorization;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 
@@ -49,7 +50,7 @@ public class EdgeOperatorLoginHandler(
         }
 
         var roles = await identityAccountStore.GetRolesAsync(account.Id, cancellationToken);
-        var isAdmin = roles.Contains("Admin");
+        var isAdmin = roles.Contains(SystemRoles.Admin, StringComparer.Ordinal);
 
         if (!isAdmin)
         {
@@ -74,7 +75,12 @@ public class EdgeOperatorLoginHandler(
         await cacheService.RemoveAsync(CacheKeys.PermissionByUser(account.Id), cancellationToken);
 
         var permissions = await permissionProvider.GetPermissionsAsync(account.Id, cancellationToken);
-        var token = jwtTokenGenerator.GenerateToken(account.Id, request.EmployeeNo, roles, permissions);
+        var token = jwtTokenGenerator.GenerateToken(
+            account.Id,
+            request.EmployeeNo,
+            roles,
+            permissions,
+            request.DeviceId);
 
         return Result.Success(token);
     }

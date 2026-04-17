@@ -3,7 +3,7 @@ using IIoT.Dapper.Production.Repositories.PassStations;
 
 namespace IIoT.Dapper.Production.PassStations;
 
-public sealed class StackingPassStationSql : IPassStationWriteSql<StackingWriteModel>
+internal sealed class StackingPassStationSql : IPassStationWriteSql<StackingWriteModel>
 {
     public string InsertSql => """
         insert into pass_data_stacking

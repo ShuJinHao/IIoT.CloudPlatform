@@ -37,7 +37,9 @@ public class HumanEmployeeController : ApiControllerBase
     public async Task<IActionResult> Onboard([FromBody] OnboardEmployeeCommand command)
     {
         var result = await Sender.Send(command);
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return result.IsSuccess
+            ? Created($"/api/v1/human/employees/{result.Value}", result.Value)
+            : BadRequest(result.Errors);
     }
 
     [HttpPut("{id}/profile")]

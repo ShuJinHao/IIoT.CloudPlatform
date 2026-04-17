@@ -5,6 +5,10 @@ using IIoT.SharedKernel.Result;
 
 namespace IIoT.ProductionService.Commands.PassStations;
 
+/// <summary>
+/// 过站接收服务。
+/// 负责对设备端上报的过站数据做统一的入口校验，校验通过后再发布到事件总线。
+/// </summary>
 public sealed class PassStationReceiveService(
     IDeviceIdentityQueryService deviceIdentityQuery,
     IEventPublisher eventPublisher) : IPassStationReceiveService

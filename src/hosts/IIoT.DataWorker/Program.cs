@@ -13,6 +13,8 @@ using MassTransit;
 using Microsoft.Extensions.DependencyInjection;
 
 var builder = Host.CreateApplicationBuilder(args);
+var consumerOptions = builder.Configuration.GetSection(ConsumerConcurrencyOptions.SectionName).Get<ConsumerConcurrencyOptions>()
+                      ?? new ConsumerConcurrencyOptions();
 
 builder.ConfigureContainer(
     new DefaultServiceProviderFactory(new ServiceProviderOptions
@@ -45,10 +47,22 @@ builder.Services.AddMassTransit(x =>
 {
     x.SetKebabCaseEndpointNameFormatter();
 
-    x.AddConsumer<PassStationConsumer<PassDataInjectionReceivedEvent>>(cfg => { cfg.ConcurrentMessageLimit = 4; });
-    x.AddConsumer<PassStationConsumer<PassDataStackingReceivedEvent>>(cfg => { cfg.ConcurrentMessageLimit = 4; });
-    x.AddConsumer<DeviceLogConsumer>(cfg => { cfg.ConcurrentMessageLimit = 3; });
-    x.AddConsumer<HourlyCapacityConsumer>(cfg => { cfg.ConcurrentMessageLimit = 1; });
+    x.AddConsumer<PassStationConsumer<PassDataInjectionReceivedEvent>>(cfg =>
+    {
+        cfg.ConcurrentMessageLimit = consumerOptions.PassStationConcurrentMessageLimit;
+    });
+    x.AddConsumer<PassStationConsumer<PassDataStackingReceivedEvent>>(cfg =>
+    {
+        cfg.ConcurrentMessageLimit = consumerOptions.PassStationConcurrentMessageLimit;
+    });
+    x.AddConsumer<DeviceLogConsumer>(cfg =>
+    {
+        cfg.ConcurrentMessageLimit = consumerOptions.DeviceLogConcurrentMessageLimit;
+    });
+    x.AddConsumer<HourlyCapacityConsumer>(cfg =>
+    {
+        cfg.ConcurrentMessageLimit = consumerOptions.HourlyCapacityConcurrentMessageLimit;
+    });
 
     x.UsingRabbitMq((context, cfg) =>
     {

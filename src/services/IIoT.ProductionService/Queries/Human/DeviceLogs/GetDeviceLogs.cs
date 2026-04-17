@@ -31,7 +31,10 @@ public class GetDeviceLogsHandler(
         if (request.DeviceId == Guid.Empty)
             return Result.Failure("DeviceId 不能为空");
 
-        if (currentUser.Role != "Admin")
+        if (!string.Equals(
+                currentUser.Role,
+                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                StringComparison.Ordinal))
         {
             if (!Guid.TryParse(currentUser.Id, out var userId))
                 return Result.Failure("用户凭证异常");

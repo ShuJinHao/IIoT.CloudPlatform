@@ -6,8 +6,8 @@ using MediatR;
 namespace IIoT.DataWorker.Consumers;
 
 /// <summary>
-/// 泛型过站数据入库消费者。
-/// Handler 成功返回后确认消息；抛异常时交给 MassTransit 重试。
+/// 泛型过站事件消费者。
+/// 支持不同过站事件共用同一套消费外壳，真正的映射和落库逻辑由内部命令链路完成。
 /// </summary>
 public sealed class PassStationConsumer<TEvent>(ISender sender)
     : IConsumer<TEvent>

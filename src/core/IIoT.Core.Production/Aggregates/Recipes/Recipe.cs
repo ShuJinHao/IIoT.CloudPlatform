@@ -24,6 +24,10 @@ public enum RecipeStatus
 /// </summary>
 public class Recipe : BaseEntity<Guid>
 {
+    private static readonly System.Text.RegularExpressions.Regex VersionPattern = new(
+        @"^V\d+\.\d+$",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
     /// <summary>
     /// 仅供 EF Core 物化使用,业务代码不要调用。
     /// </summary>
@@ -132,6 +136,8 @@ public class Recipe : BaseEntity<Guid>
         ArgumentException.ThrowIfNullOrWhiteSpace(RecipeName);
         ArgumentException.ThrowIfNullOrWhiteSpace(ParametersJsonb);
         ArgumentException.ThrowIfNullOrWhiteSpace(Version);
+        if (!VersionPattern.IsMatch(Version))
+            throw new ArgumentException("Version 必须符合 Vx.y 格式。", nameof(Version));
         if (ProcessId == Guid.Empty)
             throw new ArgumentException("ProcessId 不能为空。", nameof(ProcessId));
         if (DeviceId == Guid.Empty)

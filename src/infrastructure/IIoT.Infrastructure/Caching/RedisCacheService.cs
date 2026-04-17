@@ -31,6 +31,30 @@ public class RedisCacheService(
         }
     }
 
+    public async Task<T?> GetOrSetAsync<T>(
+        string key,
+        Func<CancellationToken, Task<T?>> factory,
+        TimeSpan? absoluteExpireTime = null,
+        CancellationToken cancellationToken = default)
+    {
+        var duration = absoluteExpireTime ?? TimeSpan.FromMinutes(5);
+
+        try
+        {
+            return await _fusionCache.GetOrSetAsync<T?>(
+                key,
+                factory,
+                default(ZiggyCreatures.Caching.Fusion.MaybeValue<T?>),
+                duration,
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Redis cache single-flight read failed for key {Key}", key);
+            return await factory(cancellationToken);
+        }
+    }
+
     public async Task SetAsync<T>(string key, T value, TimeSpan? absoluteExpireTime = null, CancellationToken cancellationToken = default)
     {
         if (value == null)
