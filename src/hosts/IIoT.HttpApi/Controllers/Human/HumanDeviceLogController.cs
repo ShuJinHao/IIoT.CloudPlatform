@@ -18,8 +18,7 @@ public class HumanDeviceLogController : ApiControllerBase
         [FromQuery] Guid deviceId,
         [FromQuery] string? level = null)
     {
-        var result = await Sender.Send(new GetDeviceLogsQuery(pagination, deviceId, Level: level));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetDeviceLogsQuery(pagination, deviceId, Level: level)));
     }
 
     [HttpGet("by-keyword")]
@@ -28,8 +27,7 @@ public class HumanDeviceLogController : ApiControllerBase
         [FromQuery] Guid deviceId,
         [FromQuery] string keyword)
     {
-        var result = await Sender.Send(new GetDeviceLogsQuery(pagination, deviceId, Keyword: keyword));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetDeviceLogsQuery(pagination, deviceId, Keyword: keyword)));
     }
 
     [HttpGet("by-date")]
@@ -40,8 +38,7 @@ public class HumanDeviceLogController : ApiControllerBase
     {
         var start = date.ToDateTime(TimeOnly.MinValue);
         var end = date.ToDateTime(TimeOnly.MaxValue);
-        var result = await Sender.Send(new GetDeviceLogsQuery(pagination, deviceId, StartTime: start, EndTime: end));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetDeviceLogsQuery(pagination, deviceId, StartTime: start, EndTime: end)));
     }
 
     [HttpGet("by-time-range")]
@@ -51,8 +48,7 @@ public class HumanDeviceLogController : ApiControllerBase
         [FromQuery] DateTime startTime,
         [FromQuery] DateTime endTime)
     {
-        var result = await Sender.Send(new GetDeviceLogsQuery(pagination, deviceId, StartTime: startTime, EndTime: endTime));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetDeviceLogsQuery(pagination, deviceId, StartTime: startTime, EndTime: endTime)));
     }
 
     [HttpGet("by-date-keyword")]
@@ -64,7 +60,6 @@ public class HumanDeviceLogController : ApiControllerBase
     {
         var start = date.ToDateTime(TimeOnly.MinValue);
         var end = date.ToDateTime(TimeOnly.MaxValue);
-        var result = await Sender.Send(new GetDeviceLogsQuery(pagination, deviceId, Keyword: keyword, StartTime: start, EndTime: end));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetDeviceLogsQuery(pagination, deviceId, Keyword: keyword, StartTime: start, EndTime: end)));
     }
 }

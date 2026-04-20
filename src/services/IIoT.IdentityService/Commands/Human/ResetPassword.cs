@@ -1,5 +1,6 @@
-using IIoT.Services.Common.Attributes;
-using IIoT.Services.Common.Contracts;
+using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 
@@ -13,14 +14,26 @@ public record ResetPasswordCommand(
 ) : IHumanCommand<Result<bool>>;
 
 public class ResetPasswordHandler(
-    IIdentityPasswordService identityPasswordService
+    IIdentityPasswordService identityPasswordService,
+    IRefreshTokenService refreshTokenService
 ) : ICommandHandler<ResetPasswordCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(ResetPasswordCommand request, CancellationToken cancellationToken)
     {
-        return await identityPasswordService.ResetPasswordAsync(
+        var result = await identityPasswordService.ResetPasswordAsync(
             request.UserId,
             request.NewPassword,
             cancellationToken);
+
+        if (result.IsSuccess && result.Value)
+        {
+            await refreshTokenService.RevokeSubjectTokensAsync(
+                IIoTClaimTypes.HumanActor,
+                request.UserId,
+                "password-reset",
+                cancellationToken);
+        }
+
+        return result;
     }
 }

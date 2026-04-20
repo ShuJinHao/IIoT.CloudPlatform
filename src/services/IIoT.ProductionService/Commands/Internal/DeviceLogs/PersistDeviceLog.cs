@@ -1,6 +1,6 @@
 using IIoT.Core.Production.Contracts.RecordRepositories;
-using IIoT.Services.Common.Contracts.RecordQueries;
-using IIoT.Services.Common.Events.DeviceLogs;
+using IIoT.Services.Contracts.RecordQueries;
+using IIoT.Services.Contracts.Events.DeviceLogs;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 

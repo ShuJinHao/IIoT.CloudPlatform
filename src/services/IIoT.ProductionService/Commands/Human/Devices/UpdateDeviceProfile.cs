@@ -1,9 +1,9 @@
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Specifications.Devices;
-using IIoT.Services.Common.Attributes;
-using IIoT.Services.Common.Caching;
-using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Contracts.Authorization;
+using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.CrossCutting.Caching;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Authorization;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -41,7 +41,7 @@ public class UpdateDeviceProfileHandler(
 
         if (!string.Equals(
                 currentUser.Role,
-                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
                 StringComparison.Ordinal))
         {
             if (!Guid.TryParse(currentUser.Id, out var userId))

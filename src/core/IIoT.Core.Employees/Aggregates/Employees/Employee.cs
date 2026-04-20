@@ -1,4 +1,7 @@
-﻿using IIoT.SharedKernel.Domain;
+using IIoT.Core.Employees.Aggregates.Employees.Events;
+using IIoT.Core.Employees.Aggregates.Employees.ValueObjects;
+using IIoT.SharedKernel.Domain;
+using EmployeeNoValueObject = IIoT.Core.Employees.Aggregates.Employees.ValueObjects.EmployeeNo;
 
 namespace IIoT.Core.Employees.Aggregates.Employees;
 
@@ -20,16 +23,21 @@ public class Employee : BaseEntity<Guid>
     /// Id 由调用方传入(因为 Employee 与 IdentityService 的 User 共用 Id)。
     /// </summary>
     public Employee(Guid id, string employeeNo, string realName)
+        : this(id, EmployeeNoValueObject.From(employeeNo), realName)
+    {
+    }
+
+    public Employee(Guid id, EmployeeNoValueObject employeeNo, string realName)
     {
         if (id == Guid.Empty)
             throw new ArgumentException("Employee Id 不能为空。", nameof(id));
-        ArgumentException.ThrowIfNullOrWhiteSpace(employeeNo);
-        ArgumentException.ThrowIfNullOrWhiteSpace(realName);
 
         Id = id;
-        EmployeeNo = employeeNo.Trim();
-        RealName = realName.Trim();
+        EmployeeNo = employeeNo.Value;
+        RealName = NormalizeRequired(realName, nameof(realName));
         IsActive = true;
+
+        AddDomainEvent(new EmployeeOnboardedDomainEvent(Id, EmployeeNo, RealName));
     }
 
     /// <summary>
@@ -47,6 +55,8 @@ public class Employee : BaseEntity<Guid>
     /// </summary>
     public bool IsActive { get; private set; }
 
+    public uint RowVersion { get; private set; }
+
     // ── 基础档案行为 ──────────────────────────────────────
 
     /// <summary>
@@ -54,16 +64,47 @@ public class Employee : BaseEntity<Guid>
     /// </summary>
     public void Rename(string newEmployeeNo, string newRealName)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(newEmployeeNo);
-        ArgumentException.ThrowIfNullOrWhiteSpace(newRealName);
+        var employeeNo = EmployeeNoValueObject.From(newEmployeeNo);
+        var realName = NormalizeRequired(newRealName, nameof(newRealName));
 
-        EmployeeNo = newEmployeeNo.Trim();
-        RealName = newRealName.Trim();
+        if (EmployeeNo == employeeNo.Value && RealName == realName)
+        {
+            return;
+        }
+
+        EmployeeNo = employeeNo.Value;
+        RealName = realName;
+
+        AddDomainEvent(new EmployeeRenamedDomainEvent(Id, EmployeeNo, RealName));
     }
 
-    public void Activate() => IsActive = true;
+    public void Activate()
+    {
+        if (IsActive)
+        {
+            return;
+        }
 
-    public void Deactivate() => IsActive = false;
+        IsActive = true;
+        AddDomainEvent(new EmployeeActivatedDomainEvent(Id));
+    }
+
+    public void Deactivate()
+    {
+        if (!IsActive)
+        {
+            return;
+        }
+
+        IsActive = false;
+        AddDomainEvent(new EmployeeDeactivatedDomainEvent(Id));
+    }
+
+    public void Terminate()
+    {
+        IsActive = false;
+        AddDomainEvent(new EmployeeTerminatedDomainEvent(Id, EmployeeNo));
+    }
 
     // ── 机台级管辖权 ──────────────────────────────────────
 
@@ -88,5 +129,10 @@ public class Employee : BaseEntity<Guid>
             _deviceAccesses.Remove(access);
         }
     }
-}
 
+    private static string NormalizeRequired(string value, string paramName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value, paramName);
+        return value.Trim();
+    }
+}

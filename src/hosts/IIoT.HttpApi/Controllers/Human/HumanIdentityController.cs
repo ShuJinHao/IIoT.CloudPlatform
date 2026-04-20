@@ -19,7 +19,35 @@ public class HumanIdentityController : ApiControllerBase
     public async Task<IActionResult> Login([FromBody] LoginUserCommand command)
     {
         var result = await Sender.Send(command);
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        if (result.IsSuccess && result.Value is not null)
+        {
+            RefreshTokenHeaderNames.ApplyTo(
+                Response,
+                result.Value.RefreshToken,
+                result.Value.RefreshTokenExpiresAtUtc,
+                result.Value.AccessTokenExpiresAtUtc);
+        }
+
+        return ReturnBodyResult(result, session => session.AccessToken);
+    }
+
+    [AllowAnonymous]
+    [EnableRateLimiting("login")]
+    [HttpPost("refresh")]
+    public async Task<IActionResult> Refresh(
+        [FromHeader(Name = RefreshTokenHeaderNames.RefreshToken)] string refreshToken)
+    {
+        var result = await Sender.Send(new RefreshHumanIdentityCommand(refreshToken));
+        if (result.IsSuccess && result.Value is not null)
+        {
+            RefreshTokenHeaderNames.ApplyTo(
+                Response,
+                result.Value.RefreshToken,
+                result.Value.RefreshTokenExpiresAtUtc,
+                result.Value.AccessTokenExpiresAtUtc);
+        }
+
+        return ReturnBodyResult(result, session => session.AccessToken);
     }
 
     [AllowAnonymous]
@@ -28,42 +56,46 @@ public class HumanIdentityController : ApiControllerBase
     public async Task<IActionResult> EdgeLogin([FromBody] EdgeOperatorLoginCommand command)
     {
         var result = await Sender.Send(command);
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        if (result.IsSuccess && result.Value is not null)
+        {
+            RefreshTokenHeaderNames.ApplyTo(
+                Response,
+                result.Value.RefreshToken,
+                result.Value.RefreshTokenExpiresAtUtc,
+                result.Value.AccessTokenExpiresAtUtc);
+        }
+
+        return ReturnBodyResult(result, session => session.AccessToken);
     }
 
     [HttpPut("password")]
     public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordCommand command)
     {
-        var result = await Sender.Send(command);
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(command));
     }
 
     [HttpPut("password/reset")]
     public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordCommand command)
     {
-        var result = await Sender.Send(command);
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(command));
     }
 
     [HttpGet("roles")]
     public async Task<IActionResult> GetAllRoles()
     {
-        var result = await Sender.Send(new GetAllRolesQuery());
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetAllRolesQuery()));
     }
 
     [HttpPost("roles")]
     public async Task<IActionResult> DefineRolePolicy([FromBody] DefineRolePolicyCommand command)
     {
-        var result = await Sender.Send(command);
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(command));
     }
 
     [HttpGet("roles/{roleName}/permissions")]
     public async Task<IActionResult> GetRolePermissions([FromRoute] string roleName)
     {
-        var result = await Sender.Send(new GetRolePermissionsQuery(roleName));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetRolePermissionsQuery(roleName)));
     }
 
     [HttpPut("roles/{roleName}/permissions")]
@@ -71,22 +103,19 @@ public class HumanIdentityController : ApiControllerBase
         [FromRoute] string roleName,
         [FromBody] List<string> permissions)
     {
-        var result = await Sender.Send(new UpdateRolePermissionsCommand(roleName, permissions));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new UpdateRolePermissionsCommand(roleName, permissions)));
     }
 
     [HttpGet("permissions")]
     public async Task<IActionResult> GetAllPermissions()
     {
-        var result = await Sender.Send(new GetAllDefinedPermissionsQuery());
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetAllDefinedPermissionsQuery()));
     }
 
     [HttpGet("users/{userId}/permissions")]
     public async Task<IActionResult> GetUserPersonalPermissions([FromRoute] Guid userId)
     {
-        var result = await Sender.Send(new GetUserPersonalPermissionsQuery(userId));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetUserPersonalPermissionsQuery(userId)));
     }
 
     [HttpPut("users/{userId}/permissions")]
@@ -94,7 +123,6 @@ public class HumanIdentityController : ApiControllerBase
         [FromRoute] Guid userId,
         [FromBody] UpdateUserPermissionsCommand command)
     {
-        var result = await Sender.Send(command with { UserId = userId });
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(command with { UserId = userId }));
     }
 }

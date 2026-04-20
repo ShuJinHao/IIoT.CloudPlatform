@@ -1,0 +1,13 @@
+.git
+.vs
+.vscode
+artifacts
+publish
+**/bin
+**/obj
+**/node_modules
+**/dist
+**/*.db
+**/logs
+src/hosts/IIoT.AppHost/aspirate-output
+

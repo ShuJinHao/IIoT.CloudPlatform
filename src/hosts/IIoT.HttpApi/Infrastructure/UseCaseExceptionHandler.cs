@@ -1,6 +1,7 @@
-using IIoT.Services.Common.Exceptions;
+using IIoT.Services.CrossCutting.Exceptions;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace IIoT.HttpApi.Infrastructure;
 
@@ -23,6 +24,11 @@ public sealed class UseCaseExceptionHandler : IExceptionHandler
                 "Conflict",
                 "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/409",
                 timeout.Message),
+            DbUpdateConcurrencyException => CreateProblem(
+                StatusCodes.Status409Conflict,
+                "Conflict",
+                "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/409",
+                "The resource was modified by another request. Please refresh and retry."),
             ArgumentException argument => CreateProblem(
                 StatusCodes.Status400BadRequest,
                 "Bad Request",

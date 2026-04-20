@@ -3,5 +3,7 @@ publish/
 **/obj/
 src/ui/iiot-web/dist/
 src/ui/iiot-web/node_modules/
+aspirate-state.json
+src/hosts/IIoT.AppHost/aspirate-state.json
 src/hosts/IIoT.AppHost/aspirate-output/.env
 src/hosts/IIoT.AppHost/aspirate-output/certs/

@@ -1,7 +1,7 @@
 using IIoT.Infrastructure.Authentication;
 using IIoT.Infrastructure.Caching;
 using IIoT.Infrastructure.Locking;
-using IIoT.Services.Common.Contracts;
+using IIoT.Services.Contracts;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;

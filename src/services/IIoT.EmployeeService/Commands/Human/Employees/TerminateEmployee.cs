@@ -1,7 +1,8 @@
-﻿using IIoT.Core.Employees.Aggregates.Employees;
+using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.Employees.Specifications;
-using IIoT.Services.Common.Attributes;
-using IIoT.Services.Common.Contracts;
+using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -15,7 +16,8 @@ public record TerminateEmployeeCommand(Guid EmployeeId) : IHumanCommand<Result>;
 public class TerminateEmployeeHandler(
     IRepository<Employee> employeeRepository,
     IIdentityAccountStore identityAccountStore,
-    IUnitOfWork unitOfWork)
+    IUnitOfWork unitOfWork,
+    IRefreshTokenService refreshTokenService)
     : ICommandHandler<TerminateEmployeeCommand, Result>
 {
     public async Task<Result> Handle(
@@ -32,6 +34,7 @@ public class TerminateEmployeeHandler(
 
             if (employee is not null)
             {
+                employee.Terminate();
                 employeeRepository.Delete(employee);
                 await employeeRepository.SaveChangesAsync(cancellationToken);
             }
@@ -43,14 +46,19 @@ public class TerminateEmployeeHandler(
                 return Result.Failure(identityResult.Errors?.ToArray() ?? ["账号销毁失败"]);
             }
 
+            await refreshTokenService.RevokeSubjectTokensAsync(
+                IIoTClaimTypes.HumanActor,
+                request.EmployeeId,
+                "employee-terminated",
+                cancellationToken);
             await unitOfWork.CommitAsync(cancellationToken);
+
             return Result.Success();
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             await unitOfWork.RollbackAsync(cancellationToken);
-            return Result.Failure($"离职办理失败: {ex.Message}");
+            throw;
         }
     }
 }
-

@@ -17,37 +17,32 @@ public class HumanMasterDataProcessController : ApiControllerBase
     public async Task<IActionResult> GetPagedList([FromQuery] Pagination pagination, [FromQuery] string? keyword = null)
     {
         pagination ??= new Pagination();
-        var result = await Sender.Send(new GetProcessPagedListQuery(pagination, keyword));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetProcessPagedListQuery(pagination, keyword)));
     }
 
     [HttpGet("all")]
     public async Task<IActionResult> GetAll()
     {
-        var result = await Sender.Send(new GetAllProcessesQuery());
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetAllProcessesQuery()));
     }
 
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateProcessCommand command)
     {
-        var result = await Sender.Send(command);
-        return result.IsSuccess
-            ? Created($"/api/v1/human/master-data/processes/{result.Value}", result.Value)
-            : BadRequest(result.Errors);
+        return ReturnResult(
+            await Sender.Send(command),
+            processId => $"/api/v1/human/master-data/processes/{processId}");
     }
 
     [HttpPut("{id}")]
     public async Task<IActionResult> Update([FromRoute] Guid id, [FromBody] UpdateProcessCommand command)
     {
-        var result = await Sender.Send(command with { ProcessId = id });
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(command with { ProcessId = id }));
     }
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete([FromRoute] Guid id)
     {
-        var result = await Sender.Send(new DeleteProcessCommand(id));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new DeleteProcessCommand(id)));
     }
 }

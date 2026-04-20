@@ -1,0 +1,66 @@
+name: cloud-ci
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "deploy/**"
+      - "docs/**"
+      - ".dockerignore"
+      - "Directory.Build.props"
+      - "global.json"
+      - "IIoT.CloudPlatform.slnx"
+      - ".github/workflows/cloud-ci.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "deploy/**"
+      - "docs/**"
+      - ".dockerignore"
+      - "Directory.Build.props"
+      - "global.json"
+      - "IIoT.CloudPlatform.slnx"
+      - ".github/workflows/cloud-ci.yml"
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: "src/ui/iiot-web/package-lock.json"
+
+      - name: Restore cloud solution
+        run: dotnet restore IIoT.CloudPlatform.slnx
+
+      - name: Build cloud solution
+        run: dotnet build IIoT.CloudPlatform.slnx -c Release --no-restore
+
+      - name: Run service layer tests
+        run: dotnet test src/tests/IIoT.ServiceLayer.Tests/IIoT.ServiceLayer.Tests.csproj -c Release --no-build
+
+      - name: Run end-to-end tests
+        run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build
+
+      - name: Build web app
+        working-directory: src/ui/iiot-web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Validate production compose
+        run: docker compose --env-file deploy/.env.example -f deploy/docker-compose.prod.yml config -q
+

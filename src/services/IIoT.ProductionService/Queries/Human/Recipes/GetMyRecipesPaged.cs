@@ -1,8 +1,8 @@
 using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.Core.Production.Specifications.Recipes;
-using IIoT.Services.Common.Attributes;
-using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Contracts.Authorization;
+using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Authorization;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Paging;
 using IIoT.SharedKernel.Repository;
@@ -39,7 +39,7 @@ public class GetMyRecipesPagedHandler(
 
         if (!string.Equals(
                 currentUser.Role,
-                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
                 StringComparison.Ordinal))
         {
             if (!Guid.TryParse(currentUser.Id, out var userId))

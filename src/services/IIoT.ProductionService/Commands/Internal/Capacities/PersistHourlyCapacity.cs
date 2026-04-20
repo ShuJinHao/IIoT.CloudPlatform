@@ -1,8 +1,8 @@
-using IIoT.Services.Common.Caching;
-using IIoT.Services.Common.Contracts;
+using IIoT.Services.CrossCutting.Caching;
+using IIoT.Services.Contracts;
 using IIoT.Core.Production.Contracts.RecordRepositories;
-using IIoT.Services.Common.Contracts.RecordQueries;
-using IIoT.Services.Common.Events.Capacities;
+using IIoT.Services.Contracts.RecordQueries;
+using IIoT.Services.Contracts.Events.Capacities;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 

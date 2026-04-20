@@ -9,7 +9,12 @@
   <ItemGroup>
     <ProjectReference Include="..\..\core\IIoT.Core.Employees\IIoT.Core.Employees.csproj" />
     <ProjectReference Include="..\..\core\IIoT.Core.Identity\IIoT.Core.Identity.csproj" />
-    <ProjectReference Include="..\IIoT.Services.Common\IIoT.Services.Common.csproj" />
+    <ProjectReference Include="..\IIoT.Services.Contracts\IIoT.Services.Contracts.csproj" />
+    <ProjectReference Include="..\IIoT.Services.CrossCutting\IIoT.Services.CrossCutting.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentValidation" Version="11.11.0" />
   </ItemGroup>
 
 </Project>

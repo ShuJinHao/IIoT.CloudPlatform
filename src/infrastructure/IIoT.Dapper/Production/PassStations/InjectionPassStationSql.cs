@@ -1,7 +1,7 @@
 using IIoT.Core.Production.Contracts.PassStation;
 using IIoT.Dapper.Production.QueryServices.PassStation;
 using IIoT.Dapper.Production.Repositories.PassStations;
-using IIoT.Services.Common.Contracts.RecordQueries;
+using IIoT.Services.Contracts.RecordQueries;
 
 namespace IIoT.Dapper.Production.PassStations;
 

@@ -1,4 +1,4 @@
-using IIoT.Services.Common.Contracts;
+using IIoT.Services.Contracts;
 using IIoT.SharedKernel.Result;
 using Microsoft.AspNetCore.Identity;
 

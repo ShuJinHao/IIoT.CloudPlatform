@@ -15,58 +15,50 @@ public class HumanEmployeeController : ApiControllerBase
     [HttpGet]
     public async Task<IActionResult> GetPagedList([FromQuery] GetEmployeePagedListQuery query)
     {
-        var result = await Sender.Send(query);
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(query));
     }
 
     [HttpGet("{id}")]
     public async Task<IActionResult> GetDetail([FromRoute] Guid id)
     {
-        var result = await Sender.Send(new GetEmployeeDetailQuery(id));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetEmployeeDetailQuery(id)));
     }
 
     [HttpGet("{id}/access")]
     public async Task<IActionResult> GetAccess([FromRoute] Guid id)
     {
-        var result = await Sender.Send(new GetEmployeeAccessQuery(id));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetEmployeeAccessQuery(id)));
     }
 
     [HttpPost]
     public async Task<IActionResult> Onboard([FromBody] OnboardEmployeeCommand command)
     {
-        var result = await Sender.Send(command);
-        return result.IsSuccess
-            ? Created($"/api/v1/human/employees/{result.Value}", result.Value)
-            : BadRequest(result.Errors);
+        return ReturnResult(
+            await Sender.Send(command),
+            employeeId => $"/api/v1/human/employees/{employeeId}");
     }
 
     [HttpPut("{id}/profile")]
     public async Task<IActionResult> UpdateProfile([FromRoute] Guid id, [FromBody] UpdateEmployeeProfileCommand command)
     {
-        var result = await Sender.Send(command with { EmployeeId = id });
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(command with { EmployeeId = id }));
     }
 
     [HttpPut("{id}/access")]
     public async Task<IActionResult> UpdateAccess([FromRoute] Guid id, [FromBody] UpdateEmployeeAccessCommand command)
     {
-        var result = await Sender.Send(command with { EmployeeId = id });
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(command with { EmployeeId = id }));
     }
 
     [HttpPut("{id}/deactivate")]
     public async Task<IActionResult> Deactivate([FromRoute] Guid id)
     {
-        var result = await Sender.Send(new DeactivateEmployeeCommand(id));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new DeactivateEmployeeCommand(id)));
     }
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> Terminate([FromRoute] Guid id)
     {
-        var result = await Sender.Send(new TerminateEmployeeCommand(id));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new TerminateEmployeeCommand(id)));
     }
 }

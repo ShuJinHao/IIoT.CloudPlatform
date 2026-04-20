@@ -2,7 +2,7 @@ using System.Net;
 using System.Security.Claims;
 using FluentAssertions;
 using IIoT.HttpApi.Infrastructure;
-using IIoT.Services.Common.Contracts.Identity;
+using IIoT.Services.Contracts.Identity;
 using Microsoft.AspNetCore.Http;
 
 namespace IIoT.EndToEndTests;

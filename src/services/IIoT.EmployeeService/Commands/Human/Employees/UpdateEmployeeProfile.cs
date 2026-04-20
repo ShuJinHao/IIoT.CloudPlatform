@@ -1,7 +1,8 @@
 using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.Employees.Specifications;
-using IIoT.Services.Common.Attributes;
-using IIoT.Services.Common.Contracts;
+using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -19,7 +20,8 @@ public record UpdateEmployeeProfileCommand(
 public class UpdateEmployeeProfileHandler(
     IRepository<Employee> employeeRepository,
     IIdentityAccountStore identityAccountStore,
-    IUnitOfWork unitOfWork)
+    IUnitOfWork unitOfWork,
+    IRefreshTokenService refreshTokenService)
     : ICommandHandler<UpdateEmployeeProfileCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(
@@ -70,13 +72,22 @@ public class UpdateEmployeeProfileHandler(
                 return Result.Failure(identityResult.Errors?.ToArray() ?? ["账号状态同步失败"]);
             }
 
+            if (!request.IsActive)
+            {
+                await refreshTokenService.RevokeSubjectTokensAsync(
+                    IIoTClaimTypes.HumanActor,
+                    request.EmployeeId,
+                    "employee-deactivated",
+                    cancellationToken);
+            }
+
             await unitOfWork.CommitAsync(cancellationToken);
             return Result.Success(true);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             await unitOfWork.RollbackAsync(cancellationToken);
-            return Result.Failure($"员工信息更新失败: {ex.Message}");
+            throw;
         }
     }
 }

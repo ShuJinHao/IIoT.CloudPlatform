@@ -1,5 +1,5 @@
 using Dapper;
-using IIoT.Services.Common.Contracts.RecordQueries;
+using IIoT.Services.Contracts.RecordQueries;
 using IIoT.SharedKernel.Paging;
 
 namespace IIoT.Dapper.Production.QueryServices.DeviceLog;

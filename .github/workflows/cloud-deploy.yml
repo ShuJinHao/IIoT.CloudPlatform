@@ -1,0 +1,66 @@
+name: cloud-deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Copy deploy template
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          source: "deploy/*"
+          target: ${{ secrets.DEPLOY_TARGET_DIR }}
+          strip_components: 1
+
+      - name: Deploy cloud stack
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          script_stop: true
+          envs: GITHUB_ACTOR,GITHUB_TOKEN
+          script: |
+            set -e
+            mkdir -p "${{ secrets.DEPLOY_TARGET_DIR }}/nginx"
+            cat > "${{ secrets.DEPLOY_TARGET_DIR }}/.env" <<'EOF'
+            ${{ secrets.DEPLOY_ENV_FILE }}
+            EOF
+
+            registry="${{ secrets.OCI_REGISTRY }}"
+            username="${{ secrets.OCI_REGISTRY_USERNAME }}"
+            password="${{ secrets.OCI_REGISTRY_PASSWORD }}"
+
+            if [ -z "$registry" ]; then
+              registry="ghcr.io"
+              username="${GITHUB_ACTOR}"
+              password="${GITHUB_TOKEN}"
+            fi
+
+            echo "$password" | docker login "$registry" --username "$username" --password-stdin
+
+            cd "${{ secrets.DEPLOY_TARGET_DIR }}"
+
+            docker compose --env-file .env -f docker-compose.prod.yml config -q
+            docker compose --env-file .env -f docker-compose.prod.yml pull
+            docker compose --env-file .env -f docker-compose.prod.yml up -d postgres redis-cache rabbitmq seq
+            docker compose --env-file .env -f docker-compose.prod.yml run --rm iiot-migration
+            docker compose --env-file .env -f docker-compose.prod.yml up -d iiot-httpapi iiot-gateway iiot-dataworker iiot-web nginx-gateway
