@@ -1,6 +1,6 @@
-using IIoT.Services.Common.Attributes;
-using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Contracts.Identity;
+using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 
@@ -11,6 +11,7 @@ public record ChangePasswordCommand(Guid UserId, string CurrentPassword, string 
 
 public class ChangePasswordHandler(
     IIdentityPasswordService identityPasswordService,
+    IRefreshTokenService refreshTokenService,
     ICurrentUser currentUser) : ICommandHandler<ChangePasswordCommand, Result>
 {
     public async Task<Result> Handle(ChangePasswordCommand request, CancellationToken cancellationToken)
@@ -21,10 +22,21 @@ public class ChangePasswordHandler(
         if (currentUserId != request.UserId)
             return Result.Failure("仅允许修改当前登录用户自己的密码");
 
-        return await identityPasswordService.ChangePasswordAsync(
+        var result = await identityPasswordService.ChangePasswordAsync(
             request.UserId,
             request.CurrentPassword,
             request.NewPassword,
             cancellationToken);
+
+        if (result.IsSuccess)
+        {
+            await refreshTokenService.RevokeSubjectTokensAsync(
+                IIoTClaimTypes.HumanActor,
+                request.UserId,
+                "password-changed",
+                cancellationToken);
+        }
+
+        return result;
     }
 }

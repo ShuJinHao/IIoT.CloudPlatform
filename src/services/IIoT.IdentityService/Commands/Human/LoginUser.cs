@@ -1,21 +1,23 @@
-using IIoT.Services.Common.Caching;
-using IIoT.Services.Common.Contracts;
+using IIoT.Services.CrossCutting.Caching;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 
 namespace IIoT.IdentityService.Commands;
 
-public record LoginUserCommand(string EmployeeNo, string Password) : IHumanCommand<Result<string>>;
+public record LoginUserCommand(string EmployeeNo, string Password) : IHumanCommand<Result<HumanIdentitySessionResult>>;
 
 public class LoginUserHandler(
     IIdentityAccountStore identityAccountStore,
     IIdentityPasswordService identityPasswordService,
     IPermissionProvider permissionProvider,
     ICacheService cacheService,
-    IJwtTokenGenerator jwtTokenGenerator)
-    : ICommandHandler<LoginUserCommand, Result<string>>
+    IJwtTokenGenerator jwtTokenGenerator,
+    IRefreshTokenService refreshTokenService)
+    : ICommandHandler<LoginUserCommand, Result<HumanIdentitySessionResult>>
 {
-    public async Task<Result<string>> Handle(
+    public async Task<Result<HumanIdentitySessionResult>> Handle(
         LoginUserCommand request,
         CancellationToken cancellationToken)
     {
@@ -48,8 +50,16 @@ public class LoginUserHandler(
         await cacheService.RemoveAsync(CacheKeys.PermissionByUser(account.Id), cancellationToken);
 
         var permissions = await permissionProvider.GetPermissionsAsync(account.Id, cancellationToken);
-        var token = jwtTokenGenerator.GenerateHumanToken(account.Id, request.EmployeeNo, roles, permissions);
+        var accessToken = jwtTokenGenerator.GenerateHumanToken(account.Id, request.EmployeeNo, roles, permissions);
+        var refreshToken = await refreshTokenService.IssueAsync(
+            IIoTClaimTypes.HumanActor,
+            account.Id,
+            cancellationToken);
 
-        return Result.Success(token.Token);
+        return Result.Success(new HumanIdentitySessionResult(
+            accessToken.Token,
+            accessToken.ExpiresAtUtc,
+            refreshToken.Token,
+            refreshToken.ExpiresAtUtc));
     }
 }

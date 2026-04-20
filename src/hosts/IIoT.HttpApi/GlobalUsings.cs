@@ -1,1 +1,1 @@
-global using IIoT.Services.Common.Contracts.Identity;
+global using IIoT.Services.Contracts.Identity;

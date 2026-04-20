@@ -12,7 +12,7 @@ create table if not exists hourly_capacity
     ng_count      int         not null,
     plc_name      varchar(50) not null default '',
     reported_at   timestamptz not null,
-    primary key (id)
+    primary key (id, date)
 );
 
 create index if not exists ix_hourly_capacity_device_date

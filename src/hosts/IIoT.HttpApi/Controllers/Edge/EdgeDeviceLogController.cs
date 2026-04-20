@@ -16,7 +16,6 @@ public class EdgeDeviceLogController : ApiControllerBase
     [EnableRateLimiting("edge-upload")]
     public async Task<IActionResult> Receive([FromBody] ReceiveDeviceLogCommand command)
     {
-        var result = await Sender.Send(command);
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(command));
     }
 }

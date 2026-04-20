@@ -1,1 +1,1 @@
-global using IIoT.Services.Common.Contracts.RecordQueries;
+global using IIoT.Services.Contracts.RecordQueries;

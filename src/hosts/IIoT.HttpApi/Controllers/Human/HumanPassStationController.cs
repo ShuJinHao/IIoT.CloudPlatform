@@ -1,6 +1,6 @@
 using IIoT.HttpApi.Infrastructure;
 using IIoT.ProductionService.Queries.PassStations;
-using IIoT.Services.Common.Contracts.RecordQueries;
+using IIoT.Services.Contracts.RecordQueries;
 using IIoT.SharedKernel.Paging;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -19,10 +19,9 @@ public class HumanPassStationController : ApiControllerBase
         [FromQuery] Guid processId,
         [FromQuery] string barcode)
     {
-        var result = await Sender.Send(
+        return ReturnResult(await Sender.Send(
             new GetPassStationListQuery<InjectionPassListItemDto>(
-                pagination, ProcessId: processId, Barcode: barcode));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+                pagination, ProcessId: processId, Barcode: barcode)));
     }
 
     [HttpGet("injection/by-time-process")]
@@ -32,10 +31,9 @@ public class HumanPassStationController : ApiControllerBase
         [FromQuery] DateTime startTime,
         [FromQuery] DateTime endTime)
     {
-        var result = await Sender.Send(
+        return ReturnResult(await Sender.Send(
             new GetPassStationListQuery<InjectionPassListItemDto>(
-                pagination, ProcessId: processId, StartTime: startTime, EndTime: endTime));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+                pagination, ProcessId: processId, StartTime: startTime, EndTime: endTime)));
     }
 
     [HttpGet("injection/by-device-barcode")]
@@ -44,10 +42,9 @@ public class HumanPassStationController : ApiControllerBase
         [FromQuery] Guid deviceId,
         [FromQuery] string barcode)
     {
-        var result = await Sender.Send(
+        return ReturnResult(await Sender.Send(
             new GetPassStationListQuery<InjectionPassListItemDto>(
-                pagination, DeviceId: deviceId, Barcode: barcode));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+                pagination, DeviceId: deviceId, Barcode: barcode)));
     }
 
     [HttpGet("injection/by-device-time")]
@@ -57,17 +54,15 @@ public class HumanPassStationController : ApiControllerBase
         [FromQuery] DateTime startTime,
         [FromQuery] DateTime endTime)
     {
-        var result = await Sender.Send(
+        return ReturnResult(await Sender.Send(
             new GetPassStationListQuery<InjectionPassListItemDto>(
-                pagination, DeviceId: deviceId, StartTime: startTime, EndTime: endTime));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+                pagination, DeviceId: deviceId, StartTime: startTime, EndTime: endTime)));
     }
 
     [HttpGet("injection/{id}")]
     public async Task<IActionResult> GetInjectionDetail([FromRoute] Guid id)
     {
-        var result = await Sender.Send(new GetPassStationDetailQuery<InjectionPassDetailDto>(id));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetPassStationDetailQuery<InjectionPassDetailDto>(id)));
     }
 
     [HttpGet("injection/device/{deviceId}/latest")]
@@ -75,8 +70,7 @@ public class HumanPassStationController : ApiControllerBase
         [FromRoute] Guid deviceId,
         [FromQuery] Pagination pagination)
     {
-        var result = await Sender.Send(
-            new GetPassStationLatest200Query<InjectionPassListItemDto>(deviceId, pagination));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(
+            new GetPassStationLatest200Query<InjectionPassListItemDto>(deviceId, pagination)));
     }
 }

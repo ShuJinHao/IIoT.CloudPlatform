@@ -16,39 +16,34 @@ public class HumanRecipeController : ApiControllerBase
     [HttpGet]
     public async Task<IActionResult> GetPagedList([FromQuery] Pagination pagination, [FromQuery] string? keyword = null)
     {
-        var result = await Sender.Send(new GetMyRecipesPagedQuery(pagination, keyword));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetMyRecipesPagedQuery(pagination, keyword)));
     }
 
     [HttpGet("{id}")]
     public async Task<IActionResult> GetDetail([FromRoute] Guid id)
     {
-        var result = await Sender.Send(new GetRecipeByIdQuery(id));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetRecipeByIdQuery(id)));
     }
 
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateRecipeCommand command)
     {
-        var result = await Sender.Send(command);
-        return result.IsSuccess
-            ? Created($"/api/v1/human/recipes/{result.Value}", result.Value)
-            : BadRequest(result.Errors);
+        return ReturnResult(
+            await Sender.Send(command),
+            recipeId => $"/api/v1/human/recipes/{recipeId}");
     }
 
     [HttpPost("{id}/upgrade")]
     public async Task<IActionResult> UpgradeVersion([FromRoute] Guid id, [FromBody] UpgradeRecipeVersionCommand command)
     {
-        var result = await Sender.Send(command with { SourceRecipeId = id });
-        return result.IsSuccess
-            ? Created($"/api/v1/human/recipes/{result.Value}", result.Value)
-            : BadRequest(result.Errors);
+        return ReturnResult(
+            await Sender.Send(command with { SourceRecipeId = id }),
+            recipeId => $"/api/v1/human/recipes/{recipeId}");
     }
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete([FromRoute] Guid id)
     {
-        var result = await Sender.Send(new DeleteRecipeCommand(id));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new DeleteRecipeCommand(id)));
     }
 }

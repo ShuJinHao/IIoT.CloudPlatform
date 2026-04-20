@@ -1,6 +1,6 @@
-using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Contracts.RecordQueries;
-using IIoT.Services.Common.Events.PassStations;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.RecordQueries;
+using IIoT.Services.Contracts.Events.PassStations;
 using IIoT.SharedKernel.Result;
 
 namespace IIoT.ProductionService.Commands.PassStations;

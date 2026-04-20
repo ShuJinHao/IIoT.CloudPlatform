@@ -1,10 +1,11 @@
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Specifications.Devices;
-using IIoT.Services.Common.Attributes;
-using IIoT.Services.Common.Caching;
-using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Contracts.Authorization;
-using IIoT.Services.Common.Contracts.RecordQueries;
+using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.CrossCutting.Caching;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts.RecordQueries;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -19,6 +20,7 @@ public class DeleteDeviceHandler(
     IRepository<Device> deviceRepository,
     IDeviceDeletionDependencyQueryService dependencyQueryService,
     ICacheService cacheService,
+    IRefreshTokenService refreshTokenService,
     IDevicePermissionService devicePermissionService)
     : ICommandHandler<DeleteDeviceCommand, Result<bool>>
 {
@@ -35,7 +37,7 @@ public class DeleteDeviceHandler(
 
         if (!string.Equals(
                 currentUser.Role,
-                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
                 StringComparison.Ordinal))
         {
             if (!Guid.TryParse(currentUser.Id, out var userId))
@@ -96,8 +98,18 @@ public class DeleteDeviceHandler(
         await cacheService.RemoveByPatternAsync(
             CacheKeys.CapacityPagedByDevicePattern(device.Id), cancellationToken);
 
+        device.MarkDeleted();
         deviceRepository.Delete(device);
         var affected = await deviceRepository.SaveChangesAsync(cancellationToken);
+
+        if (affected > 0)
+        {
+            await refreshTokenService.RevokeSubjectTokensAsync(
+                IIoTClaimTypes.EdgeDeviceActor,
+                device.Id,
+                "device-deleted",
+                cancellationToken);
+        }
 
         return Result.Success(affected > 0);
     }

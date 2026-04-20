@@ -1,7 +1,7 @@
-using IIoT.Services.Common.Attributes;
-using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Contracts.Authorization;
-using IIoT.Services.Common.Contracts.RecordQueries;
+using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.RecordQueries;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Paging;
 using IIoT.SharedKernel.Result;
@@ -33,7 +33,7 @@ public sealed class GetPassStationListHandler<TDto>(
 
         if (!string.Equals(
                 currentUser.Role,
-                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
                 StringComparison.Ordinal))
         {
             if (!Guid.TryParse(currentUser.Id, out var userId))
@@ -112,7 +112,7 @@ public sealed class GetPassStationDetailHandler<TDto>(
 
         if (!string.Equals(
                 currentUser.Role,
-                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
                 StringComparison.Ordinal))
         {
             if (!Guid.TryParse(currentUser.Id, out var userId))
@@ -162,7 +162,7 @@ public sealed class GetPassStationLatest200Handler<TDto>(
     {
         if (!string.Equals(
                 currentUser.Role,
-                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
                 StringComparison.Ordinal))
         {
             if (!Guid.TryParse(currentUser.Id, out var userId))

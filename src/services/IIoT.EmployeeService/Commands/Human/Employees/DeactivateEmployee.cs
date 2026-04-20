@@ -1,8 +1,9 @@
 using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.Employees.Specifications;
-using IIoT.Services.Common.Caching;
-using IIoT.Services.Common.Attributes;
-using IIoT.Services.Common.Contracts;
+using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.CrossCutting.Caching;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -17,7 +18,8 @@ public class DeactivateEmployeeHandler(
     IRepository<Employee> employeeRepository,
     IIdentityAccountStore identityAccountStore,
     IUnitOfWork unitOfWork,
-    ICacheService cacheService)
+    ICacheService cacheService,
+    IRefreshTokenService refreshTokenService)
     : ICommandHandler<DeactivateEmployeeCommand, Result>
 {
     public async Task<Result> Handle(
@@ -57,13 +59,19 @@ public class DeactivateEmployeeHandler(
             }
 
             await cacheService.RemoveAsync(CacheKeys.DeviceAccessesByUser(request.EmployeeId), cancellationToken);
+            await refreshTokenService.RevokeSubjectTokensAsync(
+                IIoTClaimTypes.HumanActor,
+                request.EmployeeId,
+                "employee-deactivated",
+                cancellationToken);
             await unitOfWork.CommitAsync(cancellationToken);
+
             return Result.Success();
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             await unitOfWork.RollbackAsync(cancellationToken);
-            return Result.Failure($"员工停用失败: {ex.Message}");
+            throw;
         }
     }
 }

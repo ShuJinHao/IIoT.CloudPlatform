@@ -1,7 +1,7 @@
-﻿using IIoT.Core.Employees.Aggregates.Employees;
+using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.Employees.Specifications;
-using IIoT.Services.Common.Attributes;
-using IIoT.Services.Common.Contracts;
+using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.Contracts;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;

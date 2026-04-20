@@ -1,4 +1,6 @@
-﻿using IIoT.SharedKernel.Domain;
+using IIoT.Core.Production.Aggregates.Recipes.Events;
+using IIoT.Core.Production.Aggregates.Recipes.ValueObjects;
+using IIoT.SharedKernel.Domain;
 
 namespace IIoT.Core.Production.Aggregates.Recipes;
 
@@ -24,10 +26,6 @@ public enum RecipeStatus
 /// </summary>
 public class Recipe : BaseEntity<Guid>
 {
-    private static readonly System.Text.RegularExpressions.Regex VersionPattern = new(
-        @"^V\d+\.\d+$",
-        System.Text.RegularExpressions.RegexOptions.Compiled);
-
     /// <summary>
     /// 仅供 EF Core 物化使用,业务代码不要调用。
     /// </summary>
@@ -48,10 +46,11 @@ public class Recipe : BaseEntity<Guid>
         ProcessId = processId;
         DeviceId = deviceId;
         ParametersJsonb = NormalizeRequired(parametersJsonb, nameof(parametersJsonb));
-        Version = "V1.0";
+        Version = RecipeVersion.Initial.Value;
         Status = RecipeStatus.Active;
 
         ValidateInvariants();
+        AddDomainEvent(new RecipeCreatedDomainEvent(Id, RecipeName, Version, ProcessId, DeviceId));
     }
 
     /// <summary>
@@ -62,17 +61,18 @@ public class Recipe : BaseEntity<Guid>
         Guid processId,
         Guid deviceId,
         string parametersJsonb,
-        string version)
+        RecipeVersion version)
     {
         Id = Guid.NewGuid();
         RecipeName = NormalizeRequired(recipeName, nameof(recipeName));
         ProcessId = processId;
         DeviceId = deviceId;
         ParametersJsonb = NormalizeRequired(parametersJsonb, nameof(parametersJsonb));
-        Version = NormalizeRequired(version, nameof(version));
+        Version = version.Value;
         Status = RecipeStatus.Active;
 
         ValidateInvariants();
+        AddDomainEvent(new RecipeCreatedDomainEvent(Id, RecipeName, Version, ProcessId, DeviceId));
     }
 
     /// <summary>
@@ -106,6 +106,8 @@ public class Recipe : BaseEntity<Guid>
     /// </summary>
     public RecipeStatus Status { get; private set; }
 
+    public uint RowVersion { get; private set; }
+
     // ── 行为 ──────────────────────────────────────────────
 
     /// <summary>
@@ -115,12 +117,20 @@ public class Recipe : BaseEntity<Guid>
     /// </summary>
     public Recipe CreateNextVersion(string newVersion, string newParametersJsonb)
     {
-        return new Recipe(
+        var nextRecipe = new Recipe(
             RecipeName,
             ProcessId,
             DeviceId,
             newParametersJsonb,
-            newVersion);
+            RecipeVersion.From(newVersion));
+
+        nextRecipe.AddDomainEvent(new RecipeVersionUpgradedDomainEvent(
+            Id,
+            nextRecipe.Id,
+            nextRecipe.RecipeName,
+            nextRecipe.Version));
+
+        return nextRecipe;
     }
 
     /// <summary>
@@ -128,7 +138,13 @@ public class Recipe : BaseEntity<Guid>
     /// </summary>
     public void Archive()
     {
+        if (Status == RecipeStatus.Archived)
+        {
+            return;
+        }
+
         Status = RecipeStatus.Archived;
+        AddDomainEvent(new RecipeArchivedDomainEvent(Id, Version));
     }
 
     private void ValidateInvariants()
@@ -136,8 +152,7 @@ public class Recipe : BaseEntity<Guid>
         ArgumentException.ThrowIfNullOrWhiteSpace(RecipeName);
         ArgumentException.ThrowIfNullOrWhiteSpace(ParametersJsonb);
         ArgumentException.ThrowIfNullOrWhiteSpace(Version);
-        if (!VersionPattern.IsMatch(Version))
-            throw new ArgumentException("Version 必须符合 Vx.y 格式。", nameof(Version));
+        _ = RecipeVersion.From(Version);
         if (ProcessId == Guid.Empty)
             throw new ArgumentException("ProcessId 不能为空。", nameof(ProcessId));
         if (DeviceId == Guid.Empty)

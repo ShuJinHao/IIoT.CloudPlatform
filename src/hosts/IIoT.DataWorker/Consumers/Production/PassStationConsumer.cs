@@ -1,5 +1,5 @@
 using IIoT.ProductionService.Commands.PassStations;
-using IIoT.Services.Common.Events.PassStations;
+using IIoT.Services.Contracts.Events.PassStations;
 using MassTransit;
 using MediatR;
 

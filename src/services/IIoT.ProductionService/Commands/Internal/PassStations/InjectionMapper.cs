@@ -1,5 +1,5 @@
 using IIoT.Core.Production.Contracts.PassStation;
-using IIoT.Services.Common.Events.PassStations;
+using IIoT.Services.Contracts.Events.PassStations;
 
 namespace IIoT.ProductionService.Commands.PassStations;
 

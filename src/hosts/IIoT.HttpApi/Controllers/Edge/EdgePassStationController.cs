@@ -16,15 +16,13 @@ public class EdgePassStationController : ApiControllerBase
     [EnableRateLimiting("edge-upload")]
     public async Task<IActionResult> ReceiveInjectionBatch([FromBody] ReceiveInjectionPassCommand command)
     {
-        var result = await Sender.Send(command);
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(command));
     }
 
     [HttpPost("stacking")]
     [EnableRateLimiting("edge-upload")]
     public async Task<IActionResult> ReceiveStacking([FromBody] ReceiveStackingPassCommand command)
     {
-        var result = await Sender.Send(command);
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(command));
     }
 }

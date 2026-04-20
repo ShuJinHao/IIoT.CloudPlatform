@@ -1,5 +1,6 @@
 using System.Text;
 using System.Threading.RateLimiting;
+using FluentValidation;
 using IIoT.Core.Production.Contracts.PassStation;
 using IIoT.Dapper;
 using IIoT.EmployeeService.Commands.Employees;
@@ -12,16 +13,17 @@ using IIoT.MasterDataService.Commands.Processes;
 using IIoT.ProductionService;
 using IIoT.ProductionService.Commands.PassStations;
 using IIoT.ProductionService.Profiles;
-using IIoT.Services.Common.Behaviors;
-using IIoT.Services.Common.Contracts.Identity;
-using IIoT.Services.Common.Contracts.RecordQueries;
-using IIoT.Services.Common.DependencyInjection;
-using IIoT.Services.Common.Events.PassStations;
+using IIoT.Services.CrossCutting.Behaviors;
+using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts.RecordQueries;
+using IIoT.Services.CrossCutting.DependencyInjection;
+using IIoT.Services.Contracts.Events.PassStations;
+using IIoT.SharedKernel.Configuration;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
-using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.IdentityModel.Tokens;
 
 namespace IIoT.HttpApi;
@@ -35,6 +37,14 @@ public static class DependencyInjection
         builder.AddEventBus();
         builder.AddDapper();
 
+        builder.Services.AddValidatorsFromAssemblies(
+        [
+            typeof(IIoT.IdentityService.Commands.LoginUserCommand).Assembly,
+            typeof(OnboardEmployeeCommand).Assembly,
+            typeof(CreateProcessCommand).Assembly,
+            typeof(IIoT.ProductionService.Commands.Recipes.CreateRecipeCommand).Assembly
+        ]);
+
         builder.Services.AddConfiguredMediatR(builder.Configuration, cfg =>
         {
             cfg.RegisterServicesFromAssemblies(
@@ -43,6 +53,7 @@ public static class DependencyInjection
                 typeof(CreateProcessCommand).Assembly,
                 typeof(IIoT.ProductionService.Commands.Recipes.CreateRecipeCommand).Assembly);
             cfg.AddOpenBehavior(typeof(RequestKindGuardBehavior<,>));
+            cfg.AddOpenBehavior(typeof(ValidationBehavior<,>));
             cfg.AddOpenBehavior(typeof(DeviceBindingBehavior<,>));
             cfg.AddOpenBehavior(typeof(AuthorizationBehavior<,>));
             cfg.AddOpenBehavior(typeof(DistributedLockBehavior<,>));
@@ -59,22 +70,25 @@ public static class DependencyInjection
 
     public static void AddWebServices(this IHostApplicationBuilder builder)
     {
-        var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>()
-                          ?? throw new NullReferenceException("JwtSettings is missing");
+        var jwtSettings = builder.AddValidatedOptions<JwtSettings>(
+            JwtSettings.SectionName,
+            static options => options.Validate());
         var jwtSecret = JwtSecretResolver.Resolve(builder.Environment, jwtSettings.Secret);
-        var rateLimiting = builder.Configuration
-                               .GetSection(HttpApiRateLimitingOptions.SectionName)
-                               .Get<HttpApiRateLimitingOptions>()
-                           ?? new HttpApiRateLimitingOptions();
-        var forwardedHeaders = builder.Configuration
-                                   .GetSection(HttpApiForwardedHeadersOptions.SectionName)
-                                   .Get<HttpApiForwardedHeadersOptions>()
-                               ?? new HttpApiForwardedHeadersOptions();
+        var rateLimiting = builder.Configuration.GetRequiredValidatedOptions<HttpApiRateLimitingOptions>(
+            HttpApiRateLimitingOptions.SectionName,
+            static options => options.Validate());
+        var forwardedHeaders = builder.Configuration.GetRequiredValidatedOptions<HttpApiForwardedHeadersOptions>(
+            HttpApiForwardedHeadersOptions.SectionName,
+            static options => options.Validate());
+        var corsOptions = builder.Configuration.GetRequiredValidatedOptions<HttpApiCorsOptions>(
+            HttpApiCorsOptions.SectionName,
+            static options => options.Validate());
+        _ = builder.AddValidatedOptions<RefreshTokenOptions>(
+            RefreshTokenOptions.SectionName,
+            static options => options.Validate());
         var authenticatedUserPolicy = new AuthorizationPolicyBuilder()
             .RequireAuthenticatedUser()
             .Build();
-
-        forwardedHeaders.Validate();
 
         builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddJwtBearer(options =>
@@ -91,6 +105,7 @@ public static class DependencyInjection
                     ClockSkew = TimeSpan.Zero
                 };
             });
+
         builder.Services.AddAuthorizationBuilder()
             .SetDefaultPolicy(authenticatedUserPolicy)
             .SetFallbackPolicy(authenticatedUserPolicy)
@@ -98,14 +113,12 @@ public static class DependencyInjection
                 policy.RequireAuthenticatedUser()
                     .RequireClaim(IIoTClaimTypes.ActorType, IIoTClaimTypes.EdgeDeviceActor)
                     .RequireClaim(IIoTClaimTypes.DeviceId));
-        builder.Services.Configure<HttpApiForwardedHeadersOptions>(
-            builder.Configuration.GetSection(HttpApiForwardedHeadersOptions.SectionName));
+
         builder.Services.Configure<ForwardedHeadersOptions>(options =>
         {
             forwardedHeaders.ApplyTo(options);
         });
-        builder.Services.Configure<HttpApiRateLimitingOptions>(
-            builder.Configuration.GetSection(HttpApiRateLimitingOptions.SectionName));
+
         builder.Services.AddRateLimiter(options =>
         {
             options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -138,6 +151,21 @@ public static class DependencyInjection
                 RateLimitPartition.GetTokenBucketLimiter(
                     RateLimitPartitionKeyResolver.ResolveEdgeUploadPartitionKey(context),
                     _ => rateLimiting.EdgeUpload.ToRateLimiterOptions()));
+        });
+
+        builder.Services.AddCors(options =>
+        {
+            options.AddPolicy(HttpApiCorsOptions.PolicyName, policy =>
+            {
+                if (corsOptions.AllowedOrigins.Length > 0)
+                {
+                    policy.WithOrigins(corsOptions.AllowedOrigins);
+                }
+
+                policy.WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                    .WithHeaders("Authorization", "Content-Type", RefreshTokenHeaderNames.RefreshToken)
+                    .WithExposedHeaders(RefreshTokenHeaderNames.ExposedHeaders);
+            });
         });
 
         builder.Services.AddScoped<ICurrentUser, CurrentUser>();

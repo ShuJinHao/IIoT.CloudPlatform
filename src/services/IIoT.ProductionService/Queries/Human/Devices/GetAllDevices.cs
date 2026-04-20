@@ -1,8 +1,8 @@
 using IIoT.Core.Production.Aggregates.Devices;
-using IIoT.Services.Common.Attributes;
-using IIoT.Services.Common.Caching;
-using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Exceptions;
+using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.CrossCutting.Caching;
+using IIoT.Services.Contracts;
+using IIoT.Services.CrossCutting.Exceptions;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -29,7 +29,7 @@ public class GetAllDevicesHandler(
     {
         if (!string.Equals(
                 currentUser.Role,
-                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
                 StringComparison.Ordinal))
             throw new ForbiddenException("仅管理员可查看全量设备列表");
 

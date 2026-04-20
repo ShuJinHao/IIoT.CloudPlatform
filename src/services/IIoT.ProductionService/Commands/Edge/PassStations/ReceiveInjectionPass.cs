@@ -1,6 +1,6 @@
 using AutoMapper;
-using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Events.PassStations;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Events.PassStations;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 

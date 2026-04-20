@@ -1,8 +1,8 @@
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Specifications.Devices;
-using IIoT.Services.Common.Caching;
-using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Contracts.Identity;
+using IIoT.Services.CrossCutting.Caching;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -24,17 +24,23 @@ public record DeviceIdentityDto(
     DateTimeOffset UploadAccessTokenExpiresAtUtc
 );
 
+public sealed record BootstrapDeviceSessionResult(
+    DeviceIdentityDto DeviceIdentity,
+    string RefreshToken,
+    DateTimeOffset RefreshTokenExpiresAtUtc);
+
 public record GetDeviceByInstanceQuery(
     string Code
-) : IAnonymousBootstrapQuery<Result<DeviceIdentityDto>>;
+) : IAnonymousBootstrapQuery<Result<BootstrapDeviceSessionResult>>;
 
 public class GetDeviceByInstanceHandler(
     IReadRepository<Device> deviceRepository,
     ICacheService cacheService,
-    IJwtTokenGenerator jwtTokenGenerator
-) : IQueryHandler<GetDeviceByInstanceQuery, Result<DeviceIdentityDto>>
+    IJwtTokenGenerator jwtTokenGenerator,
+    IRefreshTokenService refreshTokenService
+) : IQueryHandler<GetDeviceByInstanceQuery, Result<BootstrapDeviceSessionResult>>
 {
-    public async Task<Result<DeviceIdentityDto>> Handle(
+    public async Task<Result<BootstrapDeviceSessionResult>> Handle(
         GetDeviceByInstanceQuery request,
         CancellationToken cancellationToken)
     {
@@ -65,17 +71,24 @@ public class GetDeviceByInstanceHandler(
             await cacheService.SetAsync(cacheKey, identity, TimeSpan.FromHours(2), cancellationToken);
         }
 
-        var token = jwtTokenGenerator.GenerateEdgeDeviceToken(
+        var accessToken = jwtTokenGenerator.GenerateEdgeDeviceToken(
             identity.Id,
             identity.ClientCode,
             identity.ProcessId);
-
-        return Result.Success(new DeviceIdentityDto(
+        var refreshToken = await refreshTokenService.IssueAsync(
+            IIoTClaimTypes.EdgeDeviceActor,
             identity.Id,
-            identity.DeviceName,
-            identity.ClientCode,
-            identity.ProcessId,
-            token.Token,
-            token.ExpiresAtUtc));
+            cancellationToken);
+
+        return Result.Success(new BootstrapDeviceSessionResult(
+            new DeviceIdentityDto(
+                identity.Id,
+                identity.DeviceName,
+                identity.ClientCode,
+                identity.ProcessId,
+                accessToken.Token,
+                accessToken.ExpiresAtUtc),
+            refreshToken.Token,
+            refreshToken.ExpiresAtUtc));
     }
 }

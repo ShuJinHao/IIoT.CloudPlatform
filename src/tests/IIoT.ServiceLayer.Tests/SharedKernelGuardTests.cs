@@ -1,5 +1,5 @@
 using System.Linq.Expressions;
-using IIoT.Services.Common.Caching.Options;
+using IIoT.Services.CrossCutting.Caching.Options;
 using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Paging;
 using IIoT.SharedKernel.Result;

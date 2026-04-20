@@ -1,20 +1,26 @@
 using IIoT.Core.Production.Contracts.PassStation;
 using IIoT.Dapper;
 using IIoT.DataWorker.Consumers;
+using IIoT.DataWorker.Outbox;
+using IIoT.EntityFrameworkCore;
+using IIoT.EntityFrameworkCore.Outbox;
+using IIoT.EventBus;
 using IIoT.Infrastructure;
 using IIoT.Infrastructure.Logging;
 using IIoT.ProductionService;
 using IIoT.ProductionService.Commands.Capacities;
 using IIoT.ProductionService.Commands.PassStations;
-using IIoT.Services.Common.Behaviors;
-using IIoT.Services.Common.DependencyInjection;
-using IIoT.Services.Common.Events.PassStations;
+using IIoT.Services.CrossCutting.Behaviors;
+using IIoT.Services.CrossCutting.DependencyInjection;
+using IIoT.Services.Contracts.Events.PassStations;
+using IIoT.SharedKernel.Configuration;
 using MassTransit;
 using Microsoft.Extensions.DependencyInjection;
 
 var builder = Host.CreateApplicationBuilder(args);
-var consumerOptions = builder.Configuration.GetSection(ConsumerConcurrencyOptions.SectionName).Get<ConsumerConcurrencyOptions>()
-                      ?? new ConsumerConcurrencyOptions();
+var eventBusOptions = builder.Configuration.GetRequiredValidatedOptions<EventBusOptions>(
+    EventBusOptions.SectionName,
+    static options => options.Validate());
 
 builder.ConfigureContainer(
     new DefaultServiceProviderFactory(new ServiceProviderOptions
@@ -26,12 +32,24 @@ builder.ConfigureContainer(
 builder.AddSerilog("dataworker");
 builder.AddServiceDefaults();
 builder.AddDapper();
+builder.AddEfCore();
 builder.AddInfrastructures();
 
 builder.Services.AddConfiguredMediatR(builder.Configuration, cfg =>
 {
     cfg.RegisterServicesFromAssemblyContaining<ReceiveHourlyCapacityCommand>();
     cfg.AddOpenBehavior(typeof(DistributedLockBehavior<,>));
+});
+
+builder.Services.AddScoped<IOutboxMessageDispatcher, OutboxMessageDispatcher>();
+_ = builder.AddValidatedOptions<OutboxDispatcherOptions>(
+    OutboxDispatcherOptions.SectionName,
+    static options => options.Validate());
+builder.Services.Configure<MassTransitHostOptions>(options =>
+{
+    options.WaitUntilStarted = false;
+    options.StartTimeout = TimeSpan.FromSeconds(eventBusOptions.HostStartTimeoutSeconds);
+    options.StopTimeout = TimeSpan.FromSeconds(eventBusOptions.HostStopTimeoutSeconds);
 });
 
 builder.Services.AddPassStationType<
@@ -45,36 +63,52 @@ builder.Services.AddPassStationType<
 
 builder.Services.AddMassTransit(x =>
 {
-    x.SetKebabCaseEndpointNameFormatter();
-
-    x.AddConsumer<PassStationConsumer<PassDataInjectionReceivedEvent>>(cfg =>
-    {
-        cfg.ConcurrentMessageLimit = consumerOptions.PassStationConcurrentMessageLimit;
-    });
-    x.AddConsumer<PassStationConsumer<PassDataStackingReceivedEvent>>(cfg =>
-    {
-        cfg.ConcurrentMessageLimit = consumerOptions.PassStationConcurrentMessageLimit;
-    });
-    x.AddConsumer<DeviceLogConsumer>(cfg =>
-    {
-        cfg.ConcurrentMessageLimit = consumerOptions.DeviceLogConcurrentMessageLimit;
-    });
-    x.AddConsumer<HourlyCapacityConsumer>(cfg =>
-    {
-        cfg.ConcurrentMessageLimit = consumerOptions.HourlyCapacityConcurrentMessageLimit;
-    });
+    x.AddConsumer<PassStationConsumer<PassDataInjectionReceivedEvent>>();
+    x.AddConsumer<PassStationConsumer<PassDataStackingReceivedEvent>>();
+    x.AddConsumer<DeviceLogConsumer>();
+    x.AddConsumer<HourlyCapacityConsumer>();
 
     x.UsingRabbitMq((context, cfg) =>
     {
-        var connectionString = builder.Configuration.GetConnectionString("eventbus");
+        var connectionString = builder.Configuration.GetConnectionString(ConnectionResourceNames.EventBus)
+            ?? throw new InvalidOperationException($"Missing {ConnectionResourceNames.EventBus} connection string.");
         cfg.Host(connectionString);
 
-        // 成功消费后确认消息，失败时按重试策略重新处理。
-        cfg.UseMessageRetry(r => r.Incremental(3, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2)));
+        cfg.ReceiveEndpoint(eventBusOptions.ResolveEndpointName(RabbitMqEndpointNames.PassStationInjection), endpoint =>
+        {
+            endpoint.ApplyIIoTEndpointDefaults(
+                eventBusOptions,
+                eventBusOptions.Consumers.PassStationConcurrentMessageLimit);
+            endpoint.ConfigureConsumer<PassStationConsumer<PassDataInjectionReceivedEvent>>(context);
+        });
 
-        cfg.ConfigureEndpoints(context);
+        cfg.ReceiveEndpoint(eventBusOptions.ResolveEndpointName(RabbitMqEndpointNames.PassStationStacking), endpoint =>
+        {
+            endpoint.ApplyIIoTEndpointDefaults(
+                eventBusOptions,
+                eventBusOptions.Consumers.PassStationConcurrentMessageLimit);
+            endpoint.ConfigureConsumer<PassStationConsumer<PassDataStackingReceivedEvent>>(context);
+        });
+
+        cfg.ReceiveEndpoint(eventBusOptions.ResolveEndpointName(RabbitMqEndpointNames.DeviceLogs), endpoint =>
+        {
+            endpoint.ApplyIIoTEndpointDefaults(
+                eventBusOptions,
+                eventBusOptions.Consumers.DeviceLogConcurrentMessageLimit);
+            endpoint.ConfigureConsumer<DeviceLogConsumer>(context);
+        });
+
+        cfg.ReceiveEndpoint(eventBusOptions.ResolveEndpointName(RabbitMqEndpointNames.HourlyCapacities), endpoint =>
+        {
+            endpoint.ApplyIIoTEndpointDefaults(
+                eventBusOptions,
+                eventBusOptions.Consumers.HourlyCapacityConcurrentMessageLimit);
+            endpoint.ConfigureConsumer<HourlyCapacityConsumer>(context);
+        });
     });
 });
+
+builder.Services.AddHostedService<OutboxDispatcherWorker>();
 
 var host = builder.Build();
 host.Run();

@@ -1,0 +1,96 @@
+name: cloud-image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "deploy/**"
+      - ".dockerignore"
+      - "Directory.Build.props"
+      - "global.json"
+      - "IIoT.CloudPlatform.slnx"
+      - ".github/workflows/cloud-image.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: iiot-httpapi
+            dockerfile: src/hosts/IIoT.HttpApi/Dockerfile
+          - image: iiot-gateway
+            dockerfile: src/hosts/IIoT.Gateway/Dockerfile
+          - image: iiot-dataworker
+            dockerfile: src/hosts/IIoT.DataWorker/Dockerfile
+          - image: iiot-migrationworkapp
+            dockerfile: src/hosts/IIoT.MigrationWorkApp/Dockerfile
+          - image: iiot-web
+            dockerfile: src/hosts/IIoT.AppHost/iiot-web.Dockerfile
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve registry target
+        id: registry
+        shell: bash
+        run: |
+          registry="${{ secrets.OCI_REGISTRY }}"
+          namespace="${{ secrets.OCI_NAMESPACE }}"
+          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          if [ -z "$registry" ]; then
+            registry="ghcr.io"
+          fi
+          if [ -z "$namespace" ]; then
+            namespace="$owner"
+          fi
+          echo "registry=$registry" >> "$GITHUB_OUTPUT"
+          echo "image=$registry/$namespace/${{ matrix.image }}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        if: steps.registry.outputs.registry == 'ghcr.io'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to custom OCI registry
+        if: steps.registry.outputs.registry != 'ghcr.io'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ steps.registry.outputs.registry }}
+          username: ${{ secrets.OCI_REGISTRY_USERNAME }}
+          password: ${{ secrets.OCI_REGISTRY_PASSWORD }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.registry.outputs.image }}
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+

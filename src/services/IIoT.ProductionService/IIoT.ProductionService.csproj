@@ -8,10 +8,13 @@
 
   <ItemGroup>
     <PackageReference Include="AutoMapper" Version="16.1.1" />
+    <PackageReference Include="FluentValidation" Version="11.11.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\IIoT.Services.Common\IIoT.Services.Common.csproj" />
+    <ProjectReference Include="..\..\core\IIoT.Core.Production\IIoT.Core.Production.csproj" />
+    <ProjectReference Include="..\IIoT.Services.Contracts\IIoT.Services.Contracts.csproj" />
+    <ProjectReference Include="..\IIoT.Services.CrossCutting\IIoT.Services.CrossCutting.csproj" />
   </ItemGroup>
 
 </Project>

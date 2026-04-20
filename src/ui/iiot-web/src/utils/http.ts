@@ -28,10 +28,17 @@ client.interceptors.request.use(
   (error) => Promise.reject(error),
 );
 
+const clearStoredSession = () => {
+  localStorage.removeItem('token');
+  localStorage.removeItem('refreshToken');
+  localStorage.removeItem('accessTokenExpiresAt');
+  localStorage.removeItem('refreshTokenExpiresAt');
+};
+
 const handleHttpError = (error: unknown) => {
   if (axios.isAxiosError(error) && error.response) {
     if (error.response.status === 401) {
-      localStorage.removeItem('token');
+      clearStoredSession();
       window.location.href = '/login';
     } else if (error.response.status === 403) {
       alert('系统拒绝访问：权限不足 (HTTP 403)');
@@ -73,12 +80,12 @@ const unwrap = async <T>(request: Promise<AxiosResponse<ApiResult<T> | T>>): Pro
 
       case ResultStatus.Forbidden:
         console.warn('越权警告：您没有权限执行此操作。');
-        alert('越权警告：您没有该模块或数据的管辖权。');
+        alert('越权警告：您没有该模块或数据的管理权限。');
         return Promise.reject(apiResult);
 
       case ResultStatus.Unauthorized:
-        console.warn('凭证已过期');
-        localStorage.removeItem('token');
+        console.warn('凭证已过期。');
+        clearStoredSession();
         alert('登录已过期，请重新登录。');
         window.location.href = '/login';
         return Promise.reject(apiResult);

@@ -17,8 +17,7 @@ public class EdgeCapacityController : ApiControllerBase
     [EnableRateLimiting("edge-upload")]
     public async Task<IActionResult> ReceiveHourly([FromBody] ReceiveHourlyCapacityCommand command)
     {
-        var result = await Sender.Send(command);
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(command));
     }
 
     [HttpGet("hourly")]
@@ -27,8 +26,7 @@ public class EdgeCapacityController : ApiControllerBase
         [FromQuery] DateOnly date,
         [FromQuery] string? plcName = null)
     {
-        var result = await Sender.Send(new GetEdgeHourlyByDeviceIdQuery(deviceId, date, plcName));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetEdgeHourlyByDeviceIdQuery(deviceId, date, plcName)));
     }
 
     [HttpGet("summary")]
@@ -37,11 +35,7 @@ public class EdgeCapacityController : ApiControllerBase
         [FromQuery] DateOnly date,
         [FromQuery] string? plcName = null)
     {
-        var result = await Sender.Send(new GetEdgeSummaryByDeviceIdQuery(deviceId, date, plcName));
-        if (!result.IsSuccess)
-            return BadRequest(result.Errors);
-
-        return result.Value is null ? NoContent() : Ok(result.Value);
+        return ReturnResult(await Sender.Send(new GetEdgeSummaryByDeviceIdQuery(deviceId, date, plcName)));
     }
 
     [HttpGet("summary/range")]
@@ -51,7 +45,6 @@ public class EdgeCapacityController : ApiControllerBase
         [FromQuery] DateOnly endDate,
         [FromQuery] string? plcName = null)
     {
-        var result = await Sender.Send(new GetEdgeSummaryRangeQuery(deviceId, startDate, endDate, plcName));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetEdgeSummaryRangeQuery(deviceId, startDate, endDate, plcName)));
     }
 }

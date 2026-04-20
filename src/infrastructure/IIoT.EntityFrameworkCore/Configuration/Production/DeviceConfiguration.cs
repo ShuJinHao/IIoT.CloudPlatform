@@ -27,6 +27,10 @@ public class DeviceConfiguration : IEntityTypeConfiguration<Device>
             .IsRequired()
             .HasColumnName("process_id");
 
+        builder.Property(d => d.RowVersion)
+            .HasColumnName("xmin")
+            .IsRowVersion();
+
         builder.HasIndex(d => d.Code)
             .IsUnique()
             .HasDatabaseName("ix_devices_client_code");

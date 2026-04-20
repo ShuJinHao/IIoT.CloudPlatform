@@ -1,6 +1,6 @@
-﻿using IIoT.Services.Common.Attributes;
-using IIoT.Services.Common.Caching;
-using IIoT.Services.Common.Contracts;
+using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.CrossCutting.Caching;
+using IIoT.Services.Contracts;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 
@@ -18,7 +18,7 @@ public class UpdateRolePermissionsHandler(
     public async Task<Result<bool>> Handle(UpdateRolePermissionsCommand request, CancellationToken cancellationToken)
     {
         if (request.RoleName.Equals(
-                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
                 StringComparison.OrdinalIgnoreCase))
         {
             return Result.Failure("系统保护：内置 Admin 角色的权限由系统硬编码，禁止修改！");

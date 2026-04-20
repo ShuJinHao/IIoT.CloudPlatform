@@ -1,5 +1,5 @@
 using IIoT.ProductionService.Commands.DeviceLogs;
-using IIoT.Services.Common.Events.DeviceLogs;
+using IIoT.Services.Contracts.Events.DeviceLogs;
 using MassTransit;
 using MediatR;
 

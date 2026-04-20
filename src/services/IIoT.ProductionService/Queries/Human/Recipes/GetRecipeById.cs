@@ -1,9 +1,9 @@
 using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.Core.Production.Specifications.Recipes;
-using IIoT.Services.Common.Attributes;
-using IIoT.Services.Common.Caching;
-using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Contracts.Authorization;
+using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.CrossCutting.Caching;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Authorization;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -68,7 +68,7 @@ public class GetRecipeByIdHandler(
         // ABAC 校验:无论数据来自 DB 还是缓存,都要在这里过一遍管辖权
         if (!string.Equals(
                 currentUser.Role,
-                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
                 StringComparison.Ordinal))
         {
             if (!Guid.TryParse(currentUser.Id, out var userId))

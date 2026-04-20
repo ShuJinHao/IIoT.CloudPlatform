@@ -1,12 +1,9 @@
 <template>
   <div class="login-root">
-    <!-- 背景网格 -->
     <div class="bg-grid"></div>
-    <!-- 左侧装饰条 -->
     <div class="accent-bar"></div>
 
     <div class="login-card">
-      <!-- Logo区 -->
       <div class="logo-block">
         <div class="logo-icon">
           <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -24,13 +21,12 @@
 
       <div class="divider"></div>
 
-      <h2 class="login-title">操作员登录</h2>
-      <p class="login-desc">请使用您的工号和密码进行身份验证</p>
+      <h2 class="login-title">Operator Login</h2>
+      <p class="login-desc">Use your employee number and password to sign in.</p>
 
-      <!-- 表单 -->
       <div class="form">
         <div class="field-group" :class="{ 'field-focus': focusedField === 'no' }">
-          <label class="field-label">工号</label>
+          <label class="field-label">Employee No</label>
           <div class="field-input-wrap">
             <svg class="field-icon" viewBox="0 0 20 20" fill="none">
               <circle cx="10" cy="7" r="3.5" stroke="currentColor" stroke-width="1.5"/>
@@ -39,7 +35,7 @@
             <input
               v-model="loginForm.employeeNo"
               type="text"
-              placeholder="请输入工号"
+              placeholder="Enter employee number"
               @focus="focusedField = 'no'"
               @blur="focusedField = ''"
               autocomplete="username"
@@ -48,7 +44,7 @@
         </div>
 
         <div class="field-group" :class="{ 'field-focus': focusedField === 'pw' }">
-          <label class="field-label">密码</label>
+          <label class="field-label">Password</label>
           <div class="field-input-wrap">
             <svg class="field-icon" viewBox="0 0 20 20" fill="none">
               <rect x="4" y="9" width="12" height="9" rx="2" stroke="currentColor" stroke-width="1.5"/>
@@ -57,7 +53,7 @@
             <input
               v-model="loginForm.password"
               :type="showPw ? 'text' : 'password'"
-              placeholder="请输入密码"
+              placeholder="Enter password"
               @focus="focusedField = 'pw'"
               @blur="focusedField = ''"
               @keyup.enter="handleLogin"
@@ -75,21 +71,23 @@
           </div>
         </div>
 
-        <!-- 错误提示 -->
         <div v-if="errorMsg" class="error-msg">
-          <svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="#ff4d4f" stroke-width="1.2"/><path d="M8 5v3.5M8 10.5v.5" stroke="#ff4d4f" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <svg viewBox="0 0 16 16" fill="none">
+            <circle cx="8" cy="8" r="6.5" stroke="#ff4d4f" stroke-width="1.2"/>
+            <path d="M8 5v3.5M8 10.5v.5" stroke="#ff4d4f" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
           {{ errorMsg }}
         </div>
 
         <button class="submit-btn" @click="handleLogin" :disabled="loading">
-          <span v-if="!loading">登 录</span>
+          <span v-if="!loading">LOGIN</span>
           <span v-else class="loading-dots">
             <span></span><span></span><span></span>
           </span>
         </button>
       </div>
 
-      <p class="footer-tip">工业物联网云端管护平台 · v1.0</p>
+      <p class="footer-tip">Industrial IoT Cloud Platform v1.0</p>
     </div>
   </div>
 </template>
@@ -116,21 +114,19 @@ const loginForm = reactive<LoginPayload>({
 
 const handleLogin = async () => {
   if (!loginForm.employeeNo || !loginForm.password) {
-    errorMsg.value = '工号和密码不能为空';
+    errorMsg.value = 'Employee number and password are required.';
     return;
   }
+
   errorMsg.value = '';
   loading.value = true;
+
   try {
-    // axios 拦截器会剥离 ApiResult 外壳，直接拿到 token 字符串
-    const token = await loginApi(loginForm) as unknown as string;
-
-    // 存入 Pinia store（同时解析 JWT Claims）
-    authStore.setToken(token);
-
+    const session = await loginApi(loginForm);
+    authStore.setSession(session);
     router.push('/');
   } catch {
-    errorMsg.value = '工号或密码错误，请重新输入';
+    errorMsg.value = 'Invalid employee number or password.';
   } finally {
     loading.value = false;
   }
@@ -151,7 +147,6 @@ const handleLogin = async () => {
   font-family: 'Noto Sans SC', sans-serif;
 }
 
-/* 背景网格 */
 .bg-grid {
   position: absolute;
   inset: 0;
@@ -162,15 +157,15 @@ const handleLogin = async () => {
   pointer-events: none;
 }
 
-/* 左侧竖向装饰条 */
 .accent-bar {
   position: absolute;
-  left: 0; top: 0; bottom: 0;
+  left: 0;
+  top: 0;
+  bottom: 0;
   width: 3px;
   background: linear-gradient(to bottom, transparent, #00e5ff 30%, #0077ff 70%, transparent);
 }
 
-/* 卡片 */
 .login-card {
   position: relative;
   z-index: 1;
@@ -185,23 +180,25 @@ const handleLogin = async () => {
     inset 0 1px 0 rgba(255,255,255,0.04);
 }
 
-/* Logo */
 .logo-block {
   display: flex;
   align-items: center;
   gap: 14px;
   margin-bottom: 28px;
 }
+
 .logo-icon svg {
   width: 36px;
   height: 36px;
   filter: drop-shadow(0 0 8px rgba(0,229,255,0.5));
 }
+
 .logo-text {
   display: flex;
   flex-direction: column;
   line-height: 1;
 }
+
 .logo-main {
   font-family: 'Rajdhani', sans-serif;
   font-weight: 700;
@@ -209,6 +206,7 @@ const handleLogin = async () => {
   color: #00e5ff;
   letter-spacing: 2px;
 }
+
 .logo-sub {
   font-family: 'Rajdhani', sans-serif;
   font-weight: 500;
@@ -230,17 +228,18 @@ const handleLogin = async () => {
   color: #e8eaf0;
   margin: 0 0 6px;
 }
+
 .login-desc {
   font-size: 12px;
   color: rgba(255,255,255,0.3);
   margin: 0 0 32px;
 }
 
-/* 输入框组 */
 .field-group {
   margin-bottom: 20px;
   transition: all 0.2s;
 }
+
 .field-label {
   display: block;
   font-size: 11px;
@@ -251,9 +250,11 @@ const handleLogin = async () => {
   margin-bottom: 8px;
   transition: color 0.2s;
 }
+
 .field-group.field-focus .field-label {
   color: #00e5ff;
 }
+
 .field-input-wrap {
   position: relative;
   display: flex;
@@ -263,10 +264,12 @@ const handleLogin = async () => {
   border-radius: 3px;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
+
 .field-group.field-focus .field-input-wrap {
   border-color: rgba(0,229,255,0.5);
   box-shadow: 0 0 0 3px rgba(0,229,255,0.08);
 }
+
 .field-icon {
   width: 16px;
   height: 16px;
@@ -275,9 +278,11 @@ const handleLogin = async () => {
   flex-shrink: 0;
   transition: color 0.2s;
 }
+
 .field-group.field-focus .field-icon {
   color: #00e5ff;
 }
+
 input {
   flex: 1;
   background: transparent;
@@ -288,9 +293,11 @@ input {
   color: #e8eaf0;
   font-family: 'Noto Sans SC', sans-serif;
 }
+
 input::placeholder {
   color: rgba(255,255,255,0.18);
 }
+
 .eye-btn {
   background: none;
   border: none;
@@ -301,10 +308,16 @@ input::placeholder {
   align-items: center;
   transition: color 0.2s;
 }
-.eye-btn:hover { color: #00e5ff; }
-.eye-btn svg { width: 16px; height: 16px; }
 
-/* 错误提示 */
+.eye-btn:hover {
+  color: #00e5ff;
+}
+
+.eye-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
 .error-msg {
   display: flex;
   align-items: center;
@@ -317,9 +330,13 @@ input::placeholder {
   border: 1px solid rgba(255,77,79,0.2);
   border-radius: 3px;
 }
-.error-msg svg { width: 14px; height: 14px; flex-shrink: 0; }
 
-/* 登录按钮 */
+.error-msg svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
 .submit-btn {
   width: 100%;
   padding: 14px;
@@ -336,35 +353,55 @@ input::placeholder {
   transition: opacity 0.2s, transform 0.1s, box-shadow 0.2s;
   box-shadow: 0 4px 20px rgba(0,119,255,0.3);
 }
+
 .submit-btn:hover:not(:disabled) {
   opacity: 0.9;
   box-shadow: 0 6px 24px rgba(0,119,255,0.45);
 }
-.submit-btn:active:not(:disabled) { transform: translateY(1px); }
+
+.submit-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
 .submit-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
   box-shadow: none;
 }
 
-/* 加载动画 */
 .loading-dots {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
 }
+
 .loading-dots span {
-  width: 6px; height: 6px;
+  width: 6px;
+  height: 6px;
   background: white;
   border-radius: 50%;
   animation: dot-bounce 1.2s infinite ease-in-out;
 }
-.loading-dots span:nth-child(2) { animation-delay: 0.2s; }
-.loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+.loading-dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.loading-dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
 @keyframes dot-bounce {
-  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-  40% { transform: scale(1); opacity: 1; }
+  0%, 80%, 100% {
+    transform: scale(0.6);
+    opacity: 0.4;
+  }
+
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 .footer-tip {

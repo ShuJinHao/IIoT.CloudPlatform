@@ -1,5 +1,5 @@
 using IIoT.ProductionService.Commands.Capacities;
-using IIoT.Services.Common.Events.Capacities;
+using IIoT.Services.Contracts.Events.Capacities;
 using MassTransit;
 using MediatR;
 

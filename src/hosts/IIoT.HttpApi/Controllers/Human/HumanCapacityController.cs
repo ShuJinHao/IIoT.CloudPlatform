@@ -18,8 +18,7 @@ public class HumanCapacityController : ApiControllerBase
         [FromQuery] DateOnly date,
         [FromQuery] string? plcName = null)
     {
-        var result = await Sender.Send(new GetHourlyByDeviceIdQuery(deviceId, date, plcName));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetHourlyByDeviceIdQuery(deviceId, date, plcName)));
     }
 
     [HttpGet("summary")]
@@ -28,11 +27,7 @@ public class HumanCapacityController : ApiControllerBase
         [FromQuery] DateOnly date,
         [FromQuery] string? plcName = null)
     {
-        var result = await Sender.Send(new GetSummaryByDeviceIdQuery(deviceId, date, plcName));
-        if (!result.IsSuccess)
-            return BadRequest(result.Errors);
-
-        return result.Value is null ? NoContent() : Ok(result.Value);
+        return ReturnResult(await Sender.Send(new GetSummaryByDeviceIdQuery(deviceId, date, plcName)));
     }
 
     [HttpGet("summary/range")]
@@ -42,8 +37,7 @@ public class HumanCapacityController : ApiControllerBase
         [FromQuery] DateOnly endDate,
         [FromQuery] string? plcName = null)
     {
-        var result = await Sender.Send(new GetSummaryRangeQuery(deviceId, startDate, endDate, plcName));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetSummaryRangeQuery(deviceId, startDate, endDate, plcName)));
     }
 
     [HttpGet("daily")]
@@ -52,7 +46,6 @@ public class HumanCapacityController : ApiControllerBase
         [FromQuery] DateOnly? date = null,
         [FromQuery] Guid? deviceId = null)
     {
-        var result = await Sender.Send(new GetDailyCapacityPagedQuery(pagination, date, deviceId));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetDailyCapacityPagedQuery(pagination, date, deviceId)));
     }
 }

@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using Serilog;
 using Serilog.Events;
 
@@ -15,8 +16,12 @@ public static class SerilogExtensions
     public static void AddSerilog(this IHostApplicationBuilder builder, string serviceName)
     {
         var logDirectory = Path.Combine(AppContext.BaseDirectory, "logs");
+        var seqOptions = builder.Configuration.GetSection(SeqOptions.SectionName).Get<SeqOptions>()
+                         ?? new SeqOptions();
 
-        Log.Logger = new LoggerConfiguration()
+        seqOptions.Validate();
+
+        var loggerConfiguration = new LoggerConfiguration()
             .MinimumLevel.Information()
             .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
             .MinimumLevel.Override("Microsoft.EntityFrameworkCore", LogEventLevel.Warning)
@@ -31,8 +36,16 @@ public static class SerilogExtensions
                 retainedFileCountLimit: 30,
                 outputTemplate:
                     "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] [{ServiceName}] [{SourceContext}] {Message:lj}{NewLine}{Exception}",
-                shared: true)
-            .CreateLogger();
+                shared: true);
+
+        if (seqOptions.Enabled)
+        {
+            loggerConfiguration.WriteTo.Seq(
+                serverUrl: seqOptions.ServerUrl,
+                apiKey: string.IsNullOrWhiteSpace(seqOptions.ApiKey) ? null : seqOptions.ApiKey);
+        }
+
+        Log.Logger = loggerConfiguration.CreateLogger();
 
         builder.Services.AddSerilog();
     }
