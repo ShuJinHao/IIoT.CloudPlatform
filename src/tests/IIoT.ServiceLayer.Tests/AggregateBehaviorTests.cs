@@ -1,5 +1,7 @@
 using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.Employees.Aggregates.Employees.Events;
+using IIoT.Core.MasterData.Aggregates.MfgProcesses;
+using IIoT.Core.MasterData.Aggregates.MfgProcesses.Events;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.Devices.Events;
 using IIoT.Core.Production.Aggregates.Recipes;
@@ -83,6 +85,67 @@ public sealed class AggregateBehaviorTests
         Assert.Equal("DEV-0001", device.Code);
         Assert.Contains(device.DomainEvents, e => e is DeviceRenamedDomainEvent);
         Assert.Contains(device.DomainEvents, e => e is DeviceDeletedDomainEvent);
+    }
+
+    [Fact]
+    public void Device_ChangeProcess_ShouldRaiseProcessChangedEvent_AndSkipSameProcess()
+    {
+        var originalProcessId = Guid.NewGuid();
+        var newProcessId = Guid.NewGuid();
+        var device = new Device("Press-01", "DEV-0001", originalProcessId);
+
+        device.ClearDomainEvents();
+        device.ChangeProcess(originalProcessId);
+
+        Assert.Empty(device.DomainEvents);
+
+        device.ChangeProcess(newProcessId);
+
+        Assert.Equal(newProcessId, device.ProcessId);
+        var domainEvent = Assert.IsType<DeviceProcessChangedDomainEvent>(
+            Assert.Single(device.DomainEvents));
+        Assert.Equal(device.Id, domainEvent.DeviceId);
+        Assert.Equal(originalProcessId, domainEvent.OldProcessId);
+        Assert.Equal(newProcessId, domainEvent.NewProcessId);
+    }
+
+    [Fact]
+    public void Device_ChangeProcess_ShouldRejectEmptyProcessId()
+    {
+        var device = new Device("Press-01", "DEV-0001", Guid.NewGuid());
+
+        Assert.ThrowsAny<ArgumentException>(() => device.ChangeProcess(Guid.Empty));
+    }
+
+    [Fact]
+    public void MfgProcess_Rename_ShouldNormalizeAndRaiseEvent_AndSkipSameValues()
+    {
+        var process = new MfgProcess("Stacking", "叠片工序");
+
+        process.Rename(" Stacking ", "叠片工序");
+
+        Assert.Empty(process.DomainEvents);
+
+        process.Rename("Injection", "注液工序");
+
+        Assert.Equal("Injection", process.ProcessCode);
+        Assert.Equal("注液工序", process.ProcessName);
+        var domainEvent = Assert.IsType<MfgProcessRenamedDomainEvent>(
+            Assert.Single(process.DomainEvents));
+        Assert.Equal(process.Id, domainEvent.ProcessId);
+        Assert.Equal("Stacking", domainEvent.OldProcessCode);
+        Assert.Equal("Injection", domainEvent.NewProcessCode);
+        Assert.Equal("叠片工序", domainEvent.OldProcessName);
+        Assert.Equal("注液工序", domainEvent.NewProcessName);
+    }
+
+    [Fact]
+    public void MfgProcess_Rename_ShouldRejectBlankValues()
+    {
+        var process = new MfgProcess("Stacking", "叠片工序");
+
+        Assert.ThrowsAny<ArgumentException>(() => process.Rename("", "注液工序"));
+        Assert.ThrowsAny<ArgumentException>(() => process.Rename("Injection", " "));
     }
 
     [Fact]
