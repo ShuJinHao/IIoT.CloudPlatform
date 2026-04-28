@@ -286,6 +286,39 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HumanIdentity_ConcurrentRefresh_ShouldOnlyRotateOnce()
+    {
+        _fixture.ClearAuthToken();
+
+        using var loginResponse = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/human/identity/login", new
+        {
+            EmployeeNo = IIoTAppFixture.SeedAdminEmployeeNo,
+            Password = IIoTAppFixture.SeedAdminPassword
+        });
+
+        loginResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        var loginSession = await ReadIssuedAuthSessionAsync(loginResponse);
+
+        var refreshResponses = await Task.WhenAll(
+            SendRefreshAsync("/api/v1/human/identity/refresh", loginSession.RefreshToken),
+            SendRefreshAsync("/api/v1/human/identity/refresh", loginSession.RefreshToken));
+
+        try
+        {
+            refreshResponses.Select(response => response.StatusCode)
+                .Should()
+                .BeEquivalentTo([HttpStatusCode.OK, HttpStatusCode.Unauthorized]);
+        }
+        finally
+        {
+            foreach (var response in refreshResponses)
+            {
+                response.Dispose();
+            }
+        }
+    }
+
+    [Fact]
     public async Task EdgeBootstrap_DeviceInstanceAndRefresh_ShouldRotateRefreshToken()
     {
         await AuthenticateAsAdminAsync();
@@ -858,6 +891,13 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
             refreshToken,
             accessTokenExpiresAtUtc,
             refreshTokenExpiresAtUtc);
+    }
+
+    private async Task<HttpResponseMessage> SendRefreshAsync(string path, string refreshToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, path);
+        request.Headers.Add("X-IIoT-Refresh-Token", refreshToken);
+        return await _fixture.HttpClient.SendAsync(request);
     }
 
     private static async Task<IssuedBootstrapSession> ReadIssuedBootstrapSessionAsync(HttpResponseMessage response)

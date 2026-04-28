@@ -14,6 +14,10 @@ public sealed class DeviceLogConsumer(ISender sender)
 {
     public async Task Consume(ConsumeContext<DeviceLogReceivedEvent> context)
     {
+        EventSchemaVersionGuard.EnsureSupported(
+            context.Message.SchemaVersion,
+            nameof(DeviceLogReceivedEvent));
+
         var command = new PersistDeviceLogCommand(context.Message);
         var result = await sender.Send(command, context.CancellationToken);
 

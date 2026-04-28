@@ -2,6 +2,8 @@ namespace IIoT.Services.Contracts.Events.PassStations;
 
 public record PassDataStackingReceivedEvent : IPassStationEvent
 {
+    public int SchemaVersion { get; init; } = 1;
+
     public Guid DeviceId { get; init; }
     public PassDataStackingItem Item { get; init; } = new();
 }

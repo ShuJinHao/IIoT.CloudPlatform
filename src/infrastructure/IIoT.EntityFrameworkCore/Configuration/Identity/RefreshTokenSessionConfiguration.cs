@@ -23,6 +23,10 @@ public sealed class RefreshTokenSessionConfiguration : IEntityTypeConfiguration<
         builder.Property(x => x.RevokedReason)
             .HasMaxLength(256);
 
+        builder.Property(x => x.RowVersion)
+            .HasColumnName("xmin")
+            .IsRowVersion();
+
         builder.HasIndex(x => x.TokenHash)
             .IsUnique();
 

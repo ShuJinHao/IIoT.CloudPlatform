@@ -1,5 +1,6 @@
 ﻿using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Repository;
+using Microsoft.EntityFrameworkCore;
 
 namespace IIoT.EntityFrameworkCore.Repository;
 
@@ -17,7 +18,14 @@ public class EfRepository<T>(IIoTDbContext dbContext) : EfReadRepository<T>(dbCo
 
     public void Update(T entity)
     {
-        _dbContext.Set<T>().Update(entity);
+        var entry = _dbContext.Entry(entity);
+        if (entry.State != EntityState.Detached)
+        {
+            return;
+        }
+
+        _dbContext.Set<T>().Attach(entity);
+        entry.State = EntityState.Modified;
     }
 
     public void Delete(T entity)

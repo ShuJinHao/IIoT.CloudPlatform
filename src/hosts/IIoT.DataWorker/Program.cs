@@ -15,12 +15,27 @@ using IIoT.Services.CrossCutting.DependencyInjection;
 using IIoT.Services.Contracts.Events.PassStations;
 using IIoT.SharedKernel.Configuration;
 using MassTransit;
+using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using System.Net.Sockets;
 
 var builder = Host.CreateApplicationBuilder(args);
-var eventBusOptions = builder.Configuration.GetRequiredValidatedOptions<EventBusOptions>(
-    EventBusOptions.SectionName,
-    static options => options.Validate());
+var healthCheckRequested = IsHealthCheckMode(args);
+EventBusOptions eventBusOptions;
+try
+{
+    eventBusOptions = builder.Configuration.GetRequiredValidatedOptions<EventBusOptions>(
+        EventBusOptions.SectionName,
+        static options => options.Validate());
+}
+catch (Exception ex) when (healthCheckRequested)
+{
+    Console.Error.WriteLine($"IIoT.DataWorker health check failed: {ex.Message}");
+    Environment.ExitCode = 1;
+    return;
+}
 
 builder.ConfigureContainer(
     new DefaultServiceProviderFactory(new ServiceProviderOptions
@@ -31,9 +46,28 @@ builder.ConfigureContainer(
 
 builder.AddSerilog("dataworker");
 builder.AddServiceDefaults();
-builder.AddDapper();
-builder.AddEfCore();
-builder.AddInfrastructures();
+try
+{
+    builder.AddDapper();
+    builder.AddEfCore();
+    builder.AddInfrastructures();
+}
+catch (Exception ex) when (healthCheckRequested)
+{
+    Console.Error.WriteLine($"IIoT.DataWorker health check failed: {ex.Message}");
+    Environment.ExitCode = 1;
+    return;
+}
+
+if (healthCheckRequested)
+{
+    using var healthCheckProvider = builder.Services.BuildServiceProvider();
+    Environment.ExitCode = await RunHealthCheckAsync(
+        healthCheckProvider,
+        builder.Configuration,
+        CancellationToken.None);
+    return;
+}
 
 builder.Services.AddConfiguredMediatR(builder.Configuration, cfg =>
 {
@@ -130,3 +164,78 @@ startupLogger.LogInformation(
     "_skipped");
 
 host.Run();
+
+static bool IsHealthCheckMode(string[] args)
+{
+    return args.Any(arg => string.Equals(arg, "--healthcheck", StringComparison.OrdinalIgnoreCase));
+}
+
+static async Task<int> RunHealthCheckAsync(
+    IServiceProvider services,
+    IConfiguration configuration,
+    CancellationToken cancellationToken)
+{
+    try
+    {
+        var requiredConnectionStrings = new[]
+        {
+            ConnectionResourceNames.IiotDatabase,
+            ConnectionResourceNames.EventBus,
+            "redis-cache"
+        };
+
+        var connectionStrings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in requiredConnectionStrings)
+        {
+            var connectionString = configuration.GetConnectionString(name);
+            if (string.IsNullOrWhiteSpace(connectionString))
+            {
+                Console.Error.WriteLine($"IIoT.DataWorker health check failed: missing connection string '{name}'.");
+                return 1;
+            }
+
+            connectionStrings[name] = connectionString;
+        }
+
+        using var scope = services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        if (!await dbContext.Database.CanConnectAsync(cancellationToken))
+        {
+            Console.Error.WriteLine("IIoT.DataWorker health check failed: database connection is unavailable.");
+            return 1;
+        }
+
+        var distributedCache = scope.ServiceProvider.GetRequiredService<IDistributedCache>();
+        await distributedCache.GetStringAsync("__iiot_dataworker_healthcheck__", cancellationToken);
+
+        await EnsureTcpConnectAsync(
+            connectionStrings[ConnectionResourceNames.EventBus],
+            ConnectionResourceNames.EventBus,
+            cancellationToken);
+
+        Console.WriteLine("IIoT.DataWorker health check passed.");
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"IIoT.DataWorker health check failed: {ex.Message}");
+        return 1;
+    }
+}
+
+static async Task EnsureTcpConnectAsync(
+    string connectionString,
+    string connectionName,
+    CancellationToken cancellationToken)
+{
+    if (!Uri.TryCreate(connectionString, UriKind.Absolute, out var uri))
+    {
+        throw new InvalidOperationException($"Connection string '{connectionName}' must be an absolute URI.");
+    }
+
+    var port = uri.IsDefaultPort ? 5672 : uri.Port;
+    using var client = new TcpClient();
+    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+    timeout.CancelAfter(TimeSpan.FromSeconds(5));
+    await client.ConnectAsync(uri.Host, port, timeout.Token);
+}
