@@ -11,6 +11,13 @@ internal sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outb
 
         builder.HasKey(x => x.Id);
 
+        builder.Property(x => x.MessageKind)
+            .HasColumnName("message_kind")
+            .HasConversion<string>()
+            .HasMaxLength(32)
+            .HasDefaultValue(OutboxMessageKind.DomainEvent)
+            .IsRequired();
+
         builder.Property(x => x.EventType)
             .HasColumnName("event_type")
             .HasMaxLength(1024)

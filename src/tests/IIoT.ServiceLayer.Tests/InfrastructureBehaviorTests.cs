@@ -13,6 +13,7 @@ using IIoT.EventBus;
 using IIoT.IdentityService.Commands;
 using IIoT.Infrastructure.Logging;
 using IIoT.Services.CrossCutting.Behaviors;
+using IIoT.Services.Contracts.Events.Capacities;
 using IIoT.SharedKernel.Configuration;
 using IIoT.SharedKernel.Result;
 using MediatR;
@@ -121,6 +122,7 @@ public sealed class InfrastructureBehaviorTests
         var dispatcher = new OutboxMessageDispatcher(
             dbContext,
             mediator,
+            new RecordingEventPublisher(),
             Options.Create(new OutboxDispatcherOptions
             {
                 BatchSize = 10,
@@ -144,6 +146,156 @@ public sealed class InfrastructureBehaviorTests
     }
 
     [Fact]
+    public void OutboxMessage_ShouldRoundTripIntegrationEvents()
+    {
+        var deviceId = Guid.NewGuid();
+        var integrationEvent = new HourlyCapacityReceivedEvent
+        {
+            DeviceId = deviceId,
+            Date = DateOnly.FromDateTime(DateTime.UtcNow),
+            ShiftCode = "D",
+            Hour = 10,
+            Minute = 0,
+            TimeLabel = "10:00",
+            TotalCount = 20,
+            OkCount = 19,
+            NgCount = 1,
+            ReceivedAtUtc = DateTime.UtcNow
+        };
+
+        var outboxMessage = OutboxMessage.FromIntegrationEvent(integrationEvent);
+        var deserialized = Assert.IsType<HourlyCapacityReceivedEvent>(
+            outboxMessage.DeserializeIntegrationEvent());
+
+        Assert.Equal(OutboxMessageKind.IntegrationEvent, outboxMessage.MessageKind);
+        Assert.Contains(nameof(HourlyCapacityReceivedEvent), outboxMessage.EventType);
+        Assert.Equal(deviceId, deserialized.DeviceId);
+        Assert.Equal(1, deserialized.SchemaVersion);
+        Assert.Equal(integrationEvent.EventId, deserialized.EventId);
+    }
+
+    [Fact]
+    public async Task IntegrationEventOutbox_ShouldPersistIntegrationEventMessages()
+    {
+        using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
+        using var scope = provider.CreateScope();
+
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var outbox = new EfIntegrationEventOutbox(dbContext);
+        var integrationEvent = new HourlyCapacityReceivedEvent
+        {
+            DeviceId = Guid.NewGuid(),
+            Date = DateOnly.FromDateTime(DateTime.UtcNow),
+            ShiftCode = "D",
+            Hour = 10,
+            Minute = 0,
+            TimeLabel = "10:00",
+            TotalCount = 20,
+            OkCount = 19,
+            NgCount = 1,
+            ReceivedAtUtc = DateTime.UtcNow
+        };
+
+        await outbox.EnqueueAsync(integrationEvent);
+
+        var outboxMessage = await dbContext.OutboxMessages.SingleAsync();
+        Assert.Equal(OutboxMessageKind.IntegrationEvent, outboxMessage.MessageKind);
+        Assert.Null(outboxMessage.ProcessedAtUtc);
+        Assert.Equal(integrationEvent.EventId, Assert.IsType<HourlyCapacityReceivedEvent>(
+            outboxMessage.DeserializeIntegrationEvent()).EventId);
+    }
+
+    [Fact]
+    public async Task OutboxMessageDispatcher_ShouldPublishIntegrationMessagesAndMarkProcessed()
+    {
+        using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
+        using var scope = provider.CreateScope();
+
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var publisher = new RecordingEventPublisher();
+        dbContext.OutboxMessages.Add(OutboxMessage.FromIntegrationEvent(new HourlyCapacityReceivedEvent
+        {
+            DeviceId = Guid.NewGuid(),
+            Date = DateOnly.FromDateTime(DateTime.UtcNow),
+            ShiftCode = "D",
+            Hour = 10,
+            Minute = 0,
+            TimeLabel = "10:00",
+            TotalCount = 20,
+            OkCount = 19,
+            NgCount = 1,
+            ReceivedAtUtc = DateTime.UtcNow
+        }));
+        await dbContext.SaveChangesAsync();
+
+        var dispatcher = new OutboxMessageDispatcher(
+            dbContext,
+            scope.ServiceProvider.GetRequiredService<IMediator>(),
+            publisher,
+            Options.Create(new OutboxDispatcherOptions
+            {
+                BatchSize = 10,
+                PollingIntervalSeconds = 1
+            }),
+            CreateLogger<OutboxMessageDispatcher>());
+
+        var dispatched = await dispatcher.DispatchPendingAsync();
+        var outboxMessage = await dbContext.OutboxMessages.SingleAsync();
+
+        Assert.Equal(1, dispatched.ScannedCount);
+        Assert.Equal(1, dispatched.SucceededCount);
+        Assert.Equal(0, dispatched.FailedCount);
+        Assert.IsType<HourlyCapacityReceivedEvent>(publisher.LastPublishedEvent);
+        Assert.NotNull(outboxMessage.ProcessedAtUtc);
+        Assert.Equal(1, outboxMessage.AttemptCount);
+    }
+
+    [Fact]
+    public async Task OutboxMessageDispatcher_ShouldKeepFailedIntegrationMessagesPending()
+    {
+        using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
+        using var scope = provider.CreateScope();
+
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        dbContext.OutboxMessages.Add(OutboxMessage.FromIntegrationEvent(new HourlyCapacityReceivedEvent
+        {
+            DeviceId = Guid.NewGuid(),
+            Date = DateOnly.FromDateTime(DateTime.UtcNow),
+            ShiftCode = "D",
+            Hour = 10,
+            Minute = 0,
+            TimeLabel = "10:00",
+            TotalCount = 20,
+            OkCount = 19,
+            NgCount = 1,
+            ReceivedAtUtc = DateTime.UtcNow
+        }));
+        await dbContext.SaveChangesAsync();
+
+        var dispatcher = new OutboxMessageDispatcher(
+            dbContext,
+            scope.ServiceProvider.GetRequiredService<IMediator>(),
+            new RecordingEventPublisher(publishException: new InvalidOperationException("publish failed")),
+            Options.Create(new OutboxDispatcherOptions
+            {
+                BatchSize = 10,
+                PollingIntervalSeconds = 1
+            }),
+            CreateLogger<OutboxMessageDispatcher>());
+
+        var dispatched = await dispatcher.DispatchPendingAsync();
+        var outboxMessage = await dbContext.OutboxMessages.SingleAsync();
+
+        Assert.Equal(1, dispatched.ScannedCount);
+        Assert.Equal(0, dispatched.SucceededCount);
+        Assert.Equal(1, dispatched.FailedCount);
+        Assert.Equal(1, dispatched.PendingBacklogCount);
+        Assert.Null(outboxMessage.ProcessedAtUtc);
+        Assert.Equal(1, outboxMessage.AttemptCount);
+        Assert.Equal("publish failed", outboxMessage.LastError);
+    }
+
+    [Fact]
     public async Task OutboxMessageDispatcher_ShouldKeepFailedMessagesPending()
     {
         using var provider = TestServiceProviders.CreateEfServiceProvider(new ThrowingMediator("dispatch failed"));
@@ -156,6 +308,7 @@ public sealed class InfrastructureBehaviorTests
         var dispatcher = new OutboxMessageDispatcher(
             dbContext,
             scope.ServiceProvider.GetRequiredService<IMediator>(),
+            new RecordingEventPublisher(),
             Options.Create(new OutboxDispatcherOptions
             {
                 BatchSize = 10,
@@ -191,6 +344,7 @@ public sealed class InfrastructureBehaviorTests
         var dispatcher = new OutboxMessageDispatcher(
             dbContext,
             scope.ServiceProvider.GetRequiredService<IMediator>(),
+            new RecordingEventPublisher(),
             Options.Create(new OutboxDispatcherOptions
             {
                 BatchSize = 10,
@@ -223,6 +377,7 @@ public sealed class InfrastructureBehaviorTests
         var dispatcher = new OutboxMessageDispatcher(
             dbContext,
             scope.ServiceProvider.GetRequiredService<IMediator>(),
+            new RecordingEventPublisher(),
             Options.Create(new OutboxDispatcherOptions
             {
                 BatchSize = 10,
@@ -269,6 +424,23 @@ public sealed class InfrastructureBehaviorTests
                 && string.Equals(index.Properties[0].Name, nameof(AuditTrailRecord.ActorUserId), StringComparison.Ordinal));
 
         Assert.True(hasActorUserIdIndex);
+    }
+
+    [Fact]
+    public void OutboxConfiguration_ShouldMapMessageKindDefault()
+    {
+        using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
+        using var scope = provider.CreateScope();
+
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var outboxEntityType = dbContext.Model.FindEntityType(typeof(OutboxMessage));
+        var messageKindProperty = outboxEntityType!.FindProperty(nameof(OutboxMessage.MessageKind));
+
+        Assert.NotNull(messageKindProperty);
+        Assert.Equal("message_kind", messageKindProperty!.GetColumnName());
+        Assert.Equal(
+            nameof(OutboxMessageKind.DomainEvent),
+            messageKindProperty.GetDefaultValue()?.ToString());
     }
 
     [Fact]

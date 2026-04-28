@@ -2,12 +2,14 @@ using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using IIoT.Services.Contracts;
 
 namespace IIoT.EntityFrameworkCore.Outbox;
 
 public sealed class OutboxMessageDispatcher(
     IIoTDbContext dbContext,
     IMediator mediator,
+    IEventPublisher eventPublisher,
     IOptions<OutboxDispatcherOptions> options,
     ILogger<OutboxMessageDispatcher> logger) : IOutboxMessageDispatcher
 {
@@ -36,8 +38,22 @@ public sealed class OutboxMessageDispatcher(
         {
             try
             {
-                var domainEvent = message.DeserializeDomainEvent();
-                await mediator.Publish((object)domainEvent, cancellationToken);
+                if (message.MessageKind == OutboxMessageKind.DomainEvent)
+                {
+                    var domainEvent = message.DeserializeDomainEvent();
+                    await mediator.Publish((object)domainEvent, cancellationToken);
+                }
+                else if (message.MessageKind == OutboxMessageKind.IntegrationEvent)
+                {
+                    var integrationEvent = message.DeserializeIntegrationEvent();
+                    await eventPublisher.PublishAsync(integrationEvent, cancellationToken);
+                }
+                else
+                {
+                    throw new InvalidOperationException(
+                        $"Unsupported outbox message kind '{message.MessageKind}'.");
+                }
+
                 message.MarkProcessed();
                 succeededCount++;
             }

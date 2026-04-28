@@ -24,7 +24,7 @@ public record ReceiveHourlyCapacityCommand(
 public class ReceiveHourlyCapacityHandler(
     IDeviceIdentityQueryService deviceIdentityQuery,
     IMapper mapper,
-    IEventPublisher eventPublisher,
+    IIntegrationEventOutbox integrationEventOutbox,
     ICacheService cacheService
 ) : ICommandHandler<ReceiveHourlyCapacityCommand, Result<bool>>
 {
@@ -43,7 +43,7 @@ public class ReceiveHourlyCapacityHandler(
         {
             ReceivedAtUtc = DateTime.UtcNow
         };
-        await eventPublisher.PublishAsync(@event, cancellationToken);
+        await integrationEventOutbox.EnqueueAsync(@event, cancellationToken);
         await cacheService.RemoveAsync(
             CacheKeys.CapacityHourly(request.DeviceId, request.Date, request.PlcName),
             cancellationToken);
