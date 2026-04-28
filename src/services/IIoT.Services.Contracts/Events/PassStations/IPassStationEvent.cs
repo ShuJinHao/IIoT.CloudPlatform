@@ -1,8 +1,8 @@
+using IIoT.Services.Contracts;
+
 namespace IIoT.Services.Contracts.Events.PassStations;
 
-public interface IPassStationEvent
+public interface IPassStationEvent : IIntegrationEvent
 {
-    int SchemaVersion { get; }
-
     Guid DeviceId { get; }
 }

@@ -8,6 +8,6 @@ public sealed class MassTransitEventPublisher(IPublishEndpoint publishEndpoint) 
     public Task PublishAsync<TEvent>(
         TEvent @event,
         CancellationToken cancellationToken = default)
-        where TEvent : class
+        where TEvent : class, IIntegrationEvent
         => publishEndpoint.Publish(@event, cancellationToken);
 }
