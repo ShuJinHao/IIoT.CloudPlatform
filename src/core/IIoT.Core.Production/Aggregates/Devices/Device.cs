@@ -65,7 +65,14 @@ public class Device : BaseEntity<Guid>
         if (newProcessId == Guid.Empty)
             throw new ArgumentException("ProcessId cannot be empty.", nameof(newProcessId));
 
+        if (ProcessId == newProcessId)
+        {
+            return;
+        }
+
+        var oldProcessId = ProcessId;
         ProcessId = newProcessId;
+        AddDomainEvent(new DeviceProcessChangedDomainEvent(Id, oldProcessId, ProcessId));
     }
 
     public void MarkDeleted()

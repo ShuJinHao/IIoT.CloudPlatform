@@ -43,7 +43,23 @@ public class MfgProcess : BaseEntity<Guid>
         ArgumentException.ThrowIfNullOrWhiteSpace(newCode);
         ArgumentException.ThrowIfNullOrWhiteSpace(newName);
 
-        ProcessCode = newCode.Trim();
-        ProcessName = newName.Trim();
+        var normalizedCode = newCode.Trim();
+        var normalizedName = newName.Trim();
+        if (ProcessCode == normalizedCode && ProcessName == normalizedName)
+        {
+            return;
+        }
+
+        var oldCode = ProcessCode;
+        var oldName = ProcessName;
+
+        ProcessCode = normalizedCode;
+        ProcessName = normalizedName;
+        AddDomainEvent(new Events.MfgProcessRenamedDomainEvent(
+            Id,
+            oldCode,
+            ProcessCode,
+            oldName,
+            ProcessName));
     }
 }
