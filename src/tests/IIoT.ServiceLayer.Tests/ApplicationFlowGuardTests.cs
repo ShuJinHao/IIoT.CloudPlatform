@@ -14,6 +14,7 @@ using IIoT.ProductionService.Queries.Capacities;
 using IIoT.ProductionService.Queries.Devices;
 using IIoT.ProductionService.Validators;
 using IIoT.Services.CrossCutting.Caching;
+using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.Contracts.Events.Capacities;
@@ -620,6 +621,46 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal(1, JsonSerializer.Deserialize<DeviceLogReceivedEvent>("{}", options)!.SchemaVersion);
         Assert.Equal(1, JsonSerializer.Deserialize<PassDataInjectionReceivedEvent>("{}", options)!.SchemaVersion);
         Assert.Equal(1, JsonSerializer.Deserialize<PassDataStackingReceivedEvent>("{}", options)!.SchemaVersion);
+    }
+
+    [Fact]
+    public void EventContracts_ShouldExposeIntegrationEventBoundary()
+    {
+        var eventTypes = new[]
+        {
+            typeof(HourlyCapacityReceivedEvent),
+            typeof(DeviceLogReceivedEvent),
+            typeof(PassDataInjectionReceivedEvent),
+            typeof(PassDataStackingReceivedEvent)
+        };
+
+        foreach (var eventType in eventTypes)
+        {
+            Assert.True(typeof(IIntegrationEvent).IsAssignableFrom(eventType), eventType.FullName);
+        }
+
+        Assert.True(typeof(IIntegrationEvent).IsAssignableFrom(typeof(IPassStationEvent)));
+
+        var publishMethod = typeof(IEventPublisher).GetMethod(nameof(IEventPublisher.PublishAsync))!;
+        var genericParameter = Assert.Single(publishMethod.GetGenericArguments());
+        Assert.Contains(
+            typeof(IIntegrationEvent),
+            genericParameter.GetGenericParameterConstraints());
+
+        IIntegrationEvent[] events =
+        [
+            new HourlyCapacityReceivedEvent(),
+            new DeviceLogReceivedEvent(),
+            new PassDataInjectionReceivedEvent(),
+            new PassDataStackingReceivedEvent()
+        ];
+
+        foreach (var @event in events)
+        {
+            Assert.NotEqual(Guid.Empty, @event.EventId);
+            Assert.True(@event.OccurredAtUtc > DateTimeOffset.UtcNow.AddMinutes(-1));
+            Assert.Equal(1, @event.SchemaVersion);
+        }
     }
 
     [Fact]

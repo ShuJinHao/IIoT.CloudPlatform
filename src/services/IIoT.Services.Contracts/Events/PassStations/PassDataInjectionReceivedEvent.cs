@@ -5,6 +5,10 @@ namespace IIoT.Services.Contracts.Events.PassStations;
 /// </summary>
 public record PassDataInjectionReceivedEvent : IPassStationEvent
 {
+    public Guid EventId { get; init; } = Guid.NewGuid();
+
+    public DateTimeOffset OccurredAtUtc { get; init; } = DateTimeOffset.UtcNow;
+
     public int SchemaVersion { get; init; } = 1;
 
     public Guid DeviceId { get; init; }

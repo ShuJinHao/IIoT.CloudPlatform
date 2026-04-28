@@ -728,7 +728,7 @@ internal sealed class RecordingEventPublisher(
     public Task PublishAsync<TEvent>(
         TEvent @event,
         CancellationToken cancellationToken = default)
-        where TEvent : class
+        where TEvent : class, IIntegrationEvent
     {
         callOrder?.Add("publish");
         if (publishException is not null)

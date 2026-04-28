@@ -1,10 +1,16 @@
+using IIoT.Services.Contracts;
+
 namespace IIoT.Services.Contracts.Events.Capacities;
 
 /// <summary>
 /// 半小时产能接收事件。
 /// </summary>
-public record HourlyCapacityReceivedEvent
+public record HourlyCapacityReceivedEvent : IIntegrationEvent
 {
+    public Guid EventId { get; init; } = Guid.NewGuid();
+
+    public DateTimeOffset OccurredAtUtc { get; init; } = DateTimeOffset.UtcNow;
+
     public int SchemaVersion { get; init; } = 1;
 
     public Guid DeviceId { get; init; }
