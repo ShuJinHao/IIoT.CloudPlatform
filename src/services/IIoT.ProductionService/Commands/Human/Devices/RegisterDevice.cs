@@ -1,9 +1,11 @@
 using System.Security.Cryptography;
 using IIoT.Core.Production.Aggregates.Devices;
-using IIoT.Services.Common.Attributes;
-using IIoT.Services.Common.Caching;
-using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Contracts.RecordQueries;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Auditing;
+using IIoT.Services.Contracts.Caching;
+using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts.RecordQueries;
+using IIoT.Services.CrossCutting.Attributes;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -22,10 +24,12 @@ public sealed record CreateDeviceResultDto(
     string Code);
 
 public class RegisterDeviceHandler(
+    ICurrentUser currentUser,
     IRepository<Device> deviceRepository,
     IProcessReadQueryService processReadQueryService,
     IDeviceReadQueryService deviceReadQueryService,
-    ICacheService cacheService
+    IDeviceCacheInvalidationService cacheInvalidationService,
+    IAuditTrailService auditTrailService
 ) : ICommandHandler<RegisterDeviceCommand, Result<CreateDeviceResultDto>>
 {
     public async Task<Result<CreateDeviceResultDto>> Handle(
@@ -35,20 +39,20 @@ public class RegisterDeviceHandler(
         var deviceName = request.DeviceName?.Trim() ?? string.Empty;
 
         if (string.IsNullOrEmpty(deviceName))
-            return Result.Failure("设备名称不能为空");
+            return await FailAsync(request, "Device name is required.", cancellationToken);
         if (request.ProcessId == Guid.Empty)
-            return Result.Failure("ProcessId 不能为空");
+            return await FailAsync(request, "ProcessId is required.", cancellationToken);
 
         var processExists = await processReadQueryService.ExistsAsync(
             request.ProcessId,
             cancellationToken);
 
         if (!processExists)
-            return Result.Failure("设备创建失败：指定工序不存在");
+            return await FailAsync(request, "Device registration failed: process was not found.", cancellationToken);
 
         var code = await GenerateUniqueCodeAsync(deviceReadQueryService, cancellationToken);
         if (code is null)
-            return Result.Failure("设备创建失败：无法分配唯一设备 Code");
+            return await FailAsync(request, "Device registration failed: unable to allocate a unique device code.", cancellationToken);
 
         var device = new Device(deviceName, code, request.ProcessId);
 
@@ -57,12 +61,53 @@ public class RegisterDeviceHandler(
 
         if (affected > 0)
         {
-            await cacheService.RemoveAsync(CacheKeys.AllDevices(), cancellationToken);
-            await cacheService.RemoveAsync(
-                CacheKeys.DevicesByProcess(device.ProcessId), cancellationToken);
+            await cacheInvalidationService.InvalidateListsAfterRegisterAsync(
+                device.ProcessId,
+                cancellationToken);
         }
 
+        await auditTrailService.TryWriteAsync(
+            new AuditTrailEntry(
+                ParseActorUserId(currentUser.Id),
+                currentUser.UserName,
+                "Device.Register",
+                "Device",
+                device.Id.ToString(),
+                DateTime.UtcNow,
+                affected > 0,
+                $"Registered device {device.DeviceName} ({device.Code}) to process {device.ProcessId}.",
+                affected > 0 ? null : "SaveChangesAsync did not persist any rows."),
+            cancellationToken);
+
         return Result.Success(new CreateDeviceResultDto(device.Id, device.Code));
+    }
+
+    private async Task<Result<CreateDeviceResultDto>> FailAsync(
+        RegisterDeviceCommand request,
+        string message,
+        CancellationToken cancellationToken)
+    {
+        await auditTrailService.TryWriteAsync(
+            new AuditTrailEntry(
+                ParseActorUserId(currentUser.Id),
+                currentUser.UserName,
+                "Device.Register",
+                "Device",
+                $"{request.ProcessId}:{request.DeviceName?.Trim()}",
+                DateTime.UtcNow,
+                false,
+                $"Register device {request.DeviceName?.Trim()}.",
+                message),
+            cancellationToken);
+
+        return Result.Failure(message);
+    }
+
+    private static Guid? ParseActorUserId(string? rawUserId)
+    {
+        return Guid.TryParse(rawUserId, out var actorUserId)
+            ? actorUserId
+            : null;
     }
 
     private static async Task<string?> GenerateUniqueCodeAsync(

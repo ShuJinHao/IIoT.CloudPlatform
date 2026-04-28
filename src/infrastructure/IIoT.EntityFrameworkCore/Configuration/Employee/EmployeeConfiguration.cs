@@ -17,7 +17,6 @@ public class EmployeeConfiguration : IEntityTypeConfiguration<EmployeeEntity>
         builder.HasKey(e => e.Id);
         builder.Property(e => e.Id).HasColumnName("id");
 
-        // Employee.Id 同时也是 ApplicationUser.Id，账号删除时级联删除员工档案。
         builder.HasOne<ApplicationUser>()
             .WithOne()
             .HasForeignKey<EmployeeEntity>(e => e.Id)
@@ -37,11 +36,14 @@ public class EmployeeConfiguration : IEntityTypeConfiguration<EmployeeEntity>
             .IsRequired()
             .HasColumnName("is_active");
 
+        builder.Property(e => e.RowVersion)
+            .HasColumnName("xmin")
+            .IsRowVersion();
+
         builder.HasIndex(e => e.EmployeeNo)
             .IsUnique()
             .HasDatabaseName("ix_employees_employee_no");
 
-        // 一个员工可以关联多个可操作设备。
         builder.HasMany(e => e.DeviceAccesses)
             .WithOne(eda => eda.Employee)
             .HasForeignKey(eda => eda.EmployeeId)

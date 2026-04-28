@@ -1,6 +1,7 @@
-using IIoT.Services.Common.Caching;
-using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Contracts.Authorization;
+using IIoT.Services.CrossCutting.Caching;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 
@@ -10,7 +11,7 @@ public record EdgeOperatorLoginCommand(
     string EmployeeNo,
     string Password,
     Guid DeviceId
-) : IHumanCommand<Result<string>>;
+) : IHumanCommand<Result<HumanIdentitySessionResult>>;
 
 public class EdgeOperatorLoginHandler(
     IIdentityAccountStore identityAccountStore,
@@ -18,10 +19,11 @@ public class EdgeOperatorLoginHandler(
     IPermissionProvider permissionProvider,
     ICacheService cacheService,
     IJwtTokenGenerator jwtTokenGenerator,
+    IRefreshTokenService refreshTokenService,
     IEmployeeLookupService employeeLookupService)
-    : ICommandHandler<EdgeOperatorLoginCommand, Result<string>>
+    : ICommandHandler<EdgeOperatorLoginCommand, Result<HumanIdentitySessionResult>>
 {
-    public async Task<Result<string>> Handle(
+    public async Task<Result<HumanIdentitySessionResult>> Handle(
         EdgeOperatorLoginCommand request,
         CancellationToken cancellationToken)
     {
@@ -75,12 +77,20 @@ public class EdgeOperatorLoginHandler(
         await cacheService.RemoveAsync(CacheKeys.PermissionByUser(account.Id), cancellationToken);
 
         var permissions = await permissionProvider.GetPermissionsAsync(account.Id, cancellationToken);
-        var token = jwtTokenGenerator.GenerateHumanToken(
+        var accessToken = jwtTokenGenerator.GenerateHumanToken(
             account.Id,
             request.EmployeeNo,
             roles,
             permissions);
+        var refreshToken = await refreshTokenService.IssueAsync(
+            IIoTClaimTypes.HumanActor,
+            account.Id,
+            cancellationToken);
 
-        return Result.Success(token.Token);
+        return Result.Success(new HumanIdentitySessionResult(
+            accessToken.Token,
+            accessToken.ExpiresAtUtc,
+            refreshToken.Token,
+            refreshToken.ExpiresAtUtc));
     }
 }

@@ -1,8 +1,8 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
-using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Contracts.Identity;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Identity;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 

@@ -2,8 +2,12 @@ using IIoT.Dapper;
 using IIoT.EntityFrameworkCore;
 using IIoT.Infrastructure;
 using IIoT.MigrationWorkApp;
+using IIoT.SharedKernel.Configuration;
 
 var builder = Host.CreateApplicationBuilder(args);
+_ = builder.Configuration.GetRequiredValidatedOptions<PostgresOptions>(
+    PostgresOptions.SectionName,
+    static options => options.Validate());
 
 builder.AddServiceDefaults();
 builder.AddInfrastructures();

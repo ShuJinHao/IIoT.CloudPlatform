@@ -24,10 +24,33 @@
         }
       }
     },
+    "seed-admin-no": {
+      "type": "parameter.v0",
+      "value": "{seed-admin-no.inputs.value}",
+      "inputs": {
+        "value": {
+          "type": "string"
+        }
+      }
+    },
+    "seed-admin-password": {
+      "type": "parameter.v0",
+      "value": "{seed-admin-password.inputs.value}",
+      "inputs": {
+        "value": {
+          "type": "string",
+          "secret": true
+        }
+      }
+    },
     "postgres": {
       "type": "container.v0",
       "connectionString": "Host={postgres.bindings.tcp.host};Port={postgres.bindings.tcp.port};Username=postgres;Password={pg-password.value}",
-      "image": "docker.io/library/postgres:17.6",
+      "image": "docker.io/timescale/timescaledb:latest-pg17",
+      "args": [
+        "-c",
+        "shared_preload_libraries=timescaledb"
+      ],
       "volumes": [
         {
           "name": "postgres-iiot",
@@ -54,6 +77,36 @@
       "type": "value.v0",
       "connectionString": "{postgres.connectionString};Database=iiot-db"
     },
+    "eventbus": {
+      "type": "container.v0",
+      "connectionString": "amqp://guest:{eventbus-password-uri-encoded.value}@{eventbus.bindings.tcp.host}:{eventbus.bindings.tcp.port}",
+      "image": "docker.io/library/rabbitmq:4.2-management",
+      "volumes": [
+        {
+          "name": "rabbitmq-iiot",
+          "target": "/var/lib/rabbitmq",
+          "readOnly": false
+        }
+      ],
+      "env": {
+        "RABBITMQ_DEFAULT_USER": "guest",
+        "RABBITMQ_DEFAULT_PASS": "{eventbus-password.value}"
+      },
+      "bindings": {
+        "tcp": {
+          "scheme": "tcp",
+          "protocol": "tcp",
+          "transport": "tcp",
+          "targetPort": 5672
+        },
+        "management": {
+          "scheme": "http",
+          "protocol": "tcp",
+          "transport": "http",
+          "targetPort": 15672
+        }
+      }
+    },
     "iiot-migrationworkapp": {
       "type": "project.v0",
       "path": "../IIoT.MigrationWorkApp/IIoT.MigrationWorkApp.csproj",
@@ -69,7 +122,9 @@
         "IIOT_DB_URI": "postgresql://postgres:{pg-password-uri-encoded.value}@{postgres.bindings.tcp.host}:{postgres.bindings.tcp.port}/iiot-db",
         "IIOT_DB_JDBCCONNECTIONSTRING": "jdbc:postgresql://{postgres.bindings.tcp.host}:{postgres.bindings.tcp.port}/iiot-db",
         "IIOT_DB_DATABASENAME": "iiot-db",
-        "ConnectionStrings__redis-cache": "{redis-cache.connectionString}"
+        "ConnectionStrings__redis-cache": "{redis-cache.connectionString}",
+        "SEED_ADMIN_NO": "{seed-admin-no.value}",
+        "SEED_ADMIN_PASSWORD": "{seed-admin-password.value}"
       }
     },
     "iiot-httpapi": {
@@ -89,7 +144,13 @@
         "IIOT_DB_URI": "postgresql://postgres:{pg-password-uri-encoded.value}@{postgres.bindings.tcp.host}:{postgres.bindings.tcp.port}/iiot-db",
         "IIOT_DB_JDBCCONNECTIONSTRING": "jdbc:postgresql://{postgres.bindings.tcp.host}:{postgres.bindings.tcp.port}/iiot-db",
         "IIOT_DB_DATABASENAME": "iiot-db",
-        "ConnectionStrings__redis-cache": "{redis-cache.connectionString}"
+        "ConnectionStrings__redis-cache": "{redis-cache.connectionString}",
+        "ConnectionStrings__eventbus": "{eventbus.connectionString}",
+        "EVENTBUS_HOST": "{eventbus.bindings.tcp.host}",
+        "EVENTBUS_PORT": "{eventbus.bindings.tcp.port}",
+        "EVENTBUS_USERNAME": "guest",
+        "EVENTBUS_PASSWORD": "{eventbus-password.value}",
+        "EVENTBUS_URI": "amqp://guest:{eventbus-password-uri-encoded.value}@{eventbus.bindings.tcp.host}:{eventbus.bindings.tcp.port}"
       },
       "bindings": {
         "http": {
@@ -104,6 +165,58 @@
         }
       }
     },
+    "iiot-gateway": {
+      "type": "project.v0",
+      "path": "../IIoT.Gateway/IIoT.Gateway.csproj",
+      "env": {
+        "OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EXCEPTION_LOG_ATTRIBUTES": "true",
+        "OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EVENT_LOG_ATTRIBUTES": "true",
+        "OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY": "in_memory",
+        "ASPNETCORE_FORWARDEDHEADERS_ENABLED": "true",
+        "HTTP_PORTS": "{iiot-gateway.bindings.http.targetPort}",
+        "IIOT_HTTPAPI_HTTP": "{iiot-httpapi.bindings.http.url}",
+        "services__iiot-httpapi__http__0": "{iiot-httpapi.bindings.http.url}",
+        "IIOT_HTTPAPI_HTTPS": "{iiot-httpapi.bindings.https.url}",
+        "services__iiot-httpapi__https__0": "{iiot-httpapi.bindings.https.url}",
+        "ReverseProxy__Clusters__httpapi__Destinations__primary__Address": "{iiot-httpapi.bindings.http.url}"
+      },
+      "bindings": {
+        "http": {
+          "scheme": "http",
+          "protocol": "tcp",
+          "transport": "http"
+        },
+        "https": {
+          "scheme": "https",
+          "protocol": "tcp",
+          "transport": "http"
+        }
+      }
+    },
+    "iiot-dataworker": {
+      "type": "project.v0",
+      "path": "../IIoT.DataWorker/IIoT.DataWorker.csproj",
+      "env": {
+        "OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EXCEPTION_LOG_ATTRIBUTES": "true",
+        "OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EVENT_LOG_ATTRIBUTES": "true",
+        "OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY": "in_memory",
+        "ConnectionStrings__iiot-db": "{iiot-db.connectionString}",
+        "IIOT_DB_HOST": "{postgres.bindings.tcp.host}",
+        "IIOT_DB_PORT": "{postgres.bindings.tcp.port}",
+        "IIOT_DB_USERNAME": "postgres",
+        "IIOT_DB_PASSWORD": "{pg-password.value}",
+        "IIOT_DB_URI": "postgresql://postgres:{pg-password-uri-encoded.value}@{postgres.bindings.tcp.host}:{postgres.bindings.tcp.port}/iiot-db",
+        "IIOT_DB_JDBCCONNECTIONSTRING": "jdbc:postgresql://{postgres.bindings.tcp.host}:{postgres.bindings.tcp.port}/iiot-db",
+        "IIOT_DB_DATABASENAME": "iiot-db",
+        "ConnectionStrings__redis-cache": "{redis-cache.connectionString}",
+        "ConnectionStrings__eventbus": "{eventbus.connectionString}",
+        "EVENTBUS_HOST": "{eventbus.bindings.tcp.host}",
+        "EVENTBUS_PORT": "{eventbus.bindings.tcp.port}",
+        "EVENTBUS_USERNAME": "guest",
+        "EVENTBUS_PASSWORD": "{eventbus-password.value}",
+        "EVENTBUS_URI": "amqp://guest:{eventbus-password-uri-encoded.value}@{eventbus.bindings.tcp.host}:{eventbus.bindings.tcp.port}"
+      }
+    },
     "iiot-web": {
       "type": "container.v1",
       "build": {
@@ -114,11 +227,11 @@
       "env": {
         "NODE_ENV": "development",
         "PORT": "{iiot-web.bindings.http.targetPort}",
-        "IIOT_HTTPAPI_HTTP": "{iiot-httpapi.bindings.http.url}",
-        "services__iiot-httpapi__http__0": "{iiot-httpapi.bindings.http.url}",
-        "IIOT_HTTPAPI_HTTPS": "{iiot-httpapi.bindings.https.url}",
-        "services__iiot-httpapi__https__0": "{iiot-httpapi.bindings.https.url}",
-        "VITE_API_URL": "{iiot-httpapi.bindings.http.url}"
+        "IIOT_GATEWAY_HTTP": "{iiot-gateway.bindings.http.url}",
+        "services__iiot-gateway__http__0": "{iiot-gateway.bindings.http.url}",
+        "IIOT_GATEWAY_HTTPS": "{iiot-gateway.bindings.https.url}",
+        "services__iiot-gateway__https__0": "{iiot-gateway.bindings.https.url}",
+        "VITE_API_URL": "{iiot-gateway.bindings.http.url}"
       },
       "bindings": {
         "http": {
@@ -129,6 +242,27 @@
           "external": true
         }
       }
+    },
+    "eventbus-password": {
+      "type": "parameter.v0",
+      "value": "{eventbus-password.inputs.value}",
+      "inputs": {
+        "value": {
+          "type": "string",
+          "secret": true,
+          "default": {
+            "generate": {
+              "minLength": 22,
+              "special": false
+            }
+          }
+        }
+      }
+    },
+    "eventbus-password-uri-encoded": {
+      "type": "annotated.string",
+      "value": "{eventbus-password.value}",
+      "filter": "uri"
     },
     "pg-password-uri-encoded": {
       "type": "annotated.string",

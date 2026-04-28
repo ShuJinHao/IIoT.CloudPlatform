@@ -1,6 +1,6 @@
-﻿using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using IIoT.Core.Production.Aggregates.Recipes;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace IIoT.EntityFrameworkCore.Configuration.Production;
 
@@ -42,8 +42,15 @@ public class RecipeConfiguration : IEntityTypeConfiguration<Recipe>
             .HasColumnType("jsonb")
             .HasColumnName("parameters_jsonb");
 
+        builder.Property(r => r.RowVersion)
+            .HasColumnName("xmin")
+            .IsRowVersion();
+
         builder.HasIndex(r => new { r.ProcessId, r.DeviceId })
             .HasDatabaseName("ix_recipes_process_device");
+
+        builder.HasIndex(r => r.DeviceId)
+            .HasDatabaseName("ix_recipes_device_id");
 
         builder.HasIndex(r => new { r.RecipeName, r.Version })
             .HasDatabaseName("ix_recipes_name_version");

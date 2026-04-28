@@ -1,5 +1,5 @@
-﻿using IIoT.Core.Employees.Aggregates.Employees;
-using IIoT.Services.Common.Contracts;
+using IIoT.Core.Employees.Aggregates.Employees;
+using IIoT.Services.Contracts;
 using Microsoft.EntityFrameworkCore;
 
 namespace IIoT.EntityFrameworkCore.Identity;

@@ -1,11 +1,13 @@
 using System.Linq.Expressions;
 using IIoT.Core.Production.Contracts.RecordRepositories;
+using IIoT.Services.Contracts.Auditing;
 using IIoT.Core.Identity.Aggregates.IdentityAccounts;
-using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Contracts.Authorization;
-using IIoT.Services.Common.Contracts.Identity;
-using IIoT.Services.Common.Contracts.Persistence;
-using IIoT.Services.Common.Contracts.RecordQueries;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Caching;
+using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts.Persistence;
+using IIoT.Services.Contracts.RecordQueries;
 using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Paging;
 using IIoT.SharedKernel.Repository;
@@ -344,6 +346,18 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
 {
     public Result<IdentityAccount> CreateResult { get; set; } = Result.Success(IdentityAccount.Create(Guid.NewGuid(), "E000"));
 
+    public IdentityAccount? AccountById { get; set; }
+
+    public IdentityAccount? AccountByEmployeeNo { get; set; }
+
+    public Dictionary<Guid, IList<string>> RolesByUserId { get; } = [];
+
+    public List<IdentityAccount> CreatedAccounts { get; } = [];
+
+    public List<Guid> DeletedIds { get; } = [];
+
+    public List<(Guid UserId, string RoleName)> AssignedRoles { get; } = [];
+
     public Guid? LastSetEnabledId { get; private set; }
 
     public bool LastSetEnabledValue { get; private set; }
@@ -358,6 +372,13 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
         IdentityAccount account,
         CancellationToken cancellationToken = default)
     {
+        if (CreateResult.IsSuccess)
+        {
+            CreatedAccounts.Add(account);
+            AccountById = account;
+            AccountByEmployeeNo = account;
+        }
+
         return Task.FromResult(
             CreateResult.IsSuccess
                 ? Result.Success(account)
@@ -366,14 +387,17 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
 
     public Task<IdentityAccount?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        return Task.FromResult<IdentityAccount?>(null);
+        return Task.FromResult(AccountById?.Id == id ? AccountById : null);
     }
 
     public Task<IdentityAccount?> GetByEmployeeNoAsync(
         string employeeNo,
         CancellationToken cancellationToken = default)
     {
-        return Task.FromResult<IdentityAccount?>(null);
+        return Task.FromResult(
+            string.Equals(AccountByEmployeeNo?.EmployeeNo, employeeNo, StringComparison.Ordinal)
+                ? AccountByEmployeeNo
+                : null);
     }
 
     public Task<Result<bool>> SetEnabledAsync(
@@ -388,6 +412,20 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
 
     public Task<Result<bool>> DeleteAsync(Guid id, CancellationToken cancellationToken = default)
     {
+        if (DeleteResult.IsSuccess)
+        {
+            DeletedIds.Add(id);
+            if (AccountById?.Id == id)
+            {
+                AccountById = null;
+            }
+
+            if (AccountByEmployeeNo?.Id == id)
+            {
+                AccountByEmployeeNo = null;
+            }
+        }
+
         return Task.FromResult(DeleteResult);
     }
 
@@ -396,12 +434,63 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
         string roleName,
         CancellationToken cancellationToken = default)
     {
+        if (AssignRoleResult.IsSuccess)
+        {
+            AssignedRoles.Add((id, roleName));
+            if (!RolesByUserId.TryGetValue(id, out var roles))
+            {
+                roles = [];
+                RolesByUserId[id] = roles;
+            }
+
+            roles.Add(roleName);
+        }
+
         return Task.FromResult(AssignRoleResult);
     }
 
     public Task<IList<string>> GetRolesAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        return Task.FromResult<IList<string>>([]);
+        return Task.FromResult(
+            RolesByUserId.TryGetValue(id, out var roles)
+                ? roles
+                : []);
+    }
+}
+
+internal sealed class RecordingAuditTrailService : IAuditTrailService
+{
+    public List<AuditTrailEntry> Entries { get; } = [];
+
+    public Task TryWriteAsync(
+        AuditTrailEntry entry,
+        CancellationToken cancellationToken = default)
+    {
+        Entries.Add(entry);
+        return Task.CompletedTask;
+    }
+}
+
+internal sealed class RecordingDeviceCacheInvalidationService : IDeviceCacheInvalidationService
+{
+    public List<Guid> RegisteredProcessIds { get; } = [];
+
+    public List<DeviceCacheDescriptor> DeletedDevices { get; } = [];
+
+    public Task InvalidateListsAfterRegisterAsync(
+        Guid processId,
+        CancellationToken cancellationToken = default)
+    {
+        RegisteredProcessIds.Add(processId);
+        return Task.CompletedTask;
+    }
+
+    public Task InvalidateAfterDeleteAsync(
+        DeviceCacheDescriptor device,
+        CancellationToken cancellationToken = default)
+    {
+        DeletedDevices.Add(device);
+        return Task.CompletedTask;
     }
 }
 
@@ -451,6 +540,64 @@ internal sealed class StubIdentityPasswordService : IIdentityPasswordService
         CancellationToken cancellationToken = default)
     {
         throw new NotSupportedException();
+    }
+}
+
+internal sealed class StubRefreshTokenService : IRefreshTokenService
+{
+    public List<(string ActorType, Guid SubjectId, string Reason)> Revocations { get; } = [];
+
+    public List<(string ActorType, Guid SubjectId)> Issues { get; } = [];
+
+    public string? LastRotateActorType { get; private set; }
+
+    public string? LastRotatedRefreshToken { get; private set; }
+
+    public Guid NextRotateSubjectId { get; set; } = Guid.NewGuid();
+
+    public Result<RefreshTokenRotationResult>? RotateResultOverride { get; set; }
+
+    public Task<RefreshTokenEnvelope> IssueAsync(
+        string actorType,
+        Guid subjectId,
+        CancellationToken cancellationToken = default)
+    {
+        Issues.Add((actorType, subjectId));
+        return Task.FromResult(new RefreshTokenEnvelope(
+            $"refresh-{actorType}-{subjectId:N}",
+            DateTimeOffset.UtcNow.AddDays(
+                string.Equals(actorType, IIoTClaimTypes.EdgeDeviceActor, StringComparison.Ordinal)
+                    ? 30
+                    : 7)));
+    }
+
+    public Task<Result<RefreshTokenRotationResult>> RotateAsync(
+        string actorType,
+        string refreshToken,
+        CancellationToken cancellationToken = default)
+    {
+        LastRotateActorType = actorType;
+        LastRotatedRefreshToken = refreshToken;
+
+        if (RotateResultOverride is not null)
+        {
+            return Task.FromResult(RotateResultOverride);
+        }
+
+        return Task.FromResult(Result.Success(new RefreshTokenRotationResult(
+            actorType,
+            NextRotateSubjectId,
+            new RefreshTokenEnvelope($"rotated-{refreshToken}", DateTimeOffset.UtcNow.AddDays(7)))));
+    }
+
+    public Task RevokeSubjectTokensAsync(
+        string actorType,
+        Guid subjectId,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        Revocations.Add((actorType, subjectId, reason));
+        return Task.CompletedTask;
     }
 }
 
@@ -519,6 +666,8 @@ internal sealed class StubRolePolicyService : IRolePolicyService
 
     public Result<bool> UpdateRolePermissionsResult { get; set; } = Result.Success(true);
 
+    public Result<bool> UpdateUserPersonalPermissionsResult { get; set; } = Result.Success(true);
+
     public string? DeletedRoleName { get; private set; }
 
     public Task<IList<string>> GetAllRolesAsync()
@@ -559,7 +708,7 @@ internal sealed class StubRolePolicyService : IRolePolicyService
 
     public Task<Result<bool>> UpdateUserPersonalPermissionsAsync(Guid userId, List<string> permissions)
     {
-        return Task.FromResult(Result.Success(true));
+        return Task.FromResult(UpdateUserPersonalPermissionsResult);
     }
 
     public Task<List<string>> GetUserPersonalPermissionsAsync(Guid userId)
@@ -591,5 +740,25 @@ internal sealed class StubDeviceDeletionDependencyQueryService : IDeviceDeletion
         CancellationToken cancellationToken = default)
     {
         return Task.FromResult(Dependencies);
+    }
+}
+
+internal sealed class StubJwtTokenGenerator : IJwtTokenGenerator
+{
+    public JwtTokenResult GenerateHumanToken(
+        Guid userId,
+        string userName,
+        IEnumerable<string> roles,
+        IEnumerable<string> permissions)
+    {
+        return new JwtTokenResult($"human-{userId:N}", DateTimeOffset.UtcNow.AddMinutes(60));
+    }
+
+    public JwtTokenResult GenerateEdgeDeviceToken(
+        Guid deviceId,
+        string clientCode,
+        Guid processId)
+    {
+        return new JwtTokenResult($"edge-{deviceId:N}", DateTimeOffset.UtcNow.AddMinutes(60));
     }
 }

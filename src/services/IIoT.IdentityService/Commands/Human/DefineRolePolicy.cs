@@ -1,13 +1,10 @@
-﻿using IIoT.Services.Common.Attributes;
-using IIoT.Services.Common.Caching;
-using IIoT.Services.Common.Contracts;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Auditing;
+using IIoT.Services.Contracts.Identity;
+using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.CrossCutting.Caching;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace IIoT.IdentityService.Commands;
 
@@ -17,7 +14,9 @@ public record DefineRolePolicyCommand(string RoleName, List<string> Permissions)
 
 public class DefineRolePolicyHandler(
     IRolePolicyService rolePolicyService,
-    ICacheService cacheService
+    ICacheService cacheService,
+    ICurrentUser currentUser,
+    IAuditTrailService auditTrailService
 ) : ICommandHandler<DefineRolePolicyCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(DefineRolePolicyCommand request, CancellationToken cancellationToken)
@@ -29,7 +28,10 @@ public class DefineRolePolicyHandler(
 
         if (!createResult.IsSuccess)
         {
-            return Result.Failure(createResult.Errors?.ToArray() ?? ["角色创建失败"]);
+            return await FailAsync(
+                request,
+                createResult.Errors?.ToArray() ?? ["Role creation failed."],
+                cancellationToken);
         }
 
         try
@@ -41,7 +43,10 @@ public class DefineRolePolicyHandler(
                 if (!roleAlreadyExists)
                     await rolePolicyService.DeleteRoleAsync(request.RoleName);
 
-                return Result.Failure(updateResult.Errors?.ToArray() ?? ["角色权限分配失败"]);
+                return await FailAsync(
+                    request,
+                    updateResult.Errors?.ToArray() ?? ["Role permission assignment failed."],
+                    cancellationToken);
             }
 
             await cacheService.RemoveByPatternAsync(
@@ -51,6 +56,13 @@ public class DefineRolePolicyHandler(
                 CacheKeys.AllDefinedPermissions(),
                 cancellationToken);
 
+            await auditTrailService.TryWriteAsync(
+                CreateAuditEntry(
+                    request,
+                    succeeded: true,
+                    summary: $"Defined role {request.RoleName} with {request.Permissions.Count} permissions."),
+                cancellationToken);
+
             return Result.Success(true);
         }
         catch (Exception ex)
@@ -58,9 +70,52 @@ public class DefineRolePolicyHandler(
             if (!roleAlreadyExists)
                 await rolePolicyService.DeleteRoleAsync(request.RoleName);
 
-            return Result.Failure(roleAlreadyExists
-                ? $"定义角色策略时发生异常。错误: {ex.Message}"
-                : $"定义角色策略时发生异常，已执行回滚删除空壳角色。错误: {ex.Message}");
+            var message = roleAlreadyExists
+                ? $"Define role policy failed with exception: {ex.Message}"
+                : $"Define role policy failed with exception and rolled back the new role: {ex.Message}";
+
+            return await FailAsync(request, [message], cancellationToken);
         }
+    }
+
+    private async Task<Result<bool>> FailAsync(
+        DefineRolePolicyCommand request,
+        string[] errors,
+        CancellationToken cancellationToken)
+    {
+        await auditTrailService.TryWriteAsync(
+            CreateAuditEntry(
+                request,
+                succeeded: false,
+                summary: $"Define role {request.RoleName}.",
+                failureReason: string.Join("; ", errors)),
+            cancellationToken);
+
+        return Result.Failure(errors);
+    }
+
+    private AuditTrailEntry CreateAuditEntry(
+        DefineRolePolicyCommand request,
+        bool succeeded,
+        string summary,
+        string? failureReason = null)
+    {
+        return new AuditTrailEntry(
+            ParseActorUserId(currentUser.Id),
+            currentUser.UserName,
+            "Role.Define",
+            "Role",
+            request.RoleName,
+            DateTime.UtcNow,
+            succeeded,
+            summary,
+            failureReason);
+    }
+
+    private static Guid? ParseActorUserId(string? rawUserId)
+    {
+        return Guid.TryParse(rawUserId, out var actorUserId)
+            ? actorUserId
+            : null;
     }
 }

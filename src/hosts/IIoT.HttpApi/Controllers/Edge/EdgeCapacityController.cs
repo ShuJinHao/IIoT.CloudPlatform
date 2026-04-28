@@ -14,34 +14,32 @@ namespace IIoT.HttpApi.Controllers;
 public class EdgeCapacityController : ApiControllerBase
 {
     [HttpPost("hourly")]
-    [EnableRateLimiting("edge-upload")]
-    public async Task<IActionResult> ReceiveHourly([FromBody] ReceiveHourlyCapacityCommand command)
+    [EnableRateLimiting(HttpApiRateLimitPolicies.CapacityUpload)]
+    public async Task<IActionResult> ReceiveHourly(
+        [FromBody] ReceiveHourlyCapacityCommand command,
+        CancellationToken cancellationToken)
     {
-        var result = await Sender.Send(command);
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(command, cancellationToken));
     }
 
     [HttpGet("hourly")]
     public async Task<IActionResult> GetHourly(
         [FromQuery] Guid deviceId,
         [FromQuery] DateOnly date,
-        [FromQuery] string? plcName = null)
+        [FromQuery] string? plcName = null,
+        CancellationToken cancellationToken = default)
     {
-        var result = await Sender.Send(new GetEdgeHourlyByDeviceIdQuery(deviceId, date, plcName));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetEdgeHourlyByDeviceIdQuery(deviceId, date, plcName), cancellationToken));
     }
 
     [HttpGet("summary")]
     public async Task<IActionResult> GetSummary(
         [FromQuery] Guid deviceId,
         [FromQuery] DateOnly date,
-        [FromQuery] string? plcName = null)
+        [FromQuery] string? plcName = null,
+        CancellationToken cancellationToken = default)
     {
-        var result = await Sender.Send(new GetEdgeSummaryByDeviceIdQuery(deviceId, date, plcName));
-        if (!result.IsSuccess)
-            return BadRequest(result.Errors);
-
-        return result.Value is null ? NoContent() : Ok(result.Value);
+        return ReturnResult(await Sender.Send(new GetEdgeSummaryByDeviceIdQuery(deviceId, date, plcName), cancellationToken));
     }
 
     [HttpGet("summary/range")]
@@ -49,9 +47,9 @@ public class EdgeCapacityController : ApiControllerBase
         [FromQuery] Guid deviceId,
         [FromQuery] DateOnly startDate,
         [FromQuery] DateOnly endDate,
-        [FromQuery] string? plcName = null)
+        [FromQuery] string? plcName = null,
+        CancellationToken cancellationToken = default)
     {
-        var result = await Sender.Send(new GetEdgeSummaryRangeQuery(deviceId, startDate, endDate, plcName));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetEdgeSummaryRangeQuery(deviceId, startDate, endDate, plcName), cancellationToken));
     }
 }

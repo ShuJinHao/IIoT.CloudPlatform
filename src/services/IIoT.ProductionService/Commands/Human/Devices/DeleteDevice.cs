@@ -1,10 +1,12 @@
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Specifications.Devices;
-using IIoT.Services.Common.Attributes;
-using IIoT.Services.Common.Caching;
-using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Contracts.Authorization;
-using IIoT.Services.Common.Contracts.RecordQueries;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Auditing;
+using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Caching;
+using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts.RecordQueries;
+using IIoT.Services.CrossCutting.Attributes;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -18,8 +20,10 @@ public class DeleteDeviceHandler(
     ICurrentUser currentUser,
     IRepository<Device> deviceRepository,
     IDeviceDeletionDependencyQueryService dependencyQueryService,
-    ICacheService cacheService,
-    IDevicePermissionService devicePermissionService)
+    IDeviceCacheInvalidationService cacheInvalidationService,
+    IRefreshTokenService refreshTokenService,
+    IDevicePermissionService devicePermissionService,
+    IAuditTrailService auditTrailService)
     : ICommandHandler<DeleteDeviceCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(
@@ -31,15 +35,12 @@ public class DeleteDeviceHandler(
             cancellationToken);
 
         if (device is null)
-            return Result.Failure("设备不存在");
+            return await FailAsync(request.DeviceId.ToString(), "Device was not found.", cancellationToken);
 
-        if (!string.Equals(
-                currentUser.Role,
-                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
-                StringComparison.Ordinal))
+        if (!string.Equals(currentUser.Role, SystemRoles.Admin, StringComparison.Ordinal))
         {
             if (!Guid.TryParse(currentUser.Id, out var userId))
-                return Result.Failure("用户凭证异常");
+                return await FailAsync(device.Id.ToString(), "Current user identity is invalid.", cancellationToken);
 
             var accessibleDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
                 userId,
@@ -47,7 +48,7 @@ public class DeleteDeviceHandler(
                 cancellationToken);
             if (accessibleDeviceIds is null || !accessibleDeviceIds.Contains(device.Id))
             {
-                return Result.Failure("越权:未授权访问该设备");
+                return await FailAsync(device.Id.ToString(), "Unauthorized device access.", cancellationToken);
             }
         }
 
@@ -60,45 +61,84 @@ public class DeleteDeviceHandler(
             var blockedBy = new List<string>();
             if (dependencies.HasRecipes)
             {
-                blockedBy.Add("配方");
+                blockedBy.Add("recipes");
             }
             if (dependencies.HasCapacities)
             {
-                blockedBy.Add("产能记录");
+                blockedBy.Add("capacities");
             }
             if (dependencies.HasDeviceLogs)
             {
-                blockedBy.Add("设备日志");
+                blockedBy.Add("device-logs");
             }
             if (dependencies.HasPassStations)
             {
-                blockedBy.Add("过站日志");
+                blockedBy.Add("pass-stations");
             }
 
-            return Result.Failure($"设备存在历史依赖，无法删除: {string.Join("、", blockedBy)}");
+            return await FailAsync(
+                device.Id.ToString(),
+                $"Device cannot be deleted because dependencies exist: {string.Join(", ", blockedBy)}",
+                cancellationToken);
         }
 
-        await cacheService.RemoveAsync(
-            CacheKeys.DeviceCode(device.Code), cancellationToken);
-        await cacheService.RemoveAsync(
-            CacheKeys.DevicesByProcess(device.ProcessId), cancellationToken);
-        await cacheService.RemoveAsync(CacheKeys.AllDevices(), cancellationToken);
-        await cacheService.RemoveAsync(
-            CacheKeys.DeviceIdentity(device.Id), cancellationToken);
-        await cacheService.RemoveAsync(
-            CacheKeys.RecipesByDevice(device.Id), cancellationToken);
-        await cacheService.RemoveByPatternAsync(
-            CacheKeys.CapacityHourlyPattern(device.Id), cancellationToken);
-        await cacheService.RemoveByPatternAsync(
-            CacheKeys.CapacitySummaryPattern(device.Id), cancellationToken);
-        await cacheService.RemoveByPatternAsync(
-            CacheKeys.CapacityRangePattern(device.Id), cancellationToken);
-        await cacheService.RemoveByPatternAsync(
-            CacheKeys.CapacityPagedByDevicePattern(device.Id), cancellationToken);
-
+        device.MarkDeleted();
         deviceRepository.Delete(device);
         var affected = await deviceRepository.SaveChangesAsync(cancellationToken);
 
+        if (affected > 0)
+        {
+            await cacheInvalidationService.InvalidateAfterDeleteAsync(
+                new DeviceCacheDescriptor(device.Id, device.ProcessId, device.Code),
+                cancellationToken);
+            await refreshTokenService.RevokeSubjectTokensAsync(
+                IIoTClaimTypes.EdgeDeviceActor,
+                device.Id,
+                "device-deleted",
+                cancellationToken);
+        }
+
+        await auditTrailService.TryWriteAsync(
+            new AuditTrailEntry(
+                ParseActorUserId(currentUser.Id),
+                currentUser.UserName,
+                "Device.Delete",
+                "Device",
+                device.Id.ToString(),
+                DateTime.UtcNow,
+                affected > 0,
+                $"Deleted device {device.DeviceName} ({device.Code}).",
+                affected > 0 ? null : "SaveChangesAsync did not persist any rows."),
+            cancellationToken);
+
         return Result.Success(affected > 0);
+    }
+
+    private async Task<Result<bool>> FailAsync(
+        string targetIdOrKey,
+        string message,
+        CancellationToken cancellationToken)
+    {
+        await auditTrailService.TryWriteAsync(
+            new AuditTrailEntry(
+                ParseActorUserId(currentUser.Id),
+                currentUser.UserName,
+                "Device.Delete",
+                "Device",
+                targetIdOrKey,
+                DateTime.UtcNow,
+                false,
+                $"Delete device {targetIdOrKey}.",
+                message),
+            cancellationToken);
+
+        return Result.Failure(message);
+    }
+
+    private static Guid? ParseActorUserId(string? rawUserId)
+    {
+        return Guid.TryParse(rawUserId, out var actorUserId)
+            ? actorUserId
+            : null;
     }
 }

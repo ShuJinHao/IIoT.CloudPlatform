@@ -1,7 +1,7 @@
-using IIoT.Services.Common.Caching;
-using IIoT.Services.Common.Caching.Options;
-using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Contracts.Identity;
+using IIoT.Services.CrossCutting.Caching;
+using IIoT.Services.CrossCutting.Caching.Options;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Identity;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Options;
 

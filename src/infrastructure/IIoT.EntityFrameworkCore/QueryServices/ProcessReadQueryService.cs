@@ -1,4 +1,4 @@
-using IIoT.Services.Common.Contracts.RecordQueries;
+using IIoT.Services.Contracts.RecordQueries;
 using Microsoft.EntityFrameworkCore;
 
 namespace IIoT.EntityFrameworkCore.QueryServices;

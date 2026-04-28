@@ -1,8 +1,10 @@
+using IIoT.SharedKernel.Configuration;
+
 namespace IIoT.HttpApi;
 
 public static class DesignTimeConnectionStringResolver
 {
-    public const string ConnectionStringEnvironmentVariable = "ConnectionStrings__iiot-db";
+    public const string ConnectionStringEnvironmentVariable = "ConnectionStrings__" + ConnectionResourceNames.IiotDatabase;
 
     public static string Resolve(Func<string, string?>? getEnvironmentVariable = null)
     {

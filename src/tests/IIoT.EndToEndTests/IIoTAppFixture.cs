@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Testing;
+using IIoT.SharedKernel.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace IIoT.EndToEndTests;
@@ -11,10 +12,13 @@ public sealed class IIoTAppFixture : IAsyncDisposable
     public const string SeedAdminEmployeeNo = "101650";
     public const string SeedAdminPassword = "Ljh123456!";
     public const string SeedAdminRealName = "\u7CFB\u7EDF\u7BA1\u7406\u5458";
+    public const string TestPostgresPassword = "TestPg123!";
 
     private DistributedApplication? _app;
     private HttpClient? _httpClient;
     private readonly Dictionary<string, string?> _originalEnvironment = new(StringComparer.Ordinal);
+    private readonly string _postgresVolumeName = $"postgres-iiot-e2e-{Guid.NewGuid():N}";
+    private readonly string _rabbitMqVolumeName = $"rabbitmq-iiot-e2e-{Guid.NewGuid():N}";
 
     public HttpClient HttpClient => _httpClient ?? throw new InvalidOperationException("环境未启动。");
 
@@ -35,13 +39,14 @@ public sealed class IIoTAppFixture : IAsyncDisposable
             await _app.StartAsync();
 
             await _app.ResourceNotifications.WaitForResourceHealthyAsync("postgres");
-            await _app.ResourceNotifications.WaitForResourceHealthyAsync("eventbus");
+            await _app.ResourceNotifications.WaitForResourceHealthyAsync(ConnectionResourceNames.EventBus);
             await _app.ResourceNotifications.WaitForResourceHealthyAsync("iiot-httpapi");
+            await _app.ResourceNotifications.WaitForResourceHealthyAsync("iiot-gateway");
             await _app.ResourceNotifications.WaitForResourceAsync(
                 "iiot-dataworker",
                 KnownResourceStates.Running);
 
-            _httpClient = _app.CreateHttpClient("iiot-httpapi");
+            _httpClient = _app.CreateHttpClient("iiot-gateway");
         }
         catch (DistributedApplicationException ex)
             when (ex.Message.Contains("docker", StringComparison.OrdinalIgnoreCase))
@@ -75,20 +80,32 @@ public sealed class IIoTAppFixture : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        _httpClient?.Dispose();
-        if (_app is not null)
-            await _app.DisposeAsync();
-
-        foreach (var entry in _originalEnvironment)
+        try
         {
-            Environment.SetEnvironmentVariable(entry.Key, entry.Value);
+            _httpClient?.Dispose();
+            if (_app is not null)
+                await _app.DisposeAsync();
+
+            await DockerTestResourceCleaner.CleanupNamedVolumesAsync(
+                _postgresVolumeName,
+                _rabbitMqVolumeName);
+        }
+        finally
+        {
+            foreach (var entry in _originalEnvironment)
+            {
+                Environment.SetEnvironmentVariable(entry.Key, entry.Value);
+            }
         }
     }
 
     private void ConfigureSeedAdminEnvironment()
     {
+        SetEnvironmentVariable("Parameters__pg-password", TestPostgresPassword);
         SetEnvironmentVariable("Parameters__seed-admin-no", SeedAdminEmployeeNo);
         SetEnvironmentVariable("Parameters__seed-admin-password", SeedAdminPassword);
+        SetEnvironmentVariable("AppHost__PostgresVolumeName", _postgresVolumeName);
+        SetEnvironmentVariable("AppHost__RabbitMqVolumeName", _rabbitMqVolumeName);
         SetEnvironmentVariable("SEED_ADMIN_NO", SeedAdminEmployeeNo);
         SetEnvironmentVariable("SEED_ADMIN_PASSWORD", SeedAdminPassword);
         SetEnvironmentVariable("SEED_ADMIN_REAL_NAME", SeedAdminRealName);

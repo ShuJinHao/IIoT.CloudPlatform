@@ -13,7 +13,7 @@ public static class RateLimitPartitionKeyResolver
 
     public static string ResolveEdgeUploadPartitionKey(HttpContext context)
     {
-        return context.User.FindFirst(IIoT.Services.Common.Contracts.Identity.IIoTClaimTypes.DeviceId)?.Value
+        return context.User.FindFirst(IIoT.Services.Contracts.Identity.IIoTClaimTypes.DeviceId)?.Value
                ?? ResolveClientPartitionKey(context, "edge-anonymous");
     }
 }

@@ -1,102 +1,214 @@
 # IIoT Cloud Platform 部署操作手册
-# 作者：梁金浩
-# 日期：2026-03-23
 
-==================================================
-## 一、本地构建推送（每次代码更新后执行）
-==================================================
+本文档只说明当前云端部署模板与脚本的标准用法。
 
-在 aspirate-output 目录下执行：
+当前入口拓扑：
 
+- `Nginx`
+- `IIoT.Gateway`
+- `IIoT.HttpApi`
+
+当前部署策略：
+
+- 单 IP
+- HTTP
+- 不启用正式 TLS/证书
+
+## 一、部署前准备
+
+1. 进入 `src/hosts/IIoT.AppHost/aspirate-output/`
+2. 复制一份配置样例：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+3. 在 `.env` 中至少填写这些键：
+
+- `IIOT_REGISTRY`
+- `DEPLOY_HOST`
+- `DEPLOY_USER`
+- `DEPLOY_PORT`
+- `STACK_NAME`
+- `DEPLOY_DIR`
+- `PUBLIC_BASE_URL`
+- `PG_PASSWORD`
+- `RABBITMQ_DEFAULT_USER`
+- `RABBITMQ_DEFAULT_PASS`
+- `ASPIRE_DASHBOARD_FRONTEND_BROWSERTOKEN`
+- `ASPIRE_DASHBOARD_OTLP_PRIMARYAPIKEY`
+
+4. `PUBLIC_BASE_URL` 使用正式外部访问地址，例如：
+
+```text
+PUBLIC_BASE_URL=http://10.0.0.15
+```
+
+注意：不要以 `/` 结尾。
+
+## 二、本地构建与推送
+
+在 `aspirate-output` 目录执行：
+
+```powershell
 powershell -ExecutionPolicy Bypass -File .\build-push.ps1
+```
 
-# 如果只改了配置文件没改代码，跳过构建：
+如果这次只改了部署模板或配置文件，没有改镜像内容：
+
+```powershell
 powershell -ExecutionPolicy Bypass -File .\build-push.ps1 -SkipBuild
-
-
-==================================================
-## 二、服务器部署（通过 MobaXterm 执行）
-==================================================
-
-### 情况A：代码有更新（构建推送完之后执行）
-cd /opt/iiot-app
-export $(grep -v '^#' .env | xargs)
-docker stack deploy -c docker-compose.yaml iiot-app --with-registry-auth
-
-### 情况B：只更新了配置文件（.env / docker-compose.yaml / nginx.conf）
-# 1. 先通过 MobaXterm SFTP 把文件拖拽上传到 /opt/iiot-app/
-# 2. 再执行：
-cd /opt/iiot-app
-export $(grep -v '^#' .env | xargs)
-docker stack deploy -c docker-compose.yaml iiot-app --with-registry-auth
-
-
-==================================================
-## 三、验证部署结果
-==================================================
-
-# 查看所有服务状态
-docker stack ps iiot-app
-
-# 正常状态应显示：
-# iiot-httpapi  × 3  Running
-# iiot-web      × 2  Running
-# nginx-gateway × 1  Running
-# postgres      × 1  Running
-# redis-cache   × 1  Running
-# aspire-dashboard × 1  Running
-
-# 查看服务日志（替换 服务名）
-docker service logs iiot-app_iiot-httpapi --tail 50
-
-
-==================================================
-## 四、常用访问地址
-==================================================
-
-监控面板：http://10.98.90.154:18888
-API 地址：http://10.98.90.154:81/api
-前端地址：http://10.98.90.154:81
-
-
-==================================================
-## 五、常用运维命令
-==================================================
-
-# 查看服务列表
-docker stack services iiot-app
-
-# 强制重启某个服务（不重新部署）
-docker service update --force iiot-app_iiot-httpapi
-
-# 扩缩容
-docker service scale iiot-app_iiot-httpapi=3
-
-# 移除整个 Stack（慎用）
-docker stack rm iiot-app
-
-# 查看容器日志
-docker service logs iiot-app_iiot-httpapi -f
-
-
-
-
-# 查看 httpapi 的日志文件
-docker run --rm -v httpapi-logs:/logs alpine ls -la /logs
-
-# 查看某天的日志
-docker run --rm -v httpapi-logs:/logs alpine cat /logs/iiot-httpapi-20260326.log
-
-# 或者直接进容器看
-docker exec -it <container_id> ls /app/logs/
 ```
 
-RabbitMQ 管理面板暴露在 15672 端口，浏览器访问 `http://10.98.90.154:15672`，用 guest/guest 登录可以看到队列、消息堆积情况。
+脚本按这个优先级取配置：
 
-**部署操作手册补充：**
+1. 脚本参数
+2. 当前目录 `.env`
+3. 进程环境变量
 
-验证部署结果那里，正常状态应该多两个服务：
+## 三、部署到服务器
+
+推荐直接使用脚本：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\deploy.ps1
 ```
-# iiot-migration    × 1  Complete (一次性任务，跑完自动退出)
-# iiot-dataworker   × 1  Running
-# rabbitmq          × 1  Running
+
+如果镜像已经提前推送完成，可跳过构建：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\deploy.ps1 -SkipBuild
+```
+
+`deploy.ps1` 会完成这些动作：
+
+1. 登录 `IIOT_REGISTRY`
+2. 构建并推送镜像（可跳过）
+3. 将 `.env`、`docker-compose.yaml`、`nginx.conf` 上传到 `${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_DIR}`
+4. 执行 `docker stack deploy`
+
+## 四、验证部署结果
+
+查看所有服务状态：
+
+```powershell
+docker stack ps ${STACK_NAME}
+```
+
+当前常见服务包括：
+
+```text
+iiot-httpapi
+iiot-gateway
+iiot-web
+iiot-dataworker
+iiot-migration
+nginx-gateway
+postgres
+redis-cache
+rabbitmq
+aspire-dashboard
+```
+
+查看 HttpApi 日志：
+
+```powershell
+docker service logs ${STACK_NAME}_iiot-httpapi --tail 50
+```
+
+查看 Gateway 日志：
+
+```powershell
+docker service logs ${STACK_NAME}_iiot-gateway --tail 50
+```
+
+## 五、常用访问地址
+
+- 前端地址：`${PUBLIC_BASE_URL}`
+- API 地址：`${PUBLIC_BASE_URL}/api`
+- Aspire Dashboard：`http://${DEPLOY_HOST}:18888`
+- RabbitMQ 管理面板：`http://${DEPLOY_HOST}:15672`
+
+RabbitMQ 管理面板请使用 `.env` 中的 `RABBITMQ_DEFAULT_USER` / `RABBITMQ_DEFAULT_PASS` 登录，不要使用示例值。
+
+## 六、常用运维命令
+
+查看 Stack 服务：
+
+```powershell
+docker stack services ${STACK_NAME}
+```
+
+强制重启某个服务：
+
+```powershell
+docker service update --force ${STACK_NAME}_iiot-httpapi
+docker service update --force ${STACK_NAME}_iiot-gateway
+```
+
+扩缩容：
+
+```powershell
+docker service scale ${STACK_NAME}_iiot-httpapi=3
+```
+
+移除整个 Stack（慎用）：
+
+```powershell
+docker stack rm ${STACK_NAME}
+```
+
+## 七、2026-04-22 deployment fix notes
+
+The current `aspirate-output` template must include these runtime values before upload:
+
+- `JWTSETTINGS__SECRET`
+- `SEED_ADMIN_NO`
+- `SEED_ADMIN_PASSWORD`
+- `SEED_ADMIN_REAL_NAME` (optional, defaults to `系统管理员`)
+
+`iiot-migration` is a one-shot initialization service.
+When database migration and seed succeed, `docker service ls` may show `${STACK_NAME}_iiot-migration` as `0/1`. This is expected.
+
+If you need a full reset of the database before redeploy, run:
+
+```powershell
+docker stack rm ${STACK_NAME}
+docker volume rm ${STACK_NAME}_postgres-iiot
+```
+
+## 2026-04-22 deployment guardrails
+
+This section overrides any earlier emergency-reset wording for normal release work.
+
+- Routine deploy and routine update must preserve the existing PostgreSQL data volume.
+- Do not delete the database, do not remove the PostgreSQL volume, and do not use full reset steps during normal deployment/update.
+- Only perform `docker stack rm`, `docker volume rm`, or any database rebuild when the user explicitly asks for a full reset and understands the data-loss impact.
+- Before upload/deploy, verify every `${VAR}` referenced by `docker-compose.yaml` exists in both `.env` and `.env.example`.
+- Keep `GATEWAY_HTTP_PORT=81` unless the user explicitly approves a port change.
+- `iiot-migration` must receive `JWTSETTINGS__SECRET`, `SEED_ADMIN_NO`, `SEED_ADMIN_PASSWORD`, and `SEED_ADMIN_REAL_NAME`.
+- `iiot-web` updates must be verified end-to-end: no CSP-blocked external font/CDN dependency, and the container must really serve `dist` on the port expected by `nginx.conf`.
+
+## 八、2026-04-27 限流基线
+
+当前限流改为两层分工：
+
+- `nginx` 只做入口粗防护。
+- `IIoT.HttpApi` 做业务级精细限流。
+
+入口层要求：
+
+- 登录、刷新、bootstrap 继续在 `nginx` 保护。
+- 边端上传接口在 `nginx` 只保留宽松保护，避免多台设备共用一个出口 IP 时互相误伤。
+- `refresh` 必须单独有自己的 `location` 和 `refresh_limit`，不得继续和密码登录共用同一条入口限流。
+
+应用层要求：
+
+- `password-login`、`refresh`、`edge-operator-login`、`bootstrap` 必须分开配置。
+- `capacity-upload`、`device-log-upload`、`pass-station-upload` 必须分开配置。
+- 上传限流必须优先按 `DeviceId` 分区；只有拿不到 `DeviceId` 时才允许退回按 IP。
+
+后续新增工序时：
+
+- 如果是新的高频云端上传接口，默认先归入 `pass-station-upload` 这一类思路评估，不得直接复用旧的单一 `edge-upload` 概念。
+- 如果只改了阈值，也必须同时检查两份 `nginx.conf` 和 `IIoT.HttpApi/appsettings.json`，避免入口层与应用层配置漂移。

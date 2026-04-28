@@ -5,7 +5,7 @@
     "anonymousAuthentication": true,
     "iisExpress": {
       "applicationUrl": "http://localhost:15251",
-      "sslPort": 44321
+      "sslPort": 0
     }
   },
   "profiles": {
@@ -14,20 +14,6 @@
       "dotnetRunMessages": true,
       "launchBrowser": true,
       "applicationUrl": "http://localhost:15251",
-      "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development",
-        "DOTNET_ENVIRONMENT": "Development",
-        "ASPIRE_DASHBOARD_OTLP_ENDPOINT_URL": "http://localhost:19281",
-        "ASPIRE_DASHBOARD_MCP_ENDPOINT_URL": "http://localhost:18254",
-        "ASPIRE_RESOURCE_SERVICE_ENDPOINT_URL": "http://localhost:20134",
-        "ASPIRE_ALLOW_UNSECURED_TRANSPORT": "true"
-      }
-    },
-    "https": {
-      "commandName": "Project",
-      "dotnetRunMessages": true,
-      "launchBrowser": true,
-      "applicationUrl": "https://localhost:7041;http://localhost:15251",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development",
         "DOTNET_ENVIRONMENT": "Development",

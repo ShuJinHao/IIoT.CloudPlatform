@@ -1,5 +1,5 @@
 using System.Linq.Expressions;
-using IIoT.Services.Common.Caching.Options;
+using IIoT.Services.CrossCutting.Caching.Options;
 using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Paging;
 using IIoT.SharedKernel.Result;
@@ -37,6 +37,39 @@ public sealed class SharedKernelGuardTests
         pagination.PageSize = 500;
 
         Assert.Equal(100, pagination.PageSize);
+    }
+
+    [Theory]
+    [InlineData(-1, 1)]
+    [InlineData(0, 1)]
+    [InlineData(1, 1)]
+    [InlineData(99, 99)]
+    [InlineData(100, 100)]
+    [InlineData(101, 100)]
+    [InlineData(500, 100)]
+    public void Pagination_PageSize_ShouldClampBoundaryValues(int input, int expected)
+    {
+        var pagination = new Pagination
+        {
+            PageSize = input
+        };
+
+        Assert.Equal(expected, pagination.PageSize);
+    }
+
+    [Theory]
+    [InlineData(-1, 1)]
+    [InlineData(0, 1)]
+    [InlineData(1, 1)]
+    [InlineData(2, 2)]
+    public void Pagination_PageNumber_ShouldClampLowerBoundaryValues(int input, int expected)
+    {
+        var pagination = new Pagination
+        {
+            PageNumber = input
+        };
+
+        Assert.Equal(expected, pagination.PageNumber);
     }
 
     [Fact]

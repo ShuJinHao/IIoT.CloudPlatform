@@ -1,7 +1,7 @@
 using IIoT.Core.Production.Contracts.PassStation;
 using IIoT.ProductionService.Commands.PassStations;
 using IIoT.ProductionService.Queries.PassStations;
-using IIoT.Services.Common.Events.PassStations;
+using IIoT.Services.Contracts.Events.PassStations;
 using IIoT.SharedKernel.Paging;
 using IIoT.SharedKernel.Result;
 using MediatR;

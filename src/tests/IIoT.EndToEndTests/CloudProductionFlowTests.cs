@@ -3,7 +3,9 @@ using System.Net.Http.Json;
 using System.IdentityModel.Tokens.Jwt;
 using System.Text.Json;
 using FluentAssertions;
-using IIoT.Services.Common.Events.DeviceLogs;
+using IIoT.EventBus;
+using IIoT.Services.Contracts.Events.DeviceLogs;
+using IIoT.SharedKernel.Configuration;
 using MassTransit;
 using Npgsql;
 using RabbitMQ.Client;
@@ -12,7 +14,7 @@ using Xunit;
 
 namespace IIoT.EndToEndTests;
 
-public sealed class CloudProductionFlowTests : IAsyncLifetime
+public sealed partial class CloudProductionFlowTests : IAsyncLifetime
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly TimeSpan EventuallyTimeout = TimeSpan.FromSeconds(45);
@@ -24,6 +26,16 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
     public Task InitializeAsync() => _fixture.StartAsync();
 
     public Task DisposeAsync() => _fixture.DisposeAsync().AsTask();
+
+    [Fact]
+    public async Task InternalHealthz_ShouldReturnOk()
+    {
+        _fixture.ClearAuthToken();
+
+        using var response = await _fixture.HttpClient.GetAsync("/internal/healthz");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
 
     [Fact]
     public async Task DeviceLogs_DuplicateConsume_ShouldPersistOneRow()
@@ -153,13 +165,14 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         await AuthenticateAsAdminAsync();
 
         var result = await EventuallyAsync(async () =>
-            await GetFromJsonAsync<PagedResponse<InjectionPassListItemDto>>(
-                $"/api/v1/human/pass-stations/injection/by-device-time?PageNumber=1&PageSize=20&deviceId={deviceId}" +
+            await GetFromJsonAsync<PagedResponse<PassStationListItemDto>>(
+                $"/api/v1/human/pass-stations/injection?PageNumber=1&PageSize=20&mode=device-time&deviceId={deviceId}" +
                 $"&startTime={Uri.EscapeDataString(completedTime.AddMinutes(-1).ToString("O"))}" +
                 $"&endTime={Uri.EscapeDataString(completedTime.AddMinutes(1).ToString("O"))}"),
             response => response.Items.Count(x => x.Barcode == barcode) == 1);
 
         result.Items.Should().ContainSingle(x => x.Barcode == barcode);
+        result.Items.Single(x => x.Barcode == barcode).Fields.Should().ContainKey("injectionVolume");
     }
 
     [Fact]
@@ -169,7 +182,6 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
 
         var deviceId = await CreateTestDeviceAsync("stacking-pass");
         await AuthenticateAsEdgeAsync(deviceId);
-        var connectionString = await _fixture.GetConnectionStringAsync("iiot-db");
         var completedTime = DateTime.SpecifyKind(DateTime.UtcNow.AddMinutes(-4), DateTimeKind.Utc);
         var barcode = $"ST-{Guid.NewGuid():N}"[..14];
 
@@ -190,16 +202,22 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         await PostJsonAsync("/api/v1/edge/pass-stations/stacking", request);
         await PostJsonAsync("/api/v1/edge/pass-stations/stacking", request);
 
-        var rows = await EventuallyAsync(
-            async () => await GetStackingPassRowsAsync(connectionString, deviceId, barcode),
-            response => response.Count == 1);
+        await AuthenticateAsAdminAsync();
 
-        rows.Should().ContainSingle();
-        rows[0].TrayCode.Should().Be("TRAY-STACK-01");
-        rows[0].LayerCount.Should().Be(16);
-        rows[0].SequenceNo.Should().Be(9);
-        rows[0].CellResult.Should().Be("OK");
-        rows[0].CompletedTime.ToUniversalTime().Should().BeCloseTo(completedTime, TimeSpan.FromMilliseconds(1));
+        var result = await EventuallyAsync(async () =>
+            await GetFromJsonAsync<PagedResponse<PassStationListItemDto>>(
+                $"/api/v1/human/pass-stations/stacking?PageNumber=1&PageSize=20&mode=device-time&deviceId={deviceId}" +
+                $"&startTime={Uri.EscapeDataString(completedTime.AddMinutes(-1).ToString("O"))}" +
+                $"&endTime={Uri.EscapeDataString(completedTime.AddMinutes(1).ToString("O"))}"),
+            response => response.Items.Count(x => x.Barcode == barcode) == 1);
+
+        var item = result.Items.Single(x => x.Barcode == barcode);
+        item.Fields["trayCode"].GetString().Should().Be("TRAY-STACK-01");
+        item.Fields["layerCount"].GetInt32().Should().Be(16);
+        item.Fields["sequenceNo"].GetInt32().Should().Be(9);
+        item.CellResult.Should().Be("OK");
+        item.CompletedTime.Should().NotBeNull();
+        item.CompletedTime!.Value.ToUniversalTime().Should().BeCloseTo(completedTime, TimeSpan.FromMilliseconds(1));
     }
 
     [Fact]
@@ -207,8 +225,8 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
     {
         await AuthenticateAsAdminAsync();
 
-        var connectionString = await _fixture.GetConnectionStringAsync("eventbus");
-        var queueName = "device-log_error";
+        var connectionString = await _fixture.GetConnectionStringAsync(ConnectionResourceNames.EventBus);
+        var queueName = $"{RabbitMqEndpointNames.DeviceLogs}_error";
         var initialCount = await GetQueueMessageCountAsync(connectionString, queueName);
 
         await PublishInvalidDeviceLogEventAsync(connectionString);
@@ -230,6 +248,150 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
 
         roles.Should().NotBeEmpty();
         permissions.Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public async Task HumanIdentity_LoginAndRefresh_ShouldRotateRefreshToken()
+    {
+        _fixture.ClearAuthToken();
+
+        using var loginResponse = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/human/identity/login", new
+        {
+            EmployeeNo = IIoTAppFixture.SeedAdminEmployeeNo,
+            Password = IIoTAppFixture.SeedAdminPassword
+        });
+
+        loginResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        var loginSession = await ReadIssuedAuthSessionAsync(loginResponse);
+        loginSession.AccessToken.Should().NotBeNullOrWhiteSpace();
+        loginSession.RefreshToken.Should().NotBeNullOrWhiteSpace();
+        loginSession.AccessTokenExpiresAtUtc.Should().BeAfter(DateTimeOffset.UtcNow);
+        loginSession.RefreshTokenExpiresAtUtc.Should().BeAfter(DateTimeOffset.UtcNow);
+
+        using var refreshRequest = new HttpRequestMessage(HttpMethod.Post, "/api/v1/human/identity/refresh");
+        refreshRequest.Headers.Add("X-IIoT-Refresh-Token", loginSession.RefreshToken);
+
+        using var refreshResponse = await _fixture.HttpClient.SendAsync(refreshRequest);
+        refreshResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var refreshedSession = await ReadIssuedAuthSessionAsync(refreshResponse);
+        refreshedSession.RefreshToken.Should().NotBe(loginSession.RefreshToken);
+        refreshedSession.AccessToken.Should().NotBe(loginSession.AccessToken);
+
+        using var staleRefreshRequest = new HttpRequestMessage(HttpMethod.Post, "/api/v1/human/identity/refresh");
+        staleRefreshRequest.Headers.Add("X-IIoT-Refresh-Token", loginSession.RefreshToken);
+
+        using var staleRefreshResponse = await _fixture.HttpClient.SendAsync(staleRefreshRequest);
+        staleRefreshResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task EdgeBootstrap_DeviceInstanceAndRefresh_ShouldRotateRefreshToken()
+    {
+        await AuthenticateAsAdminAsync();
+        var device = await CreateTestDeviceRegistrationAsync("bootstrap-refresh");
+        _fixture.ClearAuthToken();
+
+        using var bootstrapResponse = await _fixture.HttpClient.GetAsync(
+            $"/api/v1/bootstrap/device-instance?clientCode={Uri.EscapeDataString(device.Code)}");
+
+        bootstrapResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        var bootstrapSession = await ReadIssuedBootstrapSessionAsync(bootstrapResponse);
+        bootstrapSession.Device.ClientCode.Should().Be(device.Code);
+        bootstrapSession.RefreshToken.Should().NotBeNullOrWhiteSpace();
+
+        using var refreshRequest = new HttpRequestMessage(HttpMethod.Post, "/api/v1/bootstrap/edge-refresh");
+        refreshRequest.Headers.Add("X-IIoT-Refresh-Token", bootstrapSession.RefreshToken);
+
+        using var refreshResponse = await _fixture.HttpClient.SendAsync(refreshRequest);
+        refreshResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var refreshedBootstrapSession = await ReadIssuedBootstrapSessionAsync(refreshResponse);
+        refreshedBootstrapSession.Device.Id.Should().Be(device.DeviceId);
+        refreshedBootstrapSession.RefreshToken.Should().NotBe(bootstrapSession.RefreshToken);
+        refreshedBootstrapSession.Device.UploadAccessToken.Should().NotBe(bootstrapSession.Device.UploadAccessToken);
+
+        using var staleRefreshRequest = new HttpRequestMessage(HttpMethod.Post, "/api/v1/bootstrap/edge-refresh");
+        staleRefreshRequest.Headers.Add("X-IIoT-Refresh-Token", bootstrapSession.RefreshToken);
+
+        using var staleRefreshResponse = await _fixture.HttpClient.SendAsync(staleRefreshRequest);
+        staleRefreshResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task HumanIdentity_Login_ShouldReturnCorsHeaders_WithoutWildcardOrigin()
+    {
+        _fixture.ClearAuthToken();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/human/identity/login");
+        request.Headers.Add("Origin", "http://localhost:5173");
+        request.Content = JsonContent.Create(new
+        {
+            EmployeeNo = IIoTAppFixture.SeedAdminEmployeeNo,
+            Password = IIoTAppFixture.SeedAdminPassword
+        });
+
+        using var response = await _fixture.HttpClient.SendAsync(request);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Headers.Should().ContainKey("Access-Control-Allow-Origin");
+        response.Headers.GetValues("Access-Control-Allow-Origin").Should().ContainSingle("http://localhost:5173");
+        response.Headers.Should().ContainKey("Access-Control-Expose-Headers");
+        response.Headers.GetValues("Access-Control-Expose-Headers").Single()
+            .Should()
+            .Contain("X-IIoT-Refresh-Token")
+            .And.Contain("X-IIoT-Refresh-Token-Expires-At")
+            .And.Contain("X-IIoT-Access-Token-Expires-At");
+    }
+
+    [Fact]
+    public async Task DomainOutbox_DeviceRegistration_ShouldEventuallyBeMarkedProcessed()
+    {
+        await AuthenticateAsAdminAsync();
+
+        var connectionString = await _fixture.GetConnectionStringAsync(ConnectionResourceNames.IiotDatabase);
+        var device = await CreateTestDeviceRegistrationAsync("outbox-device");
+
+        var outboxMessage = await EventuallyAsync(
+            async () => await GetOutboxMessageAsync(
+                connectionString,
+                nameof(IIoT.Core.Production.Aggregates.Devices.Events.DeviceRegisteredDomainEvent),
+                device.DeviceId),
+            message => message is not null && message.ProcessedAtUtc is not null);
+
+        outboxMessage.Should().NotBeNull();
+        outboxMessage!.AttemptCount.Should().BeGreaterThan(0);
+        outboxMessage.ProcessedAtUtc.Should().NotBeNull();
+        outboxMessage.LastError.Should().BeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task TimescaleDb_ShouldInitializeConfiguredHypertables()
+    {
+        var connectionString = await _fixture.GetConnectionStringAsync(ConnectionResourceNames.IiotDatabase);
+
+        var hypertables = await GetHypertableNamesAsync(connectionString);
+
+        hypertables.Should().Contain("device_logs");
+        hypertables.Should().Contain("hourly_capacity");
+        hypertables.Should().Contain("pass_data_injection");
+        hypertables.Should().Contain("pass_data_stacking");
+    }
+
+    [Fact]
+    public async Task HumanIdentity_Login_ShouldReturnUnifiedValidationErrors()
+    {
+        _fixture.ClearAuthToken();
+
+        using var response = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/human/identity/login", new
+        {
+            EmployeeNo = "",
+            Password = ""
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var envelope = await response.Content.ReadFromJsonAsync<ErrorEnvelope>(JsonOptions)
+                       ?? throw new InvalidOperationException("Unable to deserialize validation envelope.");
+        envelope.Errors.Should().NotBeEmpty();
     }
 
     [Fact]
@@ -271,12 +433,46 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         var device = await CreateTestDeviceRegistrationAsync("bootstrap");
         _fixture.ClearAuthToken();
 
-        var edge = await GetFromJsonAsync<EdgeBootstrapDto>(
-            $"/api/v1/edge/bootstrap/device-instance?clientCode={Uri.EscapeDataString(device.Code)}");
+        using var response = await _fixture.HttpClient.GetAsync(
+            $"/api/v1/bootstrap/device-instance?clientCode={Uri.EscapeDataString(device.Code)}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Headers.Should().ContainKey("X-IIoT-Route-Surface");
+        response.Headers.GetValues("X-IIoT-Route-Surface").Should().ContainSingle("bootstrap");
+        response.Headers.Should().NotContainKey("X-IIoT-Deprecated-Alias");
+        response.Headers.Should().NotContainKey("X-IIoT-Replacement-Route");
+
+        var edge = await response.Content.ReadFromJsonAsync<EdgeBootstrapDto>(JsonOptions)
+                   ?? throw new InvalidOperationException("Unable to deserialize bootstrap response.");
         edge.Id.Should().Be(device.DeviceId);
         edge.ClientCode.Should().Be(device.Code);
         edge.UploadAccessToken.Should().NotBeNullOrWhiteSpace();
         edge.UploadAccessTokenExpiresAtUtc.Should().BeAfter(DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
+    public async Task LegacyEdgeBootstrapAlias_ShouldRemainCompatible()
+    {
+        await AuthenticateAsAdminAsync();
+
+        var device = await CreateTestDeviceRegistrationAsync("bootstrap-alias");
+        _fixture.ClearAuthToken();
+
+        using var response = await _fixture.HttpClient.GetAsync(
+            $"/api/v1/edge/bootstrap/device-instance?clientCode={Uri.EscapeDataString(device.Code)}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Headers.Should().ContainKey("X-IIoT-Route-Surface");
+        response.Headers.GetValues("X-IIoT-Route-Surface").Should().ContainSingle("legacy-bootstrap-alias");
+        response.Headers.Should().ContainKey("X-IIoT-Deprecated-Alias");
+        response.Headers.GetValues("X-IIoT-Deprecated-Alias").Should().ContainSingle("true");
+        response.Headers.Should().ContainKey("X-IIoT-Replacement-Route");
+        response.Headers.GetValues("X-IIoT-Replacement-Route").Should().ContainSingle("/api/v1/bootstrap/device-instance");
+
+        var edge = await response.Content.ReadFromJsonAsync<EdgeBootstrapDto>(JsonOptions)
+                   ?? throw new InvalidOperationException("Unable to deserialize legacy bootstrap response.");
+
+        edge.Id.Should().Be(device.DeviceId);
+        edge.ClientCode.Should().Be(device.Code);
+        edge.UploadAccessToken.Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]
@@ -335,7 +531,7 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
             Version = "V1.0.0",
             ProcessId = device.ProcessId,
             DeviceId = device.DeviceId,
-            ParametersJsonb = "{\"speed\":120}",
+            ParametersJsonb = ValidRecipeParametersJson(),
             Status = 1
         });
 
@@ -353,6 +549,65 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
             response => response.Any(x => x.RecipeName == recipeName));
 
         recipes.Should().Contain(x => x.RecipeName == recipeName && x.DeviceId == device.DeviceId);
+    }
+
+    [Fact]
+    public async Task HumanRecipe_Create_ShouldRejectInvalidStructuredParametersJson()
+    {
+        await AuthenticateAsAdminAsync();
+
+        var device = await CreateTestDeviceRegistrationAsync("recipe-invalid");
+        using var response = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/human/recipes", new
+        {
+            RecipeName = $"recipe-{Guid.NewGuid():N}"[..14],
+            ProcessId = device.ProcessId,
+            DeviceId = device.DeviceId,
+            ParametersJsonb = """{"speed":120}"""
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var error = await response.Content.ReadFromJsonAsync<ErrorEnvelope>(JsonOptions);
+        error.Should().NotBeNull();
+        error!.Errors.Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public async Task HumanRecipe_Upgrade_ShouldRejectInvalidStructuredParametersJson_AndKeepSourceVersionReadable()
+    {
+        await AuthenticateAsAdminAsync();
+
+        var device = await CreateTestDeviceRegistrationAsync("recipe-upgrade");
+        var recipeId = await PostJsonAsync<Guid>("/api/v1/human/recipes", new
+        {
+            RecipeName = $"recipe-{Guid.NewGuid():N}"[..14],
+            ProcessId = device.ProcessId,
+            DeviceId = device.DeviceId,
+            ParametersJsonb = ValidRecipeParametersJson()
+        });
+
+        using var response = await _fixture.HttpClient.PostAsJsonAsync($"/api/v1/human/recipes/{recipeId}/upgrade", new
+        {
+            SourceRecipeId = recipeId,
+            NewVersion = "V1.1",
+            ParametersJsonb = """[{"id":"speed","name":"","unit":"rpm","min":1,"max":2}]"""
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+        var detail = await GetFromJsonAsync<RecipeForDeviceDto>($"/api/v1/human/recipes/{recipeId}");
+        detail.Id.Should().Be(recipeId);
+        using (var parameters = JsonDocument.Parse(detail.ParametersJsonb))
+        {
+            parameters.RootElement.ValueKind.Should().Be(JsonValueKind.Array);
+            parameters.RootElement.GetArrayLength().Should().Be(1);
+            var item = parameters.RootElement[0];
+            item.GetProperty("id").GetString().Should().Be("speed");
+            item.GetProperty("name").GetString().Should().Be("Speed");
+            item.GetProperty("unit").GetString().Should().Be("rpm");
+            item.GetProperty("min").GetDecimal().Should().Be(100);
+            item.GetProperty("max").GetDecimal().Should().Be(150);
+        }
+        detail.Status.Should().Be("Active");
     }
 
     [Fact]
@@ -471,14 +726,14 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HumanIdentity_EdgeLogin_ShouldReturnHumanJwt_ThatCannotAccessEdgeRoutes()
+    public async Task Bootstrap_EdgeLogin_ShouldReturnHumanJwt_ThatCannotAccessEdgeRoutes()
     {
         await AuthenticateAsAdminAsync();
 
         var device = await CreateTestDeviceRegistrationAsync("edge-login");
         _fixture.ClearAuthToken();
 
-        using var response = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/human/identity/edge-login", new
+        using var response = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/bootstrap/edge-login", new
         {
             EmployeeNo = IIoTAppFixture.SeedAdminEmployeeNo,
             Password = IIoTAppFixture.SeedAdminPassword,
@@ -486,6 +741,10 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Headers.Should().ContainKey("X-IIoT-Route-Surface");
+        response.Headers.GetValues("X-IIoT-Route-Surface").Should().ContainSingle("bootstrap");
+        response.Headers.Should().NotContainKey("X-IIoT-Deprecated-Alias");
+        response.Headers.Should().NotContainKey("X-IIoT-Replacement-Route");
         var token = await ReadJwtTokenAsync(response);
         token.Should().NotBeNullOrWhiteSpace();
 
@@ -511,6 +770,32 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         edgeResponse.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
 
+    [Fact]
+    public async Task LegacyHumanEdgeLoginAlias_ShouldRemainCompatible()
+    {
+        await AuthenticateAsAdminAsync();
+
+        var device = await CreateTestDeviceRegistrationAsync("edge-login-alias");
+        _fixture.ClearAuthToken();
+
+        using var response = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/human/identity/edge-login", new
+        {
+            EmployeeNo = IIoTAppFixture.SeedAdminEmployeeNo,
+            Password = IIoTAppFixture.SeedAdminPassword,
+            DeviceId = device.DeviceId
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Headers.Should().ContainKey("X-IIoT-Route-Surface");
+        response.Headers.GetValues("X-IIoT-Route-Surface").Should().ContainSingle("legacy-edge-login-alias");
+        response.Headers.Should().ContainKey("X-IIoT-Deprecated-Alias");
+        response.Headers.GetValues("X-IIoT-Deprecated-Alias").Should().ContainSingle("true");
+        response.Headers.Should().ContainKey("X-IIoT-Replacement-Route");
+        response.Headers.GetValues("X-IIoT-Replacement-Route").Should().ContainSingle("/api/v1/bootstrap/edge-login");
+        var token = await ReadJwtTokenAsync(response);
+        token.Should().NotBeNullOrWhiteSpace();
+    }
+
     private async Task AuthenticateAsAdminAsync()
     {
         using var response = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/human/identity/login", new
@@ -533,7 +818,7 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
 
         _deviceCodes.TryGetValue(deviceId, out var code).Should().BeTrue($"device code for {deviceId} should be tracked during test setup");
         var bootstrap = await GetFromJsonAsync<EdgeBootstrapDto>(
-            $"/api/v1/edge/bootstrap/device-instance?clientCode={Uri.EscapeDataString(code!)}");
+            $"/api/v1/bootstrap/device-instance?clientCode={Uri.EscapeDataString(code!)}");
 
         bootstrap.Id.Should().Be(deviceId);
         bootstrap.UploadAccessToken.Should().NotBeNullOrWhiteSpace();
@@ -557,6 +842,39 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
         }
 
         return body.Trim();
+    }
+
+    private static async Task<IssuedAuthSession> ReadIssuedAuthSessionAsync(HttpResponseMessage response)
+    {
+        var token = await ReadJwtTokenAsync(response);
+        var refreshToken = response.Headers.GetValues("X-IIoT-Refresh-Token").Single();
+        var refreshTokenExpiresAtUtc = DateTimeOffset.Parse(
+            response.Headers.GetValues("X-IIoT-Refresh-Token-Expires-At").Single());
+        var accessTokenExpiresAtUtc = DateTimeOffset.Parse(
+            response.Headers.GetValues("X-IIoT-Access-Token-Expires-At").Single());
+
+        return new IssuedAuthSession(
+            token,
+            refreshToken,
+            accessTokenExpiresAtUtc,
+            refreshTokenExpiresAtUtc);
+    }
+
+    private static async Task<IssuedBootstrapSession> ReadIssuedBootstrapSessionAsync(HttpResponseMessage response)
+    {
+        var device = await response.Content.ReadFromJsonAsync<EdgeBootstrapDto>(JsonOptions)
+                     ?? throw new InvalidOperationException("Unable to deserialize bootstrap response.");
+        var refreshToken = response.Headers.GetValues("X-IIoT-Refresh-Token").Single();
+        var refreshTokenExpiresAtUtc = DateTimeOffset.Parse(
+            response.Headers.GetValues("X-IIoT-Refresh-Token-Expires-At").Single());
+        var accessTokenExpiresAtUtc = DateTimeOffset.Parse(
+            response.Headers.GetValues("X-IIoT-Access-Token-Expires-At").Single());
+
+        return new IssuedBootstrapSession(
+            device,
+            refreshToken,
+            accessTokenExpiresAtUtc,
+            refreshTokenExpiresAtUtc);
     }
 
     private async Task<Guid> CreateTestDeviceAsync(string prefix)
@@ -594,6 +912,11 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
 
         processId.Should().NotBe(Guid.Empty);
         return processId;
+    }
+
+    private static string ValidRecipeParametersJson()
+    {
+        return """[{"id":"speed","name":"Speed","unit":"rpm","min":100,"max":150}]""";
     }
 
     private async Task PostJsonAsync(string path, object request)
@@ -744,6 +1067,62 @@ public sealed class CloudProductionFlowTests : IAsyncLifetime
 
         return rows;
     }
+
+    private static async Task<OutboxMessageRow?> GetOutboxMessageAsync(
+        string connectionString,
+        string eventName,
+        Guid aggregateId)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+
+        await using var command = new NpgsqlCommand(
+            """
+            select "Id", attempt_count, processed_at_utc, last_error
+            from outbox_messages
+            where position(@eventName in event_type) > 0
+              and payload ->> 'deviceId' = @aggregateId
+            order by occurred_at_utc desc
+            limit 1
+            """,
+            connection);
+        command.Parameters.AddWithValue("eventName", eventName);
+        command.Parameters.AddWithValue("aggregateId", aggregateId.ToString());
+
+        await using var reader = await command.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return null;
+        }
+
+        return new OutboxMessageRow(
+            Id: reader.GetGuid(0),
+            AttemptCount: reader.GetInt32(1),
+            ProcessedAtUtc: reader.IsDBNull(2) ? null : reader.GetFieldValue<DateTimeOffset>(2),
+            LastError: reader.IsDBNull(3) ? null : reader.GetString(3));
+    }
+
+    private static async Task<HashSet<string>> GetHypertableNamesAsync(string connectionString)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+
+        await using var command = new NpgsqlCommand(
+            """
+            select hypertable_name
+            from timescaledb_information.hypertables
+            """,
+            connection);
+
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            result.Add(reader.GetString(0));
+        }
+
+        return result;
+    }
 }
 
 public sealed record PagedResponse<T>
@@ -801,18 +1180,14 @@ public sealed record DailyRangeSummaryDto(
     int NightShiftOk,
     int NightShiftNg);
 
-public sealed record InjectionPassListItemDto(
+public sealed record PassStationListItemDto(
     Guid Id,
     Guid DeviceId,
-    string Barcode,
-    string CellResult,
-    DateTime PreInjectionTime,
-    decimal PreInjectionWeight,
-    DateTime PostInjectionTime,
-    decimal PostInjectionWeight,
-    decimal InjectionVolume,
-    DateTime CompletedTime,
-    DateTime ReceivedAt);
+    string? Barcode,
+    string? CellResult,
+    DateTime? CompletedTime,
+    DateTime? ReceivedAt,
+    Dictionary<string, JsonElement> Fields);
 
 public sealed record StackingPassRow(
     string TrayCode,
@@ -821,9 +1196,18 @@ public sealed record StackingPassRow(
     string CellResult,
     DateTime CompletedTime);
 
+public sealed record OutboxMessageRow(
+    Guid Id,
+    int AttemptCount,
+    DateTimeOffset? ProcessedAtUtc,
+    string? LastError);
+
 public sealed record PermissionGroupDto(
     string GroupName,
     List<string> Permissions);
+
+public sealed record ErrorEnvelope(
+    List<string> Errors);
 
 public sealed record EdgeBootstrapDto(
     Guid Id,
@@ -855,3 +1239,15 @@ public sealed record TestDeviceRegistration(
     Guid DeviceId,
     Guid ProcessId,
     string Code);
+
+public sealed record IssuedAuthSession(
+    string AccessToken,
+    string RefreshToken,
+    DateTimeOffset AccessTokenExpiresAtUtc,
+    DateTimeOffset RefreshTokenExpiresAtUtc);
+
+public sealed record IssuedBootstrapSession(
+    EdgeBootstrapDto Device,
+    string RefreshToken,
+    DateTimeOffset AccessTokenExpiresAtUtc,
+    DateTimeOffset RefreshTokenExpiresAtUtc);

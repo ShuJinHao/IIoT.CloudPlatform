@@ -1,8 +1,8 @@
 using AutoMapper;
-using IIoT.Services.Common.Caching;
-using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Contracts.RecordQueries;
-using IIoT.Services.Common.Events.Capacities;
+using IIoT.Services.CrossCutting.Caching;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.RecordQueries;
+using IIoT.Services.Contracts.Events.Capacities;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 
@@ -39,7 +39,10 @@ public class ReceiveHourlyCapacityHandler(
         if (!exists)
             return Result.Failure("数据接收失败: 设备不存在");
 
-        var @event = mapper.Map<HourlyCapacityReceivedEvent>(request);
+        var @event = mapper.Map<HourlyCapacityReceivedEvent>(request) with
+        {
+            ReceivedAtUtc = DateTime.UtcNow
+        };
         await cacheService.RemoveAsync(
             CacheKeys.CapacityHourly(request.DeviceId, request.Date, request.PlcName),
             cancellationToken);

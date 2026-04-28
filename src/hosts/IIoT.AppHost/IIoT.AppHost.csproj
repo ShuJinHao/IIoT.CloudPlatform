@@ -17,8 +17,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\IIoT.DataWorker\IIoT.DataWorker.csproj" />
+    <ProjectReference Include="..\IIoT.Gateway\IIoT.Gateway.csproj" />
     <ProjectReference Include="..\IIoT.HttpApi\IIoT.HttpApi.csproj" />
     <ProjectReference Include="..\IIoT.MigrationWorkApp\IIoT.MigrationWorkApp.csproj" />
+    <ProjectReference Include="..\..\shared\IIoT.SharedKernel\IIoT.SharedKernel.csproj" IsAspireProjectResource="false" ReferenceOutputAssembly="true" />
   </ItemGroup>
 
 </Project>

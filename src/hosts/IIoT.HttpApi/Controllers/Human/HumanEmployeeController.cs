@@ -3,70 +3,82 @@ using IIoT.EmployeeService.Queries.Employees;
 using IIoT.HttpApi.Infrastructure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace IIoT.HttpApi.Controllers;
 
 [Authorize]
+[EnableRateLimiting(HttpApiRateLimitPolicies.GeneralApi)]
 [Route("api/v1/human/employees")]
 [ApiController]
 [Tags("Human Employees")]
 public class HumanEmployeeController : ApiControllerBase
 {
     [HttpGet]
-    public async Task<IActionResult> GetPagedList([FromQuery] GetEmployeePagedListQuery query)
+    public async Task<IActionResult> GetPagedList(
+        [FromQuery] GetEmployeePagedListQuery query,
+        CancellationToken cancellationToken)
     {
-        var result = await Sender.Send(query);
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(query, cancellationToken));
     }
 
     [HttpGet("{id}")]
-    public async Task<IActionResult> GetDetail([FromRoute] Guid id)
+    public async Task<IActionResult> GetDetail(
+        [FromRoute] Guid id,
+        CancellationToken cancellationToken)
     {
-        var result = await Sender.Send(new GetEmployeeDetailQuery(id));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetEmployeeDetailQuery(id), cancellationToken));
     }
 
     [HttpGet("{id}/access")]
-    public async Task<IActionResult> GetAccess([FromRoute] Guid id)
+    public async Task<IActionResult> GetAccess(
+        [FromRoute] Guid id,
+        CancellationToken cancellationToken)
     {
-        var result = await Sender.Send(new GetEmployeeAccessQuery(id));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new GetEmployeeAccessQuery(id), cancellationToken));
     }
 
     [HttpPost]
-    public async Task<IActionResult> Onboard([FromBody] OnboardEmployeeCommand command)
+    public async Task<IActionResult> Onboard(
+        [FromBody] OnboardEmployeeCommand command,
+        CancellationToken cancellationToken)
     {
-        var result = await Sender.Send(command);
-        return result.IsSuccess
-            ? Created($"/api/v1/human/employees/{result.Value}", result.Value)
-            : BadRequest(result.Errors);
+        return ReturnResult(
+            await Sender.Send(command, cancellationToken),
+            employeeId => $"/api/v1/human/employees/{employeeId}");
     }
 
     [HttpPut("{id}/profile")]
-    public async Task<IActionResult> UpdateProfile([FromRoute] Guid id, [FromBody] UpdateEmployeeProfileCommand command)
+    public async Task<IActionResult> UpdateProfile(
+        [FromRoute] Guid id,
+        [FromBody] UpdateEmployeeProfileCommand command,
+        CancellationToken cancellationToken)
     {
-        var result = await Sender.Send(command with { EmployeeId = id });
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(command with { EmployeeId = id }, cancellationToken));
     }
 
     [HttpPut("{id}/access")]
-    public async Task<IActionResult> UpdateAccess([FromRoute] Guid id, [FromBody] UpdateEmployeeAccessCommand command)
+    public async Task<IActionResult> UpdateAccess(
+        [FromRoute] Guid id,
+        [FromBody] UpdateEmployeeAccessCommand command,
+        CancellationToken cancellationToken)
     {
-        var result = await Sender.Send(command with { EmployeeId = id });
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(command with { EmployeeId = id }, cancellationToken));
     }
 
     [HttpPut("{id}/deactivate")]
-    public async Task<IActionResult> Deactivate([FromRoute] Guid id)
+    public async Task<IActionResult> Deactivate(
+        [FromRoute] Guid id,
+        CancellationToken cancellationToken)
     {
-        var result = await Sender.Send(new DeactivateEmployeeCommand(id));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new DeactivateEmployeeCommand(id), cancellationToken));
     }
 
     [HttpDelete("{id}")]
-    public async Task<IActionResult> Terminate([FromRoute] Guid id)
+    public async Task<IActionResult> Terminate(
+        [FromRoute] Guid id,
+        CancellationToken cancellationToken)
     {
-        var result = await Sender.Send(new TerminateEmployeeCommand(id));
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(new TerminateEmployeeCommand(id), cancellationToken));
     }
 }

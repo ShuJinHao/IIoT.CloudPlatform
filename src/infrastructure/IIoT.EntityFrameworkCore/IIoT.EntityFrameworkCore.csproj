@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <PackageReference Include="Aspire.Npgsql.EntityFrameworkCore.PostgreSQL" Version="13.1.2" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.2" />
     <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="10.0.2" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.2" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.2" />
@@ -19,7 +20,9 @@
     <ProjectReference Include="..\..\core\IIoT.Core.Identity\IIoT.Core.Identity.csproj" />
     <ProjectReference Include="..\..\core\IIoT.Core.MasterData\IIoT.Core.MasterData.csproj" />
     <ProjectReference Include="..\..\core\IIoT.Core.Production\IIoT.Core.Production.csproj" />
-    <ProjectReference Include="..\..\services\IIoT.Services.Common\IIoT.Services.Common.csproj" />
+    <ProjectReference Include="..\..\services\IIoT.Services.Contracts\IIoT.Services.Contracts.csproj" />
+    <ProjectReference Include="..\..\services\IIoT.Services.CrossCutting\IIoT.Services.CrossCutting.csproj" />
+    <ProjectReference Include="..\..\shared\IIoT.SharedKernel\IIoT.SharedKernel.csproj" />
   </ItemGroup>
 
 </Project>

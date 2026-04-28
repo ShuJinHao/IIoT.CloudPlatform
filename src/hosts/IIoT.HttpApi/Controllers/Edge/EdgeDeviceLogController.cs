@@ -13,10 +13,11 @@ namespace IIoT.HttpApi.Controllers;
 public class EdgeDeviceLogController : ApiControllerBase
 {
     [HttpPost]
-    [EnableRateLimiting("edge-upload")]
-    public async Task<IActionResult> Receive([FromBody] ReceiveDeviceLogCommand command)
+    [EnableRateLimiting(HttpApiRateLimitPolicies.DeviceLogUpload)]
+    public async Task<IActionResult> Receive(
+        [FromBody] ReceiveDeviceLogCommand command,
+        CancellationToken cancellationToken)
     {
-        var result = await Sender.Send(command);
-        return result.IsSuccess ? Ok(result.Value) : BadRequest(result.Errors);
+        return ReturnResult(await Sender.Send(command, cancellationToken));
     }
 }

@@ -2,14 +2,13 @@
 using IIoT.Core.MasterData.Aggregates.MfgProcesses;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.Recipes;
+using IIoT.EntityFrameworkCore.Auditing;
 using IIoT.EntityFrameworkCore.Identity;
+using IIoT.EntityFrameworkCore.Outbox;
 using IIoT.SharedKernel.Domain;
-using MediatR;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Infrastructure;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace IIoT.EntityFrameworkCore;
 
@@ -20,9 +19,12 @@ public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)
     public DbSet<MfgProcess> MfgProcesses => Set<MfgProcess>();
     public DbSet<Device> Devices => Set<Device>();
     public DbSet<Recipe> Recipes => Set<Recipe>();
+    public DbSet<RefreshTokenSession> RefreshTokenSessions => Set<RefreshTokenSession>();
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+    public DbSet<AuditTrailRecord> AuditTrails => Set<AuditTrailRecord>();
 
-    private readonly List<IDomainEvent> _pendingDomainEvents = [];
-    public bool HasPendingDomainEvents => _pendingDomainEvents.Count > 0;
+    public bool HasPendingDomainEvents => ChangeTracker.Entries<BaseEntity<Guid>>()
+        .Any(e => e.Entity.DomainEvents.Count > 0);
 
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
@@ -33,58 +35,26 @@ public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)
         var domainEvents = trackedEntities.SelectMany(e => e.Entity.DomainEvents).ToList();
         trackedEntities.ForEach(e => e.Entity.ClearDomainEvents());
 
-        var affected = await base.SaveChangesAsync(cancellationToken);
-
         if (domainEvents.Count > 0)
         {
-            if (Database.CurrentTransaction is null)
-            {
-                await PublishDomainEventsAsync(domainEvents, cancellationToken);
-            }
-            else
-            {
-                _pendingDomainEvents.AddRange(domainEvents);
-            }
+            OutboxMessages.AddRange(domainEvents.Select(OutboxMessage.FromDomainEvent));
         }
 
-        return affected;
-    }
-
-    public async Task FlushDomainEventsAsync(CancellationToken cancellationToken = default)
-    {
-        while (_pendingDomainEvents.Count > 0)
-        {
-            var domainEvent = _pendingDomainEvents[0];
-            await PublishDomainEventsAsync([domainEvent], cancellationToken);
-            _pendingDomainEvents.RemoveAt(0);
-        }
+        return await base.SaveChangesAsync(cancellationToken);
     }
 
     public void DiscardPendingDomainEvents()
     {
-        _pendingDomainEvents.Clear();
+        foreach (var entry in ChangeTracker.Entries<BaseEntity<Guid>>())
+        {
+            entry.Entity.ClearDomainEvents();
+        }
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(IIoTDbContext).Assembly);
-    }
-
-    private async Task PublishDomainEventsAsync(
-        IEnumerable<IDomainEvent> domainEvents,
-        CancellationToken cancellationToken)
-    {
-        var mediator = this.GetService<IMediator>();
-        if (mediator is null)
-        {
-            return;
-        }
-
-        foreach (var domainEvent in domainEvents)
-        {
-            await mediator.Publish(domainEvent, cancellationToken);
-        }
     }
 }
 

@@ -1,0 +1,79 @@
+name: cloud-deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag from cloud-image (sha-*)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate release tag input
+        shell: bash
+        run: |
+          release_tag='${{ inputs.release_tag }}'
+          if [[ ! "$release_tag" =~ ^sha-[0-9a-f]+$ ]]; then
+            echo "release_tag must match sha-<hex>: $release_tag" >&2
+            exit 1
+          fi
+
+      - name: Copy deploy template
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          source: "deploy/*"
+          target: ${{ secrets.DEPLOY_TARGET_DIR }}
+          strip_components: 1
+
+      - name: Deploy cloud stack
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          DEPLOY_GIT_SHA: ${{ github.sha }}
+          DEPLOY_TRIGGERED_BY: ${{ github.actor }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          script_stop: true
+          envs: GITHUB_ACTOR,GITHUB_TOKEN,RELEASE_TAG,DEPLOY_GIT_SHA,DEPLOY_TRIGGERED_BY
+          script: |
+            set -eu
+            mkdir -p "${{ secrets.DEPLOY_TARGET_DIR }}/nginx"
+            cat > "${{ secrets.DEPLOY_TARGET_DIR }}/.env" <<'EOF'
+            ${{ secrets.DEPLOY_ENV_FILE }}
+            EOF
+
+            registry="${{ secrets.OCI_REGISTRY }}"
+            username="${{ secrets.OCI_REGISTRY_USERNAME }}"
+            password="${{ secrets.OCI_REGISTRY_PASSWORD }}"
+
+            if [ -z "$registry" ]; then
+              registry="ghcr.io"
+              username="${GITHUB_ACTOR}"
+              password="${GITHUB_TOKEN}"
+            fi
+
+            echo "$password" | docker login "$registry" --username "$username" --password-stdin
+
+            cd "${{ secrets.DEPLOY_TARGET_DIR }}"
+            chmod +x ./scripts/*.sh
+            RELEASE_TAG="$RELEASE_TAG" DEPLOY_GIT_SHA="$DEPLOY_GIT_SHA" DEPLOY_TRIGGERED_BY="$DEPLOY_TRIGGERED_BY" ./scripts/deploy-release.sh "$RELEASE_TAG"

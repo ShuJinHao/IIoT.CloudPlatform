@@ -1,4 +1,4 @@
-using IIoT.Services.Common.Contracts;
+using IIoT.Services.Contracts;
 using MassTransit;
 
 namespace IIoT.EventBus;

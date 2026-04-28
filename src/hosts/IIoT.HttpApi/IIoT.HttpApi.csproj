@@ -15,6 +15,8 @@
     <ProjectReference Include="..\..\services\IIoT.IdentityService\IIoT.IdentityService.csproj" />
     <ProjectReference Include="..\..\services\IIoT.MasterDataService\IIoT.MasterDataService.csproj" />
     <ProjectReference Include="..\..\services\IIoT.ProductionService\IIoT.ProductionService.csproj" />
+    <ProjectReference Include="..\..\services\IIoT.Services.Contracts\IIoT.Services.Contracts.csproj" />
+    <ProjectReference Include="..\..\services\IIoT.Services.CrossCutting\IIoT.Services.CrossCutting.csproj" />
     <ProjectReference Include="..\IIoT.ServiceDefaults\IIoT.ServiceDefaults.csproj" />
   </ItemGroup>
 
@@ -32,12 +34,14 @@
 
   <ItemGroup>
     <PackageReference Include="AutoMapper" Version="16.1.1" />
+    <PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="11.11.0" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.2" />
+    <PackageReference Include="Microsoft.OpenApi" Version="2.3.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.2">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="Swashbuckle.AspNetCore.SwaggerUI" Version="10.1.0" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="10.1.0" />
   </ItemGroup>
 
 </Project>

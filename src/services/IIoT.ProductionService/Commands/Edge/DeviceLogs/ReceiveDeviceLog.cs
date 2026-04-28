@@ -1,7 +1,7 @@
 using AutoMapper;
-using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Contracts.RecordQueries;
-using IIoT.Services.Common.Events.DeviceLogs;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.RecordQueries;
+using IIoT.Services.Contracts.Events.DeviceLogs;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 

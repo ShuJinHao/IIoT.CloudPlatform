@@ -1,4 +1,4 @@
-using IIoT.Services.Common.Events.PassStations;
+using IIoT.Services.Contracts.Events.PassStations;
 using IIoT.SharedKernel.Result;
 
 namespace IIoT.ProductionService.Commands.PassStations;

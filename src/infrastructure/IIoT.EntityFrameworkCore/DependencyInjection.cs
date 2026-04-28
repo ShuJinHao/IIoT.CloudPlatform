@@ -1,12 +1,18 @@
 using IIoT.EntityFrameworkCore.Identity;
+using IIoT.EntityFrameworkCore.Outbox;
 using IIoT.EntityFrameworkCore.Persistence;
 using IIoT.EntityFrameworkCore.Repository;
-using IIoT.Services.Common.Caching.Options;
-using IIoT.Services.Common.Contracts;
-using IIoT.Services.Common.Contracts.Authorization;
-using IIoT.Services.Common.Contracts.RecordQueries;
+using IIoT.Services.CrossCutting.Caching.Options;
+using IIoT.Services.Contracts.Auditing;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts.RecordQueries;
+using IIoT.SharedKernel.Configuration;
 using IIoT.SharedKernel.Repository;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
@@ -16,7 +22,31 @@ public static class DependencyInjection
 {
     public static void AddEfCore(this IHostApplicationBuilder builder)
     {
-        builder.AddNpgsqlDbContext<IIoTDbContext>("iiot-db");
+        var postgresOptions = builder.Configuration.GetRequiredValidatedOptions<PostgresOptions>(
+            PostgresOptions.SectionName,
+            static options => options.Validate());
+
+        builder.AddNpgsqlDbContext<IIoTDbContext>(
+            ConnectionResourceNames.IiotDatabase,
+            settings =>
+            {
+                settings.DisableRetry = !postgresOptions.EnableRetry;
+                settings.CommandTimeout = postgresOptions.CommandTimeoutSeconds;
+            },
+            options =>
+            {
+                options.UseNpgsql(npgsqlOptions =>
+                {
+                    npgsqlOptions.CommandTimeout(postgresOptions.CommandTimeoutSeconds);
+                    if (postgresOptions.EnableRetry)
+                    {
+                        npgsqlOptions.EnableRetryOnFailure(
+                            postgresOptions.MaxRetryCount,
+                            TimeSpan.FromSeconds(postgresOptions.MaxRetryDelaySeconds),
+                            null);
+                    }
+                });
+            });
 
         builder.Services.Configure<PermissionCacheOptions>(
             builder.Configuration.GetSection("PermissionCache"));
@@ -29,8 +59,10 @@ public static class DependencyInjection
         builder.Services.AddScoped<IEmployeeLookupService, EmployeeLookupService>();
         builder.Services.AddScoped<IDevicePermissionService, DevicePermissionService>();
         builder.Services.AddScoped<IIdentityPasswordService, IdentityPasswordService>();
+        builder.Services.AddScoped<IRefreshTokenService, EfRefreshTokenService>();
         builder.Services.AddScoped<IRolePolicyService, RolePolicyService>();
         builder.Services.AddScoped<IUserQueryService, UserQueryService>();
+        builder.Services.AddScoped<IAuditTrailService, Auditing.EfAuditTrailService>();
         builder.Services.AddScoped<IUnitOfWork, EfUnitOfWork>();
         builder.Services.AddScoped<IProcessReadQueryService, QueryServices.ProcessReadQueryService>();
         builder.Services.AddScoped<IDeviceReadQueryService, QueryServices.DeviceReadQueryService>();
@@ -41,7 +73,7 @@ public static class DependencyInjection
             options.Password.RequireNonAlphanumeric = false;
             options.Password.RequiredLength = 8;
         })
-            .AddRoles<IdentityRole<Guid>>()
-            .AddEntityFrameworkStores<IIoTDbContext>();
+        .AddRoles<IdentityRole<Guid>>()
+        .AddEntityFrameworkStores<IIoTDbContext>();
     }
 }

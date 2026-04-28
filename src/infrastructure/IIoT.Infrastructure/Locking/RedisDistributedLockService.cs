@@ -1,4 +1,4 @@
-using IIoT.Services.Common.Contracts;
+using IIoT.Services.Contracts;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;

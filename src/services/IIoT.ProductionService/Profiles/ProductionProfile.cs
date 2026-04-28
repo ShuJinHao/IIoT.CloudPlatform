@@ -2,9 +2,9 @@ using AutoMapper;
 using IIoT.ProductionService.Commands.Capacities;
 using IIoT.ProductionService.Commands.DeviceLogs;
 using IIoT.ProductionService.Commands.PassStations;
-using IIoT.Services.Common.Events.Capacities;
-using IIoT.Services.Common.Events.DeviceLogs;
-using IIoT.Services.Common.Events.PassStations;
+using IIoT.Services.Contracts.Events.Capacities;
+using IIoT.Services.Contracts.Events.DeviceLogs;
+using IIoT.Services.Contracts.Events.PassStations;
 
 namespace IIoT.ProductionService.Profiles;
 
@@ -13,8 +13,7 @@ public sealed class ProductionProfile : Profile
     public ProductionProfile()
     {
         CreateMap<ReceiveDeviceLogCommand, DeviceLogReceivedEvent>();
-        CreateMap<ReceiveHourlyCapacityCommand, HourlyCapacityReceivedEvent>()
-            .ForMember(dest => dest.ReceivedAtUtc, opt => opt.MapFrom(_ => DateTime.UtcNow));
+        CreateMap<ReceiveHourlyCapacityCommand, HourlyCapacityReceivedEvent>();
         CreateMap<ReceiveInjectionPassCommand, PassDataInjectionReceivedEvent>();
         CreateMap<ReceiveStackingPassCommand, PassDataStackingReceivedEvent>();
         CreateMap<InjectionPassItemInput, PassDataInjectionItem>()

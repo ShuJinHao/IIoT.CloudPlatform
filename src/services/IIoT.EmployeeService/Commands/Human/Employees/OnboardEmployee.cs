@@ -1,7 +1,7 @@
-﻿using IIoT.Core.Employees.Aggregates.Employees;
+using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.Identity.Aggregates.IdentityAccounts;
-using IIoT.Services.Common.Attributes;
-using IIoT.Services.Common.Contracts;
+using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.Contracts;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -30,7 +30,7 @@ public class OnboardEmployeeHandler(
     {
         if (!string.IsNullOrWhiteSpace(request.RoleName)
             && request.RoleName.Equals(
-                IIoT.Services.Common.Contracts.Authorization.SystemRoles.Admin,
+                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
                 StringComparison.OrdinalIgnoreCase))
         {
             return Result.Failure("管理员角色禁止通过该接口创建");
@@ -89,11 +89,10 @@ public class OnboardEmployeeHandler(
 
             return Result.Success(sharedId);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             await unitOfWork.RollbackAsync(cancellationToken);
-            return Result.Failure($"员工入职失败: {ex.Message}");
+            throw;
         }
     }
 }
-

@@ -1,3 +1,5 @@
+using IIoT.Core.Production.Aggregates.Devices.Events;
+using IIoT.Core.Production.Aggregates.Devices.ValueObjects;
 using IIoT.SharedKernel.Domain;
 
 namespace IIoT.Core.Production.Aggregates.Devices;
@@ -15,16 +17,25 @@ public class Device : BaseEntity<Guid>
         string deviceName,
         string code,
         Guid processId)
+        : this(deviceName, DeviceCode.From(code), processId)
+    {
+    }
+
+    public Device(
+        string deviceName,
+        DeviceCode code,
+        Guid processId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(deviceName);
-        ArgumentException.ThrowIfNullOrWhiteSpace(code);
         if (processId == Guid.Empty)
             throw new ArgumentException("ProcessId cannot be empty.", nameof(processId));
 
         Id = Guid.NewGuid();
         DeviceName = deviceName.Trim();
-        Code = NormalizeCode(code);
+        Code = code.Value;
         ProcessId = processId;
+
+        AddDomainEvent(new DeviceRegisteredDomainEvent(Id, DeviceName, Code, ProcessId));
     }
 
     public string DeviceName { get; private set; } = null!;
@@ -33,10 +44,20 @@ public class Device : BaseEntity<Guid>
 
     public Guid ProcessId { get; private set; }
 
+    public uint RowVersion { get; private set; }
+
     public void Rename(string newName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(newName);
-        DeviceName = newName.Trim();
+
+        var normalizedName = newName.Trim();
+        if (DeviceName == normalizedName)
+        {
+            return;
+        }
+
+        DeviceName = normalizedName;
+        AddDomainEvent(new DeviceRenamedDomainEvent(Id, DeviceName));
     }
 
     public void ChangeProcess(Guid newProcessId)
@@ -47,5 +68,8 @@ public class Device : BaseEntity<Guid>
         ProcessId = newProcessId;
     }
 
-    private static string NormalizeCode(string code) => code.Trim().ToUpperInvariant();
+    public void MarkDeleted()
+    {
+        AddDomainEvent(new DeviceDeletedDomainEvent(Id, Code));
+    }
 }

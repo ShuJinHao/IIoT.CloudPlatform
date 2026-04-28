@@ -388,6 +388,43 @@ const paramsToJsonb = (params: RecipeParameter[]): string => {
   return JSON.stringify(params.map(p => ({ id: p.id, name: p.name, unit: p.unit, min: p.min, max: p.max })));
 };
 
+const validateParams = (params: RecipeParameter[]): string | null => {
+  if (params.length === 0) {
+    return '至少保留一个工艺参数';
+  }
+
+  for (let index = 0; index < params.length; index += 1) {
+    const param = params[index]!;
+    const rowLabel = `第 ${index + 1} 个参数`;
+
+    if (!param.id?.trim()) {
+      return `${rowLabel}缺少参数标识，请删除后重新添加`;
+    }
+
+    if (!param.name?.trim()) {
+      return `${rowLabel}的参数名称不能为空`;
+    }
+
+    if (!param.unit?.trim()) {
+      return `${rowLabel}的单位不能为空`;
+    }
+
+    if (typeof param.min !== 'number' || Number.isNaN(param.min)) {
+      return `${rowLabel}的下限必须是数字`;
+    }
+
+    if (typeof param.max !== 'number' || Number.isNaN(param.max)) {
+      return `${rowLabel}的上限必须是数字`;
+    }
+
+    if (param.min > param.max) {
+      return `${rowLabel}的下限不能大于上限`;
+    }
+  }
+
+  return null;
+};
+
 const prettyJson = (str: string): string => {
   try { return JSON.stringify(JSON.parse(str), null, 2); } catch { return str; }
 };
@@ -415,9 +452,8 @@ const submitCreate = async () => {
     alert('配方名称、归属工序和归属设备为必填项');
     return;
   }
-  if (createParams.value.length === 0) { alert('至少添加一个工艺参数'); return; }
-  const emptyName = createParams.value.some(p => !p.name.trim());
-  if (emptyName) { alert('参数名称不能为空'); return; }
+  const paramValidationError = validateParams(createParams.value);
+  if (paramValidationError) { alert(paramValidationError); return; }
   submitting.value = true;
   try {
     await createRecipeApi({
@@ -461,9 +497,8 @@ const openUpgradeModal = async (recipe: RecipeListItemDto) => {
 
 const submitUpgrade = async () => {
   if (!upgradeTarget.value || !upgradeForm.newVersion.trim()) { alert('版本号不能为空'); return; }
-  if (upgradeParams.value.length === 0) { alert('至少保留一个工艺参数'); return; }
-  const emptyName = upgradeParams.value.some(p => !p.name.trim());
-  if (emptyName) { alert('参数名称不能为空'); return; }
+  const paramValidationError = validateParams(upgradeParams.value);
+  if (paramValidationError) { alert(paramValidationError); return; }
   submitting.value = true;
   try {
     await upgradeRecipeVersionApi(upgradeTarget.value.id, {

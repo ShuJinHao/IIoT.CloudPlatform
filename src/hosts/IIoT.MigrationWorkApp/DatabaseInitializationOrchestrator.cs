@@ -50,10 +50,35 @@ public sealed class DatabaseInitializationOrchestrator(
         ALTER TABLE devices DROP COLUMN IF EXISTS mac_address;
         """;
 
+    private const string NormalizeHourlyCapacityPrimaryKeySql =
+        """
+        DO $$
+        DECLARE
+            current_pk_columns text[];
+        BEGIN
+            SELECT array_agg(attribute.attname ORDER BY columns.ordinality)
+            INTO current_pk_columns
+            FROM pg_constraint con
+            JOIN pg_class relation ON relation.oid = con.conrelid
+            JOIN unnest(con.conkey) WITH ORDINALITY AS columns(attnum, ordinality) ON TRUE
+            JOIN pg_attribute attribute ON attribute.attrelid = relation.oid
+                                       AND attribute.attnum = columns.attnum
+            WHERE relation.relname = 'hourly_capacity'
+              AND con.contype = 'p'
+            GROUP BY con.oid;
+
+            IF current_pk_columns IS DISTINCT FROM ARRAY['id', 'date'] THEN
+                ALTER TABLE hourly_capacity DROP CONSTRAINT IF EXISTS hourly_capacity_pkey;
+                ALTER TABLE hourly_capacity ADD CONSTRAINT hourly_capacity_pkey PRIMARY KEY (id, date);
+            END IF;
+        END $$;
+        """;
+
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
         await RunEfMigrationsAsync(cancellationToken);
         await InitializeRecordSchemasAsync(cancellationToken);
+        await EnsureRecordSchemaCompatibilityAsync(cancellationToken);
         await InitializeTimescaleDbAsync(cancellationToken);
         await SeedSystemDataAsync(cancellationToken);
     }
@@ -187,6 +212,15 @@ public sealed class DatabaseInitializationOrchestrator(
         logger.LogInformation("记录表 schema 初始化完成。");
     }
 
+    private async Task EnsureRecordSchemaCompatibilityAsync(CancellationToken cancellationToken)
+    {
+        logger.LogInformation("Checking record-table compatibility before Timescale conversion.");
+
+        await dbContext.Database.ExecuteSqlRawAsync(
+            NormalizeHourlyCapacityPrimaryKeySql,
+            cancellationToken);
+    }
+
     private async Task InitializeTimescaleDbAsync(CancellationToken cancellationToken)
     {
         logger.LogInformation("开始初始化 TimescaleDB。");
@@ -218,6 +252,32 @@ public sealed class DatabaseInitializationOrchestrator(
                         WHERE hypertable_name = 'device_logs'
                     ) THEN
                         PERFORM create_hypertable('device_logs', 'log_time');
+                    END IF;
+                END $$;",
+                cancellationToken);
+
+            await dbContext.Database.ExecuteSqlRawAsync(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM timescaledb_information.hypertables
+                        WHERE hypertable_name = 'hourly_capacity'
+                    ) THEN
+                        -- Keep the existing slot-based unique index valid by partitioning on `date`,
+                        -- which is already part of the idempotency/upsert key.
+                        PERFORM create_hypertable('hourly_capacity', 'date');
+                    END IF;
+                END $$;",
+                cancellationToken);
+
+            await dbContext.Database.ExecuteSqlRawAsync(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM timescaledb_information.hypertables
+                        WHERE hypertable_name = 'pass_data_stacking'
+                    ) THEN
+                        PERFORM create_hypertable('pass_data_stacking', 'completed_time');
                     END IF;
                 END $$;",
                 cancellationToken);

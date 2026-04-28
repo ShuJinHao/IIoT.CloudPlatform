@@ -11,10 +11,12 @@ using IIoT.Dapper.Production.Repositories.Capacities;
 using IIoT.Dapper.Production.Repositories.DeviceLogs;
 using IIoT.Dapper.Production.Repositories.PassStations;
 using IIoT.Dapper.TypeHandlers;
-using IIoT.Services.Common.Contracts.RecordQueries;
+using IIoT.Services.Contracts.RecordQueries;
+using IIoT.SharedKernel.Configuration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Npgsql;
 
 namespace IIoT.Dapper;
 
@@ -27,9 +29,18 @@ public static class DependencyInjection
         builder.Services.AddSingleton<IDbConnectionFactory>(sp =>
         {
             var config = sp.GetRequiredService<IConfiguration>();
-            var connStr = config.GetConnectionString("iiot-db")
-                ?? throw new InvalidOperationException("\u7F3A\u5C11 iiot-db \u8FDE\u63A5\u5B57\u7B26\u4E32");
-            return new NpgsqlConnectionFactory(connStr);
+            var postgresOptions = config.GetRequiredValidatedOptions<PostgresOptions>(
+                PostgresOptions.SectionName,
+                static options => options.Validate());
+
+            var connStr = config.GetConnectionString(ConnectionResourceNames.IiotDatabase)
+                ?? throw new InvalidOperationException($"Missing {ConnectionResourceNames.IiotDatabase} connection string.");
+            var connectionStringBuilder = new NpgsqlConnectionStringBuilder(connStr)
+            {
+                CommandTimeout = postgresOptions.CommandTimeoutSeconds
+            };
+
+            return new NpgsqlConnectionFactory(connectionStringBuilder.ConnectionString);
         });
 
         builder.Services.AddScoped<IRecordSchemaInitializer, RecordSchemaInitializer>();
@@ -48,5 +59,7 @@ public static class DependencyInjection
         builder.Services.AddSingleton<IPassStationWriteSql<StackingWriteModel>, StackingPassStationSql>();
         builder.Services.AddSingleton<IPassStationQuerySql<InjectionPassListItemDto>, InjectionPassStationSql>();
         builder.Services.AddSingleton<IPassStationQuerySql<InjectionPassDetailDto>, InjectionPassStationSql>();
+        builder.Services.AddSingleton<IPassStationQuerySql<StackingPassListItemDto>, StackingPassStationSql>();
+        builder.Services.AddSingleton<IPassStationQuerySql<StackingPassDetailDto>, StackingPassStationSql>();
     }
 }

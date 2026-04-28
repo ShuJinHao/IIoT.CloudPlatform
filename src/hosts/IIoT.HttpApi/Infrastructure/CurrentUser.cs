@@ -1,5 +1,5 @@
 using System.Security.Claims;
-using IIoT.Services.Common.Contracts.Identity;
+using IIoT.Services.Contracts.Identity;
 
 namespace IIoT.HttpApi.Infrastructure;
 

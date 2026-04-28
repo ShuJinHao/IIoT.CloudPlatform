@@ -1,0 +1,201 @@
+# Single-machine production starter for IIoT.CloudPlatform.
+# This template intentionally keeps one gateway and one HttpApi destination in this batch.
+services:
+  postgres:
+    image: ${IIOT_POSTGRES_IMAGE}
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: iiot-db
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=timescaledb
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d iiot-db"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - iiot-net
+
+  redis-cache:
+    image: ${IIOT_REDIS_IMAGE}
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - iiot-net
+
+  rabbitmq:
+    image: ${IIOT_RABBITMQ_IMAGE}
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+    ports:
+      - 127.0.0.1:${RABBITMQ_MANAGEMENT_PORT:-15672}:15672
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - iiot-net
+
+  seq:
+    image: ${IIOT_SEQ_IMAGE}
+    environment:
+      ACCEPT_EULA: Y
+      SEQ_FIRSTRUN_ADMINUSERNAME: admin
+      SEQ_FIRSTRUN_ADMINPASSWORD: ${SEQ_ADMIN_PASSWORD}
+    ports:
+      - 127.0.0.1:${SEQ_HOST_PORT:-5341}:80
+    volumes:
+      - seq-data:/data
+    restart: unless-stopped
+    networks:
+      - iiot-net
+
+  iiot-migration:
+    image: ${IIOT_MIGRATION_IMAGE}
+    environment:
+      ConnectionStrings__iiot-db: Host=postgres;Port=5432;Username=postgres;Password=${PG_PASSWORD};Database=iiot-db
+      ConnectionStrings__redis-cache: redis-cache:6379
+      JwtSettings__Secret: ${JWTSETTINGS__SECRET}
+      SEED_ADMIN_NO: ${SEED_ADMIN_NO}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD}
+      Seq__Enabled: true
+      Seq__ServerUrl: ${SEQ_SERVER_URL}
+      Seq__ApiKey: ${SEQ_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - iiot-net
+
+  iiot-httpapi:
+    image: ${IIOT_HTTPAPI_IMAGE}
+    mem_limit: 768m
+    cpus: 1.0
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__iiot-db: Host=postgres;Port=5432;Username=postgres;Password=${PG_PASSWORD};Database=iiot-db
+      ConnectionStrings__redis-cache: redis-cache:6379
+      ConnectionStrings__eventbus: amqp://${RABBITMQ_DEFAULT_USER}:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672
+      JwtSettings__Secret: ${JWTSETTINGS__SECRET}
+      ForwardedHeaders__Enabled: ${FORWARDED_HEADERS_ENABLED}
+      ForwardedHeaders__ForwardLimit: ${FORWARDED_HEADERS_FORWARDLIMIT}
+      ForwardedHeaders__KnownNetworks__0: ${FORWARDED_HEADERS_KNOWNNETWORKS__0}
+      ForwardedHeaders__KnownNetworks__1: ${FORWARDED_HEADERS_KNOWNNETWORKS__1}
+      Cors__AllowedOrigins__0: ${CORS_ALLOWED_ORIGIN_0}
+      Cors__AllowedOrigins__1: ${CORS_ALLOWED_ORIGIN_1}
+      Cors__AllowedOrigins__2: ${CORS_ALLOWED_ORIGIN_2}
+      Infrastructure__EventBus__EndpointPrefix: ${Infrastructure__EventBus__EndpointPrefix}
+      Seq__Enabled: true
+      Seq__ServerUrl: ${SEQ_SERVER_URL}
+      Seq__ApiKey: ${SEQ_API_KEY}
+    volumes:
+      - httpapi-logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - iiot-net
+
+  iiot-gateway:
+    image: ${IIOT_GATEWAY_IMAGE}
+    mem_limit: 512m
+    cpus: 0.5
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      # Single-node launch keeps one explicit upstream destination.
+      ReverseProxy__Clusters__httpapi__Destinations__primary__Address: http://iiot-httpapi:8080/
+      Seq__Enabled: true
+      Seq__ServerUrl: ${SEQ_SERVER_URL}
+      Seq__ApiKey: ${SEQ_API_KEY}
+    depends_on:
+      - iiot-httpapi
+    restart: unless-stopped
+    networks:
+      - iiot-net
+
+  iiot-dataworker:
+    image: ${IIOT_DATAWORKER_IMAGE}
+    mem_limit: 512m
+    cpus: 0.75
+    environment:
+      DOTNET_ENVIRONMENT: Production
+      ConnectionStrings__iiot-db: Host=postgres;Port=5432;Username=postgres;Password=${PG_PASSWORD};Database=iiot-db
+      ConnectionStrings__redis-cache: redis-cache:6379
+      ConnectionStrings__eventbus: amqp://${RABBITMQ_DEFAULT_USER}:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672
+      JwtSettings__Secret: ${JWTSETTINGS__SECRET}
+      Infrastructure__EventBus__EndpointPrefix: ${Infrastructure__EventBus__EndpointPrefix}
+      Seq__Enabled: true
+      Seq__ServerUrl: ${SEQ_SERVER_URL}
+      Seq__ApiKey: ${SEQ_API_KEY}
+    volumes:
+      - dataworker-logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - iiot-net
+
+  iiot-web:
+    image: ${IIOT_WEB_IMAGE}
+    mem_limit: 256m
+    cpus: 0.25
+    depends_on:
+      - iiot-gateway
+    restart: unless-stopped
+    networks:
+      - iiot-net
+
+  nginx-gateway:
+    image: ${IIOT_NGINX_IMAGE}
+    ports:
+      - ${GATEWAY_HTTP_PORT:-80}:80
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - iiot-gateway
+      - iiot-web
+    restart: unless-stopped
+    networks:
+      - iiot-net
+
+networks:
+  iiot-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  rabbitmq-data:
+  seq-data:
+  httpapi-logs:
+  dataworker-logs:
