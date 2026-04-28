@@ -6,17 +6,25 @@ public sealed class HttpApiRateLimitingOptions
 {
     public const string SectionName = "RateLimiting";
 
-    public FixedWindowPolicyOptions Global { get; set; } = new();
-    public FixedWindowPolicyOptions Login { get; set; } = new();
+    public FixedWindowPolicyOptions GeneralApi { get; set; } = new();
+    public FixedWindowPolicyOptions PasswordLogin { get; set; } = new();
+    public FixedWindowPolicyOptions Refresh { get; set; } = new();
+    public FixedWindowPolicyOptions EdgeOperatorLogin { get; set; } = new();
     public FixedWindowPolicyOptions Bootstrap { get; set; } = new();
-    public TokenBucketPolicyOptions EdgeUpload { get; set; } = new();
+    public TokenBucketPolicyOptions CapacityUpload { get; set; } = new();
+    public TokenBucketPolicyOptions DeviceLogUpload { get; set; } = new();
+    public TokenBucketPolicyOptions PassStationUpload { get; set; } = new();
 
     public void Validate()
     {
-        Global.Validate($"{SectionName}:Global");
-        Login.Validate($"{SectionName}:Login");
+        GeneralApi.Validate($"{SectionName}:GeneralApi");
+        PasswordLogin.Validate($"{SectionName}:PasswordLogin");
+        Refresh.Validate($"{SectionName}:Refresh");
+        EdgeOperatorLogin.Validate($"{SectionName}:EdgeOperatorLogin");
         Bootstrap.Validate($"{SectionName}:Bootstrap");
-        EdgeUpload.Validate($"{SectionName}:EdgeUpload");
+        CapacityUpload.Validate($"{SectionName}:CapacityUpload");
+        DeviceLogUpload.Validate($"{SectionName}:DeviceLogUpload");
+        PassStationUpload.Validate($"{SectionName}:PassStationUpload");
     }
 }
 

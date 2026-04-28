@@ -28,6 +28,16 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
     public Task DisposeAsync() => _fixture.DisposeAsync().AsTask();
 
     [Fact]
+    public async Task InternalHealthz_ShouldReturnOk()
+    {
+        _fixture.ClearAuthToken();
+
+        using var response = await _fixture.HttpClient.GetAsync("/internal/healthz");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
     public async Task DeviceLogs_DuplicateConsume_ShouldPersistOneRow()
     {
         await AuthenticateAsAdminAsync();
@@ -155,13 +165,14 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
         await AuthenticateAsAdminAsync();
 
         var result = await EventuallyAsync(async () =>
-            await GetFromJsonAsync<PagedResponse<InjectionPassListItemDto>>(
-                $"/api/v1/human/pass-stations/injection/by-device-time?PageNumber=1&PageSize=20&deviceId={deviceId}" +
+            await GetFromJsonAsync<PagedResponse<PassStationListItemDto>>(
+                $"/api/v1/human/pass-stations/injection?PageNumber=1&PageSize=20&mode=device-time&deviceId={deviceId}" +
                 $"&startTime={Uri.EscapeDataString(completedTime.AddMinutes(-1).ToString("O"))}" +
                 $"&endTime={Uri.EscapeDataString(completedTime.AddMinutes(1).ToString("O"))}"),
             response => response.Items.Count(x => x.Barcode == barcode) == 1);
 
         result.Items.Should().ContainSingle(x => x.Barcode == barcode);
+        result.Items.Single(x => x.Barcode == barcode).Fields.Should().ContainKey("injectionVolume");
     }
 
     [Fact]
@@ -171,7 +182,6 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
 
         var deviceId = await CreateTestDeviceAsync("stacking-pass");
         await AuthenticateAsEdgeAsync(deviceId);
-        var connectionString = await _fixture.GetConnectionStringAsync(ConnectionResourceNames.IiotDatabase);
         var completedTime = DateTime.SpecifyKind(DateTime.UtcNow.AddMinutes(-4), DateTimeKind.Utc);
         var barcode = $"ST-{Guid.NewGuid():N}"[..14];
 
@@ -192,16 +202,22 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
         await PostJsonAsync("/api/v1/edge/pass-stations/stacking", request);
         await PostJsonAsync("/api/v1/edge/pass-stations/stacking", request);
 
-        var rows = await EventuallyAsync(
-            async () => await GetStackingPassRowsAsync(connectionString, deviceId, barcode),
-            response => response.Count == 1);
+        await AuthenticateAsAdminAsync();
 
-        rows.Should().ContainSingle();
-        rows[0].TrayCode.Should().Be("TRAY-STACK-01");
-        rows[0].LayerCount.Should().Be(16);
-        rows[0].SequenceNo.Should().Be(9);
-        rows[0].CellResult.Should().Be("OK");
-        rows[0].CompletedTime.ToUniversalTime().Should().BeCloseTo(completedTime, TimeSpan.FromMilliseconds(1));
+        var result = await EventuallyAsync(async () =>
+            await GetFromJsonAsync<PagedResponse<PassStationListItemDto>>(
+                $"/api/v1/human/pass-stations/stacking?PageNumber=1&PageSize=20&mode=device-time&deviceId={deviceId}" +
+                $"&startTime={Uri.EscapeDataString(completedTime.AddMinutes(-1).ToString("O"))}" +
+                $"&endTime={Uri.EscapeDataString(completedTime.AddMinutes(1).ToString("O"))}"),
+            response => response.Items.Count(x => x.Barcode == barcode) == 1);
+
+        var item = result.Items.Single(x => x.Barcode == barcode);
+        item.Fields["trayCode"].GetString().Should().Be("TRAY-STACK-01");
+        item.Fields["layerCount"].GetInt32().Should().Be(16);
+        item.Fields["sequenceNo"].GetInt32().Should().Be(9);
+        item.CellResult.Should().Be("OK");
+        item.CompletedTime.Should().NotBeNull();
+        item.CompletedTime!.Value.ToUniversalTime().Should().BeCloseTo(completedTime, TimeSpan.FromMilliseconds(1));
     }
 
     [Fact]
@@ -515,7 +531,7 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
             Version = "V1.0.0",
             ProcessId = device.ProcessId,
             DeviceId = device.DeviceId,
-            ParametersJsonb = "{\"speed\":120}",
+            ParametersJsonb = ValidRecipeParametersJson(),
             Status = 1
         });
 
@@ -533,6 +549,65 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
             response => response.Any(x => x.RecipeName == recipeName));
 
         recipes.Should().Contain(x => x.RecipeName == recipeName && x.DeviceId == device.DeviceId);
+    }
+
+    [Fact]
+    public async Task HumanRecipe_Create_ShouldRejectInvalidStructuredParametersJson()
+    {
+        await AuthenticateAsAdminAsync();
+
+        var device = await CreateTestDeviceRegistrationAsync("recipe-invalid");
+        using var response = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/human/recipes", new
+        {
+            RecipeName = $"recipe-{Guid.NewGuid():N}"[..14],
+            ProcessId = device.ProcessId,
+            DeviceId = device.DeviceId,
+            ParametersJsonb = """{"speed":120}"""
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var error = await response.Content.ReadFromJsonAsync<ErrorEnvelope>(JsonOptions);
+        error.Should().NotBeNull();
+        error!.Errors.Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public async Task HumanRecipe_Upgrade_ShouldRejectInvalidStructuredParametersJson_AndKeepSourceVersionReadable()
+    {
+        await AuthenticateAsAdminAsync();
+
+        var device = await CreateTestDeviceRegistrationAsync("recipe-upgrade");
+        var recipeId = await PostJsonAsync<Guid>("/api/v1/human/recipes", new
+        {
+            RecipeName = $"recipe-{Guid.NewGuid():N}"[..14],
+            ProcessId = device.ProcessId,
+            DeviceId = device.DeviceId,
+            ParametersJsonb = ValidRecipeParametersJson()
+        });
+
+        using var response = await _fixture.HttpClient.PostAsJsonAsync($"/api/v1/human/recipes/{recipeId}/upgrade", new
+        {
+            SourceRecipeId = recipeId,
+            NewVersion = "V1.1",
+            ParametersJsonb = """[{"id":"speed","name":"","unit":"rpm","min":1,"max":2}]"""
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+        var detail = await GetFromJsonAsync<RecipeForDeviceDto>($"/api/v1/human/recipes/{recipeId}");
+        detail.Id.Should().Be(recipeId);
+        using (var parameters = JsonDocument.Parse(detail.ParametersJsonb))
+        {
+            parameters.RootElement.ValueKind.Should().Be(JsonValueKind.Array);
+            parameters.RootElement.GetArrayLength().Should().Be(1);
+            var item = parameters.RootElement[0];
+            item.GetProperty("id").GetString().Should().Be("speed");
+            item.GetProperty("name").GetString().Should().Be("Speed");
+            item.GetProperty("unit").GetString().Should().Be("rpm");
+            item.GetProperty("min").GetDecimal().Should().Be(100);
+            item.GetProperty("max").GetDecimal().Should().Be(150);
+        }
+        detail.Status.Should().Be("Active");
     }
 
     [Fact]
@@ -839,6 +914,11 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
         return processId;
     }
 
+    private static string ValidRecipeParametersJson()
+    {
+        return """[{"id":"speed","name":"Speed","unit":"rpm","min":100,"max":150}]""";
+    }
+
     private async Task PostJsonAsync(string path, object request)
     {
         using var response = await _fixture.HttpClient.PostAsJsonAsync(path, request);
@@ -1100,18 +1180,14 @@ public sealed record DailyRangeSummaryDto(
     int NightShiftOk,
     int NightShiftNg);
 
-public sealed record InjectionPassListItemDto(
+public sealed record PassStationListItemDto(
     Guid Id,
     Guid DeviceId,
-    string Barcode,
-    string CellResult,
-    DateTime PreInjectionTime,
-    decimal PreInjectionWeight,
-    DateTime PostInjectionTime,
-    decimal PostInjectionWeight,
-    decimal InjectionVolume,
-    DateTime CompletedTime,
-    DateTime ReceivedAt);
+    string? Barcode,
+    string? CellResult,
+    DateTime? CompletedTime,
+    DateTime? ReceivedAt,
+    Dictionary<string, JsonElement> Fields);
 
 public sealed record StackingPassRow(
     string TrayCode,

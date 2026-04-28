@@ -14,11 +14,13 @@ namespace IIoT.HttpApi.Controllers;
 public class HumanIdentityController : ApiControllerBase
 {
     [AllowAnonymous]
-    [EnableRateLimiting("login")]
+    [EnableRateLimiting(HttpApiRateLimitPolicies.PasswordLogin)]
     [HttpPost("login")]
-    public async Task<IActionResult> Login([FromBody] LoginUserCommand command)
+    public async Task<IActionResult> Login(
+        [FromBody] LoginUserCommand command,
+        CancellationToken cancellationToken)
     {
-        var result = await Sender.Send(command);
+        var result = await Sender.Send(command, cancellationToken);
         if (result.IsSuccess && result.Value is not null)
         {
             RefreshTokenHeaderNames.ApplyTo(
@@ -32,12 +34,13 @@ public class HumanIdentityController : ApiControllerBase
     }
 
     [AllowAnonymous]
-    [EnableRateLimiting("login")]
+    [EnableRateLimiting(HttpApiRateLimitPolicies.Refresh)]
     [HttpPost("refresh")]
     public async Task<IActionResult> Refresh(
-        [FromHeader(Name = RefreshTokenHeaderNames.RefreshToken)] string refreshToken)
+        [FromHeader(Name = RefreshTokenHeaderNames.RefreshToken)] string refreshToken,
+        CancellationToken cancellationToken)
     {
-        var result = await Sender.Send(new RefreshHumanIdentityCommand(refreshToken));
+        var result = await Sender.Send(new RefreshHumanIdentityCommand(refreshToken), cancellationToken);
         if (result.IsSuccess && result.Value is not null)
         {
             RefreshTokenHeaderNames.ApplyTo(
@@ -51,11 +54,13 @@ public class HumanIdentityController : ApiControllerBase
     }
 
     [AllowAnonymous]
-    [EnableRateLimiting("login")]
+    [EnableRateLimiting(HttpApiRateLimitPolicies.EdgeOperatorLogin)]
     [HttpPost("edge-login")]
-    public async Task<IActionResult> EdgeLogin([FromBody] EdgeOperatorLoginCommand command)
+    public async Task<IActionResult> EdgeLogin(
+        [FromBody] EdgeOperatorLoginCommand command,
+        CancellationToken cancellationToken)
     {
-        var result = await Sender.Send(command);
+        var result = await Sender.Send(command, cancellationToken);
         if (result.IsSuccess && result.Value is not null)
         {
             RefreshTokenHeaderNames.ApplyTo(
@@ -68,61 +73,82 @@ public class HumanIdentityController : ApiControllerBase
         return ReturnBodyResult(result, session => session.AccessToken);
     }
 
+    [EnableRateLimiting(HttpApiRateLimitPolicies.GeneralApi)]
     [HttpPut("password")]
-    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordCommand command)
+    public async Task<IActionResult> ChangePassword(
+        [FromBody] ChangePasswordCommand command,
+        CancellationToken cancellationToken)
     {
-        return ReturnResult(await Sender.Send(command));
+        return ReturnResult(await Sender.Send(command, cancellationToken));
     }
 
+    [EnableRateLimiting(HttpApiRateLimitPolicies.GeneralApi)]
     [HttpPut("password/reset")]
-    public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordCommand command)
+    public async Task<IActionResult> ResetPassword(
+        [FromBody] ResetPasswordCommand command,
+        CancellationToken cancellationToken)
     {
-        return ReturnResult(await Sender.Send(command));
+        return ReturnResult(await Sender.Send(command, cancellationToken));
     }
 
+    [EnableRateLimiting(HttpApiRateLimitPolicies.GeneralApi)]
     [HttpGet("roles")]
-    public async Task<IActionResult> GetAllRoles()
+    public async Task<IActionResult> GetAllRoles(CancellationToken cancellationToken)
     {
-        return ReturnResult(await Sender.Send(new GetAllRolesQuery()));
+        return ReturnResult(await Sender.Send(new GetAllRolesQuery(), cancellationToken));
     }
 
+    [EnableRateLimiting(HttpApiRateLimitPolicies.GeneralApi)]
     [HttpPost("roles")]
-    public async Task<IActionResult> DefineRolePolicy([FromBody] DefineRolePolicyCommand command)
+    public async Task<IActionResult> DefineRolePolicy(
+        [FromBody] DefineRolePolicyCommand command,
+        CancellationToken cancellationToken)
     {
-        return ReturnResult(await Sender.Send(command));
+        return ReturnResult(await Sender.Send(command, cancellationToken));
     }
 
+    [EnableRateLimiting(HttpApiRateLimitPolicies.GeneralApi)]
     [HttpGet("roles/{roleName}/permissions")]
-    public async Task<IActionResult> GetRolePermissions([FromRoute] string roleName)
+    public async Task<IActionResult> GetRolePermissions(
+        [FromRoute] string roleName,
+        CancellationToken cancellationToken)
     {
-        return ReturnResult(await Sender.Send(new GetRolePermissionsQuery(roleName)));
+        return ReturnResult(await Sender.Send(new GetRolePermissionsQuery(roleName), cancellationToken));
     }
 
+    [EnableRateLimiting(HttpApiRateLimitPolicies.GeneralApi)]
     [HttpPut("roles/{roleName}/permissions")]
     public async Task<IActionResult> UpdateRolePermissions(
         [FromRoute] string roleName,
-        [FromBody] List<string> permissions)
+        [FromBody] List<string> permissions,
+        CancellationToken cancellationToken)
     {
-        return ReturnResult(await Sender.Send(new UpdateRolePermissionsCommand(roleName, permissions)));
+        return ReturnResult(await Sender.Send(new UpdateRolePermissionsCommand(roleName, permissions), cancellationToken));
     }
 
+    [EnableRateLimiting(HttpApiRateLimitPolicies.GeneralApi)]
     [HttpGet("permissions")]
-    public async Task<IActionResult> GetAllPermissions()
+    public async Task<IActionResult> GetAllPermissions(CancellationToken cancellationToken)
     {
-        return ReturnResult(await Sender.Send(new GetAllDefinedPermissionsQuery()));
+        return ReturnResult(await Sender.Send(new GetAllDefinedPermissionsQuery(), cancellationToken));
     }
 
+    [EnableRateLimiting(HttpApiRateLimitPolicies.GeneralApi)]
     [HttpGet("users/{userId}/permissions")]
-    public async Task<IActionResult> GetUserPersonalPermissions([FromRoute] Guid userId)
+    public async Task<IActionResult> GetUserPersonalPermissions(
+        [FromRoute] Guid userId,
+        CancellationToken cancellationToken)
     {
-        return ReturnResult(await Sender.Send(new GetUserPersonalPermissionsQuery(userId)));
+        return ReturnResult(await Sender.Send(new GetUserPersonalPermissionsQuery(userId), cancellationToken));
     }
 
+    [EnableRateLimiting(HttpApiRateLimitPolicies.GeneralApi)]
     [HttpPut("users/{userId}/permissions")]
     public async Task<IActionResult> UpdateUserPermissions(
         [FromRoute] Guid userId,
-        [FromBody] UpdateUserPermissionsCommand command)
+        [FromBody] UpdateUserPermissionsCommand command,
+        CancellationToken cancellationToken)
     {
-        return ReturnResult(await Sender.Send(command with { UserId = userId }));
+        return ReturnResult(await Sender.Send(command with { UserId = userId }, cancellationToken));
     }
 }

@@ -9,6 +9,9 @@ internal static class GatewayRouteCatalog
 
     public static GatewayRouteMetadata Resolve(PathString path)
     {
+        if (path.Equals("/internal/healthz", StringComparison.OrdinalIgnoreCase))
+            return new GatewayRouteMetadata("internal-health", "internal-healthz", HttpApiCluster, false, null);
+
         if (path.Equals("/api/v1/bootstrap/device-instance", StringComparison.OrdinalIgnoreCase))
             return new GatewayRouteMetadata("bootstrap", "bootstrap-device-instance", HttpApiCluster, false, null);
 

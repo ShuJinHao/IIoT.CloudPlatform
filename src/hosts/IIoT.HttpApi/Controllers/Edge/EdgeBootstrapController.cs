@@ -14,11 +14,13 @@ namespace IIoT.HttpApi.Controllers;
 public class EdgeBootstrapController : ApiControllerBase
 {
     [HttpGet("device-instance")]
-    [EnableRateLimiting("bootstrap")]
+    [EnableRateLimiting(HttpApiRateLimitPolicies.Bootstrap)]
     // Keep the legacy clientCode query parameter until deprecated bootstrap callers are retired.
-    public async Task<IActionResult> GetDeviceByInstance([FromQuery] string clientCode)
+    public async Task<IActionResult> GetDeviceByInstance(
+        [FromQuery] string clientCode,
+        CancellationToken cancellationToken)
     {
-        var result = await Sender.Send(new GetDeviceByInstanceQuery(clientCode));
+        var result = await Sender.Send(new GetDeviceByInstanceQuery(clientCode), cancellationToken);
         if (result.IsSuccess && result.Value is not null)
         {
             RefreshTokenHeaderNames.ApplyTo(
@@ -32,11 +34,12 @@ public class EdgeBootstrapController : ApiControllerBase
     }
 
     [HttpPost("edge-refresh")]
-    [EnableRateLimiting("bootstrap")]
+    [EnableRateLimiting(HttpApiRateLimitPolicies.Bootstrap)]
     public async Task<IActionResult> Refresh(
-        [FromHeader(Name = RefreshTokenHeaderNames.RefreshToken)] string refreshToken)
+        [FromHeader(Name = RefreshTokenHeaderNames.RefreshToken)] string refreshToken,
+        CancellationToken cancellationToken)
     {
-        var result = await Sender.Send(new RefreshEdgeDeviceIdentityCommand(refreshToken));
+        var result = await Sender.Send(new RefreshEdgeDeviceIdentityCommand(refreshToken), cancellationToken);
         if (result.IsSuccess && result.Value is not null)
         {
             RefreshTokenHeaderNames.ApplyTo(

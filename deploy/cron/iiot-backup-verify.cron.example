@@ -1,0 +1,3 @@
+# Replace /srv/iiot-cloud/deploy with the real deploy directory before installing.
+# Runs a weekly PostgreSQL restore verification at 03:30 every Sunday in the server's local time zone.
+30 3 * * 0 cd /srv/iiot-cloud/deploy && ./scripts/postgres-verify-backup.sh >> ./backups/postgres/cron-backup-verify.log 2>&1

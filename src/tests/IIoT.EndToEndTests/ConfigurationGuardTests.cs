@@ -222,8 +222,8 @@ public sealed class ConfigurationGuardTests
         httpApiConfiguration.GetValue<int>("CacheSafety:FailSafeMinutes").Should().Be(30);
         httpApiConfiguration.GetValue<bool>("ForwardedHeaders:Enabled").Should().BeFalse();
         httpApiConfiguration.GetValue<int>("ForwardedHeaders:ForwardLimit").Should().BeGreaterThan(0);
-        httpApiConfiguration.GetValue<int>("RateLimiting:Login:PermitLimit").Should().BeGreaterThan(0);
-        httpApiConfiguration.GetValue<int>("RateLimiting:EdgeUpload:TokenLimit").Should().BeGreaterThan(0);
+        httpApiConfiguration.GetValue<int>("RateLimiting:PasswordLogin:PermitLimit").Should().BeGreaterThan(0);
+        httpApiConfiguration.GetValue<int>("RateLimiting:PassStationUpload:TokenLimit").Should().BeGreaterThan(0);
         httpApiConfiguration.GetValue<int>("Infrastructure:Postgres:CommandTimeoutSeconds").Should().BeGreaterThan(0);
         httpApiConfiguration.GetValue<int>("Infrastructure:EventBus:RetryLimit").Should().BeGreaterThanOrEqualTo(0);
         httpApiConfiguration.GetValue<int>("Infrastructure:EventBus:PrefetchMultiplier").Should().BeGreaterThan(0);
@@ -291,6 +291,15 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
+    public void DeploymentArtifacts_ShouldIgnoreGeneratedBackupOutputs()
+    {
+        var gitIgnoreSource = File.ReadAllText(FindRepoFile(".gitignore"));
+
+        gitIgnoreSource.Should().Contain("deploy/backups/");
+        gitIgnoreSource.Should().Contain("deploy/releases/");
+    }
+
+    [Fact]
     public void DeploymentScriptsAndManual_ShouldUseStandardizedCloudSettings()
     {
         var buildPushSource = File.ReadAllText(
@@ -322,6 +331,46 @@ public sealed class ConfigurationGuardTests
         manualSource.Should().Contain("HTTP");
         manualSource.Should().NotContain("10.98.90.154");
         manualSource.Should().NotContain("guest/guest");
+    }
+
+    [Fact]
+    public void DeployTemplates_ShouldDocumentSingleNodeSecretsAndSmokePolicy()
+    {
+        var readmeSource = File.ReadAllText(FindRepoFile("deploy", "README.md"));
+        var envExampleSource = File.ReadAllText(FindRepoFile("deploy", ".env.example"));
+        var composeSource = File.ReadAllText(FindRepoFile("deploy", "docker-compose.prod.yml"));
+
+        readmeSource.Should().Contain("single-machine production starter");
+        readmeSource.Should().Contain("`release_tag` produced by `cloud-image`");
+        readmeSource.Should().Contain("`/internal/healthz` remains the production readiness probe");
+        readmeSource.Should().Contain("[OPERATIONS.md](./OPERATIONS.md)");
+        readmeSource.Should().Contain("deploy/scripts/deploy-release.sh");
+        readmeSource.Should().Contain("deploy/scripts/rollback-release.sh");
+        readmeSource.Should().Contain("deploy/releases/current-release.env");
+        readmeSource.Should().Contain("deploy/cron/iiot-backup.cron.example");
+        readmeSource.Should().Contain("deploy/cron/iiot-backup-verify.cron.example");
+        readmeSource.Should().Contain("daily backup at `02:30`");
+        readmeSource.Should().Contain("weekly restore verification at `03:30` every Sunday");
+        readmeSource.Should().Contain("`latest` is not a standard production application version in this batch");
+
+        envExampleSource.Should().Contain("Must replace: application image repositories");
+        envExampleSource.Should().Contain("Must replace: runtime secrets");
+        envExampleSource.Should().Contain("Template defaults: single-machine published ports");
+        envExampleSource.Should().Contain("DEPLOY_ENV_FILE");
+        envExampleSource.Should().Contain("Infrastructure__EventBus__EndpointPrefix=");
+        envExampleSource.Should().Contain("IIOT_HTTPAPI_IMAGE=ghcr.io/example/iiot-httpapi:sha-");
+        envExampleSource.Should().Contain("IIOT_GATEWAY_IMAGE=ghcr.io/example/iiot-gateway:sha-");
+        envExampleSource.Should().Contain("IIOT_DATAWORKER_IMAGE=ghcr.io/example/iiot-dataworker:sha-");
+        envExampleSource.Should().Contain("IIOT_MIGRATION_IMAGE=ghcr.io/example/iiot-migrationworkapp:sha-");
+        envExampleSource.Should().Contain("IIOT_WEB_IMAGE=ghcr.io/example/iiot-web:sha-");
+        envExampleSource.Should().NotContain("IIOT_HTTPAPI_IMAGE=ghcr.io/example/iiot-httpapi:latest");
+        envExampleSource.Should().Contain("BACKUP_RETENTION_DAYS=14");
+        envExampleSource.Should().Contain("BACKUP_MAX_AGE_HOURS=24");
+        envExampleSource.Should().Contain("BACKUP_VERIFY_MAX_AGE_DAYS=7");
+
+        composeSource.Should().Contain("Single-machine production starter for IIoT.CloudPlatform.");
+        composeSource.Should().Contain("Single-node launch keeps one explicit upstream destination.");
+        composeSource.Should().Contain("Infrastructure__EventBus__EndpointPrefix:");
     }
 
     [Fact]
@@ -426,6 +475,33 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
+    public void DeployNginxTemplate_ShouldUseGatewayPoolStructuredLogsAndRequestIdForwarding()
+    {
+        var source = File.ReadAllText(FindRepoFile("deploy", "nginx", "nginx.conf"));
+
+        source.Should().Contain("upstream gateway_pool");
+        source.Should().Contain("keepalive 32;");
+        source.Should().Contain("access_log /dev/stdout iiot_gateway;");
+        source.Should().Contain("error_log /dev/stderr warn;");
+        source.Should().Contain("request_id=$request_id");
+        source.Should().Contain("upstream_addr=\"$upstream_addr\"");
+        source.Should().Contain("upstream_status=\"$upstream_status\"");
+        source.Should().Contain("upstream_response_time=\"$upstream_response_time\"");
+        source.Should().Contain("request_time=$request_time");
+        source.Should().Contain("route_path=\"$uri\"");
+        source.Should().Contain("proxy_http_version 1.1;");
+        source.Should().Contain("proxy_set_header Connection \"\";");
+        source.Should().Contain("proxy_set_header X-Request-Id $request_id;");
+        source.Should().Contain("proxy_pass http://gateway_pool;");
+        source.Should().Contain("location = /internal/healthz");
+        source.Should().Contain("allow 127.0.0.1;");
+        source.Should().Contain("allow ::1;");
+        source.Should().Contain("deny all;");
+        source.Should().NotContain("proxy_set_header Connection \"upgrade\";");
+        source.Should().NotContain("proxy_set_header Upgrade $http_upgrade;");
+    }
+
+    [Fact]
     public void GatewayHost_ShouldDefineYarpRoutesForHumanEdgeAndBootstrapSurfaces()
     {
         var gatewayProjectSource = File.ReadAllText(
@@ -436,6 +512,8 @@ public sealed class ConfigurationGuardTests
             FindRepoFile("src", "hosts", "IIoT.Gateway", "appsettings.json"));
         var gatewayMiddlewareSource = File.ReadAllText(
             FindRepoFile("src", "hosts", "IIoT.Gateway", "Infrastructure", "GatewayObservabilityMiddleware.cs"));
+        var gatewayRouteCatalogSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.Gateway", "Infrastructure", "GatewayRouteCatalog.cs"));
 
         gatewayProjectSource.Should().Contain("Yarp.ReverseProxy");
         gatewayProjectSource.Should().Contain("IIoT.ServiceDefaults");
@@ -447,13 +525,18 @@ public sealed class ConfigurationGuardTests
 
         gatewayAppSettingsSource.Should().Contain("/api/v1/human/{**catch-all}");
         gatewayAppSettingsSource.Should().Contain("/api/v1/edge/{**catch-all}");
+        gatewayAppSettingsSource.Should().Contain("/internal/healthz");
         gatewayAppSettingsSource.Should().Contain("/api/v1/bootstrap/device-instance");
         gatewayAppSettingsSource.Should().Contain("/api/v1/bootstrap/edge-login");
         gatewayAppSettingsSource.Should().Contain("legacy-edge-bootstrap-device-instance");
         gatewayAppSettingsSource.Should().Contain("legacy-human-edge-login");
         gatewayAppSettingsSource.Should().Contain("/api/v1/edge/bootstrap/device-instance");
         gatewayAppSettingsSource.Should().Contain("/api/v1/human/identity/edge-login");
+        gatewayAppSettingsSource.Should().Contain("internal-health");
         gatewayAppSettingsSource.Should().Contain("X-IIoT-Deprecated-Alias");
+        gatewayRouteCatalogSource.Should().Contain("/internal/healthz");
+        gatewayRouteCatalogSource.Should().Contain("\"internal-healthz\"");
+        gatewayRouteCatalogSource.Should().Contain("\"internal-health\"");
 
         gatewayMiddlewareSource.Should().Contain("route_surface={route_surface}");
         gatewayMiddlewareSource.Should().Contain("is_deprecated_alias={is_deprecated_alias}");
@@ -462,6 +545,212 @@ public sealed class ConfigurationGuardTests
         gatewayMiddlewareSource.Should().Contain("status_code={status_code}");
         gatewayMiddlewareSource.Should().Contain("elapsed_ms={elapsed_ms}");
         gatewayMiddlewareSource.Should().Contain("GatewayRouteCatalog.ReplacementRouteHeader");
+    }
+
+    [Fact]
+    public void GatewayConfigAndRequestLogging_ShouldKeepSingleDestinationTimeoutAndRequestCorrelation()
+    {
+        var gatewayAppSettingsSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.Gateway", "appsettings.json"));
+        var requestLoggingSource = File.ReadAllText(
+            FindRepoFile("src", "infrastructure", "IIoT.Infrastructure", "Logging", "IIoTRequestLoggingExtensions.cs"));
+        var gatewayMiddlewareSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.Gateway", "Infrastructure", "GatewayObservabilityMiddleware.cs"));
+
+        gatewayAppSettingsSource.Should().Contain("\"ActivityTimeout\": \"00:01:00\"");
+        gatewayAppSettingsSource.Should().Contain("\"primary\"");
+        gatewayAppSettingsSource.Should().NotContain("\"secondary\"");
+
+        requestLoggingSource.Should().Contain("request_id={RequestId}");
+        requestLoggingSource.Should().Contain("trace_id={TraceId}");
+        requestLoggingSource.Should().Contain("X-Request-Id");
+        gatewayMiddlewareSource.Should().Contain("request_id={request_id}");
+        gatewayMiddlewareSource.Should().Contain("trace_id={trace_id}");
+    }
+
+    [Fact]
+    public void CloudDeployWorkflow_ShouldUseReleaseTagInputAndSharedDeployScript()
+    {
+        var workflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-deploy.yml"));
+
+        workflowSource.Should().Contain("release_tag:");
+        workflowSource.Should().Contain("Release tag from cloud-image (sha-*)");
+        workflowSource.Should().Contain("if [[ ! \"$release_tag\" =~ ^sha-[0-9a-f]+$ ]]");
+        workflowSource.Should().Contain("RELEASE_TAG: ${{ inputs.release_tag }}");
+        workflowSource.Should().Contain("DEPLOY_GIT_SHA: ${{ github.sha }}");
+        workflowSource.Should().Contain("DEPLOY_TRIGGERED_BY: ${{ github.actor }}");
+        workflowSource.Should().Contain("envs: GITHUB_ACTOR,GITHUB_TOKEN,RELEASE_TAG,DEPLOY_GIT_SHA,DEPLOY_TRIGGERED_BY");
+        workflowSource.Should().Contain("chmod +x ./scripts/*.sh");
+        workflowSource.Should().Contain("./scripts/deploy-release.sh \"$RELEASE_TAG\"");
+        workflowSource.Should().NotContain("compose run --rm iiot-migration");
+        workflowSource.Should().NotContain("probe_status \"${public_base_url}/internal/healthz\" \"200\"");
+    }
+
+    [Fact]
+    public void DeployOperationsScripts_ShouldExistAndUseExpectedCommands()
+    {
+        var backupSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "postgres-backup.sh"));
+        var restoreSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "postgres-restore.sh"));
+        var verifySource = File.ReadAllText(FindRepoFile("deploy", "scripts", "postgres-verify-backup.sh"));
+        var opsCheckSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "ops-check.sh"));
+        var releaseCommonSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "release-common.sh"));
+        var preDeploySource = File.ReadAllText(FindRepoFile("deploy", "scripts", "pre-deploy-check.sh"));
+        var deployReleaseSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "deploy-release.sh"));
+        var postDeploySource = File.ReadAllText(FindRepoFile("deploy", "scripts", "post-deploy-check.sh"));
+        var rollbackSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "rollback-release.sh"));
+
+        backupSource.Should().Contain("pg_dump -Fc -U postgres -d iiot-db");
+        backupSource.Should().Contain("backups/postgres");
+        backupSource.Should().Contain(".sha256");
+        backupSource.Should().Contain("latest-successful-backup.txt");
+        backupSource.Should().Contain("BACKUP_RETENTION_DAYS");
+        backupSource.Should().Contain("find \"$BACKUP_DIR\"");
+        backupSource.Should().Contain("sha256sum");
+
+        restoreSource.Should().Contain("CHECKSUM_FILE=\"$DUMP_FILE.sha256\"");
+        restoreSource.Should().Contain("sha256sum -c");
+        restoreSource.Should().Contain("compose stop nginx-gateway iiot-web iiot-gateway iiot-httpapi iiot-dataworker");
+        restoreSource.Should().Contain("pg_restore --clean --if-exists --no-owner --no-privileges -U postgres -d iiot-db");
+        restoreSource.Should().Contain("compose run --rm iiot-migration");
+        restoreSource.Should().Contain("\"$SCRIPT_DIR/ops-check.sh\"");
+
+        verifySource.Should().Contain("latest-successful-verify.txt");
+        verifySource.Should().Contain("locate_latest_dump");
+        verifySource.Should().Contain("CHECKSUM_FILE=\"$DUMP_FILE.sha256\"");
+        verifySource.Should().Contain("sha256sum -c");
+        verifySource.Should().Contain("iiot-restore-verify-");
+        verifySource.Should().Contain("createdb -U postgres");
+        verifySource.Should().Contain("dropdb --if-exists -U postgres");
+        verifySource.Should().Contain("select count(*) from devices;");
+        verifySource.Should().Contain("select count(*) from employees;");
+        verifySource.Should().Contain("select count(*) from recipes;");
+        verifySource.Should().Contain("select count(*) from outbox_messages;");
+        verifySource.Should().Contain("select count(*) from \"__EFMigrationsHistory\";");
+
+        opsCheckSource.Should().Contain("curl --silent --show-error --output /dev/null --write-out '%{http_code}'");
+        opsCheckSource.Should().Contain("/internal/healthz");
+        opsCheckSource.Should().Contain("select count(*) from outbox_messages where processed_at_utc is null;");
+        opsCheckSource.Should().Contain("rabbitmqctl list_queues -q name messages");
+        opsCheckSource.Should().Contain("latest-successful-backup.txt");
+        opsCheckSource.Should().Contain("latest-successful-verify.txt");
+        opsCheckSource.Should().Contain("BACKUP_MAX_AGE_HOURS");
+        opsCheckSource.Should().Contain("BACKUP_VERIFY_MAX_AGE_DAYS");
+        opsCheckSource.Should().Contain("latest_backup_age_hours=");
+        opsCheckSource.Should().Contain("latest_backup_verified_age_days=");
+        opsCheckSource.Should().Contain("latest_backup_file=");
+        opsCheckSource.Should().Contain("stat -c %Y");
+        opsCheckSource.Should().Contain("iiot-pass-station-injection");
+        opsCheckSource.Should().Contain("iiot-pass-station-stacking");
+        opsCheckSource.Should().Contain("iiot-device-logs");
+        opsCheckSource.Should().Contain("iiot-hourly-capacities");
+        opsCheckSource.Should().Contain("exit 1");
+        opsCheckSource.Should().Contain("exit 2");
+
+        releaseCommonSource.Should().Contain("CURRENT_RELEASE_FILE");
+        releaseCommonSource.Should().Contain("PREVIOUS_RELEASE_FILE");
+        releaseCommonSource.Should().Contain("STAGED_RELEASE_FILE");
+        releaseCommonSource.Should().Contain("RELEASE_HISTORY_DIR");
+        releaseCommonSource.Should().Contain("ensure_release_tag");
+        releaseCommonSource.Should().Contain("Application image may not use :latest");
+        releaseCommonSource.Should().Contain("write_release_manifest");
+        releaseCommonSource.Should().Contain("record_release_history");
+        releaseCommonSource.Should().Contain("apply_app_images_to_dotenv");
+
+        preDeploySource.Should().Contain("ensure_release_tag \"$RELEASE_TAG\"");
+        preDeploySource.Should().Contain("compose config -q");
+        preDeploySource.Should().Contain("resolve_release_images \"$RELEASE_TAG\"");
+        preDeploySource.Should().Contain("ensure_target_images_not_latest");
+        preDeploySource.Should().Contain("probe_status \"${public_base_url}/internal/healthz\" \"200\" 3");
+        preDeploySource.Should().Contain("\"$SCRIPT_DIR/ops-check.sh\"");
+
+        deployReleaseSource.Should().Contain("\"$SCRIPT_DIR/pre-deploy-check.sh\" \"$RELEASE_TAG\"");
+        deployReleaseSource.Should().Contain("\"$SCRIPT_DIR/postgres-backup.sh\"");
+        deployReleaseSource.Should().Contain("write_release_manifest");
+        deployReleaseSource.Should().Contain("apply_app_images_to_dotenv");
+        deployReleaseSource.Should().Contain("compose pull iiot-httpapi iiot-gateway iiot-dataworker iiot-migration iiot-web");
+        deployReleaseSource.Should().Contain("compose run --rm iiot-migration");
+        deployReleaseSource.Should().Contain("\"$SCRIPT_DIR/post-deploy-check.sh\"");
+        deployReleaseSource.Should().Contain("cp \"$CURRENT_RELEASE_FILE\" \"$PREVIOUS_RELEASE_FILE\"");
+        deployReleaseSource.Should().Contain("record_release_history");
+
+        postDeploySource.Should().Contain("for service_name in nginx-gateway iiot-gateway iiot-httpapi iiot-dataworker iiot-web");
+        postDeploySource.Should().Contain("require_running_service \"$service_name\"");
+        postDeploySource.Should().Contain("probe_status \"${public_base_url}/\" \"200\"");
+        postDeploySource.Should().Contain("probe_status \"${public_base_url}/internal/healthz\" \"200\"");
+        postDeploySource.Should().Contain("\"$SCRIPT_DIR/ops-check.sh\"");
+
+        rollbackSource.Should().Contain("resolve_release_file_path");
+        rollbackSource.Should().Contain("load_release_images_from_manifest");
+        rollbackSource.Should().Contain("compose pull iiot-httpapi iiot-gateway iiot-dataworker iiot-web");
+        rollbackSource.Should().Contain("\"$SCRIPT_DIR/post-deploy-check.sh\"");
+        rollbackSource.Should().Contain("cp \"$CURRENT_RELEASE_FILE\" \"$PREVIOUS_RELEASE_FILE\"");
+        rollbackSource.Should().Contain("write_release_manifest");
+        rollbackSource.Should().Contain("record_release_history");
+        rollbackSource.Should().NotContain("iiot-migration");
+        rollbackSource.Should().NotContain("postgres-restore.sh");
+    }
+
+    [Fact]
+    public void OperationsManual_ShouldDocumentHealthBackupRestoreAndExitCodes()
+    {
+        var operationsSource = File.ReadAllText(FindRepoFile("deploy", "OPERATIONS.md"));
+
+        operationsSource.Should().Contain("GET /internal/healthz");
+        operationsSource.Should().Contain("127.0.0.1");
+        operationsSource.Should().Contain("./scripts/postgres-backup.sh");
+        operationsSource.Should().Contain("./scripts/postgres-restore.sh");
+        operationsSource.Should().Contain("./scripts/postgres-verify-backup.sh");
+        operationsSource.Should().Contain("./scripts/ops-check.sh");
+        operationsSource.Should().Contain("./scripts/deploy-release.sh");
+        operationsSource.Should().Contain("./scripts/rollback-release.sh");
+        operationsSource.Should().Contain("current-release.env");
+        operationsSource.Should().Contain("previous-release.env");
+        operationsSource.Should().Contain("staged-release.env");
+        operationsSource.Should().Contain("history/");
+        operationsSource.Should().Contain("latest-successful-backup.txt");
+        operationsSource.Should().Contain("latest-successful-verify.txt");
+        operationsSource.Should().Contain(".sha256");
+        operationsSource.Should().Contain("02:30");
+        operationsSource.Should().Contain("03:30");
+        operationsSource.Should().Contain("latest_backup_age_hours");
+        operationsSource.Should().Contain("latest_backup_verified_age_days");
+        operationsSource.Should().Contain("latest_backup_file");
+        operationsSource.Should().Contain("`0`");
+        operationsSource.Should().Contain("`1`");
+        operationsSource.Should().Contain("`2`");
+        operationsSource.Should().Contain("Redis is treated as cache");
+        operationsSource.Should().Contain("RabbitMQ queue state is not covered");
+        operationsSource.Should().Contain("It only rolls back the 5 application images.");
+        operationsSource.Should().Contain("It does not run database downgrade logic.");
+        operationsSource.Should().Contain("Transfer to the existing database recovery flow");
+        operationsSource.Should().Contain("Do not replay while `/internal/healthz` is failing");
+    }
+
+    [Fact]
+    public void DeployCronTemplates_ShouldUseFixedSchedulesForBackupAndRestoreVerification()
+    {
+        var backupCronSource = File.ReadAllText(FindRepoFile("deploy", "cron", "iiot-backup.cron.example"));
+        var verifyCronSource = File.ReadAllText(FindRepoFile("deploy", "cron", "iiot-backup-verify.cron.example"));
+
+        backupCronSource.Should().Contain("30 2 * * *");
+        backupCronSource.Should().Contain("./scripts/postgres-backup.sh");
+        backupCronSource.Should().Contain("/srv/iiot-cloud/deploy");
+
+        verifyCronSource.Should().Contain("30 3 * * 0");
+        verifyCronSource.Should().Contain("./scripts/postgres-verify-backup.sh");
+        verifyCronSource.Should().Contain("/srv/iiot-cloud/deploy");
+    }
+
+    [Fact]
+    public void RecipeDeviceIdIndexMigration_ShouldExist()
+    {
+        var migrationsDirectory = FindRepoFile("src", "infrastructure", "IIoT.EntityFrameworkCore", "Migrations");
+        var migrationFiles = Directory.GetFiles(migrationsDirectory, "*AddRecipeDeviceIdIndex*.cs", SearchOption.TopDirectoryOnly)
+            .Where(file => !file.EndsWith(".Designer.cs", StringComparison.Ordinal))
+            .ToList();
+
+        migrationFiles.Should().ContainSingle();
+        File.ReadAllText(migrationFiles[0]).Should().Contain("ix_recipes_device_id");
     }
 
     [Fact]

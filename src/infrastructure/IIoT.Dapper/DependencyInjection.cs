@@ -59,5 +59,7 @@ public static class DependencyInjection
         builder.Services.AddSingleton<IPassStationWriteSql<StackingWriteModel>, StackingPassStationSql>();
         builder.Services.AddSingleton<IPassStationQuerySql<InjectionPassListItemDto>, InjectionPassStationSql>();
         builder.Services.AddSingleton<IPassStationQuerySql<InjectionPassDetailDto>, InjectionPassStationSql>();
+        builder.Services.AddSingleton<IPassStationQuerySql<StackingPassListItemDto>, StackingPassStationSql>();
+        builder.Services.AddSingleton<IPassStationQuerySql<StackingPassDetailDto>, StackingPassStationSql>();
     }
 }

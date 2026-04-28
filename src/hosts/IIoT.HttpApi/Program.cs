@@ -4,6 +4,7 @@ using IIoT.HttpApi.Infrastructure.OpenApi;
 using IIoT.Infrastructure.Logging;
 using IIoT.SharedKernel.Paging;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.OpenApi;
 using Serilog;
 
@@ -48,13 +49,17 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseExceptionHandler();
-app.UseSerilogRequestLogging();
 app.UseForwardedHeaders();
+app.UseIIoTSerilogRequestLogging();
 app.UseCors(HttpApiCorsOptions.PolicyName);
 app.UseAuthentication();
 app.UseRateLimiter();
 app.UseAuthorization();
 app.MapControllers();
+app.MapHealthChecks("/internal/healthz", new HealthCheckOptions
+{
+    Predicate = _ => true
+}).AllowAnonymous();
 app.MapDefaultEndpoints();
 
 app.Run();

@@ -85,6 +85,9 @@ $resolvedDeployPort = Resolve-Setting "DEPLOY_PORT" $DeployPort $envValues
 $resolvedStackName = Resolve-Setting "STACK_NAME" $StackName $envValues
 $resolvedDeployDir = Resolve-Setting "DEPLOY_DIR" $DeployDir $envValues
 $resolvedPublicBaseUrl = Resolve-Setting "PUBLIC_BASE_URL" $PublicBaseUrl $envValues
+$resolvedJwtSecret = Resolve-Setting "JWTSETTINGS__SECRET" $null $envValues
+$resolvedSeedAdminNo = Resolve-Setting "SEED_ADMIN_NO" $null $envValues
+$resolvedSeedAdminPassword = Resolve-Setting "SEED_ADMIN_PASSWORD" $null $envValues
 
 Assert-Configured "IIOT_REGISTRY" $resolvedRegistry @("registry.example.com", "change-me-registry")
 Assert-Configured "DEPLOY_HOST" $resolvedDeployHost @("deploy.example.com", "change-me-deploy-host")
@@ -93,6 +96,9 @@ Assert-Configured "DEPLOY_PORT" $resolvedDeployPort
 Assert-Configured "STACK_NAME" $resolvedStackName
 Assert-Configured "DEPLOY_DIR" $resolvedDeployDir
 Assert-Configured "PUBLIC_BASE_URL" $resolvedPublicBaseUrl @("https://iiot.example.com", "http://iiot.example.com", "http://10.0.0.15")
+Assert-Configured "JWTSETTINGS__SECRET" $resolvedJwtSecret @("change-me-jwt-secret")
+Assert-Configured "SEED_ADMIN_NO" $resolvedSeedAdminNo @("change-me-admin-no")
+Assert-Configured "SEED_ADMIN_PASSWORD" $resolvedSeedAdminPassword @("change-me-admin-password")
 
 if ($resolvedPublicBaseUrl.EndsWith("/")) {
     throw "PUBLIC_BASE_URL must not end with '/'. Example: http://10.0.0.15"

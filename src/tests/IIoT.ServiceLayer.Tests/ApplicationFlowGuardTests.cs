@@ -11,6 +11,7 @@ using IIoT.ProductionService.Commands.Recipes;
 using IIoT.ProductionService.Profiles;
 using IIoT.ProductionService.Queries.Capacities;
 using IIoT.ProductionService.Queries.Devices;
+using IIoT.ProductionService.Validators;
 using IIoT.Services.CrossCutting.Caching;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.RecordQueries;
@@ -50,8 +51,21 @@ public sealed class ApplicationFlowGuardTests
         var processId = Guid.NewGuid();
         var processQueries = new StubProcessReadQueryService { Exists = true };
         var deviceQueries = new StubDeviceReadQueryService();
-        var cache = new RecordingCacheService();
-        var handler = new RegisterDeviceHandler(repository, processQueries, deviceQueries, cache);
+        var cacheInvalidation = new RecordingDeviceCacheInvalidationService();
+        var auditTrail = new RecordingAuditTrailService();
+        var handler = new RegisterDeviceHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "admin-001",
+                Role = SystemRoles.Admin,
+                IsAuthenticated = true
+            },
+            repository,
+            processQueries,
+            deviceQueries,
+            cacheInvalidation,
+            auditTrail);
 
         var result = await handler.Handle(
             new RegisterDeviceCommand(
@@ -66,8 +80,11 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal(processId, repository.AddedEntity!.ProcessId);
         Assert.StartsWith("DEV-", repository.AddedEntity.Code);
         Assert.Equal(repository.AddedEntity.Code, created.Code);
-        Assert.Contains(CacheKeys.AllDevices(), cache.RemovedKeys);
-        Assert.Contains(CacheKeys.DevicesByProcess(processId), cache.RemovedKeys);
+        Assert.Contains(processId, cacheInvalidation.RegisteredProcessIds);
+        Assert.Contains(auditTrail.Entries, x =>
+            x.OperationType == "Device.Register"
+            && x.TargetType == "Device"
+            && x.Succeeded);
     }
 
     [Fact]
@@ -76,8 +93,21 @@ public sealed class ApplicationFlowGuardTests
         var repository = new InMemoryRepository<Device>();
         var processQueries = new StubProcessReadQueryService { Exists = true };
         var deviceQueries = new StubDeviceReadQueryService { CodeExists = true };
-        var cache = new RecordingCacheService();
-        var handler = new RegisterDeviceHandler(repository, processQueries, deviceQueries, cache);
+        var cacheInvalidation = new RecordingDeviceCacheInvalidationService();
+        var auditTrail = new RecordingAuditTrailService();
+        var handler = new RegisterDeviceHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "admin-001",
+                Role = SystemRoles.Admin,
+                IsAuthenticated = true
+            },
+            repository,
+            processQueries,
+            deviceQueries,
+            cacheInvalidation,
+            auditTrail);
 
         var result = await handler.Handle(
             new RegisterDeviceCommand("Injection-01", Guid.NewGuid()),
@@ -85,6 +115,10 @@ public sealed class ApplicationFlowGuardTests
 
         Assert.False(result.IsSuccess);
         Assert.Null(repository.AddedEntity);
+        Assert.Empty(cacheInvalidation.RegisteredProcessIds);
+        Assert.Contains(auditTrail.Entries, x =>
+            x.OperationType == "Device.Register"
+            && !x.Succeeded);
     }
 
     [Fact]
@@ -368,9 +402,10 @@ public sealed class ApplicationFlowGuardTests
         {
             SingleOrDefaultResult = device
         };
-        var cache = new RecordingCacheService();
         var dependencyQuery = new StubDeviceDeletionDependencyQueryService();
         var refreshTokenService = new StubRefreshTokenService();
+        var cacheInvalidation = new RecordingDeviceCacheInvalidationService();
+        var auditTrail = new RecordingAuditTrailService();
         var handler = new DeleteDeviceHandler(
             new TestCurrentUser
             {
@@ -381,21 +416,57 @@ public sealed class ApplicationFlowGuardTests
             },
             repository,
             dependencyQuery,
-            cache,
+            cacheInvalidation,
             refreshTokenService,
-            new StubDevicePermissionService());
+            new StubDevicePermissionService(),
+            auditTrail);
 
         var result = await handler.Handle(new DeleteDeviceCommand(device.Id), CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        Assert.Contains(CacheKeys.DeviceIdentity(device.Id), cache.RemovedKeys);
-        Assert.Contains(CacheKeys.CapacityHourlyPattern(device.Id), cache.RemovedPatterns);
-        Assert.Contains(CacheKeys.CapacitySummaryPattern(device.Id), cache.RemovedPatterns);
-        Assert.Contains(CacheKeys.CapacityRangePattern(device.Id), cache.RemovedPatterns);
+        Assert.Contains(cacheInvalidation.DeletedDevices, x =>
+            x.DeviceId == device.Id
+            && x.ProcessId == processId
+            && x.DeviceCode == device.Code);
         Assert.Contains(refreshTokenService.Revocations, x =>
             x.ActorType == IIoT.Services.Contracts.Identity.IIoTClaimTypes.EdgeDeviceActor
             && x.SubjectId == device.Id
             && x.Reason == "device-deleted");
+        Assert.Contains(auditTrail.Entries, x =>
+            x.OperationType == "Device.Delete"
+            && x.TargetIdOrKey == device.Id.ToString()
+            && x.Succeeded);
+    }
+
+    [Fact]
+    public void CreateRecipeCommandValidator_ShouldRejectInvalidStructuredParametersJson()
+    {
+        var validator = new CreateRecipeCommandValidator();
+        var command = new CreateRecipeCommand(
+            "Recipe-A",
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            """[{"id":"speed","name":"Speed","unit":"rpm","min":12,"max":5}]""");
+
+        var result = validator.Validate(command);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, x => x.PropertyName == nameof(CreateRecipeCommand.ParametersJsonb));
+    }
+
+    [Fact]
+    public void UpgradeRecipeVersionCommandValidator_ShouldRejectMissingParameterFields()
+    {
+        var validator = new UpgradeRecipeVersionCommandValidator();
+        var command = new UpgradeRecipeVersionCommand(
+            Guid.NewGuid(),
+            "V1.1",
+            """[{"id":"speed","name":"","unit":"rpm","min":1,"max":2}]""");
+
+        var result = validator.Validate(command);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, x => x.PropertyName == nameof(UpgradeRecipeVersionCommand.ParametersJsonb));
     }
 
     [Fact]

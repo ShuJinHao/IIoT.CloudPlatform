@@ -3,6 +3,7 @@ using IIoT.EntityFrameworkCore.Outbox;
 using IIoT.EntityFrameworkCore.Persistence;
 using IIoT.EntityFrameworkCore.Repository;
 using IIoT.Services.CrossCutting.Caching.Options;
+using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
@@ -61,6 +62,7 @@ public static class DependencyInjection
         builder.Services.AddScoped<IRefreshTokenService, EfRefreshTokenService>();
         builder.Services.AddScoped<IRolePolicyService, RolePolicyService>();
         builder.Services.AddScoped<IUserQueryService, UserQueryService>();
+        builder.Services.AddScoped<IAuditTrailService, Auditing.EfAuditTrailService>();
         builder.Services.AddScoped<IUnitOfWork, EfUnitOfWork>();
         builder.Services.AddScoped<IProcessReadQueryService, QueryServices.ProcessReadQueryService>();
         builder.Services.AddScoped<IDeviceReadQueryService, QueryServices.DeviceReadQueryService>();

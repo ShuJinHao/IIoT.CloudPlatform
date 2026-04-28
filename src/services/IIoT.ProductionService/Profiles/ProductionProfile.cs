@@ -13,8 +13,7 @@ public sealed class ProductionProfile : Profile
     public ProductionProfile()
     {
         CreateMap<ReceiveDeviceLogCommand, DeviceLogReceivedEvent>();
-        CreateMap<ReceiveHourlyCapacityCommand, HourlyCapacityReceivedEvent>()
-            .ForMember(dest => dest.ReceivedAtUtc, opt => opt.MapFrom(_ => DateTime.UtcNow));
+        CreateMap<ReceiveHourlyCapacityCommand, HourlyCapacityReceivedEvent>();
         CreateMap<ReceiveInjectionPassCommand, PassDataInjectionReceivedEvent>();
         CreateMap<ReceiveStackingPassCommand, PassDataStackingReceivedEvent>();
         CreateMap<InjectionPassItemInput, PassDataInjectionItem>()

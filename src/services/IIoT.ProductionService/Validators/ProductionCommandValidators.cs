@@ -41,22 +41,42 @@ public sealed class DeleteDeviceCommandValidator : AbstractValidator<DeleteDevic
 
 public sealed class CreateRecipeCommandValidator : AbstractValidator<CreateRecipeCommand>
 {
+    private static readonly RecipeParametersJsonbValidator ParametersValidator = new();
+
     public CreateRecipeCommandValidator()
     {
         RuleFor(x => x.RecipeName).NotEmpty().MaximumLength(128);
         RuleFor(x => x.ProcessId).NotEmpty();
         RuleFor(x => x.DeviceId).NotEmpty();
-        RuleFor(x => x.ParametersJsonb).NotEmpty();
+        RuleFor(x => x.ParametersJsonb)
+            .NotEmpty()
+            .Custom((value, context) =>
+            {
+                foreach (var error in ParametersValidator.Validate(value))
+                {
+                    context.AddFailure(nameof(CreateRecipeCommand.ParametersJsonb), error);
+                }
+            });
     }
 }
 
 public sealed class UpgradeRecipeVersionCommandValidator : AbstractValidator<UpgradeRecipeVersionCommand>
 {
+    private static readonly RecipeParametersJsonbValidator ParametersValidator = new();
+
     public UpgradeRecipeVersionCommandValidator()
     {
         RuleFor(x => x.SourceRecipeId).NotEmpty();
         RuleFor(x => x.NewVersion).NotEmpty().MaximumLength(32);
-        RuleFor(x => x.ParametersJsonb).NotEmpty();
+        RuleFor(x => x.ParametersJsonb)
+            .NotEmpty()
+            .Custom((value, context) =>
+            {
+                foreach (var error in ParametersValidator.Validate(value))
+                {
+                    context.AddFailure(nameof(UpgradeRecipeVersionCommand.ParametersJsonb), error);
+                }
+            });
     }
 }
 

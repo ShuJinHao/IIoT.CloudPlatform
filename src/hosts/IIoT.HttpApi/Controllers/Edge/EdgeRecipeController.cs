@@ -12,8 +12,10 @@ namespace IIoT.HttpApi.Controllers;
 public class EdgeRecipeController : ApiControllerBase
 {
     [HttpGet("device/{deviceId}")]
-    public async Task<IActionResult> GetByDeviceId([FromRoute] Guid deviceId)
+    public async Task<IActionResult> GetByDeviceId(
+        [FromRoute] Guid deviceId,
+        CancellationToken cancellationToken)
     {
-        return ReturnResult(await Sender.Send(new GetRecipesByDeviceIdQuery(deviceId)));
+        return ReturnResult(await Sender.Send(new GetRecipesByDeviceIdQuery(deviceId), cancellationToken));
     }
 }

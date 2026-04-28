@@ -13,6 +13,10 @@ app.use(router);
 app.directive('permission', permissionDirective);
 
 const authStore = useAuthStore();
-void authStore.restoreFromStorage();
 
-app.mount('#app');
+async function bootstrap() {
+  await authStore.restoreFromStorage();
+  app.mount('#app');
+}
+
+void bootstrap();

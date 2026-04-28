@@ -111,4 +111,22 @@ builder.Services.AddMassTransit(x =>
 builder.Services.AddHostedService<OutboxDispatcherWorker>();
 
 var host = builder.Build();
+
+var startupLogger = host.Services
+    .GetRequiredService<ILoggerFactory>()
+    .CreateLogger("IIoT.DataWorker.Startup");
+var configuredQueues = new[]
+{
+    eventBusOptions.ResolveEndpointName(RabbitMqEndpointNames.PassStationInjection),
+    eventBusOptions.ResolveEndpointName(RabbitMqEndpointNames.PassStationStacking),
+    eventBusOptions.ResolveEndpointName(RabbitMqEndpointNames.DeviceLogs),
+    eventBusOptions.ResolveEndpointName(RabbitMqEndpointNames.HourlyCapacities)
+};
+
+startupLogger.LogInformation(
+    "DataWorker queues configured queues={queues} error_queue_suffix={error_queue_suffix} skipped_queue_suffix={skipped_queue_suffix}",
+    configuredQueues,
+    "_error",
+    "_skipped");
+
 host.Run();

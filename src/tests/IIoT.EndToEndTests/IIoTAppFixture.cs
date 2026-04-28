@@ -80,13 +80,22 @@ public sealed class IIoTAppFixture : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        _httpClient?.Dispose();
-        if (_app is not null)
-            await _app.DisposeAsync();
-
-        foreach (var entry in _originalEnvironment)
+        try
         {
-            Environment.SetEnvironmentVariable(entry.Key, entry.Value);
+            _httpClient?.Dispose();
+            if (_app is not null)
+                await _app.DisposeAsync();
+
+            await DockerTestResourceCleaner.CleanupNamedVolumesAsync(
+                _postgresVolumeName,
+                _rabbitMqVolumeName);
+        }
+        finally
+        {
+            foreach (var entry in _originalEnvironment)
+            {
+                Environment.SetEnvironmentVariable(entry.Key, entry.Value);
+            }
         }
     }
 

@@ -7,3 +7,7 @@ aspirate-state.json
 src/hosts/IIoT.AppHost/aspirate-state.json
 src/hosts/IIoT.AppHost/aspirate-output/.env
 src/hosts/IIoT.AppHost/aspirate-output/certs/
+deploy/backups/
+deploy/releases/
+.claude/settings.local.json
+src/ui/iiot-web/.claude/worktrees/

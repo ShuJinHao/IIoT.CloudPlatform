@@ -553,7 +553,6 @@ onMounted(() => { fetchList(); fetchSelectData(); });
 </script>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&family=Noto+Sans+SC:wght@300;400;500&display=swap');
 .employee-list { font-family: 'Noto Sans SC', sans-serif; }
 .page-header { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:24px; }
 .page-title { font-size:22px; font-weight:500; color:#e8eaf0; margin:0 0 4px; }

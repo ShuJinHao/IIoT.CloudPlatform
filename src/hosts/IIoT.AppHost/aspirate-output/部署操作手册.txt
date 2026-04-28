@@ -157,3 +157,58 @@ docker service scale ${STACK_NAME}_iiot-httpapi=3
 ```powershell
 docker stack rm ${STACK_NAME}
 ```
+
+## 七、2026-04-22 deployment fix notes
+
+The current `aspirate-output` template must include these runtime values before upload:
+
+- `JWTSETTINGS__SECRET`
+- `SEED_ADMIN_NO`
+- `SEED_ADMIN_PASSWORD`
+- `SEED_ADMIN_REAL_NAME` (optional, defaults to `系统管理员`)
+
+`iiot-migration` is a one-shot initialization service.
+When database migration and seed succeed, `docker service ls` may show `${STACK_NAME}_iiot-migration` as `0/1`. This is expected.
+
+If you need a full reset of the database before redeploy, run:
+
+```powershell
+docker stack rm ${STACK_NAME}
+docker volume rm ${STACK_NAME}_postgres-iiot
+```
+
+## 2026-04-22 deployment guardrails
+
+This section overrides any earlier emergency-reset wording for normal release work.
+
+- Routine deploy and routine update must preserve the existing PostgreSQL data volume.
+- Do not delete the database, do not remove the PostgreSQL volume, and do not use full reset steps during normal deployment/update.
+- Only perform `docker stack rm`, `docker volume rm`, or any database rebuild when the user explicitly asks for a full reset and understands the data-loss impact.
+- Before upload/deploy, verify every `${VAR}` referenced by `docker-compose.yaml` exists in both `.env` and `.env.example`.
+- Keep `GATEWAY_HTTP_PORT=81` unless the user explicitly approves a port change.
+- `iiot-migration` must receive `JWTSETTINGS__SECRET`, `SEED_ADMIN_NO`, `SEED_ADMIN_PASSWORD`, and `SEED_ADMIN_REAL_NAME`.
+- `iiot-web` updates must be verified end-to-end: no CSP-blocked external font/CDN dependency, and the container must really serve `dist` on the port expected by `nginx.conf`.
+
+## 八、2026-04-27 限流基线
+
+当前限流改为两层分工：
+
+- `nginx` 只做入口粗防护。
+- `IIoT.HttpApi` 做业务级精细限流。
+
+入口层要求：
+
+- 登录、刷新、bootstrap 继续在 `nginx` 保护。
+- 边端上传接口在 `nginx` 只保留宽松保护，避免多台设备共用一个出口 IP 时互相误伤。
+- `refresh` 必须单独有自己的 `location` 和 `refresh_limit`，不得继续和密码登录共用同一条入口限流。
+
+应用层要求：
+
+- `password-login`、`refresh`、`edge-operator-login`、`bootstrap` 必须分开配置。
+- `capacity-upload`、`device-log-upload`、`pass-station-upload` 必须分开配置。
+- 上传限流必须优先按 `DeviceId` 分区；只有拿不到 `DeviceId` 时才允许退回按 IP。
+
+后续新增工序时：
+
+- 如果是新的高频云端上传接口，默认先归入 `pass-station-upload` 这一类思路评估，不得直接复用旧的单一 `edge-upload` 概念。
+- 如果只改了阈值，也必须同时检查两份 `nginx.conf` 和 `IIoT.HttpApi/appsettings.json`，避免入口层与应用层配置漂移。

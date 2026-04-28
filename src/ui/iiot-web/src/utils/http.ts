@@ -4,6 +4,7 @@ import type {
   AxiosResponse,
   InternalAxiosRequestConfig,
 } from 'axios';
+import { useAuthStore } from '../stores/auth';
 import { ResultStatus } from '../types/api';
 import type { ApiResult } from '../types/api';
 
@@ -28,27 +29,24 @@ client.interceptors.request.use(
   (error) => Promise.reject(error),
 );
 
-const clearStoredSession = () => {
-  localStorage.removeItem('token');
-  localStorage.removeItem('refreshToken');
-  localStorage.removeItem('accessTokenExpiresAt');
-  localStorage.removeItem('refreshTokenExpiresAt');
-};
+function logoutAndRedirect() {
+  const authStore = useAuthStore();
+  authStore.logout({ redirectToLogin: true });
+}
 
 const handleHttpError = (error: unknown) => {
   if (axios.isAxiosError(error) && error.response) {
     if (error.response.status === 401) {
-      clearStoredSession();
-      window.location.href = '/login';
+      logoutAndRedirect();
     } else if (error.response.status === 403) {
-      alert('系统拒绝访问：权限不足 (HTTP 403)');
+      alert('当前账号无权访问该功能。');
     } else if (error.response.status === 400) {
-      alert('请求参数格式有误 (HTTP 400)');
+      alert('请求参数校验失败。');
     } else if (error.response.status === 500) {
-      alert('服务器内部错误，请联系管理员查看日志。');
+      alert('服务端发生异常，请稍后重试。');
     }
   } else {
-    alert('网络连接异常，请检查后端服务是否正常启动。');
+    alert('网络异常，请检查后端服务是否正常。');
   }
 
   return Promise.reject(error);
@@ -72,22 +70,20 @@ const unwrap = async <T>(request: Promise<AxiosResponse<ApiResult<T> | T>>): Pro
       case ResultStatus.Error:
       case ResultStatus.Invalid:
       case ResultStatus.NotFound: {
-        const errorMessage = apiResult.errors?.join('\n') || '业务处理失败';
-        console.error('业务拦截:', errorMessage);
-        alert(`提示:\n${errorMessage}`);
+        const errorMessage = apiResult.errors?.join('\n') || '业务请求失败。';
+        console.error('业务拦截：', errorMessage);
+        alert(`提示：\n${errorMessage}`);
         return Promise.reject(apiResult);
       }
 
       case ResultStatus.Forbidden:
-        console.warn('越权警告：您没有权限执行此操作。');
-        alert('越权警告：您没有该模块或数据的管理权限。');
+        console.warn('收到无权访问响应。');
+        alert('当前账号无权执行该操作。');
         return Promise.reject(apiResult);
 
       case ResultStatus.Unauthorized:
-        console.warn('凭证已过期。');
-        clearStoredSession();
-        alert('登录已过期，请重新登录。');
-        window.location.href = '/login';
+        console.warn('登录状态已过期。');
+        logoutAndRedirect();
         return Promise.reject(apiResult);
 
       default:

@@ -99,7 +99,18 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             UpdateRolePermissionsResult = Result.Failure("permission update failed")
         };
         var cacheService = new RecordingCacheService();
-        var handler = new DefineRolePolicyHandler(rolePolicyService, cacheService);
+        var auditTrail = new RecordingAuditTrailService();
+        var handler = new DefineRolePolicyHandler(
+            rolePolicyService,
+            cacheService,
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "admin-001",
+                Role = SystemRoles.Admin,
+                IsAuthenticated = true
+            },
+            auditTrail);
 
         var result = await handler.Handle(
             new DefineRolePolicyCommand("Auditor", ["Device.Read"]),
@@ -107,6 +118,10 @@ public sealed class AuthorizationAndIdentityBehaviorTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal("Auditor", rolePolicyService.DeletedRoleName);
+        Assert.Contains(auditTrail.Entries, x =>
+            x.OperationType == "Role.Define"
+            && x.TargetIdOrKey == "Auditor"
+            && !x.Succeeded);
     }
 
     [Fact]
@@ -118,7 +133,18 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             UpdateRolePermissionsResult = Result.Failure("permission update failed")
         };
         var cacheService = new RecordingCacheService();
-        var handler = new DefineRolePolicyHandler(rolePolicyService, cacheService);
+        var auditTrail = new RecordingAuditTrailService();
+        var handler = new DefineRolePolicyHandler(
+            rolePolicyService,
+            cacheService,
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "admin-001",
+                Role = SystemRoles.Admin,
+                IsAuthenticated = true
+            },
+            auditTrail);
 
         var result = await handler.Handle(
             new DefineRolePolicyCommand("Auditor", ["Device.Read"]),
@@ -126,6 +152,72 @@ public sealed class AuthorizationAndIdentityBehaviorTests
 
         Assert.False(result.IsSuccess);
         Assert.Null(rolePolicyService.DeletedRoleName);
+        Assert.Contains(auditTrail.Entries, x =>
+            x.OperationType == "Role.Define"
+            && x.TargetIdOrKey == "Auditor"
+            && !x.Succeeded);
+    }
+
+    [Fact]
+    public async Task UpdateRolePermissionsHandler_ShouldWriteAuditOnSuccess()
+    {
+        var rolePolicyService = new StubRolePolicyService();
+        var cacheService = new RecordingCacheService();
+        var auditTrail = new RecordingAuditTrailService();
+        var handler = new UpdateRolePermissionsHandler(
+            rolePolicyService,
+            cacheService,
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "admin-001",
+                Role = SystemRoles.Admin,
+                IsAuthenticated = true
+            },
+            auditTrail);
+
+        var result = await handler.Handle(
+            new UpdateRolePermissionsCommand("Supervisor", ["Device.Read", "Recipe.Update"]),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Contains(auditTrail.Entries, x =>
+            x.OperationType == "Role.Permissions.Update"
+            && x.TargetIdOrKey == "Supervisor"
+            && x.Succeeded);
+    }
+
+    [Fact]
+    public async Task UpdateUserPermissionsHandler_ShouldWriteAuditOnFailure()
+    {
+        var userId = Guid.NewGuid();
+        var rolePolicyService = new StubRolePolicyService
+        {
+            UpdateUserPersonalPermissionsResult = Result.Failure("user permission update failed")
+        };
+        var cacheService = new RecordingCacheService();
+        var auditTrail = new RecordingAuditTrailService();
+        var handler = new UpdateUserPermissionsHandler(
+            rolePolicyService,
+            cacheService,
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "admin-001",
+                Role = SystemRoles.Admin,
+                IsAuthenticated = true
+            },
+            auditTrail);
+
+        var result = await handler.Handle(
+            new UpdateUserPermissionsCommand(userId, ["Device.Read"]),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains(auditTrail.Entries, x =>
+            x.OperationType == "User.Permissions.Update"
+            && x.TargetIdOrKey == userId.ToString()
+            && !x.Succeeded);
     }
 
     [Fact]

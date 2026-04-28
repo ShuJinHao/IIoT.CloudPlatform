@@ -1,3 +1,5 @@
+# Single-machine production starter for IIoT.CloudPlatform.
+# This template intentionally keeps one gateway and one HttpApi destination in this batch.
 services:
   postgres:
     image: ${IIOT_POSTGRES_IMAGE}
@@ -86,6 +88,8 @@ services:
 
   iiot-httpapi:
     image: ${IIOT_HTTPAPI_IMAGE}
+    mem_limit: 768m
+    cpus: 1.0
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_URLS: http://+:8080
@@ -100,6 +104,7 @@ services:
       Cors__AllowedOrigins__0: ${CORS_ALLOWED_ORIGIN_0}
       Cors__AllowedOrigins__1: ${CORS_ALLOWED_ORIGIN_1}
       Cors__AllowedOrigins__2: ${CORS_ALLOWED_ORIGIN_2}
+      Infrastructure__EventBus__EndpointPrefix: ${Infrastructure__EventBus__EndpointPrefix}
       Seq__Enabled: true
       Seq__ServerUrl: ${SEQ_SERVER_URL}
       Seq__ApiKey: ${SEQ_API_KEY}
@@ -118,9 +123,12 @@ services:
 
   iiot-gateway:
     image: ${IIOT_GATEWAY_IMAGE}
+    mem_limit: 512m
+    cpus: 0.5
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_URLS: http://+:8080
+      # Single-node launch keeps one explicit upstream destination.
       ReverseProxy__Clusters__httpapi__Destinations__primary__Address: http://iiot-httpapi:8080/
       Seq__Enabled: true
       Seq__ServerUrl: ${SEQ_SERVER_URL}
@@ -133,12 +141,15 @@ services:
 
   iiot-dataworker:
     image: ${IIOT_DATAWORKER_IMAGE}
+    mem_limit: 512m
+    cpus: 0.75
     environment:
       DOTNET_ENVIRONMENT: Production
       ConnectionStrings__iiot-db: Host=postgres;Port=5432;Username=postgres;Password=${PG_PASSWORD};Database=iiot-db
       ConnectionStrings__redis-cache: redis-cache:6379
       ConnectionStrings__eventbus: amqp://${RABBITMQ_DEFAULT_USER}:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672
       JwtSettings__Secret: ${JWTSETTINGS__SECRET}
+      Infrastructure__EventBus__EndpointPrefix: ${Infrastructure__EventBus__EndpointPrefix}
       Seq__Enabled: true
       Seq__ServerUrl: ${SEQ_SERVER_URL}
       Seq__ApiKey: ${SEQ_API_KEY}
@@ -157,6 +168,8 @@ services:
 
   iiot-web:
     image: ${IIOT_WEB_IMAGE}
+    mem_limit: 256m
+    cpus: 0.25
     depends_on:
       - iiot-gateway
     restart: unless-stopped

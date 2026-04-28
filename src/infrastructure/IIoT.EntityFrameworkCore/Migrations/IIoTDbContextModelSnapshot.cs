@@ -192,6 +192,9 @@ namespace IIoT.EntityFrameworkCore.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("DeviceId")
+                        .HasDatabaseName("ix_recipes_device_id");
+
                     b.HasIndex("ProcessId", "DeviceId")
                         .HasDatabaseName("ix_recipes_process_device");
 
@@ -199,6 +202,60 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .HasDatabaseName("ix_recipes_name_version");
 
                     b.ToTable("recipes", (string)null);
+                });
+
+            modelBuilder.Entity("IIoT.EntityFrameworkCore.Auditing.AuditTrailRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ActorEmployeeNo")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("ExecutedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("FailureReason")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<string>("OperationType")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<bool>("Succeeded")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Summary")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<string>("TargetIdOrKey")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("TargetType")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ActorUserId");
+
+                    b.HasIndex("ExecutedAtUtc");
+
+                    b.HasIndex("OperationType", "TargetType");
+
+                    b.ToTable("audit_trails", (string)null);
                 });
 
             modelBuilder.Entity("IIoT.EntityFrameworkCore.Identity.ApplicationUser", b =>

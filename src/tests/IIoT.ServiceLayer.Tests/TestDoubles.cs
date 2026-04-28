@@ -1,8 +1,10 @@
 using System.Linq.Expressions;
 using IIoT.Core.Production.Contracts.RecordRepositories;
+using IIoT.Services.Contracts.Auditing;
 using IIoT.Core.Identity.Aggregates.IdentityAccounts;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Caching;
 using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.Contracts.RecordQueries;
@@ -456,6 +458,42 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
     }
 }
 
+internal sealed class RecordingAuditTrailService : IAuditTrailService
+{
+    public List<AuditTrailEntry> Entries { get; } = [];
+
+    public Task TryWriteAsync(
+        AuditTrailEntry entry,
+        CancellationToken cancellationToken = default)
+    {
+        Entries.Add(entry);
+        return Task.CompletedTask;
+    }
+}
+
+internal sealed class RecordingDeviceCacheInvalidationService : IDeviceCacheInvalidationService
+{
+    public List<Guid> RegisteredProcessIds { get; } = [];
+
+    public List<DeviceCacheDescriptor> DeletedDevices { get; } = [];
+
+    public Task InvalidateListsAfterRegisterAsync(
+        Guid processId,
+        CancellationToken cancellationToken = default)
+    {
+        RegisteredProcessIds.Add(processId);
+        return Task.CompletedTask;
+    }
+
+    public Task InvalidateAfterDeleteAsync(
+        DeviceCacheDescriptor device,
+        CancellationToken cancellationToken = default)
+    {
+        DeletedDevices.Add(device);
+        return Task.CompletedTask;
+    }
+}
+
 internal sealed class StubIdentityPasswordService : IIdentityPasswordService
 {
     public Result<bool> SetPasswordResult { get; set; } = Result.Success(true);
@@ -628,6 +666,8 @@ internal sealed class StubRolePolicyService : IRolePolicyService
 
     public Result<bool> UpdateRolePermissionsResult { get; set; } = Result.Success(true);
 
+    public Result<bool> UpdateUserPersonalPermissionsResult { get; set; } = Result.Success(true);
+
     public string? DeletedRoleName { get; private set; }
 
     public Task<IList<string>> GetAllRolesAsync()
@@ -668,7 +708,7 @@ internal sealed class StubRolePolicyService : IRolePolicyService
 
     public Task<Result<bool>> UpdateUserPersonalPermissionsAsync(Guid userId, List<string> permissions)
     {
-        return Task.FromResult(Result.Success(true));
+        return Task.FromResult(UpdateUserPersonalPermissionsResult);
     }
 
     public Task<List<string>> GetUserPersonalPermissionsAsync(Guid userId)

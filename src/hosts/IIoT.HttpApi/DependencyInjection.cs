@@ -11,14 +11,20 @@ using IIoT.Infrastructure;
 using IIoT.Infrastructure.Authentication;
 using IIoT.MasterDataService.Commands.Processes;
 using IIoT.ProductionService;
+using IIoT.ProductionService.Caching;
 using IIoT.ProductionService.Commands.PassStations;
 using IIoT.ProductionService.Profiles;
+using IIoT.ProductionService.Queries.PassStations;
 using IIoT.Services.CrossCutting.Behaviors;
+using IIoT.Services.Contracts.Caching;
 using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.DependencyInjection;
 using IIoT.Services.Contracts.Events.PassStations;
 using IIoT.SharedKernel.Configuration;
+using IIoT.SharedKernel.Paging;
+using IIoT.SharedKernel.Result;
+using MediatR;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -60,10 +66,18 @@ public static class DependencyInjection
         });
 
         builder.Services.AddScoped<IPassStationReceiveService, PassStationReceiveService>();
+        builder.Services.AddScoped<IDeviceCacheInvalidationService, DeviceCacheInvalidationService>();
         builder.Services
             .AddPassStationType<PassDataInjectionReceivedEvent, InjectionWriteModel, InjectionMapper>()
-            .AddPassStationType<PassDataStackingReceivedEvent, StackingWriteModel, StackingMapper>()
-            .AddPassStationQuery<InjectionPassListItemDto, InjectionPassDetailDto>();
+            .AddPassStationType<PassDataStackingReceivedEvent, StackingWriteModel, StackingMapper>();
+        builder.Services.AddScoped<IPassStationQueryDescriptor, InjectionPassStationQueryDescriptor>();
+        builder.Services.AddScoped<IPassStationQueryDescriptor, StackingPassStationQueryDescriptor>();
+        builder.Services.AddTransient<
+            IRequestHandler<GetPassStationListByTypeQuery, Result<PagedList<PassStationListItemDto>>>,
+            GetPassStationListByTypeHandler>();
+        builder.Services.AddTransient<
+            IRequestHandler<GetPassStationDetailByTypeQuery, Result<PassStationDetailDto>>,
+            GetPassStationDetailByTypeHandler>();
 
         builder.Services.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
     }
@@ -135,22 +149,38 @@ public static class DependencyInjection
                     },
                     token);
             };
-            options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+            options.AddPolicy(HttpApiRateLimitPolicies.GeneralApi, context =>
                 RateLimitPartition.GetFixedWindowLimiter(
-                    RateLimitPartitionKeyResolver.ResolveClientPartitionKey(context, "global-anonymous"),
-                    _ => rateLimiting.Global.ToRateLimiterOptions()));
-            options.AddPolicy("login", context =>
+                    RateLimitPartitionKeyResolver.ResolveClientPartitionKey(context, "general-anonymous"),
+                    _ => rateLimiting.GeneralApi.ToRateLimiterOptions()));
+            options.AddPolicy(HttpApiRateLimitPolicies.PasswordLogin, context =>
                 RateLimitPartition.GetFixedWindowLimiter(
-                    RateLimitPartitionKeyResolver.ResolveClientPartitionKey(context, "login-anonymous"),
-                    _ => rateLimiting.Login.ToRateLimiterOptions()));
-            options.AddPolicy("bootstrap", context =>
+                    RateLimitPartitionKeyResolver.ResolveClientPartitionKey(context, "password-login-anonymous"),
+                    _ => rateLimiting.PasswordLogin.ToRateLimiterOptions()));
+            options.AddPolicy(HttpApiRateLimitPolicies.Refresh, context =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    RateLimitPartitionKeyResolver.ResolveClientPartitionKey(context, "refresh-anonymous"),
+                    _ => rateLimiting.Refresh.ToRateLimiterOptions()));
+            options.AddPolicy(HttpApiRateLimitPolicies.EdgeOperatorLogin, context =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    RateLimitPartitionKeyResolver.ResolveClientPartitionKey(context, "edge-operator-login-anonymous"),
+                    _ => rateLimiting.EdgeOperatorLogin.ToRateLimiterOptions()));
+            options.AddPolicy(HttpApiRateLimitPolicies.Bootstrap, context =>
                 RateLimitPartition.GetFixedWindowLimiter(
                     RateLimitPartitionKeyResolver.ResolveClientPartitionKey(context, "bootstrap-anonymous"),
                     _ => rateLimiting.Bootstrap.ToRateLimiterOptions()));
-            options.AddPolicy("edge-upload", context =>
+            options.AddPolicy(HttpApiRateLimitPolicies.CapacityUpload, context =>
                 RateLimitPartition.GetTokenBucketLimiter(
                     RateLimitPartitionKeyResolver.ResolveEdgeUploadPartitionKey(context),
-                    _ => rateLimiting.EdgeUpload.ToRateLimiterOptions()));
+                    _ => rateLimiting.CapacityUpload.ToRateLimiterOptions()));
+            options.AddPolicy(HttpApiRateLimitPolicies.DeviceLogUpload, context =>
+                RateLimitPartition.GetTokenBucketLimiter(
+                    RateLimitPartitionKeyResolver.ResolveEdgeUploadPartitionKey(context),
+                    _ => rateLimiting.DeviceLogUpload.ToRateLimiterOptions()));
+            options.AddPolicy(HttpApiRateLimitPolicies.PassStationUpload, context =>
+                RateLimitPartition.GetTokenBucketLimiter(
+                    RateLimitPartitionKeyResolver.ResolveEdgeUploadPartitionKey(context),
+                    _ => rateLimiting.PassStationUpload.ToRateLimiterOptions()));
         });
 
         builder.Services.AddCors(options =>
@@ -172,5 +202,7 @@ public static class DependencyInjection
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddExceptionHandler<UseCaseExceptionHandler>();
         builder.Services.AddProblemDetails();
+        builder.Services.AddHealthChecks()
+            .AddCheck<PostgresReadinessHealthCheck>("postgres-ready");
     }
 }

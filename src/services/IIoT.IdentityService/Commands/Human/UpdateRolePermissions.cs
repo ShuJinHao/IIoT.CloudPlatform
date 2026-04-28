@@ -1,6 +1,9 @@
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Auditing;
+using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Identity;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.CrossCutting.Caching;
-using IIoT.Services.Contracts;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 
@@ -12,32 +15,91 @@ public record UpdateRolePermissionsCommand(string RoleName, List<string> Permiss
 
 public class UpdateRolePermissionsHandler(
     IRolePolicyService rolePolicyService,
-    ICacheService cacheService
+    ICacheService cacheService,
+    ICurrentUser currentUser,
+    IAuditTrailService auditTrailService
 ) : ICommandHandler<UpdateRolePermissionsCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(UpdateRolePermissionsCommand request, CancellationToken cancellationToken)
     {
-        if (request.RoleName.Equals(
-                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
-                StringComparison.OrdinalIgnoreCase))
+        if (request.RoleName.Equals(SystemRoles.Admin, StringComparison.OrdinalIgnoreCase))
         {
-            return Result.Failure("系统保护：内置 Admin 角色的权限由系统硬编码，禁止修改！");
+            return await FailAsync(
+                request,
+                "System protection: built-in Admin role permissions cannot be modified.",
+                cancellationToken);
         }
 
         var result = await rolePolicyService.UpdateRolePermissionsAsync(request.RoleName, request.Permissions);
 
         if (result.IsSuccess && result.Value)
         {
-            // 角色权限变更后，爆破所有用户的权限缓存（下次请求时重新从 DB 计算）
-            // 无法枚举哪些用户属于该角色，用模式删除兜底
             await cacheService.RemoveByPatternAsync(
                 CacheKeys.PermissionByUserPattern(),
                 cancellationToken);
             await cacheService.RemoveAsync(
                 CacheKeys.AllDefinedPermissions(),
                 cancellationToken);
+
+            await auditTrailService.TryWriteAsync(
+                CreateAuditEntry(
+                    request,
+                    succeeded: true,
+                    summary: $"Updated role {request.RoleName} permissions with {request.Permissions.Count} entries."),
+                cancellationToken);
+        }
+        else
+        {
+            await auditTrailService.TryWriteAsync(
+                CreateAuditEntry(
+                    request,
+                    succeeded: false,
+                    summary: $"Update role {request.RoleName} permissions.",
+                    failureReason: string.Join("; ", result.Errors ?? ["Role permission update failed."])),
+                cancellationToken);
         }
 
         return result;
+    }
+
+    private async Task<Result<bool>> FailAsync(
+        UpdateRolePermissionsCommand request,
+        string message,
+        CancellationToken cancellationToken)
+    {
+        await auditTrailService.TryWriteAsync(
+            CreateAuditEntry(
+                request,
+                succeeded: false,
+                summary: $"Update role {request.RoleName} permissions.",
+                failureReason: message),
+            cancellationToken);
+
+        return Result.Failure(message);
+    }
+
+    private AuditTrailEntry CreateAuditEntry(
+        UpdateRolePermissionsCommand request,
+        bool succeeded,
+        string summary,
+        string? failureReason = null)
+    {
+        return new AuditTrailEntry(
+            ParseActorUserId(currentUser.Id),
+            currentUser.UserName,
+            "Role.Permissions.Update",
+            "Role",
+            request.RoleName,
+            DateTime.UtcNow,
+            succeeded,
+            summary,
+            failureReason);
+    }
+
+    private static Guid? ParseActorUserId(string? rawUserId)
+    {
+        return Guid.TryParse(rawUserId, out var actorUserId)
+            ? actorUserId
+            : null;
     }
 }

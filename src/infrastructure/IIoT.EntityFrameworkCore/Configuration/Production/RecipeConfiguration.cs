@@ -49,6 +49,9 @@ public class RecipeConfiguration : IEntityTypeConfiguration<Recipe>
         builder.HasIndex(r => new { r.ProcessId, r.DeviceId })
             .HasDatabaseName("ix_recipes_process_device");
 
+        builder.HasIndex(r => r.DeviceId)
+            .HasDatabaseName("ix_recipes_device_id");
+
         builder.HasIndex(r => new { r.RecipeName, r.Version })
             .HasDatabaseName("ix_recipes_name_version");
     }

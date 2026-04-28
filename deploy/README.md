@@ -12,7 +12,10 @@ Current production assumptions:
 - No public domain
 - No production TLS certificate yet
 
-`HTTPS` and `HSTS` are intentionally excluded from this batch. They must be delivered in a later dedicated hardening window.
+`HTTPS`, `HSTS`, multi-replica rollout, and pseudo-high-availability are intentionally excluded from this batch.
+
+Current rollout target is a single-machine production starter, not a multi-replica topology.
+`iiot-gateway` keeps one upstream `httpapi` destination in this batch on purpose.
 
 ## Topology
 
@@ -48,32 +51,130 @@ npm run dev
 ## Single Machine Production
 
 1. Copy `deploy/.env.example` to a real `.env`.
-2. Replace all placeholder secrets.
+2. Replace every placeholder secret and set the application image repositories for the real registry namespace.
 3. Keep `PUBLIC_BASE_URL` as an origin only, without a trailing slash.
 4. Validate the template before the first rollout:
 
 ```powershell
-docker compose --env-file deploy/.env.example -f deploy/docker-compose.prod.yml config
+docker compose --env-file deploy/.env.example -f deploy/docker-compose.prod.yml config -q
 ```
 
-5. Pull or build the images referenced in `.env`.
-6. Start infrastructure:
+5. Use a `release_tag` produced by `cloud-image`. The only standard production version format in this batch is `sha-*`.
+6. First deployment, or a post-clean rebuild, may not have `deploy/releases/current-release.env` yet. That is normal for this stage.
+7. Keep the release scripts executable on the server:
 
 ```powershell
-docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml up -d postgres redis-cache rabbitmq seq
+chmod +x deploy/scripts/*.sh
 ```
 
-7. Run the migration/bootstrap job:
+8. Manual release uses the standard release entrypoint:
 
 ```powershell
-docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml run --rm iiot-migration
+$env:DEPLOY_GIT_SHA = "<git-sha>"
+$env:DEPLOY_TRIGGERED_BY = "manual"
+bash deploy/scripts/deploy-release.sh sha-0123456789abcdef
 ```
 
-8. Start application services:
+9. GitHub release uses the `cloud-deploy` workflow with the same `release_tag`.
+
+What the standard release entrypoint does:
+
+- runs `pre-deploy-check.sh`
+- forces a fresh PostgreSQL backup
+- rewrites only the 5 application image coordinates in `.env`
+- runs `iiot-migration`
+- starts the application containers
+- runs `post-deploy-check.sh`
+- writes `deploy/releases/current-release.env`, `previous-release.env`, `staged-release.env`, and `history/*`
+
+`/internal/healthz` remains the production readiness probe for this batch.
+It verifies `nginx -> iiot-gateway -> iiot-httpapi` and PostgreSQL connectivity.
+The nginx template only allows localhost access to this route. It is not a public anonymous health endpoint.
+
+## Standard Rollback
+
+Use the standard rollback entrypoint for application-only rollback:
 
 ```powershell
-docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml up -d iiot-httpapi iiot-gateway iiot-dataworker iiot-web nginx-gateway
+bash deploy/scripts/rollback-release.sh
 ```
+
+You can also target an explicit history record:
+
+```powershell
+bash deploy/scripts/rollback-release.sh releases/history/20260421T083000Z-sha-0123456789abcdef.env
+```
+
+Rollback rules for this batch:
+
+- Only the 5 application images are rolled back.
+- The rollback entrypoint does not run database downgrade logic.
+- The rollback entrypoint does not call the database restore flow automatically.
+- If a schema-changing release cannot pass health checks after application rollback, transfer to the existing database recovery flow or clear and rebuild the database in the current pre-launch environment.
+
+The operator workflow for release, rollback, backup, restore, and post-deploy checks is documented in [OPERATIONS.md](./OPERATIONS.md).
+
+## Recurring Backup And Verify
+
+This batch ships cron templates only. `cloud-deploy` does not modify system cron automatically.
+
+Standard operator steps:
+
+1. Replace `/srv/iiot-cloud/deploy` in `deploy/cron/iiot-backup.cron.example` and `deploy/cron/iiot-backup-verify.cron.example` with the real deploy directory on the server.
+2. Append both template entries to the deployment user's crontab.
+3. Keep the default cadence unless a later ops decision explicitly changes it:
+   - daily backup at `02:30`
+   - weekly restore verification at `03:30` every Sunday
+4. Confirm the deployment user can access Docker and run the scripts manually before enabling the cron entries.
+5. Verify the installed crontab includes both entries.
+
+## Configuration Ownership
+
+Use `deploy/.env.example` only as a template. Real production values should come from one of these sources:
+
+- CI secret `DEPLOY_ENV_FILE`, which is written to the server as `.env` during `cloud-deploy`
+- an operator-managed `.env` on the target server for manual rollout
+
+Values that must be replaced by secrets or environment-specific settings:
+
+- application image repositories for `IIOT_HTTPAPI_IMAGE`, `IIOT_GATEWAY_IMAGE`, `IIOT_DATAWORKER_IMAGE`, `IIOT_MIGRATION_IMAGE`, and `IIOT_WEB_IMAGE`
+- `PUBLIC_BASE_URL`
+- `PG_PASSWORD`
+- `RABBITMQ_DEFAULT_PASS`
+- `JWTSETTINGS__SECRET`
+- `SEQ_ADMIN_PASSWORD`
+- `SEED_ADMIN_PASSWORD`
+- `SEQ_API_KEY` if Seq ingestion is protected
+
+Values that are template defaults and usually stay unchanged for the single-machine starter:
+
+- `IIOT_NGINX_IMAGE`
+- `IIOT_POSTGRES_IMAGE`
+- `IIOT_REDIS_IMAGE`
+- `IIOT_RABBITMQ_IMAGE`
+- `IIOT_SEQ_IMAGE`
+- `GATEWAY_HTTP_PORT`
+- `SEQ_HOST_PORT`
+- `RABBITMQ_MANAGEMENT_PORT`
+- `FORWARDED_HEADERS_ENABLED`
+- `FORWARDED_HEADERS_FORWARDLIMIT`
+- `FORWARDED_HEADERS_KNOWNNETWORKS__0`
+- `FORWARDED_HEADERS_KNOWNNETWORKS__1`
+- `BACKUP_RETENTION_DAYS`
+- `BACKUP_MAX_AGE_HOURS`
+- `BACKUP_VERIFY_MAX_AGE_DAYS`
+- local Vite development CORS origins
+
+Optional values that stay empty unless the operator explicitly needs them:
+
+- `Infrastructure__EventBus__EndpointPrefix`
+- `SEQ_API_KEY`
+
+Release version ownership stays explicit:
+
+- `DEPLOY_ENV_FILE` provides the registry/repository coordinates and secrets.
+- `release_tag` comes from `cloud-image` and is passed separately to `cloud-deploy`.
+- `latest` is not a standard production application version in this batch.
 
 ## Gateway Notes
 
@@ -96,6 +197,7 @@ Seq is the current log aggregation baseline. Application services write both:
 
 - local rolling files under `/app/logs`
 - centralized events to Seq
+- gateway access and error logs to container stdout/stderr
 
 DataWorker queues are explicit and stable:
 
@@ -117,6 +219,8 @@ Replay guidance:
 3. Move messages back to the original queue in controlled batches.
 4. Watch Seq during replay and stop if the same failure pattern returns.
 
+For backup, restore, health checking, and the standard manual handling order, use [OPERATIONS.md](./OPERATIONS.md).
+
 ## Alias Retirement Gate
 
 Do not remove the deprecated aliases until both conditions are true:
@@ -124,12 +228,11 @@ Do not remove the deprecated aliases until both conditions are true:
 - 14 consecutive days with zero alias hits
 - no active consumer or deployed client still depends on the alias
 
-## Next Batch
+## Later Hardening
 
-The next public-network hardening batch must cover:
+Future public-network hardening can cover:
 
 - domain and certificate setup
 - TLS termination
 - `HTTPS` redirect policy
 - `HSTS`
-

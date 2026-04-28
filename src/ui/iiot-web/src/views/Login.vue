@@ -15,18 +15,18 @@
         </div>
         <div class="logo-text">
           <span class="logo-main">IIoT</span>
-          <span class="logo-sub">CLOUD PLATFORM</span>
+          <span class="logo-sub">云平台</span>
         </div>
       </div>
 
       <div class="divider"></div>
 
-      <h2 class="login-title">Operator Login</h2>
-      <p class="login-desc">Use your employee number and password to sign in.</p>
+      <h2 class="login-title">操作员登录</h2>
+      <p class="login-desc">请输入工号和密码登录系统。</p>
 
       <div class="form">
         <div class="field-group" :class="{ 'field-focus': focusedField === 'no' }">
-          <label class="field-label">Employee No</label>
+          <label class="field-label">工号</label>
           <div class="field-input-wrap">
             <svg class="field-icon" viewBox="0 0 20 20" fill="none">
               <circle cx="10" cy="7" r="3.5" stroke="currentColor" stroke-width="1.5"/>
@@ -35,7 +35,7 @@
             <input
               v-model="loginForm.employeeNo"
               type="text"
-              placeholder="Enter employee number"
+              placeholder="请输入工号"
               @focus="focusedField = 'no'"
               @blur="focusedField = ''"
               autocomplete="username"
@@ -44,7 +44,7 @@
         </div>
 
         <div class="field-group" :class="{ 'field-focus': focusedField === 'pw' }">
-          <label class="field-label">Password</label>
+          <label class="field-label">密码</label>
           <div class="field-input-wrap">
             <svg class="field-icon" viewBox="0 0 20 20" fill="none">
               <rect x="4" y="9" width="12" height="9" rx="2" stroke="currentColor" stroke-width="1.5"/>
@@ -53,7 +53,7 @@
             <input
               v-model="loginForm.password"
               :type="showPw ? 'text' : 'password'"
-              placeholder="Enter password"
+              placeholder="请输入密码"
               @focus="focusedField = 'pw'"
               @blur="focusedField = ''"
               @keyup.enter="handleLogin"
@@ -80,14 +80,14 @@
         </div>
 
         <button class="submit-btn" @click="handleLogin" :disabled="loading">
-          <span v-if="!loading">LOGIN</span>
+          <span v-if="!loading">登录</span>
           <span v-else class="loading-dots">
             <span></span><span></span><span></span>
           </span>
         </button>
       </div>
 
-      <p class="footer-tip">Industrial IoT Cloud Platform v1.0</p>
+      <p class="footer-tip">工业物联网云平台 v1.0</p>
     </div>
   </div>
 </template>
@@ -114,7 +114,7 @@ const loginForm = reactive<LoginPayload>({
 
 const handleLogin = async () => {
   if (!loginForm.employeeNo || !loginForm.password) {
-    errorMsg.value = 'Employee number and password are required.';
+    errorMsg.value = '请输入工号和密码。';
     return;
   }
 
@@ -126,7 +126,7 @@ const handleLogin = async () => {
     authStore.setSession(session);
     router.push('/');
   } catch {
-    errorMsg.value = 'Invalid employee number or password.';
+    errorMsg.value = '工号或密码不正确。';
   } finally {
     loading.value = false;
   }
@@ -134,8 +134,6 @@ const handleLogin = async () => {
 </script>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Noto+Sans+SC:wght@300;400;500&display=swap');
-
 .login-root {
   min-height: 100vh;
   background: #0a0e1a;
@@ -246,7 +244,6 @@ const handleLogin = async () => {
   font-weight: 500;
   color: rgba(255,255,255,0.35);
   letter-spacing: 1.5px;
-  text-transform: uppercase;
   margin-bottom: 8px;
   transition: color 0.2s;
 }

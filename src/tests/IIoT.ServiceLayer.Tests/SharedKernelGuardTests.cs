@@ -39,6 +39,39 @@ public sealed class SharedKernelGuardTests
         Assert.Equal(100, pagination.PageSize);
     }
 
+    [Theory]
+    [InlineData(-1, 1)]
+    [InlineData(0, 1)]
+    [InlineData(1, 1)]
+    [InlineData(99, 99)]
+    [InlineData(100, 100)]
+    [InlineData(101, 100)]
+    [InlineData(500, 100)]
+    public void Pagination_PageSize_ShouldClampBoundaryValues(int input, int expected)
+    {
+        var pagination = new Pagination
+        {
+            PageSize = input
+        };
+
+        Assert.Equal(expected, pagination.PageSize);
+    }
+
+    [Theory]
+    [InlineData(-1, 1)]
+    [InlineData(0, 1)]
+    [InlineData(1, 1)]
+    [InlineData(2, 2)]
+    public void Pagination_PageNumber_ShouldClampLowerBoundaryValues(int input, int expected)
+    {
+        var pagination = new Pagination
+        {
+            PageNumber = input
+        };
+
+        Assert.Equal(expected, pagination.PageNumber);
+    }
+
     [Fact]
     public void Specification_ShouldExposeReadOnlyIncludeCollections()
     {

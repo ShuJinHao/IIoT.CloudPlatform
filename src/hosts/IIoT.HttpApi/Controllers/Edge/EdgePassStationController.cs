@@ -13,16 +13,20 @@ namespace IIoT.HttpApi.Controllers;
 public class EdgePassStationController : ApiControllerBase
 {
     [HttpPost("injection/batch")]
-    [EnableRateLimiting("edge-upload")]
-    public async Task<IActionResult> ReceiveInjectionBatch([FromBody] ReceiveInjectionPassCommand command)
+    [EnableRateLimiting(HttpApiRateLimitPolicies.PassStationUpload)]
+    public async Task<IActionResult> ReceiveInjectionBatch(
+        [FromBody] ReceiveInjectionPassCommand command,
+        CancellationToken cancellationToken)
     {
-        return ReturnResult(await Sender.Send(command));
+        return ReturnResult(await Sender.Send(command, cancellationToken));
     }
 
     [HttpPost("stacking")]
-    [EnableRateLimiting("edge-upload")]
-    public async Task<IActionResult> ReceiveStacking([FromBody] ReceiveStackingPassCommand command)
+    [EnableRateLimiting(HttpApiRateLimitPolicies.PassStationUpload)]
+    public async Task<IActionResult> ReceiveStacking(
+        [FromBody] ReceiveStackingPassCommand command,
+        CancellationToken cancellationToken)
     {
-        return ReturnResult(await Sender.Send(command));
+        return ReturnResult(await Sender.Send(command, cancellationToken));
     }
 }

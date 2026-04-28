@@ -34,7 +34,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: "10.0.100"
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -63,4 +63,3 @@ jobs:
 
       - name: Validate production compose
         run: docker compose --env-file deploy/.env.example -f deploy/docker-compose.prod.yml config -q
-

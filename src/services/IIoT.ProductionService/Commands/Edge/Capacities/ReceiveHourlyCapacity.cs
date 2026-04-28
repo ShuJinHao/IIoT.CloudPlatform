@@ -39,7 +39,10 @@ public class ReceiveHourlyCapacityHandler(
         if (!exists)
             return Result.Failure("数据接收失败: 设备不存在");
 
-        var @event = mapper.Map<HourlyCapacityReceivedEvent>(request);
+        var @event = mapper.Map<HourlyCapacityReceivedEvent>(request) with
+        {
+            ReceivedAtUtc = DateTime.UtcNow
+        };
         await cacheService.RemoveAsync(
             CacheKeys.CapacityHourly(request.DeviceId, request.Date, request.PlcName),
             cancellationToken);

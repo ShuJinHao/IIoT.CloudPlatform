@@ -14,6 +14,12 @@ public sealed class OutboxDispatcherWorker(
     {
         _options.Validate();
 
+        logger.LogInformation(
+            "Outbox dispatcher started polling_interval_seconds={polling_interval_seconds} batch_size={batch_size} max_attempts={max_attempts}",
+            _options.PollingIntervalSeconds,
+            _options.BatchSize,
+            _options.MaxAttempts);
+
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(_options.PollingIntervalSeconds));
 
         do
@@ -22,11 +28,17 @@ public sealed class OutboxDispatcherWorker(
             {
                 await using var scope = scopeFactory.CreateAsyncScope();
                 var dispatcher = scope.ServiceProvider.GetRequiredService<IOutboxMessageDispatcher>();
-                var dispatched = await dispatcher.DispatchPendingAsync(stoppingToken);
+                var dispatchResult = await dispatcher.DispatchPendingAsync(stoppingToken);
 
-                if (dispatched > 0)
+                if (dispatchResult.ScannedCount > 0 || dispatchResult.FailedCount > 0)
                 {
-                    logger.LogInformation("Dispatched {Count} outbox message(s).", dispatched);
+                    logger.LogInformation(
+                        "Outbox dispatch iteration scanned={scanned_count} succeeded={succeeded_count} failed={failed_count} pending_backlog={pending_backlog_count} last_failure_summary={last_failure_summary}",
+                        dispatchResult.ScannedCount,
+                        dispatchResult.SucceededCount,
+                        dispatchResult.FailedCount,
+                        dispatchResult.PendingBacklogCount,
+                        dispatchResult.LastFailureSummary ?? string.Empty);
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

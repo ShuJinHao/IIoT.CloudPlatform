@@ -8,6 +8,8 @@ public sealed class OutboxDispatcherOptions
 
     public int PollingIntervalSeconds { get; set; } = 5;
 
+    public int MaxAttempts { get; set; } = 5;
+
     public void Validate()
     {
         if (BatchSize <= 0)
@@ -18,6 +20,11 @@ public sealed class OutboxDispatcherOptions
         if (PollingIntervalSeconds <= 0)
         {
             throw new InvalidOperationException("Outbox.PollingIntervalSeconds must be greater than 0.");
+        }
+
+        if (MaxAttempts <= 0)
+        {
+            throw new InvalidOperationException("Outbox.MaxAttempts must be greater than 0.");
         }
     }
 }

@@ -2,5 +2,5 @@ namespace IIoT.EntityFrameworkCore.Outbox;
 
 public interface IOutboxMessageDispatcher
 {
-    Task<int> DispatchPendingAsync(CancellationToken cancellationToken = default);
+    Task<OutboxDispatchResult> DispatchPendingAsync(CancellationToken cancellationToken = default);
 }

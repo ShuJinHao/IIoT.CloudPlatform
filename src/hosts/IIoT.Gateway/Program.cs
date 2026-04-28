@@ -13,7 +13,7 @@ builder.Services
 
 var app = builder.Build();
 
-app.UseSerilogRequestLogging();
+app.UseIIoTSerilogRequestLogging();
 app.UseMiddleware<GatewayObservabilityMiddleware>();
 app.MapDefaultEndpoints();
 app.MapReverseProxy();
