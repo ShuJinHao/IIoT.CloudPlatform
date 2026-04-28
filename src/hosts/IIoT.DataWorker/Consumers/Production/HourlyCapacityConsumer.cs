@@ -14,6 +14,10 @@ public sealed class HourlyCapacityConsumer(ISender sender)
 {
     public async Task Consume(ConsumeContext<HourlyCapacityReceivedEvent> context)
     {
+        EventSchemaVersionGuard.EnsureSupported(
+            context.Message.SchemaVersion,
+            nameof(HourlyCapacityReceivedEvent));
+
         var command = new PersistHourlyCapacityCommand(context.Message);
         var result = await sender.Send(command, context.CancellationToken);
 

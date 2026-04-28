@@ -5,6 +5,8 @@ namespace IIoT.Services.Contracts.Events.Capacities;
 /// </summary>
 public record HourlyCapacityReceivedEvent
 {
+    public int SchemaVersion { get; init; } = 1;
+
     public Guid DeviceId { get; init; }
 
     public DateOnly Date { get; init; }

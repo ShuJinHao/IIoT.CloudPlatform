@@ -43,6 +43,7 @@ public class ReceiveHourlyCapacityHandler(
         {
             ReceivedAtUtc = DateTime.UtcNow
         };
+        await eventPublisher.PublishAsync(@event, cancellationToken);
         await cacheService.RemoveAsync(
             CacheKeys.CapacityHourly(request.DeviceId, request.Date, request.PlcName),
             cancellationToken);
@@ -64,7 +65,6 @@ public class ReceiveHourlyCapacityHandler(
         await cacheService.RemoveByPatternAsync(
             CacheKeys.CapacityPagedByDevicePattern(request.DeviceId),
             cancellationToken);
-        await eventPublisher.PublishAsync(@event, cancellationToken);
 
         return Result.Success(true);
     }

@@ -13,5 +13,7 @@ ENV TZ=Asia/Shanghai
 
 COPY --from=build /app/publish .
 
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 CMD dotnet IIoT.DataWorker.dll --healthcheck || exit 1
+
 ENTRYPOINT ["dotnet", "IIoT.DataWorker.dll"]
 

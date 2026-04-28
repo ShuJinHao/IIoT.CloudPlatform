@@ -53,7 +53,14 @@ public sealed class EfRefreshTokenService(
         existing.ReplacedByTokenId = replacementSession.Id;
 
         dbContext.RefreshTokenSessions.Add(replacementSession);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return Result.Unauthorized("Refresh token is invalid or expired.");
+        }
 
         return Result.Success(new RefreshTokenRotationResult(
             actorType,

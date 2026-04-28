@@ -6,7 +6,9 @@ using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.EntityFrameworkCore;
 using IIoT.EntityFrameworkCore.Auditing;
+using IIoT.EntityFrameworkCore.Identity;
 using IIoT.EntityFrameworkCore.Outbox;
+using IIoT.EntityFrameworkCore.Repository;
 using IIoT.EventBus;
 using IIoT.IdentityService.Commands;
 using IIoT.Infrastructure.Logging;
@@ -49,6 +51,38 @@ public sealed class InfrastructureBehaviorTests
         Assert.True(dbContext.Model.FindEntityType(typeof(Recipe))!
             .FindProperty(nameof(Recipe.RowVersion))!
             .IsConcurrencyToken);
+        Assert.True(dbContext.Model.FindEntityType(typeof(RefreshTokenSession))!
+            .FindProperty(nameof(RefreshTokenSession.RowVersion))!
+            .IsConcurrencyToken);
+    }
+
+    [Fact]
+    public async Task EfRepository_Update_ShouldPreserveTrackedEntityChangedProperties()
+    {
+        using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
+        using var scope = provider.CreateScope();
+
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var repository = new EfRepository<Device>(dbContext);
+        var device = new Device("Device-01", "DEV-TRACKED001", Guid.NewGuid());
+
+        dbContext.Devices.Add(device);
+        await dbContext.SaveChangesAsync();
+
+        device.Rename("Device-02");
+        dbContext.ChangeTracker.DetectChanges();
+
+        repository.Update(device);
+
+        var modifiedProperties = dbContext.Entry(device)
+            .Properties
+            .Where(property => property.IsModified)
+            .Select(property => property.Metadata.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.Contains(nameof(Device.DeviceName), modifiedProperties);
+        Assert.DoesNotContain(nameof(Device.Code), modifiedProperties);
+        Assert.DoesNotContain(nameof(Device.ProcessId), modifiedProperties);
     }
 
     [Fact]

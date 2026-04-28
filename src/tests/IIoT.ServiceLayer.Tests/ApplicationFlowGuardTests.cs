@@ -1,4 +1,5 @@
 using AutoMapper;
+using System.Text.Json;
 using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.MasterData.Aggregates.MfgProcesses;
 using IIoT.Core.Production.Aggregates.Devices;
@@ -16,6 +17,8 @@ using IIoT.Services.CrossCutting.Caching;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.Contracts.Events.Capacities;
+using IIoT.Services.Contracts.Events.DeviceLogs;
+using IIoT.Services.Contracts.Events.PassStations;
 using IIoT.SharedKernel.Result;
 using IIoT.SharedKernel.Specification;
 using Microsoft.Extensions.DependencyInjection;
@@ -519,11 +522,12 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
-    public async Task ReceiveHourlyCapacityHandler_ShouldClearCapacityCachesBeforePublishing()
+    public async Task ReceiveHourlyCapacityHandler_ShouldPublishBeforeClearingCapacityCaches()
     {
         var deviceId = Guid.NewGuid();
-        var cache = new RecordingCacheService();
-        var publisher = new RecordingEventPublisher();
+        var callOrder = new List<string>();
+        var cache = new RecordingCacheService(callOrder);
+        var publisher = new RecordingEventPublisher(callOrder);
         var mapperServices = new ServiceCollection();
         mapperServices.AddLogging();
         mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
@@ -549,6 +553,7 @@ public sealed class ApplicationFlowGuardTests
         var result = await handler.Handle(request, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
+        Assert.Equal("publish", callOrder[0]);
         var published = Assert.IsType<HourlyCapacityReceivedEvent>(publisher.LastPublishedEvent);
         Assert.Equal(deviceId, published.DeviceId);
         Assert.True(published.ReceivedAtUtc > DateTime.UtcNow.AddMinutes(-1));
@@ -560,6 +565,61 @@ public sealed class ApplicationFlowGuardTests
         Assert.Contains(CacheKeys.CapacitySummaryPattern(deviceId), cache.RemovedPatterns);
         Assert.Contains(CacheKeys.CapacityRangePattern(deviceId), cache.RemovedPatterns);
         Assert.Contains(CacheKeys.CapacityPagedByDevicePattern(deviceId), cache.RemovedPatterns);
+    }
+
+    [Fact]
+    public async Task ReceiveHourlyCapacityHandler_ShouldNotClearCapacityCachesWhenPublishFails()
+    {
+        var deviceId = Guid.NewGuid();
+        var callOrder = new List<string>();
+        var cache = new RecordingCacheService(callOrder);
+        var publisher = new RecordingEventPublisher(
+            callOrder,
+            new InvalidOperationException("publish failed"));
+        var mapperServices = new ServiceCollection();
+        mapperServices.AddLogging();
+        mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
+        var mapper = mapperServices.BuildServiceProvider().GetRequiredService<IMapper>();
+        var handler = new ReceiveHourlyCapacityHandler(
+            new StubDeviceIdentityQueryService { Exists = true },
+            mapper,
+            publisher,
+            cache);
+
+        var request = new ReceiveHourlyCapacityCommand(
+            deviceId,
+            DateOnly.FromDateTime(DateTime.UtcNow),
+            "D",
+            9,
+            30,
+            "09:30",
+            16,
+            15,
+            1,
+            "PLC-01");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            handler.Handle(request, CancellationToken.None));
+
+        Assert.Equal("publish failed", exception.Message);
+        Assert.Equal(["publish"], callOrder);
+        Assert.Empty(cache.RemovedKeys);
+        Assert.Empty(cache.RemovedPatterns);
+    }
+
+    [Fact]
+    public void EventContracts_ShouldDefaultMissingSchemaVersionToV1()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        Assert.Equal(1, new HourlyCapacityReceivedEvent().SchemaVersion);
+        Assert.Equal(1, new DeviceLogReceivedEvent().SchemaVersion);
+        Assert.Equal(1, new PassDataInjectionReceivedEvent().SchemaVersion);
+        Assert.Equal(1, new PassDataStackingReceivedEvent().SchemaVersion);
+        Assert.Equal(1, JsonSerializer.Deserialize<HourlyCapacityReceivedEvent>("{}", options)!.SchemaVersion);
+        Assert.Equal(1, JsonSerializer.Deserialize<DeviceLogReceivedEvent>("{}", options)!.SchemaVersion);
+        Assert.Equal(1, JsonSerializer.Deserialize<PassDataInjectionReceivedEvent>("{}", options)!.SchemaVersion);
+        Assert.Equal(1, JsonSerializer.Deserialize<PassDataStackingReceivedEvent>("{}", options)!.SchemaVersion);
     }
 
     [Fact]

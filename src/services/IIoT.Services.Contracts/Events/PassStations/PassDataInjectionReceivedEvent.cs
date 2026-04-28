@@ -5,6 +5,8 @@ namespace IIoT.Services.Contracts.Events.PassStations;
 /// </summary>
 public record PassDataInjectionReceivedEvent : IPassStationEvent
 {
+    public int SchemaVersion { get; init; } = 1;
+
     public Guid DeviceId { get; init; }
     public List<PassDataInjectionItem> Items { get; init; } = [];
 }

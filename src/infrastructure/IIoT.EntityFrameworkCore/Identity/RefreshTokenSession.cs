@@ -19,4 +19,6 @@ public sealed class RefreshTokenSession
     public string? RevokedReason { get; set; }
 
     public Guid? ReplacedByTokenId { get; set; }
+
+    public uint RowVersion { get; set; }
 }

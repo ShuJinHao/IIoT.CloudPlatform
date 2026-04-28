@@ -118,6 +118,17 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
+    public void BootstrapHardeningDesign_ShouldDocumentCompatibleNextStep()
+    {
+        var documentSource = File.ReadAllText(FindRepoFile("docs", "bootstrap-auth-hardening.md"));
+
+        documentSource.Should().Contain("预共享启动密钥");
+        documentSource.Should().Contain("clientCode");
+        documentSource.Should().Contain("DeviceId");
+        documentSource.Should().Contain("不修改 `EdgeBootstrapController`");
+    }
+
+    [Fact]
     public void HttpApiControllers_ShouldOnlyExposeHumanAndEdgeRoutes()
     {
         var controllerDirectory = FindRepoDirectory("src", "hosts", "IIoT.HttpApi", "Controllers");
@@ -235,6 +246,55 @@ public sealed class ConfigurationGuardTests
 
         migrationConfiguration.GetValue<int>("Infrastructure:Postgres:CommandTimeoutSeconds").Should().BeGreaterThan(0);
         migrationConfiguration.GetValue<int>("Infrastructure:Postgres:MaxRetryCount").Should().BeGreaterThanOrEqualTo(0);
+    }
+
+    [Fact]
+    public void DataWorkerDockerfile_ShouldUseHealthcheck_AndMigrationWorkAppShouldRemainOneShot()
+    {
+        var dataWorkerDockerfile = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.DataWorker", "Dockerfile"));
+        var dataWorkerProgram = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.DataWorker", "Program.cs"));
+        var migrationDockerfile = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.MigrationWorkApp", "Dockerfile"));
+        var composeSource = File.ReadAllText(
+            FindRepoFile("deploy", "docker-compose.prod.yml"));
+
+        dataWorkerDockerfile.Should().Contain("HEALTHCHECK");
+        dataWorkerDockerfile.Should().Contain("dotnet IIoT.DataWorker.dll --healthcheck");
+        dataWorkerProgram.Should().Contain("--healthcheck");
+        dataWorkerProgram.Should().Contain("CanConnectAsync");
+        migrationDockerfile.Should().NotContain("HEALTHCHECK");
+        composeSource.Should().Contain("iiot-migration:");
+        composeSource.Should().Contain("restart: \"no\"");
+    }
+
+    [Fact]
+    public void EventContractsAndConsumers_ShouldDeclareSchemaVersionGuard()
+    {
+        var eventContractFiles = new[]
+        {
+            FindRepoFile("src", "services", "IIoT.Services.Contracts", "Events", "Capacities", "HourlyCapacityReceivedEvent.cs"),
+            FindRepoFile("src", "services", "IIoT.Services.Contracts", "Events", "DeviceLogs", "DeviceLogReceivedEvent.cs"),
+            FindRepoFile("src", "services", "IIoT.Services.Contracts", "Events", "PassStations", "PassDataInjectionReceivedEvent.cs"),
+            FindRepoFile("src", "services", "IIoT.Services.Contracts", "Events", "PassStations", "PassDataStackingReceivedEvent.cs")
+        };
+        var consumerFiles = new[]
+        {
+            FindRepoFile("src", "hosts", "IIoT.DataWorker", "Consumers", "Production", "HourlyCapacityConsumer.cs"),
+            FindRepoFile("src", "hosts", "IIoT.DataWorker", "Consumers", "Production", "DeviceLogConsumer.cs"),
+            FindRepoFile("src", "hosts", "IIoT.DataWorker", "Consumers", "Production", "PassStationConsumer.cs")
+        };
+
+        foreach (var file in eventContractFiles)
+        {
+            File.ReadAllText(file).Should().Contain("SchemaVersion { get; init; } = 1");
+        }
+
+        foreach (var file in consumerFiles)
+        {
+            File.ReadAllText(file).Should().Contain("EventSchemaVersionGuard.EnsureSupported");
+        }
     }
 
     [Fact]

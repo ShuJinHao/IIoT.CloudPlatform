@@ -5,6 +5,8 @@ namespace IIoT.Services.Contracts.Events.DeviceLogs;
 /// </summary>
 public record DeviceLogReceivedEvent
 {
+    public int SchemaVersion { get; init; } = 1;
+
     /// <summary>
     /// 本批日志归属的设备 ID。
     /// </summary>

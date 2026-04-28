@@ -110,7 +110,7 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
     }
 }
 
-internal sealed class RecordingCacheService : ICacheService
+internal sealed class RecordingCacheService(List<string>? callOrder = null) : ICacheService
 {
     public List<string> RemovedKeys { get; } = [];
     public List<string> RemovedPatterns { get; } = [];
@@ -163,12 +163,14 @@ internal sealed class RecordingCacheService : ICacheService
 
     public Task RemoveAsync(string key, CancellationToken cancellationToken = default)
     {
+        callOrder?.Add($"cache:{key}");
         RemovedKeys.Add(key);
         return Task.CompletedTask;
     }
 
     public Task RemoveByPatternAsync(string pattern, CancellationToken cancellationToken = default)
     {
+        callOrder?.Add($"cache-pattern:{pattern}");
         RemovedPatterns.Add(pattern);
         return Task.CompletedTask;
     }
@@ -717,7 +719,9 @@ internal sealed class StubRolePolicyService : IRolePolicyService
     }
 }
 
-internal sealed class RecordingEventPublisher : IEventPublisher
+internal sealed class RecordingEventPublisher(
+    List<string>? callOrder = null,
+    Exception? publishException = null) : IEventPublisher
 {
     public object? LastPublishedEvent { get; private set; }
 
@@ -726,6 +730,12 @@ internal sealed class RecordingEventPublisher : IEventPublisher
         CancellationToken cancellationToken = default)
         where TEvent : class
     {
+        callOrder?.Add("publish");
+        if (publishException is not null)
+        {
+            throw publishException;
+        }
+
         LastPublishedEvent = @event;
         return Task.CompletedTask;
     }
