@@ -3,7 +3,6 @@ using IIoT.Core.Production.Specifications.Devices;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
-using IIoT.Services.Contracts.Caching;
 using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Attributes;
@@ -20,7 +19,6 @@ public class DeleteDeviceHandler(
     ICurrentUser currentUser,
     IRepository<Device> deviceRepository,
     IDeviceDeletionDependencyQueryService dependencyQueryService,
-    IDeviceCacheInvalidationService cacheInvalidationService,
     IRefreshTokenService refreshTokenService,
     IDevicePermissionService devicePermissionService,
     IAuditTrailService auditTrailService)
@@ -35,12 +33,12 @@ public class DeleteDeviceHandler(
             cancellationToken);
 
         if (device is null)
-            return await FailAsync(request.DeviceId.ToString(), "Device was not found.", cancellationToken);
+            return await FailAsync(request.DeviceId.ToString(), "目标设备不存在", cancellationToken);
 
         if (!string.Equals(currentUser.Role, SystemRoles.Admin, StringComparison.Ordinal))
         {
             if (!Guid.TryParse(currentUser.Id, out var userId))
-                return await FailAsync(device.Id.ToString(), "Current user identity is invalid.", cancellationToken);
+                return await FailAsync(device.Id.ToString(), "用户凭证异常", cancellationToken);
 
             var accessibleDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
                 userId,
@@ -48,7 +46,7 @@ public class DeleteDeviceHandler(
                 cancellationToken);
             if (accessibleDeviceIds is null || !accessibleDeviceIds.Contains(device.Id))
             {
-                return await FailAsync(device.Id.ToString(), "Unauthorized device access.", cancellationToken);
+                return await FailAsync(device.Id.ToString(), "越权：未授权访问该设备", cancellationToken);
             }
         }
 
@@ -61,24 +59,24 @@ public class DeleteDeviceHandler(
             var blockedBy = new List<string>();
             if (dependencies.HasRecipes)
             {
-                blockedBy.Add("recipes");
+                blockedBy.Add("配方数据");
             }
             if (dependencies.HasCapacities)
             {
-                blockedBy.Add("capacities");
+                blockedBy.Add("产能记录");
             }
             if (dependencies.HasDeviceLogs)
             {
-                blockedBy.Add("device-logs");
+                blockedBy.Add("设备日志");
             }
             if (dependencies.HasPassStations)
             {
-                blockedBy.Add("pass-stations");
+                blockedBy.Add("过站数据");
             }
 
             return await FailAsync(
                 device.Id.ToString(),
-                $"Device cannot be deleted because dependencies exist: {string.Join(", ", blockedBy)}",
+                $"设备存在历史数据依赖，禁止删除：{string.Join("、", blockedBy)}",
                 cancellationToken);
         }
 
@@ -88,9 +86,6 @@ public class DeleteDeviceHandler(
 
         if (affected > 0)
         {
-            await cacheInvalidationService.InvalidateAfterDeleteAsync(
-                new DeviceCacheDescriptor(device.Id, device.ProcessId, device.Code),
-                cancellationToken);
             await refreshTokenService.RevokeSubjectTokensAsync(
                 IIoTClaimTypes.EdgeDeviceActor,
                 device.Id,
@@ -107,8 +102,8 @@ public class DeleteDeviceHandler(
                 device.Id.ToString(),
                 DateTime.UtcNow,
                 affected > 0,
-                $"Deleted device {device.DeviceName} ({device.Code}).",
-                affected > 0 ? null : "SaveChangesAsync did not persist any rows."),
+                $"删除设备 {device.DeviceName}（{device.Code}）。",
+                affected > 0 ? null : "保存设备删除记录失败。"),
             cancellationToken);
 
         return Result.Success(affected > 0);
@@ -128,7 +123,7 @@ public class DeleteDeviceHandler(
                 targetIdOrKey,
                 DateTime.UtcNow,
                 false,
-                $"Delete device {targetIdOrKey}.",
+                $"删除设备 {targetIdOrKey}。",
                 message),
             cancellationToken);
 

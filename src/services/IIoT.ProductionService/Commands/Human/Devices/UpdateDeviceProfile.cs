@@ -1,7 +1,6 @@
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Specifications.Devices;
 using IIoT.Services.CrossCutting.Attributes;
-using IIoT.Services.CrossCutting.Caching;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.SharedKernel.Messaging;
@@ -19,7 +18,6 @@ public record UpdateDeviceProfileCommand(
 public class UpdateDeviceProfileHandler(
     ICurrentUser currentUser,
     IRepository<Device> deviceRepository,
-    ICacheService cacheService,
     IDevicePermissionService devicePermissionService)
     : ICommandHandler<UpdateDeviceProfileCommand, Result<bool>>
 {
@@ -60,18 +58,7 @@ public class UpdateDeviceProfileHandler(
         device.Rename(deviceName);
 
         deviceRepository.Update(device);
-        var affected = await deviceRepository.SaveChangesAsync(cancellationToken);
-
-        if (affected > 0)
-        {
-            await cacheService.RemoveAsync(
-                CacheKeys.DeviceCode(device.Code), cancellationToken);
-            await cacheService.RemoveAsync(
-                CacheKeys.DevicesByProcess(device.ProcessId), cancellationToken);
-            await cacheService.RemoveAsync(CacheKeys.AllDevices(), cancellationToken);
-            await cacheService.RemoveAsync(
-                CacheKeys.DeviceIdentity(device.Id), cancellationToken);
-        }
+        await deviceRepository.SaveChangesAsync(cancellationToken);
 
         return Result.Success(true);
     }

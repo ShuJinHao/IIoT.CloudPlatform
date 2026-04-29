@@ -67,6 +67,7 @@ public static class DependencyInjection
 
         builder.Services.AddScoped<IPassStationReceiveService, PassStationReceiveService>();
         builder.Services.AddScoped<IDeviceCacheInvalidationService, DeviceCacheInvalidationService>();
+        builder.Services.AddScoped<IRecipeCacheInvalidationService, RecipeCacheInvalidationService>();
         builder.Services
             .AddPassStationType<PassDataInjectionReceivedEvent, InjectionWriteModel, InjectionMapper>()
             .AddPassStationType<PassDataStackingReceivedEvent, StackingWriteModel, StackingMapper>();
@@ -143,9 +144,9 @@ public static class DependencyInjection
                     new ProblemDetails
                     {
                         Status = StatusCodes.Status429TooManyRequests,
-                        Title = "Too Many Requests",
+                        Title = "请求过于频繁",
                         Type = "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/429",
-                        Detail = "Too many requests. Please retry later."
+                        Detail = "请求过于频繁，请稍后重试。"
                     },
                     token);
             };

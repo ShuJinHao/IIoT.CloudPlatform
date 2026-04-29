@@ -112,9 +112,17 @@ public sealed class ConfigurationGuardTests
     {
         var controllerSource = File.ReadAllText(
             FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Edge", "EdgeBootstrapController.cs"));
+        var programSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Program.cs"));
+        var filterSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Infrastructure", "RefreshTokenResponseFilter.cs"));
 
         controllerSource.Should().Contain("[FromQuery] string clientCode");
         controllerSource.Should().Contain("legacy");
+        controllerSource.Should().Contain("RefreshTokenResponseFilter.SetHeaders");
+        controllerSource.Should().NotContain("RefreshTokenHeaderNames.ApplyTo");
+        programSource.Should().Contain("RefreshTokenResponseFilter");
+        filterSource.Should().Contain("IAsyncResultFilter");
     }
 
     [Fact]
@@ -209,7 +217,7 @@ public sealed class ConfigurationGuardTests
         source.Should().Contain("ArgumentException");
         source.Should().Contain("InvalidOperationException");
         source.Should().Contain("StatusCodes.Status500InternalServerError");
-        source.Should().Contain("The server encountered an unexpected error while processing the request.");
+        source.Should().Contain("服务器处理请求时发生未预期错误。");
     }
 
     [Fact]
@@ -578,6 +586,8 @@ public sealed class ConfigurationGuardTests
         gatewayProjectSource.Should().Contain("Yarp.ReverseProxy");
         gatewayProjectSource.Should().Contain("IIoT.ServiceDefaults");
 
+        gatewayProgramSource.Should().Contain("AddProblemDetails()");
+        gatewayProgramSource.Should().Contain("UseExceptionHandler()");
         gatewayProgramSource.Should().Contain("AddReverseProxy()");
         gatewayProgramSource.Should().Contain("LoadFromConfig(builder.Configuration.GetSection(\"ReverseProxy\"))");
         gatewayProgramSource.Should().Contain("UseMiddleware<GatewayObservabilityMiddleware>()");

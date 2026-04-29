@@ -477,6 +477,10 @@ internal sealed class RecordingDeviceCacheInvalidationService : IDeviceCacheInva
 {
     public List<Guid> RegisteredProcessIds { get; } = [];
 
+    public List<DeviceCacheDescriptor> RenamedDevices { get; } = [];
+
+    public List<DeviceProcessCacheDescriptor> ProcessChangedDevices { get; } = [];
+
     public List<DeviceCacheDescriptor> DeletedDevices { get; } = [];
 
     public Task InvalidateListsAfterRegisterAsync(
@@ -487,11 +491,40 @@ internal sealed class RecordingDeviceCacheInvalidationService : IDeviceCacheInva
         return Task.CompletedTask;
     }
 
+    public Task InvalidateAfterRenameAsync(
+        DeviceCacheDescriptor device,
+        CancellationToken cancellationToken = default)
+    {
+        RenamedDevices.Add(device);
+        return Task.CompletedTask;
+    }
+
+    public Task InvalidateAfterProcessChangeAsync(
+        DeviceProcessCacheDescriptor device,
+        CancellationToken cancellationToken = default)
+    {
+        ProcessChangedDevices.Add(device);
+        return Task.CompletedTask;
+    }
+
     public Task InvalidateAfterDeleteAsync(
         DeviceCacheDescriptor device,
         CancellationToken cancellationToken = default)
     {
         DeletedDevices.Add(device);
+        return Task.CompletedTask;
+    }
+}
+
+internal sealed class RecordingRecipeCacheInvalidationService : IRecipeCacheInvalidationService
+{
+    public List<RecipeCacheDescriptor> ChangedRecipes { get; } = [];
+
+    public Task InvalidateAfterChangeAsync(
+        RecipeCacheDescriptor recipe,
+        CancellationToken cancellationToken = default)
+    {
+        ChangedRecipes.Add(recipe);
         return Task.CompletedTask;
     }
 }

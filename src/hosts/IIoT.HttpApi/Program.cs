@@ -18,6 +18,7 @@ builder.AddWebServices();
 builder.Services.AddControllers()
     .AddMvcOptions(options =>
     {
+        options.Filters.Add<RefreshTokenResponseFilter>();
         options.Conventions.Add(new RouteSurfaceApiExplorerConvention());
     })
     .AddJsonOptions(options =>

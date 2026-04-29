@@ -28,7 +28,7 @@ public class Device : BaseEntity<Guid>
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(deviceName);
         if (processId == Guid.Empty)
-            throw new ArgumentException("ProcessId cannot be empty.", nameof(processId));
+            throw new ArgumentException("ProcessId 不能为空。", nameof(processId));
 
         Id = Guid.NewGuid();
         DeviceName = deviceName.Trim();
@@ -57,13 +57,13 @@ public class Device : BaseEntity<Guid>
         }
 
         DeviceName = normalizedName;
-        AddDomainEvent(new DeviceRenamedDomainEvent(Id, DeviceName));
+        AddDomainEvent(new DeviceRenamedDomainEvent(Id, DeviceName, Code, ProcessId));
     }
 
     public void ChangeProcess(Guid newProcessId)
     {
         if (newProcessId == Guid.Empty)
-            throw new ArgumentException("ProcessId cannot be empty.", nameof(newProcessId));
+            throw new ArgumentException("ProcessId 不能为空。", nameof(newProcessId));
 
         if (ProcessId == newProcessId)
         {
@@ -72,11 +72,11 @@ public class Device : BaseEntity<Guid>
 
         var oldProcessId = ProcessId;
         ProcessId = newProcessId;
-        AddDomainEvent(new DeviceProcessChangedDomainEvent(Id, oldProcessId, ProcessId));
+        AddDomainEvent(new DeviceProcessChangedDomainEvent(Id, Code, oldProcessId, ProcessId));
     }
 
     public void MarkDeleted()
     {
-        AddDomainEvent(new DeviceDeletedDomainEvent(Id, Code));
+        AddDomainEvent(new DeviceDeletedDomainEvent(Id, Code, ProcessId));
     }
 }

@@ -27,7 +27,7 @@ public sealed class GetPassStationListByTypeHandler(
     {
         var descriptor = PassStationQueryRuntime.ResolveDescriptor(descriptors, request.Request.TypeKey);
         if (descriptor is null)
-            return Result.NotFound($"Pass-station type '{request.Request.TypeKey}' was not found.");
+            return Result.NotFound($"过站类型 [{request.Request.TypeKey}] 不存在。");
 
         var validation = PassStationQueryRuntime.ValidateListRequest(request.Request, descriptor);
         if (validation is not null)
@@ -71,17 +71,17 @@ public sealed class GetPassStationDetailByTypeHandler(
     {
         var descriptor = PassStationQueryRuntime.ResolveDescriptor(descriptors, request.TypeKey);
         if (descriptor is null)
-            return Result.NotFound($"Pass-station type '{request.TypeKey}' was not found.");
+            return Result.NotFound($"过站类型 [{request.TypeKey}] 不存在。");
 
         var detail = await descriptor.GetDetailAsync(request.Id, cancellationToken);
         if (detail is null)
-            return Result.NotFound("Pass-station record was not found.");
+            return Result.NotFound("未找到该过站记录。");
 
         if (string.Equals(currentUser.Role, SystemRoles.Admin, StringComparison.Ordinal))
             return Result.Success(detail);
 
         if (!Guid.TryParse(currentUser.Id, out var userId))
-            return Result.Invalid("Current user identity is invalid.");
+            return Result.Invalid("用户凭证异常。");
 
         var accessibleDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
             userId,
@@ -279,44 +279,44 @@ internal static class PassStationQueryRuntime
         IPassStationQueryDescriptor descriptor)
     {
         if (!descriptor.SupportedModes.Contains(request.Mode))
-            return Result.Invalid($"Pass-station mode '{request.Mode}' is not supported for '{request.TypeKey}'.");
+            return Result.Invalid($"过站查询模式 [{request.Mode}] 不支持类型 [{request.TypeKey}]。");
 
         if (!PassStationQueryModes.All.Contains(request.Mode))
-            return Result.Invalid($"Pass-station mode '{request.Mode}' is invalid.");
+            return Result.Invalid($"过站查询模式 [{request.Mode}] 无效。");
 
         if (string.Equals(request.Mode, PassStationQueryModes.BarcodeProcess, StringComparison.Ordinal)
             && (request.ProcessId is null || string.IsNullOrWhiteSpace(request.Barcode)))
         {
-            return Result.Invalid("Mode 'barcode-process' requires processId and barcode.");
+            return Result.Invalid("查询模式 barcode-process 需要提供工序和条码。");
         }
 
         if (string.Equals(request.Mode, PassStationQueryModes.TimeProcess, StringComparison.Ordinal)
             && (request.ProcessId is null || request.StartTime is null || request.EndTime is null))
         {
-            return Result.Invalid("Mode 'time-process' requires processId, startTime, and endTime.");
+            return Result.Invalid("查询模式 time-process 需要提供工序、开始时间和结束时间。");
         }
 
         if (string.Equals(request.Mode, PassStationQueryModes.DeviceBarcode, StringComparison.Ordinal)
             && (request.DeviceId is null || string.IsNullOrWhiteSpace(request.Barcode)))
         {
-            return Result.Invalid("Mode 'device-barcode' requires deviceId and barcode.");
+            return Result.Invalid("查询模式 device-barcode 需要提供设备和条码。");
         }
 
         if (string.Equals(request.Mode, PassStationQueryModes.DeviceTime, StringComparison.Ordinal)
             && (request.DeviceId is null || request.StartTime is null || request.EndTime is null))
         {
-            return Result.Invalid("Mode 'device-time' requires deviceId, startTime, and endTime.");
+            return Result.Invalid("查询模式 device-time 需要提供设备、开始时间和结束时间。");
         }
 
         if (string.Equals(request.Mode, PassStationQueryModes.DeviceLatest, StringComparison.Ordinal)
             && request.DeviceId is null)
         {
-            return Result.Invalid("Mode 'device-latest' requires deviceId.");
+            return Result.Invalid("查询模式 device-latest 需要提供设备。");
         }
 
         if (request.StartTime is not null && request.EndTime is not null && request.StartTime > request.EndTime)
         {
-            return Result.Invalid("startTime cannot be greater than endTime.");
+            return Result.Invalid("开始时间不能晚于结束时间。");
         }
 
         return null;

@@ -8,11 +8,13 @@ using IIoT.EventBus;
 using IIoT.Infrastructure;
 using IIoT.Infrastructure.Logging;
 using IIoT.ProductionService;
+using IIoT.ProductionService.Caching;
 using IIoT.ProductionService.Commands.Capacities;
 using IIoT.ProductionService.Commands.PassStations;
 using IIoT.Services.CrossCutting.Behaviors;
 using IIoT.Services.CrossCutting.DependencyInjection;
 using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Caching;
 using IIoT.Services.Contracts.Events.PassStations;
 using IIoT.SharedKernel.Configuration;
 using MassTransit;
@@ -78,6 +80,8 @@ builder.Services.AddConfiguredMediatR(builder.Configuration, cfg =>
 
 builder.Services.AddScoped<IOutboxMessageDispatcher, OutboxMessageDispatcher>();
 builder.Services.AddScoped<IEventPublisher, MassTransitEventPublisher>();
+builder.Services.AddScoped<IDeviceCacheInvalidationService, DeviceCacheInvalidationService>();
+builder.Services.AddScoped<IRecipeCacheInvalidationService, RecipeCacheInvalidationService>();
 _ = builder.AddValidatedOptions<OutboxDispatcherOptions>(
     OutboxDispatcherOptions.SectionName,
     static options => options.Validate());

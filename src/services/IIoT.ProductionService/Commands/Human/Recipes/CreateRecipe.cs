@@ -1,6 +1,5 @@
 using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.Services.CrossCutting.Attributes;
-using IIoT.Services.CrossCutting.Caching;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.RecordQueries;
@@ -25,7 +24,6 @@ public class CreateRecipeHandler(
     IProcessReadQueryService processReadQueryService,
     IDeviceReadQueryService deviceReadQueryService,
     IRecipeReadQueryService recipeReadQueryService,
-    ICacheService cacheService,
     IDevicePermissionService devicePermissionService)
     : ICommandHandler<CreateRecipeCommand, Result<Guid>>
 {
@@ -85,15 +83,7 @@ public class CreateRecipeHandler(
 
         var recipe = new Recipe(recipeName, request.ProcessId, request.DeviceId, parametersJsonb);
         recipeRepository.Add(recipe);
-        var affected = await recipeRepository.SaveChangesAsync(cancellationToken);
-
-        if (affected > 0)
-        {
-            await cacheService.RemoveAsync(
-                CacheKeys.RecipesByProcess(request.ProcessId), cancellationToken);
-            await cacheService.RemoveAsync(
-                CacheKeys.RecipesByDevice(request.DeviceId), cancellationToken);
-        }
+        await recipeRepository.SaveChangesAsync(cancellationToken);
 
         return Result.Success(recipe.Id);
     }

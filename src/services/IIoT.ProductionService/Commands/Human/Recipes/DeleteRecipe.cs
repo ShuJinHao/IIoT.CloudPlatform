@@ -1,7 +1,6 @@
 using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.Core.Production.Specifications.Recipes;
 using IIoT.Services.CrossCutting.Attributes;
-using IIoT.Services.CrossCutting.Caching;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.SharedKernel.Messaging;
@@ -19,7 +18,6 @@ public record DeleteRecipeCommand(Guid RecipeId) : IHumanCommand<Result<bool>>;
 public class DeleteRecipeHandler(
     ICurrentUser currentUser,
     IRepository<Recipe> recipeRepository,
-    ICacheService cacheService,
     IDevicePermissionService devicePermissionService)
     : ICommandHandler<DeleteRecipeCommand, Result<bool>>
 {
@@ -50,17 +48,9 @@ public class DeleteRecipeHandler(
                 return Result.Failure("越权:您没有该机台的管辖权,禁止删除此配方");
         }
 
+        recipe.MarkDeleted();
         recipeRepository.Delete(recipe);
-        var affected = await recipeRepository.SaveChangesAsync(cancellationToken);
-
-        if (affected > 0)
-        {
-            await cacheService.RemoveAsync(CacheKeys.Recipe(recipe.Id), cancellationToken);
-            await cacheService.RemoveAsync(
-                CacheKeys.RecipesByProcess(recipe.ProcessId), cancellationToken);
-            await cacheService.RemoveAsync(
-                CacheKeys.RecipesByDevice(recipe.DeviceId), cancellationToken);
-        }
+        await recipeRepository.SaveChangesAsync(cancellationToken);
 
         return Result.Success(true);
     }
