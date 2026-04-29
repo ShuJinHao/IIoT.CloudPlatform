@@ -131,12 +131,18 @@ public sealed class ConfigurationGuardTests
     public void BootstrapHardeningDesign_ShouldDocumentCompatibleNextStep()
     {
         var documentSource = File.ReadAllText(FindRepoFile("docs", "bootstrap-auth-hardening.md"));
+        var triageSource = File.ReadAllText(FindRepoFile("docs", "deepseek-audit-triage-2026-04-29.md"));
 
         documentSource.Should().Contain("预共享启动密钥");
         documentSource.Should().Contain("X-IIoT-Bootstrap-Secret");
         documentSource.Should().Contain("BootstrapAuth:RequireSecret");
         documentSource.Should().Contain("clientCode");
         documentSource.Should().Contain("DeviceId");
+        triageSource.Should().Contain("A01 Bootstrap RequireSecret=false");
+        triageSource.Should().Contain("不能直接把源码默认值改为 `true`");
+        triageSource.Should().Contain("EdgeClient 升级后必须改为 `true`");
+        triageSource.Should().Contain("PR-16");
+        triageSource.Should().Contain("PR-17");
     }
 
     [Fact]
@@ -439,10 +445,14 @@ public sealed class ConfigurationGuardTests
         envExampleSource.Should().Contain("BACKUP_RETENTION_DAYS=14");
         envExampleSource.Should().Contain("BACKUP_MAX_AGE_HOURS=24");
         envExampleSource.Should().Contain("BACKUP_VERIFY_MAX_AGE_DAYS=7");
+        envExampleSource.Should().Contain("GATEWAY_HTTP_PORT=81");
+        envExampleSource.Should().Contain("BOOTSTRAP_AUTH_REQUIRE_SECRET=false");
+        envExampleSource.Should().Contain("X-IIoT-Bootstrap-Secret");
 
         composeSource.Should().Contain("Single-machine production starter for IIoT.CloudPlatform.");
         composeSource.Should().Contain("Single-node launch keeps one explicit upstream destination.");
         composeSource.Should().Contain("Infrastructure__EventBus__EndpointPrefix:");
+        composeSource.Should().Contain("BootstrapAuth__RequireSecret: ${BOOTSTRAP_AUTH_REQUIRE_SECRET}");
     }
 
     [Fact]
@@ -602,6 +612,7 @@ public sealed class ConfigurationGuardTests
         gatewayAppSettingsSource.Should().Contain("/internal/healthz");
         gatewayAppSettingsSource.Should().Contain("/api/v1/bootstrap/device-instance");
         gatewayAppSettingsSource.Should().Contain("/api/v1/bootstrap/edge-login");
+        gatewayAppSettingsSource.Should().Contain("/api/v1/bootstrap/edge-refresh");
         gatewayAppSettingsSource.Should().Contain("legacy-edge-bootstrap-device-instance");
         gatewayAppSettingsSource.Should().Contain("legacy-human-edge-login");
         gatewayAppSettingsSource.Should().Contain("/api/v1/edge/bootstrap/device-instance");
@@ -609,6 +620,8 @@ public sealed class ConfigurationGuardTests
         gatewayAppSettingsSource.Should().Contain("internal-health");
         gatewayAppSettingsSource.Should().Contain("X-IIoT-Deprecated-Alias");
         gatewayRouteCatalogSource.Should().Contain("/internal/healthz");
+        gatewayRouteCatalogSource.Should().Contain("/api/v1/bootstrap/edge-refresh");
+        gatewayRouteCatalogSource.Should().Contain("\"bootstrap-edge-refresh\"");
         gatewayRouteCatalogSource.Should().Contain("\"internal-healthz\"");
         gatewayRouteCatalogSource.Should().Contain("\"internal-health\"");
 
