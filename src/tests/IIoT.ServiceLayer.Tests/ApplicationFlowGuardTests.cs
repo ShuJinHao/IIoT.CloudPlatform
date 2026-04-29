@@ -17,10 +17,12 @@ using IIoT.ProductionService.Caching;
 using IIoT.ProductionService.Profiles;
 using IIoT.ProductionService.Queries.Capacities;
 using IIoT.ProductionService.Queries.Devices;
+using IIoT.ProductionService.Security;
 using IIoT.ProductionService.Validators;
 using IIoT.Services.CrossCutting.Caching;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.Contracts.Events.Capacities;
 using IIoT.Services.Contracts.Events.DeviceLogs;
@@ -28,6 +30,7 @@ using IIoT.Services.Contracts.Events.PassStations;
 using IIoT.SharedKernel.Result;
 using IIoT.SharedKernel.Specification;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace IIoT.ServiceLayer.Tests;
@@ -87,6 +90,11 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal(processId, repository.AddedEntity!.ProcessId);
         Assert.StartsWith("DEV-", repository.AddedEntity.Code);
         Assert.Equal(repository.AddedEntity.Code, created.Code);
+        Assert.NotNull(repository.AddedEntity.BootstrapSecretHash);
+        Assert.NotEqual(repository.AddedEntity.BootstrapSecretHash, created.BootstrapSecret);
+        Assert.True(BootstrapSecretHasher.Verify(
+            created.BootstrapSecret,
+            repository.AddedEntity.BootstrapSecretHash));
         Assert.Contains(repository.AddedEntity.DomainEvents, x =>
             x is DeviceRegisteredDomainEvent registered
             && registered.ProcessId == processId
@@ -977,7 +985,8 @@ public sealed class ApplicationFlowGuardTests
             repository,
             cache,
             new StubJwtTokenGenerator(),
-            refreshTokenService);
+            refreshTokenService,
+            Options.Create(new BootstrapAuthOptions()));
 
         var result = await handler.Handle(
             new GetDeviceByInstanceQuery($"  {device.Code.ToLowerInvariant()}  "),
@@ -995,5 +1004,84 @@ public sealed class ApplicationFlowGuardTests
         var specification = Assert.IsAssignableFrom<ISpecification<Device>>(repository.LastGetSingleOrDefaultSpecification);
         Assert.NotNull(specification.FilterCondition);
         Assert.True(specification.FilterCondition!.Compile()(device));
+    }
+
+    [Fact]
+    public async Task GetDeviceByInstanceHandler_ShouldRequireBootstrapSecret_WhenEnabled()
+    {
+        var bootstrapSecret = BootstrapSecretGenerator.Generate();
+        var device = new Device("Device-Bootstrap", "DEV-SECRET01", Guid.NewGuid());
+        device.SetBootstrapSecretHash(BootstrapSecretHasher.Hash(bootstrapSecret));
+        var repository = new InMemoryRepository<Device>
+        {
+            SingleOrDefaultResult = device
+        };
+        var handler = new GetDeviceByInstanceHandler(
+            repository,
+            new RecordingCacheService(),
+            new StubJwtTokenGenerator(),
+            new StubRefreshTokenService(),
+            Options.Create(new BootstrapAuthOptions { RequireSecret = true }));
+
+        var missingSecret = await handler.Handle(
+            new GetDeviceByInstanceQuery(device.Code),
+            CancellationToken.None);
+        var wrongSecret = await handler.Handle(
+            new GetDeviceByInstanceQuery(device.Code, "wrong-secret"),
+            CancellationToken.None);
+        var validSecret = await handler.Handle(
+            new GetDeviceByInstanceQuery(device.Code, bootstrapSecret),
+            CancellationToken.None);
+
+        Assert.False(missingSecret.IsSuccess);
+        Assert.Equal(ResultStatus.Unauthorized, missingSecret.Status);
+        Assert.False(wrongSecret.IsSuccess);
+        Assert.Equal(ResultStatus.Unauthorized, wrongSecret.Status);
+        Assert.True(validSecret.IsSuccess);
+        Assert.Equal(device.Id, validSecret.Value!.DeviceIdentity.Id);
+    }
+
+    [Fact]
+    public async Task RotateDeviceBootstrapSecretHandler_ShouldReplaceHashAndClearBootstrapCache()
+    {
+        var device = new Device("Device-Rotate", "DEV-ROTATE01", Guid.NewGuid());
+        var oldSecret = BootstrapSecretGenerator.Generate();
+        device.SetBootstrapSecretHash(BootstrapSecretHasher.Hash(oldSecret));
+        var oldHash = device.BootstrapSecretHash;
+        var repository = new InMemoryRepository<Device>
+        {
+            SingleOrDefaultResult = device
+        };
+        var cache = new RecordingCacheService();
+        var auditTrail = new RecordingAuditTrailService();
+        var handler = new RotateDeviceBootstrapSecretHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "admin-001",
+                Role = SystemRoles.Admin,
+                IsAuthenticated = true
+            },
+            repository,
+            cache,
+            auditTrail);
+
+        var result = await handler.Handle(
+            new RotateDeviceBootstrapSecretCommand(device.Id),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var rotated = Assert.IsType<RotateDeviceBootstrapSecretResultDto>(result.Value);
+        Assert.Equal(device.Id, rotated.Id);
+        Assert.Equal(device.Code, rotated.Code);
+        Assert.NotEqual(oldHash, device.BootstrapSecretHash);
+        Assert.False(BootstrapSecretHasher.Verify(oldSecret, device.BootstrapSecretHash));
+        Assert.True(BootstrapSecretHasher.Verify(rotated.BootstrapSecret, device.BootstrapSecretHash));
+        Assert.Contains(CacheKeys.DeviceCode(device.Code), cache.RemovedKeys);
+        Assert.Contains(auditTrail.Entries, x =>
+            x.OperationType == "Device.RotateBootstrapSecret"
+            && x.Succeeded
+            && x.FailureReason is null
+            && !x.Summary.Contains(rotated.BootstrapSecret, StringComparison.Ordinal));
     }
 }

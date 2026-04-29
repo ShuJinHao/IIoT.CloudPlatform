@@ -483,6 +483,51 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task EdgeBootstrap_ShouldAcceptBootstrapSecretHeader_InCompatibleMode()
+    {
+        await AuthenticateAsAdminAsync();
+
+        var device = await CreateTestDeviceRegistrationAsync("bootstrap-secret");
+        _fixture.ClearAuthToken();
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/api/v1/bootstrap/device-instance?clientCode={Uri.EscapeDataString(device.Code)}");
+        request.Headers.Add("X-IIoT-Bootstrap-Secret", device.BootstrapSecret);
+
+        using var response = await _fixture.HttpClient.SendAsync(request);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var edge = await response.Content.ReadFromJsonAsync<EdgeBootstrapDto>(JsonOptions)
+                   ?? throw new InvalidOperationException("Unable to deserialize bootstrap response.");
+        edge.Id.Should().Be(device.DeviceId);
+        edge.ClientCode.Should().Be(device.Code);
+        edge.UploadAccessToken.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task HumanDevice_RotateBootstrapSecret_ShouldReturnNewSecret()
+    {
+        await AuthenticateAsAdminAsync();
+
+        var device = await CreateTestDeviceRegistrationAsync("bootstrap-rotate");
+
+        using var response = await _fixture.HttpClient.PostAsync(
+            $"/api/v1/human/devices/{device.DeviceId}/bootstrap-secret/rotate",
+            content: null);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.IsSuccessStatusCode.Should().BeTrue(body);
+        var rotated = JsonSerializer.Deserialize<RotateDeviceBootstrapSecretResultDto>(body, JsonOptions)
+                      ?? throw new InvalidOperationException("Unable to deserialize rotate response.");
+
+        rotated.Id.Should().Be(device.DeviceId);
+        rotated.Code.Should().Be(device.Code);
+        rotated.BootstrapSecret.Should().NotBeNullOrWhiteSpace();
+        rotated.BootstrapSecret.Should().NotBe(device.BootstrapSecret);
+    }
+
+    [Fact]
     public async Task LegacyEdgeBootstrapAlias_ShouldRemainCompatible()
     {
         await AuthenticateAsAdminAsync();
@@ -937,9 +982,11 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
         created.Id.Should().NotBe(Guid.Empty);
         created.Code.Should().StartWith("DEV-");
         created.Code.Should().NotBeNullOrWhiteSpace();
+        created.BootstrapSecret.Should().NotBeNullOrWhiteSpace();
+        created.BootstrapSecret.Should().NotBe(created.Code);
         _deviceCodes[created.Id] = created.Code;
 
-        return new TestDeviceRegistration(created.Id, processId, created.Code);
+        return new TestDeviceRegistration(created.Id, processId, created.Code, created.BootstrapSecret);
     }
 
     private async Task<Guid> CreateProcessAsync(string code)
@@ -1259,7 +1306,13 @@ public sealed record EdgeBootstrapDto(
 
 public sealed record CreateDeviceResultDto(
     Guid Id,
-    string Code);
+    string Code,
+    string BootstrapSecret);
+
+public sealed record RotateDeviceBootstrapSecretResultDto(
+    Guid Id,
+    string Code,
+    string BootstrapSecret);
 
 public sealed record ProcessSelectDto(
     Guid Id,
@@ -1278,7 +1331,8 @@ public sealed record RecipeForDeviceDto(
 public sealed record TestDeviceRegistration(
     Guid DeviceId,
     Guid ProcessId,
-    string Code);
+    string Code,
+    string BootstrapSecret);
 
 public sealed record IssuedAuthSession(
     string AccessToken,

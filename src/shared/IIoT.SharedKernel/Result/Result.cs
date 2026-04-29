@@ -99,6 +99,14 @@ public class Result : Result<Result>
         return new Result(ResultStatus.Forbidden);
     }
 
+    public static Result Forbidden(params string[] errors)
+    {
+        return new Result(ResultStatus.Forbidden)
+        {
+            Errors = errors
+        };
+    }
+
     public static Result Unauthorized(params string[] error)
     {
         return new Result(ResultStatus.Unauthorized)

@@ -5,6 +5,7 @@ using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Attributes;
+using IIoT.ProductionService.Security;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -20,7 +21,8 @@ public record RegisterDeviceCommand(
 
 public sealed record CreateDeviceResultDto(
     Guid Id,
-    string Code);
+    string Code,
+    string BootstrapSecret);
 
 public class RegisterDeviceHandler(
     ICurrentUser currentUser,
@@ -52,7 +54,9 @@ public class RegisterDeviceHandler(
         if (code is null)
             return await FailAsync(request, "设备注册失败：无法生成唯一设备寻址码", cancellationToken);
 
+        var bootstrapSecret = BootstrapSecretGenerator.Generate();
         var device = new Device(deviceName, code, request.ProcessId);
+        device.SetBootstrapSecretHash(BootstrapSecretHasher.Hash(bootstrapSecret));
 
         deviceRepository.Add(device);
         var affected = await deviceRepository.SaveChangesAsync(cancellationToken);
@@ -70,7 +74,7 @@ public class RegisterDeviceHandler(
                 affected > 0 ? null : "保存设备注册记录失败。"),
             cancellationToken);
 
-        return Result.Success(new CreateDeviceResultDto(device.Id, device.Code));
+        return Result.Success(new CreateDeviceResultDto(device.Id, device.Code, bootstrapSecret));
     }
 
     private async Task<Result<CreateDeviceResultDto>> FailAsync(

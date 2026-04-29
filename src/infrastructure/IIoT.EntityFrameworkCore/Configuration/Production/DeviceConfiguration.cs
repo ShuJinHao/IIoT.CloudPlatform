@@ -23,6 +23,10 @@ public class DeviceConfiguration : IEntityTypeConfiguration<Device>
             .HasMaxLength(50)
             .HasColumnName("client_code");
 
+        builder.Property(d => d.BootstrapSecretHash)
+            .HasMaxLength(256)
+            .HasColumnName("bootstrap_secret_hash");
+
         builder.Property(d => d.ProcessId)
             .IsRequired()
             .HasColumnName("process_id");

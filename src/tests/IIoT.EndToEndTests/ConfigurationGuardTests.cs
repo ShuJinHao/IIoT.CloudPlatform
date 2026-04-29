@@ -123,6 +123,8 @@ public sealed class ConfigurationGuardTests
         controllerSource.Should().NotContain("RefreshTokenHeaderNames.ApplyTo");
         programSource.Should().Contain("RefreshTokenResponseFilter");
         filterSource.Should().Contain("IAsyncResultFilter");
+        controllerSource.Should().Contain("BootstrapSecretHeaderNames.Secret");
+        controllerSource.Should().Contain("string? bootstrapSecret");
     }
 
     [Fact]
@@ -131,9 +133,10 @@ public sealed class ConfigurationGuardTests
         var documentSource = File.ReadAllText(FindRepoFile("docs", "bootstrap-auth-hardening.md"));
 
         documentSource.Should().Contain("预共享启动密钥");
+        documentSource.Should().Contain("X-IIoT-Bootstrap-Secret");
+        documentSource.Should().Contain("BootstrapAuth:RequireSecret");
         documentSource.Should().Contain("clientCode");
         documentSource.Should().Contain("DeviceId");
-        documentSource.Should().Contain("不修改 `EdgeBootstrapController`");
     }
 
     [Fact]
@@ -243,6 +246,7 @@ public sealed class ConfigurationGuardTests
         httpApiConfiguration.GetValue<int>("ForwardedHeaders:ForwardLimit").Should().BeGreaterThan(0);
         httpApiConfiguration.GetValue<int>("RateLimiting:PasswordLogin:PermitLimit").Should().BeGreaterThan(0);
         httpApiConfiguration.GetValue<int>("RateLimiting:PassStationUpload:TokenLimit").Should().BeGreaterThan(0);
+        httpApiConfiguration.GetValue<bool>("BootstrapAuth:RequireSecret").Should().BeFalse();
         httpApiConfiguration.GetValue<int>("Infrastructure:Postgres:CommandTimeoutSeconds").Should().BeGreaterThan(0);
         httpApiConfiguration.GetValue<int>("Infrastructure:EventBus:RetryLimit").Should().BeGreaterThanOrEqualTo(0);
         httpApiConfiguration.GetValue<int>("Infrastructure:EventBus:PrefetchMultiplier").Should().BeGreaterThan(0);
