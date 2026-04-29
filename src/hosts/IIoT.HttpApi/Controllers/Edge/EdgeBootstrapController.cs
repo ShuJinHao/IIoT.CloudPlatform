@@ -18,9 +18,12 @@ public class EdgeBootstrapController : ApiControllerBase
     // Keep the legacy clientCode query parameter until deprecated bootstrap callers are retired.
     public async Task<IActionResult> GetDeviceByInstance(
         [FromQuery] string clientCode,
+        [FromHeader(Name = BootstrapSecretHeaderNames.Secret)] string? bootstrapSecret,
         CancellationToken cancellationToken)
     {
-        var result = await Sender.Send(new GetDeviceByInstanceQuery(clientCode), cancellationToken);
+        var result = await Sender.Send(
+            new GetDeviceByInstanceQuery(clientCode, bootstrapSecret),
+            cancellationToken);
         if (result.IsSuccess && result.Value is not null)
         {
             RefreshTokenResponseFilter.SetHeaders(

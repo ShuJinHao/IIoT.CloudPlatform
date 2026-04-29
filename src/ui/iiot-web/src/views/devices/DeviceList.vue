@@ -67,6 +67,9 @@
               <button class="icon-btn edit" title="编辑设备" v-permission="'Device.Update'" @click="openEditModal(device)">
                 <svg viewBox="0 0 16 16" fill="none"><path d="M11.5 2.5l2 2-8 8H3.5v-2l8-8z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
               </button>
+              <button class="icon-btn secret" title="轮换启动密钥" v-permission="'Device.Update'" @click="handleRotateBootstrapSecret(device)">
+                <svg viewBox="0 0 16 16" fill="none"><circle cx="5.5" cy="8" r="2.5" stroke="currentColor" stroke-width="1.2"/><path d="M8 8h5M11 8v2M13 8v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+              </button>
               <button class="icon-btn deactivate" title="删除设备" v-permission="'Device.Delete'" @click="handleDelete(device)">
                 <svg viewBox="0 0 16 16" fill="none"><path d="M4.5 5.5h7M6 5.5V4.3c0-.44.36-.8.8-.8h1.4c.44 0 .8.36.8.8v1.2M5.2 5.5l.5 6.1c.03.39.36.69.75.69h3.1c.39 0 .72-.3.75-.69l.5-6.1" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </button>
@@ -109,11 +112,11 @@
                 </option>
               </select>
             </div>
-            <div class="hint-card">
-              <div class="hint-title">设备 Code 由云端自动生成</div>
-              <div class="hint-desc">保存后会返回唯一 Code，可直接复制给现场客户端配置使用。</div>
+              <div class="hint-card">
+                <div class="hint-title">设备 Code 由云端自动生成</div>
+                <div class="hint-desc">保存后会返回唯一 Code 和启动密钥，可直接复制给现场客户端配置使用。</div>
+              </div>
             </div>
-          </div>
           <div class="modal-footer">
             <button class="btn btn-ghost" @click="showRegisterModal = false">取消</button>
             <button class="btn btn-primary" :disabled="submitting" @click="submitRegister">
@@ -180,7 +183,43 @@
                 <span class="detail-label">所属工序</span>
                 <span class="detail-value">{{ processNameMap[selectedDevice.processId] || selectedDevice.processId }}</span>
               </div>
+              <button class="btn btn-ghost detail-action" v-permission="'Device.Update'" @click="handleRotateBootstrapSecret(selectedDevice)">
+                轮换启动密钥
+              </button>
             </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="bootstrapSecretDialog.show" class="modal-overlay" @click.self="bootstrapSecretDialog.show = false">
+        <div class="modal secret-modal">
+          <div class="modal-header">
+            <span class="modal-title">{{ bootstrapSecretDialog.title }}</span>
+            <button class="modal-close" @click="bootstrapSecretDialog.show = false">×</button>
+          </div>
+          <div class="modal-body">
+            <div class="secret-warning">
+              启动密钥只显示一次，请立即保存到边缘端配置。
+            </div>
+            <div class="form-field">
+              <label class="form-label">设备 Code</label>
+              <div class="secret-copy-row">
+                <span class="secret-value mono">{{ bootstrapSecretDialog.code }}</span>
+                <button class="mini-copy-btn" @click="copyText(bootstrapSecretDialog.code, 'Code 已复制。')">复制</button>
+              </div>
+            </div>
+            <div class="form-field">
+              <label class="form-label">启动密钥</label>
+              <div class="secret-copy-row">
+                <span class="secret-value mono">{{ bootstrapSecretDialog.secret }}</span>
+                <button class="mini-copy-btn" @click="copyText(bootstrapSecretDialog.secret, '启动密钥已复制。')">复制</button>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-primary" @click="bootstrapSecretDialog.show = false">我已保存</button>
           </div>
         </div>
       </div>
@@ -212,6 +251,7 @@ import {
   getDevicePagedListApi,
   registerDeviceApi,
   updateDeviceProfileApi,
+  rotateDeviceBootstrapSecretApi,
   deleteDeviceApi,
   type DeviceListItemDto,
   type PagedMetaData,
@@ -280,13 +320,13 @@ const goPage = (page: number) => {
   fetchList();
 };
 
-const copyCode = async (code: string) => {
+const copyText = async (text: string, successMessage: string) => {
   try {
     if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(code);
+      await navigator.clipboard.writeText(text);
     } else {
       const textarea = document.createElement('textarea');
-      textarea.value = code;
+      textarea.value = text;
       textarea.style.position = 'fixed';
       textarea.style.opacity = '0';
       document.body.appendChild(textarea);
@@ -294,14 +334,24 @@ const copyCode = async (code: string) => {
       document.execCommand('copy');
       document.body.removeChild(textarea);
     }
-    alert(`Code 已复制：${code}`);
+    alert(successMessage);
   } catch {
     alert('复制失败，请手动复制。');
   }
 };
 
+const copyCode = async (code: string) => {
+  await copyText(code, `Code 已复制：${code}`);
+};
+
 const showRegisterModal = ref(false);
 const registerForm = reactive({ deviceName: '', processId: '' });
+const bootstrapSecretDialog = reactive({
+  show: false,
+  title: '',
+  code: '',
+  secret: '',
+});
 
 const openRegisterModal = async () => {
   Object.assign(registerForm, { deviceName: '', processId: '' });
@@ -340,12 +390,22 @@ const submitRegister = async () => {
 
     showRegisterModal.value = false;
     openDetailPanel(createdDevice);
+    showBootstrapSecret('设备启动密钥', created.code, created.bootstrapSecret);
     await fetchList();
   } catch {
     // handled by the shared http wrapper
   } finally {
     submitting.value = false;
   }
+};
+
+const showBootstrapSecret = (title: string, code: string, secret: string) => {
+  Object.assign(bootstrapSecretDialog, {
+    show: true,
+    title,
+    code,
+    secret,
+  });
 };
 
 const showEditModal = ref(false);
@@ -413,6 +473,27 @@ const handleDelete = (device: DeviceListItemDto) => {
   });
 };
 
+const handleRotateBootstrapSecret = (device: DeviceListItemDto) => {
+  Object.assign(confirmDialog, {
+    show: true,
+    title: '确认轮换启动密钥',
+    desc: `轮换后，设备【${device.deviceName}】旧启动密钥会立即失效。`,
+    confirmText: '轮换',
+    onConfirm: async () => {
+      submitting.value = true;
+      try {
+        const rotated = await rotateDeviceBootstrapSecretApi(device.id);
+        confirmDialog.show = false;
+        showBootstrapSecret('启动密钥已轮换', rotated.code, rotated.bootstrapSecret);
+      } catch {
+        // handled by the shared http wrapper
+      } finally {
+        submitting.value = false;
+      }
+    },
+  });
+};
+
 onMounted(async () => {
   await Promise.all([fetchList(), fetchProcesses()]);
 });
@@ -454,6 +535,7 @@ onMounted(async () => {
 .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 3px; border: none; cursor: pointer; background: rgba(255,255,255,0.04); color: rgba(255,255,255,0.4); transition: all 0.15s; margin-left: 4px; }
 .icon-btn svg { width: 13px; height: 13px; }
 .icon-btn.edit:hover { background: rgba(0,229,255,0.12); color: #00e5ff; }
+.icon-btn.secret:hover { background: rgba(255,193,7,0.12); color: #ffd166; }
 .icon-btn.deactivate:hover { background: rgba(255,107,107,0.12); color: #ff8888; }
 .skeleton-rows { padding: 8px 0; }
 .skeleton-row { display: flex; gap: 16px; padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,0.04); align-items: center; }
@@ -518,6 +600,12 @@ select.form-input option { background: #0f1525; color: #e0e4ef; }
 .detail-value.small { font-size: 11px; color: rgba(255,255,255,0.45); }
 .detail-code-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .detail-copy { width: fit-content; }
+.detail-action { width: fit-content; margin-top: 4px; }
+.secret-modal { width: 560px; }
+.secret-warning { background: rgba(255,193,7,0.1); border: 1px solid rgba(255,193,7,0.22); border-radius: 4px; padding: 10px 12px; color: #ffd166; font-size: 12px; line-height: 1.6; }
+.secret-copy-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.secret-value { flex: 1; min-width: 0; color: #00e5ff; background: rgba(0,229,255,0.08); border: 1px solid rgba(0,229,255,0.14); border-radius: 3px; padding: 8px 10px; word-break: break-all; }
+.mono { font-family: 'Courier New', monospace; }
 .confirm-box { background: #0f1525; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 28px 28px 22px; width: 360px; max-width: 90vw; text-align: center; box-shadow: 0 24px 48px rgba(0,0,0,0.6); }
 .confirm-icon { width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; }
 .confirm-icon.danger { background: rgba(255,77,79,0.1); color: #ff8888; }

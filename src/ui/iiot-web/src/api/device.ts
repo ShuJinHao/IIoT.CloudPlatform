@@ -25,6 +25,13 @@ export interface RegisterDevicePayload {
 export interface CreateDeviceResultDto {
   id: string;
   code: string;
+  bootstrapSecret: string;
+}
+
+export interface RotateDeviceBootstrapSecretResultDto {
+  id: string;
+  code: string;
+  bootstrapSecret: string;
 }
 
 export interface UpdateDeviceProfilePayload {
@@ -61,6 +68,10 @@ export const registerDeviceApi = (payload: RegisterDevicePayload) => {
 
 export const updateDeviceProfileApi = (id: string, payload: UpdateDeviceProfilePayload) => {
   return http.put<boolean>(`${basePath}/${id}`, payload);
+};
+
+export const rotateDeviceBootstrapSecretApi = (id: string) => {
+  return http.post<RotateDeviceBootstrapSecretResultDto>(`${basePath}/${id}/bootstrap-secret/rotate`);
 };
 
 export const deleteDeviceApi = (id: string) => {

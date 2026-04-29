@@ -47,6 +47,14 @@ public class HumanDeviceController : ApiControllerBase
         return ReturnResult(await Sender.Send(command with { DeviceId = id }, cancellationToken));
     }
 
+    [HttpPost("{id}/bootstrap-secret/rotate")]
+    public async Task<IActionResult> RotateBootstrapSecret(
+        [FromRoute] Guid id,
+        CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(new RotateDeviceBootstrapSecretCommand(id), cancellationToken));
+    }
+
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(
         [FromRoute] Guid id,

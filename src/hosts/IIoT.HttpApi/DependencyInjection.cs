@@ -101,6 +101,9 @@ public static class DependencyInjection
         _ = builder.AddValidatedOptions<RefreshTokenOptions>(
             RefreshTokenOptions.SectionName,
             static options => options.Validate());
+        _ = builder.AddValidatedOptions<BootstrapAuthOptions>(
+            BootstrapAuthOptions.SectionName,
+            static options => options.Validate());
         var authenticatedUserPolicy = new AuthorizationPolicyBuilder()
             .RequireAuthenticatedUser()
             .Build();
@@ -194,7 +197,11 @@ public static class DependencyInjection
                 }
 
                 policy.WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-                    .WithHeaders("Authorization", "Content-Type", RefreshTokenHeaderNames.RefreshToken)
+                    .WithHeaders(
+                        "Authorization",
+                        "Content-Type",
+                        RefreshTokenHeaderNames.RefreshToken,
+                        BootstrapSecretHeaderNames.Secret)
                     .WithExposedHeaders(RefreshTokenHeaderNames.ExposedHeaders);
             });
         });

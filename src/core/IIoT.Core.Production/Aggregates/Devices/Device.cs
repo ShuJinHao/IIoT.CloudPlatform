@@ -42,6 +42,8 @@ public class Device : BaseEntity<Guid>
 
     public string Code { get; private set; } = null!;
 
+    public string? BootstrapSecretHash { get; private set; }
+
     public Guid ProcessId { get; private set; }
 
     public uint RowVersion { get; private set; }
@@ -73,6 +75,13 @@ public class Device : BaseEntity<Guid>
         var oldProcessId = ProcessId;
         ProcessId = newProcessId;
         AddDomainEvent(new DeviceProcessChangedDomainEvent(Id, Code, oldProcessId, ProcessId));
+    }
+
+    public void SetBootstrapSecretHash(string bootstrapSecretHash)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(bootstrapSecretHash);
+
+        BootstrapSecretHash = bootstrapSecretHash.Trim();
     }
 
     public void MarkDeleted()
