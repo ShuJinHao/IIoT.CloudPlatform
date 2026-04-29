@@ -1,7 +1,8 @@
 using AutoMapper;
+using IIoT.ProductionService.Commands;
 using IIoT.Services.Contracts;
-using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.Contracts.Events.DeviceLogs;
+using IIoT.Services.Contracts.RecordQueries;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 
@@ -9,13 +10,14 @@ namespace IIoT.ProductionService.Commands.DeviceLogs;
 
 public record ReceiveDeviceLogCommand(
     Guid DeviceId,
-    List<DeviceLogItem> Logs
+    List<DeviceLogItem> Logs,
+    string? RequestId = null
 ) : IDeviceCommand<Result<bool>>;
 
 public class ReceiveDeviceLogHandler(
     IDeviceIdentityQueryService deviceIdentityQuery,
     IMapper mapper,
-    IIntegrationEventOutbox integrationEventOutbox
+    IUploadReceiveRegistry uploadReceiveRegistry
 ) : ICommandHandler<ReceiveDeviceLogCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(
@@ -33,8 +35,18 @@ public class ReceiveDeviceLogHandler(
         if (!exists)
             return Result.Failure("数据接收失败: 设备不存在");
 
+        var deduplicationKey = UploadDeduplicationKeys.ForDeviceLog(request);
+        if (!deduplicationKey.IsSuccess)
+            return Result.Failure(deduplicationKey.Errors?.ToArray() ?? []);
+
         var @event = mapper.Map<DeviceLogReceivedEvent>(request);
-        await integrationEventOutbox.EnqueueAsync(@event, cancellationToken);
+        await uploadReceiveRegistry.RegisterAndEnqueueAsync(
+            request.DeviceId,
+            UploadMessageTypes.DeviceLog,
+            UploadDeduplicationKeys.NormalizeRequestId(request.RequestId),
+            deduplicationKey.Value!,
+            @event,
+            cancellationToken);
 
         return Result.Success(true);
     }

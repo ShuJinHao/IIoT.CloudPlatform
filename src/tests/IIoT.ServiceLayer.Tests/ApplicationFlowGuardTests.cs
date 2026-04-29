@@ -9,6 +9,7 @@ using IIoT.MasterDataService.Commands.Processes;
 using IIoT.ProductionService.Commands.Capacities;
 using IIoT.ProductionService.Commands.DeviceLogs;
 using IIoT.ProductionService.Commands.Devices;
+using IIoT.ProductionService.Commands.PassStations;
 using IIoT.ProductionService.Commands.Recipes;
 using IIoT.ProductionService.Profiles;
 using IIoT.ProductionService.Queries.Capacities;
@@ -529,7 +530,7 @@ public sealed class ApplicationFlowGuardTests
         var deviceId = Guid.NewGuid();
         var callOrder = new List<string>();
         var cache = new RecordingCacheService(callOrder);
-        var outbox = new RecordingIntegrationEventOutbox(callOrder);
+        var registry = new RecordingUploadReceiveRegistry(callOrder);
         var mapperServices = new ServiceCollection();
         mapperServices.AddLogging();
         mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
@@ -537,7 +538,7 @@ public sealed class ApplicationFlowGuardTests
         var handler = new ReceiveHourlyCapacityHandler(
             new StubDeviceIdentityQueryService { Exists = true },
             mapper,
-            outbox,
+            registry,
             cache);
 
         var request = new ReceiveHourlyCapacityCommand(
@@ -555,11 +556,13 @@ public sealed class ApplicationFlowGuardTests
         var result = await handler.Handle(request, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal("enqueue", callOrder[0]);
-        var enqueued = Assert.IsType<HourlyCapacityReceivedEvent>(outbox.LastEnqueuedEvent);
+        Assert.Equal("register", callOrder[0]);
+        var enqueued = Assert.IsType<HourlyCapacityReceivedEvent>(registry.LastRegisteredEvent);
         Assert.Equal(deviceId, enqueued.DeviceId);
         Assert.True(enqueued.ReceivedAtUtc > DateTime.UtcNow.AddMinutes(-1));
         Assert.Equal(DateTimeKind.Utc, enqueued.ReceivedAtUtc.Kind);
+        Assert.Equal("hourly-capacity", registry.LastMessageType);
+        Assert.StartsWith("legacy:", registry.LastDeduplicationKey, StringComparison.Ordinal);
         Assert.Contains(CacheKeys.CapacityHourly(deviceId, request.Date, request.PlcName), cache.RemovedKeys);
         Assert.Contains(CacheKeys.CapacitySummary(deviceId, request.Date, request.PlcName), cache.RemovedKeys);
         Assert.Contains(CacheKeys.CapacityRange(deviceId, request.Date, request.Date, request.PlcName), cache.RemovedKeys);
@@ -575,9 +578,9 @@ public sealed class ApplicationFlowGuardTests
         var deviceId = Guid.NewGuid();
         var callOrder = new List<string>();
         var cache = new RecordingCacheService(callOrder);
-        var outbox = new RecordingIntegrationEventOutbox(
+        var registry = new RecordingUploadReceiveRegistry(
             callOrder,
-            new InvalidOperationException("outbox failed"));
+            new InvalidOperationException("registry failed"));
         var mapperServices = new ServiceCollection();
         mapperServices.AddLogging();
         mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
@@ -585,7 +588,7 @@ public sealed class ApplicationFlowGuardTests
         var handler = new ReceiveHourlyCapacityHandler(
             new StubDeviceIdentityQueryService { Exists = true },
             mapper,
-            outbox,
+            registry,
             cache);
 
         var request = new ReceiveHourlyCapacityCommand(
@@ -603,8 +606,49 @@ public sealed class ApplicationFlowGuardTests
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             handler.Handle(request, CancellationToken.None));
 
-        Assert.Equal("outbox failed", exception.Message);
-        Assert.Equal(["enqueue"], callOrder);
+        Assert.Equal("registry failed", exception.Message);
+        Assert.Equal(["register"], callOrder);
+        Assert.Empty(cache.RemovedKeys);
+        Assert.Empty(cache.RemovedPatterns);
+    }
+
+    [Fact]
+    public async Task ReceiveHourlyCapacityHandler_ShouldNotClearCapacityCachesForDuplicateUpload()
+    {
+        var deviceId = Guid.NewGuid();
+        var callOrder = new List<string>();
+        var cache = new RecordingCacheService(callOrder);
+        var registry = new RecordingUploadReceiveRegistry(callOrder)
+        {
+            NextResult = UploadReceiveRegistrationResult.Duplicate(Guid.NewGuid())
+        };
+        var mapperServices = new ServiceCollection();
+        mapperServices.AddLogging();
+        mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
+        var mapper = mapperServices.BuildServiceProvider().GetRequiredService<IMapper>();
+        var handler = new ReceiveHourlyCapacityHandler(
+            new StubDeviceIdentityQueryService { Exists = true },
+            mapper,
+            registry,
+            cache);
+
+        var result = await handler.Handle(
+            new ReceiveHourlyCapacityCommand(
+                deviceId,
+                DateOnly.FromDateTime(DateTime.UtcNow),
+                "D",
+                9,
+                30,
+                "09:30",
+                16,
+                15,
+                1,
+                "PLC-01",
+                "retry-1"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(["register"], callOrder);
         Assert.Empty(cache.RemovedKeys);
         Assert.Empty(cache.RemovedPatterns);
     }
@@ -613,7 +657,7 @@ public sealed class ApplicationFlowGuardTests
     public async Task ReceiveDeviceLogHandler_ShouldEnqueueIntegrationEvent()
     {
         var deviceId = Guid.NewGuid();
-        var outbox = new RecordingIntegrationEventOutbox();
+        var registry = new RecordingUploadReceiveRegistry();
         var mapperServices = new ServiceCollection();
         mapperServices.AddLogging();
         mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
@@ -621,7 +665,7 @@ public sealed class ApplicationFlowGuardTests
         var handler = new ReceiveDeviceLogHandler(
             new StubDeviceIdentityQueryService { Exists = true },
             mapper,
-            outbox);
+            registry);
 
         var result = await handler.Handle(
             new ReceiveDeviceLogCommand(
@@ -633,13 +677,102 @@ public sealed class ApplicationFlowGuardTests
                         Message = "started",
                         LogTime = DateTime.UtcNow
                     }
-                ]),
+                ],
+                "request-1"),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        var enqueued = Assert.IsType<DeviceLogReceivedEvent>(outbox.LastEnqueuedEvent);
+        var enqueued = Assert.IsType<DeviceLogReceivedEvent>(registry.LastRegisteredEvent);
         Assert.Equal(deviceId, enqueued.DeviceId);
         Assert.Single(enqueued.Logs);
+        Assert.Equal("device-log", registry.LastMessageType);
+        Assert.Equal("request-1", registry.LastRequestId);
+        Assert.Equal("request:request-1", registry.LastDeduplicationKey);
+    }
+
+    [Fact]
+    public async Task ReceiveDeviceLogHandler_ShouldUseStableLegacyDeduplicationKey()
+    {
+        var deviceId = Guid.NewGuid();
+        var logTime = new DateTime(2026, 4, 29, 9, 30, 0, DateTimeKind.Utc);
+        var mapperServices = new ServiceCollection();
+        mapperServices.AddLogging();
+        mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
+        var mapper = mapperServices.BuildServiceProvider().GetRequiredService<IMapper>();
+        var firstRegistry = new RecordingUploadReceiveRegistry();
+        var secondRegistry = new RecordingUploadReceiveRegistry();
+        var changedRegistry = new RecordingUploadReceiveRegistry();
+
+        var firstHandler = new ReceiveDeviceLogHandler(
+            new StubDeviceIdentityQueryService { Exists = true },
+            mapper,
+            firstRegistry);
+        var secondHandler = new ReceiveDeviceLogHandler(
+            new StubDeviceIdentityQueryService { Exists = true },
+            mapper,
+            secondRegistry);
+        var changedHandler = new ReceiveDeviceLogHandler(
+            new StubDeviceIdentityQueryService { Exists = true },
+            mapper,
+            changedRegistry);
+
+        await firstHandler.Handle(
+            new ReceiveDeviceLogCommand(
+                deviceId,
+                [new DeviceLogItem { Level = "Information", Message = "started", LogTime = logTime }]),
+            CancellationToken.None);
+        await secondHandler.Handle(
+            new ReceiveDeviceLogCommand(
+                deviceId,
+                [new DeviceLogItem { Level = "Information", Message = "started", LogTime = logTime }]),
+            CancellationToken.None);
+        await changedHandler.Handle(
+            new ReceiveDeviceLogCommand(
+                deviceId,
+                [new DeviceLogItem { Level = "Warning", Message = "started", LogTime = logTime }]),
+            CancellationToken.None);
+
+        Assert.StartsWith("legacy:", firstRegistry.LastDeduplicationKey, StringComparison.Ordinal);
+        Assert.Equal(firstRegistry.LastDeduplicationKey, secondRegistry.LastDeduplicationKey);
+        Assert.NotEqual(firstRegistry.LastDeduplicationKey, changedRegistry.LastDeduplicationKey);
+    }
+
+    [Fact]
+    public async Task ReceiveInjectionPassHandler_ShouldRegisterPassStationUpload()
+    {
+        var deviceId = Guid.NewGuid();
+        var registry = new RecordingUploadReceiveRegistry();
+        var mapperServices = new ServiceCollection();
+        mapperServices.AddLogging();
+        mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
+        var mapper = mapperServices.BuildServiceProvider().GetRequiredService<IMapper>();
+        var receiveService = new PassStationReceiveService(
+            new StubDeviceIdentityQueryService { Exists = true },
+            registry);
+        var handler = new ReceiveInjectionPassHandler(receiveService, mapper);
+
+        var result = await handler.Handle(
+            new ReceiveInjectionPassCommand(
+                deviceId,
+                [
+                    new InjectionPassItemInput(
+                        "BC-001",
+                        "OK",
+                        new DateTime(2026, 4, 29, 9, 30, 0, DateTimeKind.Utc),
+                        new DateTime(2026, 4, 29, 9, 20, 0, DateTimeKind.Utc),
+                        10.2m,
+                        new DateTime(2026, 4, 29, 9, 25, 0, DateTimeKind.Utc),
+                        12.4m,
+                        2.2m)
+                ],
+                "pass-request-1"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("pass-station-injection", registry.LastMessageType);
+        Assert.Equal("pass-request-1", registry.LastRequestId);
+        Assert.Equal("request:pass-request-1", registry.LastDeduplicationKey);
+        Assert.IsType<PassDataInjectionReceivedEvent>(registry.LastRegisteredEvent);
     }
 
     [Fact]

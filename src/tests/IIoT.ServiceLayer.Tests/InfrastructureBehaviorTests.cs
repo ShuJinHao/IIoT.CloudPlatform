@@ -9,6 +9,7 @@ using IIoT.EntityFrameworkCore.Auditing;
 using IIoT.EntityFrameworkCore.Identity;
 using IIoT.EntityFrameworkCore.Outbox;
 using IIoT.EntityFrameworkCore.Repository;
+using IIoT.EntityFrameworkCore.Uploads;
 using IIoT.EventBus;
 using IIoT.IdentityService.Commands;
 using IIoT.Infrastructure.Logging;
@@ -441,6 +442,83 @@ public sealed class InfrastructureBehaviorTests
         Assert.Equal(
             nameof(OutboxMessageKind.DomainEvent),
             messageKindProperty.GetDefaultValue()?.ToString());
+    }
+
+    [Fact]
+    public void UploadReceiveRegistrationConfiguration_ShouldAddDeduplicationUniqueIndex()
+    {
+        using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
+        using var scope = provider.CreateScope();
+
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var entityType = dbContext.Model.FindEntityType(typeof(UploadReceiveRegistration));
+        var index = Assert.Single(
+            entityType!.GetIndexes(),
+            candidate => string.Equals(
+                candidate.GetDatabaseName(),
+                "ux_upload_receive_registrations_device_message_deduplication",
+                StringComparison.Ordinal));
+
+        Assert.Equal("upload_receive_registrations", entityType.GetTableName());
+        Assert.True(index.IsUnique);
+        Assert.Equal(
+            [
+                nameof(UploadReceiveRegistration.DeviceId),
+                nameof(UploadReceiveRegistration.MessageType),
+                nameof(UploadReceiveRegistration.DeduplicationKey)
+            ],
+            index.Properties.Select(property => property.Name).ToArray());
+    }
+
+    [Fact]
+    public async Task UploadReceiveRegistry_ShouldRegisterOnceAndReturnDuplicateForSameDeduplicationKey()
+    {
+        using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
+        using var scope = provider.CreateScope();
+
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var registry = new EfUploadReceiveRegistry(dbContext);
+        var deviceId = Guid.NewGuid();
+        var firstEvent = new HourlyCapacityReceivedEvent
+        {
+            DeviceId = deviceId,
+            Date = DateOnly.FromDateTime(DateTime.UtcNow),
+            ShiftCode = "D",
+            Hour = 9,
+            Minute = 30,
+            TimeLabel = "09:30",
+            TotalCount = 16,
+            OkCount = 15,
+            NgCount = 1,
+            ReceivedAtUtc = DateTime.UtcNow
+        };
+        var duplicateEvent = firstEvent with
+        {
+            EventId = Guid.NewGuid(),
+            OccurredAtUtc = DateTimeOffset.UtcNow.AddSeconds(1)
+        };
+
+        var first = await registry.RegisterAndEnqueueAsync(
+            deviceId,
+            "hourly-capacity",
+            " request-1 ",
+            "request:request-1",
+            firstEvent);
+        var second = await registry.RegisterAndEnqueueAsync(
+            deviceId,
+            "hourly-capacity",
+            "request-1",
+            "request:request-1",
+            duplicateEvent);
+
+        var registration = await dbContext.UploadReceiveRegistrations.SingleAsync();
+        Assert.False(first.IsDuplicate);
+        Assert.True(second.IsDuplicate);
+        Assert.Equal(first.OutboxMessageId, second.OutboxMessageId);
+        Assert.Single(dbContext.OutboxMessages);
+        Assert.Equal("request-1", registration.RequestId);
+        Assert.Equal(2, registration.SeenCount);
+        Assert.True(registration.LastSeenAtUtc >= registration.ReceivedAtUtc);
     }
 
     [Fact]

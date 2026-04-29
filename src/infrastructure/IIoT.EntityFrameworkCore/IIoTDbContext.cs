@@ -5,6 +5,7 @@ using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.EntityFrameworkCore.Auditing;
 using IIoT.EntityFrameworkCore.Identity;
 using IIoT.EntityFrameworkCore.Outbox;
+using IIoT.EntityFrameworkCore.Uploads;
 using IIoT.SharedKernel.Domain;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
@@ -21,6 +22,7 @@ public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)
     public DbSet<Recipe> Recipes => Set<Recipe>();
     public DbSet<RefreshTokenSession> RefreshTokenSessions => Set<RefreshTokenSession>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+    public DbSet<UploadReceiveRegistration> UploadReceiveRegistrations => Set<UploadReceiveRegistration>();
     public DbSet<AuditTrailRecord> AuditTrails => Set<AuditTrailRecord>();
 
     public bool HasPendingDomainEvents => ChangeTracker.Entries<BaseEntity<Guid>>()

@@ -1,8 +1,9 @@
 using AutoMapper;
-using IIoT.Services.CrossCutting.Caching;
+using IIoT.ProductionService.Commands;
 using IIoT.Services.Contracts;
-using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.Contracts.Events.Capacities;
+using IIoT.Services.Contracts.RecordQueries;
+using IIoT.Services.CrossCutting.Caching;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 
@@ -18,13 +19,14 @@ public record ReceiveHourlyCapacityCommand(
     int TotalCount,
     int OkCount,
     int NgCount,
-    string? PlcName = null
+    string? PlcName = null,
+    string? RequestId = null
 ) : IDeviceCommand<Result<bool>>;
 
 public class ReceiveHourlyCapacityHandler(
     IDeviceIdentityQueryService deviceIdentityQuery,
     IMapper mapper,
-    IIntegrationEventOutbox integrationEventOutbox,
+    IUploadReceiveRegistry uploadReceiveRegistry,
     ICacheService cacheService
 ) : ICommandHandler<ReceiveHourlyCapacityCommand, Result<bool>>
 {
@@ -39,11 +41,24 @@ public class ReceiveHourlyCapacityHandler(
         if (!exists)
             return Result.Failure("数据接收失败: 设备不存在");
 
+        var deduplicationKey = UploadDeduplicationKeys.ForHourlyCapacity(request);
+        if (!deduplicationKey.IsSuccess)
+            return Result.Failure(deduplicationKey.Errors?.ToArray() ?? []);
+
         var @event = mapper.Map<HourlyCapacityReceivedEvent>(request) with
         {
             ReceivedAtUtc = DateTime.UtcNow
         };
-        await integrationEventOutbox.EnqueueAsync(@event, cancellationToken);
+        var registration = await uploadReceiveRegistry.RegisterAndEnqueueAsync(
+            request.DeviceId,
+            UploadMessageTypes.HourlyCapacity,
+            UploadDeduplicationKeys.NormalizeRequestId(request.RequestId),
+            deduplicationKey.Value!,
+            @event,
+            cancellationToken);
+        if (registration.IsDuplicate)
+            return Result.Success(true);
+
         await cacheService.RemoveAsync(
             CacheKeys.CapacityHourly(request.DeviceId, request.Date, request.PlcName),
             cancellationToken);

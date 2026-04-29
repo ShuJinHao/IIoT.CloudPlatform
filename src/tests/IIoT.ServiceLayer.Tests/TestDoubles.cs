@@ -772,6 +772,46 @@ internal sealed class RecordingIntegrationEventOutbox(
     }
 }
 
+internal sealed class RecordingUploadReceiveRegistry(
+    List<string>? callOrder = null,
+    Exception? registerException = null) : IUploadReceiveRegistry
+{
+    public IIntegrationEvent? LastRegisteredEvent { get; private set; }
+
+    public string? LastMessageType { get; private set; }
+
+    public string? LastRequestId { get; private set; }
+
+    public string? LastDeduplicationKey { get; private set; }
+
+    public List<IIntegrationEvent> RegisteredEvents { get; } = [];
+
+    public UploadReceiveRegistrationResult NextResult { get; set; } =
+        UploadReceiveRegistrationResult.Registered(Guid.NewGuid());
+
+    public Task<UploadReceiveRegistrationResult> RegisterAndEnqueueAsync(
+        Guid deviceId,
+        string messageType,
+        string? requestId,
+        string deduplicationKey,
+        IIntegrationEvent integrationEvent,
+        CancellationToken cancellationToken = default)
+    {
+        callOrder?.Add("register");
+        if (registerException is not null)
+        {
+            throw registerException;
+        }
+
+        LastMessageType = messageType;
+        LastRequestId = requestId;
+        LastDeduplicationKey = deduplicationKey;
+        LastRegisteredEvent = integrationEvent;
+        RegisteredEvents.Add(integrationEvent);
+        return Task.FromResult(NextResult);
+    }
+}
+
 internal sealed class StubDeviceDeletionDependencyQueryService : IDeviceDeletionDependencyQueryService
 {
     public DeviceDeletionDependencies Dependencies { get; set; } = new(false, false, false, false);
