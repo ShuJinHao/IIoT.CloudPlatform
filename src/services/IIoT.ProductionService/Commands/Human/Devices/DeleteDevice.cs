@@ -3,9 +3,11 @@ using IIoT.Core.Production.Specifications.Devices;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Caching;
 using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.CrossCutting.Caching;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -21,6 +23,7 @@ public class DeleteDeviceHandler(
     IDeviceDeletionDependencyQueryService dependencyQueryService,
     IRefreshTokenService refreshTokenService,
     IDevicePermissionService devicePermissionService,
+    ICacheService cacheService,
     IAuditTrailService auditTrailService)
     : ICommandHandler<DeleteDeviceCommand, Result<bool>>
 {
@@ -90,6 +93,10 @@ public class DeleteDeviceHandler(
                 IIoTClaimTypes.EdgeDeviceActor,
                 device.Id,
                 "device-deleted",
+                cancellationToken);
+
+            await cacheService.RemoveAsync(
+                CacheKeys.DeviceCode(device.Code),
                 cancellationToken);
         }
 

@@ -428,6 +428,7 @@ public sealed class ApplicationFlowGuardTests
         };
         var dependencyQuery = new StubDeviceDeletionDependencyQueryService();
         var refreshTokenService = new StubRefreshTokenService();
+        var cache = new RecordingCacheService();
         var auditTrail = new RecordingAuditTrailService();
         var handler = new DeleteDeviceHandler(
             new TestCurrentUser
@@ -441,6 +442,7 @@ public sealed class ApplicationFlowGuardTests
             dependencyQuery,
             refreshTokenService,
             new StubDevicePermissionService(),
+            cache,
             auditTrail);
 
         var result = await handler.Handle(new DeleteDeviceCommand(device.Id), CancellationToken.None);
@@ -455,6 +457,7 @@ public sealed class ApplicationFlowGuardTests
             x.ActorType == IIoT.Services.Contracts.Identity.IIoTClaimTypes.EdgeDeviceActor
             && x.SubjectId == device.Id
             && x.Reason == "device-deleted");
+        Assert.Contains(CacheKeys.DeviceCode(device.Code), cache.RemovedKeys);
         Assert.Contains(auditTrail.Entries, x =>
             x.OperationType == "Device.Delete"
             && x.TargetIdOrKey == device.Id.ToString()
@@ -1083,5 +1086,44 @@ public sealed class ApplicationFlowGuardTests
             && x.Succeeded
             && x.FailureReason is null
             && !x.Summary.Contains(rotated.BootstrapSecret, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task RotateDeviceBootstrapSecretHandler_ShouldRejectNonAdmin()
+    {
+        var device = new Device("Device-Rotate-Forbidden", "DEV-ROTATE02", Guid.NewGuid());
+        var oldSecret = BootstrapSecretGenerator.Generate();
+        device.SetBootstrapSecretHash(BootstrapSecretHasher.Hash(oldSecret));
+        var oldHash = device.BootstrapSecretHash;
+        var repository = new InMemoryRepository<Device>
+        {
+            SingleOrDefaultResult = device
+        };
+        var cache = new RecordingCacheService();
+        var auditTrail = new RecordingAuditTrailService();
+        var handler = new RotateDeviceBootstrapSecretHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "operator-001",
+                Role = "Operator",
+                IsAuthenticated = true
+            },
+            repository,
+            cache,
+            auditTrail);
+
+        var result = await handler.Handle(
+            new RotateDeviceBootstrapSecretCommand(device.Id),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ResultStatus.Forbidden, result.Status);
+        Assert.Equal(oldHash, device.BootstrapSecretHash);
+        Assert.Empty(cache.RemovedKeys);
+        Assert.Contains(auditTrail.Entries, x =>
+            x.OperationType == "Device.RotateBootstrapSecret"
+            && !x.Succeeded
+            && x.FailureReason is not null);
     }
 }

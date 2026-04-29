@@ -104,6 +104,7 @@ services:
       Cors__AllowedOrigins__0: ${CORS_ALLOWED_ORIGIN_0}
       Cors__AllowedOrigins__1: ${CORS_ALLOWED_ORIGIN_1}
       Cors__AllowedOrigins__2: ${CORS_ALLOWED_ORIGIN_2}
+      BootstrapAuth__RequireSecret: ${BOOTSTRAP_AUTH_REQUIRE_SECRET}
       Infrastructure__EventBus__EndpointPrefix: ${Infrastructure__EventBus__EndpointPrefix}
       Seq__Enabled: true
       Seq__ServerUrl: ${SEQ_SERVER_URL}

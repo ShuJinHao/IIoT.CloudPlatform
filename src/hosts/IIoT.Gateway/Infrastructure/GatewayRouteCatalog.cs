@@ -18,6 +18,9 @@ internal static class GatewayRouteCatalog
         if (path.Equals("/api/v1/bootstrap/edge-login", StringComparison.OrdinalIgnoreCase))
             return new GatewayRouteMetadata("bootstrap", "bootstrap-edge-login", HttpApiCluster, false, null);
 
+        if (path.Equals("/api/v1/bootstrap/edge-refresh", StringComparison.OrdinalIgnoreCase))
+            return new GatewayRouteMetadata("bootstrap", "bootstrap-edge-refresh", HttpApiCluster, false, null);
+
         if (path.Equals("/api/v1/edge/bootstrap/device-instance", StringComparison.OrdinalIgnoreCase))
         {
             return new GatewayRouteMetadata(
