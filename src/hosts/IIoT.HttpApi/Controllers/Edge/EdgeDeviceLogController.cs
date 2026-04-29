@@ -1,4 +1,5 @@
 using IIoT.HttpApi.Infrastructure;
+using IIoT.ProductionService.Commands;
 using IIoT.ProductionService.Commands.DeviceLogs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -14,6 +15,7 @@ public class EdgeDeviceLogController : ApiControllerBase
 {
     [HttpPost]
     [EnableRateLimiting(HttpApiRateLimitPolicies.DeviceLogUpload)]
+    [RequestSizeLimit(UploadValidationLimits.MaxUploadRequestBodyBytes)]
     public async Task<IActionResult> Receive(
         [FromBody] ReceiveDeviceLogCommand command,
         CancellationToken cancellationToken)

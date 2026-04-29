@@ -453,6 +453,15 @@ public sealed class ConfigurationGuardTests
         composeSource.Should().Contain("Single-node launch keeps one explicit upstream destination.");
         composeSource.Should().Contain("Infrastructure__EventBus__EndpointPrefix:");
         composeSource.Should().Contain("BootstrapAuth__RequireSecret: ${BOOTSTRAP_AUTH_REQUIRE_SECRET}");
+        composeSource.Should().Contain("postgres:");
+        composeSource.Should().Contain("mem_limit: 1g");
+        composeSource.Should().Contain("redis-cache:");
+        composeSource.Should().Contain("mem_limit: 256m");
+        composeSource.Should().Contain("rabbitmq:");
+        composeSource.Should().Contain("mem_limit: 512m");
+        composeSource.Should().Contain("seq:");
+        composeSource.Should().Contain("nginx-gateway:");
+        composeSource.Should().Contain("mem_limit: 128m");
     }
 
     [Fact]
@@ -613,6 +622,9 @@ public sealed class ConfigurationGuardTests
         gatewayAppSettingsSource.Should().Contain("/api/v1/bootstrap/device-instance");
         gatewayAppSettingsSource.Should().Contain("/api/v1/bootstrap/edge-login");
         gatewayAppSettingsSource.Should().Contain("/api/v1/bootstrap/edge-refresh");
+        gatewayAppSettingsSource.Should().Contain("\"HealthCheck\"");
+        gatewayAppSettingsSource.Should().Contain("\"Active\"");
+        gatewayAppSettingsSource.Should().Contain("\"Path\": \"/internal/healthz\"");
         gatewayAppSettingsSource.Should().Contain("legacy-edge-bootstrap-device-instance");
         gatewayAppSettingsSource.Should().Contain("legacy-human-edge-login");
         gatewayAppSettingsSource.Should().Contain("/api/v1/edge/bootstrap/device-instance");
@@ -632,6 +644,32 @@ public sealed class ConfigurationGuardTests
         gatewayMiddlewareSource.Should().Contain("status_code={status_code}");
         gatewayMiddlewareSource.Should().Contain("elapsed_ms={elapsed_ms}");
         gatewayMiddlewareSource.Should().Contain("GatewayRouteCatalog.ReplacementRouteHeader");
+    }
+
+    [Fact]
+    public void EdgeUploadEndpoints_ShouldDeclareRequestSizeLimits()
+    {
+        var deviceLogControllerSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Edge", "EdgeDeviceLogController.cs"));
+        var capacityControllerSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Edge", "EdgeCapacityController.cs"));
+        var passStationControllerSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Edge", "EdgePassStationController.cs"));
+        var limitsSource = File.ReadAllText(
+            FindRepoFile("src", "services", "IIoT.ProductionService", "Commands", "Edge", "UploadValidationLimits.cs"));
+        var validatorsSource = File.ReadAllText(
+            FindRepoFile("src", "services", "IIoT.ProductionService", "Validators", "ProductionCommandValidators.cs"));
+
+        limitsSource.Should().Contain("MaxUploadRequestBodyBytes = 5 * 1024 * 1024");
+        limitsSource.Should().Contain("MaxDeviceLogItems = 1000");
+        limitsSource.Should().Contain("MaxInjectionPassItems = 1000");
+        deviceLogControllerSource.Should().Contain("[RequestSizeLimit(UploadValidationLimits.MaxUploadRequestBodyBytes)]");
+        capacityControllerSource.Should().Contain("[RequestSizeLimit(UploadValidationLimits.MaxUploadRequestBodyBytes)]");
+        passStationControllerSource.Should().Contain("[RequestSizeLimit(UploadValidationLimits.MaxUploadRequestBodyBytes)]");
+        validatorsSource.Should().Contain("ReceiveDeviceLogCommandValidator");
+        validatorsSource.Should().Contain("ReceiveHourlyCapacityCommandValidator");
+        validatorsSource.Should().Contain("ReceiveInjectionPassCommandValidator");
+        validatorsSource.Should().Contain("ReceiveStackingPassCommandValidator");
     }
 
     [Fact]
