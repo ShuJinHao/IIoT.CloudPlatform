@@ -8,6 +8,7 @@ using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.Core.Production.Aggregates.Recipes.Events;
 using IIoT.EmployeeService.Commands.Employees;
 using IIoT.MasterDataService.Commands.Processes;
+using IIoT.ProductionService.Commands;
 using IIoT.ProductionService.Commands.Capacities;
 using IIoT.ProductionService.Commands.DeviceLogs;
 using IIoT.ProductionService.Commands.Devices;
@@ -560,6 +561,95 @@ public sealed class ApplicationFlowGuardTests
 
         Assert.False(result.IsValid);
         Assert.Contains(result.Errors, x => x.PropertyName == nameof(UpgradeRecipeVersionCommand.ParametersJsonb));
+    }
+
+    [Fact]
+    public void UploadCommandValidators_ShouldRejectOversizedDeviceLogBatch()
+    {
+        var validator = new ReceiveDeviceLogCommandValidator();
+        var command = new ReceiveDeviceLogCommand(
+            Guid.NewGuid(),
+            Enumerable.Range(0, UploadValidationLimits.MaxDeviceLogItems + 1)
+                .Select(i => new DeviceLogItem
+                {
+                    Level = "Info",
+                    Message = $"Log-{i}",
+                    LogTime = DateTime.UtcNow
+                })
+                .ToList());
+
+        var result = validator.Validate(command);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, x => x.PropertyName == nameof(ReceiveDeviceLogCommand.Logs));
+    }
+
+    [Fact]
+    public void UploadCommandValidators_ShouldRejectInvalidHourlyCapacityCounts()
+    {
+        var validator = new ReceiveHourlyCapacityCommandValidator();
+        var command = new ReceiveHourlyCapacityCommand(
+            Guid.NewGuid(),
+            DateOnly.FromDateTime(DateTime.UtcNow),
+            "D",
+            9,
+            30,
+            "09:30",
+            TotalCount: 10,
+            OkCount: 8,
+            NgCount: 5,
+            PlcName: "PLC-01");
+
+        var result = validator.Validate(command);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, x => x.ErrorMessage.Contains("OK", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void UploadCommandValidators_ShouldRejectInvalidInjectionPassItem()
+    {
+        var validator = new ReceiveInjectionPassCommandValidator();
+        var command = new ReceiveInjectionPassCommand(
+            Guid.NewGuid(),
+            [
+                new InjectionPassItemInput(
+                    "",
+                    "OK",
+                    DateTime.UtcNow.AddMinutes(-10),
+                    DateTime.UtcNow,
+                    -1,
+                    DateTime.UtcNow.AddMinutes(-5),
+                    12.4m,
+                    -2)
+            ]);
+
+        var result = validator.Validate(command);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, x => x.PropertyName.Contains(nameof(InjectionPassItemInput.Barcode), StringComparison.Ordinal));
+        Assert.Contains(result.Errors, x => x.PropertyName.Contains(nameof(InjectionPassItemInput.InjectionVolume), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void UploadCommandValidators_ShouldRejectInvalidStackingPassItem()
+    {
+        var validator = new ReceiveStackingPassCommandValidator();
+        var command = new ReceiveStackingPassCommand(
+            Guid.NewGuid(),
+            new StackingPassItemInput(
+                Barcode: "",
+                TrayCode: "",
+                LayerCount: 0,
+                SequenceNo: 0,
+                CellResult: "OK",
+                CompletedTime: DateTime.UtcNow));
+
+        var result = validator.Validate(command);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, x => x.PropertyName.Contains(nameof(StackingPassItemInput.Barcode), StringComparison.Ordinal));
+        Assert.Contains(result.Errors, x => x.PropertyName.Contains(nameof(StackingPassItemInput.LayerCount), StringComparison.Ordinal));
     }
 
     [Fact]
