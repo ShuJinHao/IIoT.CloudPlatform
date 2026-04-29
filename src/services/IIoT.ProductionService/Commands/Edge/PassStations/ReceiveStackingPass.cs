@@ -1,4 +1,5 @@
 using AutoMapper;
+using IIoT.ProductionService.Commands;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Events.PassStations;
 using IIoT.SharedKernel.Messaging;
@@ -8,7 +9,8 @@ namespace IIoT.ProductionService.Commands.PassStations;
 
 public record ReceiveStackingPassCommand(
     Guid DeviceId,
-    StackingPassItemInput Item
+    StackingPassItemInput Item,
+    string? RequestId = null
 ) : IDeviceCommand<Result<bool>>;
 
 public record StackingPassItemInput(
@@ -28,10 +30,17 @@ public sealed class ReceiveStackingPassHandler(
         ReceiveStackingPassCommand request,
         CancellationToken cancellationToken)
     {
+        var deduplicationKey = UploadDeduplicationKeys.ForStackingPass(request);
+        if (!deduplicationKey.IsSuccess)
+            return Result.Failure(deduplicationKey.Errors?.ToArray() ?? []);
+
         var @event = mapper.Map<PassDataStackingReceivedEvent>(request);
-        return await receiveService.ValidateAndPublishAsync(
+        return await receiveService.ValidateAndRegisterAsync(
             request.DeviceId,
             1,
+            UploadMessageTypes.PassStationStacking,
+            UploadDeduplicationKeys.NormalizeRequestId(request.RequestId),
+            deduplicationKey.Value!,
             @event,
             cancellationToken);
     }
