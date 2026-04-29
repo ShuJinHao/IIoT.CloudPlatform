@@ -647,6 +647,21 @@ public sealed class InfrastructureBehaviorTests
     }
 
     [Fact]
+    public void ValidationBehavior_ShouldNotUseDynamicResultConversion()
+    {
+        var source = File.ReadAllText(FindRepoFile(
+            "src",
+            "services",
+            "IIoT.Services.CrossCutting",
+            "Requests",
+            "Behaviors",
+            "ValidationBehavior.cs"));
+
+        Assert.DoesNotContain("dynamic", source, StringComparison.Ordinal);
+        Assert.Contains("InvalidResultResponse", source);
+    }
+
+    [Fact]
     public void EventBusOptions_ShouldResolvePrefixedEndpointNameAndConsumerFallback()
     {
         var options = new EventBusOptions

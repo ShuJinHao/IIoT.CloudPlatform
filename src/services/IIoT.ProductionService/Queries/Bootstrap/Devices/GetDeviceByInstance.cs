@@ -47,7 +47,7 @@ public class GetDeviceByInstanceHandler(
         var code = request.Code?.Trim().ToUpperInvariant() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(code))
         {
-            return Result.Failure("Bootstrap 查询失败：设备 Code 不能为空。");
+            return Result.Failure("设备寻址失败：设备寻址码不能为空。");
         }
 
         var cacheKey = CacheKeys.DeviceCode(code);
@@ -59,7 +59,7 @@ public class GetDeviceByInstanceHandler(
 
             if (device is null)
             {
-                return Result.Failure($"Bootstrap 查询失败：未找到 Code 为 [{code}] 的设备。");
+                return Result.Failure($"设备寻址失败：未找到寻址码为 [{code}] 的设备。");
             }
 
             identity = new CachedDeviceBootstrapIdentity(

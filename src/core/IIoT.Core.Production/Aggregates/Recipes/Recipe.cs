@@ -128,7 +128,9 @@ public class Recipe : BaseEntity<Guid>
             Id,
             nextRecipe.Id,
             nextRecipe.RecipeName,
-            nextRecipe.Version));
+            nextRecipe.Version,
+            nextRecipe.ProcessId,
+            nextRecipe.DeviceId));
 
         return nextRecipe;
     }
@@ -144,7 +146,12 @@ public class Recipe : BaseEntity<Guid>
         }
 
         Status = RecipeStatus.Archived;
-        AddDomainEvent(new RecipeArchivedDomainEvent(Id, Version));
+        AddDomainEvent(new RecipeArchivedDomainEvent(Id, Version, ProcessId, DeviceId));
+    }
+
+    public void MarkDeleted()
+    {
+        AddDomainEvent(new RecipeDeletedDomainEvent(Id, ProcessId, DeviceId));
     }
 
     private void ValidateInvariants()

@@ -2,7 +2,6 @@ using System.Security.Cryptography;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
-using IIoT.Services.Contracts.Caching;
 using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Attributes;
@@ -28,7 +27,6 @@ public class RegisterDeviceHandler(
     IRepository<Device> deviceRepository,
     IProcessReadQueryService processReadQueryService,
     IDeviceReadQueryService deviceReadQueryService,
-    IDeviceCacheInvalidationService cacheInvalidationService,
     IAuditTrailService auditTrailService
 ) : ICommandHandler<RegisterDeviceCommand, Result<CreateDeviceResultDto>>
 {
@@ -39,32 +37,25 @@ public class RegisterDeviceHandler(
         var deviceName = request.DeviceName?.Trim() ?? string.Empty;
 
         if (string.IsNullOrEmpty(deviceName))
-            return await FailAsync(request, "Device name is required.", cancellationToken);
+            return await FailAsync(request, "设备名称不能为空", cancellationToken);
         if (request.ProcessId == Guid.Empty)
-            return await FailAsync(request, "ProcessId is required.", cancellationToken);
+            return await FailAsync(request, "工序不能为空", cancellationToken);
 
         var processExists = await processReadQueryService.ExistsAsync(
             request.ProcessId,
             cancellationToken);
 
         if (!processExists)
-            return await FailAsync(request, "Device registration failed: process was not found.", cancellationToken);
+            return await FailAsync(request, "设备注册失败：指定工序不存在", cancellationToken);
 
         var code = await GenerateUniqueCodeAsync(deviceReadQueryService, cancellationToken);
         if (code is null)
-            return await FailAsync(request, "Device registration failed: unable to allocate a unique device code.", cancellationToken);
+            return await FailAsync(request, "设备注册失败：无法生成唯一设备寻址码", cancellationToken);
 
         var device = new Device(deviceName, code, request.ProcessId);
 
         deviceRepository.Add(device);
         var affected = await deviceRepository.SaveChangesAsync(cancellationToken);
-
-        if (affected > 0)
-        {
-            await cacheInvalidationService.InvalidateListsAfterRegisterAsync(
-                device.ProcessId,
-                cancellationToken);
-        }
 
         await auditTrailService.TryWriteAsync(
             new AuditTrailEntry(
@@ -75,8 +66,8 @@ public class RegisterDeviceHandler(
                 device.Id.ToString(),
                 DateTime.UtcNow,
                 affected > 0,
-                $"Registered device {device.DeviceName} ({device.Code}) to process {device.ProcessId}.",
-                affected > 0 ? null : "SaveChangesAsync did not persist any rows."),
+                $"注册设备 {device.DeviceName}（{device.Code}）到工序 {device.ProcessId}。",
+                affected > 0 ? null : "保存设备注册记录失败。"),
             cancellationToken);
 
         return Result.Success(new CreateDeviceResultDto(device.Id, device.Code));
@@ -96,7 +87,7 @@ public class RegisterDeviceHandler(
                 $"{request.ProcessId}:{request.DeviceName?.Trim()}",
                 DateTime.UtcNow,
                 false,
-                $"Register device {request.DeviceName?.Trim()}.",
+                $"注册设备 {request.DeviceName?.Trim()}。",
                 message),
             cancellationToken);
 

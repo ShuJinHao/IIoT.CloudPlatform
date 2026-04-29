@@ -11,10 +11,19 @@ public sealed record RecipeCreatedDomainEvent(
 
 public sealed record RecipeArchivedDomainEvent(
     Guid RecipeId,
-    string Version) : IDomainEvent;
+    string Version,
+    Guid ProcessId,
+    Guid DeviceId) : IDomainEvent;
 
 public sealed record RecipeVersionUpgradedDomainEvent(
     Guid SourceRecipeId,
     Guid NewRecipeId,
     string RecipeName,
-    string NewVersion) : IDomainEvent;
+    string NewVersion,
+    Guid ProcessId,
+    Guid DeviceId) : IDomainEvent;
+
+public sealed record RecipeDeletedDomainEvent(
+    Guid RecipeId,
+    Guid ProcessId,
+    Guid DeviceId) : IDomainEvent;

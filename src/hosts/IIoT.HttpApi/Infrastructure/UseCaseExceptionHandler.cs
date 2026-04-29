@@ -16,34 +16,34 @@ public sealed class UseCaseExceptionHandler : IExceptionHandler
         {
             ForbiddenException forbidden => CreateProblem(
                 StatusCodes.Status403Forbidden,
-                "Forbidden",
+                "禁止访问",
                 "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/403",
                 forbidden.Message),
             TimeoutException timeout => CreateProblem(
                 StatusCodes.Status409Conflict,
-                "Conflict",
+                "请求冲突",
                 "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/409",
                 timeout.Message),
             DbUpdateConcurrencyException => CreateProblem(
                 StatusCodes.Status409Conflict,
-                "Conflict",
+                "请求冲突",
                 "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/409",
-                "The resource was modified by another request. Please refresh and retry."),
+                "资源已被其他请求修改，请刷新后重试。"),
             ArgumentException argument => CreateProblem(
                 StatusCodes.Status400BadRequest,
-                "Bad Request",
+                "请求参数错误",
                 "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/400",
                 argument.Message),
             InvalidOperationException invalidOperation => CreateProblem(
                 StatusCodes.Status400BadRequest,
-                "Bad Request",
+                "请求参数错误",
                 "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/400",
                 invalidOperation.Message),
             _ => CreateProblem(
                 StatusCodes.Status500InternalServerError,
-                "Internal Server Error",
+                "服务器内部错误",
                 "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/500",
-                "The server encountered an unexpected error while processing the request.")
+                "服务器处理请求时发生未预期错误。")
         };
 
         httpContext.Response.StatusCode = problem.Status ?? StatusCodes.Status500InternalServerError;

@@ -10,13 +10,17 @@ public sealed record DeviceRegisteredDomainEvent(
 
 public sealed record DeviceRenamedDomainEvent(
     Guid DeviceId,
-    string DeviceName) : IDomainEvent;
+    string DeviceName,
+    string Code,
+    Guid ProcessId) : IDomainEvent;
 
 public sealed record DeviceProcessChangedDomainEvent(
     Guid DeviceId,
+    string Code,
     Guid OldProcessId,
     Guid NewProcessId) : IDomainEvent;
 
 public sealed record DeviceDeletedDomainEvent(
     Guid DeviceId,
-    string Code) : IDomainEvent;
+    string Code,
+    Guid ProcessId) : IDomainEvent;

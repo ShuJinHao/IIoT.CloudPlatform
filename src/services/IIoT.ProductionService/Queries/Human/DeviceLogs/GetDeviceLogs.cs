@@ -29,7 +29,7 @@ public class GetDeviceLogsHandler(
         CancellationToken cancellationToken)
     {
         if (request.DeviceId == Guid.Empty)
-            return Result.Failure("DeviceId 不能为空");
+            return Result.Failure("设备不能为空");
 
         if (!string.Equals(
                 currentUser.Role,

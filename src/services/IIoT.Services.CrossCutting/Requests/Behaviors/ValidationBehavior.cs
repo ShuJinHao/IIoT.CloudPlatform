@@ -34,13 +34,54 @@ public sealed class ValidationBehavior<TRequest, TResponse>(
             return await next(cancellationToken);
         }
 
-        if (typeof(TResponse) == typeof(Result) ||
-            (typeof(TResponse).IsGenericType &&
-             typeof(TResponse).GetGenericTypeDefinition() == typeof(Result<>)))
+        if (InvalidResultResponse<TResponse>.CanCreate)
         {
-            return (TResponse)(dynamic)Result.Invalid(failures);
+            return InvalidResultResponse<TResponse>.Create(Result.Invalid(failures));
         }
 
         throw new ValidationException(string.Join(Environment.NewLine, failures));
+    }
+}
+
+file static class InvalidResultResponse<TResponse>
+{
+    private static readonly Func<Result, TResponse>? Factory = CreateFactory();
+
+    public static bool CanCreate => Factory is not null;
+
+    public static TResponse Create(Result result)
+    {
+        if (Factory is null)
+        {
+            throw new NotSupportedException(
+                $"ValidationBehavior cannot create an invalid response for {typeof(TResponse).FullName}.");
+        }
+
+        return Factory(result);
+    }
+
+    private static Func<Result, TResponse>? CreateFactory()
+    {
+        if (typeof(TResponse) == typeof(Result))
+        {
+            return result => (TResponse)(object)result;
+        }
+
+        if (!typeof(TResponse).IsGenericType
+            || typeof(TResponse).GetGenericTypeDefinition() != typeof(Result<>))
+        {
+            return null;
+        }
+
+        var conversion = typeof(TResponse).GetMethod(
+            "op_Implicit",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static,
+            binder: null,
+            types: [typeof(Result)],
+            modifiers: null);
+
+        return conversion is null
+            ? null
+            : result => (TResponse)conversion.Invoke(null, [result])!;
     }
 }

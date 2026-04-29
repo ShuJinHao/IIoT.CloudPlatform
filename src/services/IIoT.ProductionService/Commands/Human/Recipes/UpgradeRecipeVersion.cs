@@ -1,7 +1,6 @@
 using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.Core.Production.Specifications.Recipes;
 using IIoT.Services.CrossCutting.Attributes;
-using IIoT.Services.CrossCutting.Caching;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.RecordQueries;
@@ -23,7 +22,6 @@ public class UpgradeRecipeVersionHandler(
     ICurrentUser currentUser,
     IRepository<Recipe> recipeRepository,
     IRecipeReadQueryService recipeReadQueryService,
-    ICacheService cacheService,
     IDevicePermissionService devicePermissionService)
     : ICommandHandler<UpgradeRecipeVersionCommand, Result<Guid>>
 {
@@ -86,12 +84,6 @@ public class UpgradeRecipeVersionHandler(
         recipeRepository.Add(newRecipe);
 
         await recipeRepository.SaveChangesAsync(cancellationToken);
-
-        await cacheService.RemoveAsync(CacheKeys.Recipe(source.Id), cancellationToken);
-        await cacheService.RemoveAsync(
-            CacheKeys.RecipesByProcess(source.ProcessId), cancellationToken);
-        await cacheService.RemoveAsync(
-            CacheKeys.RecipesByDevice(source.DeviceId), cancellationToken);
 
         return Result.Success(newRecipe.Id);
     }

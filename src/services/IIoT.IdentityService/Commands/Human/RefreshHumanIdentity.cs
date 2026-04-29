@@ -27,7 +27,7 @@ public sealed class RefreshHumanIdentityHandler(
 
         if (!rotationResult.IsSuccess)
         {
-            return Result.Unauthorized(rotationResult.Errors?.ToArray() ?? ["Refresh token is invalid or expired."]);
+            return Result.Unauthorized(rotationResult.Errors?.ToArray() ?? ["刷新令牌无效或已过期。"]);
         }
 
         var account = await identityAccountStore.GetByIdAsync(
@@ -42,7 +42,7 @@ public sealed class RefreshHumanIdentityHandler(
                 "identity-unavailable",
                 cancellationToken);
 
-            return Result.Unauthorized("Account is unavailable.");
+            return Result.Unauthorized("账号不可用。");
         }
 
         var roles = await identityAccountStore.GetRolesAsync(account.Id, cancellationToken);

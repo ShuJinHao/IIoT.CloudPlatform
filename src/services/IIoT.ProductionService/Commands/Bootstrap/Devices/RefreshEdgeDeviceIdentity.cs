@@ -29,7 +29,7 @@ public sealed class RefreshEdgeDeviceIdentityHandler(
 
         if (!rotationResult.IsSuccess)
         {
-            return Result.Unauthorized(rotationResult.Errors?.ToArray() ?? ["Refresh token is invalid or expired."]);
+            return Result.Unauthorized(rotationResult.Errors?.ToArray() ?? ["刷新令牌无效或已过期。"]);
         }
 
         var device = await deviceRepository.GetSingleOrDefaultAsync(
@@ -44,7 +44,7 @@ public sealed class RefreshEdgeDeviceIdentityHandler(
                 "device-unavailable",
                 cancellationToken);
 
-            return Result.Unauthorized("Device is unavailable.");
+            return Result.Unauthorized("设备不可用。");
         }
 
         var accessToken = jwtTokenGenerator.GenerateEdgeDeviceToken(

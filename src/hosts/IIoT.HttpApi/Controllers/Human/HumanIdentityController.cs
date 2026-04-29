@@ -23,8 +23,8 @@ public class HumanIdentityController : ApiControllerBase
         var result = await Sender.Send(command, cancellationToken);
         if (result.IsSuccess && result.Value is not null)
         {
-            RefreshTokenHeaderNames.ApplyTo(
-                Response,
+            RefreshTokenResponseFilter.SetHeaders(
+                HttpContext,
                 result.Value.RefreshToken,
                 result.Value.RefreshTokenExpiresAtUtc,
                 result.Value.AccessTokenExpiresAtUtc);
@@ -43,8 +43,8 @@ public class HumanIdentityController : ApiControllerBase
         var result = await Sender.Send(new RefreshHumanIdentityCommand(refreshToken), cancellationToken);
         if (result.IsSuccess && result.Value is not null)
         {
-            RefreshTokenHeaderNames.ApplyTo(
-                Response,
+            RefreshTokenResponseFilter.SetHeaders(
+                HttpContext,
                 result.Value.RefreshToken,
                 result.Value.RefreshTokenExpiresAtUtc,
                 result.Value.AccessTokenExpiresAtUtc);
@@ -63,8 +63,8 @@ public class HumanIdentityController : ApiControllerBase
         var result = await Sender.Send(command, cancellationToken);
         if (result.IsSuccess && result.Value is not null)
         {
-            RefreshTokenHeaderNames.ApplyTo(
-                Response,
+            RefreshTokenResponseFilter.SetHeaders(
+                HttpContext,
                 result.Value.RefreshToken,
                 result.Value.RefreshTokenExpiresAtUtc,
                 result.Value.AccessTokenExpiresAtUtc);

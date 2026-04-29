@@ -3,7 +3,9 @@ using System.Text.Json;
 using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.MasterData.Aggregates.MfgProcesses;
 using IIoT.Core.Production.Aggregates.Devices;
+using IIoT.Core.Production.Aggregates.Devices.Events;
 using IIoT.Core.Production.Aggregates.Recipes;
+using IIoT.Core.Production.Aggregates.Recipes.Events;
 using IIoT.EmployeeService.Commands.Employees;
 using IIoT.MasterDataService.Commands.Processes;
 using IIoT.ProductionService.Commands.Capacities;
@@ -11,6 +13,7 @@ using IIoT.ProductionService.Commands.DeviceLogs;
 using IIoT.ProductionService.Commands.Devices;
 using IIoT.ProductionService.Commands.PassStations;
 using IIoT.ProductionService.Commands.Recipes;
+using IIoT.ProductionService.Caching;
 using IIoT.ProductionService.Profiles;
 using IIoT.ProductionService.Queries.Capacities;
 using IIoT.ProductionService.Queries.Devices;
@@ -51,13 +54,12 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
-    public async Task RegisterDeviceHandler_ShouldCreateDeviceAndClearCaches()
+    public async Task RegisterDeviceHandler_ShouldCreateDeviceAndRaiseRegisteredEvent()
     {
         var repository = new InMemoryRepository<Device>();
         var processId = Guid.NewGuid();
         var processQueries = new StubProcessReadQueryService { Exists = true };
         var deviceQueries = new StubDeviceReadQueryService();
-        var cacheInvalidation = new RecordingDeviceCacheInvalidationService();
         var auditTrail = new RecordingAuditTrailService();
         var handler = new RegisterDeviceHandler(
             new TestCurrentUser
@@ -70,7 +72,6 @@ public sealed class ApplicationFlowGuardTests
             repository,
             processQueries,
             deviceQueries,
-            cacheInvalidation,
             auditTrail);
 
         var result = await handler.Handle(
@@ -86,7 +87,10 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal(processId, repository.AddedEntity!.ProcessId);
         Assert.StartsWith("DEV-", repository.AddedEntity.Code);
         Assert.Equal(repository.AddedEntity.Code, created.Code);
-        Assert.Contains(processId, cacheInvalidation.RegisteredProcessIds);
+        Assert.Contains(repository.AddedEntity.DomainEvents, x =>
+            x is DeviceRegisteredDomainEvent registered
+            && registered.ProcessId == processId
+            && registered.Code == repository.AddedEntity.Code);
         Assert.Contains(auditTrail.Entries, x =>
             x.OperationType == "Device.Register"
             && x.TargetType == "Device"
@@ -99,7 +103,6 @@ public sealed class ApplicationFlowGuardTests
         var repository = new InMemoryRepository<Device>();
         var processQueries = new StubProcessReadQueryService { Exists = true };
         var deviceQueries = new StubDeviceReadQueryService { CodeExists = true };
-        var cacheInvalidation = new RecordingDeviceCacheInvalidationService();
         var auditTrail = new RecordingAuditTrailService();
         var handler = new RegisterDeviceHandler(
             new TestCurrentUser
@@ -112,7 +115,6 @@ public sealed class ApplicationFlowGuardTests
             repository,
             processQueries,
             deviceQueries,
-            cacheInvalidation,
             auditTrail);
 
         var result = await handler.Handle(
@@ -121,7 +123,6 @@ public sealed class ApplicationFlowGuardTests
 
         Assert.False(result.IsSuccess);
         Assert.Null(repository.AddedEntity);
-        Assert.Empty(cacheInvalidation.RegisteredProcessIds);
         Assert.Contains(auditTrail.Entries, x =>
             x.OperationType == "Device.Register"
             && !x.Succeeded);
@@ -133,13 +134,13 @@ public sealed class ApplicationFlowGuardTests
         var processId = Guid.NewGuid();
         var deviceId = Guid.NewGuid();
         var source = new Recipe("Injection Recipe", processId, deviceId, "{\"speed\":120}");
+        source.ClearDomainEvents();
         var repository = new InMemoryRepository<Recipe>
         {
             SingleOrDefaultResult = source
         };
         repository.ListResult.Add(source);
 
-        var cache = new RecordingCacheService();
         var handler = new UpgradeRecipeVersionHandler(
             new TestCurrentUser
             {
@@ -150,7 +151,6 @@ public sealed class ApplicationFlowGuardTests
             },
             repository,
             new StubRecipeReadQueryService(),
-            cache,
             new StubDevicePermissionService());
 
         var result = await handler.Handle(
@@ -164,9 +164,15 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal("V1.1", repository.AddedEntity!.Version);
         Assert.Equal(processId, repository.AddedEntity.ProcessId);
         Assert.Equal(deviceId, repository.AddedEntity.DeviceId);
-        Assert.Contains(CacheKeys.Recipe(source.Id), cache.RemovedKeys);
-        Assert.Contains(CacheKeys.RecipesByProcess(processId), cache.RemovedKeys);
-        Assert.Contains(CacheKeys.RecipesByDevice(deviceId), cache.RemovedKeys);
+        Assert.Contains(source.DomainEvents, x =>
+            x is RecipeArchivedDomainEvent archived
+            && archived.ProcessId == processId
+            && archived.DeviceId == deviceId);
+        Assert.Contains(repository.AddedEntity.DomainEvents, x =>
+            x is RecipeVersionUpgradedDomainEvent upgraded
+            && upgraded.SourceRecipeId == source.Id
+            && upgraded.ProcessId == processId
+            && upgraded.DeviceId == deviceId);
     }
 
     [Fact]
@@ -370,15 +376,15 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
-    public async Task UpdateDeviceProfileHandler_ShouldClearDeviceIdentityCache()
+    public async Task UpdateDeviceProfileHandler_ShouldRaiseDeviceRenamedEvent()
     {
         var processId = Guid.NewGuid();
         var device = new Device("Device-01", "DEV-UPDATE001", processId);
+        device.ClearDomainEvents();
         var repository = new InMemoryRepository<Device>
         {
             SingleOrDefaultResult = device
         };
-        var cache = new RecordingCacheService();
         var handler = new UpdateDeviceProfileHandler(
             new TestCurrentUser
             {
@@ -388,7 +394,6 @@ public sealed class ApplicationFlowGuardTests
                 IsAuthenticated = true
             },
             repository,
-            cache,
             new StubDevicePermissionService());
 
         var result = await handler.Handle(
@@ -396,21 +401,25 @@ public sealed class ApplicationFlowGuardTests
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        Assert.Contains(CacheKeys.DeviceIdentity(device.Id), cache.RemovedKeys);
+        Assert.Contains(device.DomainEvents, x =>
+            x is DeviceRenamedDomainEvent renamed
+            && renamed.DeviceId == device.Id
+            && renamed.Code == device.Code
+            && renamed.ProcessId == processId);
     }
 
     [Fact]
-    public async Task DeleteDeviceHandler_ShouldClearCaches_AndRevokeRefreshTokens()
+    public async Task DeleteDeviceHandler_ShouldRaiseDeletedEvent_AndRevokeRefreshTokens()
     {
         var processId = Guid.NewGuid();
         var device = new Device("Device-Delete", "DEV-DELETE001", processId);
+        device.ClearDomainEvents();
         var repository = new InMemoryRepository<Device>
         {
             SingleOrDefaultResult = device
         };
         var dependencyQuery = new StubDeviceDeletionDependencyQueryService();
         var refreshTokenService = new StubRefreshTokenService();
-        var cacheInvalidation = new RecordingDeviceCacheInvalidationService();
         var auditTrail = new RecordingAuditTrailService();
         var handler = new DeleteDeviceHandler(
             new TestCurrentUser
@@ -422,7 +431,6 @@ public sealed class ApplicationFlowGuardTests
             },
             repository,
             dependencyQuery,
-            cacheInvalidation,
             refreshTokenService,
             new StubDevicePermissionService(),
             auditTrail);
@@ -430,10 +438,11 @@ public sealed class ApplicationFlowGuardTests
         var result = await handler.Handle(new DeleteDeviceCommand(device.Id), CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        Assert.Contains(cacheInvalidation.DeletedDevices, x =>
-            x.DeviceId == device.Id
-            && x.ProcessId == processId
-            && x.DeviceCode == device.Code);
+        Assert.Contains(device.DomainEvents, x =>
+            x is DeviceDeletedDomainEvent deleted
+            && deleted.DeviceId == device.Id
+            && deleted.ProcessId == processId
+            && deleted.Code == device.Code);
         Assert.Contains(refreshTokenService.Revocations, x =>
             x.ActorType == IIoT.Services.Contracts.Identity.IIoTClaimTypes.EdgeDeviceActor
             && x.SubjectId == device.Id
@@ -442,6 +451,73 @@ public sealed class ApplicationFlowGuardTests
             x.OperationType == "Device.Delete"
             && x.TargetIdOrKey == device.Id.ToString()
             && x.Succeeded);
+    }
+
+    [Fact]
+    public async Task DeviceCacheInvalidationHandlers_ShouldRouteDomainEventsToCacheService()
+    {
+        var deviceId = Guid.NewGuid();
+        var oldProcessId = Guid.NewGuid();
+        var newProcessId = Guid.NewGuid();
+        var cacheInvalidation = new RecordingDeviceCacheInvalidationService();
+
+        await new DeviceRegisteredCacheInvalidationHandler(cacheInvalidation).Handle(
+            new DeviceRegisteredDomainEvent(deviceId, "Device-01", "DEV-CACHE001", oldProcessId),
+            CancellationToken.None);
+        await new DeviceRenamedCacheInvalidationHandler(cacheInvalidation).Handle(
+            new DeviceRenamedDomainEvent(deviceId, "Device-02", "DEV-CACHE001", oldProcessId),
+            CancellationToken.None);
+        await new DeviceProcessChangedCacheInvalidationHandler(cacheInvalidation).Handle(
+            new DeviceProcessChangedDomainEvent(deviceId, "DEV-CACHE001", oldProcessId, newProcessId),
+            CancellationToken.None);
+        await new DeviceDeletedCacheInvalidationHandler(cacheInvalidation).Handle(
+            new DeviceDeletedDomainEvent(deviceId, "DEV-CACHE001", newProcessId),
+            CancellationToken.None);
+
+        Assert.Contains(oldProcessId, cacheInvalidation.RegisteredProcessIds);
+        Assert.Contains(cacheInvalidation.RenamedDevices, x =>
+            x.DeviceId == deviceId
+            && x.ProcessId == oldProcessId
+            && x.DeviceCode == "DEV-CACHE001");
+        Assert.Contains(cacheInvalidation.ProcessChangedDevices, x =>
+            x.DeviceId == deviceId
+            && x.OldProcessId == oldProcessId
+            && x.NewProcessId == newProcessId);
+        Assert.Contains(cacheInvalidation.DeletedDevices, x =>
+            x.DeviceId == deviceId
+            && x.ProcessId == newProcessId
+            && x.DeviceCode == "DEV-CACHE001");
+    }
+
+    [Fact]
+    public async Task RecipeCacheInvalidationHandlers_ShouldRouteDomainEventsToCacheService()
+    {
+        var recipeId = Guid.NewGuid();
+        var newRecipeId = Guid.NewGuid();
+        var processId = Guid.NewGuid();
+        var deviceId = Guid.NewGuid();
+        var cacheInvalidation = new RecordingRecipeCacheInvalidationService();
+
+        await new RecipeCreatedCacheInvalidationHandler(cacheInvalidation).Handle(
+            new RecipeCreatedDomainEvent(recipeId, "Recipe-A", "V1.0", processId, deviceId),
+            CancellationToken.None);
+        await new RecipeArchivedCacheInvalidationHandler(cacheInvalidation).Handle(
+            new RecipeArchivedDomainEvent(recipeId, "V1.0", processId, deviceId),
+            CancellationToken.None);
+        await new RecipeVersionUpgradedCacheInvalidationHandler(cacheInvalidation).Handle(
+            new RecipeVersionUpgradedDomainEvent(recipeId, newRecipeId, "Recipe-A", "V1.1", processId, deviceId),
+            CancellationToken.None);
+        await new RecipeDeletedCacheInvalidationHandler(cacheInvalidation).Handle(
+            new RecipeDeletedDomainEvent(recipeId, processId, deviceId),
+            CancellationToken.None);
+
+        Assert.Equal(4, cacheInvalidation.ChangedRecipes.Count);
+        Assert.All(cacheInvalidation.ChangedRecipes, x =>
+        {
+            Assert.Equal(recipeId, x.RecipeId);
+            Assert.Equal(processId, x.ProcessId);
+            Assert.Equal(deviceId, x.DeviceId);
+        });
     }
 
     [Fact]
