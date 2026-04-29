@@ -11,7 +11,7 @@ namespace IIoT.ProductionService.Commands.PassStations;
 /// </summary>
 public sealed class PassStationReceiveService(
     IDeviceIdentityQueryService deviceIdentityQuery,
-    IEventPublisher eventPublisher) : IPassStationReceiveService
+    IIntegrationEventOutbox integrationEventOutbox) : IPassStationReceiveService
 {
     public async Task<Result<bool>> ValidateAndPublishAsync<TEvent>(
         Guid deviceId,
@@ -30,7 +30,7 @@ public sealed class PassStationReceiveService(
         if (!exists)
             return Result.Failure("数据接收失败:设备不存在");
 
-        await eventPublisher.PublishAsync(@event, cancellationToken);
+        await integrationEventOutbox.EnqueueAsync(@event, cancellationToken);
         return Result.Success(true);
     }
 }

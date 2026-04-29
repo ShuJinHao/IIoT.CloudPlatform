@@ -725,10 +725,9 @@ internal sealed class RecordingEventPublisher(
 {
     public object? LastPublishedEvent { get; private set; }
 
-    public Task PublishAsync<TEvent>(
-        TEvent @event,
+    public Task PublishAsync(
+        IIntegrationEvent @event,
         CancellationToken cancellationToken = default)
-        where TEvent : class, IIntegrationEvent
     {
         callOrder?.Add("publish");
         if (publishException is not null)
@@ -737,6 +736,38 @@ internal sealed class RecordingEventPublisher(
         }
 
         LastPublishedEvent = @event;
+        return Task.CompletedTask;
+    }
+
+    public Task PublishAsync<TEvent>(
+        TEvent @event,
+        CancellationToken cancellationToken = default)
+        where TEvent : class, IIntegrationEvent
+    {
+        return PublishAsync((IIntegrationEvent)@event, cancellationToken);
+    }
+}
+
+internal sealed class RecordingIntegrationEventOutbox(
+    List<string>? callOrder = null,
+    Exception? enqueueException = null) : IIntegrationEventOutbox
+{
+    public IIntegrationEvent? LastEnqueuedEvent { get; private set; }
+
+    public List<IIntegrationEvent> EnqueuedEvents { get; } = [];
+
+    public Task EnqueueAsync(
+        IIntegrationEvent @event,
+        CancellationToken cancellationToken = default)
+    {
+        callOrder?.Add("enqueue");
+        if (enqueueException is not null)
+        {
+            throw enqueueException;
+        }
+
+        LastEnqueuedEvent = @event;
+        EnqueuedEvents.Add(@event);
         return Task.CompletedTask;
     }
 }

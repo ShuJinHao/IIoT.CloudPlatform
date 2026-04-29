@@ -15,7 +15,7 @@ public record ReceiveDeviceLogCommand(
 public class ReceiveDeviceLogHandler(
     IDeviceIdentityQueryService deviceIdentityQuery,
     IMapper mapper,
-    IEventPublisher eventPublisher
+    IIntegrationEventOutbox integrationEventOutbox
 ) : ICommandHandler<ReceiveDeviceLogCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(
@@ -34,7 +34,7 @@ public class ReceiveDeviceLogHandler(
             return Result.Failure("数据接收失败: 设备不存在");
 
         var @event = mapper.Map<DeviceLogReceivedEvent>(request);
-        await eventPublisher.PublishAsync(@event, cancellationToken);
+        await integrationEventOutbox.EnqueueAsync(@event, cancellationToken);
 
         return Result.Success(true);
     }

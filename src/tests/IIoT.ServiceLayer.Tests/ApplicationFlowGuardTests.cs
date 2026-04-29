@@ -7,6 +7,7 @@ using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.EmployeeService.Commands.Employees;
 using IIoT.MasterDataService.Commands.Processes;
 using IIoT.ProductionService.Commands.Capacities;
+using IIoT.ProductionService.Commands.DeviceLogs;
 using IIoT.ProductionService.Commands.Devices;
 using IIoT.ProductionService.Commands.Recipes;
 using IIoT.ProductionService.Profiles;
@@ -523,12 +524,12 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
-    public async Task ReceiveHourlyCapacityHandler_ShouldPublishBeforeClearingCapacityCaches()
+    public async Task ReceiveHourlyCapacityHandler_ShouldEnqueueBeforeClearingCapacityCaches()
     {
         var deviceId = Guid.NewGuid();
         var callOrder = new List<string>();
         var cache = new RecordingCacheService(callOrder);
-        var publisher = new RecordingEventPublisher(callOrder);
+        var outbox = new RecordingIntegrationEventOutbox(callOrder);
         var mapperServices = new ServiceCollection();
         mapperServices.AddLogging();
         mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
@@ -536,7 +537,7 @@ public sealed class ApplicationFlowGuardTests
         var handler = new ReceiveHourlyCapacityHandler(
             new StubDeviceIdentityQueryService { Exists = true },
             mapper,
-            publisher,
+            outbox,
             cache);
 
         var request = new ReceiveHourlyCapacityCommand(
@@ -554,11 +555,11 @@ public sealed class ApplicationFlowGuardTests
         var result = await handler.Handle(request, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal("publish", callOrder[0]);
-        var published = Assert.IsType<HourlyCapacityReceivedEvent>(publisher.LastPublishedEvent);
-        Assert.Equal(deviceId, published.DeviceId);
-        Assert.True(published.ReceivedAtUtc > DateTime.UtcNow.AddMinutes(-1));
-        Assert.Equal(DateTimeKind.Utc, published.ReceivedAtUtc.Kind);
+        Assert.Equal("enqueue", callOrder[0]);
+        var enqueued = Assert.IsType<HourlyCapacityReceivedEvent>(outbox.LastEnqueuedEvent);
+        Assert.Equal(deviceId, enqueued.DeviceId);
+        Assert.True(enqueued.ReceivedAtUtc > DateTime.UtcNow.AddMinutes(-1));
+        Assert.Equal(DateTimeKind.Utc, enqueued.ReceivedAtUtc.Kind);
         Assert.Contains(CacheKeys.CapacityHourly(deviceId, request.Date, request.PlcName), cache.RemovedKeys);
         Assert.Contains(CacheKeys.CapacitySummary(deviceId, request.Date, request.PlcName), cache.RemovedKeys);
         Assert.Contains(CacheKeys.CapacityRange(deviceId, request.Date, request.Date, request.PlcName), cache.RemovedKeys);
@@ -569,14 +570,14 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
-    public async Task ReceiveHourlyCapacityHandler_ShouldNotClearCapacityCachesWhenPublishFails()
+    public async Task ReceiveHourlyCapacityHandler_ShouldNotClearCapacityCachesWhenOutboxEnqueueFails()
     {
         var deviceId = Guid.NewGuid();
         var callOrder = new List<string>();
         var cache = new RecordingCacheService(callOrder);
-        var publisher = new RecordingEventPublisher(
+        var outbox = new RecordingIntegrationEventOutbox(
             callOrder,
-            new InvalidOperationException("publish failed"));
+            new InvalidOperationException("outbox failed"));
         var mapperServices = new ServiceCollection();
         mapperServices.AddLogging();
         mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
@@ -584,7 +585,7 @@ public sealed class ApplicationFlowGuardTests
         var handler = new ReceiveHourlyCapacityHandler(
             new StubDeviceIdentityQueryService { Exists = true },
             mapper,
-            publisher,
+            outbox,
             cache);
 
         var request = new ReceiveHourlyCapacityCommand(
@@ -602,10 +603,43 @@ public sealed class ApplicationFlowGuardTests
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             handler.Handle(request, CancellationToken.None));
 
-        Assert.Equal("publish failed", exception.Message);
-        Assert.Equal(["publish"], callOrder);
+        Assert.Equal("outbox failed", exception.Message);
+        Assert.Equal(["enqueue"], callOrder);
         Assert.Empty(cache.RemovedKeys);
         Assert.Empty(cache.RemovedPatterns);
+    }
+
+    [Fact]
+    public async Task ReceiveDeviceLogHandler_ShouldEnqueueIntegrationEvent()
+    {
+        var deviceId = Guid.NewGuid();
+        var outbox = new RecordingIntegrationEventOutbox();
+        var mapperServices = new ServiceCollection();
+        mapperServices.AddLogging();
+        mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
+        var mapper = mapperServices.BuildServiceProvider().GetRequiredService<IMapper>();
+        var handler = new ReceiveDeviceLogHandler(
+            new StubDeviceIdentityQueryService { Exists = true },
+            mapper,
+            outbox);
+
+        var result = await handler.Handle(
+            new ReceiveDeviceLogCommand(
+                deviceId,
+                [
+                    new DeviceLogItem
+                    {
+                        Level = "Information",
+                        Message = "started",
+                        LogTime = DateTime.UtcNow
+                    }
+                ]),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var enqueued = Assert.IsType<DeviceLogReceivedEvent>(outbox.LastEnqueuedEvent);
+        Assert.Equal(deviceId, enqueued.DeviceId);
+        Assert.Single(enqueued.Logs);
     }
 
     [Fact]
@@ -641,7 +675,11 @@ public sealed class ApplicationFlowGuardTests
 
         Assert.True(typeof(IIntegrationEvent).IsAssignableFrom(typeof(IPassStationEvent)));
 
-        var publishMethod = typeof(IEventPublisher).GetMethod(nameof(IEventPublisher.PublishAsync))!;
+        var publishMethod = typeof(IEventPublisher)
+            .GetMethods()
+            .Single(method =>
+                string.Equals(method.Name, nameof(IEventPublisher.PublishAsync), StringComparison.Ordinal)
+                && method.IsGenericMethodDefinition);
         var genericParameter = Assert.Single(publishMethod.GetGenericArguments());
         Assert.Contains(
             typeof(IIntegrationEvent),

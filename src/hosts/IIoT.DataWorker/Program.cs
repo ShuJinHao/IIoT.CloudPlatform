@@ -12,6 +12,7 @@ using IIoT.ProductionService.Commands.Capacities;
 using IIoT.ProductionService.Commands.PassStations;
 using IIoT.Services.CrossCutting.Behaviors;
 using IIoT.Services.CrossCutting.DependencyInjection;
+using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Events.PassStations;
 using IIoT.SharedKernel.Configuration;
 using MassTransit;
@@ -76,6 +77,7 @@ builder.Services.AddConfiguredMediatR(builder.Configuration, cfg =>
 });
 
 builder.Services.AddScoped<IOutboxMessageDispatcher, OutboxMessageDispatcher>();
+builder.Services.AddScoped<IEventPublisher, MassTransitEventPublisher>();
 _ = builder.AddValidatedOptions<OutboxDispatcherOptions>(
     OutboxDispatcherOptions.SectionName,
     static options => options.Validate());
