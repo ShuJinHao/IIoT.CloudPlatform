@@ -647,6 +647,18 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
+    public void HttpApi_ShouldReturnProblemDetailsForResultFailures()
+    {
+        var apiControllerBaseSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Infrastructure", "ApiControllerBase.cs"));
+
+        apiControllerBaseSource.Should().Contain("ProblemDetails");
+        apiControllerBaseSource.Should().Contain("application/problem+json");
+        apiControllerBaseSource.Should().Contain("Extensions[\"errors\"]");
+        apiControllerBaseSource.Should().NotContain("new { errors =");
+    }
+
+    [Fact]
     public void EdgeUploadEndpoints_ShouldDeclareRequestSizeLimits()
     {
         var deviceLogControllerSource = File.ReadAllText(

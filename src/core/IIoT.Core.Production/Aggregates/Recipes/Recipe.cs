@@ -151,6 +151,11 @@ public class Recipe : BaseEntity<Guid>
 
     public void MarkDeleted()
     {
+        if (Status != RecipeStatus.Archived)
+        {
+            throw new InvalidOperationException("只有已归档配方可以删除。");
+        }
+
         AddDomainEvent(new RecipeDeletedDomainEvent(Id, ProcessId, DeviceId));
     }
 

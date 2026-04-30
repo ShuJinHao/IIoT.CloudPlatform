@@ -5,4 +5,5 @@ public sealed record OutboxDispatchResult(
     int SucceededCount,
     int FailedCount,
     int PendingBacklogCount,
+    int AbandonedCount,
     string? LastFailureSummary);

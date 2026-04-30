@@ -21,22 +21,22 @@ public abstract class ApiControllerBase : ControllerBase
                     return value is null ? NoContent() : Ok(value);
                 }
             case ResultStatus.Error:
-                return result.Errors is null ? BadRequest() : BadRequest(new { errors = result.Errors });
+                return ProblemResult(result, StatusCodes.Status400BadRequest, "请求处理失败");
 
             case ResultStatus.NotFound:
-                return result.Errors is null ? NotFound() : NotFound(new { errors = result.Errors });
+                return ProblemResult(result, StatusCodes.Status404NotFound, "资源不存在");
 
             case ResultStatus.Invalid:
-                return result.Errors is null ? BadRequest() : BadRequest(new { errors = result.Errors });
+                return ProblemResult(result, StatusCodes.Status400BadRequest, "请求参数无效");
 
             case ResultStatus.Forbidden:
-                return StatusCode(403, result.Errors is null ? null : new { errors = result.Errors });
+                return ProblemResult(result, StatusCodes.Status403Forbidden, "禁止访问");
 
             case ResultStatus.Unauthorized:
-                return Unauthorized(result.Errors is null ? null : new { errors = result.Errors });
+                return ProblemResult(result, StatusCodes.Status401Unauthorized, "未认证或凭据无效");
 
             default:
-                return BadRequest();
+                return ProblemResult(result, StatusCodes.Status400BadRequest, "请求处理失败");
         }
     }
 
@@ -75,5 +75,32 @@ public abstract class ApiControllerBase : ControllerBase
 
         var body = bodyFactory(result.Value);
         return body is null ? NoContent() : Ok(body);
+    }
+
+    private IActionResult ProblemResult(IResult result, int statusCode, string title)
+    {
+        var errors = result.Errors?
+            .Where(error => !string.IsNullOrWhiteSpace(error))
+            .ToArray();
+
+        var problemDetails = new ProblemDetails
+        {
+            Status = statusCode,
+            Title = title,
+            Detail = errors?.Length == 1 ? errors[0] : null,
+            Instance = HttpContext.Request.Path
+        };
+
+        if (errors is { Length: > 0 })
+        {
+            problemDetails.Extensions["errors"] = errors;
+        }
+
+        var objectResult = new ObjectResult(problemDetails)
+        {
+            StatusCode = statusCode
+        };
+        objectResult.ContentTypes.Add("application/problem+json");
+        return objectResult;
     }
 }

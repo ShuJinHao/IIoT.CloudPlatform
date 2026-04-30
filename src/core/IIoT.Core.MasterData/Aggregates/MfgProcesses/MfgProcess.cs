@@ -32,6 +32,8 @@ public class MfgProcess : BaseEntity<Guid>
     /// </summary>
     public string ProcessName { get; private set; } = null!;
 
+    public uint RowVersion { get; private set; }
+
     // ── 行为 ──────────────────────────────────────────────
 
     /// <summary>

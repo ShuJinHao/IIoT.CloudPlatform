@@ -23,6 +23,10 @@ public class MfgProcessConfiguration : IEntityTypeConfiguration<MfgProcess>
             .HasMaxLength(100)
             .HasColumnName("process_name");
 
+        builder.Property(p => p.RowVersion)
+            .IsRowVersion()
+            .HasColumnName("xmin");
+
         builder.HasIndex(p => p.ProcessCode)
             .IsUnique()
             .HasDatabaseName("ix_mfg_processes_process_code");

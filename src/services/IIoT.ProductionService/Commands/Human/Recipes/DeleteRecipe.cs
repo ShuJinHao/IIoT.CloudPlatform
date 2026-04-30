@@ -48,6 +48,9 @@ public class DeleteRecipeHandler(
                 return Result.Failure("越权:您没有该机台的管辖权,禁止删除此配方");
         }
 
+        if (recipe.Status != RecipeStatus.Archived)
+            return Result.Failure("操作失败:只有已归档配方可以删除");
+
         recipe.MarkDeleted();
         recipeRepository.Delete(recipe);
         await recipeRepository.SaveChangesAsync(cancellationToken);

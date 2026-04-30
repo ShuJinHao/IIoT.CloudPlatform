@@ -30,14 +30,17 @@ public sealed class OutboxDispatcherWorker(
                 var dispatcher = scope.ServiceProvider.GetRequiredService<IOutboxMessageDispatcher>();
                 var dispatchResult = await dispatcher.DispatchPendingAsync(stoppingToken);
 
-                if (dispatchResult.ScannedCount > 0 || dispatchResult.FailedCount > 0)
+                if (dispatchResult.ScannedCount > 0
+                    || dispatchResult.FailedCount > 0
+                    || dispatchResult.AbandonedCount > 0)
                 {
                     logger.LogInformation(
-                        "Outbox dispatch iteration scanned={scanned_count} succeeded={succeeded_count} failed={failed_count} pending_backlog={pending_backlog_count} last_failure_summary={last_failure_summary}",
+                        "Outbox dispatch iteration scanned={scanned_count} succeeded={succeeded_count} failed={failed_count} pending_backlog={pending_backlog_count} abandoned={abandoned_count} last_failure_summary={last_failure_summary}",
                         dispatchResult.ScannedCount,
                         dispatchResult.SucceededCount,
                         dispatchResult.FailedCount,
                         dispatchResult.PendingBacklogCount,
+                        dispatchResult.AbandonedCount,
                         dispatchResult.LastFailureSummary ?? string.Empty);
                 }
             }
