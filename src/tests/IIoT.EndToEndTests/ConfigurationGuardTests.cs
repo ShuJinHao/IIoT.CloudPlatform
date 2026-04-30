@@ -294,8 +294,7 @@ public sealed class ConfigurationGuardTests
         {
             FindRepoFile("src", "services", "IIoT.Services.Contracts", "Events", "Capacities", "HourlyCapacityReceivedEvent.cs"),
             FindRepoFile("src", "services", "IIoT.Services.Contracts", "Events", "DeviceLogs", "DeviceLogReceivedEvent.cs"),
-            FindRepoFile("src", "services", "IIoT.Services.Contracts", "Events", "PassStations", "PassDataInjectionReceivedEvent.cs"),
-            FindRepoFile("src", "services", "IIoT.Services.Contracts", "Events", "PassStations", "PassDataStackingReceivedEvent.cs")
+            FindRepoFile("src", "services", "IIoT.Services.Contracts", "Events", "PassStations", "PassStationBatchReceivedEvent.cs")
         };
         var consumerFiles = new[]
         {
@@ -674,14 +673,14 @@ public sealed class ConfigurationGuardTests
 
         limitsSource.Should().Contain("MaxUploadRequestBodyBytes = 5 * 1024 * 1024");
         limitsSource.Should().Contain("MaxDeviceLogItems = 1000");
-        limitsSource.Should().Contain("MaxInjectionPassItems = 1000");
+        limitsSource.Should().Contain("MaxPassStationItems = 1000");
         deviceLogControllerSource.Should().Contain("[RequestSizeLimit(UploadValidationLimits.MaxUploadRequestBodyBytes)]");
         capacityControllerSource.Should().Contain("[RequestSizeLimit(UploadValidationLimits.MaxUploadRequestBodyBytes)]");
         passStationControllerSource.Should().Contain("[RequestSizeLimit(UploadValidationLimits.MaxUploadRequestBodyBytes)]");
+        passStationControllerSource.Should().Contain("{typeKey}/batch");
         validatorsSource.Should().Contain("ReceiveDeviceLogCommandValidator");
         validatorsSource.Should().Contain("ReceiveHourlyCapacityCommandValidator");
-        validatorsSource.Should().Contain("ReceiveInjectionPassCommandValidator");
-        validatorsSource.Should().Contain("ReceiveStackingPassCommandValidator");
+        validatorsSource.Should().Contain("ReceivePassStationBatchCommandValidator");
     }
 
     [Fact]
@@ -776,8 +775,7 @@ public sealed class ConfigurationGuardTests
         opsCheckSource.Should().Contain("latest_backup_verified_age_days=");
         opsCheckSource.Should().Contain("latest_backup_file=");
         opsCheckSource.Should().Contain("stat -c %Y");
-        opsCheckSource.Should().Contain("iiot-pass-station-injection");
-        opsCheckSource.Should().Contain("iiot-pass-station-stacking");
+        opsCheckSource.Should().Contain("iiot-pass-station-batches");
         opsCheckSource.Should().Contain("iiot-device-logs");
         opsCheckSource.Should().Contain("iiot-hourly-capacities");
         opsCheckSource.Should().Contain("exit 1");
@@ -926,15 +924,22 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
-    public void PassStationSqlContracts_ShouldRemainInternalToDapper()
+    public void PassStationRuntime_ShouldUseUnifiedSchemaAndRepository()
     {
-        var queryContractSource = File.ReadAllText(
-            FindRepoFile("src", "infrastructure", "IIoT.Dapper", "Production", "QueryServices", "PassStation", "IPassStationQuerySql.cs"));
-        var writeContractSource = File.ReadAllText(
-            FindRepoFile("src", "infrastructure", "IIoT.Dapper", "Production", "Repositories", "PassStations", "IPassStationWriteSql.cs"));
+        var schemaSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.HttpApi", "config", "pass-station-types.json"));
+        var queryServiceSource = File.ReadAllText(
+            FindRepoFile("src", "infrastructure", "IIoT.Dapper", "Production", "QueryServices", "PassStation", "PassStationRecordQueryService.cs"));
+        var repositorySource = File.ReadAllText(
+            FindRepoFile("src", "infrastructure", "IIoT.Dapper", "Production", "Repositories", "PassStations", "PassStationRecordRepository.cs"));
 
-        queryContractSource.Should().Contain("internal interface IPassStationQuerySql");
-        writeContractSource.Should().Contain("internal interface IPassStationWriteSql");
+        schemaSource.Should().Contain("\"typeKey\": \"injection\"");
+        schemaSource.Should().Contain("\"typeKey\": \"stacking\"");
+        schemaSource.Should().Contain("\"typeKey\": \"homogenization\"");
+        queryServiceSource.Should().Contain("pass_station_records");
+        repositorySource.Should().Contain("payload_jsonb");
+        repositorySource.Should().NotContain("pass_data_injection");
+        repositorySource.Should().NotContain("pass_data_stacking");
     }
 
     [Fact]

@@ -201,8 +201,7 @@ Seq is the current log aggregation baseline. Application services write both:
 
 DataWorker queues are explicit and stable:
 
-- `iiot-pass-station-injection`
-- `iiot-pass-station-stacking`
+- `iiot-pass-station-batches`
 - `iiot-device-logs`
 - `iiot-hourly-capacities`
 

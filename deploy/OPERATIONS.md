@@ -228,8 +228,7 @@ It checks:
 
 Business queue scope is fixed:
 
-- `iiot-pass-station-injection`
-- `iiot-pass-station-stacking`
+- `iiot-pass-station-batches`
 - `iiot-device-logs`
 - `iiot-hourly-capacities`
 

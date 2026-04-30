@@ -15,7 +15,7 @@ public sealed class DeviceDeletionDependencyQueryService(IDbConnectionFactory co
                 exists(select 1 from recipes where device_id = @DeviceId)            as HasRecipes,
                 exists(select 1 from hourly_capacity where device_id = @DeviceId)    as HasCapacities,
                 exists(select 1 from device_logs where device_id = @DeviceId)        as HasDeviceLogs,
-                exists(select 1 from pass_data_injection where device_id = @DeviceId) as HasPassStations;
+                exists(select 1 from pass_station_records where device_id = @DeviceId) as HasPassStations;
             """;
 
         using var connection = connectionFactory.CreateConnection();

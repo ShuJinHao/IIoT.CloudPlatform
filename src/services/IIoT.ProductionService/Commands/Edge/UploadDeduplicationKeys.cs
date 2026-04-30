@@ -13,8 +13,11 @@ internal static class UploadMessageTypes
 {
     public const string DeviceLog = "device-log";
     public const string HourlyCapacity = "hourly-capacity";
-    public const string PassStationInjection = "pass-station-injection";
-    public const string PassStationStacking = "pass-station-stacking";
+
+    public static string ForPassStation(string typeKey)
+    {
+        return $"pass-station:{typeKey}";
+    }
 }
 
 internal static class UploadDeduplicationKeys
@@ -60,48 +63,47 @@ internal static class UploadDeduplicationKeys
             });
     }
 
-    public static Result<string> ForInjectionPass(ReceiveInjectionPassCommand request)
+    public static Result<string> ForPassStationBatch(ReceivePassStationBatchCommand request)
     {
         return Build(
             request.RequestId,
             new
             {
                 request.DeviceId,
+                TypeKey = PassStationPayloadJson.NormalizeTypeKey(request.TypeKey),
                 Items = (request.Items ?? [])
                     .Select(item => new
                     {
                         item.Barcode,
                         item.CellResult,
                         CompletedTime = NormalizeDateTime(item.CompletedTime),
-                        PreInjectionTime = NormalizeDateTime(item.PreInjectionTime),
-                        item.PreInjectionWeight,
-                        PostInjectionTime = NormalizeDateTime(item.PostInjectionTime),
-                        item.PostInjectionWeight,
-                        item.InjectionVolume
+                        Payload = PassStationPayloadJson.Canonicalize(item.Payload)
                     })
                     .ToArray()
             });
     }
 
-    public static Result<string> ForStackingPass(ReceiveStackingPassCommand request)
+    public static string ForPassStationRecord(
+        string typeKey,
+        Guid deviceId,
+        string barcode,
+        string cellResult,
+        DateTime completedTime,
+        string payloadJson)
     {
-        return Build(
-            request.RequestId,
+        var payload = JsonSerializer.Serialize(
             new
             {
-                request.DeviceId,
-                Item = request.Item is null
-                    ? null
-                    : new
-                    {
-                        request.Item.Barcode,
-                        request.Item.TrayCode,
-                        request.Item.LayerCount,
-                        request.Item.SequenceNo,
-                        request.Item.CellResult,
-                        CompletedTime = NormalizeDateTime(request.Item.CompletedTime)
-                    }
-            });
+                TypeKey = PassStationPayloadJson.NormalizeTypeKey(typeKey),
+                DeviceId = deviceId,
+                Barcode = barcode.Trim(),
+                CellResult = cellResult.Trim(),
+                CompletedTime = NormalizeDateTime(completedTime),
+                Payload = payloadJson
+            },
+            SerializerOptions);
+
+        return ComputeSha256(payload);
     }
 
     public static string? NormalizeRequestId(string? requestId)

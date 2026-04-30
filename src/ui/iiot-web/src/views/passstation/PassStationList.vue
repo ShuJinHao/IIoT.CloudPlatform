@@ -245,8 +245,13 @@
               结果：{{ formatResultText(detailData.cellResult || '-') }}
             </div>
 
-            <div class="detail-section">
-              <div v-for="field in currentSchema.detailFields" :key="field.key" class="detail-row">
+            <div
+              v-for="section in currentSchema.detailSections"
+              :key="section.title"
+              class="detail-section"
+            >
+              <div class="detail-section-title">{{ section.title }}</div>
+              <div v-for="field in section.fields" :key="field.key" class="detail-row">
                 <span class="detail-label">{{ field.label }}</span>
                 <span class="detail-value" :class="field.className">
                   {{ formatDisplayValue(field.render(detailData)) }}
@@ -267,12 +272,18 @@ import { getAllProcessesApi, type ProcessSelectDto } from '../../api/masterData/
 import {
   getPassStationDetailApi,
   getPassStationListApi,
+  getPassStationTypesApi,
   type PassStationDetailDto,
   type PassStationListItemDto,
   type PassStationQueryMode,
 } from '../../api/passStation';
 import type { PagedMetaData } from '../../api/employee';
-import { getPassStationSchema, normalizePassStationTypeKey, passStationSchemas } from './schema';
+import {
+  buildPassStationSchemaMap,
+  getPassStationSchema,
+  normalizePassStationTypeKey,
+  type PassStationSchema,
+} from './schema';
 
 interface QueryModeOption {
   key: PassStationQueryMode;
@@ -332,6 +343,7 @@ const metaData = ref<PagedMetaData>({ totalCount: 0, pageSize: PAGE_SIZE, curren
 
 const allProcesses = ref<ProcessSelectDto[]>([]);
 const allDevices = ref<DeviceSelectDto[]>([]);
+const schemaMap = ref<Record<string, PassStationSchema>>({});
 
 const filters = reactive({
   deviceId: '',
@@ -342,10 +354,10 @@ const filters = reactive({
 
 const currentProcess = computed(() => allProcesses.value.find((process) => process.id === currentProcessId.value) ?? null);
 const currentTypeKey = computed(() => (currentProcess.value ? normalizePassStationTypeKey(currentProcess.value.processCode) : ''));
-const currentSchema = computed(() => getPassStationSchema(currentTypeKey.value));
+const currentSchema = computed(() => getPassStationSchema(schemaMap.value, currentTypeKey.value));
 
 const supportedProcesses = computed(() =>
-  allProcesses.value.filter((process) => Boolean(passStationSchemas[normalizePassStationTypeKey(process.processCode)])));
+  allProcesses.value.filter((process) => Boolean(schemaMap.value[normalizePassStationTypeKey(process.processCode)])));
 
 const filteredDevices = computed(() => {
   if (!currentProcessId.value) {
@@ -448,13 +460,15 @@ function formatResultText(value: string | null | undefined) {
 }
 
 const fetchSelectData = async () => {
-  const [processes, devices] = await Promise.all([
+  const [processes, devices, schemas] = await Promise.all([
     getAllProcessesApi().catch(() => [] as ProcessSelectDto[]),
     getAllActiveDevicesApi().catch(() => [] as DeviceSelectDto[]),
+    getPassStationTypesApi().catch(() => []),
   ]);
 
   allProcesses.value = processes;
   allDevices.value = devices;
+  schemaMap.value = buildPassStationSchemaMap(schemas);
 
   const firstSupportedProcess = supportedProcesses.value[0];
   if (!currentProcessId.value && firstSupportedProcess) {
@@ -712,6 +726,11 @@ option { background: #1d231f; color: var(--text-main); }
 .result-icon { font-size: 16px; }
 
 .detail-section { display: flex; flex-direction: column; gap: 14px; }
+.detail-section + .detail-section { margin-top: 22px; }
+.detail-section-title {
+  padding-bottom: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--text-muted); font-size: 13px; font-weight: 600;
+}
 .detail-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .detail-label { color: var(--text-subtle); font-size: 12px; }
 .detail-value { color: var(--text-main); font-size: 13px; text-align: right; }

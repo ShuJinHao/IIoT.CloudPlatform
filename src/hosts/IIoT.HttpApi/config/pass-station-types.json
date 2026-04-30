@@ -1,0 +1,241 @@
+{
+  "PassStationTypes": {
+    "types": [
+      {
+        "typeKey": "injection",
+        "displayName": "注塑",
+        "description": "注塑过站追溯数据。公共列用于检索，注塑专属字段进入 payload_jsonb。",
+        "supportedModes": [
+          "barcode-process",
+          "time-process",
+          "device-barcode",
+          "device-time",
+          "device-latest"
+        ],
+        "fields": [
+          {
+            "key": "preInjectionTime",
+            "label": "注塑前时间",
+            "type": "datetime",
+            "required": true
+          },
+          {
+            "key": "preInjectionWeight",
+            "label": "注塑前重量",
+            "type": "number",
+            "required": true,
+            "min": 0,
+            "unit": "g",
+            "precision": 3
+          },
+          {
+            "key": "postInjectionTime",
+            "label": "注塑后时间",
+            "type": "datetime",
+            "required": true
+          },
+          {
+            "key": "postInjectionWeight",
+            "label": "注塑后重量",
+            "type": "number",
+            "required": true,
+            "min": 0,
+            "unit": "g",
+            "precision": 3
+          },
+          {
+            "key": "injectionVolume",
+            "label": "注塑量",
+            "type": "number",
+            "required": true,
+            "min": 0,
+            "unit": "ml",
+            "precision": 3
+          }
+        ],
+        "listColumns": [
+          "barcode",
+          "cellResult",
+          "injectionVolume",
+          "preInjectionWeight",
+          "postInjectionWeight",
+          "completedTime"
+        ],
+        "detailSections": [
+          {
+            "title": "基础信息",
+            "fields": [
+              "barcode",
+              "deviceId",
+              "cellResult",
+              "completedTime",
+              "receivedAt"
+            ]
+          },
+          {
+            "title": "注塑数据",
+            "fields": [
+              "preInjectionTime",
+              "preInjectionWeight",
+              "postInjectionTime",
+              "postInjectionWeight",
+              "injectionVolume"
+            ]
+          }
+        ]
+      },
+      {
+        "typeKey": "stacking",
+        "displayName": "叠片",
+        "description": "叠片过站追溯数据。托盘、层数和序号等工序字段进入 payload_jsonb。",
+        "supportedModes": [
+          "barcode-process",
+          "time-process",
+          "device-barcode",
+          "device-time",
+          "device-latest"
+        ],
+        "fields": [
+          {
+            "key": "trayCode",
+            "label": "托盘码",
+            "type": "string",
+            "required": true,
+            "maxLength": 128
+          },
+          {
+            "key": "sequenceNo",
+            "label": "序号",
+            "type": "integer",
+            "required": true,
+            "min": 1,
+            "max": 100000
+          },
+          {
+            "key": "layerCount",
+            "label": "层数",
+            "type": "integer",
+            "required": true,
+            "min": 1,
+            "max": 1000
+          }
+        ],
+        "listColumns": [
+          "barcode",
+          "cellResult",
+          "trayCode",
+          "sequenceNo",
+          "layerCount",
+          "completedTime"
+        ],
+        "detailSections": [
+          {
+            "title": "基础信息",
+            "fields": [
+              "barcode",
+              "deviceId",
+              "cellResult",
+              "completedTime",
+              "receivedAt"
+            ]
+          },
+          {
+            "title": "叠片数据",
+            "fields": [
+              "trayCode",
+              "sequenceNo",
+              "layerCount"
+            ]
+          }
+        ]
+      },
+      {
+        "typeKey": "homogenization",
+        "displayName": "匀浆",
+        "description": "匀浆过站追溯配置示例。新增工序默认只扩展这里的字段定义。",
+        "supportedModes": [
+          "barcode-process",
+          "time-process",
+          "device-barcode",
+          "device-time",
+          "device-latest"
+        ],
+        "fields": [
+          {
+            "key": "slurryBatchNo",
+            "label": "浆料批次",
+            "type": "string",
+            "required": true,
+            "maxLength": 128
+          },
+          {
+            "key": "viscosity",
+            "label": "粘度",
+            "type": "number",
+            "required": true,
+            "min": 0,
+            "unit": "mPa·s",
+            "precision": 2
+          },
+          {
+            "key": "solidContent",
+            "label": "固含量",
+            "type": "number",
+            "required": true,
+            "min": 0,
+            "max": 100,
+            "unit": "%",
+            "precision": 2
+          },
+          {
+            "key": "temperature",
+            "label": "温度",
+            "type": "number",
+            "min": -50,
+            "max": 200,
+            "unit": "℃",
+            "precision": 1
+          },
+          {
+            "key": "mixerSpeed",
+            "label": "转速",
+            "type": "number",
+            "min": 0,
+            "unit": "rpm",
+            "precision": 1
+          }
+        ],
+        "listColumns": [
+          "barcode",
+          "cellResult",
+          "slurryBatchNo",
+          "viscosity",
+          "solidContent",
+          "completedTime"
+        ],
+        "detailSections": [
+          {
+            "title": "基础信息",
+            "fields": [
+              "barcode",
+              "deviceId",
+              "cellResult",
+              "completedTime",
+              "receivedAt"
+            ]
+          },
+          {
+            "title": "匀浆数据",
+            "fields": [
+              "slurryBatchNo",
+              "viscosity",
+              "solidContent",
+              "temperature",
+              "mixerSpeed"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

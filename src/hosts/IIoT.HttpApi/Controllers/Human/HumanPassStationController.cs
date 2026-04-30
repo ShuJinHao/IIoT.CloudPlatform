@@ -15,6 +15,12 @@ namespace IIoT.HttpApi.Controllers;
 [Tags("Human Pass Stations")]
 public class HumanPassStationController : ApiControllerBase
 {
+    [HttpGet("types")]
+    public async Task<IActionResult> GetTypes(CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(new GetPassStationTypesQuery(), cancellationToken));
+    }
+
     [HttpGet("{typeKey}")]
     public async Task<IActionResult> GetByType(
         [FromRoute] string typeKey,

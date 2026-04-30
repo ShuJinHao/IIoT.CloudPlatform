@@ -15,6 +15,7 @@ using IIoT.ProductionService.Commands.Devices;
 using IIoT.ProductionService.Commands.PassStations;
 using IIoT.ProductionService.Commands.Recipes;
 using IIoT.ProductionService.Caching;
+using IIoT.ProductionService.PassStations;
 using IIoT.ProductionService.Profiles;
 using IIoT.ProductionService.Queries.Capacities;
 using IIoT.ProductionService.Queries.Devices;
@@ -634,49 +635,61 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
-    public void UploadCommandValidators_ShouldRejectInvalidInjectionPassItem()
+    public void UploadCommandValidators_ShouldRejectInvalidPassStationItem()
     {
-        var validator = new ReceiveInjectionPassCommandValidator();
-        var command = new ReceiveInjectionPassCommand(
+        var validator = new ReceivePassStationBatchCommandValidator(CreatePassStationSchemaProvider());
+        var command = new ReceivePassStationBatchCommand(
+            "injection",
             Guid.NewGuid(),
             [
-                new InjectionPassItemInput(
+                new PassStationItemInput(
                     "",
                     "OK",
                     DateTime.UtcNow.AddMinutes(-10),
-                    DateTime.UtcNow,
-                    -1,
-                    DateTime.UtcNow.AddMinutes(-5),
-                    12.4m,
-                    -2)
+                    JsonPayload("""
+                    {
+                      "preInjectionTime": "2026-04-29T09:20:00Z",
+                      "preInjectionWeight": -1,
+                      "postInjectionTime": "2026-04-29T09:25:00Z",
+                      "postInjectionWeight": 12.4,
+                      "injectionVolume": -2
+                    }
+                    """))
             ]);
 
         var result = validator.Validate(command);
 
         Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, x => x.PropertyName.Contains(nameof(InjectionPassItemInput.Barcode), StringComparison.Ordinal));
-        Assert.Contains(result.Errors, x => x.PropertyName.Contains(nameof(InjectionPassItemInput.InjectionVolume), StringComparison.Ordinal));
+        Assert.Contains(result.Errors, x => x.PropertyName.Contains(nameof(PassStationItemInput.Barcode), StringComparison.Ordinal));
+        Assert.Contains(result.Errors, x => x.PropertyName.Contains("injectionVolume", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void UploadCommandValidators_ShouldRejectInvalidStackingPassItem()
+    public void UploadCommandValidators_ShouldRejectUnknownPassStationPayloadField()
     {
-        var validator = new ReceiveStackingPassCommandValidator();
-        var command = new ReceiveStackingPassCommand(
+        var validator = new ReceivePassStationBatchCommandValidator(CreatePassStationSchemaProvider());
+        var command = new ReceivePassStationBatchCommand(
+            "stacking",
             Guid.NewGuid(),
-            new StackingPassItemInput(
-                Barcode: "",
-                TrayCode: "",
-                LayerCount: 0,
-                SequenceNo: 0,
-                CellResult: "OK",
-                CompletedTime: DateTime.UtcNow));
+            [
+                new PassStationItemInput(
+                    "BC-001",
+                    "OK",
+                    DateTime.UtcNow,
+                    JsonPayload("""
+                    {
+                      "trayCode": "TRAY-001",
+                      "sequenceNo": 1,
+                      "layerCount": 12,
+                      "extraField": "bad"
+                    }
+                    """))
+            ]);
 
         var result = validator.Validate(command);
 
         Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, x => x.PropertyName.Contains(nameof(StackingPassItemInput.Barcode), StringComparison.Ordinal));
-        Assert.Contains(result.Errors, x => x.PropertyName.Contains(nameof(StackingPassItemInput.LayerCount), StringComparison.Ordinal));
+        Assert.Contains(result.Errors, x => x.PropertyName.Contains("extraField", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -978,41 +991,44 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
-    public async Task ReceiveInjectionPassHandler_ShouldRegisterPassStationUpload()
+    public async Task ReceivePassStationBatchHandler_ShouldRegisterPassStationUpload()
     {
         var deviceId = Guid.NewGuid();
         var registry = new RecordingUploadReceiveRegistry();
-        var mapperServices = new ServiceCollection();
-        mapperServices.AddLogging();
-        mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
-        var mapper = mapperServices.BuildServiceProvider().GetRequiredService<IMapper>();
         var receiveService = new PassStationReceiveService(
             new StubDeviceIdentityQueryService { Exists = true },
             registry);
-        var handler = new ReceiveInjectionPassHandler(receiveService, mapper);
+        var handler = new ReceivePassStationBatchHandler(receiveService, CreatePassStationSchemaProvider());
 
         var result = await handler.Handle(
-            new ReceiveInjectionPassCommand(
+            new ReceivePassStationBatchCommand(
+                "injection",
                 deviceId,
                 [
-                    new InjectionPassItemInput(
+                    new PassStationItemInput(
                         "BC-001",
                         "OK",
                         new DateTime(2026, 4, 29, 9, 30, 0, DateTimeKind.Utc),
-                        new DateTime(2026, 4, 29, 9, 20, 0, DateTimeKind.Utc),
-                        10.2m,
-                        new DateTime(2026, 4, 29, 9, 25, 0, DateTimeKind.Utc),
-                        12.4m,
-                        2.2m)
+                        JsonPayload("""
+                        {
+                          "preInjectionTime": "2026-04-29T09:20:00Z",
+                          "preInjectionWeight": 10.2,
+                          "postInjectionTime": "2026-04-29T09:25:00Z",
+                          "postInjectionWeight": 12.4,
+                          "injectionVolume": 2.2
+                        }
+                        """))
                 ],
                 "pass-request-1"),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal("pass-station-injection", registry.LastMessageType);
+        Assert.Equal("pass-station:injection", registry.LastMessageType);
         Assert.Equal("pass-request-1", registry.LastRequestId);
         Assert.Equal("request:pass-request-1", registry.LastDeduplicationKey);
-        Assert.IsType<PassDataInjectionReceivedEvent>(registry.LastRegisteredEvent);
+        var registered = Assert.IsType<PassStationBatchReceivedEvent>(registry.LastRegisteredEvent);
+        Assert.Equal("injection", registered.TypeKey);
+        Assert.Single(registered.Items);
     }
 
     [Fact]
@@ -1022,12 +1038,10 @@ public sealed class ApplicationFlowGuardTests
 
         Assert.Equal(1, new HourlyCapacityReceivedEvent().SchemaVersion);
         Assert.Equal(1, new DeviceLogReceivedEvent().SchemaVersion);
-        Assert.Equal(1, new PassDataInjectionReceivedEvent().SchemaVersion);
-        Assert.Equal(1, new PassDataStackingReceivedEvent().SchemaVersion);
+        Assert.Equal(1, new PassStationBatchReceivedEvent().SchemaVersion);
         Assert.Equal(1, JsonSerializer.Deserialize<HourlyCapacityReceivedEvent>("{}", options)!.SchemaVersion);
         Assert.Equal(1, JsonSerializer.Deserialize<DeviceLogReceivedEvent>("{}", options)!.SchemaVersion);
-        Assert.Equal(1, JsonSerializer.Deserialize<PassDataInjectionReceivedEvent>("{}", options)!.SchemaVersion);
-        Assert.Equal(1, JsonSerializer.Deserialize<PassDataStackingReceivedEvent>("{}", options)!.SchemaVersion);
+        Assert.Equal(1, JsonSerializer.Deserialize<PassStationBatchReceivedEvent>("{}", options)!.SchemaVersion);
     }
 
     [Fact]
@@ -1037,8 +1051,7 @@ public sealed class ApplicationFlowGuardTests
         {
             typeof(HourlyCapacityReceivedEvent),
             typeof(DeviceLogReceivedEvent),
-            typeof(PassDataInjectionReceivedEvent),
-            typeof(PassDataStackingReceivedEvent)
+            typeof(PassStationBatchReceivedEvent)
         };
 
         foreach (var eventType in eventTypes)
@@ -1062,8 +1075,7 @@ public sealed class ApplicationFlowGuardTests
         [
             new HourlyCapacityReceivedEvent(),
             new DeviceLogReceivedEvent(),
-            new PassDataInjectionReceivedEvent(),
-            new PassDataStackingReceivedEvent()
+            new PassStationBatchReceivedEvent()
         ];
 
         foreach (var @event in events)
@@ -1278,5 +1290,69 @@ public sealed class ApplicationFlowGuardTests
             x.OperationType == "Device.RotateBootstrapSecret"
             && !x.Succeeded
             && x.FailureReason is not null);
+    }
+
+    private static JsonElement JsonPayload(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.Clone();
+    }
+
+    private static IPassStationSchemaProvider CreatePassStationSchemaProvider()
+    {
+        var options = new PassStationTypesOptions
+        {
+            Types =
+            [
+                new PassStationTypeDefinitionDto
+                {
+                    TypeKey = "injection",
+                    DisplayName = "注塑",
+                    Description = "test",
+                    SupportedModes = [..PassStationQueryModes.All],
+                    Fields =
+                    [
+                        new PassStationFieldDefinitionDto { Key = "preInjectionTime", Label = "注塑前时间", Type = PassStationFieldTypes.DateTime, Required = true },
+                        new PassStationFieldDefinitionDto { Key = "preInjectionWeight", Label = "注塑前重量", Type = PassStationFieldTypes.Number, Required = true, Min = 0 },
+                        new PassStationFieldDefinitionDto { Key = "postInjectionTime", Label = "注塑后时间", Type = PassStationFieldTypes.DateTime, Required = true },
+                        new PassStationFieldDefinitionDto { Key = "postInjectionWeight", Label = "注塑后重量", Type = PassStationFieldTypes.Number, Required = true, Min = 0 },
+                        new PassStationFieldDefinitionDto { Key = "injectionVolume", Label = "注塑量", Type = PassStationFieldTypes.Number, Required = true, Min = 0 }
+                    ],
+                    ListColumns = ["barcode", "cellResult", "injectionVolume", "completedTime"],
+                    DetailSections =
+                    [
+                        new PassStationDetailSectionDto
+                        {
+                            Title = "注塑数据",
+                            Fields = ["barcode", "deviceId", "cellResult", "completedTime", "receivedAt", "injectionVolume"]
+                        }
+                    ]
+                },
+                new PassStationTypeDefinitionDto
+                {
+                    TypeKey = "stacking",
+                    DisplayName = "叠片",
+                    Description = "test",
+                    SupportedModes = [..PassStationQueryModes.All],
+                    Fields =
+                    [
+                        new PassStationFieldDefinitionDto { Key = "trayCode", Label = "托盘码", Type = PassStationFieldTypes.String, Required = true, MaxLength = 128 },
+                        new PassStationFieldDefinitionDto { Key = "sequenceNo", Label = "序号", Type = PassStationFieldTypes.Integer, Required = true, Min = 1 },
+                        new PassStationFieldDefinitionDto { Key = "layerCount", Label = "层数", Type = PassStationFieldTypes.Integer, Required = true, Min = 1 }
+                    ],
+                    ListColumns = ["barcode", "cellResult", "trayCode", "completedTime"],
+                    DetailSections =
+                    [
+                        new PassStationDetailSectionDto
+                        {
+                            Title = "叠片数据",
+                            Fields = ["barcode", "deviceId", "cellResult", "completedTime", "receivedAt", "trayCode", "sequenceNo", "layerCount"]
+                        }
+                    ]
+                }
+            ]
+        };
+
+        return new PassStationSchemaProvider(Options.Create(options));
     }
 }
