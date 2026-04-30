@@ -37,6 +37,36 @@ export interface PassStationDetailDto {
   fields: Record<string, PassStationFieldValue>;
 }
 
+export type PassStationFieldType = 'string' | 'number' | 'integer' | 'boolean' | 'datetime' | 'enum';
+
+export interface PassStationFieldDefinitionDto {
+  key: string;
+  label: string;
+  type: PassStationFieldType;
+  required: boolean;
+  maxLength?: number | null;
+  min?: number | null;
+  max?: number | null;
+  unit?: string | null;
+  precision?: number | null;
+  options?: string[] | null;
+}
+
+export interface PassStationDetailSectionDto {
+  title: string;
+  fields: string[];
+}
+
+export interface PassStationTypeDefinitionDto {
+  typeKey: string;
+  displayName: string;
+  description: string;
+  fields: PassStationFieldDefinitionDto[];
+  listColumns: string[];
+  detailSections: PassStationDetailSectionDto[];
+  supportedModes: PassStationQueryMode[];
+}
+
 export interface GetPassStationListParams {
   typeKey: string;
   mode: PassStationQueryMode;
@@ -49,6 +79,10 @@ export interface GetPassStationListParams {
 }
 
 const basePath = '/human/pass-stations';
+
+export const getPassStationTypesApi = () => {
+  return http.get<PassStationTypeDefinitionDto[]>(`${basePath}/types`);
+};
 
 export const getPassStationListApi = (params: GetPassStationListParams) => {
   return http.get<PagedList<PassStationListItemDto>>(

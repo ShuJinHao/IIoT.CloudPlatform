@@ -13,23 +13,20 @@ namespace IIoT.HttpApi.Controllers;
 [Tags("Edge Pass Stations")]
 public class EdgePassStationController : ApiControllerBase
 {
-    [HttpPost("injection/batch")]
+    [HttpPost("{typeKey}/batch")]
     [EnableRateLimiting(HttpApiRateLimitPolicies.PassStationUpload)]
     [RequestSizeLimit(UploadValidationLimits.MaxUploadRequestBodyBytes)]
-    public async Task<IActionResult> ReceiveInjectionBatch(
-        [FromBody] ReceiveInjectionPassCommand command,
+    public async Task<IActionResult> ReceiveBatch(
+        [FromRoute] string typeKey,
+        [FromBody] PassStationBatchUploadRequest request,
         CancellationToken cancellationToken)
     {
-        return ReturnResult(await Sender.Send(command, cancellationToken));
-    }
-
-    [HttpPost("stacking")]
-    [EnableRateLimiting(HttpApiRateLimitPolicies.PassStationUpload)]
-    [RequestSizeLimit(UploadValidationLimits.MaxUploadRequestBodyBytes)]
-    public async Task<IActionResult> ReceiveStacking(
-        [FromBody] ReceiveStackingPassCommand command,
-        CancellationToken cancellationToken)
-    {
-        return ReturnResult(await Sender.Send(command, cancellationToken));
+        return ReturnResult(await Sender.Send(
+            new ReceivePassStationBatchCommand(
+                typeKey,
+                request.DeviceId,
+                request.Items,
+                request.RequestId),
+            cancellationToken));
     }
 }

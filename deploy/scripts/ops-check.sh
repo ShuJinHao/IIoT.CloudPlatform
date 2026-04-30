@@ -119,8 +119,7 @@ printf 'internal_healthz=200 outbox_backlog=%s latest_backup_age_hours=%s latest
   "$LATEST_BACKUP_FILE"
 
 for semantic_name in \
-  iiot-pass-station-injection \
-  iiot-pass-station-stacking \
+  iiot-pass-station-batches \
   iiot-device-logs \
   iiot-hourly-capacities
 do

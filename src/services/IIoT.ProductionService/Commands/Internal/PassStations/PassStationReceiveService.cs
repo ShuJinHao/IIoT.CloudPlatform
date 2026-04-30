@@ -13,15 +13,14 @@ public sealed class PassStationReceiveService(
     IDeviceIdentityQueryService deviceIdentityQuery,
     IUploadReceiveRegistry uploadReceiveRegistry) : IPassStationReceiveService
 {
-    public async Task<Result<bool>> ValidateAndRegisterAsync<TEvent>(
+    public async Task<Result<bool>> ValidateAndRegisterAsync(
         Guid deviceId,
         int itemCount,
         string messageType,
         string? requestId,
         string deduplicationKey,
-        TEvent @event,
+        IPassStationEvent @event,
         CancellationToken cancellationToken)
-        where TEvent : class, IPassStationEvent
     {
         if (deviceId == Guid.Empty)
             return Result.Failure("数据接收失败: DeviceId 不能为空");

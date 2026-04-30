@@ -3,7 +3,6 @@
 
 drop index if exists ix_device_logs_mac_client_time;
 drop index if exists ix_hourly_capacity_mac_client_date;
-drop index if exists ix_pass_data_injection_mac_client_time;
 drop index if exists ux_hourly_capacity_instance_slot_plc;
 
 alter table device_logs
@@ -11,10 +10,6 @@ alter table device_logs
     drop column if exists client_code;
 
 alter table hourly_capacity
-    drop column if exists mac_address,
-    drop column if exists client_code;
-
-alter table pass_data_injection
     drop column if exists mac_address,
     drop column if exists client_code;
 

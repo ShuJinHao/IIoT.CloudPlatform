@@ -1,8 +1,10 @@
 import type {
   PassStationDetailDto,
+  PassStationFieldDefinitionDto,
+  PassStationFieldValue,
   PassStationListItemDto,
   PassStationQueryMode,
-  PassStationFieldValue,
+  PassStationTypeDefinitionDto,
 } from '../../api/passStation';
 
 export interface PassStationColumnSchema {
@@ -20,15 +22,36 @@ export interface PassStationDetailFieldSchema {
   render: (detail: PassStationDetailDto) => string;
 }
 
+export interface PassStationDetailSectionSchema {
+  title: string;
+  fields: PassStationDetailFieldSchema[];
+}
+
 export interface PassStationSchema {
   typeKey: string;
   title: string;
   subtitle: string;
   supportedModes: PassStationQueryMode[];
   columns: PassStationColumnSchema[];
+  detailSections: PassStationDetailSectionSchema[];
   detailFields: PassStationDetailFieldSchema[];
   unsupportedMessage: string;
 }
+
+const commonFieldLabels: Record<string, string> = {
+  barcode: '条码',
+  deviceId: '设备 ID',
+  cellResult: '结果',
+  completedTime: '完成时间',
+  receivedAt: '接收时间',
+};
+
+const commonFieldClassNames: Record<string, string> = {
+  barcode: 'mono-val',
+  deviceId: 'mono-val small',
+  completedTime: 'small',
+  receivedAt: 'small',
+};
 
 function readFieldAsString(
   value: PassStationFieldValue | undefined,
@@ -45,207 +68,135 @@ export function normalizePassStationTypeKey(processCode: string) {
   return processCode.trim().toLowerCase();
 }
 
-export const passStationSchemas: Record<string, PassStationSchema> = {
-  injection: {
-    typeKey: 'injection',
-    title: '注液过站追溯',
-    subtitle: '按工序、设备、条码和时间范围查询注液过站记录。',
-    supportedModes: [
-      'barcode-process',
-      'time-process',
-      'device-barcode',
-      'device-time',
-      'device-latest',
-    ],
-    columns: [
-      {
-        key: 'barcode',
-        label: '条码',
-        variant: 'barcode',
-        render: (record) => record.barcode || '-',
-      },
-      {
-        key: 'cellResult',
-        label: '结果',
-        variant: 'result',
-        render: (record) => record.cellResult || '-',
-      },
-      {
-        key: 'injectionVolume',
-        label: '注液量',
-        className: 'mono',
-        render: (record) => readFieldAsString(record.fields.injectionVolume, ' ml'),
-      },
-      {
-        key: 'preInjectionWeight',
-        label: '注液前重量',
-        className: 'mono',
-        render: (record) => readFieldAsString(record.fields.preInjectionWeight, ' g'),
-      },
-      {
-        key: 'postInjectionWeight',
-        label: '注液后重量',
-        className: 'mono',
-        render: (record) => readFieldAsString(record.fields.postInjectionWeight, ' g'),
-      },
-      {
-        key: 'completedTime',
-        label: '完成时间',
-        className: 'time-cell',
-        render: (record) => record.completedTime || '-',
-      },
-    ],
-    detailFields: [
-      {
-        key: 'barcode',
-        label: '条码',
-        className: 'mono-val',
-        render: (detail) => detail.barcode || '-',
-      },
-      {
-        key: 'deviceId',
-        label: '设备 ID',
-        className: 'mono-val small',
-        render: (detail) => detail.deviceId,
-      },
-      {
-        key: 'preInjectionTime',
-        label: '注液前时间',
-        render: (detail) => readFieldAsString(detail.fields.preInjectionTime),
-      },
-      {
-        key: 'preInjectionWeight',
-        label: '注液前重量',
-        className: 'mono-val',
-        render: (detail) => readFieldAsString(detail.fields.preInjectionWeight, ' g'),
-      },
-      {
-        key: 'postInjectionTime',
-        label: '注液后时间',
-        render: (detail) => readFieldAsString(detail.fields.postInjectionTime),
-      },
-      {
-        key: 'postInjectionWeight',
-        label: '注液后重量',
-        className: 'mono-val',
-        render: (detail) => readFieldAsString(detail.fields.postInjectionWeight, ' g'),
-      },
-      {
-        key: 'injectionVolume',
-        label: '注液量',
-        className: 'mono-val highlight',
-        render: (detail) => readFieldAsString(detail.fields.injectionVolume, ' ml'),
-      },
-      {
-        key: 'completedTime',
-        label: '完成时间',
-        render: (detail) => detail.completedTime || '-',
-      },
-      {
-        key: 'receivedAt',
-        label: '接收时间',
-        className: 'small',
-        render: (detail) => detail.receivedAt || '-',
-      },
-    ],
-    unsupportedMessage: '当前工序暂未开放注液过站追溯。',
-  },
-  stacking: {
-    typeKey: 'stacking',
-    title: '叠片过站追溯',
-    subtitle: '在同一查询页内追溯叠片过站记录。',
-    supportedModes: [
-      'barcode-process',
-      'time-process',
-      'device-barcode',
-      'device-time',
-      'device-latest',
-    ],
-    columns: [
-      {
-        key: 'barcode',
-        label: '条码',
-        variant: 'barcode',
-        render: (record) => record.barcode || '-',
-      },
-      {
-        key: 'cellResult',
-        label: '结果',
-        variant: 'result',
-        render: (record) => record.cellResult || '-',
-      },
-      {
-        key: 'trayCode',
-        label: '托盘码',
-        className: 'mono',
-        render: (record) => readFieldAsString(record.fields.trayCode),
-      },
-      {
-        key: 'sequenceNo',
-        label: '序号',
-        className: 'mono',
-        render: (record) => readFieldAsString(record.fields.sequenceNo),
-      },
-      {
-        key: 'layerCount',
-        label: '层数',
-        className: 'mono',
-        render: (record) => readFieldAsString(record.fields.layerCount),
-      },
-      {
-        key: 'completedTime',
-        label: '完成时间',
-        className: 'time-cell',
-        render: (record) => record.completedTime || '-',
-      },
-    ],
-    detailFields: [
-      {
-        key: 'barcode',
-        label: '条码',
-        className: 'mono-val',
-        render: (detail) => detail.barcode || '-',
-      },
-      {
-        key: 'deviceId',
-        label: '设备 ID',
-        className: 'mono-val small',
-        render: (detail) => detail.deviceId,
-      },
-      {
-        key: 'trayCode',
-        label: '托盘码',
-        className: 'mono-val',
-        render: (detail) => readFieldAsString(detail.fields.trayCode),
-      },
-      {
-        key: 'sequenceNo',
-        label: '序号',
-        className: 'mono-val',
-        render: (detail) => readFieldAsString(detail.fields.sequenceNo),
-      },
-      {
-        key: 'layerCount',
-        label: '层数',
-        className: 'mono-val highlight',
-        render: (detail) => readFieldAsString(detail.fields.layerCount),
-      },
-      {
-        key: 'completedTime',
-        label: '完成时间',
-        render: (detail) => detail.completedTime || '-',
-      },
-      {
-        key: 'receivedAt',
-        label: '接收时间',
-        className: 'small',
-        render: (detail) => detail.receivedAt || '-',
-      },
-    ],
-    unsupportedMessage: '当前工序暂未开放叠片过站追溯。',
-  },
-};
+function getFieldDefinition(
+  definition: PassStationTypeDefinitionDto,
+  key: string,
+) {
+  return definition.fields.find((field) => field.key === key) ?? null;
+}
 
-export function getPassStationSchema(typeKey: string) {
-  return passStationSchemas[typeKey] || null;
+function getFieldLabel(
+  definition: PassStationTypeDefinitionDto,
+  key: string,
+) {
+  return commonFieldLabels[key] ?? getFieldDefinition(definition, key)?.label ?? key;
+}
+
+function getListClassName(
+  field: PassStationFieldDefinitionDto | null,
+  key: string,
+) {
+  if (key === 'completedTime' || key === 'receivedAt') {
+    return 'time-cell';
+  }
+
+  if (field?.type === 'number' || field?.type === 'integer') {
+    return 'mono';
+  }
+
+  return undefined;
+}
+
+function getDetailClassName(
+  field: PassStationFieldDefinitionDto | null,
+  key: string,
+) {
+  if (commonFieldClassNames[key]) {
+    return commonFieldClassNames[key];
+  }
+
+  if (field?.type === 'number' || field?.type === 'integer') {
+    return 'mono-val';
+  }
+
+  return undefined;
+}
+
+function getRecordValue(
+  record: PassStationListItemDto,
+  key: string,
+) {
+  if (key === 'barcode') return record.barcode;
+  if (key === 'deviceId') return record.deviceId;
+  if (key === 'cellResult') return record.cellResult;
+  if (key === 'completedTime') return record.completedTime;
+  if (key === 'receivedAt') return record.receivedAt;
+  return record.fields[key];
+}
+
+function getDetailValue(
+  detail: PassStationDetailDto,
+  key: string,
+) {
+  if (key === 'barcode') return detail.barcode;
+  if (key === 'deviceId') return detail.deviceId;
+  if (key === 'cellResult') return detail.cellResult;
+  if (key === 'completedTime') return detail.completedTime;
+  if (key === 'receivedAt') return detail.receivedAt;
+  return detail.fields[key];
+}
+
+function buildColumn(
+  definition: PassStationTypeDefinitionDto,
+  key: string,
+): PassStationColumnSchema {
+  const field = getFieldDefinition(definition, key);
+
+  return {
+    key,
+    label: getFieldLabel(definition, key),
+    variant: key === 'barcode' ? 'barcode' : key === 'cellResult' ? 'result' : undefined,
+    className: getListClassName(field, key),
+    render: (record) => readFieldAsString(getRecordValue(record, key), field?.unit ? ` ${field.unit}` : ''),
+  };
+}
+
+function buildDetailField(
+  definition: PassStationTypeDefinitionDto,
+  key: string,
+): PassStationDetailFieldSchema {
+  const field = getFieldDefinition(definition, key);
+
+  return {
+    key,
+    label: getFieldLabel(definition, key),
+    className: getDetailClassName(field, key),
+    render: (detail) => readFieldAsString(getDetailValue(detail, key), field?.unit ? ` ${field.unit}` : ''),
+  };
+}
+
+export function buildPassStationSchema(
+  definition: PassStationTypeDefinitionDto,
+): PassStationSchema {
+  const detailSections = definition.detailSections.map((section) => ({
+    title: section.title,
+    fields: section.fields.map((fieldKey) => buildDetailField(definition, fieldKey)),
+  }));
+
+  return {
+    typeKey: definition.typeKey,
+    title: `${definition.displayName}过站追溯`,
+    subtitle: definition.description,
+    supportedModes: definition.supportedModes,
+    columns: definition.listColumns.map((key) => buildColumn(definition, key)),
+    detailSections,
+    detailFields: detailSections.flatMap((section) => section.fields),
+    unsupportedMessage: `当前工序暂未开放${definition.displayName}过站追溯。`,
+  };
+}
+
+export function buildPassStationSchemaMap(
+  definitions: PassStationTypeDefinitionDto[],
+) {
+  return definitions.reduce<Record<string, PassStationSchema>>((acc, definition) => {
+    acc[normalizePassStationTypeKey(definition.typeKey)] = buildPassStationSchema(definition);
+    return acc;
+  }, {});
+}
+
+export function getPassStationSchema(
+  schemas: Record<string, PassStationSchema>,
+  typeKey: string,
+) {
+  return schemas[typeKey] || null;
 }

@@ -2,7 +2,6 @@ using Dapper;
 using IIoT.Core.Production.Contracts.PassStation;
 using IIoT.Core.Production.Contracts.RecordRepositories;
 using IIoT.Dapper.Initializers;
-using IIoT.Dapper.Production.PassStations;
 using IIoT.Dapper.Production.QueryServices.Capacity;
 using IIoT.Dapper.Production.QueryServices.Device;
 using IIoT.Dapper.Production.QueryServices.DeviceLog;
@@ -49,17 +48,10 @@ public static class DependencyInjection
         builder.Services.AddScoped<ICapacityQueryService, CapacityQueryService>();
         builder.Services.AddScoped<IDeviceIdentityQueryService, DeviceIdentityQueryService>();
         builder.Services.AddScoped<IDeviceDeletionDependencyQueryService, DeviceDeletionDependencyQueryService>();
-        builder.Services.AddScoped(typeof(IPassStationQueryService<>), typeof(PassStationQueryService<>));
+        builder.Services.AddScoped<IPassStationRecordQueryService, PassStationRecordQueryService>();
 
         builder.Services.AddScoped<IDeviceLogRecordRepository, DeviceLogRecordRepository>();
         builder.Services.AddScoped<IHourlyCapacityRecordRepository, HourlyCapacityRecordRepository>();
-        builder.Services.AddScoped(typeof(IPassStationRepository<>), typeof(PassStationRepository<>));
-
-        builder.Services.AddSingleton<IPassStationWriteSql<InjectionWriteModel>, InjectionPassStationSql>();
-        builder.Services.AddSingleton<IPassStationWriteSql<StackingWriteModel>, StackingPassStationSql>();
-        builder.Services.AddSingleton<IPassStationQuerySql<InjectionPassListItemDto>, InjectionPassStationSql>();
-        builder.Services.AddSingleton<IPassStationQuerySql<InjectionPassDetailDto>, InjectionPassStationSql>();
-        builder.Services.AddSingleton<IPassStationQuerySql<StackingPassListItemDto>, StackingPassStationSql>();
-        builder.Services.AddSingleton<IPassStationQuerySql<StackingPassDetailDto>, StackingPassStationSql>();
+        builder.Services.AddScoped<IPassStationRecordRepository, PassStationRecordRepository>();
     }
 }

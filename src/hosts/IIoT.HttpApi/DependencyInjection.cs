@@ -1,7 +1,6 @@
 using System.Text;
 using System.Threading.RateLimiting;
 using FluentValidation;
-using IIoT.Core.Production.Contracts.PassStation;
 using IIoT.Dapper;
 using IIoT.EmployeeService.Commands.Employees;
 using IIoT.EntityFrameworkCore;
@@ -12,19 +11,13 @@ using IIoT.Infrastructure.Authentication;
 using IIoT.MasterDataService.Commands.Processes;
 using IIoT.ProductionService;
 using IIoT.ProductionService.Caching;
-using IIoT.ProductionService.Commands.PassStations;
+using IIoT.ProductionService.PassStations;
 using IIoT.ProductionService.Profiles;
-using IIoT.ProductionService.Queries.PassStations;
 using IIoT.Services.CrossCutting.Behaviors;
 using IIoT.Services.Contracts.Caching;
 using IIoT.Services.Contracts.Identity;
-using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.DependencyInjection;
-using IIoT.Services.Contracts.Events.PassStations;
 using IIoT.SharedKernel.Configuration;
-using IIoT.SharedKernel.Paging;
-using IIoT.SharedKernel.Result;
-using MediatR;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -65,20 +58,12 @@ public static class DependencyInjection
             cfg.AddOpenBehavior(typeof(DistributedLockBehavior<,>));
         });
 
-        builder.Services.AddScoped<IPassStationReceiveService, PassStationReceiveService>();
         builder.Services.AddScoped<IDeviceCacheInvalidationService, DeviceCacheInvalidationService>();
         builder.Services.AddScoped<IRecipeCacheInvalidationService, RecipeCacheInvalidationService>();
-        builder.Services
-            .AddPassStationType<PassDataInjectionReceivedEvent, InjectionWriteModel, InjectionMapper>()
-            .AddPassStationType<PassDataStackingReceivedEvent, StackingWriteModel, StackingMapper>();
-        builder.Services.AddScoped<IPassStationQueryDescriptor, InjectionPassStationQueryDescriptor>();
-        builder.Services.AddScoped<IPassStationQueryDescriptor, StackingPassStationQueryDescriptor>();
-        builder.Services.AddTransient<
-            IRequestHandler<GetPassStationListByTypeQuery, Result<PagedList<PassStationListItemDto>>>,
-            GetPassStationListByTypeHandler>();
-        builder.Services.AddTransient<
-            IRequestHandler<GetPassStationDetailByTypeQuery, Result<PassStationDetailDto>>,
-            GetPassStationDetailByTypeHandler>();
+        builder.AddValidatedOptions<PassStationTypesOptions>(
+            PassStationTypesOptions.SectionName,
+            static options => options.Validate());
+        builder.Services.AddPassStationRuntime();
 
         builder.Services.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
     }

@@ -9,6 +9,7 @@ using Microsoft.OpenApi;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Configuration.AddJsonFile("config/pass-station-types.json", optional: false, reloadOnChange: false);
 
 builder.AddSerilog("httpapi");
 builder.AddServiceDefaults();

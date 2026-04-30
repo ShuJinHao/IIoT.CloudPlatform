@@ -237,9 +237,9 @@ public sealed class DatabaseInitializationOrchestrator(
                 BEGIN
                     IF NOT EXISTS (
                         SELECT 1 FROM timescaledb_information.hypertables
-                        WHERE hypertable_name = 'pass_data_injection'
+                        WHERE hypertable_name = 'pass_station_records'
                     ) THEN
-                        PERFORM create_hypertable('pass_data_injection', 'completed_time');
+                        PERFORM create_hypertable('pass_station_records', 'completed_time');
                     END IF;
                 END $$;",
                 cancellationToken);
@@ -270,17 +270,6 @@ public sealed class DatabaseInitializationOrchestrator(
                 END $$;",
                 cancellationToken);
 
-            await dbContext.Database.ExecuteSqlRawAsync(@"
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM timescaledb_information.hypertables
-                        WHERE hypertable_name = 'pass_data_stacking'
-                    ) THEN
-                        PERFORM create_hypertable('pass_data_stacking', 'completed_time');
-                    END IF;
-                END $$;",
-                cancellationToken);
         });
 
         logger.LogInformation("TimescaleDB 初始化完成。");

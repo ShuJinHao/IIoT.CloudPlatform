@@ -131,7 +131,7 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task PassDataInjection_DuplicateConsume_ShouldPersistOneRow()
+    public async Task PassStationInjection_DuplicateConsume_ShouldPersistOneRow()
     {
         await AuthenticateAsAdminAsync();
 
@@ -150,11 +150,14 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
                     Barcode = barcode,
                     CellResult = "OK",
                     CompletedTime = completedTime,
-                    PreInjectionTime = completedTime.AddSeconds(-15),
-                    PreInjectionWeight = 12.34m,
-                    PostInjectionTime = completedTime.AddSeconds(-3),
-                    PostInjectionWeight = 13.21m,
-                    InjectionVolume = 0.87m
+                    Payload = new
+                    {
+                        PreInjectionTime = completedTime.AddSeconds(-15),
+                        PreInjectionWeight = 12.34m,
+                        PostInjectionTime = completedTime.AddSeconds(-3),
+                        PostInjectionWeight = 13.21m,
+                        InjectionVolume = 0.87m
+                    }
                 }
             }
         };
@@ -176,7 +179,7 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task PassDataStacking_DuplicateConsume_ShouldPersistOneRow()
+    public async Task PassStationStacking_DuplicateConsume_ShouldPersistOneRow()
     {
         await AuthenticateAsAdminAsync();
 
@@ -188,19 +191,25 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
         var request = new
         {
             DeviceId = deviceId,
-            Item = new
+            Items = new[]
             {
-                Barcode = barcode,
-                TrayCode = "TRAY-STACK-01",
-                LayerCount = 16,
-                SequenceNo = 9,
-                CellResult = "OK",
-                CompletedTime = completedTime
+                new
+                {
+                    Barcode = barcode,
+                    CellResult = "OK",
+                    CompletedTime = completedTime,
+                    Payload = new
+                    {
+                        TrayCode = "TRAY-STACK-01",
+                        LayerCount = 16,
+                        SequenceNo = 9
+                    }
+                }
             }
         };
 
-        await PostJsonAsync("/api/v1/edge/pass-stations/stacking", request);
-        await PostJsonAsync("/api/v1/edge/pass-stations/stacking", request);
+        await PostJsonAsync("/api/v1/edge/pass-stations/stacking/batch", request);
+        await PostJsonAsync("/api/v1/edge/pass-stations/stacking/batch", request);
 
         await AuthenticateAsAdminAsync();
 
@@ -406,8 +415,7 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
 
         hypertables.Should().Contain("device_logs");
         hypertables.Should().Contain("hourly_capacity");
-        hypertables.Should().Contain("pass_data_injection");
-        hypertables.Should().Contain("pass_data_stacking");
+        hypertables.Should().Contain("pass_station_records");
     }
 
     [Fact]
@@ -1121,40 +1129,6 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
         throw new TimeoutException("Condition was not satisfied before timeout.");
     }
 
-    private static async Task<List<StackingPassRow>> GetStackingPassRowsAsync(
-        string connectionString,
-        Guid deviceId,
-        string barcode)
-    {
-        await using var connection = new NpgsqlConnection(connectionString);
-        await connection.OpenAsync();
-
-        await using var command = new NpgsqlCommand(
-            """
-            select tray_code, layer_count, sequence_no, cell_result, completed_time
-            from pass_data_stacking
-            where device_id = @deviceId and barcode = @barcode
-            order by completed_time desc
-            """,
-            connection);
-        command.Parameters.AddWithValue("deviceId", deviceId);
-        command.Parameters.AddWithValue("barcode", barcode);
-
-        var rows = new List<StackingPassRow>();
-        await using var reader = await command.ExecuteReaderAsync();
-        while (await reader.ReadAsync())
-        {
-            rows.Add(new StackingPassRow(
-                TrayCode: reader.GetString(0),
-                LayerCount: reader.GetInt32(1),
-                SequenceNo: reader.GetInt32(2),
-                CellResult: reader.GetString(3),
-                CompletedTime: reader.GetDateTime(4)));
-        }
-
-        return rows;
-    }
-
     private static async Task<OutboxMessageRow?> GetOutboxMessageAsync(
         string connectionString,
         string eventName,
@@ -1275,13 +1249,6 @@ public sealed record PassStationListItemDto(
     DateTime? CompletedTime,
     DateTime? ReceivedAt,
     Dictionary<string, JsonElement> Fields);
-
-public sealed record StackingPassRow(
-    string TrayCode,
-    int LayerCount,
-    int SequenceNo,
-    string CellResult,
-    DateTime CompletedTime);
 
 public sealed record OutboxMessageRow(
     Guid Id,
