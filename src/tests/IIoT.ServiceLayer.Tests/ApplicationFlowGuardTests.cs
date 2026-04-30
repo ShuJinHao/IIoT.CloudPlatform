@@ -185,6 +185,33 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
+    public async Task DeleteRecipeHandler_ShouldRejectActiveRecipe()
+    {
+        var recipe = new Recipe("Active Recipe", Guid.NewGuid(), Guid.NewGuid(), "{\"speed\":120}");
+        var repository = new InMemoryRepository<Recipe>
+        {
+            SingleOrDefaultResult = recipe
+        };
+        repository.ListResult.Add(recipe);
+        var handler = new DeleteRecipeHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                Role = SystemRoles.Admin,
+                UserName = "admin",
+                IsAuthenticated = true
+            },
+            repository,
+            new StubDevicePermissionService());
+
+        var result = await handler.Handle(new DeleteRecipeCommand(recipe.Id), CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains(recipe, repository.ListResult);
+        Assert.DoesNotContain(recipe.DomainEvents, x => x is RecipeDeletedDomainEvent);
+    }
+
+    [Fact]
     public async Task UpdateEmployeeProfileHandler_ShouldDeactivateEmployee_AndRevokeRefreshTokens()
     {
         var employeeId = Guid.NewGuid();
@@ -912,6 +939,42 @@ public sealed class ApplicationFlowGuardTests
         Assert.StartsWith("legacy:", firstRegistry.LastDeduplicationKey, StringComparison.Ordinal);
         Assert.Equal(firstRegistry.LastDeduplicationKey, secondRegistry.LastDeduplicationKey);
         Assert.NotEqual(firstRegistry.LastDeduplicationKey, changedRegistry.LastDeduplicationKey);
+    }
+
+    [Fact]
+    public async Task ReceiveDeviceLogHandler_ShouldTreatUnspecifiedLogTimeAsUtcForLegacyDeduplication()
+    {
+        var deviceId = Guid.NewGuid();
+        var utcLogTime = new DateTime(2026, 4, 29, 9, 30, 0, DateTimeKind.Utc);
+        var unspecifiedLogTime = DateTime.SpecifyKind(utcLogTime, DateTimeKind.Unspecified);
+        var mapperServices = new ServiceCollection();
+        mapperServices.AddLogging();
+        mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
+        var mapper = mapperServices.BuildServiceProvider().GetRequiredService<IMapper>();
+        var utcRegistry = new RecordingUploadReceiveRegistry();
+        var unspecifiedRegistry = new RecordingUploadReceiveRegistry();
+        var utcHandler = new ReceiveDeviceLogHandler(
+            new StubDeviceIdentityQueryService { Exists = true },
+            mapper,
+            utcRegistry);
+        var unspecifiedHandler = new ReceiveDeviceLogHandler(
+            new StubDeviceIdentityQueryService { Exists = true },
+            mapper,
+            unspecifiedRegistry);
+
+        await utcHandler.Handle(
+            new ReceiveDeviceLogCommand(
+                deviceId,
+                [new DeviceLogItem { Level = "Information", Message = "started", LogTime = utcLogTime }]),
+            CancellationToken.None);
+        await unspecifiedHandler.Handle(
+            new ReceiveDeviceLogCommand(
+                deviceId,
+                [new DeviceLogItem { Level = "Information", Message = "started", LogTime = unspecifiedLogTime }]),
+            CancellationToken.None);
+
+        Assert.StartsWith("legacy:", utcRegistry.LastDeduplicationKey, StringComparison.Ordinal);
+        Assert.Equal(utcRegistry.LastDeduplicationKey, unspecifiedRegistry.LastDeduplicationKey);
     }
 
     [Fact]

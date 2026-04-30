@@ -26,11 +26,15 @@ public sealed class OutboxMessage
 
     public DateTimeOffset? LastAttemptedAtUtc { get; private set; }
 
+    public DateTimeOffset? AbandonedAtUtc { get; private set; }
+
     public int AttemptCount { get; private set; }
 
     public string? LastError { get; private set; }
 
     public bool IsProcessed => ProcessedAtUtc.HasValue;
+
+    public bool IsAbandoned => AbandonedAtUtc.HasValue;
 
     public static OutboxMessage FromDomainEvent(IDomainEvent domainEvent)
     {
@@ -110,16 +114,27 @@ public sealed class OutboxMessage
     {
         ProcessedAtUtc = DateTimeOffset.UtcNow;
         LastAttemptedAtUtc = ProcessedAtUtc;
+        AbandonedAtUtc = null;
         AttemptCount++;
         LastError = null;
     }
 
     public void MarkFailed(string error)
     {
+        MarkFailed(error, int.MaxValue);
+    }
+
+    public void MarkFailed(string error, int maxAttempts)
+    {
         LastAttemptedAtUtc = DateTimeOffset.UtcNow;
         AttemptCount++;
         LastError = string.IsNullOrWhiteSpace(error)
             ? "Unknown outbox dispatch failure."
             : error;
+
+        if (AttemptCount >= maxAttempts)
+        {
+            AbandonedAtUtc = LastAttemptedAtUtc;
+        }
     }
 }

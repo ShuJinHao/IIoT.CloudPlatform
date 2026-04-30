@@ -38,6 +38,9 @@ internal sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outb
         builder.Property(x => x.LastAttemptedAtUtc)
             .HasColumnName("last_attempted_at_utc");
 
+        builder.Property(x => x.AbandonedAtUtc)
+            .HasColumnName("abandoned_at_utc");
+
         builder.Property(x => x.AttemptCount)
             .HasColumnName("attempt_count")
             .HasDefaultValue(0)
@@ -48,11 +51,15 @@ internal sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outb
             .HasColumnType("text");
 
         builder.Ignore(x => x.IsProcessed);
+        builder.Ignore(x => x.IsAbandoned);
 
-        builder.HasIndex(x => new { x.ProcessedAtUtc, x.OccurredAtUtc })
+        builder.HasIndex(x => new { x.ProcessedAtUtc, x.AbandonedAtUtc, x.OccurredAtUtc })
             .HasDatabaseName("ix_outbox_messages_dispatch");
 
         builder.HasIndex(x => x.LastAttemptedAtUtc)
             .HasDatabaseName("ix_outbox_messages_last_attempted");
+
+        builder.HasIndex(x => new { x.AbandonedAtUtc, x.LastAttemptedAtUtc })
+            .HasDatabaseName("ix_outbox_messages_abandoned");
     }
 }

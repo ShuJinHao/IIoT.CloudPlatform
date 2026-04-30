@@ -129,7 +129,14 @@ internal static class UploadDeduplicationKeys
 
     private static string NormalizeDateTime(DateTime value)
     {
-        return value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+        var normalized = value.Kind switch
+        {
+            DateTimeKind.Utc => value,
+            DateTimeKind.Local => value.ToUniversalTime(),
+            _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
+        };
+
+        return normalized.ToString("O", CultureInfo.InvariantCulture);
     }
 
     private static string ComputeSha256(string value)

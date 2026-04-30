@@ -166,4 +166,24 @@ public sealed class AggregateBehaviorTests
         Assert.Contains(nextVersion.DomainEvents, e => e is RecipeCreatedDomainEvent);
         Assert.Contains(nextVersion.DomainEvents, e => e is RecipeVersionUpgradedDomainEvent);
     }
+
+    [Fact]
+    public void Recipe_MarkDeleted_ShouldRejectActiveRecipe()
+    {
+        var recipe = new Recipe("Recipe", Guid.NewGuid(), Guid.NewGuid(), "{\"speed\":120}");
+
+        Assert.Throws<InvalidOperationException>(() => recipe.MarkDeleted());
+    }
+
+    [Fact]
+    public void Recipe_MarkDeleted_ShouldRaiseEventForArchivedRecipe()
+    {
+        var recipe = new Recipe("Recipe", Guid.NewGuid(), Guid.NewGuid(), "{\"speed\":120}");
+
+        recipe.Archive();
+        recipe.ClearDomainEvents();
+        recipe.MarkDeleted();
+
+        Assert.Contains(recipe.DomainEvents, e => e is RecipeDeletedDomainEvent);
+    }
 }

@@ -2,6 +2,7 @@ using System.IO;
 using FluentValidation;
 using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.Employees.Aggregates.Employees.Events;
+using IIoT.Core.MasterData.Aggregates.MfgProcesses;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.EntityFrameworkCore;
@@ -52,6 +53,9 @@ public sealed class InfrastructureBehaviorTests
             .IsConcurrencyToken);
         Assert.True(dbContext.Model.FindEntityType(typeof(Recipe))!
             .FindProperty(nameof(Recipe.RowVersion))!
+            .IsConcurrencyToken);
+        Assert.True(dbContext.Model.FindEntityType(typeof(MfgProcess))!
+            .FindProperty(nameof(MfgProcess.RowVersion))!
             .IsConcurrencyToken);
         Assert.True(dbContext.Model.FindEntityType(typeof(RefreshTokenSession))!
             .FindProperty(nameof(RefreshTokenSession.RowVersion))!
@@ -291,6 +295,7 @@ public sealed class InfrastructureBehaviorTests
         Assert.Equal(0, dispatched.SucceededCount);
         Assert.Equal(1, dispatched.FailedCount);
         Assert.Equal(1, dispatched.PendingBacklogCount);
+        Assert.Equal(0, dispatched.AbandonedCount);
         Assert.Null(outboxMessage.ProcessedAtUtc);
         Assert.Equal(1, outboxMessage.AttemptCount);
         Assert.Equal("publish failed", outboxMessage.LastError);
@@ -324,6 +329,7 @@ public sealed class InfrastructureBehaviorTests
         Assert.Equal(0, dispatched.SucceededCount);
         Assert.Equal(1, dispatched.FailedCount);
         Assert.Equal(1, dispatched.PendingBacklogCount);
+        Assert.Equal(0, dispatched.AbandonedCount);
         Assert.NotNull(dispatched.LastFailureSummary);
         Assert.Contains("dispatch failed", dispatched.LastFailureSummary, StringComparison.Ordinal);
         Assert.Null(outboxMessage.ProcessedAtUtc);
@@ -333,7 +339,7 @@ public sealed class InfrastructureBehaviorTests
     }
 
     [Fact]
-    public async Task OutboxMessageDispatcher_ShouldSkipMessagesAtMaxAttempts()
+    public async Task OutboxMessageDispatcher_ShouldMarkMessagesAbandonedAtMaxAttempts()
     {
         using var provider = TestServiceProviders.CreateEfServiceProvider(new ThrowingMediator("dispatch failed"));
         using var scope = provider.CreateScope();
@@ -360,10 +366,14 @@ public sealed class InfrastructureBehaviorTests
 
         Assert.Equal(1, firstDispatch.ScannedCount);
         Assert.Equal(1, firstDispatch.FailedCount);
-        Assert.Equal(0, firstDispatch.PendingBacklogCount);
+        Assert.Equal(1, firstDispatch.PendingBacklogCount);
+        Assert.Equal(1, firstDispatch.AbandonedCount);
         Assert.Equal(0, secondDispatch.ScannedCount);
-        Assert.Equal(0, secondDispatch.PendingBacklogCount);
+        Assert.Equal(1, secondDispatch.PendingBacklogCount);
+        Assert.Equal(1, secondDispatch.AbandonedCount);
         Assert.Null(outboxMessage.ProcessedAtUtc);
+        Assert.NotNull(outboxMessage.AbandonedAtUtc);
+        Assert.True(outboxMessage.IsAbandoned);
         Assert.Equal(1, outboxMessage.AttemptCount);
         Assert.Equal("dispatch failed", outboxMessage.LastError);
     }
@@ -392,6 +402,7 @@ public sealed class InfrastructureBehaviorTests
         Assert.Equal(0, dispatched.SucceededCount);
         Assert.Equal(0, dispatched.FailedCount);
         Assert.Equal(0, dispatched.PendingBacklogCount);
+        Assert.Equal(0, dispatched.AbandonedCount);
         Assert.Null(dispatched.LastFailureSummary);
     }
 
@@ -442,6 +453,40 @@ public sealed class InfrastructureBehaviorTests
         Assert.Equal(
             nameof(OutboxMessageKind.DomainEvent),
             messageKindProperty.GetDefaultValue()?.ToString());
+    }
+
+    [Fact]
+    public void OutboxConfiguration_ShouldMapAbandonedStateAndIndexes()
+    {
+        using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
+        using var scope = provider.CreateScope();
+
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var outboxEntityType = dbContext.Model.FindEntityType(typeof(OutboxMessage));
+        var abandonedProperty = outboxEntityType!.FindProperty(nameof(OutboxMessage.AbandonedAtUtc));
+        var indexNames = outboxEntityType.GetIndexes()
+            .Select(index => index.GetDatabaseName())
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.NotNull(abandonedProperty);
+        Assert.Equal("abandoned_at_utc", abandonedProperty!.GetColumnName());
+        Assert.Contains("ix_outbox_messages_abandoned", indexNames);
+        Assert.Contains("ix_outbox_messages_dispatch", indexNames);
+    }
+
+    [Fact]
+    public void OutboxMessageDispatcher_ShouldUsePostgresSkipLockedForHorizontalWorkers()
+    {
+        var source = File.ReadAllText(FindRepoFile(
+            "src",
+            "infrastructure",
+            "IIoT.EntityFrameworkCore",
+            "Outbox",
+            "OutboxMessageDispatcher.cs"));
+
+        Assert.Contains("FOR UPDATE SKIP LOCKED", source, StringComparison.Ordinal);
+        Assert.Contains("BeginTransactionAsync", source, StringComparison.Ordinal);
+        Assert.Contains("abandoned_at_utc IS NULL", source, StringComparison.Ordinal);
     }
 
     [Fact]
