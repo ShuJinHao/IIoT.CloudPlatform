@@ -108,6 +108,41 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
+    public async Task RegisterDeviceHandler_ShouldRejectNonAdminBeforeCreatingDevice()
+    {
+        var repository = new InMemoryRepository<Device>();
+        var processQueries = new StubProcessReadQueryService { Exists = true };
+        var deviceQueries = new StubDeviceReadQueryService();
+        var auditTrail = new RecordingAuditTrailService();
+        var handler = new RegisterDeviceHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "operator-001",
+                Role = "Operator",
+                IsAuthenticated = true
+            },
+            repository,
+            processQueries,
+            deviceQueries,
+            auditTrail);
+
+        var result = await handler.Handle(
+            new RegisterDeviceCommand("Injection-01", Guid.NewGuid()),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.Errors);
+        Assert.Contains(result.Errors, error => error.Contains("管理员", StringComparison.Ordinal));
+        Assert.Null(repository.AddedEntity);
+        Assert.Contains(auditTrail.Entries, x =>
+            x.OperationType == "Device.Register"
+            && x.TargetType == "Device"
+            && !x.Succeeded
+            && x.FailureReason == "只有管理员可以注册设备");
+    }
+
+    [Fact]
     public async Task RegisterDeviceHandler_ShouldFailWhenUniqueCodeCannotBeAllocated()
     {
         var repository = new InMemoryRepository<Device>();
