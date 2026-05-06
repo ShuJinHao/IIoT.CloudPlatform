@@ -22,6 +22,12 @@ public interface IDeviceRequest<out TResponse> : IRequest<TResponse>;
 public interface IAnonymousBootstrapRequest<out TResponse> : IRequest<TResponse>;
 
 /// <summary>
+/// AI 只读请求标记。
+/// 只表达“请求来自 ai/read/* 入口”这一层语义，供管道行为识别请求来源使用。
+/// </summary>
+public interface IAiReadRequest<out TResponse> : IRequest<TResponse>;
+
+/// <summary>
 /// 人员端命令。
 /// 等价于“这是一个 Command，并且它属于 human/* 请求”。
 /// </summary>
@@ -51,6 +57,13 @@ public interface IDeviceQuery<out TResponse> : IQuery<TResponse>, IDeviceRequest
 /// 当前 bootstrap 只开放查询语义，不开放匿名写操作。
 /// </summary>
 public interface IAnonymousBootstrapQuery<out TResponse> : IQuery<TResponse>, IAnonymousBootstrapRequest<TResponse>;
+
+/// <summary>
+/// AI 只读查询。
+/// 等价于“这是一个 Query，并且它属于 ai/read/* 请求”。
+/// AiRead 第一阶段只开放查询语义，不开放写操作。
+/// </summary>
+public interface IAiReadQuery<out TResponse> : IQuery<TResponse>, IAiReadRequest<TResponse>;
 
 /// <summary>
 /// 匿名 bootstrap 命令。

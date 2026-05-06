@@ -47,6 +47,9 @@ internal static class GatewayRouteCatalog
         if (path.StartsWithSegments("/api/v1/edge", StringComparison.OrdinalIgnoreCase))
             return new GatewayRouteMetadata("edge", "edge", HttpApiCluster, false, null);
 
+        if (path.StartsWithSegments("/api/v1/ai/read", StringComparison.OrdinalIgnoreCase))
+            return new GatewayRouteMetadata("ai-read", "ai-read", HttpApiCluster, false, null);
+
         return new GatewayRouteMetadata("unknown", "unmatched", "unmatched", false, null);
     }
 }

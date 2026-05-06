@@ -11,6 +11,7 @@ public sealed class HttpApiRateLimitingOptions
     public FixedWindowPolicyOptions Refresh { get; set; } = new();
     public FixedWindowPolicyOptions EdgeOperatorLogin { get; set; } = new();
     public FixedWindowPolicyOptions Bootstrap { get; set; } = new();
+    public FixedWindowPolicyOptions AiRead { get; set; } = new();
     public TokenBucketPolicyOptions CapacityUpload { get; set; } = new();
     public TokenBucketPolicyOptions DeviceLogUpload { get; set; } = new();
     public TokenBucketPolicyOptions PassStationUpload { get; set; } = new();
@@ -22,6 +23,7 @@ public sealed class HttpApiRateLimitingOptions
         Refresh.Validate($"{SectionName}:Refresh");
         EdgeOperatorLogin.Validate($"{SectionName}:EdgeOperatorLogin");
         Bootstrap.Validate($"{SectionName}:Bootstrap");
+        AiRead.Validate($"{SectionName}:AiRead");
         CapacityUpload.Validate($"{SectionName}:CapacityUpload");
         DeviceLogUpload.Validate($"{SectionName}:DeviceLogUpload");
         PassStationUpload.Validate($"{SectionName}:PassStationUpload");

@@ -287,6 +287,8 @@ internal sealed class StubCapacityQueryService : ICapacityQueryService
 {
     public List<HourlyCapacityDto> HourlyResult { get; set; } = [];
 
+    public List<DailyRangeSummaryDto> SummaryRangeResult { get; set; } = [];
+
     public int HourlyCalls { get; private set; }
 
     public Task<List<HourlyCapacityDto>> GetHourlyByDeviceIdAsync(
@@ -315,7 +317,7 @@ internal sealed class StubCapacityQueryService : ICapacityQueryService
         string? plcName = null,
         CancellationToken cancellationToken = default)
     {
-        throw new NotSupportedException();
+        return Task.FromResult(SummaryRangeResult);
     }
 
     public Task<(List<DailyCapacityPagedItemDto> Items, int TotalCount)> GetDailyPagedAsync(
@@ -326,6 +328,25 @@ internal sealed class StubCapacityQueryService : ICapacityQueryService
         CancellationToken cancellationToken = default)
     {
         throw new NotSupportedException();
+    }
+}
+
+internal sealed class StubDeviceLogQueryService : IDeviceLogQueryService
+{
+    public List<DeviceLogListItemDto> Items { get; set; } = [];
+
+    public int TotalCount { get; set; }
+
+    public Task<(List<DeviceLogListItemDto> Items, int TotalCount)> GetLogsByConditionAsync(
+        Pagination pagination,
+        Guid deviceId,
+        string? level = null,
+        string? keyword = null,
+        DateTime? startTime = null,
+        DateTime? endTime = null,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult((Items, TotalCount));
     }
 }
 
@@ -674,6 +695,15 @@ internal sealed class TestCurrentUser : ICurrentUser
     public Guid? DeviceId { get; init; }
 
     public bool IsAuthenticated { get; init; }
+}
+
+internal sealed class TestAiReadScopeAccessor : IAiReadScopeAccessor
+{
+    public string Caller { get; init; } = "ai-read-test";
+
+    public Guid? DelegatedUserId { get; init; }
+
+    public IReadOnlyCollection<Guid>? DelegatedDeviceIds { get; init; }
 }
 
 internal sealed class StubDevicePermissionService : IDevicePermissionService

@@ -5,12 +5,14 @@
 - `human`：人员端后台与 Web 管理请求
 - `edge`：已认证设备的正式业务请求
 - `bootstrap`：匿名设备引导请求
+- `ai-read`：AI service account 只读查询请求
 
 正式路由面统一为：
 
 - `/api/v1/human/*`
 - `/api/v1/edge/*`
 - `/api/v1/bootstrap/*`
+- `/api/v1/ai/read/*`
 
 ## 正式入口
 
@@ -19,6 +21,7 @@
 | `human` | 人员登录、后台管理、主数据、设备管理 | `/api/v1/human/*` | Human JWT |
 | `edge` | 设备产能、日志、过站、配方读取 | `/api/v1/edge/*` | Edge JWT + device binding |
 | `bootstrap` | 设备冷启动、匿名引导、edge-login | `/api/v1/bootstrap/device-instance` `POST /api/v1/bootstrap/edge-login` | AllowAnonymous + bootstrap 限流 |
+| `ai-read` | AI 只读摘要、产能、日志、过站查询 | `/api/v1/ai/read/*` | AI service account JWT + `AiRead.*` 权限 |
 
 ## 兼容 alias（deprecated）
 
@@ -34,4 +37,5 @@
 - 新接入一律只走正式入口，不允许再依赖 deprecated alias。
 - `bootstrap` 的语义固定为“匿名设备引导”，不是“已认证 edge”。
 - `edge-login` 已归入 `bootstrap` 面，只是当前后端内部仍通过 Gateway 做路径重写兼容。
+- `ai-read` 只允许读取 Cloud 主动暴露的只读契约，不复用 human DTO，不提供写接口。
 - 当兼容 alias 的命中统计清零后，再单开批次移除旧路径。

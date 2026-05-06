@@ -33,6 +33,7 @@ builder.Services.AddSwaggerGen(options =>
     options.SwaggerDoc("human", new OpenApiInfo { Title = "IIoT Human API", Version = "v1" });
     options.SwaggerDoc("edge", new OpenApiInfo { Title = "IIoT Edge API", Version = "v1" });
     options.SwaggerDoc("bootstrap", new OpenApiInfo { Title = "IIoT Bootstrap API", Version = "v1" });
+    options.SwaggerDoc("ai-read", new OpenApiInfo { Title = "IIoT AI Read API", Version = "v1" });
     options.DocInclusionPredicate((documentName, apiDescription) =>
         string.Equals(apiDescription.GroupName, documentName, StringComparison.OrdinalIgnoreCase));
 });
@@ -47,6 +48,7 @@ if (app.Environment.IsDevelopment())
         options.SwaggerEndpoint("/swagger/human/swagger.json", "human");
         options.SwaggerEndpoint("/swagger/edge/swagger.json", "edge");
         options.SwaggerEndpoint("/swagger/bootstrap/swagger.json", "bootstrap");
+        options.SwaggerEndpoint("/swagger/ai-read/swagger.json", "ai-read");
     });
 }
 

@@ -18,6 +18,7 @@ public sealed class RateLimitingConfigurationGuardTests
         configuration.GetValue<int>("RateLimiting:Refresh:PermitLimit").Should().Be(60);
         configuration.GetValue<int>("RateLimiting:EdgeOperatorLogin:PermitLimit").Should().Be(20);
         configuration.GetValue<int>("RateLimiting:Bootstrap:PermitLimit").Should().Be(30);
+        configuration.GetValue<int>("RateLimiting:AiRead:PermitLimit").Should().Be(60);
         configuration.GetValue<int>("RateLimiting:CapacityUpload:TokenLimit").Should().Be(120);
         configuration.GetValue<int>("RateLimiting:DeviceLogUpload:TokenLimit").Should().Be(120);
         configuration.GetValue<int>("RateLimiting:PassStationUpload:TokenLimit").Should().Be(600);
@@ -36,6 +37,8 @@ public sealed class RateLimitingConfigurationGuardTests
             FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Edge", "EdgePassStationController.cs"));
         var bootstrapSource = File.ReadAllText(
             FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Edge", "EdgeBootstrapController.cs"));
+        var aiReadSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "AiRead", "AiReadController.cs"));
         var humanControllers = new[]
         {
             FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Human", "HumanCapacityController.cs"),
@@ -53,6 +56,7 @@ public sealed class RateLimitingConfigurationGuardTests
         identitySource.Should().Contain("HttpApiRateLimitPolicies.GeneralApi");
 
         bootstrapSource.Should().Contain("HttpApiRateLimitPolicies.Bootstrap");
+        aiReadSource.Should().Contain("HttpApiRateLimitPolicies.AiRead");
         capacitySource.Should().Contain("HttpApiRateLimitPolicies.CapacityUpload");
         deviceLogSource.Should().Contain("HttpApiRateLimitPolicies.DeviceLogUpload");
         passStationSource.Should().Contain("HttpApiRateLimitPolicies.PassStationUpload");
