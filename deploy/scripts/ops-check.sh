@@ -61,6 +61,10 @@ read_state_path() {
   printf '%s\n' "$state_path"
 }
 
+psql_scalar() {
+  compose exec -T postgres psql -qtAX -U postgres -d iiot-db -c "$1"
+}
+
 PUBLIC_BASE_URL="http://127.0.0.1:${GATEWAY_HTTP_PORT:-80}"
 for service_name in postgres redis-cache rabbitmq seq iiot-httpapi iiot-gateway iiot-dataworker iiot-web nginx-gateway
 do
@@ -73,13 +77,29 @@ if [ "$health_status" != "200" ]; then
   exit 1
 fi
 
-OUTBOX_BACKLOG=$(compose exec -T postgres psql -qtAX -U postgres -d iiot-db -c "select count(*) from outbox_messages where processed_at_utc is null;")
+OUTBOX_BACKLOG=$(psql_scalar "select count(*) from outbox_messages where processed_at_utc is null;")
+OUTBOX_OLDEST_PENDING_AGE_SECONDS=$(psql_scalar "select coalesce(extract(epoch from (now() - min(occurred_at_utc)))::bigint::text, '0') from outbox_messages where processed_at_utc is null and abandoned_at_utc is null;")
+UPLOAD_RECEIVE_REGISTRATION_COUNT=$(psql_scalar "select count(*) from upload_receive_registrations;")
+TIMESCALE_EXTENSION_VERSION=$(psql_scalar "select coalesce((select extversion from pg_extension where extname = 'timescaledb'), 'missing');")
+TIMESCALE_INFO_AVAILABLE=$(psql_scalar "select case when to_regclass('timescaledb_information.hypertables') is null then '0' else '1' end;")
+RECORD_TABLE_STATS=$(psql_scalar "select c.relname || ' table_total=' || pg_size_pretty(pg_total_relation_size(c.oid)) || ' indexes=' || pg_size_pretty(pg_indexes_size(c.oid)) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind in ('r','p') and c.relname in ('device_logs','hourly_capacity','pass_station_records') order by c.relname;")
 QUEUE_SNAPSHOT=$(compose exec -T rabbitmq rabbitmqctl list_queues -q name messages)
 NOW_EPOCH=$(date +%s)
 
 HAS_RISK=0
 if [ "$OUTBOX_BACKLOG" != "0" ]; then
   HAS_RISK=1
+fi
+
+if [ "$TIMESCALE_EXTENSION_VERSION" = "missing" ] || [ "$TIMESCALE_INFO_AVAILABLE" != "1" ]; then
+  HAS_RISK=1
+  HYPERTABLE_SNAPSHOT=""
+  CHUNK_SNAPSHOT=""
+  TIMESCALE_POLICY_SNAPSHOT=""
+else
+  HYPERTABLE_SNAPSHOT=$(psql_scalar "with expected(name) as (values ('device_logs'), ('hourly_capacity'), ('pass_station_records')) select expected.name || ':' || case when h.hypertable_name is null then 'missing' else 'present' end from expected left join timescaledb_information.hypertables h on h.hypertable_schema = 'public' and h.hypertable_name = expected.name order by expected.name;")
+  CHUNK_SNAPSHOT=$(psql_scalar "with expected(name) as (values ('device_logs'), ('hourly_capacity'), ('pass_station_records')) select expected.name || ':' || count(c.chunk_name) from expected left join timescaledb_information.chunks c on c.hypertable_schema = 'public' and c.hypertable_name = expected.name group by expected.name order by expected.name;")
+  TIMESCALE_POLICY_SNAPSHOT=$(psql_scalar "with expected(name) as (values ('device_logs'), ('hourly_capacity'), ('pass_station_records')) select expected.name || ' compression_policy=' || coalesce(max(case when j.proc_name = 'policy_compression' then 'present' end), 'missing') || ' retention_policy=' || coalesce(max(case when j.proc_name = 'policy_retention' then 'present' end), 'missing') from expected left join timescaledb_information.jobs j on j.hypertable_schema = 'public' and j.hypertable_name = expected.name group by expected.name order by expected.name;")
 fi
 
 LATEST_BACKUP_FILE="missing"
@@ -117,6 +137,60 @@ printf 'internal_healthz=200 outbox_backlog=%s latest_backup_age_hours=%s latest
   "$LATEST_BACKUP_AGE_HOURS" \
   "$LATEST_BACKUP_VERIFIED_AGE_DAYS" \
   "$LATEST_BACKUP_FILE"
+
+printf 'outbox_oldest_pending_age_seconds=%s upload_receive_registrations=%s timescale_extension=%s\n' \
+  "$OUTBOX_OLDEST_PENDING_AGE_SECONDS" \
+  "$UPLOAD_RECEIVE_REGISTRATION_COUNT" \
+  "$TIMESCALE_EXTENSION_VERSION"
+
+printf '%s\n' "$RECORD_TABLE_STATS" | while IFS= read -r table_stat
+do
+  if [ -n "$table_stat" ]; then
+    printf 'record_table=%s\n' "$table_stat"
+  fi
+done
+
+for record_table in device_logs hourly_capacity pass_station_records
+do
+  hypertable_state="missing"
+  chunk_count="missing"
+
+  if [ -n "$HYPERTABLE_SNAPSHOT" ]; then
+    hypertable_state=$(printf '%s\n' "$HYPERTABLE_SNAPSHOT" | awk -F: -v target="$record_table" '
+      $1 == target { print $2; found = 1; exit }
+      END {
+        if (!found) {
+          print "missing"
+        }
+      }')
+  fi
+
+  if [ -n "$CHUNK_SNAPSHOT" ]; then
+    chunk_count=$(printf '%s\n' "$CHUNK_SNAPSHOT" | awk -F: -v target="$record_table" '
+      $1 == target { print $2; found = 1; exit }
+      END {
+        if (!found) {
+          print "missing"
+        }
+      }')
+  fi
+
+  printf 'timescale_hypertable=%s status=%s chunk_count=%s\n' \
+    "$record_table" \
+    "$hypertable_state" \
+    "$chunk_count"
+
+  if [ "$hypertable_state" != "present" ]; then
+    HAS_RISK=1
+  fi
+done
+
+printf '%s\n' "$TIMESCALE_POLICY_SNAPSHOT" | while IFS= read -r policy_state
+do
+  if [ -n "$policy_state" ]; then
+    printf 'timescale_policy=%s\n' "$policy_state"
+  fi
+done
 
 for semantic_name in \
   iiot-pass-station-batches \
