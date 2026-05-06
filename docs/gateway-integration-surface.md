@@ -32,6 +32,14 @@
 | `/api/v1/edge/bootstrap/device-instance` | `/api/v1/bootstrap/device-instance` | deprecated |
 | `/api/v1/human/identity/edge-login` | `/api/v1/bootstrap/edge-login` | deprecated |
 
+## AiRead service account 边界
+
+- `/api/v1/ai/read/*` 只接受 Cloud 信任签发端签发的 AI service account JWT，令牌必须包含 `actor_type=ai-service-account` 以及对应 `AiRead.*` 权限点。
+- `AiRead.*` 权限只用于 AI service account，不应分配给 human 角色，也不能替代 human RBAC 或 edge device binding。
+- 生产启用前必须完成 service account 签发、轮换和撤销运维方案；如果没有单令牌撤销清单，撤销依赖禁用账号或轮换凭据，并用短有效期令牌控制风险窗口。
+- `delegated_user_id` 和 `delegated_device_id` 是可选范围声明。存在 `delegated_device_id` 时，Cloud 只返回这些设备范围内的数据；不存在时表示 service account 按自身 `AiRead.*` 授权读取接口允许范围，不继承 human 用户权限。
+- 无设备范围的 AiRead token 只允许发给经过批准的系统级只读任务，不能作为 AICopilot 默认调用凭据。
+
 ## 使用规则
 
 - 新接入一律只走正式入口，不允许再依赖 deprecated alias。
