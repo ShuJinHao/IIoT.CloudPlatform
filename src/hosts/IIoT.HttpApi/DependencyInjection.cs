@@ -10,10 +10,12 @@ using IIoT.Infrastructure;
 using IIoT.Infrastructure.Authentication;
 using IIoT.MasterDataService.Commands.Processes;
 using IIoT.ProductionService;
+using IIoT.ProductionService.AiRead;
 using IIoT.ProductionService.Caching;
 using IIoT.ProductionService.PassStations;
 using IIoT.ProductionService.Profiles;
 using IIoT.Services.CrossCutting.Behaviors;
+using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Caching;
 using IIoT.Services.Contracts.Identity;
 using IIoT.Services.CrossCutting.DependencyInjection;
@@ -54,6 +56,8 @@ public static class DependencyInjection
             cfg.AddOpenBehavior(typeof(RequestKindGuardBehavior<,>));
             cfg.AddOpenBehavior(typeof(ValidationBehavior<,>));
             cfg.AddOpenBehavior(typeof(DeviceBindingBehavior<,>));
+            cfg.AddOpenBehavior(typeof(AiReadAuditBehavior<,>));
+            cfg.AddOpenBehavior(typeof(AiReadAuthorizationBehavior<,>));
             cfg.AddOpenBehavior(typeof(AuthorizationBehavior<,>));
             cfg.AddOpenBehavior(typeof(DistributedLockBehavior<,>));
         });
@@ -62,6 +66,9 @@ public static class DependencyInjection
         builder.Services.AddScoped<IRecipeCacheInvalidationService, RecipeCacheInvalidationService>();
         builder.AddValidatedOptions<PassStationTypesOptions>(
             PassStationTypesOptions.SectionName,
+            static options => options.Validate());
+        builder.AddValidatedOptions<AiReadOptions>(
+            AiReadOptions.SectionName,
             static options => options.Validate());
         builder.Services.AddPassStationRuntime();
 
@@ -115,7 +122,10 @@ public static class DependencyInjection
             .AddPolicy(HttpApiPolicies.RequireEdgeDeviceToken, policy =>
                 policy.RequireAuthenticatedUser()
                     .RequireClaim(IIoTClaimTypes.ActorType, IIoTClaimTypes.EdgeDeviceActor)
-                    .RequireClaim(IIoTClaimTypes.DeviceId));
+                    .RequireClaim(IIoTClaimTypes.DeviceId))
+            .AddPolicy(HttpApiPolicies.RequireAiReadToken, policy =>
+                policy.RequireAuthenticatedUser()
+                    .RequireClaim(IIoTClaimTypes.ActorType, IIoTClaimTypes.AiServiceActor));
 
         builder.Services.Configure<ForwardedHeadersOptions>(options =>
         {
@@ -158,6 +168,10 @@ public static class DependencyInjection
                 RateLimitPartition.GetFixedWindowLimiter(
                     RateLimitPartitionKeyResolver.ResolveClientPartitionKey(context, "bootstrap-anonymous"),
                     _ => rateLimiting.Bootstrap.ToRateLimiterOptions()));
+            options.AddPolicy(HttpApiRateLimitPolicies.AiRead, context =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    RateLimitPartitionKeyResolver.ResolveClientPartitionKey(context, "ai-read-anonymous"),
+                    _ => rateLimiting.AiRead.ToRateLimiterOptions()));
             options.AddPolicy(HttpApiRateLimitPolicies.CapacityUpload, context =>
                 RateLimitPartition.GetTokenBucketLimiter(
                     RateLimitPartitionKeyResolver.ResolveEdgeUploadPartitionKey(context),
@@ -192,6 +206,7 @@ public static class DependencyInjection
         });
 
         builder.Services.AddScoped<ICurrentUser, CurrentUser>();
+        builder.Services.AddScoped<IAiReadScopeAccessor, HttpAiReadScopeAccessor>();
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddExceptionHandler<UseCaseExceptionHandler>();
         builder.Services.AddProblemDetails();

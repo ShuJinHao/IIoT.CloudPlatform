@@ -13,6 +13,7 @@ public sealed class IIoTAppFixture : IAsyncDisposable
     public const string SeedAdminPassword = "Ljh123456!";
     public const string SeedAdminRealName = "\u7CFB\u7EDF\u7BA1\u7406\u5458";
     public const string TestPostgresPassword = "TestPg123!";
+    public const string TestJwtSecret = "iiot-e2e-jwt-secret-2026-ai-read-tests-32chars";
 
     private DistributedApplication? _app;
     private HttpClient? _httpClient;
@@ -106,6 +107,8 @@ public sealed class IIoTAppFixture : IAsyncDisposable
         SetEnvironmentVariable("Parameters__seed-admin-password", SeedAdminPassword);
         SetEnvironmentVariable("AppHost__PostgresVolumeName", _postgresVolumeName);
         SetEnvironmentVariable("AppHost__RabbitMqVolumeName", _rabbitMqVolumeName);
+        SetEnvironmentVariable("JwtSettings__Secret", TestJwtSecret);
+        SetEnvironmentVariable("JWTSETTINGS__SECRET", TestJwtSecret);
         SetEnvironmentVariable("SEED_ADMIN_NO", SeedAdminEmployeeNo);
         SetEnvironmentVariable("SEED_ADMIN_PASSWORD", SeedAdminPassword);
         SetEnvironmentVariable("SEED_ADMIN_REAL_NAME", SeedAdminRealName);

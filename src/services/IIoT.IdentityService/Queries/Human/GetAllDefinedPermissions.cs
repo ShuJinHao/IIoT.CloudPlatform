@@ -1,6 +1,7 @@
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.CrossCutting.Caching;
 using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Authorization;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 
@@ -36,6 +37,9 @@ public class GetAllDefinedPermissionsHandler(
 
         // 角色管理
         "Role.Define", "Role.Update",
+
+        // AI 只读接口
+        AiReadPermissions.Device, AiReadPermissions.Capacity, AiReadPermissions.DeviceLog, AiReadPermissions.PassStation,
 
         // ── WPF 边缘端菜单权限 ──────────────────────────────────────
         // 硬件配置页（对应 WPF Permissions.HardwareConfig）

@@ -160,7 +160,8 @@ public sealed class ConfigurationGuardTests
             {
                 var route = match.Groups[1].Value;
                 if (!route.StartsWith("api/v1/human/", StringComparison.Ordinal)
-                    && !route.StartsWith("api/v1/edge/", StringComparison.Ordinal))
+                    && !route.StartsWith("api/v1/edge/", StringComparison.Ordinal)
+                    && !route.StartsWith("api/v1/ai/read", StringComparison.Ordinal))
                 {
                     invalidRoutes.Add($"{Path.GetFileName(file)}:{route}");
                 }
@@ -617,6 +618,7 @@ public sealed class ConfigurationGuardTests
 
         gatewayAppSettingsSource.Should().Contain("/api/v1/human/{**catch-all}");
         gatewayAppSettingsSource.Should().Contain("/api/v1/edge/{**catch-all}");
+        gatewayAppSettingsSource.Should().Contain("/api/v1/ai/read/{**catch-all}");
         gatewayAppSettingsSource.Should().Contain("/internal/healthz");
         gatewayAppSettingsSource.Should().Contain("/api/v1/bootstrap/device-instance");
         gatewayAppSettingsSource.Should().Contain("/api/v1/bootstrap/edge-login");
@@ -632,6 +634,8 @@ public sealed class ConfigurationGuardTests
         gatewayAppSettingsSource.Should().Contain("X-IIoT-Deprecated-Alias");
         gatewayRouteCatalogSource.Should().Contain("/internal/healthz");
         gatewayRouteCatalogSource.Should().Contain("/api/v1/bootstrap/edge-refresh");
+        gatewayRouteCatalogSource.Should().Contain("/api/v1/ai/read");
+        gatewayRouteCatalogSource.Should().Contain("\"ai-read\"");
         gatewayRouteCatalogSource.Should().Contain("\"bootstrap-edge-refresh\"");
         gatewayRouteCatalogSource.Should().Contain("\"internal-healthz\"");
         gatewayRouteCatalogSource.Should().Contain("\"internal-health\"");
@@ -900,9 +904,12 @@ public sealed class ConfigurationGuardTests
         programSource.Should().Contain("SwaggerDoc(\"human\"");
         programSource.Should().Contain("SwaggerDoc(\"edge\"");
         programSource.Should().Contain("SwaggerDoc(\"bootstrap\"");
+        programSource.Should().Contain("SwaggerDoc(\"ai-read\"");
         programSource.Should().Contain("SwaggerEndpoint(\"/swagger/human/swagger.json\", \"human\")");
         programSource.Should().Contain("SwaggerEndpoint(\"/swagger/edge/swagger.json\", \"edge\")");
         programSource.Should().Contain("SwaggerEndpoint(\"/swagger/bootstrap/swagger.json\", \"bootstrap\")");
+        programSource.Should().Contain("SwaggerEndpoint(\"/swagger/ai-read/swagger.json\", \"ai-read\")");
+        conventionSource.Should().Contain("return \"ai-read\";");
         conventionSource.Should().Contain("return \"bootstrap\";");
         conventionSource.Should().Contain("return \"edge\";");
         conventionSource.Should().Contain("return \"human\";");
@@ -960,6 +967,12 @@ public sealed class ConfigurationGuardTests
     public void BootstrapRequestFolders_ShouldOnlyContainAnonymousBootstrapQueries()
     {
         AssertRequestFolderConvention("Queries", "Bootstrap", "IAnonymousBootstrapQuery");
+    }
+
+    [Fact]
+    public void AiReadRequestFolders_ShouldOnlyContainAiReadQueries()
+    {
+        AssertRequestFolderConvention("Queries", "AiRead", "IAiReadQuery");
     }
 
     [Fact]
