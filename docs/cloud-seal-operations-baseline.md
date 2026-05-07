@@ -2,9 +2,16 @@
 
 ## 封口口径
 
-本基线只约束 `IIoT.CloudPlatform` 主业务链路。当前封口目标是：后续新增生产业务模块时，不重开 bootstrap、设备身份、上传幂等、Outbox、DataWorker、权限主链路、部署健康检查和通用错误响应。
+本基线只约束 `IIoT.CloudPlatform`。当前封口目标是：后续新增生产业务模块时，不重开 bootstrap、设备身份、上传幂等、Outbox、DataWorker、权限主链路、部署健康检查和通用错误响应。
 
-本轮封口不包含 AiRead。`/api/v1/ai/read/*` 属于独立 AI-facing read-only API surface，必须单独完成审核、service account 签发/轮换/撤销说明和合并验收后，才能进入主线基线。
+当前封口基线包含四套入口：
+
+- `bootstrap`：`/api/v1/bootstrap/*`，只服务匿名设备引导和 edge-login。
+- `edge`：`/api/v1/edge/*`，只服务已认证设备 token、设备绑定和设备业务链路。
+- `human`：`/api/v1/human/*`，只服务人员后台和人端 RBAC。
+- `ai-read`：`/api/v1/ai/read/*`，作为 Cloud-owned AI-facing read-only API surface 纳入封口基线。
+
+AiRead 只允许 `actor_type=ai-service-account` 且具备对应 `AiRead.*` 权限点的 service account 读取 Cloud 主动暴露的只读契约。AiRead 不提供写入、审批、派发、触发、补录或修改 Cloud 业务数据能力，也不得复用 human 写接口、edge 上传接口或 bootstrap 链路。生产启用 AiRead 前，必须明确 service account 签发、轮换、撤销、token TTL 和 `delegated_device_id` 默认范围策略；无设备范围的 AiRead token 只允许用于经过批准的系统级只读任务。
 
 ## 必须满足的业务闸门
 
@@ -16,7 +23,7 @@
 
 ## 数据库运维基线
 
-当前记录表已经依赖 TimescaleDB hypertable 承载高频数据，但 compression、retention、continuous aggregate、reporting DB/read replica 属于后续容量专项，不作为本轮主业务封口阻断项。
+当前记录表已经依赖 TimescaleDB hypertable 承载高频数据，但 compression、retention、continuous aggregate、keyset pagination、JSONB 字段索引、reporting DB/read replica 属于后续容量专项，不作为本轮主业务封口阻断项。
 
 本轮 `ops-check.sh` 必须输出以下只读观测项：
 
