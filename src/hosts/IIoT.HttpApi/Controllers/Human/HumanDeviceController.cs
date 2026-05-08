@@ -22,10 +22,22 @@ public class HumanDeviceController : ApiControllerBase
         return ReturnResult(await Sender.Send(query, cancellationToken));
     }
 
+    [HttpGet("select")]
+    public async Task<IActionResult> GetSelectList(CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(new GetDeviceSelectListQuery(), cancellationToken));
+    }
+
     [HttpGet("all")]
     public async Task<IActionResult> GetAll(CancellationToken cancellationToken)
     {
         return ReturnResult(await Sender.Send(new GetAllDevicesQuery(), cancellationToken));
+    }
+
+    [HttpGet("status-summary")]
+    public async Task<IActionResult> GetStatusSummary(CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(new GetDeviceStatusSummaryQuery(), cancellationToken));
     }
 
     [HttpPost]

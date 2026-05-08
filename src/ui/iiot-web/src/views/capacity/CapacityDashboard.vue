@@ -1,276 +1,474 @@
 <template>
   <div class="capacity-page">
-    <div class="page-header">
-      <div>
-        <h1 class="page-title">产能看板</h1>
-        <p class="page-sub">查看所有机台每日产能汇总，点击设备查看详细报表</p>
-      </div>
+    <PageHeader
+      title="产能看板"
+      subtitle="当前权限范围内每日产能汇总，点击「查看详情」进入设备级报表"
+    />
+
+    <div class="capacity-page__stats">
+      <StatCard
+        label="本页总产出"
+        :value="formatInt(totalStats.total)"
+        unit="件"
+        accent="brand"
+      />
+      <StatCard
+        label="本页良品"
+        :value="formatInt(totalStats.ok)"
+        unit="件"
+        accent="success"
+      />
+      <StatCard
+        label="本页不良品"
+        :value="formatInt(totalStats.ng)"
+        unit="件"
+        accent="error"
+      />
+      <StatCard
+        label="本页综合良率"
+        :value="totalStats.ratePercent.toFixed(1)"
+        unit="%"
+        :accent="rateAccent(totalStats.ratePercent)"
+      />
     </div>
 
-    <div class="filter-bar">
-      <div class="filter-field">
-        <label>筛选设备</label>
-        <select v-model="filterDeviceId" class="filter-input" @change="onFilterChange">
-          <option value="">全部设备</option>
-          <option v-for="d in allDevices" :key="d.id" :value="d.id">{{ d.deviceName }}</option>
-        </select>
-      </div>
-      <div class="filter-field">
-        <label>筛选日期</label>
-        <input type="date" v-model="filterDate" class="filter-input" @change="onFilterChange" />
-      </div>
-      <button class="btn btn-ghost" @click="clearFilters">清空筛选</button>
-    </div>
-
-    <!-- 统计卡片 -->
-    <div class="stat-cards">
-      <div class="stat-card">
-        <span class="stat-label">总产出</span>
-        <span class="stat-value">{{ totalStats.total }}</span>
-      </div>
-      <div class="stat-card ok">
-        <span class="stat-label">良品</span>
-        <span class="stat-value">{{ totalStats.ok }}</span>
-      </div>
-      <div class="stat-card ng">
-        <span class="stat-label">不良品</span>
-        <span class="stat-value">{{ totalStats.ng }}</span>
-      </div>
-      <div class="stat-card rate">
-        <span class="stat-label">综合良率</span>
-        <span class="stat-value">{{ totalStats.rate }}</span>
-      </div>
-    </div>
-
-    <div class="table-wrap">
-      <div v-if="loading" class="skeleton-rows">
-        <div v-for="i in 5" :key="i" class="skeleton-row">
-          <div class="skel skel-md"></div>
-          <div class="skel skel-sm"></div>
-          <div class="skel skel-sm"></div>
-          <div class="skel skel-sm"></div>
-          <div class="skel skel-md"></div>
+    <CardSurface class="capacity-page__filter-card">
+      <div class="capacity-page__filter-row">
+        <div class="filter-field">
+          <span class="filter-field__label">设备</span>
+          <n-select
+            v-model:value="deviceFilter"
+            :options="deviceOptions"
+            placeholder="全部设备"
+            clearable
+            filterable
+            size="small"
+            style="width: 220px;"
+            @update:value="onFilterChange"
+          />
         </div>
-      </div>
-      <table v-else-if="records.length > 0" class="data-table">
-        <thead>
-          <tr>
-            <th>设备</th>
-            <th>日期</th>
-            <th>总产出</th>
-            <th>良品</th>
-            <th>不良品</th>
-            <th>良率</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="r in records" :key="r.deviceId + r.date" class="table-row">
-            <td><span class="device-name">{{ r.deviceName }}</span></td>
-            <td>{{ r.date }}</td>
-            <td class="mono">{{ r.totalCount }}</td>
-            <td class="mono ok-num">{{ r.okCount }}</td>
-            <td class="mono ng-num">{{ r.ngCount }}</td>
-            <td>
-              <div class="rate-bar-wrap">
-                <div class="rate-bar" :style="{ width: r.okRate + '%' }" :class="rateClass(r.okRate)"></div>
-                <span class="rate-text" :class="rateClass(r.okRate)">{{ r.okRate }}%</span>
-              </div>
-            </td>
-            <td>
-              <button class="icon-btn detail" title="查看详细报表"
-                :disabled="!r.deviceId"
-                @click="goDetail(r.deviceId, r.deviceName)">
-                <svg viewBox="0 0 16 16" fill="none">
-                  <path d="M2 12l4-4 3 2 5-6" stroke="currentColor" stroke-width="1.3"
-                    stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div v-else class="empty-cell">
-        <div class="empty-state">
-          <svg viewBox="0 0 48 48" fill="none">
-            <rect x="6"  y="20" width="8" height="18" rx="1" stroke="currentColor" stroke-width="1.5" opacity="0.25"/>
-            <rect x="18" y="12" width="8" height="26" rx="1" stroke="currentColor" stroke-width="1.5" opacity="0.25"/>
-            <rect x="30" y="6"  width="8" height="32" rx="1" stroke="currentColor" stroke-width="1.5" opacity="0.25"/>
-          </svg>
-          <p>暂无产能数据</p>
+        <div class="filter-field">
+          <span class="filter-field__label">日期</span>
+          <n-date-picker
+            v-model:formatted-value="dateFilter"
+            value-format="yyyy-MM-dd"
+            type="date"
+            size="small"
+            style="width: 180px;"
+            @update:formatted-value="onFilterChange"
+          />
         </div>
+        <n-button quaternary size="small" @click="clearFilters">
+          清空筛选
+        </n-button>
       </div>
-    </div>
+      <div v-if="deviceLoadError" class="capacity-page__filter-error">
+        {{ deviceLoadError }}
+      </div>
+    </CardSurface>
 
-    <div class="pagination" v-if="metaData.totalPages > 1">
-      <button class="page-btn" :disabled="currentPage===1" @click="goPage(currentPage-1)">
-        <svg viewBox="0 0 12 12" fill="none"><path d="M8 2L4 6l4 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-      </button>
-      <button v-for="p in pageNumbers" :key="p" class="page-btn"
-        :class="{ active: p === currentPage }" @click="goPage(p)">{{ p }}</button>
-      <button class="page-btn" :disabled="currentPage===metaData.totalPages" @click="goPage(currentPage+1)">
-        <svg viewBox="0 0 12 12" fill="none"><path d="M4 2l4 4-4 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-      </button>
-      <span class="total-badge">共 {{ metaData.totalCount }} 条</span>
-    </div>
+    <CardSurface class="capacity-page__table-card" no-padding>
+      <n-data-table
+        class="capacity-page__table"
+        :columns="columns"
+        :data="records"
+        :loading="loading"
+        :bordered="false"
+        :single-line="false"
+        :row-key="rowKey"
+        size="small"
+      />
+
+      <div v-if="metaData.totalPages > 1" class="capacity-page__pagination">
+        <n-pagination
+          :page="currentPage"
+          :page-count="metaData.totalPages"
+          :item-count="metaData.totalCount"
+          :page-size="10"
+          show-quick-jumper
+          @update:page="onPageChange"
+        />
+      </div>
+    </CardSurface>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, h, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
+import {
+  NSelect,
+  NDatePicker,
+  NButton,
+  NDataTable,
+  NPagination,
+} from 'naive-ui';
+import type { DataTableColumns } from 'naive-ui';
 import { getDailyPagedApi, type DailyCapacityItem } from '../../api/capacity';
-import { getAllActiveDevicesApi, type DeviceSelectDto } from '../../api/device';
+import { getScopedDeviceSelectApi, type DeviceSelectDto } from '../../api/device';
 import type { PagedMetaData } from '../../api/employee';
+import PageHeader from '../../components/layout/PageHeader.vue';
+import StatCard from '../../components/data/StatCard.vue';
+import CardSurface from '../../components/layout/CardSurface.vue';
 
 const router = useRouter();
 
-const loading     = ref(false);
-const records     = ref<DailyCapacityItem[]>([]);
+// === 状态 ===
+const records = ref<DailyCapacityItem[]>([]);
+const loading = ref(false);
+const allDevices = ref<DeviceSelectDto[]>([]);
+const deviceLoadError = ref('');
+const metaData = ref<PagedMetaData>({
+  totalCount: 0,
+  pageSize: 10,
+  currentPage: 1,
+  totalPages: 1,
+});
 const currentPage = ref(1);
-const metaData    = ref<PagedMetaData>({ totalCount: 0, pageSize: 10, currentPage: 1, totalPages: 1 });
-const allDevices  = ref<DeviceSelectDto[]>([]);
-const filterDeviceId = ref('');
 
+// === 筛选 ===
 const todayLocal = () => {
   const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
-const filterDate = ref(todayLocal());
 
-const pageNumbers = computed(() => {
-  const total = metaData.value.totalPages;
-  const cur   = currentPage.value;
-  const range: number[] = [];
-  for (let i = Math.max(1, cur-2); i <= Math.min(total, cur+2); i++) range.push(i);
-  return range;
-});
+const deviceFilter = ref<string | null>(null);
+const dateFilter = ref<string>(todayLocal());
 
+const deviceOptions = computed(() =>
+  allDevices.value.map((d) => ({
+    label: d.deviceName,
+    value: d.id,
+  })),
+);
+
+// === 统计聚合（仅当前页） ===
 const totalStats = computed(() => {
   const total = records.value.reduce((s, r) => s + r.totalCount, 0);
-  const ok    = records.value.reduce((s, r) => s + r.okCount,    0);
-  const ng    = records.value.reduce((s, r) => s + r.ngCount,    0);
-  const rate  = total > 0 ? (ok * 100 / total).toFixed(1) + '%' : '0%';
-  return { total, ok, ng, rate };
+  const ok = records.value.reduce((s, r) => s + r.okCount, 0);
+  const ng = records.value.reduce((s, r) => s + r.ngCount, 0);
+  const ratePercent = total > 0 ? (ok * 100) / total : 0;
+  return { total, ok, ng, ratePercent };
 });
 
-const rateClass = (rate: number) => {
-  if (rate >= 95) return 'rate-good';
-  if (rate >= 85) return 'rate-warn';
-  return 'rate-bad';
+const rateAccent = (
+  rate: number,
+): 'success' | 'warn' | 'error' => {
+  if (rate >= 95) return 'success';
+  if (rate >= 85) return 'warn';
+  return 'error';
 };
 
-const onFilterChange = () => { currentPage.value = 1; fetchData(); };
-const clearFilters   = () => {
-  filterDeviceId.value = '';
-  filterDate.value = todayLocal();
-  currentPage.value = 1;
-  fetchData();
-};
+const formatInt = (n: number) => n.toLocaleString('zh-CN');
 
-const fetchData = async () => {
+// === 良率 cell 自定义渲染 ===
+function renderRateBar(rate: number) {
+  const tone = rateAccent(rate);
+  return h('div', { class: 'rate-cell' }, [
+    h('div', { class: 'rate-cell__track' }, [
+      h('div', {
+        class: ['rate-cell__bar', `rate-cell__bar--${tone}`],
+        style: { width: `${Math.min(100, rate)}%` },
+      }),
+    ]),
+    h(
+      'span',
+      { class: ['rate-cell__text', `rate-cell__text--${tone}`] },
+      `${rate.toFixed(1)}%`,
+    ),
+  ]);
+}
+
+// === 表格列定义 ===
+const columns: DataTableColumns<DailyCapacityItem> = [
+  {
+    title: '设备',
+    key: 'deviceName',
+    minWidth: 180,
+    render(row) {
+      return h('span', { class: 'cell-device' }, row.deviceName);
+    },
+  },
+  {
+    title: '日期',
+    key: 'date',
+    width: 130,
+    render(row) {
+      return h('span', { class: 'cell-mono' }, row.date);
+    },
+  },
+  {
+    title: '总产出',
+    key: 'totalCount',
+    align: 'right',
+    width: 120,
+    render(row) {
+      return h('span', { class: 'cell-mono' }, formatInt(row.totalCount));
+    },
+  },
+  {
+    title: '良品',
+    key: 'okCount',
+    align: 'right',
+    width: 110,
+    render(row) {
+      return h(
+        'span',
+        { class: 'cell-mono cell-num--ok' },
+        formatInt(row.okCount),
+      );
+    },
+  },
+  {
+    title: '不良品',
+    key: 'ngCount',
+    align: 'right',
+    width: 110,
+    render(row) {
+      return h(
+        'span',
+        { class: 'cell-mono cell-num--ng' },
+        formatInt(row.ngCount),
+      );
+    },
+  },
+  {
+    title: '良率',
+    key: 'okRate',
+    minWidth: 180,
+    render(row) {
+      return renderRateBar(row.okRate);
+    },
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 110,
+    align: 'center',
+    render(row) {
+      return h(
+        NButton,
+        {
+          size: 'tiny',
+          type: 'primary',
+          secondary: true,
+          disabled: !row.deviceId,
+          onClick: () => goDetail(row.deviceId, row.deviceName),
+        },
+        { default: () => '查看详情' },
+      );
+    },
+  },
+];
+
+// === 数据加载 ===
+async function fetchData() {
   loading.value = true;
   try {
-    const response = await getDailyPagedApi({
+    const result = await getDailyPagedApi({
       PageNumber: currentPage.value,
-      PageSize:   10,
-      date:       filterDate.value || undefined,
-      deviceId:   filterDeviceId.value || undefined,
+      PageSize: 10,
+      date: dateFilter.value || undefined,
+      deviceId: deviceFilter.value || undefined,
     });
-    metaData.value = response.metaData;
-    records.value  = response.items;
+    records.value = result.items;
+    metaData.value = result.metaData;
   } catch {
     records.value = [];
+    metaData.value = {
+      totalCount: 0,
+      pageSize: 10,
+      currentPage: 1,
+      totalPages: 1,
+    };
   } finally {
     loading.value = false;
   }
-};
+}
 
-const goPage   = (page: number) => { currentPage.value = page; fetchData(); };
-const goDetail = (deviceId: string, deviceName: string) => {
+function onFilterChange() {
+  currentPage.value = 1;
+  void fetchData();
+}
+
+function clearFilters() {
+  deviceFilter.value = null;
+  dateFilter.value = todayLocal();
+  currentPage.value = 1;
+  void fetchData();
+}
+
+function onPageChange(p: number) {
+  currentPage.value = p;
+  void fetchData();
+}
+
+function goDetail(deviceId: string, deviceName: string) {
   if (!deviceId) return;
-  router.push({ name: 'CapacityDetail', query: { deviceId, deviceName } });
-};
+  void router.push({
+    name: 'CapacityDetail',
+    query: { deviceId, deviceName },
+  });
+}
+
+function rowKey(row: DailyCapacityItem) {
+  return `${row.deviceId}-${row.date}`;
+}
 
 onMounted(async () => {
-  try { allDevices.value = await getAllActiveDevicesApi(); } catch { allDevices.value = []; }
-  fetchData();
+  try {
+    deviceLoadError.value = '';
+    allDevices.value = await getScopedDeviceSelectApi();
+  } catch {
+    allDevices.value = [];
+    deviceLoadError.value = '设备列表加载失败，请检查权限或稍后重试。';
+  }
+  await fetchData();
 });
 </script>
 
 <style scoped>
-* { box-sizing: border-box; }
-.capacity-page { font-family: 'Noto Sans SC', sans-serif; color: #e0e4ef; }
-.page-header { margin-bottom: 20px; }
-.page-title { font-size: 22px; font-weight: 600; color: #fff; margin: 0 0 4px; }
-.page-sub { font-size: 13px; color: rgba(255,255,255,0.35); margin: 0; }
+.capacity-page {
+  font-family: var(--font-sans);
+  color: var(--text-0);
+}
 
-.filter-bar { display: flex; align-items: flex-end; gap: 12px; margin-bottom: 16px; padding: 14px 16px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; }
-.filter-field { display: flex; flex-direction: column; gap: 5px; min-width: 180px; }
-.filter-field label { font-size: 11px; color: rgba(255,255,255,0.35); font-weight: 500; }
-.filter-input { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 3px; padding: 8px 10px; color: rgba(255,255,255,0.8); font-size: 13px; outline: none; transition: border-color 0.2s; }
-.filter-input:focus { border-color: rgba(0,229,255,0.4); }
-select.filter-input { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' stroke='%2300e5ff' stroke-width='1.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; padding-right: 28px; cursor: pointer; }
-select.filter-input option { background: #0f1525; color: #e0e4ef; }
+/* === KPI 网格 === */
+.capacity-page__stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
 
-.stat-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
-.stat-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; padding: 16px 18px; display: flex; flex-direction: column; gap: 6px; }
-.stat-card.ok  { border-color: rgba(0,229,160,0.15); }
-.stat-card.ng  { border-color: rgba(255,77,79,0.15); }
-.stat-card.rate { border-color: rgba(0,229,255,0.15); }
-.stat-label { font-size: 11px; color: rgba(255,255,255,0.35); }
-.stat-value { font-size: 24px; font-weight: 600; color: #fff; font-family: 'Courier New', monospace; }
-.stat-card.ok  .stat-value { color: #00e5a0; }
-.stat-card.ng  .stat-value { color: #ff8888; }
-.stat-card.rate .stat-value { color: #00e5ff; }
+@media (max-width: 1100px) {
+  .capacity-page__stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 600px) {
+  .capacity-page__stats {
+    grid-template-columns: 1fr;
+  }
+}
 
-.table-wrap { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; overflow: hidden; }
-.data-table { width: 100%; border-collapse: collapse; }
-.data-table thead tr { background: rgba(255,255,255,0.03); border-bottom: 1px solid rgba(255,255,255,0.06); }
-.data-table th { padding: 11px 14px; text-align: left; font-size: 11px; font-weight: 500; color: rgba(255,255,255,0.3); letter-spacing: 1px; text-transform: uppercase; white-space: nowrap; }
-.table-row { border-bottom: 1px solid rgba(255,255,255,0.04); transition: background 0.15s; }
-.table-row:last-child { border-bottom: none; }
-.table-row:hover { background: rgba(0,229,255,0.03); }
-.data-table td { padding: 12px 14px; font-size: 13px; vertical-align: middle; }
-.mono { font-family: 'Courier New', monospace; font-size: 12px; }
-.ok-num { color: #00e5a0; }
-.ng-num { color: #ff8888; }
-.device-name { font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.85); }
+/* === 筛选卡 === */
+.capacity-page__filter-card {
+  margin-bottom: var(--space-4);
+}
+.capacity-page__filter-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.capacity-page__filter-error {
+  margin-top: var(--space-3);
+  font-size: var(--fs-sm);
+  color: var(--error);
+}
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.filter-field__label {
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.5px;
+}
 
-.rate-bar-wrap { display: flex; align-items: center; gap: 8px; min-width: 110px; }
-.rate-bar { height: 6px; border-radius: 3px; transition: width 0.3s; min-width: 2px; }
-.rate-text { font-size: 12px; font-family: 'Courier New', monospace; white-space: nowrap; }
-.rate-good .rate-bar { background: rgba(0,229,160,0.6); }
-.rate-warn .rate-bar { background: rgba(255,179,0,0.5); }
-.rate-bad  .rate-bar { background: rgba(255,77,79,0.5); }
-.rate-good { color: #00e5a0; }
-.rate-warn { color: #ffb300; }
-.rate-bad  { color: #ff8888; }
+/* === 表格卡 === */
+.capacity-page__table-card {
+  /* CardSurface 已设了 border-radius/border，no-padding 让 NDataTable 撑到边 */
+}
+.capacity-page__pagination {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--space-4);
+  border-top: 1px solid var(--border);
+}
 
-.icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 3px; border: none; cursor: pointer; background: rgba(255,255,255,0.04); color: rgba(255,255,255,0.4); transition: all 0.15s; }
-.icon-btn svg { width: 14px; height: 14px; }
-.icon-btn.detail:hover { background: rgba(0,229,255,0.12); color: #00e5ff; }
+/* === 表格单元 === */
+.capacity-page__table :deep(.cell-device) {
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
+  color: var(--text-0);
+}
+.capacity-page__table :deep(.cell-mono) {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--text-0);
+}
+.capacity-page__table :deep(.cell-num--ok) {
+  color: var(--success);
+}
+.capacity-page__table :deep(.cell-num--ng) {
+  color: var(--error);
+}
 
-.skeleton-rows { padding: 8px 0; }
-.skeleton-row { display: flex; gap: 16px; padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,0.04); }
-.skel { background: rgba(255,255,255,0.06); border-radius: 3px; height: 14px; animation: shimmer 1.5s infinite; }
-.skel-sm { width: 70px; } .skel-md { width: 120px; }
-@keyframes shimmer { 0%,100% { opacity:0.5; } 50% { opacity:1; } }
+/* === 良率进度条 === */
+.capacity-page__table :deep(.rate-cell) {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 140px;
+}
+.capacity-page__table :deep(.rate-cell__track) {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  overflow: hidden;
+  min-width: 60px;
+}
+.capacity-page__table :deep(.rate-cell__bar) {
+  height: 100%;
+  border-radius: 3px;
+  transition: width var(--motion-base);
+  box-shadow: 0 0 8px currentColor;
+}
+.capacity-page__table :deep(.rate-cell__bar--success) {
+  background: var(--success);
+  color: var(--success);
+}
+.capacity-page__table :deep(.rate-cell__bar--warn) {
+  background: var(--warn);
+  color: var(--warn);
+}
+.capacity-page__table :deep(.rate-cell__bar--error) {
+  background: var(--error);
+  color: var(--error);
+}
+.capacity-page__table :deep(.rate-cell__text) {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+}
+.capacity-page__table :deep(.rate-cell__text--success) {
+  color: var(--success);
+}
+.capacity-page__table :deep(.rate-cell__text--warn) {
+  color: var(--warn);
+}
+.capacity-page__table :deep(.rate-cell__text--error) {
+  color: var(--error);
+}
 
-.empty-cell { text-align: center; padding: 56px 0; }
-.empty-state { display: flex; flex-direction: column; align-items: center; gap: 12px; }
-.empty-state svg { width: 52px; height: 52px; color: rgba(255,255,255,0.2); }
-.empty-state p { font-size: 13px; color: rgba(255,255,255,0.25); margin: 0; }
-
-.pagination { display: flex; justify-content: center; align-items: center; gap: 6px; margin-top: 20px; }
-.page-btn { width: 32px; height: 32px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03); color: rgba(255,255,255,0.45); font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
-.page-btn:hover:not(:disabled) { border-color: rgba(0,229,255,0.3); color: #00e5ff; }
-.page-btn.active { background: rgba(0,229,255,0.12); border-color: rgba(0,229,255,0.4); color: #00e5ff; }
-.page-btn:disabled { opacity: 0.3; cursor: not-allowed; }
-.page-btn svg { width: 12px; height: 12px; }
-.total-badge { font-size: 12px; color: rgba(255,255,255,0.3); margin-left: 8px; }
-
-.btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 3px; border: none; font-size: 13px; font-family: 'Noto Sans SC', sans-serif; font-weight: 500; cursor: pointer; transition: all 0.18s; }
-.btn-ghost { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.55); border: 1px solid rgba(255,255,255,0.1); }
-.btn-ghost:hover { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.75); }
+/* === Naive UI DataTable 微调（贴合 hybrid 风） === */
+.capacity-page__table :deep(.n-data-table-thead) {
+  background: var(--bg-1);
+}
+.capacity-page__table :deep(.n-data-table-th) {
+  font-size: var(--fs-xs) !important;
+  font-weight: var(--fw-semibold) !important;
+  color: var(--text-2) !important;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.capacity-page__table :deep(.n-data-table-tr:hover .n-data-table-td) {
+  background-color: rgba(8, 145, 178, 0.04) !important;
+}
 </style>

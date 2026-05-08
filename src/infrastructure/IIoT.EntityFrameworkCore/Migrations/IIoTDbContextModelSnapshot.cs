@@ -507,6 +507,9 @@ namespace IIoT.EntityFrameworkCore.Migrations
                     b.HasIndex("ReceivedAtUtc")
                         .HasDatabaseName("ix_upload_receive_registrations_received_at");
 
+                    b.HasIndex("DeviceId", "LastSeenAtUtc")
+                        .HasDatabaseName("ix_upload_receive_registrations_device_last_seen");
+
                     b.HasIndex("DeviceId", "MessageType", "DeduplicationKey")
                         .IsUnique()
                         .HasDatabaseName("ux_upload_receive_registrations_device_message_deduplication");

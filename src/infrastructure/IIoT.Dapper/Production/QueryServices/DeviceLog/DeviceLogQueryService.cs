@@ -78,4 +78,95 @@ public class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : IDe
 
         return (items, totalCount);
     }
+
+    public async Task<List<DeviceLogListItemDto>> GetRecentLogsAsync(
+        int limit,
+        IReadOnlyCollection<string> normalizedLevels,
+        Guid? processId = null,
+        IReadOnlyCollection<Guid>? deviceIds = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (deviceIds is { Count: 0 })
+        {
+            return [];
+        }
+
+        using var connection = connectionFactory.CreateConnection();
+
+        var conditions = "WHERE upper(l.level) = ANY(@Levels)";
+        var parameters = new DynamicParameters();
+        parameters.Add("Levels", normalizedLevels.ToArray());
+        parameters.Add("Limit", limit);
+
+        if (processId.HasValue)
+        {
+            conditions += " AND d.process_id = @ProcessId";
+            parameters.Add("ProcessId", processId.Value);
+        }
+
+        if (deviceIds is { Count: > 0 })
+        {
+            conditions += " AND l.device_id = ANY(@DeviceIds)";
+            parameters.Add("DeviceIds", deviceIds.ToArray());
+        }
+
+        var sql = $@"
+            SELECT l.id           AS Id,
+                   l.device_id    AS DeviceId,
+                   d.device_name  AS DeviceName,
+                   l.level        AS Level,
+                   l.message      AS Message,
+                   l.log_time     AS LogTime,
+                   l.received_at  AS ReceivedAt
+            FROM device_logs l
+            INNER JOIN devices d ON l.device_id = d.id
+            {conditions}
+            ORDER BY l.log_time DESC
+            LIMIT @Limit";
+
+        var command = new CommandDefinition(sql, parameters, cancellationToken: cancellationToken);
+        var items = await connection.QueryAsync<DeviceLogListItemDto>(command);
+        return items.ToList();
+    }
+
+    public async Task<int> CountRecentAlertsAsync(
+        DateTimeOffset windowStart,
+        IReadOnlyCollection<string> normalizedLevels,
+        Guid? processId = null,
+        IReadOnlyCollection<Guid>? deviceIds = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (deviceIds is { Count: 0 })
+        {
+            return 0;
+        }
+
+        using var connection = connectionFactory.CreateConnection();
+
+        var conditions = "WHERE l.log_time >= @WindowStart AND upper(l.level) = ANY(@Levels)";
+        var parameters = new DynamicParameters();
+        parameters.Add("WindowStart", windowStart);
+        parameters.Add("Levels", normalizedLevels.ToArray());
+
+        if (processId.HasValue)
+        {
+            conditions += " AND d.process_id = @ProcessId";
+            parameters.Add("ProcessId", processId.Value);
+        }
+
+        if (deviceIds is { Count: > 0 })
+        {
+            conditions += " AND l.device_id = ANY(@DeviceIds)";
+            parameters.Add("DeviceIds", deviceIds.ToArray());
+        }
+
+        var sql = $@"
+            SELECT COUNT(*)::int
+            FROM device_logs l
+            INNER JOIN devices d ON l.device_id = d.id
+            {conditions}";
+
+        var command = new CommandDefinition(sql, parameters, cancellationToken: cancellationToken);
+        return await connection.ExecuteScalarAsync<int>(command);
+    }
 }

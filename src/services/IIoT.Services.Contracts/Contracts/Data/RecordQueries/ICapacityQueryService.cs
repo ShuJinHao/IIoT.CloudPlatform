@@ -10,6 +10,12 @@ public interface ICapacityQueryService
         string? plcName = null,
         CancellationToken cancellationToken = default);
 
+    Task<List<HourlyCapacityAggregateDto>> GetHourlyAggregateAsync(
+        DateOnly date,
+        Guid? processId = null,
+        IReadOnlyCollection<Guid>? deviceIds = null,
+        CancellationToken cancellationToken = default);
+
     Task<DailySummaryDto?> GetSummaryByDeviceIdAsync(
         Guid deviceId,
         DateOnly date,
@@ -39,6 +45,14 @@ public record HourlyCapacityDto(
     int TotalCount,
     int OkCount,
     int NgCount);
+
+public record HourlyCapacityAggregateDto(
+    int Hour,
+    int Minute,
+    string TimeLabel,
+    long TotalCount,
+    long OkCount,
+    long NgCount);
 
 public record DailySummaryDto(
     int TotalCount,

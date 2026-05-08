@@ -47,6 +47,54 @@ public class CapacityQueryService(IDbConnectionFactory connectionFactory) : ICap
         return rows.ToList();
     }
 
+    public async Task<List<HourlyCapacityAggregateDto>> GetHourlyAggregateAsync(
+        DateOnly date,
+        Guid? processId = null,
+        IReadOnlyCollection<Guid>? deviceIds = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (deviceIds is { Count: 0 })
+        {
+            return [];
+        }
+
+        using var connection = connectionFactory.CreateConnection();
+
+        var conditions = "WHERE h.date = @Date";
+        var parameters = new DynamicParameters();
+        parameters.Add("Date", date);
+
+        if (processId.HasValue)
+        {
+            conditions += " AND d.process_id = @ProcessId";
+            parameters.Add("ProcessId", processId.Value);
+        }
+
+        if (deviceIds is { Count: > 0 })
+        {
+            conditions += " AND h.device_id = ANY(@DeviceIds)";
+            parameters.Add("DeviceIds", deviceIds.ToArray());
+        }
+
+        var sql = $@"
+            SELECT
+                h.hour                               AS Hour,
+                h.minute                             AS Minute,
+                MIN(h.time_label)                    AS TimeLabel,
+                COALESCE(SUM(h.total_count), 0)::bigint AS TotalCount,
+                COALESCE(SUM(h.ok_count),    0)::bigint AS OkCount,
+                COALESCE(SUM(h.ng_count),    0)::bigint AS NgCount
+            FROM hourly_capacity h
+            INNER JOIN devices d ON h.device_id = d.id
+            {conditions}
+            GROUP BY h.hour, h.minute
+            ORDER BY h.hour, h.minute";
+
+        var cmd = new CommandDefinition(sql, parameters, cancellationToken: cancellationToken);
+        var rows = await connection.QueryAsync<HourlyCapacityAggregateDto>(cmd);
+        return rows.ToList();
+    }
+
     // 指定设备某天的白班/夜班汇总。
 
     public async Task<DailySummaryDto?> GetSummaryByDeviceIdAsync(

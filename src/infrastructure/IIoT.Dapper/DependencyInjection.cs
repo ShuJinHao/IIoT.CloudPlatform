@@ -47,6 +47,7 @@ public static class DependencyInjection
         builder.Services.AddScoped<IDeviceLogQueryService, DeviceLogQueryService>();
         builder.Services.AddScoped<ICapacityQueryService, CapacityQueryService>();
         builder.Services.AddScoped<IDeviceIdentityQueryService, DeviceIdentityQueryService>();
+        builder.Services.AddScoped<IDeviceOperationalStatusQueryService, DeviceOperationalStatusQueryService>();
         builder.Services.AddScoped<IDeviceDeletionDependencyQueryService, DeviceDeletionDependencyQueryService>();
         builder.Services.AddScoped<IPassStationRecordQueryService, PassStationRecordQueryService>();
 

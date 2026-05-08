@@ -68,7 +68,7 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
         CancellationToken cancellationToken = default)
     {
         LastGetListSpecification = specification;
-        return Task.FromResult(ListResult.ToList());
+        return Task.FromResult(ApplySpecification(specification).ToList());
     }
 
     public Task<T?> GetSingleOrDefaultAsync(
@@ -84,7 +84,7 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
         CancellationToken cancellationToken = default)
     {
         LastCountSpecification = specification;
-        return Task.FromResult(ListResult.Count);
+        return Task.FromResult(ApplySpecification(specification).Count());
     }
 
     public Task<bool> AnyAsync(
@@ -92,7 +92,7 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
         CancellationToken cancellationToken = default)
     {
         LastAnySpecification = specification;
-        return Task.FromResult(ListResult.Count > 0);
+        return Task.FromResult(ApplySpecification(specification).Any());
     }
 
     public Task<bool> AnyAsync(
@@ -107,6 +107,35 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
         CancellationToken cancellationToken = default)
     {
         return Task.FromResult(ListResult.AsQueryable().Count(predicate));
+    }
+
+    private IEnumerable<T> ApplySpecification(ISpecification<T>? specification)
+    {
+        IEnumerable<T> query = ListResult;
+
+        if (specification?.FilterCondition is not null)
+        {
+            var predicate = specification.FilterCondition.Compile();
+            query = query.Where(predicate);
+        }
+
+        if (specification?.OrderBy is not null)
+        {
+            var orderBy = specification.OrderBy.Compile();
+            query = query.OrderBy(orderBy);
+        }
+        else if (specification?.OrderByDescending is not null)
+        {
+            var orderByDescending = specification.OrderByDescending.Compile();
+            query = query.OrderByDescending(orderByDescending);
+        }
+
+        if (specification?.IsPagingEnabled == true)
+        {
+            query = query.Skip(specification.Skip).Take(specification.Take);
+        }
+
+        return query;
     }
 }
 
@@ -287,9 +316,17 @@ internal sealed class StubCapacityQueryService : ICapacityQueryService
 {
     public List<HourlyCapacityDto> HourlyResult { get; set; } = [];
 
+    public List<HourlyCapacityAggregateDto> HourlyAggregateResult { get; set; } = [];
+
     public List<DailyRangeSummaryDto> SummaryRangeResult { get; set; } = [];
 
     public int HourlyCalls { get; private set; }
+
+    public int HourlyAggregateCalls { get; private set; }
+
+    public IReadOnlyCollection<Guid>? LastAggregateDeviceIds { get; private set; }
+
+    public Guid? LastAggregateProcessId { get; private set; }
 
     public Task<List<HourlyCapacityDto>> GetHourlyByDeviceIdAsync(
         Guid deviceId,
@@ -299,6 +336,18 @@ internal sealed class StubCapacityQueryService : ICapacityQueryService
     {
         HourlyCalls++;
         return Task.FromResult(HourlyResult);
+    }
+
+    public Task<List<HourlyCapacityAggregateDto>> GetHourlyAggregateAsync(
+        DateOnly date,
+        Guid? processId = null,
+        IReadOnlyCollection<Guid>? deviceIds = null,
+        CancellationToken cancellationToken = default)
+    {
+        HourlyAggregateCalls++;
+        LastAggregateProcessId = processId;
+        LastAggregateDeviceIds = deviceIds;
+        return Task.FromResult(HourlyAggregateResult);
     }
 
     public Task<DailySummaryDto?> GetSummaryByDeviceIdAsync(
@@ -337,6 +386,24 @@ internal sealed class StubDeviceLogQueryService : IDeviceLogQueryService
 
     public int TotalCount { get; set; }
 
+    public int RecentAlertCount { get; set; }
+
+    public int? LastRecentLimit { get; private set; }
+
+    public IReadOnlyCollection<string>? LastRecentLevels { get; private set; }
+
+    public IReadOnlyCollection<Guid>? LastRecentDeviceIds { get; private set; }
+
+    public Guid? LastRecentProcessId { get; private set; }
+
+    public DateTimeOffset? LastAlertWindowStart { get; private set; }
+
+    public IReadOnlyCollection<string>? LastAlertLevels { get; private set; }
+
+    public Guid? LastAlertProcessId { get; private set; }
+
+    public IReadOnlyCollection<Guid>? LastAlertDeviceIds { get; private set; }
+
     public Task<(List<DeviceLogListItemDto> Items, int TotalCount)> GetLogsByConditionAsync(
         Pagination pagination,
         Guid deviceId,
@@ -347,6 +414,57 @@ internal sealed class StubDeviceLogQueryService : IDeviceLogQueryService
         CancellationToken cancellationToken = default)
     {
         return Task.FromResult((Items, TotalCount));
+    }
+
+    public Task<List<DeviceLogListItemDto>> GetRecentLogsAsync(
+        int limit,
+        IReadOnlyCollection<string> normalizedLevels,
+        Guid? processId = null,
+        IReadOnlyCollection<Guid>? deviceIds = null,
+        CancellationToken cancellationToken = default)
+    {
+        LastRecentLimit = limit;
+        LastRecentLevels = normalizedLevels;
+        LastRecentProcessId = processId;
+        LastRecentDeviceIds = deviceIds;
+        return Task.FromResult(Items);
+    }
+
+    public Task<int> CountRecentAlertsAsync(
+        DateTimeOffset windowStart,
+        IReadOnlyCollection<string> normalizedLevels,
+        Guid? processId = null,
+        IReadOnlyCollection<Guid>? deviceIds = null,
+        CancellationToken cancellationToken = default)
+    {
+        LastAlertWindowStart = windowStart;
+        LastAlertLevels = normalizedLevels;
+        LastAlertProcessId = processId;
+        LastAlertDeviceIds = deviceIds;
+        return Task.FromResult(RecentAlertCount);
+    }
+}
+
+internal sealed class StubDeviceOperationalStatusQueryService : IDeviceOperationalStatusQueryService
+{
+    public DeviceStatusSummaryDto Summary { get; set; } = new(0, 0, 0, 0, 0, DateTimeOffset.UtcNow);
+
+    public IReadOnlyCollection<Guid>? LastDeviceIds { get; private set; }
+
+    public DateTimeOffset? LastOfflineCutoff { get; private set; }
+
+    public DateTimeOffset? LastStatusWindowStart { get; private set; }
+
+    public Task<DeviceStatusSummaryDto> GetStatusSummaryAsync(
+        DateTimeOffset offlineCutoff,
+        DateTimeOffset statusWindowStart,
+        IReadOnlyCollection<Guid>? deviceIds = null,
+        CancellationToken cancellationToken = default)
+    {
+        LastOfflineCutoff = offlineCutoff;
+        LastStatusWindowStart = statusWindowStart;
+        LastDeviceIds = deviceIds;
+        return Task.FromResult(Summary);
     }
 }
 

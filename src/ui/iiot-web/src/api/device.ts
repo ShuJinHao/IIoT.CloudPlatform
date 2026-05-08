@@ -17,6 +17,15 @@ export interface DeviceSelectDto {
   processId: string;
 }
 
+export interface DeviceStatusSummaryDto {
+  total: number;
+  online: number;
+  warning: number;
+  error: number;
+  offline: number;
+  generatedAt: string;
+}
+
 export interface RegisterDevicePayload {
   deviceName: string;
   processId: string;
@@ -60,6 +69,14 @@ export const getDevicePagedListApi = (params: {
 
 export const getAllActiveDevicesApi = () => {
   return http.get<DeviceSelectDto[]>(`${basePath}/all`);
+};
+
+export const getScopedDeviceSelectApi = () => {
+  return http.get<DeviceSelectDto[]>(`${basePath}/select`);
+};
+
+export const getDeviceStatusSummaryApi = () => {
+  return http.get<DeviceStatusSummaryDto>(`${basePath}/status-summary`);
 };
 
 export const registerDeviceApi = (payload: RegisterDevicePayload) => {

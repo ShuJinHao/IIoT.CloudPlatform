@@ -30,6 +30,15 @@ export interface HourlyCapacityItem {
   plcName?: string | null;
 }
 
+export interface HourlyCapacityAggregateItem {
+  hour: number;
+  minute: number;
+  timeLabel: string;
+  totalCount: number;
+  okCount: number;
+  ngCount: number;
+}
+
 export interface DailySummaryItem {
   totalCount: number;
   okCount: number;
@@ -83,6 +92,18 @@ export const getHourlyByDeviceApi = (params: {
       deviceId: params.deviceId,
       date: params.date,
       plcName: params.plcName || undefined,
+    },
+  });
+};
+
+export const getHourlyAggregateApi = (params: {
+  date: string;
+  processId?: string;
+}) => {
+  return http.get<HourlyCapacityAggregateItem[]>(`${basePath}/hourly/aggregate`, {
+    params: {
+      date: params.date,
+      processId: params.processId || undefined,
     },
   });
 };
