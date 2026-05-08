@@ -24,6 +24,15 @@ public class HumanCapacityController : ApiControllerBase
         return ReturnResult(await Sender.Send(new GetHourlyByDeviceIdQuery(deviceId, date, plcName), cancellationToken));
     }
 
+    [HttpGet("hourly/aggregate")]
+    public async Task<IActionResult> GetHourlyAggregate(
+        [FromQuery] DateOnly date,
+        [FromQuery] Guid? processId = null,
+        CancellationToken cancellationToken = default)
+    {
+        return ReturnResult(await Sender.Send(new GetHourlyCapacityAggregateQuery(date, processId), cancellationToken));
+    }
+
     [HttpGet("summary")]
     public async Task<IActionResult> GetSummary(
         [FromQuery] Guid deviceId,

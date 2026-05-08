@@ -12,6 +12,20 @@ public interface IDeviceLogQueryService
         DateTime? startTime = null,
         DateTime? endTime = null,
         CancellationToken cancellationToken = default);
+
+    Task<List<DeviceLogListItemDto>> GetRecentLogsAsync(
+        int limit,
+        IReadOnlyCollection<string> normalizedLevels,
+        Guid? processId = null,
+        IReadOnlyCollection<Guid>? deviceIds = null,
+        CancellationToken cancellationToken = default);
+
+    Task<int> CountRecentAlertsAsync(
+        DateTimeOffset windowStart,
+        IReadOnlyCollection<string> normalizedLevels,
+        Guid? processId = null,
+        IReadOnlyCollection<Guid>? deviceIds = null,
+        CancellationToken cancellationToken = default);
 }
 
 public record DeviceLogListItemDto(
@@ -22,3 +36,54 @@ public record DeviceLogListItemDto(
     string Message,
     DateTime LogTime,
     DateTime ReceivedAt);
+
+public record RecentAlertCountDto(
+    int Count,
+    int SinceHours,
+    string MinLevel,
+    DateTimeOffset WindowStart,
+    DateTimeOffset WindowEnd,
+    DateTimeOffset GeneratedAt);
+
+public static class DeviceLogSeverityLevels
+{
+    private static readonly string[] ErrorAndAbove = ["ERROR", "ERR"];
+    private static readonly string[] WarningAndAbove = ["WARN", "WARNING", "ERROR", "ERR"];
+    private static readonly string[] InformationAndAbove = ["INFO", "INFORMATION", "WARN", "WARNING", "ERROR", "ERR"];
+
+    public static bool TryGetLevelsAtOrAbove(
+        string? minLevel,
+        out IReadOnlyCollection<string> normalizedLevels,
+        out string normalizedMinLevel)
+    {
+        var level = string.IsNullOrWhiteSpace(minLevel)
+            ? "WARN"
+            : minLevel.Trim().ToUpperInvariant();
+
+        switch (level)
+        {
+            case "ERROR":
+            case "ERR":
+                normalizedLevels = ErrorAndAbove;
+                normalizedMinLevel = "ERROR";
+                return true;
+
+            case "WARN":
+            case "WARNING":
+                normalizedLevels = WarningAndAbove;
+                normalizedMinLevel = "WARN";
+                return true;
+
+            case "INFO":
+            case "INFORMATION":
+                normalizedLevels = InformationAndAbove;
+                normalizedMinLevel = "INFO";
+                return true;
+
+            default:
+                normalizedLevels = [];
+                normalizedMinLevel = string.Empty;
+                return false;
+        }
+    }
+}

@@ -24,5 +24,27 @@ export default defineConfig({
         secure: false
       }
     }
+  },
+  build: {
+    // 大体积第三方库拆出共享 chunk，减小路由懒加载块
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (
+              id.includes('node_modules/echarts') ||
+              id.includes('node_modules/vue-echarts') ||
+              id.includes('node_modules/zrender')
+            ) {
+              return 'vendor-echarts'
+            }
+            if (id.includes('node_modules/naive-ui')) {
+              return 'vendor-naive'
+            }
+          }
+          return undefined
+        }
+      }
+    }
   }
 })

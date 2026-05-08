@@ -18,7 +18,44 @@ export interface DeviceLogListItemDto {
   receivedAt: string;
 }
 
+export interface RecentAlertCountDto {
+  count: number;
+  sinceHours: number;
+  minLevel: string;
+  windowStart: string;
+  windowEnd: string;
+  generatedAt: string;
+}
+
 const basePath = '/human/device-logs';
+
+export const getRecentDeviceLogsApi = (params?: {
+  limit?: number;
+  minLevel?: string;
+  processId?: string;
+}) => {
+  return http.get<DeviceLogListItemDto[]>(`${basePath}/recent`, {
+    params: {
+      limit: params?.limit ?? 20,
+      minLevel: params?.minLevel || 'WARN',
+      processId: params?.processId || undefined,
+    },
+  });
+};
+
+export const getRecentAlertCountApi = (params?: {
+  sinceHours?: number;
+  minLevel?: string;
+  processId?: string;
+}) => {
+  return http.get<RecentAlertCountDto>(`${basePath}/recent-alerts/count`, {
+    params: {
+      sinceHours: params?.sinceHours ?? 24,
+      minLevel: params?.minLevel || 'WARN',
+      processId: params?.processId || undefined,
+    },
+  });
+};
 
 export const getLogsByDeviceAndLevelApi = (params: {
   pagination?: Pagination;

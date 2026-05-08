@@ -28,6 +28,12 @@ public class HumanDeviceController : ApiControllerBase
         return ReturnResult(await Sender.Send(new GetAllDevicesQuery(), cancellationToken));
     }
 
+    [HttpGet("status-summary")]
+    public async Task<IActionResult> GetStatusSummary(CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(new GetDeviceStatusSummaryQuery(), cancellationToken));
+    }
+
     [HttpPost]
     public async Task<IActionResult> Register(
         [FromBody] RegisterDeviceCommand command,

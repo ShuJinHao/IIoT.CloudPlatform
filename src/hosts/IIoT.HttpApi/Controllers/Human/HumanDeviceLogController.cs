@@ -14,6 +14,26 @@ namespace IIoT.HttpApi.Controllers;
 [Tags("Human Device Logs")]
 public class HumanDeviceLogController : ApiControllerBase
 {
+    [HttpGet("recent")]
+    public async Task<IActionResult> GetRecent(
+        [FromQuery] int limit = 20,
+        [FromQuery] string? minLevel = "WARN",
+        [FromQuery] Guid? processId = null,
+        CancellationToken cancellationToken = default)
+    {
+        return ReturnResult(await Sender.Send(new GetRecentDeviceLogsQuery(limit, minLevel, processId), cancellationToken));
+    }
+
+    [HttpGet("recent-alerts/count")]
+    public async Task<IActionResult> GetRecentAlertCount(
+        [FromQuery] int sinceHours = 24,
+        [FromQuery] string? minLevel = "WARN",
+        [FromQuery] Guid? processId = null,
+        CancellationToken cancellationToken = default)
+    {
+        return ReturnResult(await Sender.Send(new GetRecentAlertCountQuery(sinceHours, minLevel, processId), cancellationToken));
+    }
+
     [HttpGet("by-level")]
     public async Task<IActionResult> GetByLevel(
         [FromQuery] Pagination pagination,

@@ -1,259 +1,447 @@
 <template>
   <div class="detail-page">
-
-    <!-- 页头 -->
-    <div class="page-header">
-      <button class="back-btn" @click="router.back()">
-        <svg viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        返回
-      </button>
-      <div>
-        <h1 class="page-title">{{ deviceName }}</h1>
-        <p class="page-sub">
-          产能详细报表 · 年 / 月 / 日 三级查询
-          <span v-if="plcNameFilter" class="plc-badge">PLC: {{ plcNameFilter }}</span>
-        </p>
-      </div>
-    </div>
+    <PageHeader
+      :title="deviceName"
+      :subtitle="subtitleText"
+    >
+      <template #actions>
+        <n-button quaternary size="small" @click="router.back()">
+          <template #icon>
+            <svg viewBox="0 0 16 16" fill="none" width="14" height="14">
+              <path d="M10 3L5 8l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </template>
+          返回
+        </n-button>
+      </template>
+    </PageHeader>
 
     <!-- 查询控制栏 -->
-    <div class="query-bar">
-      <div class="mode-tabs">
-        <button v-for="m in modes" :key="m.value"
-          class="mode-tab" :class="{ active: queryMode === m.value }"
-          @click="switchMode(m.value)">{{ m.label }}</button>
-      </div>
-      <div class="date-inputs">
-        <template v-if="queryMode === 'day'">
-          <input type="date" v-model="queryDate" class="filter-input" @change="fetchData" />
-        </template>
-        <template v-if="queryMode === 'month'">
-          <input type="month" v-model="queryMonth" class="filter-input" @change="fetchData" />
-        </template>
-        <template v-if="queryMode === 'year'">
-          <select v-model="queryYear" class="filter-input" @change="fetchData">
-            <option v-for="y in yearOptions" :key="y" :value="y">{{ y }} 年</option>
-          </select>
-        </template>
-      </div>
-      <div class="plc-filter">
-        <input
-          type="text"
-          v-model="plcNameFilter"
-          class="filter-input"
-          placeholder="PLC 名称（不填查全部）"
-          style="width: 180px;"
-          @keyup.enter="fetchData"
-        />
-        <button class="clear-plc-btn" v-if="plcNameFilter" @click="clearPlcFilter" title="清空">✕</button>
-      </div>
-    </div>
+    <CardSurface class="detail-page__filter-card">
+      <div class="detail-page__filter-row">
+        <div class="filter-field">
+          <span class="filter-field__label">查询粒度</span>
+          <n-radio-group v-model:value="queryMode" size="small" @update:value="onModeChange">
+            <n-radio-button value="day">按日查询</n-radio-button>
+            <n-radio-button value="month">按月查询</n-radio-button>
+            <n-radio-button value="year">按年查询</n-radio-button>
+          </n-radio-group>
+        </div>
 
-    <!-- 汇总卡片 -->
-    <div class="stat-cards">
-      <div class="stat-card">
-        <span class="stat-label">总产出</span>
-        <span class="stat-value">{{ summary.total }}</span>
+        <div class="filter-field" v-if="queryMode === 'day'">
+          <span class="filter-field__label">日期</span>
+          <n-date-picker
+            v-model:formatted-value="queryDate"
+            value-format="yyyy-MM-dd"
+            type="date"
+            size="small"
+            style="width: 180px;"
+            @update:formatted-value="fetchData"
+          />
+        </div>
+
+        <div class="filter-field" v-if="queryMode === 'month'">
+          <span class="filter-field__label">月份</span>
+          <n-date-picker
+            v-model:formatted-value="queryMonth"
+            value-format="yyyy-MM"
+            type="month"
+            size="small"
+            style="width: 180px;"
+            @update:formatted-value="fetchData"
+          />
+        </div>
+
+        <div class="filter-field" v-if="queryMode === 'year'">
+          <span class="filter-field__label">年份</span>
+          <n-select
+            v-model:value="queryYear"
+            :options="yearOptions"
+            size="small"
+            style="width: 130px;"
+            @update:value="fetchData"
+          />
+        </div>
+
+        <div class="filter-field">
+          <span class="filter-field__label">PLC 名称（可选）</span>
+          <n-input
+            v-model:value="plcNameFilter"
+            placeholder="不填查全部"
+            size="small"
+            clearable
+            style="width: 200px;"
+            @keyup.enter="fetchData"
+            @clear="fetchData"
+          />
+        </div>
       </div>
-      <div class="stat-card ok">
-        <span class="stat-label">良品</span>
-        <span class="stat-value">{{ summary.ok }}</span>
-      </div>
-      <div class="stat-card ng">
-        <span class="stat-label">不良品</span>
-        <span class="stat-value">{{ summary.ng }}</span>
-      </div>
-      <div class="stat-card rate">
-        <span class="stat-label">良率</span>
-        <span class="stat-value">{{ summary.rate }}</span>
-      </div>
-      <div class="stat-card avg">
-        <span class="stat-label">{{ avgLabel }}</span>
-        <span class="stat-value">{{ summary.avg }}</span>
-      </div>
+    </CardSurface>
+
+    <!-- 5 个统计卡 -->
+    <div class="detail-page__stats">
+      <StatCard
+        label="总产出"
+        :value="formatInt(summary.total)"
+        unit="件"
+        accent="brand"
+      />
+      <StatCard
+        label="良品"
+        :value="formatInt(summary.ok)"
+        unit="件"
+        accent="success"
+      />
+      <StatCard
+        label="不良品"
+        :value="formatInt(summary.ng)"
+        unit="件"
+        accent="error"
+      />
+      <StatCard
+        label="良率"
+        :value="summary.ratePercent.toFixed(1)"
+        unit="%"
+        :accent="rateAccent(summary.ratePercent)"
+      />
+      <StatCard
+        :label="avgLabel"
+        :value="formatInt(summary.avg)"
+        unit="件"
+        accent="info"
+      />
     </div>
 
     <!-- 柱状图 -->
-    <div class="chart-card">
-      <div class="chart-header">
-        <span class="chart-title">产能趋势图</span>
-        <div class="chart-legend">
-          <span class="legend-item"><span class="legend-dot ok"></span>良品</span>
-          <span class="legend-item"><span class="legend-dot ng"></span>不良品</span>
-        </div>
+    <CardSurface
+      class="detail-page__chart-card"
+      title="产能趋势图"
+      :subtitle="chartSubtitle"
+    >
+      <div class="detail-page__chart-wrap">
+        <LoadingState v-if="loading" variant="card" :rows="4" />
+        <EmptyState
+          v-else-if="rows.length === 0"
+          title="该时段暂无产能数据"
+        />
+        <v-chart
+          v-else
+          class="detail-page__chart"
+          :option="chartOption"
+          autoresize
+        />
       </div>
-      <div v-if="loading" class="chart-loading">
-        <div class="loading-ring"></div>
-      </div>
-      <div v-else-if="rows.length > 0" class="chart-area">
-        <div class="chart-bars" :class="{ 'dense-labels': queryMode === 'day' }">
-          <div class="chart-col" v-for="(row, index) in rows" :key="row.label">
-            <span class="bar-total">{{ row.total }}</span>
-            <div class="bar-stack">
-              <div class="bar ng" :style="{ height: barH(row.ng) + 'px' }" :title="'不良: ' + row.ng"></div>
-              <div class="bar ok" :style="{ height: barH(row.ok) + 'px' }" :title="'良品: ' + row.ok"></div>
-            </div>
-            <span v-if="shouldShowBarLabel(index)" class="bar-label" :title="row.label">{{ formatBarLabel(row.label) }}</span>
-            <span v-else class="bar-label placeholder"></span>
-          </div>
-        </div>
-      </div>
-      <div v-else class="chart-empty">暂无数据</div>
-    </div>
+    </CardSurface>
 
     <!-- 明细表格 -->
-    <div class="table-wrap">
-      <div v-if="loading" class="skeleton-rows">
-        <div v-for="i in 6" :key="i" class="skeleton-row">
-          <div class="skel skel-md"></div>
-          <div class="skel skel-sm"></div>
-          <div class="skel skel-sm"></div>
-          <div class="skel skel-sm"></div>
-        </div>
-      </div>
-      <table v-else-if="rows.length > 0" class="data-table">
-        <thead>
-          <tr>
-            <th>{{ tableTimeLabel }}</th>
-            <th v-if="queryMode === 'day'">班次</th>
-            <th>总产出</th>
-            <th>良品</th>
-            <th>不良品</th>
-            <th>良率</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in rows" :key="row.label" class="table-row">
-            <td class="mono">{{ row.label }}</td>
-            <td v-if="queryMode === 'day'">
-              <span class="shift-tag">{{ row.shift }}</span>
-            </td>
-            <td class="mono">{{ row.total }}</td>
-            <td class="mono ok-num">{{ row.ok }}</td>
-            <td class="mono ng-num">{{ row.ng }}</td>
-            <td>
-              <span class="mono" :class="rateClass(row.rate)">{{ row.rate.toFixed(1) }}%</span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div v-else class="empty-cell">
-        <div class="empty-state"><p>该时段暂无产能数据</p></div>
-      </div>
-    </div>
-
+    <CardSurface class="detail-page__table-card" no-padding>
+      <n-data-table
+        class="detail-page__table"
+        :columns="columns"
+        :data="rows"
+        :loading="loading"
+        :bordered="false"
+        :single-line="false"
+        :row-key="rowKey"
+        size="small"
+      />
+    </CardSurface>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, h, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { getHourlyByDeviceApi, getDailySummaryApi, getSummaryRangeApi } from '../../api/capacity';
+import VChart from 'vue-echarts';
+import {
+  NButton,
+  NRadioGroup,
+  NRadioButton,
+  NDatePicker,
+  NSelect,
+  NInput,
+  NDataTable,
+} from 'naive-ui';
+import type { DataTableColumns } from 'naive-ui';
+import '../../components/charts/echartsSetup';
+import {
+  getHourlyByDeviceApi,
+  getDailySummaryApi,
+  getSummaryRangeApi,
+} from '../../api/capacity';
+import PageHeader from '../../components/layout/PageHeader.vue';
+import StatCard from '../../components/data/StatCard.vue';
+import CardSurface from '../../components/layout/CardSurface.vue';
+import LoadingState from '../../components/states/LoadingState.vue';
+import EmptyState from '../../components/states/EmptyState.vue';
 
-const route  = useRoute();
+const route = useRoute();
 const router = useRouter();
 
-const deviceId   = ref((route.query.deviceId   as string | undefined) ?? '');
-const deviceName = ref((route.query.deviceName as string | undefined) ?? '设备详情');
+const deviceId = ref((route.query.deviceId as string | undefined) ?? '');
+const deviceName = ref(
+  (route.query.deviceName as string | undefined) ?? '设备详情',
+);
 
-const plcNameFilter = ref('');
-
-const clearPlcFilter = () => {
-  plcNameFilter.value = '';
-  fetchData();
-};
-
-// ── 查询模式 ────────────────────────────────────────────────────────
-const modes = [
-  { value: 'day',   label: '按日查询' },
-  { value: 'month', label: '按月查询' },
-  { value: 'year',  label: '按年查询' },
-] as const;
-const queryMode = ref<'day' | 'month' | 'year'>('day');
+// === 查询模式 ===
+type QueryMode = 'day' | 'month' | 'year';
+const queryMode = ref<QueryMode>('day');
 
 const todayLocal = () => {
   const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 const thisMonth = () => {
   const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 };
 
-const queryDate  = ref(todayLocal());
+const queryDate = ref(todayLocal());
 const queryMonth = ref(thisMonth());
-const queryYear  = ref(new Date().getFullYear());
-const yearOptions = Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i);
+const queryYear = ref<number>(new Date().getFullYear());
+const yearOptions = Array.from({ length: 5 }, (_, i) => {
+  const y = new Date().getFullYear() - i;
+  return { label: `${y} 年`, value: y };
+});
+const plcNameFilter = ref('');
 
-// ── 数据 ────────────────────────────────────────────────────────────
+// === 数据 ===
 const loading = ref(false);
 
 interface Row {
   label: string;
   shift: string;
   total: number;
-  ok:    number;
-  ng:    number;
-  rate:  number;
+  ok: number;
+  ng: number;
+  rate: number;
 }
 const rows = ref<Row[]>([]);
 
 const summary = computed(() => {
   const total = rows.value.reduce((s, r) => s + r.total, 0);
-  const ok    = rows.value.reduce((s, r) => s + r.ok,    0);
-  const ng    = rows.value.reduce((s, r) => s + r.ng,    0);
-  const rate  = total > 0 ? (ok * 100 / total).toFixed(1) + '%' : '0%';
-  const div   = queryMode.value === 'year' ? 12 : Math.max(1, rows.value.length);
-  const avg   = Math.round(total / div);
-  return { total, ok, ng, rate, avg };
+  const ok = rows.value.reduce((s, r) => s + r.ok, 0);
+  const ng = rows.value.reduce((s, r) => s + r.ng, 0);
+  const ratePercent = total > 0 ? (ok * 100) / total : 0;
+  const div =
+    queryMode.value === 'year' ? 12 : Math.max(1, rows.value.length);
+  const avg = Math.round(total / div);
+  return { total, ok, ng, ratePercent, avg };
 });
 
 const avgLabel = computed(() => {
-  if (queryMode.value === 'year')  return '月均产出';
+  if (queryMode.value === 'year') return '月均产出';
   if (queryMode.value === 'month') return '日均产出';
   return '半小时均产';
 });
 
+const subtitleText = computed(() => {
+  let base = '产能详细报表 · 年 / 月 / 日 三级查询';
+  if (plcNameFilter.value) {
+    base += ` · PLC: ${plcNameFilter.value}`;
+  }
+  return base;
+});
+
+const chartSubtitle = computed(() => {
+  if (queryMode.value === 'day')
+    return `按时间段统计 · ${rows.value.length} 个数据点`;
+  if (queryMode.value === 'month') return `按日统计 · ${queryDate.value}`;
+  return `按月统计 · ${queryYear.value} 年`;
+});
+
 const tableTimeLabel = computed(() => {
-  if (queryMode.value === 'day')   return '时间段';
+  if (queryMode.value === 'day') return '时间段';
   if (queryMode.value === 'month') return '日期';
   return '月份';
 });
 
-// ── 图表 ────────────────────────────────────────────────────────────
-const maxTotal = computed(() => Math.max(...rows.value.map(r => r.total), 1));
-const barH = (val: number) => Math.max(2, Math.round((val / maxTotal.value) * 150));
+const rateAccent = (
+  rate: number,
+): 'success' | 'warn' | 'error' => {
+  if (rate >= 95) return 'success';
+  if (rate >= 85) return 'warn';
+  return 'error';
+};
 
-const chartLabelStep = computed(() => {
-  if (queryMode.value !== 'day') return 1;
-  if (rows.value.length > 36) return 4;
-  if (rows.value.length > 24) return 3;
-  return 2;
+const formatInt = (n: number) => n.toLocaleString('zh-CN');
+
+// === ECharts 选项（堆叠柱状） ===
+const chartOption = computed(() => {
+  const xAxis = rows.value.map((r) => r.label);
+  const okData = rows.value.map((r) => r.ok);
+  const ngData = rows.value.map((r) => r.ng);
+  return {
+    grid: { left: 48, right: 16, top: 32, bottom: 36 },
+    legend: {
+      data: ['良品', '不良品'],
+      top: 0,
+      right: 8,
+      itemWidth: 12,
+      itemHeight: 8,
+      textStyle: { color: '#6b7384', fontSize: 12 },
+    },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(255, 255, 255, 0.98)',
+      borderColor: 'rgba(15, 23, 42, 0.08)',
+      borderWidth: 1,
+      extraCssText: 'box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);',
+      textStyle: {
+        color: '#1a1d29',
+        fontFamily: "'Inter', sans-serif",
+        fontSize: 12,
+      },
+      axisPointer: { type: 'shadow' },
+    },
+    xAxis: {
+      type: 'category',
+      data: xAxis,
+      axisLine: { lineStyle: { color: 'rgba(15, 23, 42, 0.08)' } },
+      axisLabel: {
+        color: '#6b7384',
+        fontFamily: "'JetBrains Mono', monospace",
+        fontSize: 11,
+        rotate: queryMode.value === 'day' && xAxis.length > 12 ? 35 : 0,
+        interval: queryMode.value === 'day' && xAxis.length > 24 ? 'auto' : 0,
+      },
+      axisTick: { show: false },
+    },
+    yAxis: {
+      type: 'value',
+      splitLine: { lineStyle: { color: 'rgba(15, 23, 42, 0.05)' } },
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: {
+        color: '#6b7384',
+        fontFamily: "'JetBrains Mono', monospace",
+        fontSize: 11,
+      },
+    },
+    series: [
+      {
+        name: '良品',
+        type: 'bar',
+        stack: 'total',
+        data: okData,
+        itemStyle: {
+          color: '#0891b2',
+          borderRadius: [0, 0, 0, 0],
+        },
+        barMaxWidth: 36,
+      },
+      {
+        name: '不良品',
+        type: 'bar',
+        stack: 'total',
+        data: ngData,
+        itemStyle: {
+          color: '#dc2626',
+          borderRadius: [4, 4, 0, 0],
+        },
+        barMaxWidth: 36,
+      },
+    ],
+  };
 });
 
-const shouldShowBarLabel = (index: number) => {
-  if (queryMode.value !== 'day') return true;
-  return index % chartLabelStep.value === 0 || index === rows.value.length - 1;
+// === 表格列 ===
+function renderShiftTag(shift: string) {
+  if (!shift) return null;
+  return h(
+    'span',
+    { class: 'shift-tag' },
+    shift === 'D' ? '白班' : shift === 'N' ? '夜班' : shift,
+  );
+}
+
+const columns = computed<DataTableColumns<Row>>(() => {
+  const base: DataTableColumns<Row> = [
+    {
+      title: tableTimeLabel.value,
+      key: 'label',
+      minWidth: 140,
+      render(row) {
+        return h('span', { class: 'cell-mono' }, row.label);
+      },
+    },
+  ];
+
+  if (queryMode.value === 'day') {
+    base.push({
+      title: '班次',
+      key: 'shift',
+      width: 100,
+      render(row) {
+        return renderShiftTag(row.shift);
+      },
+    });
+  }
+
+  base.push(
+    {
+      title: '总产出',
+      key: 'total',
+      align: 'right',
+      width: 110,
+      render(row) {
+        return h('span', { class: 'cell-mono' }, formatInt(row.total));
+      },
+    },
+    {
+      title: '良品',
+      key: 'ok',
+      align: 'right',
+      width: 110,
+      render(row) {
+        return h(
+          'span',
+          { class: 'cell-mono cell-num--ok' },
+          formatInt(row.ok),
+        );
+      },
+    },
+    {
+      title: '不良品',
+      key: 'ng',
+      align: 'right',
+      width: 110,
+      render(row) {
+        return h(
+          'span',
+          { class: 'cell-mono cell-num--ng' },
+          formatInt(row.ng),
+        );
+      },
+    },
+    {
+      title: '良率',
+      key: 'rate',
+      width: 100,
+      align: 'right',
+      render(row) {
+        const tone = rateAccent(row.rate);
+        return h(
+          'span',
+          { class: ['cell-mono', `cell-num--${tone === 'success' ? 'ok' : tone === 'warn' ? 'warn' : 'ng'}`] },
+          `${row.rate.toFixed(1)}%`,
+        );
+      },
+    },
+  );
+
+  return base;
+});
+
+function rowKey(row: Row) {
+  return `${row.label}-${row.shift}`;
+}
+
+// === 数据加载 ===
+const onModeChange = () => {
+  void fetchData();
 };
 
-const formatBarLabel = (label: string) => {
-  if (queryMode.value !== 'day') return label;
-  return label.slice(0, 5);
-};
-
-const rateClass = (rate: number) => {
-  if (rate >= 95) return 'rate-good';
-  if (rate >= 85) return 'rate-warn';
-  return 'rate-bad';
-};
-
-// ── 切换模式 ────────────────────────────────────────────────────────
-const switchMode = (mode: 'day' | 'month' | 'year') => {
-  queryMode.value = mode;
-  fetchData();
-};
-
-// ── 核心查询 ────────────────────────────────────────────────────────
 const fetchData = async () => {
   if (!deviceId.value) {
     rows.value = [];
@@ -274,178 +462,247 @@ const fetchData = async () => {
   }
 };
 
-// 日查询：优先 hourly 明细，兜底 summary
-const fetchDay = async (date: string) => {
+async function fetchDay(date: string) {
   try {
-    const hourly = await getHourlyByDeviceApi({ deviceId: deviceId.value, date, plcName: plcNameFilter.value || undefined }) as unknown as any[];
+    const hourly = (await getHourlyByDeviceApi({
+      deviceId: deviceId.value,
+      date,
+      plcName: plcNameFilter.value || undefined,
+    })) as unknown as any[];
     if (Array.isArray(hourly) && hourly.length > 0) {
       rows.value = hourly.map((h: any) => ({
-        label: h.timeLabel   ?? h.time_label ?? h.TimeLabel ?? `${String(h.hour ?? h.Hour ?? 0).padStart(2,'0')}:${String(h.minute ?? h.Minute ?? 0).padStart(2,'0')}`,
-        shift: h.shiftCode   ?? h.shift_code ?? h.ShiftCode ?? '',
-        total: h.totalCount  ?? h.total_count ?? h.TotalCount ?? 0,
-        ok:    h.okCount     ?? h.ok_count ?? h.OkCount ?? 0,
-        ng:    h.ngCount     ?? h.ng_count ?? h.NgCount ?? 0,
-        rate:  (h.totalCount ?? h.total_count ?? h.TotalCount ?? 0) > 0
-          ? ((h.okCount ?? h.ok_count ?? h.OkCount ?? 0) / (h.totalCount ?? h.total_count ?? h.TotalCount ?? 0)) * 100
-          : 0,
+        label:
+          h.timeLabel ??
+          h.time_label ??
+          h.TimeLabel ??
+          `${String(h.hour ?? h.Hour ?? 0).padStart(2, '0')}:${String(h.minute ?? h.Minute ?? 0).padStart(2, '0')}`,
+        shift: h.shiftCode ?? h.shift_code ?? h.ShiftCode ?? '',
+        total: h.totalCount ?? h.total_count ?? h.TotalCount ?? 0,
+        ok: h.okCount ?? h.ok_count ?? h.OkCount ?? 0,
+        ng: h.ngCount ?? h.ng_count ?? h.NgCount ?? 0,
+        rate:
+          (h.totalCount ?? h.total_count ?? h.TotalCount ?? 0) > 0
+            ? ((h.okCount ?? h.ok_count ?? h.OkCount ?? 0) /
+                (h.totalCount ?? h.total_count ?? h.TotalCount ?? 0)) *
+              100
+            : 0,
       }));
       return;
     }
-  } catch { /* 兜底 summary */ }
+  } catch {
+    /* 兜底 summary */
+  }
 
   try {
-    const s = await getDailySummaryApi({ deviceId: deviceId.value, date, plcName: plcNameFilter.value || undefined }) as any;
+    const s = (await getDailySummaryApi({
+      deviceId: deviceId.value,
+      date,
+      plcName: plcNameFilter.value || undefined,
+    })) as any;
     if (!s) return;
     const total = s.totalCount ?? 0;
-    const ok    = s.okCount   ?? 0;
-    const ng    = s.ngCount   ?? 0;
+    const ok = s.okCount ?? 0;
+    const ng = s.ngCount ?? 0;
     rows.value = [
-      { label: '白班 08:30-20:30', shift: 'D', total: s.dayShiftTotal??0, ok: s.dayShiftOk??0, ng: s.dayShiftNg??0, rate: s.dayShiftTotal>0?(s.dayShiftOk/s.dayShiftTotal)*100:0 },
-      { label: '夜班 20:30-08:30', shift: 'N', total: s.nightShiftTotal??0, ok: s.nightShiftOk??0, ng: s.nightShiftNg??0, rate: s.nightShiftTotal>0?(s.nightShiftOk/s.nightShiftTotal)*100:0 },
-    ].filter(r => r.total > 0);
+      {
+        label: '白班 08:30-20:30',
+        shift: 'D',
+        total: s.dayShiftTotal ?? 0,
+        ok: s.dayShiftOk ?? 0,
+        ng: s.dayShiftNg ?? 0,
+        rate:
+          s.dayShiftTotal > 0 ? (s.dayShiftOk / s.dayShiftTotal) * 100 : 0,
+      },
+      {
+        label: '夜班 20:30-08:30',
+        shift: 'N',
+        total: s.nightShiftTotal ?? 0,
+        ok: s.nightShiftOk ?? 0,
+        ng: s.nightShiftNg ?? 0,
+        rate:
+          s.nightShiftTotal > 0
+            ? (s.nightShiftOk / s.nightShiftTotal) * 100
+            : 0,
+      },
+    ].filter((r) => r.total > 0);
     if (rows.value.length === 0 && total > 0) {
-      rows.value = [{ label: date, shift: '-', total, ok, ng, rate: total>0?(ok/total)*100:0 }];
+      rows.value = [
+        {
+          label: date,
+          shift: '-',
+          total,
+          ok,
+          ng,
+          rate: total > 0 ? (ok / total) * 100 : 0,
+        },
+      ];
     }
-  } catch { /* 无数据 */ }
-};
+  } catch {
+    /* 无数据 */
+  }
+}
 
-// 月查询：单次请求 summary/range，取当月首末日
-const fetchMonth = async (ym: string) => {
+async function fetchMonth(ym: string) {
   const [year, month] = ym.split('-').map(Number) as [number, number];
-  const mm        = String(month).padStart(2, '0');
-  const lastDay   = new Date(year, month, 0).getDate();
+  const mm = String(month).padStart(2, '0');
+  const lastDay = new Date(year, month, 0).getDate();
   const startDate = `${year}-${mm}-01`;
-  const endDate   = `${year}-${mm}-${String(lastDay).padStart(2, '0')}`;
+  const endDate = `${year}-${mm}-${String(lastDay).padStart(2, '0')}`;
 
-  const list = await getSummaryRangeApi({ deviceId: deviceId.value, startDate, endDate, plcName: plcNameFilter.value || undefined }) as unknown as any[];
+  const list = (await getSummaryRangeApi({
+    deviceId: deviceId.value,
+    startDate,
+    endDate,
+    plcName: plcNameFilter.value || undefined,
+  })) as unknown as any[];
   rows.value = list
     .filter((s: any) => (s.totalCount ?? 0) > 0)
     .map((s: any) => {
       const total = s.totalCount ?? 0;
-      const ok    = s.okCount    ?? 0;
-      const ng    = s.ngCount    ?? 0;
-      const d     = s.date?.slice(8, 10) ?? '';
-      return { label: `${mm}-${d}`, shift: '', total, ok, ng, rate: total > 0 ? (ok / total) * 100 : 0 };
+      const ok = s.okCount ?? 0;
+      const ng = s.ngCount ?? 0;
+      const d = s.date?.slice(8, 10) ?? '';
+      return {
+        label: `${mm}-${d}`,
+        shift: '',
+        total,
+        ok,
+        ng,
+        rate: total > 0 ? (ok / total) * 100 : 0,
+      };
     });
-};
+}
 
-// 年查询：单次请求 summary/range，取全年首末日，再按月分组聚合
-const fetchYear = async (year: number) => {
+async function fetchYear(year: number) {
   const startDate = `${year}-01-01`;
-  const endDate   = `${year}-12-31`;
+  const endDate = `${year}-12-31`;
 
-  const list = await getSummaryRangeApi({ deviceId: deviceId.value, startDate, endDate, plcName: plcNameFilter.value || undefined }) as unknown as any[];
+  const list = (await getSummaryRangeApi({
+    deviceId: deviceId.value,
+    startDate,
+    endDate,
+    plcName: plcNameFilter.value || undefined,
+  })) as unknown as any[];
 
   const byMonth: Record<number, { total: number; ok: number; ng: number }> = {};
   for (let m = 1; m <= 12; m++) byMonth[m] = { total: 0, ok: 0, ng: 0 };
 
   for (const s of list) {
     const m = parseInt((s.date as string).slice(5, 7), 10);
-    byMonth[m]!.total += s.totalCount ?? 0;
-    byMonth[m]!.ok    += s.okCount    ?? 0;
-    byMonth[m]!.ng    += s.ngCount    ?? 0;
+    if (!byMonth[m]) continue;
+    byMonth[m].total += s.totalCount ?? 0;
+    byMonth[m].ok += s.okCount ?? 0;
+    byMonth[m].ng += s.ngCount ?? 0;
   }
 
   rows.value = Object.entries(byMonth).map(([m, v]) => ({
-    label: `${m}月`, shift: '',
-    total: v.total, ok: v.ok, ng: v.ng,
+    label: `${m} 月`,
+    shift: '',
+    total: v.total,
+    ok: v.ok,
+    ng: v.ng,
     rate: v.total > 0 ? (v.ok / v.total) * 100 : 0,
   }));
-};
+}
 
 onMounted(() => fetchData());
 </script>
 
 <style scoped>
-* { box-sizing: border-box; }
-.detail-page { font-family: 'Noto Sans SC', sans-serif; color: #e0e4ef; }
-
-.page-header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
-.back-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.04); color: rgba(255,255,255,0.5); font-size: 13px; cursor: pointer; transition: all 0.15s; flex-shrink: 0; }
-.back-btn:hover { color: #fff; border-color: rgba(255,255,255,0.2); }
-.back-btn svg { width: 14px; height: 14px; }
-.page-title { font-size: 20px; font-weight: 600; color: #fff; margin: 0 0 3px; }
-.page-sub { font-size: 12px; color: rgba(255,255,255,0.3); margin: 0; }
-
-.query-bar { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; padding: 12px 16px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; }
-.plc-filter { display: flex; align-items: center; gap: 4px; }
-.clear-plc-btn { background: none; border: none; color: rgba(255,255,255,0.35); font-size: 13px; cursor: pointer; padding: 0 4px; line-height: 1; transition: color 0.15s; }
-.clear-plc-btn:hover { color: rgba(255,255,255,0.7); }
-.plc-badge { display: inline-block; margin-left: 10px; font-size: 11px; background: rgba(0,229,255,0.1); color: #00e5ff; padding: 2px 8px; border-radius: 3px; border: 1px solid rgba(0,229,255,0.2); }
-.mode-tabs { display: flex; gap: 4px; }
-.mode-tab { padding: 6px 14px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03); color: rgba(255,255,255,0.4); font-size: 13px; cursor: pointer; transition: all 0.15s; font-family: 'Noto Sans SC', sans-serif; }
-.mode-tab:hover { border-color: rgba(0,229,255,0.25); color: rgba(255,255,255,0.7); }
-.mode-tab.active { background: rgba(0,229,255,0.1); border-color: rgba(0,229,255,0.35); color: #00e5ff; }
-.date-inputs { display: flex; gap: 8px; }
-.filter-input { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 3px; padding: 7px 10px; color: rgba(255,255,255,0.8); font-size: 13px; outline: none; transition: border-color 0.2s; font-family: 'Noto Sans SC', sans-serif; }
-.filter-input:focus { border-color: rgba(0,229,255,0.4); }
-select.filter-input { appearance: none; cursor: pointer; padding-right: 28px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' stroke='%2300e5ff' stroke-width='1.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; }
-select.filter-input option { background: #0f1525; color: #e0e4ef; }
-
-.stat-cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 16px; }
-.stat-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
-.stat-card.ok   { border-color: rgba(0,229,160,0.15); }
-.stat-card.ng   { border-color: rgba(255,77,79,0.15); }
-.stat-card.rate { border-color: rgba(0,229,255,0.15); }
-.stat-card.avg  { border-color: rgba(120,80,255,0.15); }
-.stat-label { font-size: 11px; color: rgba(255,255,255,0.35); }
-.stat-value { font-size: 22px; font-weight: 600; color: #fff; font-family: 'Courier New', monospace; }
-.stat-card.ok   .stat-value { color: #00e5a0; }
-.stat-card.ng   .stat-value { color: #ff8888; }
-.stat-card.rate .stat-value { color: #00e5ff; }
-.stat-card.avg  .stat-value { color: #b090ff; }
-
-.chart-card { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; padding: 16px 18px; margin-bottom: 16px; }
-.chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
-.chart-title { font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.7); }
-.chart-legend { display: flex; gap: 14px; }
-.legend-item { display: flex; align-items: center; gap: 5px; font-size: 11px; color: rgba(255,255,255,0.4); }
-.legend-dot { width: 8px; height: 8px; border-radius: 2px; }
-.legend-dot.ok { background: rgba(0,229,160,0.7); }
-.legend-dot.ng { background: rgba(255,77,79,0.6); }
-.chart-area { overflow-x: auto; padding-bottom: 8px; }
-.chart-bars { display: flex; align-items: flex-end; gap: 6px; min-height: 170px; padding-bottom: 44px; border-bottom: 1px solid rgba(255,255,255,0.06); }
-.chart-bars.dense-labels { min-width: 1680px; }
-.chart-col { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; min-width: 28px; position: relative; }
-.bar-total { font-size: 10px; color: rgba(255,255,255,0.4); font-family: 'Courier New', monospace; }
-.bar-stack { display: flex; flex-direction: column; align-items: center; width: 100%; }
-.bar { width: 100%; max-width: 36px; transition: height 0.4s ease; }
-.bar.ok { background: rgba(0,229,160,0.6); border-radius: 3px 3px 0 0; }
-.bar.ng { background: rgba(255,77,79,0.5); }
-.bar-label { font-size: 10px; color: rgba(255,255,255,0.38); text-align: center; white-space: nowrap; margin-top: 8px; width: 44px; position: absolute; bottom: -36px; left: 50%; transform: translateX(-50%) rotate(-35deg); transform-origin: top center; }
-.bar-label.placeholder { visibility: hidden; }
-.chart-loading { display: flex; justify-content: center; padding: 40px 0; }
-.chart-empty { text-align: center; padding: 40px 0; font-size: 13px; color: rgba(255,255,255,0.2); }
-.loading-ring { width: 28px; height: 28px; border: 2px solid rgba(0,229,255,0.15); border-top-color: #00e5ff; border-radius: 50%; animation: spin 0.8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-
-@media (max-width: 768px) {
-  .chart-bars.dense-labels { min-width: 1320px; }
-  .bar-label { width: 38px; font-size: 9px; }
+.detail-page {
+  font-family: var(--font-sans);
+  color: var(--text-0);
 }
 
-.table-wrap { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; overflow: hidden; }
-.data-table { width: 100%; border-collapse: collapse; }
-.data-table thead tr { background: rgba(255,255,255,0.03); border-bottom: 1px solid rgba(255,255,255,0.06); }
-.data-table th { padding: 10px 14px; text-align: left; font-size: 11px; font-weight: 500; color: rgba(255,255,255,0.3); letter-spacing: 1px; text-transform: uppercase; }
-.table-row { border-bottom: 1px solid rgba(255,255,255,0.04); transition: background 0.15s; }
-.table-row:last-child { border-bottom: none; }
-.table-row:hover { background: rgba(0,229,255,0.03); }
-.data-table td { padding: 11px 14px; font-size: 13px; vertical-align: middle; }
-.mono { font-family: 'Courier New', monospace; font-size: 12px; }
-.ok-num { color: #00e5a0; }
-.ng-num { color: #ff8888; }
-.rate-good { color: #00e5a0; }
-.rate-warn { color: #ffb300; }
-.rate-bad  { color: #ff8888; }
-.shift-tag { font-size: 10px; background: rgba(0,229,255,0.08); color: rgba(0,229,255,0.7); padding: 2px 8px; border-radius: 3px; border: 1px solid rgba(0,229,255,0.15); font-weight: 500; }
+.detail-page__filter-card {
+  margin-bottom: var(--space-4);
+}
+.detail-page__filter-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.filter-field__label {
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.5px;
+}
 
-.skeleton-rows { padding: 8px 0; }
-.skeleton-row { display: flex; gap: 16px; padding: 13px 16px; border-bottom: 1px solid rgba(255,255,255,0.04); }
-.skel { background: rgba(255,255,255,0.06); border-radius: 3px; height: 14px; animation: shimmer 1.5s infinite; }
-.skel-sm { width: 70px; } .skel-md { width: 120px; }
-@keyframes shimmer { 0%,100% { opacity:0.5; } 50% { opacity:1; } }
+.detail-page__stats {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+@media (max-width: 1280px) {
+  .detail-page__stats {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+@media (max-width: 768px) {
+  .detail-page__stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
 
-.empty-cell { text-align: center; padding: 48px 0; }
-.empty-state p { font-size: 13px; color: rgba(255,255,255,0.25); margin: 0; }
+.detail-page__chart-card {
+  margin-bottom: var(--space-4);
+}
+.detail-page__chart-wrap {
+  height: 320px;
+  position: relative;
+}
+.detail-page__chart {
+  width: 100%;
+  height: 100%;
+}
+
+/* 表格单元 */
+.detail-page__table :deep(.cell-mono) {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--text-0);
+}
+.detail-page__table :deep(.cell-num--ok) {
+  color: var(--success);
+}
+.detail-page__table :deep(.cell-num--ng) {
+  color: var(--error);
+}
+.detail-page__table :deep(.cell-num--warn) {
+  color: var(--warn);
+}
+
+/* 班次徽章 */
+.detail-page__table :deep(.shift-tag) {
+  font-size: var(--fs-xs);
+  background: var(--brand-soft);
+  color: var(--brand);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-weight: var(--fw-semibold);
+  font-family: var(--font-mono);
+}
+
+/* Naive UI DataTable 微调 */
+.detail-page__table :deep(.n-data-table-thead) {
+  background: var(--bg-3);
+}
+.detail-page__table :deep(.n-data-table-th) {
+  font-size: var(--fs-xs) !important;
+  font-weight: var(--fw-semibold) !important;
+  color: var(--text-2) !important;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.detail-page__table :deep(.n-data-table-tr:hover .n-data-table-td) {
+  background-color: rgba(8, 145, 178, 0.04) !important;
+}
 </style>

@@ -1,11 +1,34 @@
 <template>
   <div class="forbidden">
-    <div class="code">403</div>
-    <div class="title">无权访问</div>
-    <div class="desc">您的账号当前缺少访问该页面所需的权限点，请联系系统管理员。</div>
-    <router-link to="/" class="back-btn">返回首页</router-link>
+    <div class="forbidden__icon">
+      <svg viewBox="0 0 64 64" width="56" height="56" fill="none">
+        <circle cx="32" cy="32" r="28" stroke="currentColor" stroke-width="2" opacity="0.2"/>
+        <rect x="22" y="28" width="20" height="14" rx="2" stroke="currentColor" stroke-width="2"/>
+        <path d="M27 28v-4a5 5 0 0110 0v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        <circle cx="32" cy="35" r="1.5" fill="currentColor"/>
+      </svg>
+    </div>
+    <div class="forbidden__code">403</div>
+    <div class="forbidden__title">无权访问</div>
+    <p class="forbidden__desc">
+      您的账号当前缺少访问该页面所需的权限点，请联系系统管理员申请授权。
+    </p>
+    <router-link to="/">
+      <n-button type="primary" size="medium">
+        <template #icon>
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
+            <path d="M3 8l5-5M3 8l5 5M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </template>
+        返回首页
+      </n-button>
+    </router-link>
   </div>
 </template>
+
+<script setup lang="ts">
+import { NButton } from 'naive-ui';
+</script>
 
 <style scoped>
 .forbidden {
@@ -14,29 +37,36 @@
   align-items: center;
   justify-content: center;
   min-height: 60vh;
-  font-family: 'Noto Sans SC', sans-serif;
+  font-family: var(--font-sans);
   text-align: center;
+  padding: var(--space-8);
 }
-.code {
-  font-family: 'Rajdhani', sans-serif;
+.forbidden__icon {
+  color: var(--brand);
+  opacity: 0.6;
+  margin-bottom: var(--space-4);
+}
+.forbidden__code {
   font-size: 96px;
-  font-weight: 700;
-  color: rgba(0,229,255,0.15);
+  font-weight: var(--fw-bold);
+  color: var(--brand);
+  opacity: 0.18;
   line-height: 1;
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
   letter-spacing: 8px;
+  font-family: var(--font-mono);
 }
-.title { font-size: 22px; font-weight: 500; color: rgba(255,255,255,0.7); margin-bottom: 12px; }
-.desc { font-size: 13px; color: rgba(255,255,255,0.3); max-width: 340px; line-height: 1.7; margin-bottom: 32px; }
-.back-btn {
-  padding: 10px 28px;
-  background: rgba(0,229,255,0.1);
-  border: 1px solid rgba(0,229,255,0.3);
-  border-radius: 3px;
-  color: #00e5ff;
-  text-decoration: none;
-  font-size: 13px;
-  transition: all 0.2s;
+.forbidden__title {
+  font-size: var(--fs-2xl);
+  font-weight: var(--fw-semibold);
+  color: var(--text-0);
+  margin-bottom: var(--space-3);
 }
-.back-btn:hover { background: rgba(0,229,255,0.18); }
+.forbidden__desc {
+  font-size: var(--fs-md);
+  color: var(--text-1);
+  max-width: 360px;
+  line-height: 1.7;
+  margin: 0 0 var(--space-8);
+}
 </style>

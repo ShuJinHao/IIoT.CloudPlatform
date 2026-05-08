@@ -56,5 +56,8 @@ internal sealed class UploadReceiveRegistrationConfiguration
 
         builder.HasIndex(x => x.ReceivedAtUtc)
             .HasDatabaseName("ix_upload_receive_registrations_received_at");
+
+        builder.HasIndex(x => new { x.DeviceId, x.LastSeenAtUtc })
+            .HasDatabaseName("ix_upload_receive_registrations_device_last_seen");
     }
 }

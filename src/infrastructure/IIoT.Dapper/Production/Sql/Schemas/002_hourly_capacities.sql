@@ -18,5 +18,8 @@ create table if not exists hourly_capacity
 create index if not exists ix_hourly_capacity_device_date
     on hourly_capacity (device_id, date);
 
+create index if not exists ix_hourly_capacity_date_slot
+    on hourly_capacity (date, hour, minute);
+
 create unique index if not exists ux_hourly_capacity_device_slot_plc
     on hourly_capacity (device_id, date, shift_code, hour, minute, plc_name);

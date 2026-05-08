@@ -19,6 +19,7 @@ using IIoT.ProductionService.PassStations;
 using IIoT.ProductionService.Profiles;
 using IIoT.ProductionService.Queries.Capacities;
 using IIoT.ProductionService.Queries.Devices;
+using IIoT.ProductionService.Queries.DeviceLogs;
 using IIoT.ProductionService.Security;
 using IIoT.ProductionService.Validators;
 using IIoT.Services.CrossCutting.Caching;
@@ -1150,6 +1151,123 @@ public sealed class ApplicationFlowGuardTests
         Assert.True(first.IsSuccess);
         Assert.True(second.IsSuccess);
         Assert.Equal(2, queryService.HourlyCalls);
+    }
+
+    [Fact]
+    public async Task GetHourlyCapacityAggregateHandler_ShouldUseCurrentUserDeviceScope()
+    {
+        var allowedDeviceId = Guid.NewGuid();
+        var processId = Guid.NewGuid();
+        var queryService = new StubCapacityQueryService
+        {
+            HourlyAggregateResult =
+            [
+                new HourlyCapacityAggregateDto(9, 0, "09:00", 20, 18, 2)
+            ]
+        };
+        var handler = new GetHourlyCapacityAggregateHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                Role = "Operator",
+                UserName = "operator",
+                IsAuthenticated = true
+            },
+            new StubDevicePermissionService { AccessibleDeviceIds = [allowedDeviceId] },
+            queryService);
+
+        var result = await handler.Handle(
+            new GetHourlyCapacityAggregateQuery(DateOnly.FromDateTime(DateTime.UtcNow), processId),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(processId, queryService.LastAggregateProcessId);
+        Assert.Equal(new[] { allowedDeviceId }, queryService.LastAggregateDeviceIds);
+    }
+
+    [Fact]
+    public async Task GetDeviceStatusSummaryHandler_ShouldUseCurrentUserDeviceScope()
+    {
+        var allowedDeviceId = Guid.NewGuid();
+        var queryService = new StubDeviceOperationalStatusQueryService
+        {
+            Summary = new DeviceStatusSummaryDto(1, 1, 0, 0, 0, DateTimeOffset.UtcNow)
+        };
+        var handler = new GetDeviceStatusSummaryHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                Role = "Operator",
+                UserName = "operator",
+                IsAuthenticated = true
+            },
+            new StubDevicePermissionService { AccessibleDeviceIds = [allowedDeviceId] },
+            queryService);
+
+        var result = await handler.Handle(new GetDeviceStatusSummaryQuery(), CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(new[] { allowedDeviceId }, queryService.LastDeviceIds);
+        Assert.NotNull(queryService.LastOfflineCutoff);
+        Assert.NotNull(queryService.LastStatusWindowStart);
+    }
+
+    [Fact]
+    public async Task GetRecentDeviceLogsHandler_ShouldCapLimitAndNormalizeWarnLevel()
+    {
+        var allowedDeviceId = Guid.NewGuid();
+        var processId = Guid.NewGuid();
+        var queryService = new StubDeviceLogQueryService();
+        var handler = new GetRecentDeviceLogsHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                Role = "Operator",
+                UserName = "operator",
+                IsAuthenticated = true
+            },
+            new StubDevicePermissionService { AccessibleDeviceIds = [allowedDeviceId] },
+            queryService);
+
+        var result = await handler.Handle(
+            new GetRecentDeviceLogsQuery(250, "Warning", processId),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(100, queryService.LastRecentLimit);
+        Assert.Equal(processId, queryService.LastRecentProcessId);
+        Assert.Equal(new[] { allowedDeviceId }, queryService.LastRecentDeviceIds);
+        Assert.Equal(new[] { "WARN", "WARNING", "ERROR", "ERR" }, queryService.LastRecentLevels);
+    }
+
+    [Fact]
+    public async Task GetRecentAlertCountHandler_ShouldUseDefaultWindowAndCurrentUserScope()
+    {
+        var allowedDeviceId = Guid.NewGuid();
+        var queryService = new StubDeviceLogQueryService { RecentAlertCount = 3 };
+        var handler = new GetRecentAlertCountHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                Role = "Operator",
+                UserName = "operator",
+                IsAuthenticated = true
+            },
+            new StubDevicePermissionService { AccessibleDeviceIds = [allowedDeviceId] },
+            queryService);
+
+        var before = DateTimeOffset.UtcNow.AddHours(-24).AddMinutes(-1);
+        var result = await handler.Handle(new GetRecentAlertCountQuery(), CancellationToken.None);
+        var after = DateTimeOffset.UtcNow.AddHours(-24).AddMinutes(1);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(3, result.Value!.Count);
+        Assert.Equal(24, result.Value.SinceHours);
+        Assert.Equal("WARN", result.Value.MinLevel);
+        Assert.True(queryService.LastAlertWindowStart >= before);
+        Assert.True(queryService.LastAlertWindowStart <= after);
+        Assert.Equal(new[] { allowedDeviceId }, queryService.LastAlertDeviceIds);
+        Assert.Equal(new[] { "WARN", "WARNING", "ERROR", "ERR" }, queryService.LastAlertLevels);
     }
 
     [Fact]
