@@ -3,7 +3,7 @@
     <template #header>
       <div class="trend__head">
         <span v-if="isDemo" class="trend__demo-tag">演示数据</span>
-        <span class="trend__live">
+        <span v-if="showFreshStatus" class="trend__live">
           <StatusLed status="success" />
           <span>最新</span>
         </span>
@@ -46,12 +46,14 @@ const props = withDefaults(
     loading?: boolean;
     isDemo?: boolean;
     subtitle?: string;
+    showFreshStatus?: boolean;
   }>(),
   {
     hours: () => [],
     loading: false,
     isDemo: false,
     subtitle: '最近 24 小时单位时段产量',
+    showFreshStatus: true,
   },
 );
 

@@ -305,9 +305,12 @@ import {
   type PagedMetaData,
 } from '../../api/device';
 import { getAllProcessesApi, type ProcessSelectDto } from '../../api/masterData/processes';
+import { useAuthStore } from '../../stores/auth';
+import { Permissions } from '../../types/permissions';
 import PageHeader from '../../components/layout/PageHeader.vue';
 import CardSurface from '../../components/layout/CardSurface.vue';
 
+const authStore = useAuthStore();
 const devices = ref<DeviceListItemDto[]>([]);
 const loading = ref(false);
 const keyword = ref('');
@@ -319,6 +322,12 @@ const metaData = ref<PagedMetaData>({
   totalPages: 1,
 });
 const submitting = ref(false);
+const canUpdateDevice = computed(() =>
+  authStore.hasPermission(Permissions.Device.Update),
+);
+const canDeleteDevice = computed(() =>
+  authStore.hasPermission(Permissions.Device.Delete),
+);
 
 const allProcesses = ref<ProcessSelectDto[]>([]);
 const processNameMap = computed(() => {
@@ -465,7 +474,7 @@ const columns: DataTableColumns<DeviceListItemDto> = [
     width: 240,
     align: 'right',
     render(row) {
-      return h('div', { class: 'row-actions' }, [
+      const actions = [
         h(
           NButton,
           {
@@ -476,37 +485,49 @@ const columns: DataTableColumns<DeviceListItemDto> = [
           },
           { default: () => '详情' },
         ),
-        h(
-          NButton,
-          {
-            size: 'tiny',
-            type: 'info',
-            secondary: true,
-            onClick: () => openEditModal(row),
-          },
-          { default: () => '编辑' },
-        ),
-        h(
-          NButton,
-          {
-            size: 'tiny',
-            type: 'warning',
-            secondary: true,
-            onClick: () => handleRotateBootstrapSecret(row),
-          },
-          { default: () => '轮换密钥' },
-        ),
-        h(
-          NButton,
-          {
-            size: 'tiny',
-            type: 'error',
-            secondary: true,
-            onClick: () => handleDelete(row),
-          },
-          { default: () => '删除' },
-        ),
-      ]);
+      ];
+
+      if (canUpdateDevice.value) {
+        actions.push(
+          h(
+            NButton,
+            {
+              size: 'tiny',
+              type: 'info',
+              secondary: true,
+              onClick: () => openEditModal(row),
+            },
+            { default: () => '编辑' },
+          ),
+          h(
+            NButton,
+            {
+              size: 'tiny',
+              type: 'warning',
+              secondary: true,
+              onClick: () => handleRotateBootstrapSecret(row),
+            },
+            { default: () => '轮换密钥' },
+          ),
+        );
+      }
+
+      if (canDeleteDevice.value) {
+        actions.push(
+          h(
+            NButton,
+            {
+              size: 'tiny',
+              type: 'error',
+              secondary: true,
+              onClick: () => handleDelete(row),
+            },
+            { default: () => '删除' },
+          ),
+        );
+      }
+
+      return h('div', { class: 'row-actions' }, actions);
     },
   },
 ];

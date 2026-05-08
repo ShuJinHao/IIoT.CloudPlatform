@@ -16,8 +16,6 @@ public record GetRecentDeviceLogsQuery(
 
 [AuthorizeRequirement("Device.Read")]
 public record GetRecentAlertCountQuery(
-    int SinceHours = 24,
-    string? MinLevel = "WARN",
     Guid? ProcessId = null
 ) : IHumanQuery<Result<RecentAlertCountDto>>;
 
@@ -105,21 +103,13 @@ public class GetRecentAlertCountHandler(
     IDeviceLogQueryService queryService)
     : IQueryHandler<GetRecentAlertCountQuery, Result<RecentAlertCountDto>>
 {
-    private const int DefaultSinceHours = 24;
-    private const int MaxSinceHours = 168;
+    private const int AlertWindowHours = 24;
+    private const string AlertMinLevel = "WARN";
 
     public async Task<Result<RecentAlertCountDto>> Handle(
         GetRecentAlertCountQuery request,
         CancellationToken cancellationToken)
     {
-        if (!DeviceLogSeverityLevels.TryGetLevelsAtOrAbove(
-                request.MinLevel,
-                out var levels,
-                out var normalizedMinLevel))
-        {
-            return Result.Invalid("日志等级仅支持 INFO、WARN、ERROR。");
-        }
-
         var scope = await ResolveAllowedDeviceIdsAsync(cancellationToken);
         if (scope.IsFailure)
         {
@@ -127,24 +117,21 @@ public class GetRecentAlertCountHandler(
         }
 
         var now = DateTimeOffset.UtcNow;
-        var sinceHours = request.SinceHours <= 0
-            ? DefaultSinceHours
-            : Math.Min(request.SinceHours, MaxSinceHours);
-        var windowStart = now.AddHours(-sinceHours);
+        var windowStart = now.AddHours(-AlertWindowHours);
 
         var count = scope.DeviceIds is { Count: 0 }
             ? 0
             : await queryService.CountRecentAlertsAsync(
                 windowStart,
-                levels,
+                DeviceLogSeverityLevels.WarningAndErrorLevels,
                 request.ProcessId,
                 scope.DeviceIds,
                 cancellationToken);
 
         return Result.Success(new RecentAlertCountDto(
             count,
-            sinceHours,
-            normalizedMinLevel,
+            AlertWindowHours,
+            AlertMinLevel,
             windowStart,
             now,
             now));

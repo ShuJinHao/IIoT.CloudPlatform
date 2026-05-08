@@ -71,6 +71,10 @@ export const getAllActiveDevicesApi = () => {
   return http.get<DeviceSelectDto[]>(`${basePath}/all`);
 };
 
+export const getScopedDeviceSelectApi = () => {
+  return http.get<DeviceSelectDto[]>(`${basePath}/select`);
+};
+
 export const getDeviceStatusSummaryApi = () => {
   return http.get<DeviceStatusSummaryDto>(`${basePath}/status-summary`);
 };

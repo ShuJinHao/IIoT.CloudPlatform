@@ -3,7 +3,7 @@
     <template #header>
       <div class="stream__head-right">
         <span v-if="isDemo" class="stream__demo-tag">演示数据</span>
-        <span class="stream__live">
+        <span v-if="showFreshStatus" class="stream__live">
           <StatusLed status="success" />
           <span>最新</span>
         </span>
@@ -43,11 +43,17 @@ export interface DashboardEvent {
   label: string;
 }
 
-defineProps<{
-  events: DashboardEvent[];
-  loading?: boolean;
-  isDemo?: boolean;
-}>();
+withDefaults(
+  defineProps<{
+    events: DashboardEvent[];
+    loading?: boolean;
+    isDemo?: boolean;
+    showFreshStatus?: boolean;
+  }>(),
+  {
+    showFreshStatus: true,
+  },
+);
 </script>
 
 <style scoped>

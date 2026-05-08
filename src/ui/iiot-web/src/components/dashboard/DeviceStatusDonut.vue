@@ -1,10 +1,15 @@
 <template>
-  <CardSurface title="设备状态" :subtitle="`${total} 台设备总览`">
+  <CardSurface title="设备状态" :subtitle="subtitleText">
     <template #header>
       <span v-if="isDemo" class="donut__demo-tag">演示数据</span>
     </template>
     <div class="donut__body">
       <LoadingState v-if="loading" variant="card" :rows="3" />
+      <EmptyState
+        v-else-if="loadFailed"
+        title="数据加载失败"
+        description="无法读取当前权限范围内的设备状态。"
+      />
       <v-chart
         v-else
         class="donut__chart"
@@ -12,7 +17,7 @@
         autoresize
       />
     </div>
-    <div class="donut__legend">
+    <div v-if="!loadFailed" class="donut__legend">
       <div
         v-for="seg in segments"
         :key="seg.label"
@@ -35,6 +40,7 @@ import VChart from 'vue-echarts';
 import '../charts/echartsSetup';
 import CardSurface from '../layout/CardSurface.vue';
 import LoadingState from '../states/LoadingState.vue';
+import EmptyState from '../states/EmptyState.vue';
 
 interface Segment {
   label: string;
@@ -46,10 +52,14 @@ const props = defineProps<{
   segments: Segment[];
   loading?: boolean;
   isDemo?: boolean;
+  loadFailed?: boolean;
 }>();
 
 const total = computed(() =>
   props.segments.reduce((s, x) => s + x.value, 0),
+);
+const subtitleText = computed(() =>
+  props.loadFailed ? '设备状态加载失败' : `${total.value} 台设备总览`,
 );
 
 const onlineRate = computed(() => {

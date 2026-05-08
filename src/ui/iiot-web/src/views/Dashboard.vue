@@ -4,34 +4,35 @@
       :name="authStore.employeeNo"
       :role="authStore.role"
       :alert-count="alertCount"
+      :data-state="dashboardState"
     />
 
     <div class="dashboard__grid">
       <StatCard
         class="dashboard__kpi"
         label="在线设备"
-        :value="onlineDevices"
-        :unit="`/ ${totalDevices}`"
+        :value="onlineDevicesDisplay"
+        :unit="totalDevicesDisplay"
         accent="brand"
       />
       <StatCard
         class="dashboard__kpi"
         label="今日产量"
-        :value="formattedProduction"
+        :value="productionDisplay"
         unit="件"
         accent="success"
       />
       <StatCard
         class="dashboard__kpi"
         label="近24小时告警"
-        :value="alertCount"
+        :value="alertCountDisplay"
         unit="条"
         accent="warn"
       />
       <StatCard
         class="dashboard__kpi"
         label="合格率"
-        :value="passRate.toFixed(1)"
+        :value="passRateDisplay"
         unit="%"
         accent="info"
       />
@@ -42,17 +43,20 @@
         :loading="loadingHourly"
         :is-demo="isHourlyDemo"
         :subtitle="hourlySubtitle"
+        :show-fresh-status="dataReady"
       />
       <DeviceStatusDonut
         class="dashboard__donut"
         :segments="deviceSegments"
         :loading="loadingDashboard"
+        :load-failed="loadFailed"
       />
 
       <EventStream
         class="dashboard__events"
         :events="events"
         :loading="loadingDashboard"
+        :show-fresh-status="dataReady"
       />
       <QuickAccessGrid
         class="dashboard__quick"
@@ -98,6 +102,13 @@ const todayOkProduction = ref(0);
 const alertCount = ref(0);
 const loadingDashboard = ref(true);
 const dashboardError = ref('');
+const dataReady = ref(false);
+const loadFailed = computed(() => !!dashboardError.value && !loadingDashboard.value);
+const dashboardState = computed<'loading' | 'ready' | 'error'>(() => {
+  if (loadingDashboard.value) return 'loading';
+  if (loadFailed.value) return 'error';
+  return dataReady.value ? 'ready' : 'loading';
+});
 
 const formattedProduction = computed(() =>
   todayProduction.value.toLocaleString('zh-CN'),
@@ -108,6 +119,11 @@ const passRate = computed(() =>
     ? (todayOkProduction.value / todayProduction.value) * 100
     : 0,
 );
+const onlineDevicesDisplay = computed(() => (dataReady.value ? onlineDevices.value : '--'));
+const totalDevicesDisplay = computed(() => (dataReady.value ? `/ ${totalDevices.value}` : ''));
+const productionDisplay = computed(() => (dataReady.value ? formattedProduction.value : '--'));
+const alertCountDisplay = computed(() => (dataReady.value ? alertCount.value : '--'));
+const passRateDisplay = computed(() => (dataReady.value ? passRate.value.toFixed(1) : '--'));
 
 const hourly = ref<{ label: string; value: number }[]>([]);
 const loadingHourly = ref(true);
@@ -185,12 +201,13 @@ async function loadDashboard() {
   loadingDashboard.value = true;
   loadingHourly.value = true;
   dashboardError.value = '';
+  dataReady.value = false;
 
   try {
     const [statusSummary, hourlyData, alertSummary, recentLogs] = await Promise.all([
       getDeviceStatusSummaryApi(),
       getHourlyAggregateApi({ date: today }),
-      getRecentAlertCountApi({ sinceHours: 24, minLevel: 'WARN' }),
+      getRecentAlertCountApi(),
       getRecentDeviceLogsApi({ limit: 20, minLevel: 'WARN' }),
     ]);
 
@@ -209,8 +226,10 @@ async function loadDashboard() {
     }));
     events.value = recentLogs.map(mapEvent);
     isHourlyDemo.value = false;
+    dataReady.value = true;
   } catch {
     resetDashboardData();
+    dataReady.value = false;
     dashboardError.value = 'Dashboard 数据加载失败，请检查账号权限或后端服务状态。';
   } finally {
     loadingHourly.value = false;

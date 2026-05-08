@@ -20,6 +20,9 @@
           @update:value="onDeviceChange"
         />
       </div>
+      <div v-if="deviceLoadError" class="device-row__error">
+        {{ deviceLoadError }}
+      </div>
     </CardSurface>
 
     <!-- 查询模式 + 筛选条件 -->
@@ -214,7 +217,7 @@ import {
   type DeviceLogListItemDto,
 } from '../../api/deviceLog';
 import type { PagedMetaData } from '../../api/employee';
-import { getAllActiveDevicesApi, type DeviceSelectDto } from '../../api/device';
+import { getScopedDeviceSelectApi, type DeviceSelectDto } from '../../api/device';
 import PageHeader from '../../components/layout/PageHeader.vue';
 import CardSurface from '../../components/layout/CardSurface.vue';
 import EmptyState from '../../components/states/EmptyState.vue';
@@ -262,6 +265,7 @@ const metaData = ref<PagedMetaData>({
 });
 
 const allDevices = ref<DeviceSelectDto[]>([]);
+const deviceLoadError = ref('');
 const deviceOptions = computed(() =>
   allDevices.value.map((d) => ({ label: d.deviceName, value: d.id })),
 );
@@ -467,9 +471,13 @@ const onPageChange = async (page: number) => {
 };
 
 onMounted(async () => {
-  allDevices.value = await getAllActiveDevicesApi().catch(
-    () => [] as DeviceSelectDto[],
-  );
+  try {
+    deviceLoadError.value = '';
+    allDevices.value = await getScopedDeviceSelectApi();
+  } catch {
+    allDevices.value = [];
+    deviceLoadError.value = '设备列表加载失败，请检查权限或稍后重试。';
+  }
 });
 </script>
 
@@ -492,6 +500,11 @@ onMounted(async () => {
   font-size: var(--fs-sm);
   font-weight: var(--fw-semibold);
   color: var(--text-1);
+}
+.device-row__error {
+  margin-top: var(--space-3);
+  font-size: var(--fs-sm);
+  color: var(--error);
 }
 
 .device-log-page__filter-card {

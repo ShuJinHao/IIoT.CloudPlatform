@@ -44,14 +44,10 @@ export const getRecentDeviceLogsApi = (params?: {
 };
 
 export const getRecentAlertCountApi = (params?: {
-  sinceHours?: number;
-  minLevel?: string;
   processId?: string;
 }) => {
   return http.get<RecentAlertCountDto>(`${basePath}/recent-alerts/count`, {
     params: {
-      sinceHours: params?.sinceHours ?? 24,
-      minLevel: params?.minLevel || 'WARN',
       processId: params?.processId || undefined,
     },
   });

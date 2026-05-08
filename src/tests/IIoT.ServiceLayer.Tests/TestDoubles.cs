@@ -68,7 +68,7 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
         CancellationToken cancellationToken = default)
     {
         LastGetListSpecification = specification;
-        return Task.FromResult(ListResult.ToList());
+        return Task.FromResult(ApplySpecification(specification).ToList());
     }
 
     public Task<T?> GetSingleOrDefaultAsync(
@@ -84,7 +84,7 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
         CancellationToken cancellationToken = default)
     {
         LastCountSpecification = specification;
-        return Task.FromResult(ListResult.Count);
+        return Task.FromResult(ApplySpecification(specification).Count());
     }
 
     public Task<bool> AnyAsync(
@@ -92,7 +92,7 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
         CancellationToken cancellationToken = default)
     {
         LastAnySpecification = specification;
-        return Task.FromResult(ListResult.Count > 0);
+        return Task.FromResult(ApplySpecification(specification).Any());
     }
 
     public Task<bool> AnyAsync(
@@ -107,6 +107,35 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
         CancellationToken cancellationToken = default)
     {
         return Task.FromResult(ListResult.AsQueryable().Count(predicate));
+    }
+
+    private IEnumerable<T> ApplySpecification(ISpecification<T>? specification)
+    {
+        IEnumerable<T> query = ListResult;
+
+        if (specification?.FilterCondition is not null)
+        {
+            var predicate = specification.FilterCondition.Compile();
+            query = query.Where(predicate);
+        }
+
+        if (specification?.OrderBy is not null)
+        {
+            var orderBy = specification.OrderBy.Compile();
+            query = query.OrderBy(orderBy);
+        }
+        else if (specification?.OrderByDescending is not null)
+        {
+            var orderByDescending = specification.OrderByDescending.Compile();
+            query = query.OrderByDescending(orderByDescending);
+        }
+
+        if (specification?.IsPagingEnabled == true)
+        {
+            query = query.Skip(specification.Skip).Take(specification.Take);
+        }
+
+        return query;
     }
 }
 
@@ -371,6 +400,8 @@ internal sealed class StubDeviceLogQueryService : IDeviceLogQueryService
 
     public IReadOnlyCollection<string>? LastAlertLevels { get; private set; }
 
+    public Guid? LastAlertProcessId { get; private set; }
+
     public IReadOnlyCollection<Guid>? LastAlertDeviceIds { get; private set; }
 
     public Task<(List<DeviceLogListItemDto> Items, int TotalCount)> GetLogsByConditionAsync(
@@ -408,6 +439,7 @@ internal sealed class StubDeviceLogQueryService : IDeviceLogQueryService
     {
         LastAlertWindowStart = windowStart;
         LastAlertLevels = normalizedLevels;
+        LastAlertProcessId = processId;
         LastAlertDeviceIds = deviceIds;
         return Task.FromResult(RecentAlertCount);
     }

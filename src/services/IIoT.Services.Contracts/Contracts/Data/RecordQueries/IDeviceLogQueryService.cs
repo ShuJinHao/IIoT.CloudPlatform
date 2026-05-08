@@ -48,7 +48,7 @@ public record RecentAlertCountDto(
 public static class DeviceLogSeverityLevels
 {
     private static readonly string[] ErrorAndAbove = ["ERROR", "ERR"];
-    private static readonly string[] WarningAndAbove = ["WARN", "WARNING", "ERROR", "ERR"];
+    public static readonly string[] WarningAndErrorLevels = ["WARN", "WARNING", "ERROR", "ERR"];
     private static readonly string[] InformationAndAbove = ["INFO", "INFORMATION", "WARN", "WARNING", "ERROR", "ERR"];
 
     public static bool TryGetLevelsAtOrAbove(
@@ -70,7 +70,7 @@ public static class DeviceLogSeverityLevels
 
             case "WARN":
             case "WARNING":
-                normalizedLevels = WarningAndAbove;
+                normalizedLevels = WarningAndErrorLevels;
                 normalizedMinLevel = "WARN";
                 return true;
 

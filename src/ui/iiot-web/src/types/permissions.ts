@@ -26,6 +26,7 @@ export const Permissions = {
     Read:       'Device.Read',
     Create:     'Device.Create',
     Update:     'Device.Update',
+    Delete:     'Device.Delete',
     Deactivate: 'Device.Deactivate',
   },
 

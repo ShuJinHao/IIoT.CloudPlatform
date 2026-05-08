@@ -8,7 +8,15 @@
         <span class="hero__sep">·</span>
         <span class="hero__role">{{ role || '未分配角色' }}</span>
         <span class="hero__sep">·</span>
-        <span v-if="alertCount > 0" class="hero__alert">
+        <span v-if="dataState === 'error'" class="hero__neutral">
+          <StatusLed status="idle" />
+          <span>数据加载失败</span>
+        </span>
+        <span v-else-if="dataState === 'loading'" class="hero__neutral">
+          <StatusLed status="idle" />
+          <span>数据加载中</span>
+        </span>
+        <span v-else-if="alertCount > 0" class="hero__alert">
           <SeverityBadge severity="warn" :label="`${alertCount} 条告警`" />
           <span class="hero__alert-text">近24小时事件</span>
         </span>
@@ -26,11 +34,17 @@ import { computed } from 'vue';
 import StatusLed from '../feedback/StatusLed.vue';
 import SeverityBadge from '../feedback/SeverityBadge.vue';
 
-const props = defineProps<{
-  name: string;
-  role?: string;
-  alertCount: number;
-}>();
+const props = withDefaults(
+  defineProps<{
+    name: string;
+    role?: string;
+    alertCount: number;
+    dataState?: 'loading' | 'ready' | 'error';
+  }>(),
+  {
+    dataState: 'ready',
+  },
+);
 
 const displayName = computed(() => props.name || '用户');
 
@@ -96,11 +110,13 @@ const dateStr = computed(() =>
 .hero__date { color: var(--text-1); }
 .hero__role { color: var(--text-1); }
 .hero__alert,
-.hero__ok {
+.hero__ok,
+.hero__neutral {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
 }
 .hero__ok { color: var(--text-1); }
+.hero__neutral { color: var(--text-2); }
 .hero__alert-text { color: var(--text-1); }
 </style>

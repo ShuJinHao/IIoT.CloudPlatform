@@ -23,6 +23,7 @@ using IIoT.ProductionService.Queries.DeviceLogs;
 using IIoT.ProductionService.Security;
 using IIoT.ProductionService.Validators;
 using IIoT.Services.CrossCutting.Caching;
+using IIoT.Services.CrossCutting.Exceptions;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
@@ -1213,6 +1214,98 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
+    public async Task GetDeviceSelectListHandler_ShouldReturnAllDevicesForAdmin()
+    {
+        var repository = new InMemoryRepository<Device>();
+        repository.ListResult.Add(new Device("Device-B", "DEV-B", Guid.NewGuid()));
+        repository.ListResult.Add(new Device("Device-A", "DEV-A", Guid.NewGuid()));
+        var handler = new GetDeviceSelectListHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                Role = SystemRoles.Admin,
+                UserName = "admin",
+                IsAuthenticated = true
+            },
+            new StubDevicePermissionService(),
+            repository);
+
+        var result = await handler.Handle(new GetDeviceSelectListQuery(), CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, result.Value!.Count);
+        Assert.Equal(new[] { "Device-A", "Device-B" }, result.Value.Select(x => x.DeviceName).ToArray());
+    }
+
+    [Fact]
+    public async Task GetDeviceSelectListHandler_ShouldReturnScopedDevicesForOperator()
+    {
+        var authorizedDevice = new Device("Authorized", "DEV-AUTH", Guid.NewGuid());
+        var forbiddenDevice = new Device("Forbidden", "DEV-FORBID", Guid.NewGuid());
+        var repository = new InMemoryRepository<Device>();
+        repository.ListResult.Add(authorizedDevice);
+        repository.ListResult.Add(forbiddenDevice);
+        var handler = new GetDeviceSelectListHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                Role = "Operator",
+                UserName = "operator",
+                IsAuthenticated = true
+            },
+            new StubDevicePermissionService { AccessibleDeviceIds = [authorizedDevice.Id] },
+            repository);
+
+        var result = await handler.Handle(new GetDeviceSelectListQuery(), CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var device = Assert.Single(result.Value!);
+        Assert.Equal(authorizedDevice.Id, device.Id);
+        Assert.Equal("DEV-AUTH", device.Code);
+    }
+
+    [Fact]
+    public async Task GetDeviceSelectListHandler_ShouldReturnEmptyWhenOperatorHasNoDeviceAccess()
+    {
+        var repository = new InMemoryRepository<Device>();
+        repository.ListResult.Add(new Device("Device-A", "DEV-A", Guid.NewGuid()));
+        var handler = new GetDeviceSelectListHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                Role = "Operator",
+                UserName = "operator",
+                IsAuthenticated = true
+            },
+            new StubDevicePermissionService { AccessibleDeviceIds = [] },
+            repository);
+
+        var result = await handler.Handle(new GetDeviceSelectListQuery(), CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Empty(result.Value!);
+        Assert.Null(repository.LastGetListSpecification);
+    }
+
+    [Fact]
+    public async Task GetAllDevicesHandler_ShouldRemainAdminOnly()
+    {
+        var handler = new GetAllDevicesHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                Role = "Operator",
+                UserName = "operator",
+                IsAuthenticated = true
+            },
+            new InMemoryRepository<Device>(),
+            new RecordingCacheService());
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            handler.Handle(new GetAllDevicesQuery(), CancellationToken.None));
+    }
+
+    [Fact]
     public async Task GetRecentDeviceLogsHandler_ShouldCapLimitAndNormalizeWarnLevel()
     {
         var allowedDeviceId = Guid.NewGuid();
@@ -1244,6 +1337,7 @@ public sealed class ApplicationFlowGuardTests
     public async Task GetRecentAlertCountHandler_ShouldUseDefaultWindowAndCurrentUserScope()
     {
         var allowedDeviceId = Guid.NewGuid();
+        var processId = Guid.NewGuid();
         var queryService = new StubDeviceLogQueryService { RecentAlertCount = 3 };
         var handler = new GetRecentAlertCountHandler(
             new TestCurrentUser
@@ -1257,7 +1351,7 @@ public sealed class ApplicationFlowGuardTests
             queryService);
 
         var before = DateTimeOffset.UtcNow.AddHours(-24).AddMinutes(-1);
-        var result = await handler.Handle(new GetRecentAlertCountQuery(), CancellationToken.None);
+        var result = await handler.Handle(new GetRecentAlertCountQuery(processId), CancellationToken.None);
         var after = DateTimeOffset.UtcNow.AddHours(-24).AddMinutes(1);
 
         Assert.True(result.IsSuccess);
@@ -1266,6 +1360,7 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal("WARN", result.Value.MinLevel);
         Assert.True(queryService.LastAlertWindowStart >= before);
         Assert.True(queryService.LastAlertWindowStart <= after);
+        Assert.Equal(processId, queryService.LastAlertProcessId);
         Assert.Equal(new[] { allowedDeviceId }, queryService.LastAlertDeviceIds);
         Assert.Equal(new[] { "WARN", "WARNING", "ERROR", "ERR" }, queryService.LastAlertLevels);
     }

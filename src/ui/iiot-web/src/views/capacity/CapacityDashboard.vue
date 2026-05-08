@@ -2,7 +2,7 @@
   <div class="capacity-page">
     <PageHeader
       title="产能看板"
-      subtitle="所有机台每日产能汇总，点击「查看详情」进入设备级报表"
+      subtitle="当前权限范围内每日产能汇总，点击「查看详情」进入设备级报表"
     />
 
     <div class="capacity-page__stats">
@@ -62,6 +62,9 @@
           清空筛选
         </n-button>
       </div>
+      <div v-if="deviceLoadError" class="capacity-page__filter-error">
+        {{ deviceLoadError }}
+      </div>
     </CardSurface>
 
     <CardSurface class="capacity-page__table-card" no-padding>
@@ -102,7 +105,7 @@ import {
 } from 'naive-ui';
 import type { DataTableColumns } from 'naive-ui';
 import { getDailyPagedApi, type DailyCapacityItem } from '../../api/capacity';
-import { getAllActiveDevicesApi, type DeviceSelectDto } from '../../api/device';
+import { getScopedDeviceSelectApi, type DeviceSelectDto } from '../../api/device';
 import type { PagedMetaData } from '../../api/employee';
 import PageHeader from '../../components/layout/PageHeader.vue';
 import StatCard from '../../components/data/StatCard.vue';
@@ -114,6 +117,7 @@ const router = useRouter();
 const records = ref<DailyCapacityItem[]>([]);
 const loading = ref(false);
 const allDevices = ref<DeviceSelectDto[]>([]);
+const deviceLoadError = ref('');
 const metaData = ref<PagedMetaData>({
   totalCount: 0,
   pageSize: 10,
@@ -313,9 +317,11 @@ function rowKey(row: DailyCapacityItem) {
 
 onMounted(async () => {
   try {
-    allDevices.value = await getAllActiveDevicesApi();
+    deviceLoadError.value = '';
+    allDevices.value = await getScopedDeviceSelectApi();
   } catch {
     allDevices.value = [];
+    deviceLoadError.value = '设备列表加载失败，请检查权限或稍后重试。';
   }
   await fetchData();
 });
@@ -355,6 +361,11 @@ onMounted(async () => {
   align-items: flex-end;
   gap: var(--space-4);
   flex-wrap: wrap;
+}
+.capacity-page__filter-error {
+  margin-top: var(--space-3);
+  font-size: var(--fs-sm);
+  color: var(--error);
 }
 .filter-field {
   display: flex;
