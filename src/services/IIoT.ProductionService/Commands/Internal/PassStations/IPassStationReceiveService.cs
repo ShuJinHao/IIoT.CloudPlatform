@@ -1,11 +1,12 @@
 using IIoT.Services.Contracts.Events.PassStations;
+using IIoT.Services.Contracts.Uploads;
 using IIoT.SharedKernel.Result;
 
 namespace IIoT.ProductionService.Commands.PassStations;
 
 public interface IPassStationReceiveService
 {
-    Task<Result<bool>> ValidateAndRegisterAsync(
+    Task<Result<EdgeUploadAcceptedResponse>> ValidateAndRegisterAsync(
         Guid deviceId,
         int itemCount,
         string messageType,

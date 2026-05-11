@@ -169,6 +169,12 @@ public sealed class ReceivePassStationBatchCommandValidator : AbstractValidator<
     {
         RuleFor(x => x.TypeKey).NotEmpty();
         RuleFor(x => x.DeviceId).NotEmpty();
+        RuleFor(x => x.SchemaVersion)
+            .Equal(1)
+            .WithMessage("过站数据 schemaVersion 不受支持。");
+        RuleFor(x => x.ProcessType)
+            .MaximumLength(UploadValidationLimits.MaxShortCodeLength)
+            .When(x => x.ProcessType is not null);
         RuleFor(x => x.RequestId)
             .MaximumLength(UploadValidationLimits.MaxRequestIdLength)
             .When(x => x.RequestId is not null);
@@ -184,6 +190,13 @@ public sealed class ReceivePassStationBatchCommandValidator : AbstractValidator<
                 if (definition is null)
                 {
                     context.AddFailure(nameof(ReceivePassStationBatchCommand.TypeKey), $"过站类型 [{command.TypeKey}] 不存在。");
+                    return;
+                }
+
+                var processType = PassStationPayloadJson.NormalizeOptionalProcessType(command.ProcessType);
+                if (processType is not null && !string.Equals(processType, definition.TypeKey, StringComparison.Ordinal))
+                {
+                    context.AddFailure(nameof(ReceivePassStationBatchCommand.ProcessType), "过站数据 processType 必须与 typeKey 保持一致。");
                     return;
                 }
 

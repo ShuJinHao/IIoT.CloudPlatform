@@ -18,32 +18,44 @@ public sealed class UseCaseExceptionHandler : IExceptionHandler
                 StatusCodes.Status403Forbidden,
                 "禁止访问",
                 "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/403",
-                forbidden.Message),
+                forbidden.Message,
+                httpContext.Request.Path),
             TimeoutException timeout => CreateProblem(
                 StatusCodes.Status409Conflict,
                 "请求冲突",
                 "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/409",
-                timeout.Message),
+                timeout.Message,
+                httpContext.Request.Path),
             DbUpdateConcurrencyException => CreateProblem(
                 StatusCodes.Status409Conflict,
                 "请求冲突",
                 "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/409",
-                "资源已被其他请求修改，请刷新后重试。"),
+                "资源已被其他请求修改，请刷新后重试。",
+                httpContext.Request.Path),
             ArgumentException argument => CreateProblem(
                 StatusCodes.Status400BadRequest,
                 "请求参数错误",
                 "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/400",
-                argument.Message),
+                argument.Message,
+                httpContext.Request.Path),
             InvalidOperationException invalidOperation => CreateProblem(
                 StatusCodes.Status400BadRequest,
                 "请求参数错误",
                 "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/400",
-                invalidOperation.Message),
+                invalidOperation.Message,
+                httpContext.Request.Path),
+            BadHttpRequestException { StatusCode: StatusCodes.Status413PayloadTooLarge } tooLarge => CreateProblem(
+                StatusCodes.Status413PayloadTooLarge,
+                "请求体过大",
+                "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/413",
+                tooLarge.Message,
+                httpContext.Request.Path),
             _ => CreateProblem(
                 StatusCodes.Status500InternalServerError,
                 "服务器内部错误",
                 "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/500",
-                "服务器处理请求时发生未预期错误。")
+                "服务器处理请求时发生未预期错误。",
+                httpContext.Request.Path)
         };
 
         httpContext.Response.StatusCode = problem.Status ?? StatusCodes.Status500InternalServerError;
@@ -55,7 +67,8 @@ public sealed class UseCaseExceptionHandler : IExceptionHandler
         int status,
         string title,
         string type,
-        string detail)
+        string detail,
+        PathString path)
     {
         return new ProblemDetails
         {
@@ -63,6 +76,6 @@ public sealed class UseCaseExceptionHandler : IExceptionHandler
             Title = title,
             Type = type,
             Detail = detail
-        };
+        }.AddCode(CloudProblemCodes.Resolve(status, path, [detail]));
     }
 }

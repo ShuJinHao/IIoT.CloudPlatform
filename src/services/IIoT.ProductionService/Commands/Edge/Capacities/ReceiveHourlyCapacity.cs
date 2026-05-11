@@ -3,6 +3,7 @@ using IIoT.ProductionService.Commands;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Events.Capacities;
 using IIoT.Services.Contracts.RecordQueries;
+using IIoT.Services.Contracts.Uploads;
 using IIoT.Services.CrossCutting.Caching;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
@@ -21,16 +22,16 @@ public record ReceiveHourlyCapacityCommand(
     int NgCount,
     string? PlcName = null,
     string? RequestId = null
-) : IDeviceCommand<Result<bool>>;
+) : IDeviceCommand<Result<EdgeUploadAcceptedResponse>>;
 
 public class ReceiveHourlyCapacityHandler(
     IDeviceIdentityQueryService deviceIdentityQuery,
     IMapper mapper,
     IUploadReceiveRegistry uploadReceiveRegistry,
     ICacheService cacheService
-) : ICommandHandler<ReceiveHourlyCapacityCommand, Result<bool>>
+) : ICommandHandler<ReceiveHourlyCapacityCommand, Result<EdgeUploadAcceptedResponse>>
 {
-    public async Task<Result<bool>> Handle(
+    public async Task<Result<EdgeUploadAcceptedResponse>> Handle(
         ReceiveHourlyCapacityCommand request,
         CancellationToken cancellationToken)
     {
@@ -57,7 +58,7 @@ public class ReceiveHourlyCapacityHandler(
             @event,
             cancellationToken);
         if (registration.IsDuplicate)
-            return Result.Success(true);
+            return Result.Success(EdgeUploadAcceptedResponse.Duplicate(registration.OutboxMessageId));
 
         await cacheService.RemoveAsync(
             CacheKeys.CapacityHourly(request.DeviceId, request.Date, request.PlcName),
@@ -81,6 +82,6 @@ public class ReceiveHourlyCapacityHandler(
             CacheKeys.CapacityPagedByDevicePattern(request.DeviceId),
             cancellationToken);
 
-        return Result.Success(true);
+        return Result.Success(EdgeUploadAcceptedResponse.Accepted(registration.OutboxMessageId));
     }
 }

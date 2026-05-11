@@ -1,5 +1,7 @@
 using IIoT.Core.Production.Aggregates.Devices;
+using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.Core.Production.Specifications.Devices;
+using IIoT.Core.Production.Specifications.Recipes;
 using IIoT.ProductionService.AiRead;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.AiRead;
@@ -45,6 +47,14 @@ public sealed record AiReadPassStationDto(
     DateTime? ReceivedAt,
     IReadOnlyDictionary<string, object?> Fields);
 
+public sealed record AiReadRecipeVersionDto(
+    Guid Id,
+    Guid DeviceId,
+    Guid ProcessId,
+    string RecipeName,
+    string Version,
+    string Status);
+
 [AuthorizeAiRead(AiReadPermissions.Device)]
 public sealed record GetAiReadDevicesQuery(
     string? Keyword = null,
@@ -86,6 +96,70 @@ public sealed class GetAiReadDevicesHandler(
                 ("keyword", request.Keyword),
                 ("delegatedUserId", scopeAccessor.DelegatedUserId?.ToString()),
                 ("delegatedDeviceCount", allowedDeviceIds?.Count.ToString())),
+            items.Count,
+            totalCount > items.Count));
+    }
+}
+
+[AuthorizeAiRead(AiReadPermissions.Recipe)]
+public sealed record GetAiReadRecipeVersionsQuery(
+    Guid DeviceId,
+    Guid? ProcessId = null,
+    int? MaxRows = null) : IAiReadQuery<Result<AiReadListResponse<AiReadRecipeVersionDto>>>;
+
+public sealed class GetAiReadRecipeVersionsHandler(
+    IReadRepository<Recipe> recipeRepository,
+    IAiReadScopeAccessor scopeAccessor,
+    IOptions<AiReadOptions> options)
+    : IQueryHandler<GetAiReadRecipeVersionsQuery, Result<AiReadListResponse<AiReadRecipeVersionDto>>>
+{
+    public async Task<Result<AiReadListResponse<AiReadRecipeVersionDto>>> Handle(
+        GetAiReadRecipeVersionsQuery request,
+        CancellationToken cancellationToken)
+    {
+        var deviceValidation = AiReadQueryGuard.ValidateDeviceAllowed(
+            request.DeviceId,
+            scopeAccessor.DelegatedDeviceIds);
+        if (deviceValidation is not null)
+            return deviceValidation;
+
+        var maxRows = AiReadQueryGuard.NormalizeMaxRows(request.MaxRows, options.Value);
+        var countSpec = new RecipeVersionsByDeviceSpec(
+            request.DeviceId,
+            request.ProcessId,
+            isPaging: false);
+        var totalCount = await recipeRepository.CountAsync(countSpec, cancellationToken);
+
+        List<Recipe> recipes = [];
+        if (totalCount > 0)
+        {
+            recipes = await recipeRepository.GetListAsync(
+                new RecipeVersionsByDeviceSpec(
+                    request.DeviceId,
+                    request.ProcessId,
+                    take: maxRows),
+                cancellationToken);
+        }
+
+        var items = recipes
+            .Take(maxRows)
+            .Select(recipe => new AiReadRecipeVersionDto(
+                recipe.Id,
+                recipe.DeviceId,
+                recipe.ProcessId,
+                recipe.RecipeName,
+                recipe.Version,
+                recipe.Status.ToString()))
+            .ToList();
+
+        return Result.Success(new AiReadListResponse<AiReadRecipeVersionDto>(
+            items,
+            DateTimeOffset.UtcNow,
+            "recipe_versions",
+            AiReadQueryGuard.BuildScope(
+                ("deviceId", request.DeviceId.ToString()),
+                ("processId", request.ProcessId?.ToString()),
+                ("delegatedUserId", scopeAccessor.DelegatedUserId?.ToString())),
             items.Count,
             totalCount > items.Count));
     }

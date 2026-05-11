@@ -71,6 +71,8 @@ internal static class UploadDeduplicationKeys
             {
                 request.DeviceId,
                 TypeKey = PassStationPayloadJson.NormalizeTypeKey(request.TypeKey),
+                request.SchemaVersion,
+                ProcessType = PassStationPayloadJson.NormalizeOptionalProcessType(request.ProcessType),
                 Items = (request.Items ?? [])
                     .Select(item => new
                     {

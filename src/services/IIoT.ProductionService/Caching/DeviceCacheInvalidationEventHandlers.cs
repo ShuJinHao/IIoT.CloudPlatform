@@ -35,24 +35,6 @@ public sealed class DeviceRenamedCacheInvalidationHandler(
     }
 }
 
-public sealed class DeviceProcessChangedCacheInvalidationHandler(
-    IDeviceCacheInvalidationService cacheInvalidationService)
-    : INotificationHandler<DeviceProcessChangedDomainEvent>
-{
-    public Task Handle(
-        DeviceProcessChangedDomainEvent notification,
-        CancellationToken cancellationToken)
-    {
-        return cacheInvalidationService.InvalidateAfterProcessChangeAsync(
-            new DeviceProcessCacheDescriptor(
-                notification.DeviceId,
-                notification.Code,
-                notification.OldProcessId,
-                notification.NewProcessId),
-            cancellationToken);
-    }
-}
-
 public sealed class DeviceDeletedCacheInvalidationHandler(
     IDeviceCacheInvalidationService cacheInvalidationService)
     : INotificationHandler<DeviceDeletedDomainEvent>

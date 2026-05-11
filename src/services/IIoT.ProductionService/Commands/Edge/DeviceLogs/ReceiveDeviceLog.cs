@@ -3,6 +3,7 @@ using IIoT.ProductionService.Commands;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Events.DeviceLogs;
 using IIoT.Services.Contracts.RecordQueries;
+using IIoT.Services.Contracts.Uploads;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 
@@ -12,15 +13,15 @@ public record ReceiveDeviceLogCommand(
     Guid DeviceId,
     List<DeviceLogItem> Logs,
     string? RequestId = null
-) : IDeviceCommand<Result<bool>>;
+) : IDeviceCommand<Result<EdgeUploadAcceptedResponse>>;
 
 public class ReceiveDeviceLogHandler(
     IDeviceIdentityQueryService deviceIdentityQuery,
     IMapper mapper,
     IUploadReceiveRegistry uploadReceiveRegistry
-) : ICommandHandler<ReceiveDeviceLogCommand, Result<bool>>
+) : ICommandHandler<ReceiveDeviceLogCommand, Result<EdgeUploadAcceptedResponse>>
 {
-    public async Task<Result<bool>> Handle(
+    public async Task<Result<EdgeUploadAcceptedResponse>> Handle(
         ReceiveDeviceLogCommand request,
         CancellationToken cancellationToken)
     {
@@ -40,7 +41,7 @@ public class ReceiveDeviceLogHandler(
             return Result.Failure(deduplicationKey.Errors?.ToArray() ?? []);
 
         var @event = mapper.Map<DeviceLogReceivedEvent>(request);
-        await uploadReceiveRegistry.RegisterAndEnqueueAsync(
+        var registration = await uploadReceiveRegistry.RegisterAndEnqueueAsync(
             request.DeviceId,
             UploadMessageTypes.DeviceLog,
             UploadDeduplicationKeys.NormalizeRequestId(request.RequestId),
@@ -48,6 +49,8 @@ public class ReceiveDeviceLogHandler(
             @event,
             cancellationToken);
 
-        return Result.Success(true);
+        return Result.Success(registration.IsDuplicate
+            ? EdgeUploadAcceptedResponse.Duplicate(registration.OutboxMessageId)
+            : EdgeUploadAcceptedResponse.Accepted(registration.OutboxMessageId));
     }
 }

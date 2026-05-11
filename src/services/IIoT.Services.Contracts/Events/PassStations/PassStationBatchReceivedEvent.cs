@@ -16,6 +16,8 @@ public sealed record PassStationBatchReceivedEvent : IPassStationEvent
 
     public string TypeKey { get; init; } = string.Empty;
 
+    public string ProcessType { get; init; } = string.Empty;
+
     public IReadOnlyList<PassStationBatchItem> Items { get; init; } = [];
 }
 

@@ -62,21 +62,6 @@ public class Device : BaseEntity<Guid>
         AddDomainEvent(new DeviceRenamedDomainEvent(Id, DeviceName, Code, ProcessId));
     }
 
-    public void ChangeProcess(Guid newProcessId)
-    {
-        if (newProcessId == Guid.Empty)
-            throw new ArgumentException("ProcessId 不能为空。", nameof(newProcessId));
-
-        if (ProcessId == newProcessId)
-        {
-            return;
-        }
-
-        var oldProcessId = ProcessId;
-        ProcessId = newProcessId;
-        AddDomainEvent(new DeviceProcessChangedDomainEvent(Id, Code, oldProcessId, ProcessId));
-    }
-
     public void SetBootstrapSecretHash(string bootstrapSecretHash)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(bootstrapSecretHash);

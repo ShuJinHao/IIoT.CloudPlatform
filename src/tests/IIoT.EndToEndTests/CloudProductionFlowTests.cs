@@ -63,7 +63,13 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
         };
 
         await PostJsonAsync("/api/v1/edge/device-logs", request);
-        await PostJsonAsync("/api/v1/edge/device-logs", request);
+        using (var duplicateResponse = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/edge/device-logs", request))
+        {
+            duplicateResponse.EnsureSuccessStatusCode();
+            var duplicate = await duplicateResponse.Content.ReadFromJsonAsync<EdgeUploadAcceptedResponseDto>(JsonOptions);
+            duplicate!.Code.Should().Be("duplicate_accepted");
+            duplicate.DuplicateAccepted.Should().BeTrue();
+        }
 
         await AuthenticateAsAdminAsync();
 
@@ -796,6 +802,40 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
             passStationUnauthorized.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         }
 
+        using (var processRecordsUnauthorized = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/edge/process-records", new
+               {
+                   TypeKey = "injection",
+                   ProcessType = "injection",
+                   SchemaVersion = 1,
+                   DeviceId = device.DeviceId,
+                   Records = new[]
+                   {
+                       new
+                       {
+                           TypeKey = "injection",
+                           ProcessType = "injection",
+                           SchemaVersion = 1,
+                           DeviceId = device.DeviceId,
+                           Barcode = $"PR-{Guid.NewGuid():N}"[..14],
+                           CellResult = true,
+                           CompletedTime = completedTime,
+                           Payload = new
+                           {
+                               PreInjectionTime = completedTime.AddSeconds(-15),
+                               PreInjectionWeight = 12.34m,
+                               PostInjectionTime = completedTime.AddSeconds(-3),
+                               PostInjectionWeight = 13.21m,
+                               InjectionVolume = 0.87m
+                           }
+                       }
+                   }
+               }))
+        {
+            processRecordsUnauthorized.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+            var problem = await processRecordsUnauthorized.Content.ReadFromJsonAsync<ProblemCodeEnvelope>(JsonOptions);
+            problem!.Code.Should().Be("invalid_token");
+        }
+
         using (var stackingUnauthorized = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/edge/pass-stations/stacking", new
                {
                    DeviceId = device.DeviceId,
@@ -1285,7 +1325,16 @@ public sealed record PermissionGroupDto(
     List<string> Permissions);
 
 public sealed record ErrorEnvelope(
-    List<string> Errors);
+    List<string> Errors,
+    string? Code = null);
+
+public sealed record ProblemCodeEnvelope(
+    string Code);
+
+public sealed record EdgeUploadAcceptedResponseDto(
+    string Code,
+    bool DuplicateAccepted,
+    Guid? OutboxMessageId);
 
 public sealed record EdgeBootstrapDto(
     Guid Id,

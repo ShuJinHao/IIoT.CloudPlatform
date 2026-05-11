@@ -5,12 +5,6 @@ public sealed record DeviceCacheDescriptor(
     Guid ProcessId,
     string DeviceCode);
 
-public sealed record DeviceProcessCacheDescriptor(
-    Guid DeviceId,
-    string DeviceCode,
-    Guid OldProcessId,
-    Guid NewProcessId);
-
 public interface IDeviceCacheInvalidationService
 {
     Task InvalidateListsAfterRegisterAsync(
@@ -19,10 +13,6 @@ public interface IDeviceCacheInvalidationService
 
     Task InvalidateAfterRenameAsync(
         DeviceCacheDescriptor device,
-        CancellationToken cancellationToken = default);
-
-    Task InvalidateAfterProcessChangeAsync(
-        DeviceProcessCacheDescriptor device,
         CancellationToken cancellationToken = default);
 
     Task InvalidateAfterDeleteAsync(

@@ -753,6 +753,7 @@ public sealed class ConfigurationGuardTests
         deviceLogControllerSource.Should().Contain("[RequestSizeLimit(UploadValidationLimits.MaxUploadRequestBodyBytes)]");
         capacityControllerSource.Should().Contain("[RequestSizeLimit(UploadValidationLimits.MaxUploadRequestBodyBytes)]");
         passStationControllerSource.Should().Contain("[RequestSizeLimit(UploadValidationLimits.MaxUploadRequestBodyBytes)]");
+        passStationControllerSource.Should().Contain("/api/v1/edge/process-records");
         passStationControllerSource.Should().Contain("{typeKey}/batch");
         validatorsSource.Should().Contain("ReceiveDeviceLogCommandValidator");
         validatorsSource.Should().Contain("ReceiveHourlyCapacityCommandValidator");
