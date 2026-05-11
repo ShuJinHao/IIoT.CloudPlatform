@@ -88,36 +88,6 @@ public sealed class AggregateBehaviorTests
     }
 
     [Fact]
-    public void Device_ChangeProcess_ShouldRaiseProcessChangedEvent_AndSkipSameProcess()
-    {
-        var originalProcessId = Guid.NewGuid();
-        var newProcessId = Guid.NewGuid();
-        var device = new Device("Press-01", "DEV-0001", originalProcessId);
-
-        device.ClearDomainEvents();
-        device.ChangeProcess(originalProcessId);
-
-        Assert.Empty(device.DomainEvents);
-
-        device.ChangeProcess(newProcessId);
-
-        Assert.Equal(newProcessId, device.ProcessId);
-        var domainEvent = Assert.IsType<DeviceProcessChangedDomainEvent>(
-            Assert.Single(device.DomainEvents));
-        Assert.Equal(device.Id, domainEvent.DeviceId);
-        Assert.Equal(originalProcessId, domainEvent.OldProcessId);
-        Assert.Equal(newProcessId, domainEvent.NewProcessId);
-    }
-
-    [Fact]
-    public void Device_ChangeProcess_ShouldRejectEmptyProcessId()
-    {
-        var device = new Device("Press-01", "DEV-0001", Guid.NewGuid());
-
-        Assert.ThrowsAny<ArgumentException>(() => device.ChangeProcess(Guid.Empty));
-    }
-
-    [Fact]
     public void MfgProcess_Rename_ShouldNormalizeAndRaiseEvent_AndSkipSameValues()
     {
         var process = new MfgProcess("Stacking", "叠片工序");

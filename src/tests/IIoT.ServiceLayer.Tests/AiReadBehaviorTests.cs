@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.ProductionService.AiRead;
 using IIoT.ProductionService.Queries.AiRead;
 using IIoT.Services.Contracts;
@@ -188,6 +189,39 @@ public sealed class AiReadBehaviorTests
         Assert.True(result.IsSuccess);
         Assert.True(result.Value!.Truncated);
         Assert.Equal(1, result.Value.RowCount);
+    }
+
+    [Fact]
+    public async Task AiReadRecipeVersions_ShouldReturnOnlyAllowedDeviceSummary()
+    {
+        var allowedDeviceId = Guid.NewGuid();
+        var blockedDeviceId = Guid.NewGuid();
+        var processId = Guid.NewGuid();
+        var repository = new InMemoryRepository<Recipe>();
+        repository.ListResult.Add(new Recipe("R-Allowed", processId, allowedDeviceId, """[{"name":"p1"}]"""));
+        repository.ListResult.Add(new Recipe("R-Blocked", processId, blockedDeviceId, """[{"name":"p2"}]"""));
+        var handler = new GetAiReadRecipeVersionsHandler(
+            repository,
+            new TestAiReadScopeAccessor { DelegatedDeviceIds = [allowedDeviceId] },
+            Options.Create(new AiReadOptions()));
+
+        var result = await handler.Handle(
+            new GetAiReadRecipeVersionsQuery(allowedDeviceId),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var item = Assert.Single(result.Value!.Items);
+        Assert.Equal(allowedDeviceId, item.DeviceId);
+        Assert.Equal("R-Allowed", item.RecipeName);
+        Assert.Equal("V1.0", item.Version);
+        Assert.Equal("Active", item.Status);
+
+        var forbidden = await handler.Handle(
+            new GetAiReadRecipeVersionsQuery(blockedDeviceId),
+            CancellationToken.None);
+
+        Assert.False(forbidden.IsSuccess);
+        Assert.Equal(ResultStatus.Forbidden, forbidden.Status);
     }
 
     private static HttpContextAccessor CreateAccessor(string actorType, IEnumerable<string> permissions)

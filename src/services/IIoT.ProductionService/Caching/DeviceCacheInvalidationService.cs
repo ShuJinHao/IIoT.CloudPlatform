@@ -25,20 +25,6 @@ public sealed class DeviceCacheInvalidationService(
         await cacheService.RemoveAsync(CacheKeys.DeviceIdentity(device.DeviceId), cancellationToken);
     }
 
-    public async Task InvalidateAfterProcessChangeAsync(
-        DeviceProcessCacheDescriptor device,
-        CancellationToken cancellationToken = default)
-    {
-        await cacheService.RemoveAsync(CacheKeys.AllDevices(), cancellationToken);
-        await cacheService.RemoveAsync(CacheKeys.DevicesByProcess(device.OldProcessId), cancellationToken);
-        await cacheService.RemoveAsync(CacheKeys.DevicesByProcess(device.NewProcessId), cancellationToken);
-        await cacheService.RemoveAsync(CacheKeys.DeviceCode(device.DeviceCode), cancellationToken);
-        await cacheService.RemoveAsync(CacheKeys.DeviceIdentity(device.DeviceId), cancellationToken);
-        await cacheService.RemoveAsync(CacheKeys.RecipesByDevice(device.DeviceId), cancellationToken);
-        await cacheService.RemoveAsync(CacheKeys.RecipesByProcess(device.OldProcessId), cancellationToken);
-        await cacheService.RemoveAsync(CacheKeys.RecipesByProcess(device.NewProcessId), cancellationToken);
-    }
-
     public async Task InvalidateAfterDeleteAsync(
         DeviceCacheDescriptor device,
         CancellationToken cancellationToken = default)

@@ -22,6 +22,18 @@ public sealed class AiReadController : ApiControllerBase
         return ReturnResult(await Sender.Send(new GetAiReadDevicesQuery(keyword, maxRows), cancellationToken));
     }
 
+    [HttpGet("recipes/versions")]
+    public async Task<IActionResult> GetRecipeVersions(
+        [FromQuery] Guid deviceId,
+        [FromQuery] Guid? processId = null,
+        [FromQuery] int? maxRows = null,
+        CancellationToken cancellationToken = default)
+    {
+        return ReturnResult(await Sender.Send(
+            new GetAiReadRecipeVersionsQuery(deviceId, processId, maxRows),
+            cancellationToken));
+    }
+
     [HttpGet("capacity/summary")]
     public async Task<IActionResult> GetCapacitySummary(
         [FromQuery] Guid deviceId,

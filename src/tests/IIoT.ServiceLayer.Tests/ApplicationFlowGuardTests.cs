@@ -534,35 +534,27 @@ public sealed class ApplicationFlowGuardTests
     public async Task DeviceCacheInvalidationHandlers_ShouldRouteDomainEventsToCacheService()
     {
         var deviceId = Guid.NewGuid();
-        var oldProcessId = Guid.NewGuid();
-        var newProcessId = Guid.NewGuid();
+        var processId = Guid.NewGuid();
         var cacheInvalidation = new RecordingDeviceCacheInvalidationService();
 
         await new DeviceRegisteredCacheInvalidationHandler(cacheInvalidation).Handle(
-            new DeviceRegisteredDomainEvent(deviceId, "Device-01", "DEV-CACHE001", oldProcessId),
+            new DeviceRegisteredDomainEvent(deviceId, "Device-01", "DEV-CACHE001", processId),
             CancellationToken.None);
         await new DeviceRenamedCacheInvalidationHandler(cacheInvalidation).Handle(
-            new DeviceRenamedDomainEvent(deviceId, "Device-02", "DEV-CACHE001", oldProcessId),
-            CancellationToken.None);
-        await new DeviceProcessChangedCacheInvalidationHandler(cacheInvalidation).Handle(
-            new DeviceProcessChangedDomainEvent(deviceId, "DEV-CACHE001", oldProcessId, newProcessId),
+            new DeviceRenamedDomainEvent(deviceId, "Device-02", "DEV-CACHE001", processId),
             CancellationToken.None);
         await new DeviceDeletedCacheInvalidationHandler(cacheInvalidation).Handle(
-            new DeviceDeletedDomainEvent(deviceId, "DEV-CACHE001", newProcessId),
+            new DeviceDeletedDomainEvent(deviceId, "DEV-CACHE001", processId),
             CancellationToken.None);
 
-        Assert.Contains(oldProcessId, cacheInvalidation.RegisteredProcessIds);
+        Assert.Contains(processId, cacheInvalidation.RegisteredProcessIds);
         Assert.Contains(cacheInvalidation.RenamedDevices, x =>
             x.DeviceId == deviceId
-            && x.ProcessId == oldProcessId
+            && x.ProcessId == processId
             && x.DeviceCode == "DEV-CACHE001");
-        Assert.Contains(cacheInvalidation.ProcessChangedDevices, x =>
-            x.DeviceId == deviceId
-            && x.OldProcessId == oldProcessId
-            && x.NewProcessId == newProcessId);
         Assert.Contains(cacheInvalidation.DeletedDevices, x =>
             x.DeviceId == deviceId
-            && x.ProcessId == newProcessId
+            && x.ProcessId == processId
             && x.DeviceCode == "DEV-CACHE001");
     }
 
@@ -730,6 +722,125 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
+    public void UploadCommandValidators_ShouldRejectUnsupportedPassStationSchemaVersion()
+    {
+        var validator = new ReceivePassStationBatchCommandValidator(CreatePassStationSchemaProvider());
+        var command = new ReceivePassStationBatchCommand(
+            "injection",
+            Guid.NewGuid(),
+            [
+                new PassStationItemInput(
+                    "BC-001",
+                    "OK",
+                    DateTime.UtcNow,
+                    JsonPayload("""
+                    {
+                      "preInjectionTime": "2026-04-29T09:20:00Z",
+                      "preInjectionWeight": 10.2,
+                      "postInjectionTime": "2026-04-29T09:25:00Z",
+                      "postInjectionWeight": 12.4,
+                      "injectionVolume": 2.2
+                    }
+                    """))
+            ],
+            SchemaVersion: 2);
+
+        var result = validator.Validate(command);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, x => x.PropertyName == nameof(ReceivePassStationBatchCommand.SchemaVersion));
+    }
+
+    [Fact]
+    public void ProcessRecordUploadRequestMapper_ShouldMapTrueCellResultToOk()
+    {
+        var request = CreateProcessRecordUploadRequest(cellResult: true);
+
+        var result = ProcessRecordUploadRequestMapper.ToPassStationCommand(request);
+
+        Assert.True(result.IsSuccess);
+        var command = result.Value!;
+        Assert.Equal("injection", command.TypeKey);
+        Assert.Equal("injection", command.ProcessType);
+        Assert.Equal(1, command.SchemaVersion);
+        var item = Assert.Single(command.Items);
+        Assert.Equal("OK", item.CellResult);
+    }
+
+    [Fact]
+    public void ProcessRecordUploadRequestMapper_ShouldMapFalseCellResultToNg()
+    {
+        var request = CreateProcessRecordUploadRequest(cellResult: false);
+
+        var result = ProcessRecordUploadRequestMapper.ToPassStationCommand(request);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("NG", Assert.Single(result.Value!.Items).CellResult);
+    }
+
+    [Fact]
+    public void ProcessRecordUploadRequestMapper_ShouldRejectUnsupportedSchemaVersion()
+    {
+        var request = CreateProcessRecordUploadRequest(schemaVersion: 2);
+
+        var result = ProcessRecordUploadRequestMapper.ToPassStationCommand(request);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ResultStatus.Invalid, result.Status);
+        Assert.Contains(result.Errors!, x => x.Contains("schemaVersion", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ProcessRecordUploadRequestMapper_ShouldRejectInconsistentRecordEnvelope()
+    {
+        var deviceId = Guid.NewGuid();
+
+        var mismatchedDevice = ProcessRecordUploadRequestMapper.ToPassStationCommand(
+            CreateProcessRecordUploadRequest(deviceId: deviceId, recordDeviceId: Guid.NewGuid()));
+        var mismatchedType = ProcessRecordUploadRequestMapper.ToPassStationCommand(
+            CreateProcessRecordUploadRequest(recordTypeKey: "stacking"));
+        var mismatchedProcessType = ProcessRecordUploadRequestMapper.ToPassStationCommand(
+            CreateProcessRecordUploadRequest(recordProcessType: "stacking"));
+        var mismatchedSchema = ProcessRecordUploadRequestMapper.ToPassStationCommand(
+            CreateProcessRecordUploadRequest(recordSchemaVersion: 2));
+
+        Assert.False(mismatchedDevice.IsSuccess);
+        Assert.False(mismatchedType.IsSuccess);
+        Assert.False(mismatchedProcessType.IsSuccess);
+        Assert.False(mismatchedSchema.IsSuccess);
+        Assert.All(
+            [
+                mismatchedDevice,
+                mismatchedType,
+                mismatchedProcessType,
+                mismatchedSchema
+            ],
+            result => Assert.Equal(ResultStatus.Invalid, result.Status));
+    }
+
+    [Theory]
+    [InlineData(null, "2026-04-29T09:30:00Z", "cellResult")]
+    [InlineData(true, null, "completedTime")]
+    public void ProcessRecordUploadRequestMapper_ShouldRejectNullRequiredRecordFields(
+        bool? cellResult,
+        string? completedTimeText,
+        string expectedError)
+    {
+        var request = CreateProcessRecordUploadRequest(
+            cellResult: cellResult,
+            completedTime: completedTimeText is null
+                ? null
+                : DateTime.Parse(completedTimeText, null, System.Globalization.DateTimeStyles.AdjustToUniversal),
+            nullCompletedTime: completedTimeText is null);
+
+        var result = ProcessRecordUploadRequestMapper.ToPassStationCommand(request);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ResultStatus.Invalid, result.Status);
+        Assert.Contains(result.Errors!, x => x.Contains(expectedError, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task PersistHourlyCapacityHandler_ShouldUpsertRecordAndClearCapacityCaches()
     {
         var deviceId = Guid.NewGuid();
@@ -810,6 +921,8 @@ public sealed class ApplicationFlowGuardTests
         var result = await handler.Handle(request, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
+        Assert.Equal("accepted", result.Value!.Code);
+        Assert.False(result.Value.DuplicateAccepted);
         Assert.Equal("register", callOrder[0]);
         var enqueued = Assert.IsType<HourlyCapacityReceivedEvent>(registry.LastRegisteredEvent);
         Assert.Equal(deviceId, enqueued.DeviceId);
@@ -902,6 +1015,8 @@ public sealed class ApplicationFlowGuardTests
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
+        Assert.Equal("duplicate_accepted", result.Value!.Code);
+        Assert.True(result.Value.DuplicateAccepted);
         Assert.Equal(["register"], callOrder);
         Assert.Empty(cache.RemovedKeys);
         Assert.Empty(cache.RemovedPatterns);
@@ -936,12 +1051,43 @@ public sealed class ApplicationFlowGuardTests
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
+        Assert.Equal("accepted", result.Value!.Code);
+        Assert.False(result.Value.DuplicateAccepted);
         var enqueued = Assert.IsType<DeviceLogReceivedEvent>(registry.LastRegisteredEvent);
         Assert.Equal(deviceId, enqueued.DeviceId);
         Assert.Single(enqueued.Logs);
         Assert.Equal("device-log", registry.LastMessageType);
         Assert.Equal("request-1", registry.LastRequestId);
         Assert.Equal("request:request-1", registry.LastDeduplicationKey);
+    }
+
+    [Fact]
+    public async Task ReceiveDeviceLogHandler_ShouldReturnDuplicateAcceptedForDuplicateUpload()
+    {
+        var deviceId = Guid.NewGuid();
+        var registry = new RecordingUploadReceiveRegistry
+        {
+            NextResult = UploadReceiveRegistrationResult.Duplicate(Guid.NewGuid())
+        };
+        var mapperServices = new ServiceCollection();
+        mapperServices.AddLogging();
+        mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
+        var mapper = mapperServices.BuildServiceProvider().GetRequiredService<IMapper>();
+        var handler = new ReceiveDeviceLogHandler(
+            new StubDeviceIdentityQueryService { Exists = true },
+            mapper,
+            registry);
+
+        var result = await handler.Handle(
+            new ReceiveDeviceLogCommand(
+                deviceId,
+                [new DeviceLogItem { Level = "WARN", Message = "alarm", LogTime = DateTime.UtcNow }],
+                "duplicate-log"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("duplicate_accepted", result.Value!.Code);
+        Assert.True(result.Value.DuplicateAccepted);
     }
 
     [Fact]
@@ -1060,12 +1206,55 @@ public sealed class ApplicationFlowGuardTests
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
+        Assert.Equal("accepted", result.Value!.Code);
+        Assert.False(result.Value.DuplicateAccepted);
         Assert.Equal("pass-station:injection", registry.LastMessageType);
         Assert.Equal("pass-request-1", registry.LastRequestId);
         Assert.Equal("request:pass-request-1", registry.LastDeduplicationKey);
         var registered = Assert.IsType<PassStationBatchReceivedEvent>(registry.LastRegisteredEvent);
         Assert.Equal("injection", registered.TypeKey);
+        Assert.Equal("injection", registered.ProcessType);
         Assert.Single(registered.Items);
+    }
+
+    [Fact]
+    public async Task ReceivePassStationBatchHandler_ShouldReturnDuplicateAcceptedForDuplicateUpload()
+    {
+        var deviceId = Guid.NewGuid();
+        var registry = new RecordingUploadReceiveRegistry
+        {
+            NextResult = UploadReceiveRegistrationResult.Duplicate(Guid.NewGuid())
+        };
+        var receiveService = new PassStationReceiveService(
+            new StubDeviceIdentityQueryService { Exists = true },
+            registry);
+        var handler = new ReceivePassStationBatchHandler(receiveService, CreatePassStationSchemaProvider());
+
+        var result = await handler.Handle(
+            new ReceivePassStationBatchCommand(
+                "injection",
+                deviceId,
+                [
+                    new PassStationItemInput(
+                        "BC-001",
+                        "OK",
+                        new DateTime(2026, 4, 29, 9, 30, 0, DateTimeKind.Utc),
+                        JsonPayload("""
+                        {
+                          "preInjectionTime": "2026-04-29T09:20:00Z",
+                          "preInjectionWeight": 10.2,
+                          "postInjectionTime": "2026-04-29T09:25:00Z",
+                          "postInjectionWeight": 12.4,
+                          "injectionVolume": 2.2
+                        }
+                        """))
+                ],
+                "duplicate-pass"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("duplicate_accepted", result.Value!.Code);
+        Assert.True(result.Value.DuplicateAccepted);
     }
 
     [Fact]
@@ -1546,6 +1735,50 @@ public sealed class ApplicationFlowGuardTests
     {
         using var document = JsonDocument.Parse(json);
         return document.RootElement.Clone();
+    }
+
+    private static ProcessRecordUploadRequest CreateProcessRecordUploadRequest(
+        Guid? deviceId = null,
+        string typeKey = "injection",
+        string processType = "injection",
+        int schemaVersion = 1,
+        Guid? recordDeviceId = null,
+        string? recordTypeKey = null,
+        string? recordProcessType = null,
+        int? recordSchemaVersion = null,
+        bool? cellResult = true,
+        DateTime? completedTime = null,
+        bool nullCompletedTime = false)
+    {
+        var resolvedDeviceId = deviceId ?? Guid.NewGuid();
+        DateTime? resolvedCompletedTime = nullCompletedTime
+            ? null
+            : completedTime ?? new DateTime(2026, 4, 29, 9, 30, 0, DateTimeKind.Utc);
+
+        return new ProcessRecordUploadRequest(
+            typeKey,
+            processType,
+            schemaVersion,
+            resolvedDeviceId,
+            [
+                new ProcessRecordItemInput(
+                    recordTypeKey ?? typeKey,
+                    recordProcessType ?? processType,
+                    recordSchemaVersion ?? schemaVersion,
+                    recordDeviceId ?? resolvedDeviceId,
+                    "BC-001",
+                    cellResult,
+                    resolvedCompletedTime,
+                    JsonPayload("""
+                    {
+                      "preInjectionTime": "2026-04-29T09:20:00Z",
+                      "preInjectionWeight": 10.2,
+                      "postInjectionTime": "2026-04-29T09:25:00Z",
+                      "postInjectionWeight": 12.4,
+                      "injectionVolume": 2.2
+                    }
+                    """))
+            ]);
     }
 
     private static IPassStationSchemaProvider CreatePassStationSchemaProvider()

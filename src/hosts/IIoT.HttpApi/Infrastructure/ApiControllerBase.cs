@@ -89,7 +89,10 @@ public abstract class ApiControllerBase : ControllerBase
             Title = title,
             Detail = errors?.Length == 1 ? errors[0] : null,
             Instance = HttpContext.Request.Path
-        };
+        }.AddCode(CloudProblemCodes.Resolve(
+            statusCode,
+            HttpContext.Request.Path,
+            errors ?? []));
 
         if (errors is { Length: > 0 })
         {

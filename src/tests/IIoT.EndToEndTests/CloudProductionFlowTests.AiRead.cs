@@ -25,12 +25,16 @@ public sealed partial class CloudProductionFlowTests
         using (var anonymous = await _fixture.HttpClient.GetAsync("/api/v1/ai/read/devices"))
         {
             anonymous.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+            var problem = await anonymous.Content.ReadFromJsonAsync<ProblemCodeEnvelope>(JsonOptions);
+            problem!.Code.Should().Be("invalid_token");
         }
 
         await AuthenticateAsAdminAsync();
         using (var human = await _fixture.HttpClient.GetAsync("/api/v1/ai/read/devices"))
         {
             human.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+            var problem = await human.Content.ReadFromJsonAsync<ProblemCodeEnvelope>(JsonOptions);
+            problem!.Code.Should().Be("forbidden_device_scope");
         }
 
         _fixture.SetAuthToken(CreateAiReadToken([]));
@@ -56,17 +60,27 @@ public sealed partial class CloudProductionFlowTests
     }
 
     [Fact]
-    public async Task AiReadServiceAccount_ShouldReadFourReadOnlySurfaces()
+    public async Task AiReadServiceAccount_ShouldReadFiveReadOnlySurfaces()
     {
         await AuthenticateAsAdminAsync();
 
         var device = await CreateTestDeviceRegistrationAsync("ai-read-flow");
-        await AuthenticateAsEdgeAsync(device.DeviceId);
         var completedTime = DateTime.SpecifyKind(DateTime.UtcNow.AddMinutes(-2), DateTimeKind.Utc);
         var date = DateOnly.FromDateTime(completedTime);
         var message = $"ai-read-log-{Guid.NewGuid():N}";
         var barcode = $"AI-{Guid.NewGuid():N}"[..14];
         var plcName = $"AI-{Guid.NewGuid():N}"[..10];
+        var recipeName = $"ai-r-{Guid.NewGuid():N}"[..14];
+
+        await PostJsonAsync<Guid>("/api/v1/human/recipes", new
+        {
+            RecipeName = recipeName,
+            ProcessId = device.ProcessId,
+            DeviceId = device.DeviceId,
+            ParametersJsonb = ValidRecipeParametersJson()
+        });
+
+        await AuthenticateAsEdgeAsync(device.DeviceId);
 
         await PostJsonAsync("/api/v1/edge/device-logs", new
         {
@@ -94,15 +108,22 @@ public sealed partial class CloudProductionFlowTests
             NgCount = 1,
             PlcName = plcName
         });
-        await PostJsonAsync("/api/v1/edge/pass-stations/injection/batch", new
+        await PostJsonAsync("/api/v1/edge/process-records", new
         {
+            TypeKey = "injection",
+            ProcessType = "injection",
+            SchemaVersion = 1,
             DeviceId = device.DeviceId,
-            Items = new[]
+            Records = new[]
             {
                 new
                 {
+                    TypeKey = "injection",
+                    ProcessType = "injection",
+                    SchemaVersion = 1,
+                    DeviceId = device.DeviceId,
                     Barcode = barcode,
-                    CellResult = "OK",
+                    CellResult = true,
                     CompletedTime = completedTime,
                     Payload = new
                     {
@@ -121,12 +142,22 @@ public sealed partial class CloudProductionFlowTests
                 AiReadPermissions.Device,
                 AiReadPermissions.Capacity,
                 AiReadPermissions.DeviceLog,
-                AiReadPermissions.PassStation
+                AiReadPermissions.PassStation,
+                AiReadPermissions.Recipe
             ],
             [device.DeviceId]));
 
         var devices = await GetFromJsonAsync<AiReadListResponseDto<AiReadDeviceDto>>("/api/v1/ai/read/devices");
         devices.Items.Should().ContainSingle(x => x.Id == device.DeviceId);
+
+        var recipeVersions = await GetFromJsonAsync<AiReadListResponseDto<AiReadRecipeVersionDto>>(
+            $"/api/v1/ai/read/recipes/versions?deviceId={device.DeviceId}");
+        recipeVersions.Source.Should().Be("recipe_versions");
+        recipeVersions.Items.Should().ContainSingle(x =>
+            x.DeviceId == device.DeviceId
+            && x.RecipeName == recipeName
+            && x.Version == "V1.0"
+            && x.Status == "Active");
 
         var startTime = Uri.EscapeDataString(completedTime.AddMinutes(-1).ToString("O"));
         var endTime = Uri.EscapeDataString(completedTime.AddMinutes(1).ToString("O"));
@@ -151,6 +182,78 @@ public sealed partial class CloudProductionFlowTests
         passStations.Source.Should().Be("pass_station_records:injection");
         passStation.Fields.Should().ContainKey("injectionVolume");
         passStation.Fields.Should().NotContainKey("notConfigured");
+    }
+
+    [Fact]
+    public async Task ProcessRecordsUpload_ShouldPersistOnceAndBeReadableByHumanAndAiRead()
+    {
+        await AuthenticateAsAdminAsync();
+
+        var device = await CreateTestDeviceRegistrationAsync("process-records");
+        await AuthenticateAsEdgeAsync(device.DeviceId);
+        var completedTime = DateTime.SpecifyKind(DateTime.UtcNow.AddMinutes(-2), DateTimeKind.Utc);
+        var barcode = $"PR-{Guid.NewGuid():N}"[..14];
+
+        var request = new
+        {
+            TypeKey = "injection",
+            ProcessType = "injection",
+            SchemaVersion = 1,
+            DeviceId = device.DeviceId,
+            Records = new[]
+            {
+                new
+                {
+                    TypeKey = "injection",
+                    ProcessType = "injection",
+                    SchemaVersion = 1,
+                    DeviceId = device.DeviceId,
+                    Barcode = barcode,
+                    CellResult = false,
+                    CompletedTime = completedTime,
+                    Payload = new
+                    {
+                        PreInjectionTime = completedTime.AddSeconds(-18),
+                        PreInjectionWeight = 14.1m,
+                        PostInjectionTime = completedTime.AddSeconds(-4),
+                        PostInjectionWeight = 15.6m,
+                        InjectionVolume = 1.5m
+                    }
+                }
+            }
+        };
+
+        await PostJsonAsync("/api/v1/edge/process-records", request);
+        using (var duplicateResponse = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/edge/process-records", request))
+        {
+            duplicateResponse.EnsureSuccessStatusCode();
+            var duplicate = await duplicateResponse.Content.ReadFromJsonAsync<EdgeUploadAcceptedResponseDto>(JsonOptions);
+            duplicate!.Code.Should().Be("duplicate_accepted");
+            duplicate.DuplicateAccepted.Should().BeTrue();
+        }
+
+        await AuthenticateAsAdminAsync();
+        var startTime = Uri.EscapeDataString(completedTime.AddMinutes(-1).ToString("O"));
+        var endTime = Uri.EscapeDataString(completedTime.AddMinutes(1).ToString("O"));
+        var humanPassStations = await EventuallyAsync(
+            async () => await GetFromJsonAsync<PagedResponse<PassStationListItemDto>>(
+                $"/api/v1/human/pass-stations/injection?PageNumber=1&PageSize=20&mode=device-time&deviceId={device.DeviceId}" +
+                $"&startTime={startTime}&endTime={endTime}"),
+            response => response.Items.Count(x => x.Barcode == barcode) == 1);
+
+        var humanItem = humanPassStations.Items.Single(x => x.Barcode == barcode);
+        humanItem.CellResult.Should().Be("NG");
+        humanItem.Fields.Should().ContainKey("injectionVolume");
+
+        _fixture.SetAuthToken(CreateAiReadToken([AiReadPermissions.PassStation], [device.DeviceId]));
+        var aiPassStations = await EventuallyAsync(
+            async () => await GetFromJsonAsync<AiReadListResponseDto<AiReadPassStationDto>>(
+                $"/api/v1/ai/read/pass-stations/injection?deviceId={device.DeviceId}&startTime={startTime}&endTime={endTime}&barcode={Uri.EscapeDataString(barcode)}"),
+            response => response.Items.Count(x => x.Barcode == barcode) == 1);
+
+        var aiItem = aiPassStations.Items.Single(x => x.Barcode == barcode);
+        aiItem.CellResult.Should().Be("NG");
+        aiItem.Fields.Should().ContainKey("injectionVolume");
     }
 
     [Fact]
@@ -308,6 +411,14 @@ public sealed record AiReadPassStationDto(
     DateTime? CompletedTime,
     DateTime? ReceivedAt,
     Dictionary<string, JsonElement> Fields);
+
+public sealed record AiReadRecipeVersionDto(
+    Guid Id,
+    Guid DeviceId,
+    Guid ProcessId,
+    string RecipeName,
+    string Version,
+    string Status);
 
 public sealed record AiReadAuditRow(
     bool Succeeded,

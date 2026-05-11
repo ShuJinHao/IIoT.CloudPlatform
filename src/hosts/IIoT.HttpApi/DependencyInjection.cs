@@ -24,6 +24,7 @@ using IIoT.SharedKernel.Configuration;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization.Policy;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -272,6 +273,7 @@ public static class DependencyInjection
         builder.Services.AddScoped<ICurrentUser, CurrentUser>();
         builder.Services.AddScoped<ICloudOidcSessionService, CloudOidcSessionService>();
         builder.Services.AddScoped<IAiReadScopeAccessor, HttpAiReadScopeAccessor>();
+        builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, CloudAuthorizationResultHandler>();
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddExceptionHandler<UseCaseExceptionHandler>();
         builder.Services.AddProblemDetails();

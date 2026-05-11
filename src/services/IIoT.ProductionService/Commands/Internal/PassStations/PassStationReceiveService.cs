@@ -1,6 +1,7 @@
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Events.PassStations;
 using IIoT.Services.Contracts.RecordQueries;
+using IIoT.Services.Contracts.Uploads;
 using IIoT.SharedKernel.Result;
 
 namespace IIoT.ProductionService.Commands.PassStations;
@@ -13,7 +14,7 @@ public sealed class PassStationReceiveService(
     IDeviceIdentityQueryService deviceIdentityQuery,
     IUploadReceiveRegistry uploadReceiveRegistry) : IPassStationReceiveService
 {
-    public async Task<Result<bool>> ValidateAndRegisterAsync(
+    public async Task<Result<EdgeUploadAcceptedResponse>> ValidateAndRegisterAsync(
         Guid deviceId,
         int itemCount,
         string messageType,
@@ -32,13 +33,15 @@ public sealed class PassStationReceiveService(
         if (!exists)
             return Result.Failure("数据接收失败: 设备不存在");
 
-        await uploadReceiveRegistry.RegisterAndEnqueueAsync(
+        var registration = await uploadReceiveRegistry.RegisterAndEnqueueAsync(
             deviceId,
             messageType,
             requestId,
             deduplicationKey,
             @event,
             cancellationToken);
-        return Result.Success(true);
+        return Result.Success(registration.IsDuplicate
+            ? EdgeUploadAcceptedResponse.Duplicate(registration.OutboxMessageId)
+            : EdgeUploadAcceptedResponse.Accepted(registration.OutboxMessageId));
     }
 }

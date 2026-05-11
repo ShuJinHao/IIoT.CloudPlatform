@@ -618,8 +618,6 @@ internal sealed class RecordingDeviceCacheInvalidationService : IDeviceCacheInva
 
     public List<DeviceCacheDescriptor> RenamedDevices { get; } = [];
 
-    public List<DeviceProcessCacheDescriptor> ProcessChangedDevices { get; } = [];
-
     public List<DeviceCacheDescriptor> DeletedDevices { get; } = [];
 
     public Task InvalidateListsAfterRegisterAsync(
@@ -635,14 +633,6 @@ internal sealed class RecordingDeviceCacheInvalidationService : IDeviceCacheInva
         CancellationToken cancellationToken = default)
     {
         RenamedDevices.Add(device);
-        return Task.CompletedTask;
-    }
-
-    public Task InvalidateAfterProcessChangeAsync(
-        DeviceProcessCacheDescriptor device,
-        CancellationToken cancellationToken = default)
-    {
-        ProcessChangedDevices.Add(device);
         return Task.CompletedTask;
     }
 
