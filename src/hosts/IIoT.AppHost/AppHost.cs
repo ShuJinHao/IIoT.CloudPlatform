@@ -51,10 +51,17 @@ builder.AddProject<Projects.IIoT_DataWorker>("iiot-dataworker")
     .WithReference(rabbitmq)
     .WaitForCompletion(migration);
 
-builder.AddViteApp("iiot-web", "../../ui/iiot-web")
+var web = builder.AddViteApp("iiot-web", "../../ui/iiot-web")
     .WithReference(gatewayService)
-    .WithEnvironment("VITE_API_URL", gatewayService.GetEndpoint("http"))
-    .WithExternalHttpEndpoints();
+    .WithEnvironment("VITE_API_URL", gatewayService.GetEndpoint("http"));
+
+var aicopilotChallengeUrl = builder.Configuration["AppHost:AicopilotChallengeUrl"];
+if (!string.IsNullOrWhiteSpace(aicopilotChallengeUrl))
+{
+    web.WithEnvironment("VITE_AICOPILOT_CHALLENGE_URL", aicopilotChallengeUrl);
+}
+
+web.WithExternalHttpEndpoints();
 
 builder.Build().Run();
 

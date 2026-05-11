@@ -1,4 +1,5 @@
 using IIoT.HttpApi.Infrastructure;
+using IIoT.HttpApi.Infrastructure.Oidc;
 using IIoT.IdentityService.Commands;
 using IIoT.IdentityService.Queries;
 using Microsoft.AspNetCore.Authorization;
@@ -28,6 +29,12 @@ public class HumanIdentityController : ApiControllerBase
                 result.Value.RefreshToken,
                 result.Value.RefreshTokenExpiresAtUtc,
                 result.Value.AccessTokenExpiresAtUtc);
+
+            var oidcSessionService = HttpContext.RequestServices.GetRequiredService<ICloudOidcSessionService>();
+            await oidcSessionService.SignInAsync(
+                HttpContext,
+                command.EmployeeNo,
+                cancellationToken);
         }
 
         return ReturnBodyResult(result, session => session.AccessToken);

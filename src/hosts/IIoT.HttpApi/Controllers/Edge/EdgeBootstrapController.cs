@@ -15,7 +15,7 @@ public class EdgeBootstrapController : ApiControllerBase
 {
     [HttpGet("device-instance")]
     [EnableRateLimiting(HttpApiRateLimitPolicies.Bootstrap)]
-    // Keep the legacy clientCode query parameter until deprecated bootstrap callers are retired.
+    // clientCode 只负责设备寻址，启动认证由 X-IIoT-Bootstrap-Secret 承担。
     public async Task<IActionResult> GetDeviceByInstance(
         [FromQuery] string clientCode,
         [FromHeader(Name = BootstrapSecretHeaderNames.Secret)] string? bootstrapSecret,

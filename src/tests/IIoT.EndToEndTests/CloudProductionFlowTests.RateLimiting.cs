@@ -94,8 +94,12 @@ public sealed partial class CloudProductionFlowTests
         _fixture.ClearAuthToken();
 
         _deviceCodes.TryGetValue(deviceId, out var code).Should().BeTrue($"device code for {deviceId} should be tracked during test setup");
-        using var response = await _fixture.HttpClient.GetAsync(
-            $"/api/v1/bootstrap/device-instance?clientCode={Uri.EscapeDataString(code!)}");
+        _deviceBootstrapSecrets.TryGetValue(deviceId, out var secret)
+            .Should()
+            .BeTrue($"device bootstrap secret for {deviceId} should be tracked during test setup");
+
+        using var request = CreateBootstrapRequest(code!, secret!);
+        using var response = await _fixture.HttpClient.SendAsync(request);
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var bootstrap = await response.Content.ReadFromJsonAsync<EdgeBootstrapDto>(JsonOptions);

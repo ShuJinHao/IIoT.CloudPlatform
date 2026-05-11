@@ -52,6 +52,7 @@
 - 声明 Aspire 参数与资源编排关系
 - 编排 `iiot-httpapi`、`iiot-gateway`、`iiot-dataworker`、`iiot-migrationworkapp`
 - 为前端开发时的 `VITE_API_URL` 指向 `iiot-gateway`
+- 可选为 Cloud Web 注入 `VITE_AICOPILOT_CHALLENGE_URL`，仅用于跳转 AICopilot OIDC challenge，不承载 Cloud token
 
 规则：
 
@@ -77,11 +78,18 @@
 - `/api/v1/human/*`
 - `/api/v1/edge/*`
 - `/api/v1/bootstrap/*`
+- `/api/v1/ai/read/*`
+- `/api/v1/ai/identity/*`
 
-当前保留的兼容 alias：
+其中 `/api/v1/ai/identity/*` 只用于 AICopilot 读取 Cloud 身份状态版本，必须走 AI service account JWT + `AiRead.IdentityStatus`，不提供 Cloud 业务写能力。
 
-- `/api/v1/edge/bootstrap/device-instance`
-- `/api/v1/human/identity/edge-login`
+当前 bootstrap 对外入口只允许走 Gateway 公共路径：
+
+- `/api/v1/bootstrap/device-instance`
+- `/api/v1/bootstrap/edge-refresh`
+- `/api/v1/bootstrap/edge-login`
+
+`/api/v1/edge/bootstrap/device-instance` 和 `/api/v1/human/identity/edge-login` 不再作为外部支持路径。
 
 ### HttpApi
 
@@ -96,6 +104,14 @@
 - `ForwardedHeaders`
 - `CacheSafety`
 - `Infrastructure`
+- `OidcProvider`
+
+OIDC 身份状态增强说明：
+
+- `status_version` 由 Cloud 后端确定性计算，不使用模糊 updated-at。
+- AICopilot 状态轮询使用 `/api/v1/ai/identity/users/{cloudUserId}/status?tenantId=default`。
+- 生产环境的 AI service account token 必须通过部署 secret 注入 AICopilot，不写入 Cloud 配置、前端或仓库。
+- 日志和审计不得记录 service account token、OIDC code、id_token、access_token、Cloud session 或密码。
 
 说明：
 
@@ -167,6 +183,7 @@
 - `ASPIRE_DASHBOARD_FRONTEND_BROWSERTOKEN`
 - `ASPIRE_DASHBOARD_OTLP_PRIMARYAPIKEY`
 - `GATEWAY_HTTP_PORT`
+- `BOOTSTRAP_AUTH_REQUIRE_SECRET`
 - `FORWARDED_HEADERS_*`
 
 当前 `PUBLIC_BASE_URL` 统一按 HTTP + IP 语义示例，例如：

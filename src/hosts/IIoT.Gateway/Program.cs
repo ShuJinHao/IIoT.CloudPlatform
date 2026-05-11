@@ -8,6 +8,7 @@ builder.AddSerilog("gateway");
 builder.AddServiceDefaults();
 
 builder.Services.AddProblemDetails();
+builder.Services.AddSingleton<IGatewayRouteCatalog, GatewayRouteCatalog>();
 builder.Services
     .AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));

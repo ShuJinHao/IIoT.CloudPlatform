@@ -1388,9 +1388,11 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
-    public async Task GetDeviceByInstanceHandler_ShouldNormalizeIncomingCode_AndCacheByNormalizedCode()
+    public async Task GetDeviceByInstanceHandler_ShouldNormalizeIncomingCode_AndRequireBootstrapSecret()
     {
+        var bootstrapSecret = BootstrapSecretGenerator.Generate();
         var device = new Device("Device-Bootstrap", "DEV-BOOTSTRAP1", Guid.NewGuid());
+        device.SetBootstrapSecretHash(BootstrapSecretHasher.Hash(bootstrapSecret));
         var repository = new InMemoryRepository<Device>
         {
             SingleOrDefaultResult = device
@@ -1405,14 +1407,14 @@ public sealed class ApplicationFlowGuardTests
             Options.Create(new BootstrapAuthOptions()));
 
         var result = await handler.Handle(
-            new GetDeviceByInstanceQuery($"  {device.Code.ToLowerInvariant()}  "),
+            new GetDeviceByInstanceQuery($"  {device.Code.ToLowerInvariant()}  ", bootstrapSecret),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
         var session = Assert.IsType<BootstrapDeviceSessionResult>(result.Value);
         Assert.Equal(device.Id, session.DeviceIdentity.Id);
         Assert.StartsWith("refresh-", session.RefreshToken);
-        Assert.Equal(CacheKeys.DeviceCode(device.Code), cache.LastSetKey);
+        Assert.Null(cache.LastSetKey);
         Assert.Contains(refreshTokenService.Issues, x =>
             x.ActorType == IIoT.Services.Contracts.Identity.IIoTClaimTypes.EdgeDeviceActor
             && x.SubjectId == device.Id);

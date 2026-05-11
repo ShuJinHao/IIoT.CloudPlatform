@@ -31,7 +31,13 @@ public sealed class AiReadAuditBehavior<TRequest, TResponse>(
             var response = await next(cancellationToken);
             stopwatch.Stop();
 
-            await WriteAuditAsync(response, succeeded: true, stopwatch.Elapsed, null, cancellationToken);
+            var resultSucceeded = IsSuccessfulResult(response);
+            await WriteAuditAsync(
+                response,
+                resultSucceeded,
+                stopwatch.Elapsed,
+                resultSucceeded ? null : ExtractFailureReason(response),
+                cancellationToken);
             return response;
         }
         catch (Exception ex)
@@ -76,6 +82,18 @@ public sealed class AiReadAuditBehavior<TRequest, TResponse>(
     {
         return response is IResult result
             ? result.GetValue() as IAiReadResponseMetadata
+            : null;
+    }
+
+    private static bool IsSuccessfulResult(TResponse? response)
+    {
+        return response is not IResult result || result.Status == ResultStatus.Ok;
+    }
+
+    private static string? ExtractFailureReason(TResponse? response)
+    {
+        return response is IResult { Errors: not null } result
+            ? string.Join("; ", result.Errors.Where(error => !string.IsNullOrWhiteSpace(error)))
             : null;
     }
 

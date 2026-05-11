@@ -40,6 +40,7 @@ public class GetAllDefinedPermissionsHandler(
 
         // AI 只读接口
         AiReadPermissions.Device, AiReadPermissions.Capacity, AiReadPermissions.DeviceLog, AiReadPermissions.PassStation,
+        AiReadPermissions.IdentityStatus,
 
         // ── WPF 边缘端菜单权限 ──────────────────────────────────────
         // 硬件配置页（对应 WPF Permissions.HardwareConfig）

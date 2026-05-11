@@ -22,6 +22,7 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
 
     private readonly IIoTAppFixture _fixture = new();
     private readonly Dictionary<Guid, string> _deviceCodes = new();
+    private readonly Dictionary<Guid, string> _deviceBootstrapSecrets = new();
 
     public Task InitializeAsync() => _fixture.StartAsync();
 
@@ -334,8 +335,8 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
         var device = await CreateTestDeviceRegistrationAsync("bootstrap-refresh");
         _fixture.ClearAuthToken();
 
-        using var bootstrapResponse = await _fixture.HttpClient.GetAsync(
-            $"/api/v1/bootstrap/device-instance?clientCode={Uri.EscapeDataString(device.Code)}");
+        using var bootstrapRequest = CreateBootstrapRequest(device);
+        using var bootstrapResponse = await _fixture.HttpClient.SendAsync(bootstrapRequest);
 
         bootstrapResponse.StatusCode.Should().Be(HttpStatusCode.OK);
         var bootstrapSession = await ReadIssuedBootstrapSessionAsync(bootstrapResponse);
@@ -467,15 +468,21 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task EdgeBootstrap_ShouldAllowAnonymous_AndResolveByCode()
+    public async Task EdgeBootstrap_ShouldRequireSecret_AndResolveByCode()
     {
         await AuthenticateAsAdminAsync();
 
         var device = await CreateTestDeviceRegistrationAsync("bootstrap");
         _fixture.ClearAuthToken();
 
-        using var response = await _fixture.HttpClient.GetAsync(
+        using var missingSecretRequest = new HttpRequestMessage(
+            HttpMethod.Get,
             $"/api/v1/bootstrap/device-instance?clientCode={Uri.EscapeDataString(device.Code)}");
+        using var missingSecretResponse = await _fixture.HttpClient.SendAsync(missingSecretRequest);
+        missingSecretResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+
+        using var responseRequest = CreateBootstrapRequest(device);
+        using var response = await _fixture.HttpClient.SendAsync(responseRequest);
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         response.Headers.Should().ContainKey("X-IIoT-Route-Surface");
         response.Headers.GetValues("X-IIoT-Route-Surface").Should().ContainSingle("bootstrap");
@@ -491,18 +498,18 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task EdgeBootstrap_ShouldAcceptBootstrapSecretHeader_InCompatibleMode()
+    public async Task EdgeBootstrap_ShouldAcceptBootstrapSecretHeader_WhenSecretIsRequired()
     {
         await AuthenticateAsAdminAsync();
 
         var device = await CreateTestDeviceRegistrationAsync("bootstrap-secret");
         _fixture.ClearAuthToken();
 
-        using var request = new HttpRequestMessage(
-            HttpMethod.Get,
-            $"/api/v1/bootstrap/device-instance?clientCode={Uri.EscapeDataString(device.Code)}");
-        request.Headers.Add("X-IIoT-Bootstrap-Secret", device.BootstrapSecret);
+        using var wrongSecretRequest = CreateBootstrapRequest(device, "wrong-bootstrap-secret");
+        using var wrongSecretResponse = await _fixture.HttpClient.SendAsync(wrongSecretRequest);
+        wrongSecretResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
 
+        using var request = CreateBootstrapRequest(device);
         using var response = await _fixture.HttpClient.SendAsync(request);
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
@@ -536,29 +543,25 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task LegacyEdgeBootstrapAlias_ShouldRemainCompatible()
+    public async Task LegacyEdgeBootstrapAlias_ShouldBeRejectedByGateway()
     {
         await AuthenticateAsAdminAsync();
 
         var device = await CreateTestDeviceRegistrationAsync("bootstrap-alias");
         _fixture.ClearAuthToken();
 
-        using var response = await _fixture.HttpClient.GetAsync(
-            $"/api/v1/edge/bootstrap/device-instance?clientCode={Uri.EscapeDataString(device.Code)}");
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        response.Headers.Should().ContainKey("X-IIoT-Route-Surface");
-        response.Headers.GetValues("X-IIoT-Route-Surface").Should().ContainSingle("legacy-bootstrap-alias");
-        response.Headers.Should().ContainKey("X-IIoT-Deprecated-Alias");
-        response.Headers.GetValues("X-IIoT-Deprecated-Alias").Should().ContainSingle("true");
-        response.Headers.Should().ContainKey("X-IIoT-Replacement-Route");
-        response.Headers.GetValues("X-IIoT-Replacement-Route").Should().ContainSingle("/api/v1/bootstrap/device-instance");
+        using var responseRequest = CreateBootstrapRequest(
+            device,
+            device.BootstrapSecret,
+            "/api/v1/edge/bootstrap/device-instance");
+        using var response = await _fixture.HttpClient.SendAsync(responseRequest);
 
-        var edge = await response.Content.ReadFromJsonAsync<EdgeBootstrapDto>(JsonOptions)
-                   ?? throw new InvalidOperationException("Unable to deserialize legacy bootstrap response.");
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
 
-        edge.Id.Should().Be(device.DeviceId);
-        edge.ClientCode.Should().Be(device.Code);
-        edge.UploadAccessToken.Should().NotBeNullOrWhiteSpace();
+        using var refreshAliasResponse = await _fixture.HttpClient.PostAsync(
+            "/api/v1/edge/bootstrap/edge-refresh",
+            content: null);
+        refreshAliasResponse.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]
@@ -857,7 +860,7 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task LegacyHumanEdgeLoginAlias_ShouldRemainCompatible()
+    public async Task HumanEdgeLoginAlias_ShouldBeRejectedByGateway()
     {
         await AuthenticateAsAdminAsync();
 
@@ -871,15 +874,7 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
             DeviceId = device.DeviceId
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        response.Headers.Should().ContainKey("X-IIoT-Route-Surface");
-        response.Headers.GetValues("X-IIoT-Route-Surface").Should().ContainSingle("legacy-edge-login-alias");
-        response.Headers.Should().ContainKey("X-IIoT-Deprecated-Alias");
-        response.Headers.GetValues("X-IIoT-Deprecated-Alias").Should().ContainSingle("true");
-        response.Headers.Should().ContainKey("X-IIoT-Replacement-Route");
-        response.Headers.GetValues("X-IIoT-Replacement-Route").Should().ContainSingle("/api/v1/bootstrap/edge-login");
-        var token = await ReadJwtTokenAsync(response);
-        token.Should().NotBeNullOrWhiteSpace();
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     private async Task AuthenticateAsAdminAsync()
@@ -903,8 +898,16 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
         _fixture.ClearAuthToken();
 
         _deviceCodes.TryGetValue(deviceId, out var code).Should().BeTrue($"device code for {deviceId} should be tracked during test setup");
-        var bootstrap = await GetFromJsonAsync<EdgeBootstrapDto>(
-            $"/api/v1/bootstrap/device-instance?clientCode={Uri.EscapeDataString(code!)}");
+        _deviceBootstrapSecrets.TryGetValue(deviceId, out var secret)
+            .Should()
+            .BeTrue($"device bootstrap secret for {deviceId} should be tracked during test setup");
+
+        using var request = CreateBootstrapRequest(code!, secret!);
+        using var response = await _fixture.HttpClient.SendAsync(request);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var bootstrap = await response.Content.ReadFromJsonAsync<EdgeBootstrapDto>(JsonOptions)
+                        ?? throw new InvalidOperationException("Unable to deserialize bootstrap response.");
 
         bootstrap.Id.Should().Be(deviceId);
         bootstrap.UploadAccessToken.Should().NotBeNullOrWhiteSpace();
@@ -993,8 +996,29 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
         created.BootstrapSecret.Should().NotBeNullOrWhiteSpace();
         created.BootstrapSecret.Should().NotBe(created.Code);
         _deviceCodes[created.Id] = created.Code;
+        _deviceBootstrapSecrets[created.Id] = created.BootstrapSecret;
 
         return new TestDeviceRegistration(created.Id, processId, created.Code, created.BootstrapSecret);
+    }
+
+    private static HttpRequestMessage CreateBootstrapRequest(
+        TestDeviceRegistration device,
+        string? bootstrapSecret = null,
+        string path = "/api/v1/bootstrap/device-instance")
+    {
+        return CreateBootstrapRequest(device.Code, bootstrapSecret ?? device.BootstrapSecret, path);
+    }
+
+    private static HttpRequestMessage CreateBootstrapRequest(
+        string clientCode,
+        string bootstrapSecret,
+        string path = "/api/v1/bootstrap/device-instance")
+    {
+        var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"{path}?clientCode={Uri.EscapeDataString(clientCode)}");
+        request.Headers.Add("X-IIoT-Bootstrap-Secret", bootstrapSecret);
+        return request;
     }
 
     private async Task<Guid> CreateProcessAsync(string code)

@@ -9,13 +9,13 @@
 - 不照单全收风险等级。优先核对源码、现有 PR、业务规则和“不能破坏旧 EdgeClient 启动”的约束。
 - 只把能在云端独立闭环的问题纳入收尾 PR。
 - 需要 EdgeClient、证书基础设施、BFF/httpOnly Cookie、审计事务模型或缓存可靠性设计配合的项单独立项。
-- 当前阶段仍保持兼容上线。`BootstrapAuth:RequireSecret=false` 是过渡默认值，不代表最终生产安全形态；EdgeClient 升级并能保存/发送启动密钥后，生产必须切换为 `true`。
+- EdgeClient 已完成启动密钥接入，`BootstrapAuth:RequireSecret=true` 是当前强制默认值；不再保留无密钥启动或旧路径兼容口径。
 
 ## PR-15 本批处理
 
 | 编号 | 归并结论 | 处理 |
 | --- | --- | --- |
-| A01 Bootstrap RequireSecret=false | 确认是生产 rollout 风险，但不能直接把源码默认值改为 `true`，否则旧 EdgeClient 无法启动。 | 生产 compose 显式暴露 `BOOTSTRAP_AUTH_REQUIRE_SECRET`，`.env.example` 保持 `false` 并写明 EdgeClient 升级后必须改为 `true`。 |
+| A01 Bootstrap RequireSecret=true | EdgeClient 已升级为携带 `X-IIoT-Bootstrap-Secret`，云端不再允许无密钥启动。 | 源码默认值、生产 compose 和 `.env.example` 均固定为 `true`；部署时必须把客户端 `CloudApi:BaseUrl` 指向 Gateway，并配置云端生成的启动密钥。 |
 | B09 删除设备不清除 Bootstrap 缓存 | 确认问题。兼容模式下删除设备后，`DeviceCode` 缓存可能继续签发 JWT。 | 删除设备成功后清除 `CacheKeys.DeviceCode(device.Code)`。 |
 | B10 RotateDeviceBootstrapSecret 权限声明不一致 | 确认需要明确语义。该操作属于管理员级安全操作。 | 保持 Handler 内 Admin 强校验，并补测试锁定“非 Admin 即使通过普通设备权限也不能轮换”的行为。 |
 | B11 GatewayRouteCatalog 缺少 bootstrap-edge-refresh | 确认问题。YARP 路由存在，但观测 catalog 未识别。 | 补 `/api/v1/bootstrap/edge-refresh` 到网关路由 catalog。 |

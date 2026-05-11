@@ -26,6 +26,20 @@
       </nav>
 
       <div class="topbar__right">
+        <button
+          class="topbar__ai-entry"
+          type="button"
+          :disabled="!isAicopilotEntryConfigured"
+          :title="aicopilotEntryTitle"
+          @click="openAicopilot"
+        >
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M10 3l1.4 3.6L15 8l-3.6 1.4L10 13l-1.4-3.6L5 8l3.6-1.4L10 3z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+            <path d="M15 12l.7 1.8 1.8.7-1.8.7L15 17l-.7-1.8-1.8-.7 1.8-.7L15 12z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+          </svg>
+          AI 助手
+        </button>
+
         <span class="topbar__status">
           <StatusLed status="success" />
           <span class="topbar__status-text">已登录</span>
@@ -143,10 +157,25 @@ interface NavItem {
 const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
+const aicopilotChallengeUrl = (import.meta.env.VITE_AICOPILOT_CHALLENGE_URL as string | undefined)?.trim() || '';
 
 const avatarChar = computed(() => {
   return authStore.employeeNo?.charAt(0)?.toUpperCase() || 'U';
 });
+
+const isAicopilotEntryConfigured = computed(() => aicopilotChallengeUrl.length > 0);
+const aicopilotEntryTitle = computed(() =>
+  isAicopilotEntryConfigured.value ? '进入 AI 助手' : 'AI 助手入口未配置',
+);
+
+const openAicopilot = () => {
+  if (!isAicopilotEntryConfigured.value) {
+    alert('AI 助手入口未配置');
+    return;
+  }
+
+  window.location.assign(aicopilotChallengeUrl);
+};
 
 const navItems: NavItem[] = [
   { name: 'Dashboard', path: '/', label: '概览', permission: null },
@@ -331,6 +360,39 @@ const submitPassword = async () => {
   font-size: 12px;
   color: var(--text-1);
   font-family: var(--font-mono);
+}
+.topbar__ai-entry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  color: var(--text-0);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 150ms;
+  white-space: nowrap;
+}
+.topbar__ai-entry svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--brand);
+}
+.topbar__ai-entry:hover:not(:disabled) {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+.topbar__ai-entry:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 .topbar__avatar {
   width: 36px;

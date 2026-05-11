@@ -4,6 +4,7 @@ using IIoT.Dapper.Initializers;
 using IIoT.EntityFrameworkCore;
 using IIoT.EntityFrameworkCore.Identity;
 using IIoT.MigrationWorkApp.SeedData;
+using IIoT.Services.Contracts.Identity;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -19,6 +20,7 @@ public sealed class DatabaseInitializationOrchestrator(
     IIoTDbContext dbContext,
     UserManager<ApplicationUser> userManager,
     RoleManager<IdentityRole<Guid>> roleManager,
+    IOidcClientSeeder oidcClientSeeder,
     IRecordSchemaInitializer recordSchemaInitializer,
     IConfiguration configuration,
     ILogger<DatabaseInitializationOrchestrator> logger)
@@ -81,6 +83,7 @@ public sealed class DatabaseInitializationOrchestrator(
         await EnsureRecordSchemaCompatibilityAsync(cancellationToken);
         await InitializeTimescaleDbAsync(cancellationToken);
         await SeedSystemDataAsync(cancellationToken);
+        await SeedOidcClientsAsync(cancellationToken);
     }
 
     private async Task RunEfMigrationsAsync(CancellationToken cancellationToken)
@@ -285,6 +288,13 @@ public sealed class DatabaseInitializationOrchestrator(
             configuration,
             cancellationToken);
         logger.LogInformation("系统初始化数据播种完成。");
+    }
+
+    private async Task SeedOidcClientsAsync(CancellationToken cancellationToken)
+    {
+        logger.LogInformation("开始播种 OIDC client 配置。");
+        await oidcClientSeeder.EnsureAicopilotClientAsync(cancellationToken);
+        logger.LogInformation("OIDC client 配置播种完成。");
     }
 
     private sealed record NormalizedClientCodeConflict(

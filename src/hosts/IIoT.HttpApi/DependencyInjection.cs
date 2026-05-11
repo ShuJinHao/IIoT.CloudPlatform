@@ -6,6 +6,7 @@ using IIoT.EmployeeService.Commands.Employees;
 using IIoT.EntityFrameworkCore;
 using IIoT.EventBus;
 using IIoT.HttpApi.Infrastructure;
+using IIoT.HttpApi.Infrastructure.Oidc;
 using IIoT.Infrastructure;
 using IIoT.Infrastructure.Authentication;
 using IIoT.MasterDataService.Commands.Processes;
@@ -20,12 +21,16 @@ using IIoT.Services.Contracts.Caching;
 using IIoT.Services.Contracts.Identity;
 using IIoT.Services.CrossCutting.DependencyInjection;
 using IIoT.SharedKernel.Configuration;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
+using OpenIddict.Abstractions;
+using OpenIddict.Server;
+using OpenIddict.Server.AspNetCore;
 
 namespace IIoT.HttpApi;
 
@@ -96,6 +101,9 @@ public static class DependencyInjection
         _ = builder.AddValidatedOptions<BootstrapAuthOptions>(
             BootstrapAuthOptions.SectionName,
             static options => options.Validate());
+        var oidcProviderOptions = builder.AddValidatedOptions<OidcProviderOptions>(
+            OidcProviderOptions.SectionName,
+            static options => options.Validate());
         var authenticatedUserPolicy = new AuthorizationPolicyBuilder()
             .RequireAuthenticatedUser()
             .Build();
@@ -114,6 +122,62 @@ public static class DependencyInjection
                     IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
                     ClockSkew = TimeSpan.Zero
                 };
+            })
+            .AddCookie(CloudOidcDefaults.SessionScheme, options =>
+            {
+                options.Cookie.Name = oidcProviderOptions.SessionCookieName;
+                options.Cookie.HttpOnly = true;
+                options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+                options.Cookie.SameSite = SameSiteMode.Lax;
+                options.SlidingExpiration = true;
+                options.ExpireTimeSpan = TimeSpan.FromMinutes(oidcProviderOptions.SessionIdleMinutes);
+                options.Events = new CookieAuthenticationEvents
+                {
+                    OnRedirectToLogin = context =>
+                    {
+                        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                        return Task.CompletedTask;
+                    },
+                    OnRedirectToAccessDenied = context =>
+                    {
+                        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                        return Task.CompletedTask;
+                    }
+                };
+            });
+
+        builder.Services.AddOpenIddict()
+            .AddServer(options =>
+            {
+                options.SetIssuer(new Uri(oidcProviderOptions.Issuer));
+                options.SetAuthorizationEndpointUris("/connect/authorize");
+                options.SetTokenEndpointUris("/connect/token");
+                options.SetUserInfoEndpointUris("/connect/userinfo");
+                options.SetEndSessionEndpointUris("/connect/logout");
+
+                options.AllowAuthorizationCodeFlow()
+                    .RequireProofKeyForCodeExchange();
+
+                options.RegisterScopes(OpenIddictConstants.Scopes.Profile);
+                options.SetAuthorizationCodeLifetime(TimeSpan.FromMinutes(
+                    oidcProviderOptions.AuthorizationCodeLifetimeMinutes));
+                options.SetAccessTokenLifetime(TimeSpan.FromMinutes(
+                    oidcProviderOptions.AccessTokenLifetimeMinutes));
+                options.SetIdentityTokenLifetime(TimeSpan.FromMinutes(
+                    oidcProviderOptions.IdentityTokenLifetimeMinutes));
+
+                ConfigureOpenIddictCertificates(options, oidcProviderOptions, builder.Environment);
+
+                var aspNetCore = options.UseAspNetCore()
+                    .EnableAuthorizationEndpointPassthrough()
+                    .EnableTokenEndpointPassthrough()
+                    .EnableUserInfoEndpointPassthrough()
+                    .EnableEndSessionEndpointPassthrough();
+
+                if (builder.Environment.IsDevelopment())
+                {
+                    aspNetCore.DisableTransportSecurityRequirement();
+                }
             });
 
         builder.Services.AddAuthorizationBuilder()
@@ -206,11 +270,49 @@ public static class DependencyInjection
         });
 
         builder.Services.AddScoped<ICurrentUser, CurrentUser>();
+        builder.Services.AddScoped<ICloudOidcSessionService, CloudOidcSessionService>();
         builder.Services.AddScoped<IAiReadScopeAccessor, HttpAiReadScopeAccessor>();
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddExceptionHandler<UseCaseExceptionHandler>();
         builder.Services.AddProblemDetails();
         builder.Services.AddHealthChecks()
             .AddCheck<PostgresReadinessHealthCheck>("postgres-ready");
+    }
+
+    private static void ConfigureOpenIddictCertificates(
+        OpenIddictServerBuilder builder,
+        OidcProviderOptions options,
+        IHostEnvironment environment)
+    {
+        var signingCertificate = OidcCertificateLoader.LoadSigningCertificate(options);
+        var encryptionCertificate = OidcCertificateLoader.LoadEncryptionCertificate(options);
+
+        if (signingCertificate is not null)
+        {
+            builder.AddSigningCertificate(signingCertificate);
+        }
+        else if (environment.IsDevelopment())
+        {
+            builder.AddDevelopmentSigningCertificate();
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                "OidcProvider:SigningCertificatePath is required outside Development.");
+        }
+
+        if (encryptionCertificate is not null)
+        {
+            builder.AddEncryptionCertificate(encryptionCertificate);
+        }
+        else if (environment.IsDevelopment())
+        {
+            builder.AddDevelopmentEncryptionCertificate();
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                "OidcProvider:EncryptionCertificatePath is required outside Development.");
+        }
     }
 }
