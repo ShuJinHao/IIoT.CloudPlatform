@@ -108,7 +108,7 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
-    public void EdgeBootstrapController_ShouldKeepLegacyClientCodeQueryParameterForCompatibility()
+    public void EdgeBootstrapController_ShouldRequireClientCodeAndBootstrapSecret()
     {
         var controllerSource = File.ReadAllText(
             FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Edge", "EdgeBootstrapController.cs"));
@@ -118,7 +118,7 @@ public sealed class ConfigurationGuardTests
             FindRepoFile("src", "hosts", "IIoT.HttpApi", "Infrastructure", "RefreshTokenResponseFilter.cs"));
 
         controllerSource.Should().Contain("[FromQuery] string clientCode");
-        controllerSource.Should().Contain("legacy");
+        controllerSource.Should().Contain("X-IIoT-Bootstrap-Secret");
         controllerSource.Should().Contain("RefreshTokenResponseFilter.SetHeaders");
         controllerSource.Should().NotContain("RefreshTokenHeaderNames.ApplyTo");
         programSource.Should().Contain("RefreshTokenResponseFilter");
@@ -128,7 +128,7 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
-    public void BootstrapHardeningDesign_ShouldDocumentCompatibleNextStep()
+    public void BootstrapHardeningDesign_ShouldDocumentMandatorySecret()
     {
         var documentSource = File.ReadAllText(FindRepoFile("docs", "bootstrap-auth-hardening.md"));
         var triageSource = File.ReadAllText(FindRepoFile("docs", "deepseek-audit-triage-2026-04-29.md"));
@@ -138,9 +138,9 @@ public sealed class ConfigurationGuardTests
         documentSource.Should().Contain("BootstrapAuth:RequireSecret");
         documentSource.Should().Contain("clientCode");
         documentSource.Should().Contain("DeviceId");
-        triageSource.Should().Contain("A01 Bootstrap RequireSecret=false");
-        triageSource.Should().Contain("不能直接把源码默认值改为 `true`");
-        triageSource.Should().Contain("EdgeClient 升级后必须改为 `true`");
+        triageSource.Should().Contain("A01 Bootstrap RequireSecret=true");
+        triageSource.Should().Contain("EdgeClient 已升级为携带 `X-IIoT-Bootstrap-Secret`");
+        triageSource.Should().Contain("不再保留无密钥启动或旧路径兼容口径");
         triageSource.Should().Contain("PR-16");
         triageSource.Should().Contain("PR-17");
     }
@@ -161,7 +161,8 @@ public sealed class ConfigurationGuardTests
                 var route = match.Groups[1].Value;
                 if (!route.StartsWith("api/v1/human/", StringComparison.Ordinal)
                     && !route.StartsWith("api/v1/edge/", StringComparison.Ordinal)
-                    && !route.StartsWith("api/v1/ai/read", StringComparison.Ordinal))
+                    && !route.StartsWith("api/v1/ai/read", StringComparison.Ordinal)
+                    && !route.StartsWith("api/v1/ai/identity", StringComparison.Ordinal))
                 {
                     invalidRoutes.Add($"{Path.GetFileName(file)}:{route}");
                 }
@@ -253,7 +254,17 @@ public sealed class ConfigurationGuardTests
         httpApiConfiguration.GetValue<int>("ForwardedHeaders:ForwardLimit").Should().BeGreaterThan(0);
         httpApiConfiguration.GetValue<int>("RateLimiting:PasswordLogin:PermitLimit").Should().BeGreaterThan(0);
         httpApiConfiguration.GetValue<int>("RateLimiting:PassStationUpload:TokenLimit").Should().BeGreaterThan(0);
-        httpApiConfiguration.GetValue<bool>("BootstrapAuth:RequireSecret").Should().BeFalse();
+        httpApiConfiguration.GetValue<bool>("BootstrapAuth:RequireSecret").Should().BeTrue();
+        httpApiConfiguration.GetValue<string>("OidcProvider:Issuer").Should().NotBeNullOrWhiteSpace();
+        httpApiConfiguration.GetValue<string>("OidcProvider:AicopilotClientId").Should().Be("aicopilot");
+        var aicopilotRedirectUris = httpApiConfiguration.GetSection("OidcProvider:AicopilotRedirectUris")
+            .Get<string[]>() ?? [];
+        aicopilotRedirectUris.Should().NotBeEmpty();
+        aicopilotRedirectUris.Should().OnlyContain(
+            redirectUri => IsAicopilotBackendCallbackRedirectUri(redirectUri),
+            "Cloud OIDC redirect_uri must target the AICopilot backend callback endpoint.");
+        httpApiConfiguration.GetValue<int>("OidcProvider:AuthorizationCodeLifetimeMinutes").Should().BeGreaterThan(0);
+        httpApiConfiguration.GetValue<int>("OidcProvider:SessionIdleMinutes").Should().BeGreaterThan(0);
         httpApiConfiguration.GetValue<int>("Infrastructure:Postgres:CommandTimeoutSeconds").Should().BeGreaterThan(0);
         httpApiConfiguration.GetValue<int>("Infrastructure:EventBus:RetryLimit").Should().BeGreaterThanOrEqualTo(0);
         httpApiConfiguration.GetValue<int>("Infrastructure:EventBus:PrefetchMultiplier").Should().BeGreaterThan(0);
@@ -265,6 +276,13 @@ public sealed class ConfigurationGuardTests
 
         migrationConfiguration.GetValue<int>("Infrastructure:Postgres:CommandTimeoutSeconds").Should().BeGreaterThan(0);
         migrationConfiguration.GetValue<int>("Infrastructure:Postgres:MaxRetryCount").Should().BeGreaterThanOrEqualTo(0);
+        migrationConfiguration.GetValue<string>("OidcProvider:AicopilotClientId").Should().Be("aicopilot");
+        migrationConfiguration.GetSection("OidcProvider:AicopilotRedirectUris")
+            .Get<string[]>()!
+            .Should()
+            .OnlyContain(
+                redirectUri => IsAicopilotBackendCallbackRedirectUri(redirectUri),
+                "MigrationWorkApp seeds the same AICopilot backend callback redirect_uri whitelist.");
     }
 
     [Fact]
@@ -446,7 +464,7 @@ public sealed class ConfigurationGuardTests
         envExampleSource.Should().Contain("BACKUP_MAX_AGE_HOURS=24");
         envExampleSource.Should().Contain("BACKUP_VERIFY_MAX_AGE_DAYS=7");
         envExampleSource.Should().Contain("GATEWAY_HTTP_PORT=81");
-        envExampleSource.Should().Contain("BOOTSTRAP_AUTH_REQUIRE_SECRET=false");
+        envExampleSource.Should().Contain("BOOTSTRAP_AUTH_REQUIRE_SECRET=true");
         envExampleSource.Should().Contain("X-IIoT-Bootstrap-Secret");
 
         composeSource.Should().Contain("Single-machine production starter for IIoT.CloudPlatform.");
@@ -613,9 +631,16 @@ public sealed class ConfigurationGuardTests
         gatewayProgramSource.Should().Contain("UseExceptionHandler()");
         gatewayProgramSource.Should().Contain("AddReverseProxy()");
         gatewayProgramSource.Should().Contain("LoadFromConfig(builder.Configuration.GetSection(\"ReverseProxy\"))");
+        gatewayProgramSource.Should().Contain("AddSingleton<IGatewayRouteCatalog, GatewayRouteCatalog>()");
         gatewayProgramSource.Should().Contain("UseMiddleware<GatewayObservabilityMiddleware>()");
         gatewayProgramSource.Should().Contain("MapReverseProxy()");
 
+        gatewayAppSettingsSource.Should().Contain("\"GatewayRoutes\"");
+        gatewayAppSettingsSource.Should().Contain("\"BlockedAliases\"");
+        gatewayAppSettingsSource.Should().Contain("blocked-edge-bootstrap");
+        gatewayAppSettingsSource.Should().Contain("blocked-human-edge-login");
+        gatewayAppSettingsSource.Should().Contain("\"PathPrefix\": \"/api/v1/edge/bootstrap\"");
+        gatewayAppSettingsSource.Should().Contain("\"Path\": \"/api/v1/human/identity/edge-login\"");
         gatewayAppSettingsSource.Should().Contain("/api/v1/human/{**catch-all}");
         gatewayAppSettingsSource.Should().Contain("/api/v1/edge/{**catch-all}");
         gatewayAppSettingsSource.Should().Contain("/api/v1/ai/read/{**catch-all}");
@@ -626,27 +651,74 @@ public sealed class ConfigurationGuardTests
         gatewayAppSettingsSource.Should().Contain("\"HealthCheck\"");
         gatewayAppSettingsSource.Should().Contain("\"Active\"");
         gatewayAppSettingsSource.Should().Contain("\"Path\": \"/internal/healthz\"");
-        gatewayAppSettingsSource.Should().Contain("legacy-edge-bootstrap-device-instance");
-        gatewayAppSettingsSource.Should().Contain("legacy-human-edge-login");
-        gatewayAppSettingsSource.Should().Contain("/api/v1/edge/bootstrap/device-instance");
-        gatewayAppSettingsSource.Should().Contain("/api/v1/human/identity/edge-login");
+        gatewayAppSettingsSource.Should().NotContain("legacy-edge-bootstrap-device-instance");
+        gatewayAppSettingsSource.Should().NotContain("legacy-human-edge-login");
         gatewayAppSettingsSource.Should().Contain("internal-health");
-        gatewayAppSettingsSource.Should().Contain("X-IIoT-Deprecated-Alias");
-        gatewayRouteCatalogSource.Should().Contain("/internal/healthz");
-        gatewayRouteCatalogSource.Should().Contain("/api/v1/bootstrap/edge-refresh");
-        gatewayRouteCatalogSource.Should().Contain("/api/v1/ai/read");
-        gatewayRouteCatalogSource.Should().Contain("\"ai-read\"");
-        gatewayRouteCatalogSource.Should().Contain("\"bootstrap-edge-refresh\"");
-        gatewayRouteCatalogSource.Should().Contain("\"internal-healthz\"");
-        gatewayRouteCatalogSource.Should().Contain("\"internal-health\"");
+        gatewayRouteCatalogSource.Should().Contain("GatewayRoutes:BlockedAliases");
+        gatewayRouteCatalogSource.Should().Contain("ReverseProxy:Routes");
+        gatewayRouteCatalogSource.Should().Contain("PathPrefix");
+        gatewayRouteCatalogSource.Should().Contain("Match:Path");
+        gatewayRouteCatalogSource.Should().NotContain("/api/v1/");
 
         gatewayMiddlewareSource.Should().Contain("route_surface={route_surface}");
-        gatewayMiddlewareSource.Should().Contain("is_deprecated_alias={is_deprecated_alias}");
+        gatewayMiddlewareSource.Should().Contain("is_blocked_alias={is_blocked_alias}");
         gatewayMiddlewareSource.Should().Contain("matched_route={matched_route}");
         gatewayMiddlewareSource.Should().Contain("upstream_cluster={upstream_cluster}");
         gatewayMiddlewareSource.Should().Contain("status_code={status_code}");
         gatewayMiddlewareSource.Should().Contain("elapsed_ms={elapsed_ms}");
-        gatewayMiddlewareSource.Should().Contain("GatewayRouteCatalog.ReplacementRouteHeader");
+        gatewayMiddlewareSource.Should().Contain("StatusCodes.Status404NotFound");
+    }
+
+    [Fact]
+    public void CloudOidcProvider_ShouldUseAuthorizationCodePkceAndMinimalIdentityClaims()
+    {
+        var dependencyInjectionSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.HttpApi", "DependencyInjection.cs"));
+        var controllerSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Oidc", "CloudOidcController.cs"));
+        var gatewayAppSettingsSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.Gateway", "appsettings.json"));
+        var humanIdentityControllerSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Human", "HumanIdentityController.cs"));
+
+        dependencyInjectionSource.Should().Contain("AddOpenIddict()");
+        dependencyInjectionSource.Should().Contain("AllowAuthorizationCodeFlow()");
+        dependencyInjectionSource.Should().Contain("RequireProofKeyForCodeExchange()");
+        dependencyInjectionSource.Should().Contain("SetAuthorizationEndpointUris(\"/connect/authorize\")");
+        dependencyInjectionSource.Should().Contain("SetTokenEndpointUris(\"/connect/token\")");
+        dependencyInjectionSource.Should().Contain("SetUserInfoEndpointUris(\"/connect/userinfo\")");
+        dependencyInjectionSource.Should().Contain("SetEndSessionEndpointUris(\"/connect/logout\")");
+        dependencyInjectionSource.Should().Contain("EnableAuthorizationEndpointPassthrough()");
+        dependencyInjectionSource.Should().Contain("EnableTokenEndpointPassthrough()");
+        dependencyInjectionSource.Should().Contain("EnableUserInfoEndpointPassthrough()");
+        dependencyInjectionSource.Should().Contain("EnableEndSessionEndpointPassthrough()");
+        dependencyInjectionSource.Should().NotContain("AllowRefreshTokenFlow");
+
+        controllerSource.Should().Contain("[HttpGet(\"~/connect/authorize\")]");
+        controllerSource.Should().Contain("[HttpPost(\"~/connect/token\")]");
+        controllerSource.Should().Contain("[HttpGet(\"~/connect/userinfo\")]");
+        controllerSource.Should().Contain("[HttpGet(\"~/connect/logout\")]");
+        controllerSource.Should().Contain("string.IsNullOrWhiteSpace(request.State)");
+        controllerSource.Should().Contain("string.IsNullOrWhiteSpace(request.Nonce)");
+        controllerSource.Should().Contain("\"employee_no\"");
+        controllerSource.Should().Contain("\"employee_id\"");
+        controllerSource.Should().Contain("\"account_enabled\"");
+        controllerSource.Should().Contain("\"employee_active\"");
+        controllerSource.Should().Contain("\"status_version\"");
+        controllerSource.Should().NotContain("cloud_roles");
+        controllerSource.Should().NotContain("permissions");
+        controllerSource.Should().NotContain("device_assignments");
+
+        gatewayAppSettingsSource.Should().Contain("\"oidc-discovery\"");
+        gatewayAppSettingsSource.Should().Contain("\"Path\": \"/.well-known/openid-configuration\"");
+        gatewayAppSettingsSource.Should().Contain("\"oidc-connect\"");
+        gatewayAppSettingsSource.Should().Contain("\"Path\": \"/connect/{**catch-all}\"");
+        gatewayAppSettingsSource.Should().Contain("\"ai-identity\"");
+        gatewayAppSettingsSource.Should().Contain("\"Path\": \"/api/v1/ai/identity/{**catch-all}\"");
+
+        humanIdentityControllerSource.Should().Contain("ICloudOidcSessionService");
+        humanIdentityControllerSource.Should().Contain("SignInAsync(");
+        humanIdentityControllerSource.Should().Contain("command.EmployeeNo");
     }
 
     [Fact]
@@ -916,7 +988,7 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
-    public void GatewayIntegrationSurface_ShouldDocumentFormalRoutesAndDeprecatedAliases()
+    public void GatewayIntegrationSurface_ShouldDocumentFormalRoutesAndRejectedAliases()
     {
         var documentSource = File.ReadAllText(FindRepoFile("docs", "gateway-integration-surface.md"));
 
@@ -925,9 +997,10 @@ public sealed class ConfigurationGuardTests
         documentSource.Should().Contain("/api/v1/bootstrap/*");
         documentSource.Should().Contain("/api/v1/bootstrap/device-instance");
         documentSource.Should().Contain("/api/v1/bootstrap/edge-login");
+        documentSource.Should().Contain("X-IIoT-Bootstrap-Secret");
         documentSource.Should().Contain("/api/v1/edge/bootstrap/device-instance");
         documentSource.Should().Contain("/api/v1/human/identity/edge-login");
-        documentSource.Should().Contain("deprecated");
+        documentSource.Should().Contain("rejected");
     }
 
     [Fact]
@@ -1049,6 +1122,15 @@ public sealed class ConfigurationGuardTests
     }
 
     private sealed record RequestDeclaration(string RecordName, string InterfaceName);
+
+    private static bool IsAicopilotBackendCallbackRedirectUri(string redirectUri)
+    {
+        return Uri.TryCreate(redirectUri, UriKind.Absolute, out var uri)
+               && string.Equals(
+                   uri.AbsolutePath,
+                   "/api/identity/cloud-oidc/callback",
+                   StringComparison.Ordinal);
+    }
 
     private static string FindRepoFile(params string[] relativeSegments)
     {

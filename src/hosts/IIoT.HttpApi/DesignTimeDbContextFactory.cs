@@ -1,6 +1,7 @@
 ﻿using IIoT.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
+using OpenIddict.EntityFrameworkCore;
 
 namespace IIoT.HttpApi;
 
@@ -14,6 +15,7 @@ public class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<IIoTDbCont
     {
         var optionsBuilder = new DbContextOptionsBuilder<IIoTDbContext>();
         optionsBuilder.UseNpgsql(DesignTimeConnectionStringResolver.Resolve());
+        optionsBuilder.UseOpenIddict<Guid>();
 
         return new IIoTDbContext(optionsBuilder.Options);
     }

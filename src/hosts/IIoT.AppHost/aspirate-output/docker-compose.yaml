@@ -95,6 +95,7 @@ services:
       ForwardedHeaders__ForwardLimit: "${FORWARDED_HEADERS_FORWARDLIMIT:-2}"
       ForwardedHeaders__KnownNetworks__0: "${FORWARDED_HEADERS_KNOWNNETWORKS__0:-172.16.0.0/12}"
       ForwardedHeaders__KnownNetworks__1: "${FORWARDED_HEADERS_KNOWNNETWORKS__1:-10.0.0.0/8}"
+      BootstrapAuth__RequireSecret: "${BOOTSTRAP_AUTH_REQUIRE_SECRET}"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
       OTEL_EXPORTER_OTLP_HEADERS: "x-otlp-api-key=${ASPIRE_DASHBOARD_OTLP_PRIMARYAPIKEY}"
       OTEL_SERVICE_NAME: "iiot-httpapi"

@@ -10,6 +10,7 @@ using IIoT.SharedKernel.Domain;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
+using OpenIddict.EntityFrameworkCore.Models;
 
 namespace IIoT.EntityFrameworkCore;
 
@@ -24,6 +25,10 @@ public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<UploadReceiveRegistration> UploadReceiveRegistrations => Set<UploadReceiveRegistration>();
     public DbSet<AuditTrailRecord> AuditTrails => Set<AuditTrailRecord>();
+    public DbSet<OpenIddictEntityFrameworkCoreApplication<Guid>> OpenIddictApplications => Set<OpenIddictEntityFrameworkCoreApplication<Guid>>();
+    public DbSet<OpenIddictEntityFrameworkCoreAuthorization<Guid>> OpenIddictAuthorizations => Set<OpenIddictEntityFrameworkCoreAuthorization<Guid>>();
+    public DbSet<OpenIddictEntityFrameworkCoreScope<Guid>> OpenIddictScopes => Set<OpenIddictEntityFrameworkCoreScope<Guid>>();
+    public DbSet<OpenIddictEntityFrameworkCoreToken<Guid>> OpenIddictTokens => Set<OpenIddictEntityFrameworkCoreToken<Guid>>();
 
     public bool HasPendingDomainEvents => ChangeTracker.Entries<BaseEntity<Guid>>()
         .Any(e => e.Entity.DomainEvents.Count > 0);

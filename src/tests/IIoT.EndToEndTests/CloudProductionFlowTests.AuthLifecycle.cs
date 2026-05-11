@@ -50,8 +50,8 @@ public sealed partial class CloudProductionFlowTests
         var device = await CreateTestDeviceRegistrationAsync("refresh-delete");
         _fixture.ClearAuthToken();
 
-        using var bootstrapResponse = await _fixture.HttpClient.GetAsync(
-            $"/api/v1/bootstrap/device-instance?clientCode={Uri.EscapeDataString(device.Code)}");
+        using var bootstrapRequest = CreateBootstrapRequest(device);
+        using var bootstrapResponse = await _fixture.HttpClient.SendAsync(bootstrapRequest);
         bootstrapResponse.StatusCode.Should().Be(HttpStatusCode.OK);
         var session = await ReadIssuedBootstrapSessionAsync(bootstrapResponse);
 

@@ -10,8 +10,9 @@
 - `edge`：`/api/v1/edge/*`，只服务已认证设备 token、设备绑定和设备业务链路。
 - `human`：`/api/v1/human/*`，只服务人员后台和人端 RBAC。
 - `ai-read`：`/api/v1/ai/read/*`，作为 Cloud-owned AI-facing read-only API surface 纳入封口基线。
+- `ai-identity`：`/api/v1/ai/identity/*`，只服务 AICopilot 对 Cloud 身份状态版本的只读校验，纳入封口基线。
 
-AiRead 只允许 `actor_type=ai-service-account` 且具备对应 `AiRead.*` 权限点的 service account 读取 Cloud 主动暴露的只读契约。AiRead 不提供写入、审批、派发、触发、补录或修改 Cloud 业务数据能力，也不得复用 human 写接口、edge 上传接口或 bootstrap 链路。生产启用 AiRead 前，必须明确 service account 签发、轮换、撤销、token TTL 和 `delegated_device_id` 默认范围策略；无设备范围的 AiRead token 只允许用于经过批准的系统级只读任务。
+AiRead 与 AiIdentity 只允许 `actor_type=ai-service-account` 且具备对应 `AiRead.*` 权限点的 service account 读取 Cloud 主动暴露的只读契约。它们不提供写入、审批、派发、触发、补录或修改 Cloud 业务数据能力，也不得复用 human 写接口、edge 上传接口或 bootstrap 链路。生产启用前，必须明确 service account 签发、轮换、撤销、token TTL 和 `delegated_device_id` 默认范围策略；无设备范围的 AiRead token 只允许用于经过批准的系统级只读任务。`AiRead.IdentityStatus` 只能返回 Cloud 身份状态字段，不返回 Cloud role、权限列表、设备分配或敏感个人信息。
 
 ## 必须满足的业务闸门
 

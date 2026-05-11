@@ -160,6 +160,7 @@ Values that are template defaults and usually stay unchanged for the single-mach
 - `FORWARDED_HEADERS_FORWARDLIMIT`
 - `FORWARDED_HEADERS_KNOWNNETWORKS__0`
 - `FORWARDED_HEADERS_KNOWNNETWORKS__1`
+- `BOOTSTRAP_AUTH_REQUIRE_SECRET`
 - `BACKUP_RETENTION_DAYS`
 - `BACKUP_MAX_AGE_HOURS`
 - `BACKUP_VERIFY_MAX_AGE_DAYS`
@@ -189,7 +190,9 @@ Refresh endpoints included in this template:
 - `POST /api/v1/human/identity/refresh`
 - `POST /api/v1/bootstrap/edge-refresh`
 
-The deprecated aliases are still proxied by the gateway through the existing YARP configuration.
+Edge bootstrap clients must use the Gateway public `/api/v1/bootstrap/*` surface and send
+`X-IIoT-Bootstrap-Secret` for `device-instance`. The old bootstrap alias paths are not supported
+deployment paths.
 
 ## Logs And Message Replay
 
@@ -219,13 +222,6 @@ Replay guidance:
 4. Watch Seq during replay and stop if the same failure pattern returns.
 
 For backup, restore, health checking, and the standard manual handling order, use [OPERATIONS.md](./OPERATIONS.md).
-
-## Alias Retirement Gate
-
-Do not remove the deprecated aliases until both conditions are true:
-
-- 14 consecutive days with zero alias hits
-- no active consumer or deployed client still depends on the alias
 
 ## Later Hardening
 

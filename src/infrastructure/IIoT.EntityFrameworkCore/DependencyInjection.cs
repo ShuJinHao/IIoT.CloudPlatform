@@ -16,6 +16,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using OpenIddict.EntityFrameworkCore;
 
 namespace IIoT.EntityFrameworkCore;
 
@@ -47,6 +48,15 @@ public static class DependencyInjection
                             null);
                     }
                 });
+                options.UseOpenIddict<Guid>();
+            });
+
+        builder.Services.AddOpenIddict()
+            .AddCore(options =>
+            {
+                options.UseEntityFrameworkCore()
+                    .UseDbContext<IIoTDbContext>()
+                    .ReplaceDefaultEntities<Guid>();
             });
 
         builder.Services.Configure<PermissionCacheOptions>(
@@ -57,6 +67,8 @@ public static class DependencyInjection
         builder.Services.AddScoped(typeof(IRepository<>), typeof(EfRepository<>));
 
         builder.Services.AddScoped<IIdentityAccountStore, IdentityAccountStore>();
+        builder.Services.AddScoped<ICloudOidcUserProfileService, CloudOidcUserProfileService>();
+        builder.Services.AddScoped<IOidcClientSeeder, OpenIddictClientSeeder>();
         builder.Services.AddScoped<IEmployeeLookupService, EmployeeLookupService>();
         builder.Services.AddScoped<IDevicePermissionService, DevicePermissionService>();
         builder.Services.AddScoped<IIdentityPasswordService, IdentityPasswordService>();

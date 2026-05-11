@@ -79,11 +79,13 @@ public sealed class RateLimitingConfigurationGuardTests
         {
             source.Should().Contain("zone=login_limit:10m rate=10r/m");
             source.Should().Contain("zone=refresh_limit:10m rate=60r/m");
-            source.Should().Contain("zone=edge_login_limit:10m rate=20r/m");
             source.Should().Contain("zone=bootstrap_limit:10m rate=60r/m");
             source.Should().Contain("zone=edge_upload_limit:20m rate=1200r/m");
             source.Should().Contain("zone=api_limit:20m rate=300r/m");
             source.Should().Contain("location = /api/v1/human/identity/refresh");
+            source.Should().Contain("location /api/v1/bootstrap/");
+            source.Should().NotContain("location = /api/v1/human/identity/edge-login");
+            source.Should().NotContain("location /api/v1/edge/bootstrap/");
             source.Should().Contain("limit_req zone=refresh_limit burst=30 nodelay;");
             source.Should().Contain("limit_req zone=edge_upload_limit burst=400 nodelay;");
         }

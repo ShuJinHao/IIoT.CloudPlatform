@@ -40,7 +40,7 @@
 
 ## 已闭环的主要问题
 
-- Bootstrap：云端已支持启动密钥、密钥哈希保存、密钥轮换、兼容模式配置和删除设备后的缓存失效。
+- Bootstrap：云端已支持启动密钥、密钥哈希保存、密钥轮换、强制密钥校验和删除设备后的缓存失效。
 - 上传：设备日志、小时产能、注塑过站、码垛过站已具备请求大小限制、批量上限、字段校验、接收登记和幂等去重。
 - 事件：跨服务事件有类型边界，集成事件不再直接绕过 Outbox，Outbox 派发失败耗尽后可见化。
 - 并发：刷新令牌和关键聚合使用 PostgreSQL `xmin`；Outbox dispatcher 使用 `FOR UPDATE SKIP LOCKED` 避免多 worker 重复派发。
@@ -51,7 +51,7 @@
 
 | 项目 | 当前处理 |
 | --- | --- |
-| Bootstrap 强制 `RequireSecret=true` | 云端已准备。旧 EdgeClient 尚未升级前，默认不强制；生产环境在 Edge 升级后必须切换为 `true`。 |
+| Bootstrap 强制 `RequireSecret=true` | EdgeClient 已完成启动密钥接入，云端默认强制校验；不再保留无密钥启动或旧路径兼容口径。 |
 | RefreshToken `SELECT FOR UPDATE` | 当前 PostgreSQL `xmin` 已提供并发冲突保护，暂不做事务锁重构。 |
 | DomainEvent `SchemaVersion` | 属于领域事件版本化设计，涉及历史 Outbox 消息兼容，后续单独设计。 |
 | 审计双写 | 需要统一审计写入和业务 DbContext/UnitOfWork 关系，后续单独设计。 |
