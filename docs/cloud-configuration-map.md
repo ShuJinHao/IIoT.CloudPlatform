@@ -245,3 +245,10 @@ OIDC 身份状态增强说明：
 
 - IIoT.Services.Contracts only carries contracts, events, request markers, and shared protocol constants.
 - IIoT.Services.CrossCutting only carries behaviors, attributes, exceptions, serialization, caching helpers, and MediatR registration glue.
+
+## Cloud-AICopilot OIDC 生产传输守门
+
+- `OidcProvider:Issuer`、`OidcProvider:AicopilotRedirectUris` 和 `OidcProvider:AicopilotPostLogoutRedirectUris` 在非 `Development` 环境必须全部使用 HTTPS。
+- `Development` 环境仅允许 `localhost`、`127.0.0.1`、`[::1]` 这类 loopback HTTP 地址，普通内网或公网 HTTP 地址仍会被启动校验拒绝。
+- `IIoT.HttpApi` 和 `IIoT.MigrationWorkApp` 都按当前环境执行同一套 OIDC 配置校验，避免迁移播种的 client redirect URI 与运行时安全约束不一致。
+- 本地开发配置可以继续保留 `http://localhost` / `http://127.0.0.1` 示例；预发和生产必须通过部署配置覆盖为公网 HTTPS issuer 和 AICopilot callback/logout 地址。

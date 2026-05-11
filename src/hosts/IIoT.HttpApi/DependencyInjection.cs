@@ -103,7 +103,7 @@ public static class DependencyInjection
             static options => options.Validate());
         var oidcProviderOptions = builder.AddValidatedOptions<OidcProviderOptions>(
             OidcProviderOptions.SectionName,
-            static options => options.Validate());
+            options => options.Validate(builder.Environment.EnvironmentName));
         var authenticatedUserPolicy = new AuthorizationPolicyBuilder()
             .RequireAuthenticatedUser()
             .Build();

@@ -14,18 +14,7 @@ public sealed class CloudOidcProviderBehaviorTests
     [Fact]
     public void OidcProviderOptions_Validate_ShouldRequireStableIssuerAndRedirectUri()
     {
-        var valid = new OidcProviderOptions
-        {
-            Issuer = "https://cloud.example.com",
-            AicopilotClientId = "aicopilot",
-            AicopilotRedirectUris = ["https://ai.example.com/api/identity/cloud-oidc/callback"],
-            AicopilotPostLogoutRedirectUris = ["https://ai.example.com/login"],
-            AuthorizationCodeLifetimeMinutes = 3,
-            AccessTokenLifetimeMinutes = 10,
-            IdentityTokenLifetimeMinutes = 10,
-            SessionIdleMinutes = 30,
-            SessionCookieName = "__Host-IIoT-OidcSession"
-        };
+        var valid = CreateValidOidcProviderOptions();
 
         valid.Validate();
 
@@ -37,6 +26,42 @@ public sealed class CloudOidcProviderBehaviorTests
         };
 
         Assert.Throws<InvalidOperationException>(() => invalid.Validate());
+    }
+
+    [Theory]
+    [InlineData("http://localhost:8080", "http://localhost:5178/api/identity/cloud-oidc/callback", "http://localhost:5178/login")]
+    [InlineData("http://127.0.0.1:8080", "http://127.0.0.1:5178/api/identity/cloud-oidc/callback", "http://127.0.0.1:5178/login")]
+    [InlineData("http://[::1]:8080", "http://[::1]:5178/api/identity/cloud-oidc/callback", "http://[::1]:5178/login")]
+    public void OidcProviderOptions_Validate_ShouldAllowDevelopmentLoopbackHttp(
+        string issuer,
+        string redirectUri,
+        string postLogoutRedirectUri)
+    {
+        var options = CreateValidOidcProviderOptions();
+        options.Issuer = issuer;
+        options.AicopilotRedirectUris = [redirectUri];
+        options.AicopilotPostLogoutRedirectUris = [postLogoutRedirectUri];
+
+        options.Validate("Development");
+    }
+
+    [Theory]
+    [InlineData("Production", "http://localhost:8080", "https://ai.example.com/api/identity/cloud-oidc/callback", "https://ai.example.com/login")]
+    [InlineData("Production", "https://cloud.example.com", "http://127.0.0.1:5178/api/identity/cloud-oidc/callback", "https://ai.example.com/login")]
+    [InlineData("Production", "https://cloud.example.com", "https://ai.example.com/api/identity/cloud-oidc/callback", "http://localhost:5178/login")]
+    [InlineData("Development", "http://cloud.example.com", "http://127.0.0.1:5178/api/identity/cloud-oidc/callback", "http://127.0.0.1:5178/login")]
+    public void OidcProviderOptions_Validate_ShouldRejectInsecureOidcUris(
+        string environmentName,
+        string issuer,
+        string redirectUri,
+        string postLogoutRedirectUri)
+    {
+        var options = CreateValidOidcProviderOptions();
+        options.Issuer = issuer;
+        options.AicopilotRedirectUris = [redirectUri];
+        options.AicopilotPostLogoutRedirectUris = [postLogoutRedirectUri];
+
+        Assert.Throws<InvalidOperationException>(() => options.Validate(environmentName));
     }
 
     [Fact]
@@ -145,5 +170,21 @@ public sealed class CloudOidcProviderBehaviorTests
 
         var attribute = Assert.Single(attributes);
         Assert.Equal(AiReadPermissions.IdentityStatus, attribute.Permission);
+    }
+
+    private static OidcProviderOptions CreateValidOidcProviderOptions()
+    {
+        return new OidcProviderOptions
+        {
+            Issuer = "https://cloud.example.com",
+            AicopilotClientId = "aicopilot",
+            AicopilotRedirectUris = ["https://ai.example.com/api/identity/cloud-oidc/callback"],
+            AicopilotPostLogoutRedirectUris = ["https://ai.example.com/login"],
+            AuthorizationCodeLifetimeMinutes = 3,
+            AccessTokenLifetimeMinutes = 10,
+            IdentityTokenLifetimeMinutes = 10,
+            SessionIdleMinutes = 30,
+            SessionCookieName = "__Host-IIoT-OidcSession"
+        };
     }
 }

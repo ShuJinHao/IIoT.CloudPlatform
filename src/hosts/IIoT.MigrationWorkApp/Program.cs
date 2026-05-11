@@ -11,7 +11,7 @@ _ = builder.Configuration.GetRequiredValidatedOptions<PostgresOptions>(
     static options => options.Validate());
 _ = builder.AddValidatedOptions<OidcProviderOptions>(
     OidcProviderOptions.SectionName,
-    static options => options.Validate());
+    options => options.Validate(builder.Environment.EnvironmentName));
 
 builder.AddServiceDefaults();
 builder.AddInfrastructures();

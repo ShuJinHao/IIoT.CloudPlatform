@@ -20,11 +20,21 @@ public sealed class OidcProviderOptions
 
     public void Validate()
     {
-        if (!Uri.TryCreate(Issuer, UriKind.Absolute, out var issuer) ||
-            (issuer.Scheme != Uri.UriSchemeHttps && issuer.Scheme != Uri.UriSchemeHttp))
-        {
-            throw new InvalidOperationException("OidcProvider:Issuer must be an absolute http/https URI.");
-        }
+        Validate("Production");
+    }
+
+    public void Validate(string environmentName)
+    {
+        var allowDevelopmentLoopbackHttp = string.Equals(
+            environmentName,
+            "Development",
+            StringComparison.OrdinalIgnoreCase);
+
+        var issuer = ParseHttpUri(Issuer, "OidcProvider:Issuer");
+        EnsureAllowedTransport(
+            issuer,
+            "OidcProvider:Issuer",
+            allowDevelopmentLoopbackHttp);
 
         if (string.IsNullOrWhiteSpace(AicopilotClientId))
         {
@@ -38,20 +48,24 @@ public sealed class OidcProviderOptions
 
         foreach (var redirectUri in AicopilotRedirectUris)
         {
-            if (!Uri.TryCreate(redirectUri, UriKind.Absolute, out _))
-            {
-                throw new InvalidOperationException(
-                    $"OidcProvider:AicopilotRedirectUris contains an invalid URI: {redirectUri}");
-            }
+            var parsedRedirectUri = ParseHttpUri(
+                redirectUri,
+                $"OidcProvider:AicopilotRedirectUris contains an invalid URI: {redirectUri}");
+            EnsureAllowedTransport(
+                parsedRedirectUri,
+                $"OidcProvider:AicopilotRedirectUris contains an insecure URI: {redirectUri}",
+                allowDevelopmentLoopbackHttp);
         }
 
         foreach (var postLogoutRedirectUri in AicopilotPostLogoutRedirectUris)
         {
-            if (!Uri.TryCreate(postLogoutRedirectUri, UriKind.Absolute, out _))
-            {
-                throw new InvalidOperationException(
-                    $"OidcProvider:AicopilotPostLogoutRedirectUris contains an invalid URI: {postLogoutRedirectUri}");
-            }
+            var parsedPostLogoutRedirectUri = ParseHttpUri(
+                postLogoutRedirectUri,
+                $"OidcProvider:AicopilotPostLogoutRedirectUris contains an invalid URI: {postLogoutRedirectUri}");
+            EnsureAllowedTransport(
+                parsedPostLogoutRedirectUri,
+                $"OidcProvider:AicopilotPostLogoutRedirectUris contains an insecure URI: {postLogoutRedirectUri}",
+                allowDevelopmentLoopbackHttp);
         }
 
         if (AuthorizationCodeLifetimeMinutes <= 0)
@@ -78,5 +92,35 @@ public sealed class OidcProviderOptions
         {
             throw new InvalidOperationException("OidcProvider:SessionCookieName is required.");
         }
+    }
+
+    private static Uri ParseHttpUri(string value, string settingName)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+        {
+            throw new InvalidOperationException($"{settingName} must be an absolute http/https URI.");
+        }
+
+        return uri;
+    }
+
+    private static void EnsureAllowedTransport(
+        Uri uri,
+        string settingName,
+        bool allowDevelopmentLoopbackHttp)
+    {
+        if (uri.Scheme == Uri.UriSchemeHttps)
+        {
+            return;
+        }
+
+        if (allowDevelopmentLoopbackHttp && uri.IsLoopback)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"{settingName} must use HTTPS; HTTP is only allowed for Development loopback endpoints.");
     }
 }
