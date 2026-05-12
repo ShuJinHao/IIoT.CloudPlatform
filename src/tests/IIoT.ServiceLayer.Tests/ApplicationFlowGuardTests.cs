@@ -20,6 +20,8 @@ using IIoT.ProductionService.Profiles;
 using IIoT.ProductionService.Queries.Capacities;
 using IIoT.ProductionService.Queries.Devices;
 using IIoT.ProductionService.Queries.DeviceLogs;
+using IIoT.ProductionService.Queries.PassStations;
+using IIoT.ProductionService.Queries.Recipes;
 using IIoT.ProductionService.Security;
 using IIoT.ProductionService.Validators;
 using IIoT.Services.CrossCutting.Caching;
@@ -31,6 +33,7 @@ using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.Contracts.Events.Capacities;
 using IIoT.Services.Contracts.Events.DeviceLogs;
 using IIoT.Services.Contracts.Events.PassStations;
+using IIoT.SharedKernel.Paging;
 using IIoT.SharedKernel.Result;
 using IIoT.SharedKernel.Specification;
 using Microsoft.Extensions.DependencyInjection;
@@ -1475,6 +1478,309 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
+    public async Task GetMyDevicesPagedHandler_ShouldReturnScopedDevicesForOperator()
+    {
+        var authorizedDevice = new Device("Authorized", "DEV-AUTH-PAGED", Guid.NewGuid());
+        var forbiddenDevice = new Device("Forbidden", "DEV-FORBID-PAGED", Guid.NewGuid());
+        var repository = new InMemoryRepository<Device>();
+        repository.ListResult.Add(authorizedDevice);
+        repository.ListResult.Add(forbiddenDevice);
+        var handler = new GetMyDevicesPagedHandler(
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [authorizedDevice.Id] },
+            repository);
+
+        var result = await handler.Handle(
+            new GetMyDevicesPagedQuery(Page()),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var device = Assert.Single(result.Value!);
+        Assert.Equal(authorizedDevice.Id, device.Id);
+        Assert.Equal(1, result.Value!.MetaData.TotalCount);
+        Assert.NotNull(repository.LastCountSpecification);
+        Assert.NotNull(repository.LastGetListSpecification);
+    }
+
+    [Fact]
+    public async Task GetMyDevicesPagedHandler_ShouldFailBeforeQueryWhenCurrentUserScopeFails()
+    {
+        var repository = new InMemoryRepository<Device>();
+        repository.ListResult.Add(new Device("Device-A", "DEV-SCOPE-FAIL", Guid.NewGuid()));
+        var handler = new GetMyDevicesPagedHandler(
+            new StubCurrentUserDeviceAccessService { FailureMessage = "用户凭证异常" },
+            repository);
+
+        var result = await handler.Handle(
+            new GetMyDevicesPagedQuery(Page()),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("用户凭证异常", result.Errors!);
+        Assert.Null(repository.LastCountSpecification);
+        Assert.Null(repository.LastGetListSpecification);
+    }
+
+    [Fact]
+    public async Task GetMyRecipesPagedHandler_ShouldReturnScopedRecipesForOperator()
+    {
+        var processId = Guid.NewGuid();
+        var authorizedDeviceId = Guid.NewGuid();
+        var forbiddenDeviceId = Guid.NewGuid();
+        var authorizedRecipe = new Recipe("Recipe-A", processId, authorizedDeviceId, "{}");
+        var forbiddenRecipe = new Recipe("Recipe-B", processId, forbiddenDeviceId, "{}");
+        var repository = new InMemoryRepository<Recipe>();
+        repository.ListResult.Add(authorizedRecipe);
+        repository.ListResult.Add(forbiddenRecipe);
+        var handler = new GetMyRecipesPagedHandler(
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [authorizedDeviceId] },
+            repository);
+
+        var result = await handler.Handle(
+            new GetMyRecipesPagedQuery(Page()),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var recipe = Assert.Single(result.Value!);
+        Assert.Equal(authorizedRecipe.Id, recipe.Id);
+        Assert.Equal(1, result.Value!.MetaData.TotalCount);
+    }
+
+    [Fact]
+    public async Task GetRecipeByIdHandler_ShouldRejectRecipeOutsideCurrentUserScope()
+    {
+        var recipe = new Recipe("Recipe-Forbidden", Guid.NewGuid(), Guid.NewGuid(), "{}");
+        var repository = new InMemoryRepository<Recipe>
+        {
+            SingleOrDefaultResult = recipe
+        };
+        var accessService = new StubCurrentUserDeviceAccessService
+        {
+            AccessibleDeviceIds = [Guid.NewGuid()]
+        };
+        var handler = new GetRecipeByIdHandler(
+            repository,
+            new RecordingCacheService(),
+            accessService);
+
+        var result = await handler.Handle(new GetRecipeByIdQuery(recipe.Id), CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(recipe.DeviceId, accessService.LastCheckedDeviceId);
+    }
+
+    [Fact]
+    public async Task GetDeviceLogsHandler_ShouldQueryLogsAfterDeviceAccessSucceeds()
+    {
+        var deviceId = Guid.NewGuid();
+        var queryService = new StubDeviceLogQueryService
+        {
+            Items =
+            [
+                new DeviceLogListItemDto(
+                    Guid.NewGuid(),
+                    deviceId,
+                    "Device-A",
+                    "WARN",
+                    "temperature high",
+                    DateTime.UtcNow,
+                    DateTime.UtcNow)
+            ],
+            TotalCount = 1
+        };
+        var handler = new GetDeviceLogsHandler(
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [deviceId] },
+            queryService);
+
+        var result = await handler.Handle(
+            new GetDeviceLogsQuery(Page(), deviceId, "WARN", "temperature"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(1, queryService.LogsByConditionCalls);
+        Assert.Equal(deviceId, queryService.LastLogsDeviceId);
+        Assert.Equal("WARN", queryService.LastLogsLevel);
+        Assert.Equal("temperature", queryService.LastLogsKeyword);
+        Assert.Equal(1, result.Value!.MetaData.TotalCount);
+    }
+
+    [Fact]
+    public async Task GetDeviceLogsHandler_ShouldRejectUnauthorizedDeviceBeforeQuery()
+    {
+        var deviceId = Guid.NewGuid();
+        var accessService = new StubCurrentUserDeviceAccessService
+        {
+            AccessibleDeviceIds = [Guid.NewGuid()]
+        };
+        var queryService = new StubDeviceLogQueryService();
+        var handler = new GetDeviceLogsHandler(accessService, queryService);
+
+        var result = await handler.Handle(
+            new GetDeviceLogsQuery(Page(), deviceId),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(deviceId, accessService.LastCheckedDeviceId);
+        Assert.Equal(0, queryService.LogsByConditionCalls);
+    }
+
+    [Fact]
+    public async Task GetDailyCapacityPagedHandler_ShouldReturnEmptyWhenOperatorHasNoDeviceAccess()
+    {
+        var queryService = new StubCapacityQueryService();
+        var handler = new GetDailyCapacityPagedHandler(
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [] },
+            queryService,
+            new RecordingCacheService());
+
+        var result = await handler.Handle(
+            new GetDailyCapacityPagedQuery(Page()),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Empty(result.Value!);
+        Assert.Equal(0, queryService.DailyPagedCalls);
+    }
+
+    [Fact]
+    public async Task GetDailyCapacityPagedHandler_ShouldPassCurrentUserScopeForAggregateRequest()
+    {
+        var allowedDeviceId = Guid.NewGuid();
+        var date = DateOnly.FromDateTime(DateTime.UtcNow);
+        var queryService = new StubCapacityQueryService
+        {
+            DailyPagedResult =
+            [
+                new DailyCapacityPagedItemDto(
+                    allowedDeviceId,
+                    "Device-A",
+                    date,
+                    20,
+                    18,
+                    2,
+                    90m,
+                    DateTime.UtcNow)
+            ],
+            DailyPagedTotalCount = 1
+        };
+        var cache = new RecordingCacheService();
+        var handler = new GetDailyCapacityPagedHandler(
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [allowedDeviceId] },
+            queryService,
+            cache);
+
+        var result = await handler.Handle(
+            new GetDailyCapacityPagedQuery(Page(), date),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(1, queryService.DailyPagedCalls);
+        Assert.Equal(date, queryService.LastDailyDate);
+        Assert.Null(queryService.LastDailyDeviceId);
+        Assert.Equal(new[] { allowedDeviceId }, queryService.LastDailyDeviceIds);
+        Assert.Null(cache.LastSetKey);
+    }
+
+    [Fact]
+    public async Task GetDailyCapacityPagedHandler_ShouldRejectSpecificDeviceOutsideScopeBeforeQuery()
+    {
+        var queryService = new StubCapacityQueryService();
+        var handler = new GetDailyCapacityPagedHandler(
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [Guid.NewGuid()] },
+            queryService,
+            new RecordingCacheService());
+
+        var result = await handler.Handle(
+            new GetDailyCapacityPagedQuery(Page(), DeviceId: Guid.NewGuid()),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(0, queryService.DailyPagedCalls);
+    }
+
+    [Fact]
+    public async Task GetPassStationListByTypeHandler_ShouldIntersectProcessDevicesWithCurrentUserScope()
+    {
+        var processId = Guid.NewGuid();
+        var allowedDeviceId = Guid.NewGuid();
+        var processOnlyDeviceId = Guid.NewGuid();
+        var queryService = new StubPassStationRecordQueryService();
+        var handler = new GetPassStationListByTypeHandler(
+            CreatePassStationSchemaProvider(),
+            queryService,
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [allowedDeviceId, Guid.NewGuid()] },
+            new StubProcessReadQueryService { DeviceIds = [allowedDeviceId, processOnlyDeviceId] });
+
+        var result = await handler.Handle(
+            new GetPassStationListByTypeQuery(new PassStationQueryRequest(
+                " injection ",
+                PassStationQueryModes.TimeProcess,
+                Page(),
+                processId,
+                StartTime: DateTime.UtcNow.AddHours(-1),
+                EndTime: DateTime.UtcNow)),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(1, queryService.GetByConditionCalls);
+        Assert.Equal("injection", queryService.LastRequest!.TypeKey);
+        Assert.Equal(new[] { allowedDeviceId }, queryService.LastAllowedDeviceIds);
+    }
+
+    [Fact]
+    public async Task GetPassStationListByTypeHandler_ShouldReturnEmptyWhenProcessHasNoAccessibleDevices()
+    {
+        var queryService = new StubPassStationRecordQueryService();
+        var handler = new GetPassStationListByTypeHandler(
+            CreatePassStationSchemaProvider(),
+            queryService,
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [Guid.NewGuid()] },
+            new StubProcessReadQueryService { DeviceIds = [Guid.NewGuid()] });
+
+        var result = await handler.Handle(
+            new GetPassStationListByTypeQuery(new PassStationQueryRequest(
+                "injection",
+                PassStationQueryModes.TimeProcess,
+                Page(),
+                Guid.NewGuid(),
+                StartTime: DateTime.UtcNow.AddHours(-1),
+                EndTime: DateTime.UtcNow)),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Empty(result.Value!);
+        Assert.Equal(0, queryService.GetByConditionCalls);
+    }
+
+    [Fact]
+    public async Task GetPassStationDetailByTypeHandler_ShouldRejectDetailOutsideCurrentUserScope()
+    {
+        var detail = new PassStationDetailDto(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            "BC-001",
+            "OK",
+            DateTime.UtcNow,
+            DateTime.UtcNow,
+            []);
+        var queryService = new StubPassStationRecordQueryService
+        {
+            Detail = detail
+        };
+        var handler = new GetPassStationDetailByTypeHandler(
+            CreatePassStationSchemaProvider(),
+            queryService,
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [Guid.NewGuid()] });
+
+        var result = await handler.Handle(
+            new GetPassStationDetailByTypeQuery("injection", detail.Id),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ResultStatus.Forbidden, result.Status);
+        Assert.Equal(1, queryService.GetDetailCalls);
+    }
+
+    [Fact]
     public async Task GetEdgeHourlyByDeviceIdHandler_ShouldBypassCacheForFreshReads()
     {
         var deviceId = Guid.NewGuid();
@@ -1657,6 +1963,15 @@ public sealed class ApplicationFlowGuardTests
     {
         using var document = JsonDocument.Parse(json);
         return document.RootElement.Clone();
+    }
+
+    private static Pagination Page(int pageNumber = 1, int pageSize = 10)
+    {
+        return new Pagination
+        {
+            PageNumber = pageNumber,
+            PageSize = pageSize
+        };
     }
 
     private static ProcessRecordUploadRequest CreateProcessRecordUploadRequest(
