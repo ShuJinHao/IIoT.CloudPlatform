@@ -33,6 +33,7 @@
   </Folder>
   <Folder Name="/src/tests/">
     <Project Path="src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj" Id="69d80425-d1b5-4f1c-a542-4a339531f08a" />
+    <Project Path="src/tests/IIoT.ProductionService.Tests/IIoT.ProductionService.Tests.csproj" />
     <Project Path="src/tests/IIoT.ServiceLayer.Tests/IIoT.ServiceLayer.Tests.csproj" />
   </Folder>
 </Solution>

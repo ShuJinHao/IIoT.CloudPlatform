@@ -1,5 +1,10 @@
 namespace IIoT.EntityFrameworkCore.Identity;
 
+/// <summary>
+/// Refresh-token persistence row owned by the identity infrastructure.
+/// It intentionally stays outside BaseEntity/IAggregateRoot so token rotation
+/// is not exposed through the domain repository or domain-event pipeline.
+/// </summary>
 public sealed class RefreshTokenSession
 {
     public Guid Id { get; set; }
