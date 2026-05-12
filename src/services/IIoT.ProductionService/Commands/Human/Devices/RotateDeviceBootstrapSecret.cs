@@ -23,6 +23,7 @@ public sealed record RotateDeviceBootstrapSecretResultDto(
 
 public class RotateDeviceBootstrapSecretHandler(
     ICurrentUser currentUser,
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IRepository<Device> deviceRepository,
     ICacheService cacheService,
     IAuditTrailService auditTrailService)
@@ -32,7 +33,7 @@ public class RotateDeviceBootstrapSecretHandler(
         RotateDeviceBootstrapSecretCommand request,
         CancellationToken cancellationToken)
     {
-        if (!string.Equals(currentUser.Role, SystemRoles.Admin, StringComparison.Ordinal))
+        if (!currentUserDeviceAccessService.IsAdministrator)
         {
             return await FailAsync(
                 request.DeviceId.ToString(),

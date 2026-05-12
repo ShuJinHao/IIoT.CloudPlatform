@@ -816,14 +816,66 @@ internal sealed class TestAiReadScopeAccessor : IAiReadScopeAccessor
 
 internal sealed class StubDevicePermissionService : IDevicePermissionService
 {
-    public IReadOnlyList<Guid>? AccessibleDeviceIds { get; set; }
+    public IReadOnlyList<Guid> AccessibleDeviceIds { get; set; } = [];
 
-    public Task<IReadOnlyList<Guid>?> GetAccessibleDeviceIdsAsync(
+    public int GetAccessibleDeviceIdsCalls { get; private set; }
+
+    public Guid? LastUserId { get; private set; }
+
+    public Task<IReadOnlyList<Guid>> GetAccessibleDeviceIdsAsync(
         Guid userId,
-        bool isAdmin,
         CancellationToken cancellationToken = default)
     {
+        GetAccessibleDeviceIdsCalls++;
+        LastUserId = userId;
         return Task.FromResult(AccessibleDeviceIds);
+    }
+}
+
+internal sealed class StubCurrentUserDeviceAccessService : ICurrentUserDeviceAccessService
+{
+    public bool IsAdministrator { get; set; }
+
+    public IReadOnlyList<Guid>? AccessibleDeviceIds { get; set; }
+
+    public string? FailureMessage { get; set; }
+
+    public int GetAccessibleDeviceIdsCalls { get; private set; }
+
+    public int EnsureCanAccessDeviceCalls { get; private set; }
+
+    public Guid? LastCheckedDeviceId { get; private set; }
+
+    public Task<Result<IReadOnlyList<Guid>?>> GetAccessibleDeviceIdsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        GetAccessibleDeviceIdsCalls++;
+        if (FailureMessage is not null)
+        {
+            return Task.FromResult<Result<IReadOnlyList<Guid>?>>(Result.Failure(FailureMessage));
+        }
+
+        return Task.FromResult(Result.Success<IReadOnlyList<Guid>?>(
+            IsAdministrator ? null : AccessibleDeviceIds ?? []));
+    }
+
+    public Task<Result> EnsureCanAccessDeviceAsync(
+        Guid deviceId,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureCanAccessDeviceCalls++;
+        LastCheckedDeviceId = deviceId;
+        if (FailureMessage is not null)
+        {
+            return Task.FromResult(Result.Failure(FailureMessage));
+        }
+
+        if (IsAdministrator || AccessibleDeviceIds?.Contains(deviceId) == true)
+        {
+            return Task.FromResult(Result.Success());
+        }
+
+        return Task.FromResult(Result.Failure("越权: 未授权访问该设备"));
     }
 }
 

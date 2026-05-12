@@ -13,8 +13,7 @@ namespace IIoT.ProductionService.Queries.Devices;
 public record GetDeviceSelectListQuery() : IHumanQuery<Result<List<DeviceSelectDto>>>;
 
 public class GetDeviceSelectListHandler(
-    ICurrentUser currentUser,
-    IDevicePermissionService devicePermissionService,
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IReadRepository<Device> deviceRepository)
     : IQueryHandler<GetDeviceSelectListQuery, Result<List<DeviceSelectDto>>>
 {
@@ -22,21 +21,16 @@ public class GetDeviceSelectListHandler(
         GetDeviceSelectListQuery request,
         CancellationToken cancellationToken)
     {
-        List<Guid>? allowedDeviceIds = null;
-
-        if (!string.Equals(currentUser.Role, SystemRoles.Admin, StringComparison.Ordinal))
+        var scope = await currentUserDeviceAccessService.GetAccessibleDeviceIdsAsync(cancellationToken);
+        if (!scope.IsSuccess)
         {
-            if (!Guid.TryParse(currentUser.Id, out var userId))
-                return Result.Failure("用户凭证异常");
+            return Result.Failure(scope.Errors?.ToArray() ?? ["用户凭证异常"]);
+        }
 
-            var accessibleDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
-                userId,
-                isAdmin: false,
-                cancellationToken);
-
-            allowedDeviceIds = accessibleDeviceIds?.ToList();
-            if (allowedDeviceIds is null || allowedDeviceIds.Count == 0)
-                return Result.Success(new List<DeviceSelectDto>());
+        var allowedDeviceIds = scope.Value?.ToList();
+        if (allowedDeviceIds is { Count: 0 })
+        {
+            return Result.Success(new List<DeviceSelectDto>());
         }
 
         var spec = new DevicePagedSpec(0, 0, allowedDeviceIds, isPaging: false);

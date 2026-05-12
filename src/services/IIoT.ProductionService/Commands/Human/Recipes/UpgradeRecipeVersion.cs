@@ -19,10 +19,9 @@ public record UpgradeRecipeVersionCommand(
 ) : IHumanCommand<Result<Guid>>;
 
 public class UpgradeRecipeVersionHandler(
-    ICurrentUser currentUser,
     IRepository<Recipe> recipeRepository,
     IRecipeReadQueryService recipeReadQueryService,
-    IDevicePermissionService devicePermissionService)
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService)
     : ICommandHandler<UpgradeRecipeVersionCommand, Result<Guid>>
 {
     public async Task<Result<Guid>> Handle(
@@ -44,20 +43,12 @@ public class UpgradeRecipeVersionHandler(
         if (source is null)
             return Result.Failure("升级失败: 源配方不存在");
 
-        if (!string.Equals(
-                currentUser.Role,
-                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
-                StringComparison.Ordinal))
+        var deviceAccess = await currentUserDeviceAccessService.EnsureCanAccessDeviceAsync(
+            source.DeviceId,
+            cancellationToken);
+        if (!deviceAccess.IsSuccess)
         {
-            if (!Guid.TryParse(currentUser.Id, out var userId))
-                return Result.Failure("用户凭证异常");
-
-            var accessibleDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
-                userId,
-                isAdmin: false,
-                cancellationToken);
-            if (accessibleDeviceIds is null || !accessibleDeviceIds.Contains(source.DeviceId))
-                return Result.Failure("越权: 当前账号无权操作该设备");
+            return Result.Failure(deviceAccess.Errors?.ToArray() ?? ["越权: 当前账号无权操作该设备"]);
         }
 
         var duplicateExists = await recipeReadQueryService.VersionExistsAsync(

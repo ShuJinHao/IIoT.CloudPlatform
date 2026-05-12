@@ -5,6 +5,7 @@ using IIoT.IdentityService.Commands;
 using IIoT.IdentityService.Queries;
 using IIoT.ProductionService.Commands.Bootstrap.Devices;
 using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.CrossCutting.Authorization;
 using IIoT.Services.CrossCutting.Behaviors;
 using IIoT.Services.CrossCutting.Caching;
 using IIoT.Services.CrossCutting.Caching.Options;
@@ -40,11 +41,103 @@ public sealed class AuthorizationAndIdentityBehaviorTests
                 ExpirationHours = 2
             }));
 
-        var accessibleDeviceIds = await service.GetAccessibleDeviceIdsAsync(employee.Id, isAdmin: false);
+        var accessibleDeviceIds = await service.GetAccessibleDeviceIdsAsync(employee.Id);
 
-        Assert.Single(accessibleDeviceIds!);
+        Assert.Single(accessibleDeviceIds);
         Assert.Equal(TimeSpan.FromMinutes(10), cacheService.LastAbsoluteExpireTime);
         Assert.Equal(1, cacheService.GetOrSetCalls);
+    }
+
+    [Fact]
+    public async Task CurrentUserDeviceAccessService_ShouldReturnAllDeviceScopeForAdminWithoutPermissionQuery()
+    {
+        var permissionService = new StubDevicePermissionService
+        {
+            AccessibleDeviceIds = [Guid.NewGuid()]
+        };
+        var service = new CurrentUserDeviceAccessService(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                Role = SystemRoles.Admin,
+                IsAuthenticated = true
+            },
+            permissionService);
+
+        var scope = await service.GetAccessibleDeviceIdsAsync();
+
+        Assert.True(scope.IsSuccess);
+        Assert.Null(scope.Value);
+        Assert.Equal(0, permissionService.GetAccessibleDeviceIdsCalls);
+    }
+
+    [Fact]
+    public async Task CurrentUserDeviceAccessService_ShouldReturnAssignedDeviceScopeForOperator()
+    {
+        var userId = Guid.NewGuid();
+        var deviceId = Guid.NewGuid();
+        var permissionService = new StubDevicePermissionService
+        {
+            AccessibleDeviceIds = [deviceId]
+        };
+        var service = new CurrentUserDeviceAccessService(
+            new TestCurrentUser
+            {
+                Id = userId.ToString(),
+                Role = "Operator",
+                IsAuthenticated = true
+            },
+            permissionService);
+
+        var scope = await service.GetAccessibleDeviceIdsAsync();
+
+        Assert.True(scope.IsSuccess);
+        Assert.Equal([deviceId], scope.Value);
+        Assert.Equal(1, permissionService.GetAccessibleDeviceIdsCalls);
+        Assert.Equal(userId, permissionService.LastUserId);
+    }
+
+    [Fact]
+    public async Task CurrentUserDeviceAccessService_ShouldFailForInvalidUserIdWithoutPermissionQuery()
+    {
+        var permissionService = new StubDevicePermissionService();
+        var service = new CurrentUserDeviceAccessService(
+            new TestCurrentUser
+            {
+                Id = "not-a-guid",
+                Role = "Operator",
+                IsAuthenticated = true
+            },
+            permissionService);
+
+        var scope = await service.GetAccessibleDeviceIdsAsync();
+
+        Assert.False(scope.IsSuccess);
+        Assert.Contains("用户凭证异常", scope.Errors!);
+        Assert.Equal(0, permissionService.GetAccessibleDeviceIdsCalls);
+    }
+
+    [Fact]
+    public async Task CurrentUserDeviceAccessService_ShouldRejectUnassignedDeviceForOperator()
+    {
+        var allowedDeviceId = Guid.NewGuid();
+        var deniedDeviceId = Guid.NewGuid();
+        var service = new CurrentUserDeviceAccessService(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                Role = "Operator",
+                IsAuthenticated = true
+            },
+            new StubDevicePermissionService
+            {
+                AccessibleDeviceIds = [allowedDeviceId]
+            });
+
+        var access = await service.EnsureCanAccessDeviceAsync(deniedDeviceId);
+
+        Assert.False(access.IsSuccess);
+        Assert.Contains("越权", access.Errors!.Single());
     }
 
     [Fact]

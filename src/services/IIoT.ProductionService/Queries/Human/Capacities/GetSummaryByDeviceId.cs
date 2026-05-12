@@ -19,8 +19,7 @@ public record GetSummaryByDeviceIdQuery(
 ) : IHumanQuery<Result<DailySummaryDto?>>;
 
 public class GetSummaryByDeviceIdHandler(
-    ICurrentUser currentUser,
-    IDevicePermissionService devicePermissionService,
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     ICapacityQueryService queryService,
     ICacheService cacheService
 ) : IQueryHandler<GetSummaryByDeviceIdQuery, Result<DailySummaryDto?>>
@@ -29,20 +28,12 @@ public class GetSummaryByDeviceIdHandler(
         GetSummaryByDeviceIdQuery request,
         CancellationToken cancellationToken)
     {
-        if (!string.Equals(
-                currentUser.Role,
-                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
-                StringComparison.Ordinal))
+        var deviceAccess = await currentUserDeviceAccessService.EnsureCanAccessDeviceAsync(
+            request.DeviceId,
+            cancellationToken);
+        if (!deviceAccess.IsSuccess)
         {
-            if (!Guid.TryParse(currentUser.Id, out var userId))
-                return Result.Failure("用户凭证异常");
-
-            var accessibleDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
-                userId,
-                isAdmin: false,
-                cancellationToken);
-            if (accessibleDeviceIds is null || !accessibleDeviceIds.Contains(request.DeviceId))
-                return Result.Failure("无权查看该设备的汇总报表");
+            return Result.Failure(deviceAccess.Errors?.ToArray() ?? ["无权查看该设备的汇总报表"]);
         }
 
         var cacheKey = CacheKeys.CapacitySummary(request.DeviceId, request.Date, request.PlcName);

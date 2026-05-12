@@ -16,9 +16,8 @@ public record UpdateDeviceProfileCommand(
 ) : IHumanCommand<Result<bool>>;
 
 public class UpdateDeviceProfileHandler(
-    ICurrentUser currentUser,
     IRepository<Device> deviceRepository,
-    IDevicePermissionService devicePermissionService)
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService)
     : ICommandHandler<UpdateDeviceProfileCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(
@@ -37,22 +36,12 @@ public class UpdateDeviceProfileHandler(
         if (device is null)
             return Result.Failure("目标设备不存在");
 
-        if (!string.Equals(
-                currentUser.Role,
-                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
-                StringComparison.Ordinal))
+        var deviceAccess = await currentUserDeviceAccessService.EnsureCanAccessDeviceAsync(
+            device.Id,
+            cancellationToken);
+        if (!deviceAccess.IsSuccess)
         {
-            if (!Guid.TryParse(currentUser.Id, out var userId))
-                return Result.Failure("用户凭证异常");
-
-            var accessibleDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
-                userId,
-                isAdmin: false,
-                cancellationToken);
-            if (accessibleDeviceIds is null || !accessibleDeviceIds.Contains(device.Id))
-            {
-                return Result.Failure("越权:未授权访问该设备");
-            }
+            return Result.Failure(deviceAccess.Errors?.ToArray() ?? ["越权:未授权访问该设备"]);
         }
 
         device.Rename(deviceName);

@@ -8,8 +8,7 @@ namespace IIoT.Services.Contracts.Authorization;
 /// </summary>
 public interface IDevicePermissionService
 {
-    Task<IReadOnlyList<Guid>?> GetAccessibleDeviceIdsAsync(
+    Task<IReadOnlyList<Guid>> GetAccessibleDeviceIdsAsync(
         Guid userId,
-        bool isAdmin,
         CancellationToken cancellationToken = default);
 }

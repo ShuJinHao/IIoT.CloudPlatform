@@ -20,17 +20,14 @@ public record DeviceSelectDto(
 public record GetAllDevicesQuery() : IHumanQuery<Result<List<DeviceSelectDto>>>;
 
 public class GetAllDevicesHandler(
-    ICurrentUser currentUser,
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IReadRepository<Device> deviceRepository,
     ICacheService cacheService
 ) : IQueryHandler<GetAllDevicesQuery, Result<List<DeviceSelectDto>>>
 {
     public async Task<Result<List<DeviceSelectDto>>> Handle(GetAllDevicesQuery request, CancellationToken cancellationToken)
     {
-        if (!string.Equals(
-                currentUser.Role,
-                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
-                StringComparison.Ordinal))
+        if (!currentUserDeviceAccessService.IsAdministrator)
             throw new ForbiddenException("仅管理员可查看全量设备列表");
 
         var cacheKey = CacheKeys.AllDevices();

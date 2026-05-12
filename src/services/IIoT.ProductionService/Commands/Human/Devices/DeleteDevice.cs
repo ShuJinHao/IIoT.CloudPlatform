@@ -22,7 +22,7 @@ public class DeleteDeviceHandler(
     IRepository<Device> deviceRepository,
     IDeviceDeletionDependencyQueryService dependencyQueryService,
     IRefreshTokenService refreshTokenService,
-    IDevicePermissionService devicePermissionService,
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     ICacheService cacheService,
     IAuditTrailService auditTrailService)
     : ICommandHandler<DeleteDeviceCommand, Result<bool>>
@@ -38,19 +38,15 @@ public class DeleteDeviceHandler(
         if (device is null)
             return await FailAsync(request.DeviceId.ToString(), "目标设备不存在", cancellationToken);
 
-        if (!string.Equals(currentUser.Role, SystemRoles.Admin, StringComparison.Ordinal))
+        var deviceAccess = await currentUserDeviceAccessService.EnsureCanAccessDeviceAsync(
+            device.Id,
+            cancellationToken);
+        if (!deviceAccess.IsSuccess)
         {
-            if (!Guid.TryParse(currentUser.Id, out var userId))
-                return await FailAsync(device.Id.ToString(), "用户凭证异常", cancellationToken);
-
-            var accessibleDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
-                userId,
-                isAdmin: false,
+            return await FailAsync(
+                device.Id.ToString(),
+                deviceAccess.Errors?.FirstOrDefault() ?? "越权：未授权访问该设备",
                 cancellationToken);
-            if (accessibleDeviceIds is null || !accessibleDeviceIds.Contains(device.Id))
-            {
-                return await FailAsync(device.Id.ToString(), "越权：未授权访问该设备", cancellationToken);
-            }
         }
 
         var dependencies = await dependencyQueryService.GetDependenciesAsync(

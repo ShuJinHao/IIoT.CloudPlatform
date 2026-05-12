@@ -20,8 +20,7 @@ public record GetDailyCapacityPagedQuery(
 ) : IHumanQuery<Result<PagedList<DailyCapacityPagedItemDto>>>;
 
 public class GetDailyCapacityPagedHandler(
-    ICurrentUser currentUser,
-    IDevicePermissionService devicePermissionService,
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     ICapacityQueryService queryService,
     ICacheService cacheService
 ) : IQueryHandler<GetDailyCapacityPagedQuery, Result<PagedList<DailyCapacityPagedItemDto>>>
@@ -30,27 +29,23 @@ public class GetDailyCapacityPagedHandler(
         GetDailyCapacityPagedQuery request,
         CancellationToken cancellationToken)
     {
-        List<Guid>? allowedDeviceIds = null;
-
-        if (!string.Equals(
-                currentUser.Role,
-                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
-                StringComparison.Ordinal))
+        var scope = await currentUserDeviceAccessService.GetAccessibleDeviceIdsAsync(cancellationToken);
+        if (!scope.IsSuccess)
         {
-            if (!Guid.TryParse(currentUser.Id, out var userId))
-                return Result.Failure("用户凭证异常");
+            return Result.Failure(scope.Errors?.ToArray() ?? ["用户凭证异常"]);
+        }
 
-            var accessibleDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
-                userId,
-                isAdmin: false,
-                cancellationToken);
-            allowedDeviceIds = accessibleDeviceIds?.ToList();
+        var allowedDeviceIds = scope.Value?.ToList();
+        if (allowedDeviceIds is { Count: 0 })
+        {
+            return Result.Success(new PagedList<DailyCapacityPagedItemDto>([], 0, request.PaginationParams));
+        }
 
-            if (allowedDeviceIds is null || allowedDeviceIds.Count == 0)
-                return Result.Success(new PagedList<DailyCapacityPagedItemDto>([], 0, request.PaginationParams));
-
-            if (request.DeviceId.HasValue && !allowedDeviceIds.Contains(request.DeviceId.Value))
-                return Result.Failure("无权查看该设备的日报报表");
+        if (request.DeviceId.HasValue
+            && allowedDeviceIds is not null
+            && !allowedDeviceIds.Contains(request.DeviceId.Value))
+        {
+            return Result.Failure("无权查看该设备的日报报表");
         }
 
         var cacheKey = CacheKeys.CapacityPaged(
@@ -59,11 +54,7 @@ public class GetDailyCapacityPagedHandler(
             request.PaginationParams.PageNumber,
             request.PaginationParams.PageSize);
 
-        var canUseCache = string.Equals(
-                              currentUser.Role,
-                              IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
-                              StringComparison.Ordinal)
-                          || request.DeviceId.HasValue;
+        var canUseCache = currentUserDeviceAccessService.IsAdministrator || request.DeviceId.HasValue;
 
         if (canUseCache)
         {

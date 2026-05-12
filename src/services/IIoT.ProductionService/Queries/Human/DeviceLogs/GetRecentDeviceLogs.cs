@@ -20,8 +20,7 @@ public record GetRecentAlertCountQuery(
 ) : IHumanQuery<Result<RecentAlertCountDto>>;
 
 public class GetRecentDeviceLogsHandler(
-    ICurrentUser currentUser,
-    IDevicePermissionService devicePermissionService,
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IDeviceLogQueryService queryService)
     : IQueryHandler<GetRecentDeviceLogsQuery, Result<List<DeviceLogListItemDto>>>
 {
@@ -39,13 +38,13 @@ public class GetRecentDeviceLogsHandler(
             return Result.Invalid("日志等级仅支持 INFO、WARN、ERROR。");
         }
 
-        var scope = await ResolveAllowedDeviceIdsAsync(cancellationToken);
-        if (scope.IsFailure)
+        var scope = await currentUserDeviceAccessService.GetAccessibleDeviceIdsAsync(cancellationToken);
+        if (!scope.IsSuccess)
         {
-            return Result.Failure(scope.ErrorMessage!);
+            return Result.Failure(scope.Errors?.FirstOrDefault() ?? "用户凭证异常");
         }
 
-        if (scope.DeviceIds is { Count: 0 })
+        if (scope.Value is { Count: 0 })
         {
             return Result.Success(new List<DeviceLogListItemDto>());
         }
@@ -55,51 +54,15 @@ public class GetRecentDeviceLogsHandler(
             limit,
             levels,
             request.ProcessId,
-            scope.DeviceIds,
+            scope.Value,
             cancellationToken);
 
         return Result.Success(items);
     }
-
-    private async Task<DeviceScopeResult> ResolveAllowedDeviceIdsAsync(CancellationToken cancellationToken)
-    {
-        if (string.Equals(currentUser.Role, SystemRoles.Admin, StringComparison.Ordinal))
-        {
-            return DeviceScopeResult.Success(null);
-        }
-
-        if (!Guid.TryParse(currentUser.Id, out var userId))
-        {
-            return DeviceScopeResult.Failure("用户凭证异常");
-        }
-
-        var accessibleDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
-            userId,
-            isAdmin: false,
-            cancellationToken);
-
-        return DeviceScopeResult.Success(accessibleDeviceIds?.ToList() ?? []);
-    }
-
-    private sealed record DeviceScopeResult(IReadOnlyList<Guid>? DeviceIds, string? ErrorMessage)
-    {
-        public bool IsFailure => ErrorMessage is not null;
-
-        public static DeviceScopeResult Success(IReadOnlyList<Guid>? deviceIds)
-        {
-            return new DeviceScopeResult(deviceIds, null);
-        }
-
-        public static DeviceScopeResult Failure(string errorMessage)
-        {
-            return new DeviceScopeResult(null, errorMessage);
-        }
-    }
 }
 
 public class GetRecentAlertCountHandler(
-    ICurrentUser currentUser,
-    IDevicePermissionService devicePermissionService,
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IDeviceLogQueryService queryService)
     : IQueryHandler<GetRecentAlertCountQuery, Result<RecentAlertCountDto>>
 {
@@ -110,22 +73,22 @@ public class GetRecentAlertCountHandler(
         GetRecentAlertCountQuery request,
         CancellationToken cancellationToken)
     {
-        var scope = await ResolveAllowedDeviceIdsAsync(cancellationToken);
-        if (scope.IsFailure)
+        var scope = await currentUserDeviceAccessService.GetAccessibleDeviceIdsAsync(cancellationToken);
+        if (!scope.IsSuccess)
         {
-            return Result.Failure(scope.ErrorMessage!);
+            return Result.Failure(scope.Errors?.FirstOrDefault() ?? "用户凭证异常");
         }
 
         var now = DateTimeOffset.UtcNow;
         var windowStart = now.AddHours(-AlertWindowHours);
 
-        var count = scope.DeviceIds is { Count: 0 }
+        var count = scope.Value is { Count: 0 }
             ? 0
             : await queryService.CountRecentAlertsAsync(
                 windowStart,
                 DeviceLogSeverityLevels.WarningAndErrorLevels,
                 request.ProcessId,
-                scope.DeviceIds,
+                scope.Value,
                 cancellationToken);
 
         return Result.Success(new RecentAlertCountDto(
@@ -135,40 +98,5 @@ public class GetRecentAlertCountHandler(
             windowStart,
             now,
             now));
-    }
-
-    private async Task<DeviceScopeResult> ResolveAllowedDeviceIdsAsync(CancellationToken cancellationToken)
-    {
-        if (string.Equals(currentUser.Role, SystemRoles.Admin, StringComparison.Ordinal))
-        {
-            return DeviceScopeResult.Success(null);
-        }
-
-        if (!Guid.TryParse(currentUser.Id, out var userId))
-        {
-            return DeviceScopeResult.Failure("用户凭证异常");
-        }
-
-        var accessibleDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
-            userId,
-            isAdmin: false,
-            cancellationToken);
-
-        return DeviceScopeResult.Success(accessibleDeviceIds?.ToList() ?? []);
-    }
-
-    private sealed record DeviceScopeResult(IReadOnlyList<Guid>? DeviceIds, string? ErrorMessage)
-    {
-        public bool IsFailure => ErrorMessage is not null;
-
-        public static DeviceScopeResult Success(IReadOnlyList<Guid>? deviceIds)
-        {
-            return new DeviceScopeResult(deviceIds, null);
-        }
-
-        public static DeviceScopeResult Failure(string errorMessage)
-        {
-            return new DeviceScopeResult(null, errorMessage);
-        }
     }
 }
