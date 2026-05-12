@@ -1,6 +1,5 @@
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
-using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.SharedKernel.Messaging;
@@ -32,8 +31,7 @@ public sealed record GetPassStationListByTypeQuery(
 public sealed class GetPassStationListByTypeHandler(
     IPassStationSchemaProvider schemaProvider,
     IPassStationRecordQueryService queryService,
-    ICurrentUser currentUser,
-    IDevicePermissionService devicePermissionService,
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IProcessReadQueryService processReadQueryService)
     : IQueryHandler<GetPassStationListByTypeQuery, Result<PagedList<PassStationListItemDto>>>
 {
@@ -53,8 +51,7 @@ public sealed class GetPassStationListByTypeHandler(
 
         var allowedDeviceIds = await PassStationQueryRuntime.ResolveAllowedDeviceIdsAsync(
             normalizedRequest,
-            currentUser,
-            devicePermissionService,
+            currentUserDeviceAccessService,
             processReadQueryService,
             cancellationToken);
         if (!allowedDeviceIds.IsSuccess)
@@ -80,8 +77,7 @@ public sealed record GetPassStationDetailByTypeQuery(
 public sealed class GetPassStationDetailByTypeHandler(
     IPassStationSchemaProvider schemaProvider,
     IPassStationRecordQueryService queryService,
-    ICurrentUser currentUser,
-    IDevicePermissionService devicePermissionService)
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService)
     : IQueryHandler<GetPassStationDetailByTypeQuery, Result<PassStationDetailDto>>
 {
     public async Task<Result<PassStationDetailDto>> Handle(
@@ -96,20 +92,14 @@ public sealed class GetPassStationDetailByTypeHandler(
         if (detail is null)
             return Result.NotFound("未找到该过站记录。");
 
-        if (string.Equals(currentUser.Role, SystemRoles.Admin, StringComparison.Ordinal))
+        var scope = await currentUserDeviceAccessService.GetAccessibleDeviceIdsAsync(cancellationToken);
+        if (!scope.IsSuccess)
+            return Result.Invalid(scope.Errors?.ToArray() ?? ["用户凭证异常。"]);
+
+        if (scope.Value is null || scope.Value.Contains(detail.DeviceId))
             return Result.Success(detail);
 
-        if (!Guid.TryParse(currentUser.Id, out var userId))
-            return Result.Invalid("用户凭证异常。");
-
-        var accessibleDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
-            userId,
-            isAdmin: false,
-            cancellationToken);
-        if (accessibleDeviceIds is null || !accessibleDeviceIds.Contains(detail.DeviceId))
-            return Result.Forbidden();
-
-        return Result.Success(detail);
+        return Result.Forbidden();
     }
 }
 
@@ -171,28 +161,20 @@ internal static class PassStationQueryRuntime
 
     public static async Task<AllowedDeviceResolution> ResolveAllowedDeviceIdsAsync(
         PassStationQueryRequest request,
-        ICurrentUser currentUser,
-        IDevicePermissionService devicePermissionService,
+        ICurrentUserDeviceAccessService currentUserDeviceAccessService,
         IProcessReadQueryService processReadQueryService,
         CancellationToken cancellationToken)
     {
-        IReadOnlyCollection<Guid>? allowedDeviceIds = null;
+        var scope = await currentUserDeviceAccessService.GetAccessibleDeviceIdsAsync(cancellationToken);
+        if (!scope.IsSuccess)
+            return new AllowedDeviceResolution(null, false, scope.Errors?.FirstOrDefault() ?? "Current user identity is invalid.");
 
-        if (!string.Equals(currentUser.Role, SystemRoles.Admin, StringComparison.Ordinal))
+        IReadOnlyCollection<Guid>? allowedDeviceIds = scope.Value;
+        if (request.DeviceId.HasValue
+            && allowedDeviceIds is not null
+            && !allowedDeviceIds.Contains(request.DeviceId.Value))
         {
-            if (!Guid.TryParse(currentUser.Id, out var userId))
-                return new AllowedDeviceResolution(null, false, "Current user identity is invalid.");
-
-            allowedDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
-                userId,
-                isAdmin: false,
-                cancellationToken);
-
-            if (request.DeviceId.HasValue
-                && (allowedDeviceIds is null || !allowedDeviceIds.Contains(request.DeviceId.Value)))
-            {
-                return new AllowedDeviceResolution(null, false, "Unauthorized device access.");
-            }
+            return new AllowedDeviceResolution(null, false, "Unauthorized device access.");
         }
 
         if (request.ProcessId.HasValue)

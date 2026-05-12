@@ -21,8 +21,7 @@ public record DeviceListItemDto(
 public record GetMyDevicesPagedQuery(Pagination PaginationParams, string? Keyword = null) : IHumanQuery<Result<PagedList<DeviceListItemDto>>>;
 
 public class GetMyDevicesPagedHandler(
-    ICurrentUser currentUser,
-    IDevicePermissionService devicePermissionService,
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IReadRepository<Device> deviceRepository
 ) : IQueryHandler<GetMyDevicesPagedQuery, Result<PagedList<DeviceListItemDto>>>
 {
@@ -30,27 +29,17 @@ public class GetMyDevicesPagedHandler(
         GetMyDevicesPagedQuery request,
         CancellationToken cancellationToken)
     {
-        List<Guid>? allowedDeviceIds = null;
-
-        if (!string.Equals(
-                currentUser.Role,
-                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
-                StringComparison.Ordinal))
+        var scope = await currentUserDeviceAccessService.GetAccessibleDeviceIdsAsync(cancellationToken);
+        if (!scope.IsSuccess)
         {
-            if (!Guid.TryParse(currentUser.Id, out var userId))
-                return Result.Failure("用户凭证异常");
+            return Result.Failure(scope.Errors?.ToArray() ?? ["用户凭证异常"]);
+        }
 
-            var accessibleDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
-                userId,
-                isAdmin: false,
-                cancellationToken);
-            allowedDeviceIds = accessibleDeviceIds?.ToList();
-
-            if (allowedDeviceIds is null || allowedDeviceIds.Count == 0)
-            {
-                var emptyList = new PagedList<DeviceListItemDto>([], 0, request.PaginationParams);
-                return Result.Success(emptyList);
-            }
+        var allowedDeviceIds = scope.Value?.ToList();
+        if (allowedDeviceIds is { Count: 0 })
+        {
+            var emptyList = new PagedList<DeviceListItemDto>([], 0, request.PaginationParams);
+            return Result.Success(emptyList);
         }
 
         var skip = (request.PaginationParams.PageNumber - 1) * request.PaginationParams.PageSize;

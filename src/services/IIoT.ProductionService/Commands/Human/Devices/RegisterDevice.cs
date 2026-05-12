@@ -26,6 +26,7 @@ public sealed record CreateDeviceResultDto(
 
 public class RegisterDeviceHandler(
     ICurrentUser currentUser,
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IRepository<Device> deviceRepository,
     IProcessReadQueryService processReadQueryService,
     IDeviceReadQueryService deviceReadQueryService,
@@ -36,7 +37,7 @@ public class RegisterDeviceHandler(
         RegisterDeviceCommand request,
         CancellationToken cancellationToken)
     {
-        if (!string.Equals(currentUser.Role, SystemRoles.Admin, StringComparison.Ordinal))
+        if (!currentUserDeviceAccessService.IsAdministrator)
             return await FailAsync(request, "只有管理员可以注册设备", cancellationToken);
 
         var deviceName = request.DeviceName?.Trim() ?? string.Empty;

@@ -76,6 +76,7 @@ public sealed class ApplicationFlowGuardTests
                 Role = SystemRoles.Admin,
                 IsAuthenticated = true
             },
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
             repository,
             processQueries,
             deviceQueries,
@@ -124,6 +125,7 @@ public sealed class ApplicationFlowGuardTests
                 Role = "Operator",
                 IsAuthenticated = true
             },
+            new StubCurrentUserDeviceAccessService(),
             repository,
             processQueries,
             deviceQueries,
@@ -159,6 +161,7 @@ public sealed class ApplicationFlowGuardTests
                 Role = SystemRoles.Admin,
                 IsAuthenticated = true
             },
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
             repository,
             processQueries,
             deviceQueries,
@@ -189,16 +192,9 @@ public sealed class ApplicationFlowGuardTests
         repository.ListResult.Add(source);
 
         var handler = new UpgradeRecipeVersionHandler(
-            new TestCurrentUser
-            {
-                Id = Guid.NewGuid().ToString(),
-                Role = SystemRoles.Admin,
-                UserName = "admin",
-                IsAuthenticated = true
-            },
             repository,
             new StubRecipeReadQueryService(),
-            new StubDevicePermissionService());
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true });
 
         var result = await handler.Handle(
             new UpgradeRecipeVersionCommand(source.Id, "V1.1", "{\"speed\":130}"),
@@ -232,15 +228,8 @@ public sealed class ApplicationFlowGuardTests
         };
         repository.ListResult.Add(recipe);
         var handler = new DeleteRecipeHandler(
-            new TestCurrentUser
-            {
-                Id = Guid.NewGuid().ToString(),
-                Role = SystemRoles.Admin,
-                UserName = "admin",
-                IsAuthenticated = true
-            },
             repository,
-            new StubDevicePermissionService());
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true });
 
         var result = await handler.Handle(new DeleteRecipeCommand(recipe.Id), CancellationToken.None);
 
@@ -460,15 +449,8 @@ public sealed class ApplicationFlowGuardTests
             SingleOrDefaultResult = device
         };
         var handler = new UpdateDeviceProfileHandler(
-            new TestCurrentUser
-            {
-                Id = Guid.NewGuid().ToString(),
-                Role = SystemRoles.Admin,
-                UserName = "admin",
-                IsAuthenticated = true
-            },
             repository,
-            new StubDevicePermissionService());
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true });
 
         var result = await handler.Handle(
             new UpdateDeviceProfileCommand(device.Id, "Device-02"),
@@ -507,7 +489,7 @@ public sealed class ApplicationFlowGuardTests
             repository,
             dependencyQuery,
             refreshTokenService,
-            new StubDevicePermissionService(),
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
             cache,
             auditTrail);
 
@@ -1325,14 +1307,7 @@ public sealed class ApplicationFlowGuardTests
             ]
         };
         var handler = new GetHourlyByDeviceIdHandler(
-            new TestCurrentUser
-            {
-                Id = Guid.NewGuid().ToString(),
-                Role = SystemRoles.Admin,
-                UserName = "admin",
-                IsAuthenticated = true
-            },
-            new StubDevicePermissionService(),
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
             queryService);
 
         var first = await handler.Handle(new GetHourlyByDeviceIdQuery(deviceId, date, "PLC-01"), CancellationToken.None);
@@ -1356,14 +1331,7 @@ public sealed class ApplicationFlowGuardTests
             ]
         };
         var handler = new GetHourlyCapacityAggregateHandler(
-            new TestCurrentUser
-            {
-                Id = Guid.NewGuid().ToString(),
-                Role = "Operator",
-                UserName = "operator",
-                IsAuthenticated = true
-            },
-            new StubDevicePermissionService { AccessibleDeviceIds = [allowedDeviceId] },
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [allowedDeviceId] },
             queryService);
 
         var result = await handler.Handle(
@@ -1384,14 +1352,7 @@ public sealed class ApplicationFlowGuardTests
             Summary = new DeviceStatusSummaryDto(1, 1, 0, 0, 0, DateTimeOffset.UtcNow)
         };
         var handler = new GetDeviceStatusSummaryHandler(
-            new TestCurrentUser
-            {
-                Id = Guid.NewGuid().ToString(),
-                Role = "Operator",
-                UserName = "operator",
-                IsAuthenticated = true
-            },
-            new StubDevicePermissionService { AccessibleDeviceIds = [allowedDeviceId] },
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [allowedDeviceId] },
             queryService);
 
         var result = await handler.Handle(new GetDeviceStatusSummaryQuery(), CancellationToken.None);
@@ -1409,14 +1370,7 @@ public sealed class ApplicationFlowGuardTests
         repository.ListResult.Add(new Device("Device-B", "DEV-B", Guid.NewGuid()));
         repository.ListResult.Add(new Device("Device-A", "DEV-A", Guid.NewGuid()));
         var handler = new GetDeviceSelectListHandler(
-            new TestCurrentUser
-            {
-                Id = Guid.NewGuid().ToString(),
-                Role = SystemRoles.Admin,
-                UserName = "admin",
-                IsAuthenticated = true
-            },
-            new StubDevicePermissionService(),
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
             repository);
 
         var result = await handler.Handle(new GetDeviceSelectListQuery(), CancellationToken.None);
@@ -1435,14 +1389,7 @@ public sealed class ApplicationFlowGuardTests
         repository.ListResult.Add(authorizedDevice);
         repository.ListResult.Add(forbiddenDevice);
         var handler = new GetDeviceSelectListHandler(
-            new TestCurrentUser
-            {
-                Id = Guid.NewGuid().ToString(),
-                Role = "Operator",
-                UserName = "operator",
-                IsAuthenticated = true
-            },
-            new StubDevicePermissionService { AccessibleDeviceIds = [authorizedDevice.Id] },
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [authorizedDevice.Id] },
             repository);
 
         var result = await handler.Handle(new GetDeviceSelectListQuery(), CancellationToken.None);
@@ -1459,14 +1406,7 @@ public sealed class ApplicationFlowGuardTests
         var repository = new InMemoryRepository<Device>();
         repository.ListResult.Add(new Device("Device-A", "DEV-A", Guid.NewGuid()));
         var handler = new GetDeviceSelectListHandler(
-            new TestCurrentUser
-            {
-                Id = Guid.NewGuid().ToString(),
-                Role = "Operator",
-                UserName = "operator",
-                IsAuthenticated = true
-            },
-            new StubDevicePermissionService { AccessibleDeviceIds = [] },
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [] },
             repository);
 
         var result = await handler.Handle(new GetDeviceSelectListQuery(), CancellationToken.None);
@@ -1480,13 +1420,7 @@ public sealed class ApplicationFlowGuardTests
     public async Task GetAllDevicesHandler_ShouldRemainAdminOnly()
     {
         var handler = new GetAllDevicesHandler(
-            new TestCurrentUser
-            {
-                Id = Guid.NewGuid().ToString(),
-                Role = "Operator",
-                UserName = "operator",
-                IsAuthenticated = true
-            },
+            new StubCurrentUserDeviceAccessService(),
             new InMemoryRepository<Device>(),
             new RecordingCacheService());
 
@@ -1501,14 +1435,7 @@ public sealed class ApplicationFlowGuardTests
         var processId = Guid.NewGuid();
         var queryService = new StubDeviceLogQueryService();
         var handler = new GetRecentDeviceLogsHandler(
-            new TestCurrentUser
-            {
-                Id = Guid.NewGuid().ToString(),
-                Role = "Operator",
-                UserName = "operator",
-                IsAuthenticated = true
-            },
-            new StubDevicePermissionService { AccessibleDeviceIds = [allowedDeviceId] },
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [allowedDeviceId] },
             queryService);
 
         var result = await handler.Handle(
@@ -1529,14 +1456,7 @@ public sealed class ApplicationFlowGuardTests
         var processId = Guid.NewGuid();
         var queryService = new StubDeviceLogQueryService { RecentAlertCount = 3 };
         var handler = new GetRecentAlertCountHandler(
-            new TestCurrentUser
-            {
-                Id = Guid.NewGuid().ToString(),
-                Role = "Operator",
-                UserName = "operator",
-                IsAuthenticated = true
-            },
-            new StubDevicePermissionService { AccessibleDeviceIds = [allowedDeviceId] },
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [allowedDeviceId] },
             queryService);
 
         var before = DateTimeOffset.UtcNow.AddHours(-24).AddMinutes(-1);
@@ -1669,6 +1589,7 @@ public sealed class ApplicationFlowGuardTests
                 Role = SystemRoles.Admin,
                 IsAuthenticated = true
             },
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
             repository,
             cache,
             auditTrail);
@@ -1713,6 +1634,7 @@ public sealed class ApplicationFlowGuardTests
                 Role = "Operator",
                 IsAuthenticated = true
             },
+            new StubCurrentUserDeviceAccessService(),
             repository,
             cache,
             auditTrail);

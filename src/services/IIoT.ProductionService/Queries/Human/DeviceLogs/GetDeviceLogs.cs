@@ -19,8 +19,7 @@ public record GetDeviceLogsQuery(
 ) : IHumanQuery<Result<PagedList<DeviceLogListItemDto>>>;
 
 public class GetDeviceLogsHandler(
-    ICurrentUser currentUser,
-    IDevicePermissionService devicePermissionService,
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IDeviceLogQueryService queryService)
     : IQueryHandler<GetDeviceLogsQuery, Result<PagedList<DeviceLogListItemDto>>>
 {
@@ -31,20 +30,12 @@ public class GetDeviceLogsHandler(
         if (request.DeviceId == Guid.Empty)
             return Result.Failure("设备不能为空");
 
-        if (!string.Equals(
-                currentUser.Role,
-                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
-                StringComparison.Ordinal))
+        var deviceAccess = await currentUserDeviceAccessService.EnsureCanAccessDeviceAsync(
+            request.DeviceId,
+            cancellationToken);
+        if (!deviceAccess.IsSuccess)
         {
-            if (!Guid.TryParse(currentUser.Id, out var userId))
-                return Result.Failure("用户凭证异常");
-
-            var accessibleDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
-                userId,
-                isAdmin: false,
-                cancellationToken);
-            if (accessibleDeviceIds is null || !accessibleDeviceIds.Contains(request.DeviceId))
-                return Result.Failure("无权查看该设备日志");
+            return Result.Failure(deviceAccess.Errors?.ToArray() ?? ["无权查看该设备日志"]);
         }
 
         var (items, totalCount) = await queryService.GetLogsByConditionAsync(

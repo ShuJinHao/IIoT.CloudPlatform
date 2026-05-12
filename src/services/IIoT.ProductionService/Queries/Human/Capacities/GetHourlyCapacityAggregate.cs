@@ -14,8 +14,7 @@ public record GetHourlyCapacityAggregateQuery(
 ) : IHumanQuery<Result<List<HourlyCapacityAggregateDto>>>;
 
 public class GetHourlyCapacityAggregateHandler(
-    ICurrentUser currentUser,
-    IDevicePermissionService devicePermissionService,
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     ICapacityQueryService queryService)
     : IQueryHandler<GetHourlyCapacityAggregateQuery, Result<List<HourlyCapacityAggregateDto>>>
 {
@@ -23,13 +22,13 @@ public class GetHourlyCapacityAggregateHandler(
         GetHourlyCapacityAggregateQuery request,
         CancellationToken cancellationToken)
     {
-        var scope = await ResolveAllowedDeviceIdsAsync(cancellationToken);
-        if (scope.IsFailure)
+        var scope = await currentUserDeviceAccessService.GetAccessibleDeviceIdsAsync(cancellationToken);
+        if (!scope.IsSuccess)
         {
-            return Result.Failure(scope.ErrorMessage!);
+            return Result.Failure(scope.Errors?.ToArray() ?? ["用户凭证异常"]);
         }
 
-        if (scope.DeviceIds is { Count: 0 })
+        if (scope.Value is { Count: 0 })
         {
             return Result.Success(new List<HourlyCapacityAggregateDto>());
         }
@@ -37,44 +36,9 @@ public class GetHourlyCapacityAggregateHandler(
         var data = await queryService.GetHourlyAggregateAsync(
             request.Date,
             request.ProcessId,
-            scope.DeviceIds,
+            scope.Value,
             cancellationToken);
 
         return Result.Success(data);
-    }
-
-    private async Task<DeviceScopeResult> ResolveAllowedDeviceIdsAsync(CancellationToken cancellationToken)
-    {
-        if (string.Equals(currentUser.Role, SystemRoles.Admin, StringComparison.Ordinal))
-        {
-            return DeviceScopeResult.Success(null);
-        }
-
-        if (!Guid.TryParse(currentUser.Id, out var userId))
-        {
-            return DeviceScopeResult.Failure("用户凭证异常");
-        }
-
-        var accessibleDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
-            userId,
-            isAdmin: false,
-            cancellationToken);
-
-        return DeviceScopeResult.Success(accessibleDeviceIds?.ToList() ?? []);
-    }
-
-    private sealed record DeviceScopeResult(IReadOnlyList<Guid>? DeviceIds, string? ErrorMessage)
-    {
-        public bool IsFailure => ErrorMessage is not null;
-
-        public static DeviceScopeResult Success(IReadOnlyList<Guid>? deviceIds)
-        {
-            return new DeviceScopeResult(deviceIds, null);
-        }
-
-        public static DeviceScopeResult Failure(string errorMessage)
-        {
-            return new DeviceScopeResult(null, errorMessage);
-        }
     }
 }

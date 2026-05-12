@@ -26,8 +26,7 @@ public record GetMyRecipesPagedQuery(
 ) : IHumanQuery<Result<PagedList<RecipeListItemDto>>>;
 
 public class GetMyRecipesPagedHandler(
-    ICurrentUser currentUser,
-    IDevicePermissionService devicePermissionService,
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IReadRepository<Recipe> recipeRepository
 ) : IQueryHandler<GetMyRecipesPagedQuery, Result<PagedList<RecipeListItemDto>>>
 {
@@ -35,27 +34,17 @@ public class GetMyRecipesPagedHandler(
         GetMyRecipesPagedQuery request,
         CancellationToken cancellationToken)
     {
-        List<Guid>? allowedDeviceIds = null;
-
-        if (!string.Equals(
-                currentUser.Role,
-                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
-                StringComparison.Ordinal))
+        var scope = await currentUserDeviceAccessService.GetAccessibleDeviceIdsAsync(cancellationToken);
+        if (!scope.IsSuccess)
         {
-            if (!Guid.TryParse(currentUser.Id, out var userId))
-                return Result.Failure("用户凭证异常");
+            return Result.Failure(scope.Errors?.ToArray() ?? ["用户凭证异常"]);
+        }
 
-            var accessibleDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
-                userId,
-                isAdmin: false,
-                cancellationToken);
-            allowedDeviceIds = accessibleDeviceIds?.ToList();
-
-            if (allowedDeviceIds is null || allowedDeviceIds.Count == 0)
-            {
-                var emptyList = new PagedList<RecipeListItemDto>([], 0, request.PaginationParams);
-                return Result.Success(emptyList);
-            }
+        var allowedDeviceIds = scope.Value?.ToList();
+        if (allowedDeviceIds is { Count: 0 })
+        {
+            var emptyList = new PagedList<RecipeListItemDto>([], 0, request.PaginationParams);
+            return Result.Success(emptyList);
         }
 
         var skip = (request.PaginationParams.PageNumber - 1) * request.PaginationParams.PageSize;

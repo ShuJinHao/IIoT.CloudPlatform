@@ -18,8 +18,7 @@ public record GetHourlyByDeviceIdQuery(
 ) : IHumanQuery<Result<List<HourlyCapacityDto>>>;
 
 public class GetHourlyByDeviceIdHandler(
-    ICurrentUser currentUser,
-    IDevicePermissionService devicePermissionService,
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     ICapacityQueryService queryService
 ) : IQueryHandler<GetHourlyByDeviceIdQuery, Result<List<HourlyCapacityDto>>>
 {
@@ -27,20 +26,12 @@ public class GetHourlyByDeviceIdHandler(
         GetHourlyByDeviceIdQuery request,
         CancellationToken cancellationToken)
     {
-        if (!string.Equals(
-                currentUser.Role,
-                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
-                StringComparison.Ordinal))
+        var deviceAccess = await currentUserDeviceAccessService.EnsureCanAccessDeviceAsync(
+            request.DeviceId,
+            cancellationToken);
+        if (!deviceAccess.IsSuccess)
         {
-            if (!Guid.TryParse(currentUser.Id, out var userId))
-                return Result.Failure("用户凭证异常");
-
-            var accessibleDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
-                userId,
-                isAdmin: false,
-                cancellationToken);
-            if (accessibleDeviceIds is null || !accessibleDeviceIds.Contains(request.DeviceId))
-                return Result.Failure("无权查看该设备的小时产能");
+            return Result.Failure(deviceAccess.Errors?.ToArray() ?? ["无权查看该设备的小时产能"]);
         }
 
         var data = await queryService.GetHourlyByDeviceIdAsync(

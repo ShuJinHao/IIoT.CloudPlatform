@@ -19,12 +19,11 @@ public record CreateRecipeCommand(
 ) : IHumanCommand<Result<Guid>>;
 
 public class CreateRecipeHandler(
-    ICurrentUser currentUser,
     IRepository<Recipe> recipeRepository,
     IProcessReadQueryService processReadQueryService,
     IDeviceReadQueryService deviceReadQueryService,
     IRecipeReadQueryService recipeReadQueryService,
-    IDevicePermissionService devicePermissionService)
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService)
     : ICommandHandler<CreateRecipeCommand, Result<Guid>>
 {
     public async Task<Result<Guid>> Handle(
@@ -65,20 +64,12 @@ public class CreateRecipeHandler(
         if (duplicateExists)
             return Result.Failure($"配方创建失败: 已存在同名初始版本配方 [{recipeName}]");
 
-        if (!string.Equals(
-                currentUser.Role,
-                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
-                StringComparison.Ordinal))
+        var deviceAccess = await currentUserDeviceAccessService.EnsureCanAccessDeviceAsync(
+            request.DeviceId,
+            cancellationToken);
+        if (!deviceAccess.IsSuccess)
         {
-            if (!Guid.TryParse(currentUser.Id, out var userId))
-                return Result.Failure("用户凭证异常");
-
-            var accessibleDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
-                userId,
-                isAdmin: false,
-                cancellationToken);
-            if (accessibleDeviceIds is null || !accessibleDeviceIds.Contains(request.DeviceId))
-                return Result.Failure("越权: 未授权该设备");
+            return Result.Failure(deviceAccess.Errors?.ToArray() ?? ["越权: 未授权该设备"]);
         }
 
         var recipe = new Recipe(recipeName, request.ProcessId, request.DeviceId, parametersJsonb);

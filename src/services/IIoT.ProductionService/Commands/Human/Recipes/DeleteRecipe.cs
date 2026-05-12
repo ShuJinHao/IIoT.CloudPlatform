@@ -16,9 +16,8 @@ namespace IIoT.ProductionService.Commands.Recipes;
 public record DeleteRecipeCommand(Guid RecipeId) : IHumanCommand<Result<bool>>;
 
 public class DeleteRecipeHandler(
-    ICurrentUser currentUser,
     IRepository<Recipe> recipeRepository,
-    IDevicePermissionService devicePermissionService)
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService)
     : ICommandHandler<DeleteRecipeCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(
@@ -32,20 +31,12 @@ public class DeleteRecipeHandler(
         if (recipe is null)
             return Result.Failure("操作失败:目标配方不存在");
 
-        if (!string.Equals(
-                currentUser.Role,
-                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
-                StringComparison.Ordinal))
+        var deviceAccess = await currentUserDeviceAccessService.EnsureCanAccessDeviceAsync(
+            recipe.DeviceId,
+            cancellationToken);
+        if (!deviceAccess.IsSuccess)
         {
-            if (!Guid.TryParse(currentUser.Id, out var userId))
-                return Result.Failure("用户凭证异常");
-
-            var accessibleDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
-                userId,
-                isAdmin: false,
-                cancellationToken);
-            if (accessibleDeviceIds is null || !accessibleDeviceIds.Contains(recipe.DeviceId))
-                return Result.Failure("越权:您没有该机台的管辖权,禁止删除此配方");
+            return Result.Failure(deviceAccess.Errors?.ToArray() ?? ["越权:您没有该机台的管辖权,禁止删除此配方"]);
         }
 
         if (recipe.Status != RecipeStatus.Archived)

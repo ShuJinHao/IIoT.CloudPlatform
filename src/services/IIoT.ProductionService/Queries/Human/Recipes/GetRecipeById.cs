@@ -30,10 +30,9 @@ public record RecipeDetailDto(
 public record GetRecipeByIdQuery(Guid RecipeId) : IHumanQuery<Result<RecipeDetailDto>>;
 
 public class GetRecipeByIdHandler(
-    ICurrentUser currentUser,
     IReadRepository<Recipe> recipeRepository,
     ICacheService cacheService,
-    IDevicePermissionService devicePermissionService
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService
 ) : IQueryHandler<GetRecipeByIdQuery, Result<RecipeDetailDto>>
 {
     public async Task<Result<RecipeDetailDto>> Handle(
@@ -65,21 +64,12 @@ public class GetRecipeByIdHandler(
             await cacheService.SetAsync(cacheKey, dto, TimeSpan.FromHours(2), cancellationToken);
         }
 
-        // ABAC 校验:无论数据来自 DB 还是缓存,都要在这里过一遍管辖权
-        if (!string.Equals(
-                currentUser.Role,
-                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
-                StringComparison.Ordinal))
+        var deviceAccess = await currentUserDeviceAccessService.EnsureCanAccessDeviceAsync(
+            dto.DeviceId,
+            cancellationToken);
+        if (!deviceAccess.IsSuccess)
         {
-            if (!Guid.TryParse(currentUser.Id, out var userId))
-                return Result.Failure("用户凭证异常");
-
-            var accessibleDeviceIds = await devicePermissionService.GetAccessibleDeviceIdsAsync(
-                userId,
-                isAdmin: false,
-                cancellationToken);
-            if (accessibleDeviceIds is null || !accessibleDeviceIds.Contains(dto.DeviceId))
-                return Result.Failure("无权查看该配方");
+            return Result.Failure(deviceAccess.Errors?.ToArray() ?? ["无权查看该配方"]);
         }
 
         return Result.Success(dto);

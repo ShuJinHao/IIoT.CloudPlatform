@@ -16,6 +16,7 @@ using IIoT.ProductionService.Caching;
 using IIoT.ProductionService.PassStations;
 using IIoT.ProductionService.Profiles;
 using IIoT.Services.CrossCutting.Behaviors;
+using IIoT.Services.CrossCutting.Authorization;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Caching;
 using IIoT.Services.Contracts.Identity;
@@ -271,6 +272,7 @@ public static class DependencyInjection
         });
 
         builder.Services.AddScoped<ICurrentUser, CurrentUser>();
+        builder.Services.AddScoped<ICurrentUserDeviceAccessService, CurrentUserDeviceAccessService>();
         builder.Services.AddScoped<ICloudOidcSessionService, CloudOidcSessionService>();
         builder.Services.AddScoped<IAiReadScopeAccessor, HttpAiReadScopeAccessor>();
         builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, CloudAuthorizationResultHandler>();
