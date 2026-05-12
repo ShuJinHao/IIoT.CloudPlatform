@@ -17,6 +17,7 @@ using IIoT.Infrastructure.Logging;
 using IIoT.Services.CrossCutting.Behaviors;
 using IIoT.Services.Contracts.Events.Capacities;
 using IIoT.SharedKernel.Configuration;
+using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Result;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -89,6 +90,33 @@ public sealed class InfrastructureBehaviorTests
         Assert.Contains(nameof(Device.DeviceName), modifiedProperties);
         Assert.DoesNotContain(nameof(Device.Code), modifiedProperties);
         Assert.DoesNotContain(nameof(Device.ProcessId), modifiedProperties);
+    }
+
+    [Fact]
+    public async Task EfRepository_Update_ShouldRejectDetachedAggregateToAvoidFullEntityUpdate()
+    {
+        using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
+        using var scope = provider.CreateScope();
+
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var repository = new EfRepository<Device>(dbContext);
+        var device = new Device("Device-01", "DEV-DETACHED001", Guid.NewGuid());
+
+        dbContext.Devices.Add(device);
+        await dbContext.SaveChangesAsync();
+        dbContext.Entry(device).State = EntityState.Detached;
+
+        device.Rename("Device-02");
+
+        var exception = Assert.Throws<InvalidOperationException>(() => repository.Update(device));
+        Assert.Contains("Detached aggregate updates are not supported", exception.Message);
+    }
+
+    [Fact]
+    public void RefreshTokenSession_ShouldRemainInfrastructurePersistenceModel()
+    {
+        Assert.False(typeof(BaseEntity<Guid>).IsAssignableFrom(typeof(RefreshTokenSession)));
+        Assert.False(typeof(IAggregateRoot).IsAssignableFrom(typeof(RefreshTokenSession)));
     }
 
     [Fact]

@@ -24,8 +24,8 @@ public class EfRepository<T>(IIoTDbContext dbContext) : EfReadRepository<T>(dbCo
             return;
         }
 
-        _dbContext.Set<T>().Attach(entity);
-        entry.State = EntityState.Modified;
+        throw new InvalidOperationException(
+            "Detached aggregate updates are not supported. Load the aggregate in the current DbContext before calling Update to avoid full-entity updates.");
     }
 
     public void Delete(T entity)
