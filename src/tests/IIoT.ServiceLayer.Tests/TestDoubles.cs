@@ -320,13 +320,27 @@ internal sealed class StubCapacityQueryService : ICapacityQueryService
 
     public List<DailyRangeSummaryDto> SummaryRangeResult { get; set; } = [];
 
+    public List<DailyCapacityPagedItemDto> DailyPagedResult { get; set; } = [];
+
+    public int DailyPagedTotalCount { get; set; }
+
     public int HourlyCalls { get; private set; }
 
     public int HourlyAggregateCalls { get; private set; }
 
+    public int DailyPagedCalls { get; private set; }
+
     public IReadOnlyCollection<Guid>? LastAggregateDeviceIds { get; private set; }
 
     public Guid? LastAggregateProcessId { get; private set; }
+
+    public Pagination? LastDailyPagination { get; private set; }
+
+    public DateOnly? LastDailyDate { get; private set; }
+
+    public Guid? LastDailyDeviceId { get; private set; }
+
+    public IReadOnlyCollection<Guid>? LastDailyDeviceIds { get; private set; }
 
     public Task<List<HourlyCapacityDto>> GetHourlyByDeviceIdAsync(
         Guid deviceId,
@@ -376,7 +390,12 @@ internal sealed class StubCapacityQueryService : ICapacityQueryService
         IReadOnlyCollection<Guid>? deviceIds = null,
         CancellationToken cancellationToken = default)
     {
-        throw new NotSupportedException();
+        DailyPagedCalls++;
+        LastDailyPagination = pagination;
+        LastDailyDate = date;
+        LastDailyDeviceId = deviceId;
+        LastDailyDeviceIds = deviceIds;
+        return Task.FromResult((DailyPagedResult, DailyPagedTotalCount));
     }
 }
 
@@ -387,6 +406,20 @@ internal sealed class StubDeviceLogQueryService : IDeviceLogQueryService
     public int TotalCount { get; set; }
 
     public int RecentAlertCount { get; set; }
+
+    public int LogsByConditionCalls { get; private set; }
+
+    public Pagination? LastLogsPagination { get; private set; }
+
+    public Guid? LastLogsDeviceId { get; private set; }
+
+    public string? LastLogsLevel { get; private set; }
+
+    public string? LastLogsKeyword { get; private set; }
+
+    public DateTime? LastLogsStartTime { get; private set; }
+
+    public DateTime? LastLogsEndTime { get; private set; }
 
     public int? LastRecentLimit { get; private set; }
 
@@ -413,6 +446,13 @@ internal sealed class StubDeviceLogQueryService : IDeviceLogQueryService
         DateTime? endTime = null,
         CancellationToken cancellationToken = default)
     {
+        LogsByConditionCalls++;
+        LastLogsPagination = pagination;
+        LastLogsDeviceId = deviceId;
+        LastLogsLevel = level;
+        LastLogsKeyword = keyword;
+        LastLogsStartTime = startTime;
+        LastLogsEndTime = endTime;
         return Task.FromResult((Items, TotalCount));
     }
 
@@ -442,6 +482,49 @@ internal sealed class StubDeviceLogQueryService : IDeviceLogQueryService
         LastAlertProcessId = processId;
         LastAlertDeviceIds = deviceIds;
         return Task.FromResult(RecentAlertCount);
+    }
+}
+
+internal sealed class StubPassStationRecordQueryService : IPassStationRecordQueryService
+{
+    public List<PassStationListItemDto> Items { get; set; } = [];
+
+    public int TotalCount { get; set; }
+
+    public PassStationDetailDto? Detail { get; set; }
+
+    public int GetByConditionCalls { get; private set; }
+
+    public int GetDetailCalls { get; private set; }
+
+    public PassStationQueryRequest? LastRequest { get; private set; }
+
+    public IReadOnlyCollection<Guid>? LastAllowedDeviceIds { get; private set; }
+
+    public string? LastDetailTypeKey { get; private set; }
+
+    public Guid? LastDetailId { get; private set; }
+
+    public Task<(List<PassStationListItemDto> Items, int TotalCount)> GetByConditionAsync(
+        PassStationQueryRequest request,
+        IReadOnlyCollection<Guid>? allowedDeviceIds,
+        CancellationToken cancellationToken = default)
+    {
+        GetByConditionCalls++;
+        LastRequest = request;
+        LastAllowedDeviceIds = allowedDeviceIds;
+        return Task.FromResult((Items, TotalCount));
+    }
+
+    public Task<PassStationDetailDto?> GetDetailAsync(
+        string typeKey,
+        Guid id,
+        CancellationToken cancellationToken = default)
+    {
+        GetDetailCalls++;
+        LastDetailTypeKey = typeKey;
+        LastDetailId = id;
+        return Task.FromResult(Detail);
     }
 }
 
