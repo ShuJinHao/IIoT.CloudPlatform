@@ -177,6 +177,9 @@ internal sealed record BrokenLockCommand(Guid DeviceId) : ICommand<Result<bool>>
 
 internal sealed record DeviceScopedCommand(Guid DeviceId) : IDeviceCommand<Result<bool>>;
 
+[AdminOnly]
+internal sealed record AdminOnlyHumanCommand() : IHumanCommand<Result<bool>>;
+
 internal sealed class NoopDistributedLockService : IDistributedLockService
 {
     public Task<IAsyncDisposable> AcquireAsync(

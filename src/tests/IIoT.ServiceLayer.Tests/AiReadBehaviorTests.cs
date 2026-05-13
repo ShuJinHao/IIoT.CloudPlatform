@@ -64,6 +64,21 @@ public sealed class AiReadBehaviorTests
     }
 
     [Fact]
+    public async Task RequestKindGuard_ShouldRejectAiReadRequestWithAdminOnly()
+    {
+        var behavior = new RequestKindGuardBehavior<AiReadWithAdminOnlyQuery, Result<bool>>(
+            new HttpContextAccessor { HttpContext = new DefaultHttpContext() });
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            behavior.Handle(
+                new AiReadWithAdminOnlyQuery(),
+                _ => Task.FromResult(Result.Success(true)),
+                CancellationToken.None));
+
+        Assert.Contains(nameof(AdminOnlyAttribute), exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RequestKindGuard_ShouldRejectAiReadRequestWithoutAiReadAuthorization()
     {
         var behavior = new RequestKindGuardBehavior<UnprotectedAiReadQuery, Result<bool>>(
@@ -251,6 +266,10 @@ public sealed class AiReadBehaviorTests
 
     [AuthorizeAiRead(AiReadPermissions.Device)]
     private sealed record HumanWithAiReadAuthorizationQuery() : IHumanQuery<Result<bool>>;
+
+    [AdminOnly]
+    [AuthorizeAiRead(AiReadPermissions.Device)]
+    private sealed record AiReadWithAdminOnlyQuery() : IAiReadQuery<Result<bool>>;
 
     private sealed record UnprotectedAiReadQuery() : IAiReadQuery<Result<bool>>;
 

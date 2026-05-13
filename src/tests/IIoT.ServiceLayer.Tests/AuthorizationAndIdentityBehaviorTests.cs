@@ -4,12 +4,14 @@ using IIoT.EntityFrameworkCore.Identity;
 using IIoT.IdentityService.Commands;
 using IIoT.IdentityService.Queries;
 using IIoT.ProductionService.Commands.Bootstrap.Devices;
+using IIoT.ProductionService.Commands.Devices;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.CrossCutting.Authorization;
 using IIoT.Services.CrossCutting.Behaviors;
 using IIoT.Services.CrossCutting.Caching;
 using IIoT.Services.CrossCutting.Caching.Options;
 using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.CrossCutting.Exceptions;
 using IIoT.SharedKernel.Result;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
@@ -373,6 +375,58 @@ public sealed class AuthorizationAndIdentityBehaviorTests
 
         Assert.NotNull(attribute);
         Assert.Equal("Role.Define", attribute!.Permission);
+    }
+
+    [Fact]
+    public void RegisterDeviceCommand_ShouldRequireDeviceCreatePermissionAndAdminOnly()
+    {
+        var permissionAttribute = typeof(RegisterDeviceCommand)
+            .GetCustomAttributes(typeof(AuthorizeRequirementAttribute), inherit: false)
+            .Cast<AuthorizeRequirementAttribute>()
+            .SingleOrDefault();
+        var adminOnlyAttribute = typeof(RegisterDeviceCommand)
+            .GetCustomAttributes(typeof(AdminOnlyAttribute), inherit: false)
+            .Cast<AdminOnlyAttribute>()
+            .SingleOrDefault();
+
+        Assert.NotNull(permissionAttribute);
+        Assert.Equal("Device.Create", permissionAttribute!.Permission);
+        Assert.NotNull(adminOnlyAttribute);
+    }
+
+    [Fact]
+    public async Task AdminOnlyBehavior_ShouldRejectNonAdmin()
+    {
+        var behavior = new AdminOnlyBehavior<AdminOnlyHumanCommand, Result<bool>>(
+            new StubCurrentUserDeviceAccessService { IsAdministrator = false });
+
+        var exception = await Assert.ThrowsAsync<ForbiddenException>(() =>
+            behavior.Handle(
+                new AdminOnlyHumanCommand(),
+                _ => Task.FromResult(Result.Success(true)),
+                CancellationToken.None));
+
+        Assert.Contains("管理员", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AdminOnlyBehavior_ShouldAllowAdmin()
+    {
+        var nextCalled = false;
+        var behavior = new AdminOnlyBehavior<AdminOnlyHumanCommand, Result<bool>>(
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true });
+
+        var result = await behavior.Handle(
+            new AdminOnlyHumanCommand(),
+            _ =>
+            {
+                nextCalled = true;
+                return Task.FromResult(Result.Success(true));
+            },
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(nextCalled);
     }
 
     [Fact]

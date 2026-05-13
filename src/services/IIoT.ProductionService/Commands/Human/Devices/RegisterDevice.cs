@@ -13,6 +13,7 @@ using IIoT.SharedKernel.Result;
 namespace IIoT.ProductionService.Commands.Devices;
 
 [AuthorizeRequirement("Device.Create")]
+[AdminOnly]
 [DistributedLock("iiot:lock:device-create:{ProcessId}:{DeviceName}", TimeoutSeconds = 5)]
 public record RegisterDeviceCommand(
     string DeviceName,
