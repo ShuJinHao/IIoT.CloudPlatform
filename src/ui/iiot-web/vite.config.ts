@@ -27,21 +27,57 @@ export default defineConfig({
   },
   build: {
     // 大体积第三方库拆出共享 chunk，减小路由懒加载块
+    chunkSizeWarningLimit: 600,
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (id.includes('node_modules')) {
-            if (
-              id.includes('node_modules/echarts') ||
-              id.includes('node_modules/vue-echarts') ||
-              id.includes('node_modules/zrender')
-            ) {
-              return 'vendor-echarts'
-            }
-            if (id.includes('node_modules/naive-ui')) {
-              return 'vendor-naive'
-            }
+          const normalizedId = id.replace(/\\/g, '/')
+          if (!normalizedId.includes('/node_modules/')) {
+            return undefined
           }
+
+          if (
+            normalizedId.includes('/node_modules/vue/') ||
+            normalizedId.includes('/node_modules/@vue/') ||
+            normalizedId.includes('/node_modules/vue-router/') ||
+            normalizedId.includes('/node_modules/pinia/')
+          ) {
+            return 'vendor-vue'
+          }
+
+          if (normalizedId.includes('/node_modules/axios/')) {
+            return 'vendor-http'
+          }
+
+          if (normalizedId.includes('/node_modules/vue-echarts/')) {
+            return 'vendor-vue-echarts'
+          }
+
+          if (normalizedId.includes('/node_modules/zrender/')) {
+            return 'vendor-zrender'
+          }
+
+          if (normalizedId.includes('/node_modules/echarts/')) {
+            return 'vendor-echarts'
+          }
+
+          if (
+            normalizedId.includes('/node_modules/@css-render/') ||
+            normalizedId.includes('/node_modules/css-render/') ||
+            normalizedId.includes('/node_modules/date-fns/') ||
+            normalizedId.includes('/node_modules/evtd/') ||
+            normalizedId.includes('/node_modules/seemly/') ||
+            normalizedId.includes('/node_modules/treemate/') ||
+            normalizedId.includes('/node_modules/vooks/') ||
+            normalizedId.includes('/node_modules/vueuc/')
+          ) {
+            return 'vendor-naive-support'
+          }
+
+          if (normalizedId.includes('/node_modules/naive-ui/')) {
+            return 'vendor-naive'
+          }
+
           return undefined
         }
       }

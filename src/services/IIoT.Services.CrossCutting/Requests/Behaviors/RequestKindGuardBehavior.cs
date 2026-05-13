@@ -39,10 +39,17 @@ public sealed class RequestKindGuardBehavior<TRequest, TResponse>(
         var hasAuthorizeAiRead = requestType
             .GetCustomAttributes(typeof(AuthorizeAiReadAttribute), true)
             .Length > 0;
+        var hasAdminOnly = requestType
+            .GetCustomAttributes(typeof(AdminOnlyAttribute), true)
+            .Length > 0;
 
         if (hasAuthorizeRequirement && classifications[0] != typeof(IHumanRequest<>))
             throw new InvalidOperationException(
                 $"AuthorizeRequirementAttribute can only be applied to human requests. Invalid request: '{requestType.Name}'.");
+
+        if (hasAdminOnly && classifications[0] != typeof(IHumanRequest<>))
+            throw new InvalidOperationException(
+                $"AdminOnlyAttribute can only be applied to human requests. Invalid request: '{requestType.Name}'.");
 
         if (hasAuthorizeAiRead && classifications[0] != typeof(IAiReadRequest<>))
             throw new InvalidOperationException(

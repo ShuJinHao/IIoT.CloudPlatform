@@ -66,6 +66,7 @@ public static class DependencyInjection
             cfg.AddOpenBehavior(typeof(AiReadAuditBehavior<,>));
             cfg.AddOpenBehavior(typeof(AiReadAuthorizationBehavior<,>));
             cfg.AddOpenBehavior(typeof(AuthorizationBehavior<,>));
+            cfg.AddOpenBehavior(typeof(AdminOnlyBehavior<,>));
             cfg.AddOpenBehavior(typeof(DistributedLockBehavior<,>));
         });
 

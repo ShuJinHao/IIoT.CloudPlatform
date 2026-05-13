@@ -6,8 +6,8 @@
     >
       <template #actions>
         <n-button
+          v-if="authStore.isAdmin"
           type="primary"
-          v-permission="'Device.Create'"
           @click="openRegisterModal"
         >
           <template #icon>
