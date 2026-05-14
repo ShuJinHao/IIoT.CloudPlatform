@@ -1,11 +1,12 @@
 <template>
-  <div class="process-page">
-    <PageHeader
-      title="工序管理"
+  <NiondDataPage
+    class="process-page"
+    page-key="processes"
+    title="工序管理"
       subtitle="定义与维护车间制造工序，作为设备、配方、员工权限的核心锚点"
-    >
+  >
       <template #actions>
-        <n-button
+        <UiButton
           type="primary"
           v-permission="'Process.Create'"
           @click="openCreateModal"
@@ -16,35 +17,36 @@
             </svg>
           </template>
           新建工序
-        </n-button>
+        </UiButton>
       </template>
-    </PageHeader>
 
-    <CardSurface class="process-page__filter-card">
-      <div class="filter-row">
-        <n-input
-          v-model:value="keyword"
-          placeholder="搜索工序编码或名称..."
-          clearable
-          size="small"
-          style="max-width: 360px;"
-          @input="onSearchInput"
-          @keyup.enter="fetchList"
-          @clear="onClearKeyword"
-        >
-          <template #prefix>
-            <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
-              <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" stroke-width="1.3"/>
-              <path d="M10 10l3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-            </svg>
-          </template>
-        </n-input>
-        <n-tag round :bordered="false" size="small">共 {{ metaData.totalCount }} 条</n-tag>
-      </div>
-    </CardSurface>
+    <template #toolbar>
+      <NiondToolbar>
+        <div class="filter-row">
+          <UiInput
+            v-model:value="keyword"
+            placeholder="搜索工序编码或名称..."
+            clearable
+            size="small"
+            style="max-width: 360px;"
+            @input="onSearchInput"
+            @keyup.enter="fetchList"
+            @clear="onClearKeyword"
+          >
+            <template #prefix>
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
+                <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" stroke-width="1.3"/>
+                <path d="M10 10l3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+              </svg>
+            </template>
+          </UiInput>
+          <UiTag round :bordered="false" size="small">共 {{ metaData.totalCount }} 条</UiTag>
+        </div>
+      </NiondToolbar>
+    </template>
 
-    <CardSurface class="process-page__table-card" no-padding>
-      <n-data-table
+    <NiondTableCard class="process-page__table-card">
+      <UiDataTable
         class="process-page__table"
         :columns="columns"
         :data="processes"
@@ -55,7 +57,7 @@
         size="small"
       />
       <div v-if="metaData.totalPages > 1" class="pagination-wrap">
-        <n-pagination
+        <UiPagination
           :page="currentPage"
           :page-count="metaData.totalPages"
           :item-count="metaData.totalCount"
@@ -64,10 +66,10 @@
           @update:page="onPageChange"
         />
       </div>
-    </CardSurface>
+    </NiondTableCard>
 
     <!-- 新建/编辑共用 modal -->
-    <n-modal
+    <UiModal
       v-model:show="showFormModal"
       preset="card"
       :title="editTarget ? '编辑工序' : '新建制造工序'"
@@ -77,7 +79,7 @@
       <div class="form-stack">
         <div class="form-field">
           <label class="form-label">工序编码 <span class="required">*</span></label>
-          <n-input
+          <UiInput
             v-model:value="formData.processCode"
             placeholder="如：Stacking、Injection"
             class="mono-input"
@@ -86,7 +88,7 @@
         </div>
         <div class="form-field">
           <label class="form-label">工序名称 <span class="required">*</span></label>
-          <n-input
+          <UiInput
             v-model:value="formData.processName"
             placeholder="如：叠片工序、注液工序"
           />
@@ -94,20 +96,20 @@
       </div>
       <template #footer>
         <div class="modal-actions">
-          <n-button @click="showFormModal = false">取消</n-button>
-          <n-button
+          <UiButton @click="showFormModal = false">取消</UiButton>
+          <UiButton
             type="primary"
             :loading="submitting"
             @click="submitForm"
           >
             {{ editTarget ? '保存修改' : '确认创建' }}
-          </n-button>
+          </UiButton>
         </div>
       </template>
-    </n-modal>
+    </UiModal>
 
     <!-- 删除确认 modal -->
-    <n-modal
+    <UiModal
       v-model:show="confirmDialog.show"
       preset="card"
       :title="confirmDialog.title"
@@ -117,24 +119,22 @@
       <p class="confirm-desc">{{ confirmDialog.desc }}</p>
       <template #footer>
         <div class="modal-actions">
-          <n-button @click="confirmDialog.show = false">取消</n-button>
-          <n-button
+          <UiButton @click="confirmDialog.show = false">取消</UiButton>
+          <UiButton
             type="error"
             :loading="submitting"
             @click="confirmDialog.onConfirm()"
           >
             {{ confirmDialog.confirmText }}
-          </n-button>
+          </UiButton>
         </div>
       </template>
-    </n-modal>
-  </div>
+    </UiModal>
+  </NiondDataPage>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, h, onMounted } from 'vue';
-import { NButton, NInput, NDataTable, NPagination, NModal, NTag } from 'naive-ui';
-import type { DataTableColumns } from 'naive-ui';
 import {
   getProcessPagedListApi,
   createProcessApi,
@@ -143,8 +143,16 @@ import {
   type ProcessListItemDto,
   type PagedMetaData,
 } from '../../api/masterData/processes';
-import PageHeader from '../../components/layout/PageHeader.vue';
-import CardSurface from '../../components/layout/CardSurface.vue';
+import NiondDataPage from '../../components/layout/NiondDataPage.vue';
+import NiondTableCard from '../../components/layout/NiondTableCard.vue';
+import NiondToolbar from '../../components/layout/NiondToolbar.vue';
+import UiButton from '../../components/ui/UiButton.vue';
+import UiDataTable from '../../components/ui/UiDataTable.vue';
+import UiInput from '../../components/ui/UiInput.vue';
+import UiModal from '../../components/ui/UiModal.vue';
+import UiPagination from '../../components/ui/UiPagination.vue';
+import UiTag from '../../components/ui/UiTag.vue';
+import type { UiDataTableColumn } from '../../components/ui/types';
 
 const processes = ref<ProcessListItemDto[]>([]);
 const loading = ref(false);
@@ -202,7 +210,7 @@ const onPageChange = (p: number) => {
 };
 
 // === 表格列 ===
-const columns: DataTableColumns<ProcessListItemDto> = [
+const columns: UiDataTableColumn<ProcessListItemDto>[] = [
   {
     title: '工序编码',
     key: 'processCode',
@@ -239,7 +247,7 @@ const columns: DataTableColumns<ProcessListItemDto> = [
     render(row) {
       return h('div', { class: 'row-actions' }, [
         h(
-          NButton,
+          UiButton,
           {
             size: 'tiny',
             type: 'primary',
@@ -249,7 +257,7 @@ const columns: DataTableColumns<ProcessListItemDto> = [
           { default: () => '编辑' },
         ),
         h(
-          NButton,
+          UiButton,
           {
             size: 'tiny',
             type: 'error',
@@ -398,11 +406,11 @@ onMounted(() => fetchList());
   font-size: var(--fs-xs) !important;
   font-weight: var(--fw-semibold) !important;
   color: var(--text-2) !important;
-  letter-spacing: 1px;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 .process-page__table :deep(.n-data-table-tr:hover .n-data-table-td) {
-  background-color: rgba(8, 145, 178, 0.04) !important;
+  background-color: var(--bg-3) !important;
 }
 
 /* Modal 表单 */

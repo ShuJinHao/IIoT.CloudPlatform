@@ -1,11 +1,12 @@
 <template>
-  <div class="role-page">
-    <PageHeader
-      title="角色与权限"
+  <NiondDataPage
+    class="role-page"
+    page-key="roles"
+    title="角色与权限"
       subtitle="定义系统角色并配置行为权限点策略"
-    >
+  >
       <template #actions>
-        <n-button
+        <UiButton
           type="primary"
           v-permission="'Role.Define'"
           @click="openCreateModal"
@@ -16,9 +17,8 @@
             </svg>
           </template>
           定义新角色
-        </n-button>
+        </UiButton>
       </template>
-    </PageHeader>
 
     <LoadingState v-if="loading" :rows="3" variant="card" />
 
@@ -35,20 +35,21 @@
         :key="role"
         class="role-card"
         :class="{ 'role-card--admin': role === 'Admin' }"
+        hoverable
       >
         <div class="role-card__head">
           <div class="role-card__name-block">
             <h3 class="role-card__name">{{ role }}</h3>
-            <n-tag
+            <UiTag
               v-if="role === 'Admin'"
               size="small"
               :bordered="false"
               type="warning"
             >
               系统内置
-            </n-tag>
+            </UiTag>
           </div>
-          <n-button
+          <UiButton
             v-if="role !== 'Admin'"
             v-permission="'Role.Update'"
             size="tiny"
@@ -56,7 +57,7 @@
             @click="openPermEditor(role)"
           >
             编辑权限
-          </n-button>
+          </UiButton>
         </div>
 
         <div class="role-card__body">
@@ -67,7 +68,7 @@
             </span>
           </div>
           <div v-if="rolePermissions[role]" class="role-card__chips">
-            <n-tag
+            <UiTag
               v-for="perm in rolePermissions[role]"
               :key="perm"
               size="small"
@@ -75,7 +76,7 @@
               type="info"
             >
               {{ perm }}
-            </n-tag>
+            </UiTag>
             <span
               v-if="rolePermissions[role].length === 0"
               class="role-card__no-perm"
@@ -89,7 +90,7 @@
     </div>
 
     <!-- 创建角色 modal -->
-    <n-modal
+    <UiModal
       v-model:show="showCreateModal"
       preset="card"
       title="定义新角色"
@@ -99,7 +100,7 @@
       <div class="form-stack">
         <div class="form-field">
           <label class="form-label">角色名称 <span class="required">*</span></label>
-          <n-input
+          <UiInput
             v-model:value="createForm.roleName"
             placeholder="如：Operator、Supervisor"
           />
@@ -116,14 +117,14 @@
             >
               <div class="perm-group__title">{{ group.groupName }}</div>
               <div class="perm-group__items">
-                <n-checkbox
+                <UiCheckbox
                   v-for="perm in group.permissions"
                   :key="perm"
                   :checked="createForm.permissions.includes(perm)"
                   @update:checked="(checked: boolean) => toggleCreatePerm(perm, checked)"
                 >
                   {{ perm }}
-                </n-checkbox>
+                </UiCheckbox>
               </div>
             </div>
           </div>
@@ -131,20 +132,20 @@
       </div>
       <template #footer>
         <div class="modal-actions">
-          <n-button @click="showCreateModal = false">取消</n-button>
-          <n-button
+          <UiButton @click="showCreateModal = false">取消</UiButton>
+          <UiButton
             type="primary"
             :loading="submitting"
             @click="submitCreate"
           >
             确认创建
-          </n-button>
+          </UiButton>
         </div>
       </template>
-    </n-modal>
+    </UiModal>
 
     <!-- 编辑权限 modal -->
-    <n-modal
+    <UiModal
       v-model:show="showPermEditor"
       preset="card"
       style="width: 720px;"
@@ -165,36 +166,35 @@
         >
           <div class="perm-group__title">{{ group.groupName }}</div>
           <div class="perm-group__items">
-            <n-checkbox
+            <UiCheckbox
               v-for="perm in group.permissions"
               :key="perm"
               :checked="editPermissions.includes(perm)"
               @update:checked="(checked: boolean) => toggleEditPerm(perm, checked)"
             >
               {{ perm }}
-            </n-checkbox>
+            </UiCheckbox>
           </div>
         </div>
       </div>
       <template #footer>
         <div class="modal-actions">
-          <n-button @click="showPermEditor = false">取消</n-button>
-          <n-button
+          <UiButton @click="showPermEditor = false">取消</UiButton>
+          <UiButton
             type="primary"
             :loading="submitting"
             @click="submitPermissions"
           >
             保存权限
-          </n-button>
+          </UiButton>
         </div>
       </template>
-    </n-modal>
-  </div>
+    </UiModal>
+  </NiondDataPage>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue';
-import { NButton, NInput, NCheckbox, NModal, NTag } from 'naive-ui';
 import {
   getAllRolesApi,
   defineRolePolicyApi,
@@ -203,10 +203,15 @@ import {
   getAllDefinedPermissionsApi,
   type PermissionGroupDto,
 } from '../../api/identity';
-import PageHeader from '../../components/layout/PageHeader.vue';
 import CardSurface from '../../components/layout/CardSurface.vue';
+import NiondDataPage from '../../components/layout/NiondDataPage.vue';
 import LoadingState from '../../components/states/LoadingState.vue';
 import EmptyState from '../../components/states/EmptyState.vue';
+import UiButton from '../../components/ui/UiButton.vue';
+import UiCheckbox from '../../components/ui/UiCheckbox.vue';
+import UiInput from '../../components/ui/UiInput.vue';
+import UiModal from '../../components/ui/UiModal.vue';
+import UiTag from '../../components/ui/UiTag.vue';
 
 const roles = ref<string[]>([]);
 const rolePermissions = ref<Record<string, string[]>>({});
@@ -372,7 +377,7 @@ onMounted(() => fetchRoles());
   font-weight: var(--fw-bold);
   color: var(--text-0);
   margin: 0;
-  letter-spacing: 0.3px;
+  letter-spacing: 0;
 }
 
 .role-card__body {
@@ -389,7 +394,7 @@ onMounted(() => fetchRoles());
   font-size: var(--fs-xs);
   color: var(--text-2);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
 }
 .role-card__meta-value {
   font-family: var(--font-mono);
@@ -468,7 +473,7 @@ onMounted(() => fetchRoles());
   font-weight: var(--fw-semibold);
   color: var(--text-2);
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 0;
   margin-bottom: var(--space-2);
   padding-bottom: var(--space-2);
   border-bottom: 1px solid var(--border);

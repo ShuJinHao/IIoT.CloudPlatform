@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import tailwindcss from '@tailwindcss/vite'
 
 // Aspire 注入的环境变量可能是这些格式之一
 const apiUrl = process.env.VITE_API_URL
@@ -14,7 +15,7 @@ console.log(Object.entries(process.env).filter(([k]) => /iiot|vite|PORT/i.test(k
 console.log('=== Using API target:', apiUrl, '===')
 
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [vue(), tailwindcss()],
   server: {
     port: process.env.PORT ? parseInt(process.env.PORT) : 5173,
     proxy: {
@@ -59,23 +60,6 @@ export default defineConfig({
 
           if (normalizedId.includes('/node_modules/echarts/')) {
             return 'vendor-echarts'
-          }
-
-          if (
-            normalizedId.includes('/node_modules/@css-render/') ||
-            normalizedId.includes('/node_modules/css-render/') ||
-            normalizedId.includes('/node_modules/date-fns/') ||
-            normalizedId.includes('/node_modules/evtd/') ||
-            normalizedId.includes('/node_modules/seemly/') ||
-            normalizedId.includes('/node_modules/treemate/') ||
-            normalizedId.includes('/node_modules/vooks/') ||
-            normalizedId.includes('/node_modules/vueuc/')
-          ) {
-            return 'vendor-naive-support'
-          }
-
-          if (normalizedId.includes('/node_modules/naive-ui/')) {
-            return 'vendor-naive'
           }
 
           return undefined

@@ -23,7 +23,8 @@ public sealed class DeviceOperationalStatusQueryService(IDbConnectionFactory con
         var parameters = new DynamicParameters();
         parameters.Add("OfflineCutoff", offlineCutoff);
         parameters.Add("StatusWindowStart", statusWindowStart);
-        parameters.Add("GeneratedAt", DateTimeOffset.UtcNow);
+        var generatedAt = DateTime.UtcNow;
+        parameters.Add("GeneratedAt", generatedAt);
 
         if (deviceIds is { Count: > 0 })
         {
@@ -75,6 +76,22 @@ public sealed class DeviceOperationalStatusQueryService(IDbConnectionFactory con
             FROM status_rows";
 
         var command = new CommandDefinition(sql, parameters, cancellationToken: cancellationToken);
-        return await connection.QuerySingleAsync<DeviceStatusSummaryDto>(command);
+        var row = await connection.QuerySingleAsync<DeviceStatusSummaryRow>(command);
+
+        return new DeviceStatusSummaryDto(
+            row.Total,
+            row.Online,
+            row.Warning,
+            row.Error,
+            row.Offline,
+            new DateTimeOffset(DateTime.SpecifyKind(row.GeneratedAt, DateTimeKind.Utc)));
     }
+
+    private sealed record DeviceStatusSummaryRow(
+        int Total,
+        int Online,
+        int Warning,
+        int Error,
+        int Offline,
+        DateTime GeneratedAt);
 }

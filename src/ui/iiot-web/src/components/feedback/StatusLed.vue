@@ -28,20 +28,35 @@ withDefaults(
   font-size: var(--fs-sm);
   color: var(--text-1);
   font-family: var(--font-mono);
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
 }
 .led__dot {
+  display: inline-block;
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--text-2);
   flex-shrink: 0;
 }
-.led--success .led__dot { background: var(--success); box-shadow: 0 0 8px var(--success); }
-.led--warn .led__dot    { background: var(--warn);    box-shadow: 0 0 8px var(--warn); }
-.led--error .led__dot   { background: var(--error);   box-shadow: 0 0 8px var(--error); }
-.led--info .led__dot    { background: var(--brand);   box-shadow: 0 0 8px var(--brand); }
-.led--idle .led__dot    { background: var(--text-2); }
+.led--success .led__dot {
+  background: var(--success);
+  box-shadow: 0 0 0 2px var(--bg-1), 0 0 0 4px var(--success-soft);
+}
+.led--warn .led__dot {
+  background: var(--warn);
+  box-shadow: 0 0 0 2px var(--bg-1), 0 0 0 4px var(--warn-soft);
+}
+.led--error .led__dot {
+  background: var(--error);
+  box-shadow: 0 0 0 2px var(--bg-1), 0 0 0 4px var(--error-soft);
+}
+.led--info .led__dot {
+  background: var(--info);
+  box-shadow: 0 0 0 2px var(--bg-1), 0 0 0 4px var(--info-soft);
+}
+.led--idle .led__dot {
+  background: var(--text-2);
+  box-shadow: 0 0 0 2px var(--bg-1), 0 0 0 4px rgba(155, 163, 180, 0.2);
+}
 .led--pulse .led__dot   { animation: led-pulse 1.5s infinite; }
 @keyframes led-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }

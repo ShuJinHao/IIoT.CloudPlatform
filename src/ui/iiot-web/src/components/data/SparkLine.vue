@@ -37,7 +37,7 @@ const props = withDefaults(
     height?: number;
   }>(),
   {
-    color: '#0891b2',
+    color: 'var(--brand)',
     strokeWidth: 1.5,
     height: 36,
   },

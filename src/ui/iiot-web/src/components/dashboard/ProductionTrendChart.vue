@@ -16,12 +16,7 @@
         title="暂无产能"
         description="当前日期和权限范围内暂无产能记录。"
       />
-      <v-chart
-        v-else
-        class="trend__chart"
-        :option="chartOption"
-        autoresize
-      />
+      <v-chart v-else class="trend__chart" :option="chartOption" autoresize />
     </div>
   </CardSurface>
 </template>
@@ -34,6 +29,7 @@ import CardSurface from '../layout/CardSurface.vue';
 import LoadingState from '../states/LoadingState.vue';
 import EmptyState from '../states/EmptyState.vue';
 import StatusLed from '../feedback/StatusLed.vue';
+import { useTheme } from '../../composables/useTheme';
 
 interface HourPoint {
   label: string;
@@ -57,70 +53,49 @@ const props = withDefaults(
   },
 );
 
+const { mode } = useTheme();
 const subtitleText = computed(() => props.subtitle);
 
 const chartOption = computed(() => {
+  const isDark = mode.value === 'dark';
+  const primary = isDark ? '#c6f452' : '#c8bbf0';
+  const secondary = isDark ? '#5eead4' : '#8bd7ad';
+  const gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(17,24,39,0.07)';
+  const textColor = isDark ? '#c4c4ca' : '#596273';
   const xAxis = props.hours.map((h) => h.label);
   const data = props.hours.map((h) => h.value);
+
   return {
-    grid: { left: 44, right: 16, top: 16, bottom: 32 },
+    grid: { left: 42, right: 14, top: 16, bottom: 32 },
     tooltip: {
       trigger: 'axis',
-      backgroundColor: 'rgba(255, 255, 255, 0.98)',
-      borderColor: 'rgba(15, 23, 42, 0.08)',
+      backgroundColor: isDark ? '#18181b' : '#ffffff',
+      borderColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(17,24,39,0.08)',
       borderWidth: 1,
-      extraCssText: 'box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);',
-      textStyle: {
-        color: '#1a1d29',
-        fontFamily: "'Inter', sans-serif",
-        fontSize: 12,
-      },
-      axisPointer: {
-        type: 'line',
-        lineStyle: { color: 'rgba(8, 145, 178, 0.5)', type: 'dashed' },
-      },
+      textStyle: { color: isDark ? '#f5f5f4' : '#111827', fontSize: 12 },
     },
     xAxis: {
       type: 'category',
       data: xAxis,
-      boundaryGap: false,
-      axisLine: { lineStyle: { color: 'rgba(15, 23, 42, 0.08)' } },
-      axisLabel: {
-        color: '#6b7384',
-        fontFamily: "'JetBrains Mono', monospace",
-        fontSize: 11,
-        interval: Math.max(0, Math.floor(xAxis.length / 8) - 1),
-      },
+      axisLine: { lineStyle: { color: gridColor } },
+      axisLabel: { color: textColor, fontSize: 11 },
       axisTick: { show: false },
     },
     yAxis: {
       type: 'value',
-      splitLine: { lineStyle: { color: 'rgba(15, 23, 42, 0.05)' } },
+      splitLine: { lineStyle: { color: gridColor } },
       axisLine: { show: false },
       axisTick: { show: false },
-      axisLabel: {
-        color: '#6b7384',
-        fontFamily: "'JetBrains Mono', monospace",
-        fontSize: 11,
-      },
+      axisLabel: { color: textColor, fontSize: 11 },
     },
     series: [
       {
         name: '产量',
-        type: 'line',
+        type: 'bar',
         data,
-        smooth: true,
-        symbol: 'circle',
-        symbolSize: 0,
-        lineStyle: {
-          color: '#0891b2',
-          width: 2.5,
-        },
-        itemStyle: { color: '#0891b2' },
-        emphasis: {
-          itemStyle: { color: '#0891b2', borderColor: '#ffffff', borderWidth: 2 },
-        },
-        areaStyle: {
+        barWidth: 18,
+        itemStyle: {
+          borderRadius: [999, 999, 6, 6],
           color: {
             type: 'linear',
             x: 0,
@@ -128,8 +103,8 @@ const chartOption = computed(() => {
             x2: 0,
             y2: 1,
             colorStops: [
-              { offset: 0, color: 'rgba(8, 145, 178, 0.20)' },
-              { offset: 1, color: 'rgba(8, 145, 178, 0)' },
+              { offset: 0, color: primary },
+              { offset: 1, color: secondary },
             ],
           },
         },
@@ -145,31 +120,34 @@ const chartOption = computed(() => {
   align-items: center;
   gap: var(--space-3);
 }
-.trend__demo-tag {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--warn);
-  background: var(--warn-soft);
-  padding: 3px 8px;
-  border-radius: var(--radius-sm);
-  letter-spacing: 0;
-}
+
+.trend__demo-tag,
 .trend__live {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
+  border-radius: var(--radius-full);
+  padding: 5px 10px;
   font-size: var(--fs-xs);
-  color: var(--success);
-  font-family: var(--font-mono);
+  font-weight: var(--fw-bold);
   letter-spacing: 0;
-  padding: 4px 8px;
+}
+
+.trend__demo-tag {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.trend__live {
+  gap: var(--space-2);
   background: var(--success-soft);
-  border-radius: var(--radius-sm);
+  color: var(--success);
 }
+
 .trend__body {
-  height: 280px;
   position: relative;
+  height: 280px;
 }
+
 .trend__chart {
   width: 100%;
   height: 100%;

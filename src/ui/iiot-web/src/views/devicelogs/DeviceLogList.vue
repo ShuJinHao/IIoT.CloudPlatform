@@ -1,15 +1,16 @@
 <template>
-  <div class="device-log-page">
-    <PageHeader
-      title="设备日志"
+  <NiondDataPage
+    class="device-log-page"
+    page-key="logs"
+    title="设备日志"
       subtitle="按设备、级别、关键字和时间范围检索设备运行日志"
-    />
+  >
 
     <!-- 设备选择卡 -->
-    <CardSurface class="device-log-page__device-card">
+    <NiondToolbar class="device-log-page__device-card">
       <div class="device-row">
         <span class="device-row__label">设备</span>
-        <n-select
+        <UiSelect
           v-model:value="selectedDeviceId"
           :options="deviceOptions"
           placeholder="请先选择设备"
@@ -23,7 +24,7 @@
       <div v-if="deviceLoadError" class="device-row__error">
         {{ deviceLoadError }}
       </div>
-    </CardSurface>
+    </NiondToolbar>
 
     <!-- 查询模式 + 筛选条件 -->
     <CardSurface
@@ -33,26 +34,26 @@
       <div class="filter-stack">
         <div class="filter-field">
           <span class="filter-field__label">查询粒度</span>
-          <n-radio-group
+          <UiRadioGroup
             v-model:value="currentMode"
             size="small"
             @update:value="switchMode"
           >
-            <n-radio-button
+            <UiRadioButton
               v-for="mode in queryModes"
               :key="mode.key"
               :value="mode.key"
             >
               {{ mode.label }}
-            </n-radio-button>
-          </n-radio-group>
+            </UiRadioButton>
+          </UiRadioGroup>
         </div>
 
         <div class="filter-row">
           <template v-if="currentMode === 'level'">
             <div class="filter-field">
               <span class="filter-field__label">日志级别</span>
-              <n-select
+              <UiSelect
                 v-model:value="filters.level"
                 :options="levelOptions"
                 placeholder="全部级别"
@@ -66,7 +67,7 @@
           <template v-if="currentMode === 'keyword'">
             <div class="filter-field filter-field--wide">
               <span class="filter-field__label">关键字</span>
-              <n-input
+              <UiInput
                 v-model:value="filters.keyword"
                 placeholder="搜索日志内容"
                 size="small"
@@ -79,7 +80,7 @@
           <template v-if="currentMode === 'date'">
             <div class="filter-field">
               <span class="filter-field__label">日期</span>
-              <n-date-picker
+              <UiDatePicker
                 v-model:formatted-value="filters.date"
                 value-format="yyyy-MM-dd"
                 type="date"
@@ -92,7 +93,7 @@
           <template v-if="currentMode === 'time-range'">
             <div class="filter-field">
               <span class="filter-field__label">开始时间</span>
-              <n-date-picker
+              <UiDatePicker
                 v-model:formatted-value="filters.startTime"
                 value-format="yyyy-MM-dd'T'HH:mm"
                 type="datetime"
@@ -102,7 +103,7 @@
             </div>
             <div class="filter-field">
               <span class="filter-field__label">结束时间</span>
-              <n-date-picker
+              <UiDatePicker
                 v-model:formatted-value="filters.endTime"
                 value-format="yyyy-MM-dd'T'HH:mm"
                 type="datetime"
@@ -115,7 +116,7 @@
           <template v-if="currentMode === 'date-keyword'">
             <div class="filter-field">
               <span class="filter-field__label">日期</span>
-              <n-date-picker
+              <UiDatePicker
                 v-model:formatted-value="filters.date"
                 value-format="yyyy-MM-dd"
                 type="date"
@@ -125,7 +126,7 @@
             </div>
             <div class="filter-field filter-field--wide">
               <span class="filter-field__label">关键字</span>
-              <n-input
+              <UiInput
                 v-model:value="filters.keyword"
                 placeholder="搜索日志内容"
                 size="small"
@@ -135,7 +136,7 @@
             </div>
           </template>
 
-          <n-button type="primary" size="small" @click="doSearch">
+          <UiButton type="primary" size="small" @click="doSearch">
             <template #icon>
               <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
                 <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" stroke-width="1.3"/>
@@ -143,7 +144,7 @@
               </svg>
             </template>
             查询
-          </n-button>
+          </UiButton>
         </div>
       </div>
     </CardSurface>
@@ -157,10 +158,9 @@
     </CardSurface>
 
     <!-- 表格 -->
-    <CardSurface
+    <NiondTableCard
       v-if="selectedDeviceId"
       class="device-log-page__table-card"
-      no-padding
     >
       <div v-if="!searched && !loading" class="hint-empty">
         <EmptyState
@@ -169,7 +169,7 @@
         />
       </div>
 
-      <n-data-table
+      <UiDataTable
         v-else
         class="device-log-page__table"
         :columns="columns"
@@ -182,7 +182,7 @@
       />
 
       <div v-if="metaData.totalPages > 1" class="pagination-wrap">
-        <n-pagination
+        <UiPagination
           :page="currentPage"
           :page-count="metaData.totalPages"
           :item-count="metaData.totalCount"
@@ -191,23 +191,12 @@
           @update:page="onPageChange"
         />
       </div>
-    </CardSurface>
-  </div>
+    </NiondTableCard>
+  </NiondDataPage>
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, reactive, ref } from 'vue';
-import {
-  NButton,
-  NInput,
-  NSelect,
-  NRadioGroup,
-  NRadioButton,
-  NDatePicker,
-  NDataTable,
-  NPagination,
-} from 'naive-ui';
-import type { DataTableColumns } from 'naive-ui';
+import { ref, reactive, computed, h, onMounted } from 'vue';
 import {
   getLogsByDeviceAndDateApi,
   getLogsByDeviceAndKeywordApi,
@@ -218,10 +207,21 @@ import {
 } from '../../api/deviceLog';
 import type { PagedMetaData } from '../../api/employee';
 import { getScopedDeviceSelectApi, type DeviceSelectDto } from '../../api/device';
-import PageHeader from '../../components/layout/PageHeader.vue';
 import CardSurface from '../../components/layout/CardSurface.vue';
+import NiondDataPage from '../../components/layout/NiondDataPage.vue';
+import NiondTableCard from '../../components/layout/NiondTableCard.vue';
+import NiondToolbar from '../../components/layout/NiondToolbar.vue';
 import EmptyState from '../../components/states/EmptyState.vue';
 import SeverityBadge from '../../components/feedback/SeverityBadge.vue';
+import UiButton from '../../components/ui/UiButton.vue';
+import UiDataTable from '../../components/ui/UiDataTable.vue';
+import UiDatePicker from '../../components/ui/UiDatePicker.vue';
+import UiInput from '../../components/ui/UiInput.vue';
+import UiPagination from '../../components/ui/UiPagination.vue';
+import UiRadioButton from '../../components/ui/UiRadioButton.vue';
+import UiRadioGroup from '../../components/ui/UiRadioGroup.vue';
+import UiSelect from '../../components/ui/UiSelect.vue';
+import type { UiDataTableColumn } from '../../components/ui/types';
 
 type QueryMode = 'level' | 'keyword' | 'date' | 'time-range' | 'date-keyword';
 
@@ -328,7 +328,7 @@ const formatTime = (value?: string | null) => {
 };
 
 // === 表格列 ===
-const columns: DataTableColumns<DeviceLogListItemDto> = [
+const columns: UiDataTableColumn<DeviceLogListItemDto>[] = [
   {
     title: '级别',
     key: 'level',
@@ -530,7 +530,7 @@ onMounted(async () => {
   font-size: var(--fs-xs);
   color: var(--text-2);
   font-weight: var(--fw-medium);
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
 }
 
 .pagination-wrap {
@@ -571,10 +571,10 @@ onMounted(async () => {
   font-size: var(--fs-xs) !important;
   font-weight: var(--fw-semibold) !important;
   color: var(--text-2) !important;
-  letter-spacing: 1px;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 .device-log-page__table :deep(.n-data-table-tr:hover .n-data-table-td) {
-  background-color: rgba(8, 145, 178, 0.04) !important;
+  background-color: var(--bg-3) !important;
 }
 </style>

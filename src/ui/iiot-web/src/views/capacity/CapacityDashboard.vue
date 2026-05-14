@@ -1,9 +1,10 @@
 <template>
-  <div class="capacity-page">
-    <PageHeader
-      title="产能看板"
+  <NiondDataPage
+    class="capacity-page"
+    page-key="capacity"
+    title="产能看板"
       subtitle="当前权限范围内每日产能汇总，点击「查看详情」进入设备级报表"
-    />
+  >
 
     <div class="capacity-page__stats">
       <StatCard
@@ -32,11 +33,11 @@
       />
     </div>
 
-    <CardSurface class="capacity-page__filter-card">
+    <NiondToolbar class="capacity-page__filter-card">
       <div class="capacity-page__filter-row">
         <div class="filter-field">
           <span class="filter-field__label">设备</span>
-          <n-select
+          <UiSelect
             v-model:value="deviceFilter"
             :options="deviceOptions"
             placeholder="全部设备"
@@ -49,7 +50,7 @@
         </div>
         <div class="filter-field">
           <span class="filter-field__label">日期</span>
-          <n-date-picker
+          <UiDatePicker
             v-model:formatted-value="dateFilter"
             value-format="yyyy-MM-dd"
             type="date"
@@ -58,17 +59,17 @@
             @update:formatted-value="onFilterChange"
           />
         </div>
-        <n-button quaternary size="small" @click="clearFilters">
+        <UiButton quaternary size="small" @click="clearFilters">
           清空筛选
-        </n-button>
+        </UiButton>
       </div>
       <div v-if="deviceLoadError" class="capacity-page__filter-error">
         {{ deviceLoadError }}
       </div>
-    </CardSurface>
+    </NiondToolbar>
 
-    <CardSurface class="capacity-page__table-card" no-padding>
-      <n-data-table
+    <NiondTableCard class="capacity-page__table-card">
+      <UiDataTable
         class="capacity-page__table"
         :columns="columns"
         :data="records"
@@ -80,7 +81,7 @@
       />
 
       <div v-if="metaData.totalPages > 1" class="capacity-page__pagination">
-        <n-pagination
+        <UiPagination
           :page="currentPage"
           :page-count="metaData.totalPages"
           :item-count="metaData.totalCount"
@@ -89,27 +90,26 @@
           @update:page="onPageChange"
         />
       </div>
-    </CardSurface>
-  </div>
+    </NiondTableCard>
+  </NiondDataPage>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, h, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
-import {
-  NSelect,
-  NDatePicker,
-  NButton,
-  NDataTable,
-  NPagination,
-} from 'naive-ui';
-import type { DataTableColumns } from 'naive-ui';
 import { getDailyPagedApi, type DailyCapacityItem } from '../../api/capacity';
 import { getScopedDeviceSelectApi, type DeviceSelectDto } from '../../api/device';
 import type { PagedMetaData } from '../../api/employee';
-import PageHeader from '../../components/layout/PageHeader.vue';
 import StatCard from '../../components/data/StatCard.vue';
-import CardSurface from '../../components/layout/CardSurface.vue';
+import NiondDataPage from '../../components/layout/NiondDataPage.vue';
+import NiondTableCard from '../../components/layout/NiondTableCard.vue';
+import NiondToolbar from '../../components/layout/NiondToolbar.vue';
+import UiButton from '../../components/ui/UiButton.vue';
+import UiDataTable from '../../components/ui/UiDataTable.vue';
+import UiDatePicker from '../../components/ui/UiDatePicker.vue';
+import UiPagination from '../../components/ui/UiPagination.vue';
+import UiSelect from '../../components/ui/UiSelect.vue';
+import type { UiDataTableColumn } from '../../components/ui/types';
+import { useRouter } from 'vue-router';
 
 const router = useRouter();
 
@@ -180,7 +180,7 @@ function renderRateBar(rate: number) {
 }
 
 // === 表格列定义 ===
-const columns: DataTableColumns<DailyCapacityItem> = [
+const columns: UiDataTableColumn<DailyCapacityItem>[] = [
   {
     title: '设备',
     key: 'deviceName',
@@ -247,7 +247,7 @@ const columns: DataTableColumns<DailyCapacityItem> = [
     align: 'center',
     render(row) {
       return h(
-        NButton,
+        UiButton,
         {
           size: 'tiny',
           type: 'primary',
@@ -376,12 +376,12 @@ onMounted(async () => {
   font-size: var(--fs-xs);
   color: var(--text-2);
   font-weight: var(--fw-medium);
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
 }
 
 /* === 表格卡 === */
 .capacity-page__table-card {
-  /* CardSurface 已设了 border-radius/border，no-padding 让 NDataTable 撑到边 */
+  min-width: 0;
 }
 .capacity-page__pagination {
   display: flex;
@@ -457,7 +457,7 @@ onMounted(async () => {
   color: var(--error);
 }
 
-/* === Naive UI DataTable 微调（贴合 hybrid 风） === */
+/* === 项目自有数据表微调（贴合 Niond 风） === */
 .capacity-page__table :deep(.n-data-table-thead) {
   background: var(--bg-1);
 }
@@ -465,10 +465,10 @@ onMounted(async () => {
   font-size: var(--fs-xs) !important;
   font-weight: var(--fw-semibold) !important;
   color: var(--text-2) !important;
-  letter-spacing: 1px;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 .capacity-page__table :deep(.n-data-table-tr:hover .n-data-table-td) {
-  background-color: rgba(8, 145, 178, 0.04) !important;
+  background-color: var(--bg-3) !important;
 }
 </style>
