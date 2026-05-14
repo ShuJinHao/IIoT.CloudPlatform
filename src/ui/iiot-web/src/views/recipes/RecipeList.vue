@@ -1,11 +1,12 @@
 <template>
-  <div class="recipe-page">
-    <PageHeader
-      title="配方管理"
+  <NiondDataPage
+    class="recipe-page"
+    page-key="recipes"
+    title="配方管理"
       subtitle="管理生产设备配方和版本历史，支持按设备查看、升级和删除"
-    >
+  >
       <template #actions>
-        <n-button
+        <UiButton
           type="primary"
           v-permission="'Recipe.Create'"
           @click="openCreateModal"
@@ -16,35 +17,36 @@
             </svg>
           </template>
           新建配方
-        </n-button>
+        </UiButton>
       </template>
-    </PageHeader>
 
-    <CardSurface class="recipe-page__filter-card">
-      <div class="filter-row">
-        <n-input
-          v-model:value="keyword"
-          placeholder="搜索配方名称..."
-          clearable
-          size="small"
-          style="max-width: 320px;"
-          @input="onSearchInput"
-          @keyup.enter="fetchList"
-          @clear="onClearKeyword"
-        >
-          <template #prefix>
-            <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
-              <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" stroke-width="1.3"/>
-              <path d="M10 10l3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-            </svg>
-          </template>
-        </n-input>
-        <n-tag round :bordered="false" size="small">共 {{ metaData.totalCount }} 条</n-tag>
-      </div>
-    </CardSurface>
+    <template #toolbar>
+      <NiondToolbar>
+        <div class="filter-row">
+          <UiInput
+            v-model:value="keyword"
+            placeholder="搜索配方名称..."
+            clearable
+            size="small"
+            style="max-width: 320px;"
+            @input="onSearchInput"
+            @keyup.enter="fetchList"
+            @clear="onClearKeyword"
+          >
+            <template #prefix>
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
+                <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" stroke-width="1.3"/>
+                <path d="M10 10l3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+              </svg>
+            </template>
+          </UiInput>
+          <UiTag round :bordered="false" size="small">共 {{ metaData.totalCount }} 条</UiTag>
+        </div>
+      </NiondToolbar>
+    </template>
 
-    <CardSurface class="recipe-page__table-card" no-padding>
-      <n-data-table
+    <NiondTableCard class="recipe-page__table-card">
+      <UiDataTable
         class="recipe-page__table"
         :columns="columns"
         :data="recipes"
@@ -55,7 +57,7 @@
         size="small"
       />
       <div v-if="metaData.totalPages > 1" class="pagination-wrap">
-        <n-pagination
+        <UiPagination
           :page="currentPage"
           :page-count="metaData.totalPages"
           :item-count="metaData.totalCount"
@@ -64,10 +66,10 @@
           @update:page="onPageChange"
         />
       </div>
-    </CardSurface>
+    </NiondTableCard>
 
     <!-- 新建配方 modal -->
-    <n-modal
+    <UiModal
       v-model:show="showCreateModal"
       preset="card"
       title="新建生产配方"
@@ -78,11 +80,11 @@
         <div class="form-grid form-grid--2">
           <div class="form-field">
             <label class="form-label">配方名称 <span class="required">*</span></label>
-            <n-input v-model:value="createForm.recipeName" placeholder="如：A型号冬季配方" />
+            <UiInput v-model:value="createForm.recipeName" placeholder="如：A型号冬季配方" />
           </div>
           <div class="form-field">
             <label class="form-label">归属工序 <span class="required">*</span></label>
-            <n-select
+            <UiSelect
               v-model:value="createForm.processId"
               :options="processOptions"
               placeholder="请选择工序"
@@ -92,7 +94,7 @@
         </div>
         <div class="form-field">
           <label class="form-label">归属设备 <span class="required">*</span></label>
-          <n-select
+          <UiSelect
             v-model:value="createForm.deviceId"
             :options="deviceOptions"
             placeholder="请选择设备"
@@ -103,21 +105,21 @@
       </div>
       <template #footer>
         <div class="modal-actions">
-          <n-button @click="showCreateModal = false">取消</n-button>
-          <n-button
+          <UiButton @click="showCreateModal = false">取消</UiButton>
+          <UiButton
             type="primary"
             :loading="submitting"
             :disabled="createParams.length === 0"
             @click="submitCreate"
           >
             创建配方
-          </n-button>
+          </UiButton>
         </div>
       </template>
-    </n-modal>
+    </UiModal>
 
     <!-- 升级版本 modal -->
-    <n-modal
+    <UiModal
       v-model:show="showUpgradeModal"
       preset="card"
       style="width: 720px;"
@@ -135,7 +137,7 @@
         <div class="form-grid form-grid--2">
           <div class="form-field">
             <label class="form-label">新版本号 <span class="required">*</span></label>
-            <n-input
+            <UiInput
               v-model:value="upgradeForm.newVersion"
               placeholder="如：V2.0"
               class="mono-input"
@@ -145,9 +147,9 @@
           <div class="form-field">
             <label class="form-label">配方类型</label>
             <div class="readonly-badge">
-              <n-tag :type="isDeviceBoundRecipe(upgradeTarget?.deviceId) ? 'warning' : 'info'" :bordered="false" size="small">
+              <UiTag :type="isDeviceBoundRecipe(upgradeTarget?.deviceId) ? 'warning' : 'info'" :bordered="false" size="small">
                 {{ isDeviceBoundRecipe(upgradeTarget?.deviceId) ? '设备配方' : '未绑定设备' }}
-              </n-tag>
+              </UiTag>
             </div>
           </div>
         </div>
@@ -155,26 +157,26 @@
       </div>
       <template #footer>
         <div class="modal-actions">
-          <n-button @click="showUpgradeModal = false">取消</n-button>
-          <n-button
+          <UiButton @click="showUpgradeModal = false">取消</UiButton>
+          <UiButton
             type="primary"
             :loading="submitting"
             :disabled="upgradeParams.length === 0"
             @click="submitUpgrade"
           >
             保存并升版
-          </n-button>
+          </UiButton>
         </div>
       </template>
-    </n-modal>
+    </UiModal>
 
     <!-- 详情侧滑 -->
-    <n-drawer
+    <UiDrawer
       v-model:show="showDetailPanel"
       :width="420"
       placement="right"
     >
-      <n-drawer-content title="配方详情" closable>
+      <UiDrawerContent title="配方详情" closable>
         <LoadingState v-if="detailLoading" :rows="6" />
         <div v-else-if="detailData" class="detail-stack">
           <div
@@ -183,14 +185,14 @@
           >
             <span class="detail-status-banner__dot"></span>
             {{ detailData.status === 'Active' ? '配方启用中' : '配方已归档' }}
-            <n-tag
+            <UiTag
               size="small"
               :bordered="false"
               :type="isDeviceBoundRecipe(detailData.deviceId) ? 'warning' : 'info'"
               style="margin-left: auto;"
             >
               {{ isDeviceBoundRecipe(detailData.deviceId) ? '设备配方' : '未绑定设备' }}
-            </n-tag>
+            </UiTag>
           </div>
 
           <div class="detail-row">
@@ -200,7 +202,7 @@
           <div class="detail-row">
             <span class="detail-row__label">当前版本</span>
             <span class="detail-row__value">
-              <n-tag size="small" :bordered="false" type="info" class="mono-tag">{{ detailData.version }}</n-tag>
+              <UiTag size="small" :bordered="false" type="info" class="mono-tag">{{ detailData.version }}</UiTag>
             </span>
           </div>
           <div class="detail-row">
@@ -223,11 +225,11 @@
             <pre v-else class="detail-json">{{ prettyJson(detailData.parametersJsonb) }}</pre>
           </div>
         </div>
-      </n-drawer-content>
-    </n-drawer>
+      </UiDrawerContent>
+    </UiDrawer>
 
     <!-- 删除确认 -->
-    <n-modal
+    <UiModal
       v-model:show="confirmDialog.show"
       preset="card"
       :title="confirmDialog.title"
@@ -237,35 +239,22 @@
       <p class="confirm-desc">{{ confirmDialog.desc }}</p>
       <template #footer>
         <div class="modal-actions">
-          <n-button @click="confirmDialog.show = false">取消</n-button>
-          <n-button
+          <UiButton @click="confirmDialog.show = false">取消</UiButton>
+          <UiButton
             type="error"
             :loading="submitting"
             @click="confirmDialog.onConfirm()"
           >
             {{ confirmDialog.confirmText }}
-          </n-button>
+          </UiButton>
         </div>
       </template>
-    </n-modal>
-  </div>
+    </UiModal>
+  </NiondDataPage>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, h, onMounted, defineComponent } from 'vue';
-import {
-  NButton,
-  NInput,
-  NInputNumber,
-  NSelect,
-  NDataTable,
-  NPagination,
-  NModal,
-  NDrawer,
-  NDrawerContent,
-  NTag,
-} from 'naive-ui';
-import type { DataTableColumns } from 'naive-ui';
 import {
   getRecipePagedListApi,
   getRecipeDetailApi,
@@ -279,9 +268,21 @@ import {
 } from '../../api/recipe';
 import { getAllProcessesApi, type ProcessSelectDto } from '../../api/masterData/processes';
 import { getAllActiveDevicesApi, type DeviceSelectDto } from '../../api/device';
-import PageHeader from '../../components/layout/PageHeader.vue';
-import CardSurface from '../../components/layout/CardSurface.vue';
+import NiondDataPage from '../../components/layout/NiondDataPage.vue';
+import NiondTableCard from '../../components/layout/NiondTableCard.vue';
+import NiondToolbar from '../../components/layout/NiondToolbar.vue';
 import LoadingState from '../../components/states/LoadingState.vue';
+import UiButton from '../../components/ui/UiButton.vue';
+import UiDataTable from '../../components/ui/UiDataTable.vue';
+import UiDrawer from '../../components/ui/UiDrawer.vue';
+import UiDrawerContent from '../../components/ui/UiDrawerContent.vue';
+import UiInput from '../../components/ui/UiInput.vue';
+import UiModal from '../../components/ui/UiModal.vue';
+import UiNumberInput from '../../components/ui/UiNumberInput.vue';
+import UiPagination from '../../components/ui/UiPagination.vue';
+import UiSelect from '../../components/ui/UiSelect.vue';
+import UiTag from '../../components/ui/UiTag.vue';
+import type { UiDataTableColumn } from '../../components/ui/types';
 
 const recipes = ref<RecipeListItemDto[]>([]);
 const loading = ref(false);
@@ -436,7 +437,7 @@ const prettyJson = (str: string) => {
 };
 
 // === 表格列 ===
-const columns: DataTableColumns<RecipeListItemDto> = [
+const columns: UiDataTableColumn<RecipeListItemDto>[] = [
   {
     title: '配方名称',
     key: 'recipeName',
@@ -451,7 +452,7 @@ const columns: DataTableColumns<RecipeListItemDto> = [
     width: 100,
     render(row) {
       return h(
-        NTag,
+        UiTag,
         { size: 'small', bordered: false, type: 'info' },
         { default: () => row.version },
       );
@@ -464,7 +465,7 @@ const columns: DataTableColumns<RecipeListItemDto> = [
     render(row) {
       const bound = isDeviceBoundRecipe(row.deviceId);
       return h(
-        NTag,
+        UiTag,
         {
           size: 'small',
           bordered: false,
@@ -481,7 +482,7 @@ const columns: DataTableColumns<RecipeListItemDto> = [
     render(row) {
       const active = row.status === 'Active';
       return h(
-        NTag,
+        UiTag,
         {
           size: 'small',
           bordered: false,
@@ -526,7 +527,7 @@ const columns: DataTableColumns<RecipeListItemDto> = [
     render(row) {
       const buttons = [
         h(
-          NButton,
+          UiButton,
           {
             size: 'tiny',
             type: 'primary',
@@ -539,7 +540,7 @@ const columns: DataTableColumns<RecipeListItemDto> = [
       if (row.status === 'Active') {
         buttons.push(
           h(
-            NButton,
+            UiButton,
             {
               size: 'tiny',
               type: 'info',
@@ -552,7 +553,7 @@ const columns: DataTableColumns<RecipeListItemDto> = [
       }
       buttons.push(
         h(
-          NButton,
+          UiButton,
           {
             size: 'tiny',
             type: 'error',
@@ -773,7 +774,7 @@ const ParamsEditor = defineComponent({
             ],
           ),
           h(
-            NButton,
+            UiButton,
             {
               size: 'tiny',
               type: 'primary',
@@ -802,21 +803,21 @@ const ParamsEditor = defineComponent({
                   'div',
                   { class: 'params-editor__row', key: p.id },
                   [
-                    h(NInput, {
+                    h(UiInput, {
                       value: p.name,
                       placeholder: '如：温度',
                       size: 'small',
                       'onUpdate:value': (v: string) =>
                         updateParam(idx, 'name', v),
                     }),
-                    h(NInput, {
+                    h(UiInput, {
                       value: p.unit,
                       placeholder: '℃',
                       size: 'small',
                       'onUpdate:value': (v: string) =>
                         updateParam(idx, 'unit', v),
                     }),
-                    h(NInputNumber, {
+                    h(UiNumberInput, {
                       value: p.min,
                       placeholder: '0',
                       size: 'small',
@@ -825,7 +826,7 @@ const ParamsEditor = defineComponent({
                       'onUpdate:value': (v: number | null) =>
                         updateParam(idx, 'min', v ?? 0),
                     }),
-                    h(NInputNumber, {
+                    h(UiNumberInput, {
                       value: p.max,
                       placeholder: '100',
                       size: 'small',
@@ -835,7 +836,7 @@ const ParamsEditor = defineComponent({
                         updateParam(idx, 'max', v ?? 0),
                     }),
                     h(
-                      NButton,
+                      UiButton,
                       {
                         size: 'tiny',
                         quaternary: true,
@@ -909,11 +910,11 @@ const ParamsEditor = defineComponent({
   font-size: var(--fs-xs) !important;
   font-weight: var(--fw-semibold) !important;
   color: var(--text-2) !important;
-  letter-spacing: 1px;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 .recipe-page__table :deep(.n-data-table-tr:hover .n-data-table-td) {
-  background-color: rgba(8, 145, 178, 0.04) !important;
+  background-color: var(--bg-3) !important;
 }
 
 /* 表单 */
@@ -1015,7 +1016,7 @@ const ParamsEditor = defineComponent({
   font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
   color: var(--text-2);
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
   padding: var(--space-2) var(--space-3);
 }
 .params-editor__row--head span {
@@ -1061,7 +1062,7 @@ const ParamsEditor = defineComponent({
   font-size: var(--fs-xs);
   color: var(--text-2);
   text-transform: uppercase;
-  letter-spacing: 0.8px;
+  letter-spacing: 0;
   font-weight: var(--fw-medium);
 }
 .detail-row__value {

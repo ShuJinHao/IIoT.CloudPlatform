@@ -20,7 +20,7 @@ defineProps<{
   font-size: var(--fs-xs);
   font-weight: var(--fw-bold);
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 0;
   padding: 3px 7px;
   border-radius: var(--radius-sm);
   line-height: 1.2;

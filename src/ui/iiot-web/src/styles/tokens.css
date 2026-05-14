@@ -1,47 +1,60 @@
-/**
- * IIoT 云平台设计 token · 浅色 (Linear / Stripe 风格)
- * 颜色 / 间距 / 字号 / 圆角 / 阴影 / 动效 / 字体
- * 任何视图都不应内联颜色或字号——查这里。
- */
 :root {
-  /* === 背景层级（极浅灰 + 纯白卡） === */
-  --bg-0: #fafbfc;          /* 页面底色（极浅灰，不刺眼） */
-  --bg-1: #ffffff;          /* 主卡面 */
-  --bg-2: #ffffff;          /* 表面（与 bg-1 一致，靠阴影分层） */
-  --bg-3: #f5f6f8;          /* 内嵌面板 / hover 浅色 */
+  color-scheme: light;
 
-  /* === 历史背景（旧 13 view 沿用，逐步迁移后移除） === */
-  --bg-legacy: #181d1a;
-  --text-legacy: #edf1ee;
+  --background: #e9edec;
+  --foreground: #111827;
+  --card: #ffffff;
+  --card-foreground: #111827;
+  --popover: #ffffff;
+  --popover-foreground: #111827;
+  --primary: #c6f452;
+  --primary-foreground: #111827;
+  --secondary: #edf2f4;
+  --secondary-foreground: #111827;
+  --muted: #f4f7f8;
+  --muted-foreground: #6b7280;
+  --accent: #229aa3;
+  --accent-foreground: #ffffff;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: rgba(17, 24, 39, 0.08);
+  --input: rgba(17, 24, 39, 0.12);
+  --ring: rgba(17, 24, 39, 0.18);
+  --focus-ring: rgba(17, 24, 39, 0.18);
+  --sidebar: #fbfbfb;
+  --sidebar-foreground: #151923;
+  --sidebar-muted: #8a93a3;
+  --sidebar-active: #c6f452;
+  --chart-1: #c8bbf0;
+  --chart-2: #9fbdea;
+  --chart-3: #8bd7ad;
+  --chart-4: #229aa3;
+  --chart-5: #f5c982;
+  --accent-chip: #e6f6bd;
 
-  /* === 描边（半透明黑，自然融入白底） === */
-  --border: rgba(15, 23, 42, 0.06);
-  --border-strong: rgba(15, 23, 42, 0.12);
-  --border-brand: rgba(8, 145, 178, 0.32);
+  --bg-0: var(--background);
+  --bg-1: var(--card);
+  --bg-2: #f7f9f8;
+  --bg-3: #eef3f2;
+  --text-0: var(--foreground);
+  --text-1: #596273;
+  --text-2: #9aa3af;
+  --brand: var(--accent);
+  --brand-hover: #1b858d;
+  --brand-pressed: #13646a;
+  --brand-soft: rgba(34, 154, 163, 0.12);
+  --brand-glow: 0 0 0 4px rgba(34, 154, 163, 0.14);
+  --info: #7c6ee6;
+  --info-soft: rgba(124, 110, 230, 0.13);
+  --success: #10a37f;
+  --success-soft: rgba(16, 163, 127, 0.13);
+  --warn: #e08a00;
+  --warn-soft: rgba(224, 138, 0, 0.14);
+  --error: #ef4444;
+  --error-soft: rgba(239, 68, 68, 0.12);
+  --border-strong: rgba(17, 24, 39, 0.14);
+  --border-brand: rgba(31, 157, 168, 0.35);
 
-  /* === 文本（黑稍偏蓝灰） === */
-  --text-0: #1a1d29;
-  --text-1: #6b7384;
-  --text-2: #9ba3b4;
-
-  /* === 品牌主色：深青（Tailwind cyan-700） === */
-  --brand: #0891b2;
-  --brand-hover: #0e7490;
-  --brand-pressed: #155e75;
-  --brand-soft: rgba(8, 145, 178, 0.10);
-  --brand-glow: 0 0 0 4px rgba(8, 145, 178, 0.12);
-
-  /* === 语义色（在白底需要更深更鲜艳） === */
-  --info: #6366f1;
-  --info-soft: rgba(99, 102, 241, 0.10);
-  --success: #059669;
-  --success-soft: rgba(5, 150, 105, 0.10);
-  --warn: #d97706;
-  --warn-soft: rgba(217, 119, 6, 0.10);
-  --error: #dc2626;
-  --error-soft: rgba(220, 38, 38, 0.10);
-
-  /* === 间距尺度 === */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -49,16 +62,18 @@
   --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
+  --space-10: 40px;
   --space-12: 48px;
+  --space-16: 64px;
 
-  /* === 圆角 === */
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 12px;
-  --radius-xl: 18px;
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+  --radius-2xl: 30px;
   --radius-full: 9999px;
 
-  /* === 字号 === */
   --fs-xs: 11px;
   --fs-sm: 12px;
   --fs-base: 13px;
@@ -68,33 +83,85 @@
   --fs-2xl: 22px;
   --fs-3xl: 28px;
   --fs-4xl: 36px;
+  --fs-display-1: 48px;
+  --fs-display-2: 60px;
+  --fs-display-3: 72px;
 
-  /* === 字重 === */
   --fw-regular: 400;
   --fw-medium: 500;
   --fw-semibold: 600;
   --fw-bold: 700;
+  --fw-display: 750;
+  --fw-strong: 800;
 
-  /* === 阴影（替代 dark theme 的 glow，关键差异点） === */
-  --shadow-sm:
-    0 1px 2px rgba(15, 23, 42, 0.04),
-    0 1px 3px rgba(15, 23, 42, 0.06);
-  --shadow-md:
-    0 4px 6px -1px rgba(15, 23, 42, 0.06),
-    0 2px 4px -2px rgba(15, 23, 42, 0.05);
-  --shadow-lg:
-    0 10px 15px -3px rgba(15, 23, 42, 0.08),
-    0 4px 6px -4px rgba(15, 23, 42, 0.05);
-  --shadow-card-hover:
-    0 4px 16px -4px rgba(15, 23, 42, 0.10),
-    0 2px 6px -2px rgba(15, 23, 42, 0.06);
+  --shadow-sm: 0 1px 2px rgba(18, 25, 38, 0.04), 0 1px 3px rgba(18, 25, 38, 0.06);
+  --shadow-md: 0 8px 20px rgba(18, 25, 38, 0.07);
+  --shadow-lg: 0 18px 42px rgba(18, 25, 38, 0.10);
+  --shadow-xl: 0 28px 80px rgba(18, 25, 38, 0.16);
+  --shadow-card-hover: 0 16px 36px rgba(18, 25, 38, 0.12);
 
-  /* === 动效时长 === */
   --motion-fast: 150ms;
   --motion-base: 200ms;
   --motion-slow: 300ms;
 
-  /* === 字体 === */
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --font-mono: 'JetBrains Mono', 'Consolas', 'Menlo', 'Courier New', monospace;
+  --font-sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, Menlo, monospace;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --background: #09090b;
+  --foreground: #f5f5f4;
+  --card: #18181b;
+  --card-foreground: #f5f5f4;
+  --popover: #18181b;
+  --popover-foreground: #f5f5f4;
+  --primary: #c6f452;
+  --primary-foreground: #111827;
+  --secondary: #27272a;
+  --secondary-foreground: #f5f5f4;
+  --muted: #27272a;
+  --muted-foreground: #a1a1aa;
+  --accent: #5eead4;
+  --accent-foreground: #042f2e;
+  --destructive: #f87171;
+  --destructive-foreground: #450a0a;
+  --border: rgba(255, 255, 255, 0.09);
+  --input: rgba(255, 255, 255, 0.14);
+  --ring: rgba(255, 255, 255, 0.24);
+  --focus-ring: rgba(255, 255, 255, 0.24);
+  --sidebar: #111113;
+  --sidebar-foreground: #f5f5f4;
+  --sidebar-muted: #a1a1aa;
+  --sidebar-active: #c6f452;
+
+  --bg-0: var(--background);
+  --bg-1: var(--card);
+  --bg-2: #202024;
+  --bg-3: #27272a;
+  --text-0: var(--foreground);
+  --text-1: #c4c4ca;
+  --text-2: #85858f;
+  --brand: var(--accent);
+  --brand-hover: #99f6e4;
+  --brand-pressed: #2dd4bf;
+  --brand-soft: rgba(94, 234, 212, 0.15);
+  --brand-glow: 0 0 0 4px rgba(94, 234, 212, 0.18);
+  --info: #a5b4fc;
+  --info-soft: rgba(165, 180, 252, 0.16);
+  --success: #34d399;
+  --success-soft: rgba(52, 211, 153, 0.16);
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.16);
+  --error: #f87171;
+  --error-soft: rgba(248, 113, 113, 0.16);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --border-brand: rgba(94, 234, 212, 0.4);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 8px 20px rgba(0, 0, 0, 0.38);
+  --shadow-lg: 0 18px 42px rgba(0, 0, 0, 0.48);
+  --shadow-xl: 0 28px 80px rgba(0, 0, 0, 0.56);
+  --shadow-card-hover: 0 18px 46px rgba(0, 0, 0, 0.52);
 }

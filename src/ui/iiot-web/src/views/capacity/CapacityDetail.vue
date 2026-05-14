@@ -1,36 +1,35 @@
 <template>
-  <div class="detail-page">
-    <PageHeader
+  <NiondDataPage
+    class="detail-page"
       :title="deviceName"
       :subtitle="subtitleText"
-    >
+  >
       <template #actions>
-        <n-button quaternary size="small" @click="router.back()">
+        <UiButton quaternary size="small" @click="router.back()">
           <template #icon>
             <svg viewBox="0 0 16 16" fill="none" width="14" height="14">
               <path d="M10 3L5 8l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </template>
           返回
-        </n-button>
+        </UiButton>
       </template>
-    </PageHeader>
 
     <!-- 查询控制栏 -->
-    <CardSurface class="detail-page__filter-card">
+    <NiondToolbar class="detail-page__filter-card">
       <div class="detail-page__filter-row">
         <div class="filter-field">
           <span class="filter-field__label">查询粒度</span>
-          <n-radio-group v-model:value="queryMode" size="small" @update:value="onModeChange">
-            <n-radio-button value="day">按日查询</n-radio-button>
-            <n-radio-button value="month">按月查询</n-radio-button>
-            <n-radio-button value="year">按年查询</n-radio-button>
-          </n-radio-group>
+          <UiRadioGroup v-model:value="queryMode" size="small" @update:value="onModeChange">
+            <UiRadioButton value="day">按日查询</UiRadioButton>
+            <UiRadioButton value="month">按月查询</UiRadioButton>
+            <UiRadioButton value="year">按年查询</UiRadioButton>
+          </UiRadioGroup>
         </div>
 
         <div class="filter-field" v-if="queryMode === 'day'">
           <span class="filter-field__label">日期</span>
-          <n-date-picker
+          <UiDatePicker
             v-model:formatted-value="queryDate"
             value-format="yyyy-MM-dd"
             type="date"
@@ -42,7 +41,7 @@
 
         <div class="filter-field" v-if="queryMode === 'month'">
           <span class="filter-field__label">月份</span>
-          <n-date-picker
+          <UiDatePicker
             v-model:formatted-value="queryMonth"
             value-format="yyyy-MM"
             type="month"
@@ -54,7 +53,7 @@
 
         <div class="filter-field" v-if="queryMode === 'year'">
           <span class="filter-field__label">年份</span>
-          <n-select
+          <UiSelect
             v-model:value="queryYear"
             :options="yearOptions"
             size="small"
@@ -65,7 +64,7 @@
 
         <div class="filter-field">
           <span class="filter-field__label">PLC 名称（可选）</span>
-          <n-input
+          <UiInput
             v-model:value="plcNameFilter"
             placeholder="不填查全部"
             size="small"
@@ -76,7 +75,7 @@
           />
         </div>
       </div>
-    </CardSurface>
+    </NiondToolbar>
 
     <!-- 5 个统计卡 -->
     <div class="detail-page__stats">
@@ -134,8 +133,8 @@
     </CardSurface>
 
     <!-- 明细表格 -->
-    <CardSurface class="detail-page__table-card" no-padding>
-      <n-data-table
+    <NiondTableCard class="detail-page__table-card">
+      <UiDataTable
         class="detail-page__table"
         :columns="columns"
         :data="rows"
@@ -145,35 +144,34 @@
         :row-key="rowKey"
         size="small"
       />
-    </CardSurface>
-  </div>
+    </NiondTableCard>
+  </NiondDataPage>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, h, onMounted } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
-import VChart from 'vue-echarts';
-import {
-  NButton,
-  NRadioGroup,
-  NRadioButton,
-  NDatePicker,
-  NSelect,
-  NInput,
-  NDataTable,
-} from 'naive-ui';
-import type { DataTableColumns } from 'naive-ui';
 import '../../components/charts/echartsSetup';
 import {
   getHourlyByDeviceApi,
   getDailySummaryApi,
   getSummaryRangeApi,
 } from '../../api/capacity';
-import PageHeader from '../../components/layout/PageHeader.vue';
 import StatCard from '../../components/data/StatCard.vue';
 import CardSurface from '../../components/layout/CardSurface.vue';
+import NiondDataPage from '../../components/layout/NiondDataPage.vue';
+import NiondTableCard from '../../components/layout/NiondTableCard.vue';
+import NiondToolbar from '../../components/layout/NiondToolbar.vue';
 import LoadingState from '../../components/states/LoadingState.vue';
 import EmptyState from '../../components/states/EmptyState.vue';
+import UiButton from '../../components/ui/UiButton.vue';
+import UiDataTable from '../../components/ui/UiDataTable.vue';
+import UiDatePicker from '../../components/ui/UiDatePicker.vue';
+import UiInput from '../../components/ui/UiInput.vue';
+import UiRadioButton from '../../components/ui/UiRadioButton.vue';
+import UiRadioGroup from '../../components/ui/UiRadioGroup.vue';
+import UiSelect from '../../components/ui/UiSelect.vue';
+import type { UiDataTableColumn } from '../../components/ui/types';
+import { useRouter, useRoute } from 'vue-router';
 
 const route = useRoute();
 const router = useRouter();
@@ -355,8 +353,8 @@ function renderShiftTag(shift: string) {
   );
 }
 
-const columns = computed<DataTableColumns<Row>>(() => {
-  const base: DataTableColumns<Row> = [
+const columns = computed<UiDataTableColumn<Row>[]>(() => {
+  const base: UiDataTableColumn<Row>[] = [
     {
       title: tableTimeLabel.value,
       key: 'label',
@@ -632,7 +630,7 @@ onMounted(() => fetchData());
   font-size: var(--fs-xs);
   color: var(--text-2);
   font-weight: var(--fw-medium);
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
 }
 
 .detail-page__stats {
@@ -687,11 +685,11 @@ onMounted(() => fetchData());
   color: var(--brand);
   padding: 2px 8px;
   border-radius: var(--radius-sm);
-  font-weight: var(--fw-semibold);
+  font-weight: var(--fw-display);
   font-family: var(--font-mono);
 }
 
-/* Naive UI DataTable 微调 */
+/* 项目自有数据表微调 */
 .detail-page__table :deep(.n-data-table-thead) {
   background: var(--bg-3);
 }
@@ -699,10 +697,10 @@ onMounted(() => fetchData());
   font-size: var(--fs-xs) !important;
   font-weight: var(--fw-semibold) !important;
   color: var(--text-2) !important;
-  letter-spacing: 1px;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 .detail-page__table :deep(.n-data-table-tr:hover .n-data-table-td) {
-  background-color: rgba(8, 145, 178, 0.04) !important;
+  background-color: var(--bg-3) !important;
 }
 </style>

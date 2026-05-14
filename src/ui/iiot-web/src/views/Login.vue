@@ -1,121 +1,251 @@
 <template>
-  <div class="login-root">
-    <div class="bg-grid" aria-hidden="true"></div>
-    <div class="bg-glow bg-glow--cyan" aria-hidden="true"></div>
-    <div class="bg-glow bg-glow--violet" aria-hidden="true"></div>
-
-    <div class="login-card">
-      <div class="logo-block">
-        <div class="logo-icon">
-          <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect x="2" y="2" width="16" height="16" rx="3" fill="#0891b2" opacity="0.92"/>
-            <rect x="22" y="2" width="16" height="16" rx="3" fill="#6366f1" opacity="0.78"/>
-            <rect x="2" y="22" width="16" height="16" rx="3" fill="#059669" opacity="0.72"/>
-            <rect x="22" y="22" width="16" height="16" rx="3" fill="#0891b2" opacity="0.85"/>
-          </svg>
-        </div>
-        <div class="logo-text">
-          <span class="logo-main">IIoT 云平台</span>
-          <span class="logo-sub">INDUSTRIAL IOT CLOUD</span>
-        </div>
-      </div>
-
-      <div class="divider"></div>
-
-      <h2 class="login-title">操作员登录</h2>
-      <p class="login-desc">请输入工号和密码登录系统。</p>
-
-      <div class="form">
-        <div class="field-group" :class="{ 'field-focus': focusedField === 'no' }">
-          <label class="field-label">工号</label>
-          <div class="field-input-wrap">
-            <svg class="field-icon" viewBox="0 0 20 20" fill="none">
-              <circle cx="10" cy="7" r="3.5" stroke="currentColor" stroke-width="1.5"/>
-              <path d="M3 17c0-3.314 3.134-6 7-6s7 2.686 7 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            </svg>
-            <input
-              v-model="loginForm.employeeNo"
-              type="text"
-              placeholder="请输入工号"
-              @focus="focusedField = 'no'"
-              @blur="focusedField = ''"
-              autocomplete="username"
-            />
+  <main class="grid min-h-screen place-items-center overflow-auto bg-[#dfe5e3] p-8 text-[#111827]">
+    <div class="grid h-[min(820px,calc(100vh-64px))] min-h-[640px] w-[min(1600px,calc(100vw-128px))] grid-cols-[250px_minmax(0,1fr)] overflow-hidden rounded-[32px] bg-white shadow-[0_34px_90px_rgba(30,38,48,0.18)] max-[1120px]:w-[min(960px,calc(100vw-64px))] max-[1120px]:grid-cols-1 max-[1120px]:min-h-[620px]">
+      <aside class="flex min-h-0 flex-col bg-[#fbfbfb] px-7 py-8 max-[1120px]:hidden">
+        <div class="mb-10 flex items-center gap-3">
+          <div class="grid size-10 place-items-center rounded-[14px] bg-[#111827] text-[var(--primary)]">
+            <Factory :size="21" :stroke-width="2.4" />
+          </div>
+          <div>
+            <div class="text-[18px] font-extrabold leading-tight">{{ t('brand.name') }}</div>
+            <div class="text-[11px] font-semibold uppercase text-[#8a93a3]">{{ t('brand.subtitle') }}</div>
           </div>
         </div>
 
-        <div class="field-group" :class="{ 'field-focus': focusedField === 'pw' }">
-          <label class="field-label">密码</label>
-          <div class="field-input-wrap">
-            <svg class="field-icon" viewBox="0 0 20 20" fill="none">
-              <rect x="4" y="9" width="12" height="9" rx="2" stroke="currentColor" stroke-width="1.5"/>
-              <path d="M7 9V6.5a3 3 0 016 0V9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            </svg>
-            <input
-              v-model="loginForm.password"
-              :type="showPw ? 'text' : 'password'"
-              placeholder="请输入密码"
-              @focus="focusedField = 'pw'"
-              @blur="focusedField = ''"
-              @keyup.enter="handleLogin"
-              autocomplete="current-password"
-            />
-            <button class="eye-btn" @click="showPw = !showPw" type="button" tabindex="-1">
-              <svg v-if="!showPw" viewBox="0 0 20 20" fill="none">
-                <path d="M2 10s3-6 8-6 8 6 8 6-3 6-8 6-8-6-8-6z" stroke="currentColor" stroke-width="1.5"/>
-                <circle cx="10" cy="10" r="2.5" stroke="currentColor" stroke-width="1.5"/>
-              </svg>
-              <svg v-else viewBox="0 0 20 20" fill="none">
-                <path d="M3 3l14 14M8.46 8.52A2.5 2.5 0 0012.5 12.5M6 6.3C3.9 7.6 2 10 2 10s3 6 8 6c1.6 0 3-.5 4.2-1.3M10 4c4.4.3 8 6 8 6s-1 2-2.8 3.7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-              </svg>
+        <div class="grid gap-2">
+          <div class="flex h-11 items-center gap-3 rounded-[12px] bg-[var(--primary)] px-3 text-[13px] font-bold text-[#111827]">
+            <LayoutDashboard :size="18" :stroke-width="2.4" />
+            {{ t('login.sectionOverview') }}
+          </div>
+          <div class="flex h-11 items-center gap-3 rounded-[12px] px-3 text-[13px] font-bold text-[#3d4552]">
+            <Activity :size="18" :stroke-width="2.2" />
+            {{ t('login.sectionDevices') }}
+          </div>
+          <div class="flex h-11 items-center gap-3 rounded-[12px] px-3 text-[13px] font-bold text-[#3d4552]">
+            <ClipboardList :size="18" :stroke-width="2.2" />
+            {{ t('login.sectionTrace') }}
+          </div>
+          <div class="flex h-11 items-center gap-3 rounded-[12px] px-3 text-[13px] font-bold text-[#3d4552]">
+            <Users :size="18" :stroke-width="2.2" />
+            {{ t('login.sectionTeam') }}
+          </div>
+        </div>
+
+        <div class="mt-auto rounded-[24px] bg-[#f0f4f3] p-5">
+          <div class="mb-2 text-[13px] font-extrabold">{{ t('login.sideTitle') }}</div>
+          <p class="text-[12px] leading-5 text-[#7a8494]">{{ t('login.sideDesc') }}</p>
+        </div>
+      </aside>
+
+      <section class="grid min-w-0 grid-cols-[410px_minmax(0,1fr)] bg-[#f0f4f3] p-8 max-[1120px]:grid-cols-1 max-[1120px]:bg-white max-[1120px]:p-7">
+        <div class="relative flex min-h-0 flex-col justify-center rounded-l-[28px] bg-white px-9 py-10 max-[1120px]:mx-auto max-[1120px]:w-full max-[1120px]:max-w-[460px] max-[1120px]:rounded-[28px] max-[1120px]:px-7">
+          <button
+            class="absolute right-7 top-7 inline-flex h-10 items-center gap-2 rounded-[13px] border border-[rgba(17,24,39,0.10)] bg-white px-3 text-[12px] font-extrabold text-[#111827] shadow-[0_8px_22px_rgba(17,24,39,0.05)] transition hover:bg-[#f7fafb]"
+            type="button"
+            :title="t('common.language')"
+            @click="toggleLocale"
+          >
+            <Languages :size="17" />
+            {{ currentLocale === 'zh-CN' ? 'EN' : '中' }}
+          </button>
+
+          <div class="mb-10 flex items-center gap-3 min-[1121px]:hidden">
+            <div class="grid size-10 place-items-center rounded-[14px] bg-[#111827] text-[var(--primary)]">
+              <Factory :size="21" :stroke-width="2.4" />
+            </div>
+            <div>
+              <div class="text-[18px] font-extrabold leading-tight">{{ t('brand.name') }}</div>
+              <div class="text-[11px] font-semibold uppercase text-[#8a93a3]">{{ t('brand.subtitle') }}</div>
+            </div>
+          </div>
+
+          <p class="mb-3 text-[12px] font-bold uppercase text-[#8a93a3]">{{ t('login.eyebrow') }}</p>
+          <h1 class="mb-3 text-[32px] font-extrabold leading-tight tracking-[0]">{{ t('login.title') }}</h1>
+          <p class="mb-9 max-w-[330px] text-[14px] leading-6 text-[#6b7280]">{{ t('login.desc') }}</p>
+
+          <div class="space-y-5">
+            <label class="grid gap-2">
+              <span class="text-[13px] font-bold text-[#596273]">{{ t('login.employeeNo') }}</span>
+              <span class="flex h-[54px] items-center rounded-[16px] border border-[rgba(17,24,39,0.10)] bg-[#f7fafb] px-4 transition focus-within:border-[rgba(17,24,39,0.26)] focus-within:bg-white focus-within:shadow-[0_10px_24px_rgba(17,24,39,0.06)]">
+                <UserRound class="mr-3 shrink-0 text-[#9aa3af]" :size="18" />
+                <input
+                  v-model="loginForm.employeeNo"
+                  class="min-w-0 flex-1 bg-transparent text-[15px] font-semibold text-[#111827] outline-none placeholder:text-[#a6afba]"
+                  type="text"
+                  :placeholder="t('login.employeePlaceholder')"
+                  autocomplete="username"
+                />
+              </span>
+            </label>
+
+            <label class="grid gap-2">
+              <span class="text-[13px] font-bold text-[#596273]">{{ t('login.password') }}</span>
+              <span class="flex h-[54px] items-center rounded-[16px] border border-[rgba(17,24,39,0.10)] bg-[#f7fafb] px-4 transition focus-within:border-[rgba(17,24,39,0.26)] focus-within:bg-white focus-within:shadow-[0_10px_24px_rgba(17,24,39,0.06)]">
+                <LockKeyhole class="mr-3 shrink-0 text-[#9aa3af]" :size="18" />
+                <input
+                  v-model="loginForm.password"
+                  class="min-w-0 flex-1 bg-transparent text-[15px] font-semibold text-[#111827] outline-none placeholder:text-[#a6afba]"
+                  :type="showPw ? 'text' : 'password'"
+                  :placeholder="t('login.passwordPlaceholder')"
+                  autocomplete="current-password"
+                  @keyup.enter="handleLogin"
+                />
+                <button class="grid size-9 shrink-0 place-items-center rounded-[12px] text-[#8a93a3] hover:bg-[#f0f4f3] hover:text-[#111827]" type="button" tabindex="-1" @click="showPw = !showPw">
+                  <EyeOff v-if="showPw" :size="18" />
+                  <Eye v-else :size="18" />
+                </button>
+              </span>
+            </label>
+
+            <div v-if="errorMsg" class="rounded-[14px] bg-[rgba(239,68,68,0.10)] px-4 py-3 text-[13px] font-semibold text-[#ef4444]">
+              {{ errorMsg }}
+            </div>
+
+            <button
+              class="mt-2 h-[54px] w-full rounded-[16px] bg-[#111827] text-[15px] font-extrabold text-white transition hover:bg-[#262f3f] disabled:cursor-not-allowed disabled:opacity-55"
+              type="button"
+              :disabled="loading"
+              @click="handleLogin"
+            >
+              {{ loading ? t('login.submitting') : t('login.submit') }}
             </button>
           </div>
+
+          <p class="mt-10 text-center text-[12px] font-semibold text-[#a0a8b5]">{{ t('login.version') }}</p>
         </div>
 
-        <div v-if="errorMsg" class="error-msg">
-          <svg viewBox="0 0 16 16" fill="none">
-            <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.4"/>
-            <path d="M8 5v3.5M8 10.5v.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-          {{ errorMsg }}
-        </div>
+        <aside class="min-w-0 rounded-r-[28px] bg-[#f0f4f3] p-6 max-[1120px]:hidden">
+          <div class="mb-6 flex items-start justify-between">
+            <div>
+              <p class="mb-2 text-[12px] font-bold uppercase text-[#8a93a3]">{{ t('login.previewSubtitle') }}</p>
+              <h2 class="text-[30px] font-extrabold leading-tight">{{ t('login.previewDate') }}</h2>
+            </div>
+            <div class="rounded-full bg-[#d9f2e6] px-4 py-3 text-[13px] font-extrabold text-[#07845f]">
+              <span class="mr-2 inline-block size-2 rounded-full bg-[#10a37f]"></span>
+              {{ t('login.workshopStatus') }}
+            </div>
+          </div>
 
-        <button class="submit-btn" @click="handleLogin" :disabled="loading">
-          <span v-if="!loading">登录</span>
-          <span v-else class="loading-dots">
-            <span></span><span></span><span></span>
-          </span>
-        </button>
-      </div>
+          <div class="grid grid-cols-4 gap-4 max-[1320px]:grid-cols-2">
+            <div class="rounded-[18px] bg-[var(--chart-1)] p-4">
+              <Factory class="mb-6" :size="16" />
+              <div class="text-[28px] font-extrabold">36</div>
+              <div class="mt-1 text-[11px] font-semibold text-[#5a536b]">{{ t('login.onlineDevices') }}</div>
+            </div>
+            <div class="rounded-[18px] bg-[var(--chart-2)] p-4">
+              <Activity class="mb-6" :size="16" />
+              <div class="text-[28px] font-extrabold">932</div>
+              <div class="mt-1 text-[11px] font-semibold text-[#4e5f7c]">{{ t('login.todayOutput') }}</div>
+            </div>
+            <div class="rounded-[18px] bg-[var(--chart-3)] p-4">
+              <Gauge class="mb-6" :size="16" />
+              <div class="text-[28px] font-extrabold">98.6%</div>
+              <div class="mt-1 text-[11px] font-semibold text-[#3b6a50]">{{ t('login.passRate') }}</div>
+            </div>
+            <div class="rounded-[18px] bg-[var(--chart-5)] p-4">
+              <AlertTriangle class="mb-6" :size="16" />
+              <div class="text-[28px] font-extrabold">2</div>
+              <div class="mt-1 text-[11px] font-semibold text-[#74551a]">{{ t('login.alerts') }}</div>
+            </div>
+          </div>
 
-      <p class="footer-tip">工业物联网云平台 v1.0</p>
+          <div class="mt-6 grid grid-cols-[minmax(0,1fr)_230px] gap-5">
+            <div class="rounded-[22px] bg-white p-5">
+              <div class="mb-4 flex items-center justify-between">
+                <h3 class="text-[18px] font-extrabold">{{ t('login.trend') }}</h3>
+                <span class="rounded-[10px] bg-[#111827] px-3 py-2 text-[12px] font-extrabold text-white">{{ t('common.live') }}</span>
+              </div>
+              <div class="login-chart">
+                <i style="height: 52%; background: var(--chart-1)"></i>
+                <i style="height: 44%; background: var(--chart-3)"></i>
+                <i style="height: 68%; background: var(--chart-1)"></i>
+                <i style="height: 56%; background: var(--chart-3)"></i>
+                <i style="height: 82%; background: var(--chart-1)"></i>
+                <i style="height: 62%; background: var(--chart-3)"></i>
+                <i style="height: 50%; background: var(--chart-1)"></i>
+                <i style="height: 46%; background: var(--chart-3)"></i>
+                <i style="height: 70%; background: var(--chart-1)"></i>
+                <i style="height: 54%; background: var(--chart-3)"></i>
+              </div>
+            </div>
+
+            <div class="space-y-5">
+              <div class="rounded-[22px] bg-[var(--accent)] p-6 text-white">
+                <Wifi class="mb-5" :size="20" />
+                <div class="mb-2 text-[17px] font-extrabold">{{ t('login.syncStatus') }}</div>
+                <div class="mb-6 text-[13px] font-semibold text-white/80">{{ t('login.gateway') }}</div>
+                <span class="rounded-[10px] bg-white/90 px-3 py-2 text-[12px] font-extrabold text-[#111827]">{{ t('login.syncNormal') }}</span>
+              </div>
+              <div class="rounded-[22px] bg-white p-5 max-[1400px]:hidden">
+                <div class="mb-4 flex items-center gap-3">
+                  <span class="size-3 rounded-full bg-[#e08a00]"></span>
+                  <div>
+                    <div class="text-[15px] font-extrabold">{{ t('login.alertHint') }}</div>
+                    <div class="mt-1 text-[12px] font-semibold text-[#8a93a3]">{{ t('login.lineHint') }}</div>
+                  </div>
+                </div>
+                <div class="h-px bg-[#edf0f2]"></div>
+                <div class="mt-4 flex items-center gap-3">
+                  <span class="size-3 rounded-full bg-[#10a37f]"></span>
+                  <div>
+                    <div class="text-[15px] font-extrabold">{{ t('login.syncNormal') }}</div>
+                    <div class="mt-1 text-[12px] font-semibold text-[#8a93a3]">{{ t('login.gateway') }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </section>
     </div>
-  </div>
+  </main>
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
+import { useI18n } from 'vue-i18n';
+import {
+  Activity,
+  AlertTriangle,
+  ClipboardList,
+  Eye,
+  EyeOff,
+  Factory,
+  Gauge,
+  Languages,
+  LayoutDashboard,
+  LockKeyhole,
+  UserRound,
+  Users,
+  Wifi,
+} from 'lucide-vue-next';
 import { loginApi } from '../api/auth';
 import { useAuthStore } from '../stores/auth';
 import type { LoginPayload } from '../api/auth';
+import { setAppLocale, type AppLocale } from '../i18n';
 
 const router = useRouter();
 const authStore = useAuthStore();
+const { t, locale } = useI18n();
 
 const loading = ref(false);
 const showPw = ref(false);
-const focusedField = ref('');
 const errorMsg = ref('');
+const currentLocale = computed(() => locale.value as AppLocale);
 
 const loginForm = reactive<LoginPayload>({
   employeeNo: '',
   password: '',
 });
 
+const toggleLocale = () => {
+  setAppLocale(currentLocale.value === 'zh-CN' ? 'en-US' : 'zh-CN');
+};
+
 const handleLogin = async () => {
   if (!loginForm.employeeNo || !loginForm.password) {
-    errorMsg.value = '请输入工号和密码。';
+    errorMsg.value = t('login.required');
     return;
   }
 
@@ -127,7 +257,7 @@ const handleLogin = async () => {
     authStore.setSession(session);
     router.push('/');
   } catch {
-    errorMsg.value = '工号或密码不正确。';
+    errorMsg.value = t('login.failed');
   } finally {
     loading.value = false;
   }
@@ -135,274 +265,22 @@ const handleLogin = async () => {
 </script>
 
 <style scoped>
-.login-root {
-  min-height: 100vh;
-  background: var(--bg-0);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  overflow: hidden;
-  font-family: var(--font-sans);
+.login-chart {
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  align-items: end;
+  gap: 10px;
+  height: 130px;
+  padding-top: 18px;
+  background:
+    linear-gradient(to bottom, transparent 24%, rgba(17, 24, 39, 0.07) 24%, rgba(17, 24, 39, 0.07) calc(24% + 1px), transparent calc(24% + 1px)),
+    linear-gradient(to bottom, transparent 49%, rgba(17, 24, 39, 0.07) 49%, rgba(17, 24, 39, 0.07) calc(49% + 1px), transparent calc(49% + 1px)),
+    linear-gradient(to bottom, transparent 74%, rgba(17, 24, 39, 0.07) 74%, rgba(17, 24, 39, 0.07) calc(74% + 1px), transparent calc(74% + 1px));
 }
 
-/* === 背景装饰：极淡网格 + 两团径向光晕 === */
-.bg-grid {
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(15, 23, 42, 0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(15, 23, 42, 0.04) 1px, transparent 1px);
-  background-size: 56px 56px;
-  pointer-events: none;
-  mask-image: radial-gradient(ellipse at center, black 30%, transparent 80%);
-  -webkit-mask-image: radial-gradient(ellipse at center, black 30%, transparent 80%);
-}
-.bg-glow {
-  position: absolute;
-  pointer-events: none;
-  border-radius: 50%;
-  filter: blur(80px);
-  opacity: 0.5;
-}
-.bg-glow--cyan {
-  width: 480px;
-  height: 480px;
-  background: radial-gradient(circle, rgba(8, 145, 178, 0.18), transparent 60%);
-  top: -120px;
-  left: 10vw;
-}
-.bg-glow--violet {
-  width: 420px;
-  height: 420px;
-  background: radial-gradient(circle, rgba(99, 102, 241, 0.12), transparent 60%);
-  bottom: -100px;
-  right: 8vw;
-}
-
-/* === 登录卡 === */
-.login-card {
-  position: relative;
-  z-index: 1;
-  width: 420px;
-  padding: 44px 40px 36px;
-  background: var(--bg-1);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
-}
-
-/* === Logo === */
-.logo-block {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin-bottom: 28px;
-}
-.logo-icon svg {
-  width: 36px;
-  height: 36px;
-}
-.logo-text {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.1;
-}
-.logo-main {
-  font-weight: 700;
-  font-size: 20px;
-  color: var(--text-0);
-  letter-spacing: 0.3px;
-}
-.logo-sub {
-  font-family: var(--font-mono);
-  font-weight: 500;
-  font-size: 10px;
-  color: var(--text-2);
-  letter-spacing: 2px;
-  margin-top: 4px;
-}
-
-.divider {
-  height: 1px;
-  background: var(--border);
-  margin-bottom: 28px;
-}
-
-/* === 标题 === */
-.login-title {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--text-0);
-  margin: 0 0 6px;
-  letter-spacing: -0.2px;
-}
-.login-desc {
-  font-size: 13px;
-  color: var(--text-1);
-  margin: 0 0 28px;
-}
-
-/* === 表单字段 === */
-.field-group {
-  margin-bottom: 18px;
-}
-.field-label {
+.login-chart i {
   display: block;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-1);
-  letter-spacing: 0.5px;
-  margin-bottom: 8px;
-  transition: color var(--motion-fast);
-}
-.field-group.field-focus .field-label {
-  color: var(--brand);
-}
-
-.field-input-wrap {
-  position: relative;
-  display: flex;
-  align-items: center;
-  background: var(--bg-1);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
-}
-.field-group.field-focus .field-input-wrap {
-  border-color: var(--brand);
-  box-shadow: 0 0 0 3px var(--brand-soft);
-}
-
-.field-icon {
-  width: 16px;
-  height: 16px;
-  color: var(--text-2);
-  margin-left: 14px;
-  flex-shrink: 0;
-  transition: color var(--motion-fast);
-}
-.field-group.field-focus .field-icon {
-  color: var(--brand);
-}
-
-input {
-  flex: 1;
-  background: transparent;
-  border: none;
-  outline: none;
-  padding: 12px;
-  font-size: 14px;
-  color: var(--text-0);
-  font-family: var(--font-sans);
-}
-input::placeholder {
-  color: var(--text-2);
-}
-
-.eye-btn {
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 0 14px;
-  color: var(--text-2);
-  display: flex;
-  align-items: center;
-  transition: color var(--motion-fast);
-}
-.eye-btn:hover {
-  color: var(--brand);
-}
-.eye-btn svg {
-  width: 16px;
-  height: 16px;
-}
-
-/* === 错误信息 === */
-.error-msg {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 13px;
-  color: var(--error);
-  margin-bottom: 16px;
-  padding: 10px 12px;
-  background: var(--error-soft);
-  border: 1px solid rgba(220, 38, 38, 0.2);
-  border-radius: var(--radius-sm);
-}
-.error-msg svg {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-}
-
-/* === 提交按钮 === */
-.submit-btn {
-  width: 100%;
-  padding: 13px;
-  background: var(--brand);
-  border: none;
-  border-radius: var(--radius-sm);
-  color: #ffffff;
-  font-size: 14px;
-  font-weight: 600;
-  font-family: var(--font-sans);
-  letter-spacing: 1px;
-  cursor: pointer;
-  margin-top: 8px;
-  transition: background-color var(--motion-fast), transform 0.1s, box-shadow var(--motion-fast);
-}
-.submit-btn:hover:not(:disabled) {
-  background: var(--brand-hover);
-  box-shadow: 0 4px 12px rgba(8, 145, 178, 0.25);
-}
-.submit-btn:active:not(:disabled) {
-  transform: translateY(1px);
-}
-.submit-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* === 加载点点 === */
-.loading-dots {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-}
-.loading-dots span {
-  width: 6px;
-  height: 6px;
-  background: #ffffff;
-  border-radius: 50%;
-  animation: dot-bounce 1.2s infinite ease-in-out;
-}
-.loading-dots span:nth-child(2) {
-  animation-delay: 0.2s;
-}
-.loading-dots span:nth-child(3) {
-  animation-delay: 0.4s;
-}
-@keyframes dot-bounce {
-  0%, 80%, 100% {
-    transform: scale(0.6);
-    opacity: 0.4;
-  }
-  40% {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
-
-/* === 底部提示 === */
-.footer-tip {
-  text-align: center;
-  font-size: 11px;
-  color: var(--text-2);
-  margin: 28px 0 0;
-  letter-spacing: 0.5px;
-  font-family: var(--font-mono);
+  min-height: 32px;
+  border-radius: 999px 999px 8px 8px;
 }
 </style>

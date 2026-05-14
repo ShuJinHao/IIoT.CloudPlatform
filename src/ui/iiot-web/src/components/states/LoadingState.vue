@@ -33,6 +33,7 @@ function barWidth(i: number): number {
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-3) 0;
+  animation: fadeIn var(--motion-slow) ease forwards;
 }
 .loading--card {
   padding: var(--space-5);
@@ -42,21 +43,28 @@ function barWidth(i: number): number {
 }
 .loading__bar {
   height: 12px;
+  /* 使用 CSS 变量以自适应暗色/亮色模式 */
   background: linear-gradient(
     90deg,
-    rgba(15, 23, 42, 0.04) 0%,
-    rgba(15, 23, 42, 0.10) 50%,
-    rgba(15, 23, 42, 0.04) 100%
+    var(--bg-3) 0%,
+    var(--border-strong) 50%,
+    var(--bg-3) 100%
   );
   background-size: 200% 100%;
-  animation: shimmer 1.5s infinite;
+  animation: shimmer 1.5s infinite linear;
   border-radius: var(--radius-sm);
 }
 .loading--inline .loading__bar {
   flex: 1;
 }
+
 @keyframes shimmer {
   0%   { background-position: 200% 0; }
   100% { background-position: -200% 0; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 </style>

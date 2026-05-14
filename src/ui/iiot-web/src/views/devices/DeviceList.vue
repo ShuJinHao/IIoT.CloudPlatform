@@ -1,11 +1,12 @@
 <template>
-  <div class="device-page">
-    <PageHeader
-      title="设备台账"
+  <NiondDataPage
+    class="device-page"
+    page-key="devices"
+    title="设备台账"
       subtitle="管理云端导入的设备档案、工序归属与现场使用的设备 Code"
-    >
+  >
       <template #actions>
-        <n-button
+        <UiButton
           v-if="authStore.isAdmin"
           type="primary"
           @click="openRegisterModal"
@@ -16,35 +17,36 @@
             </svg>
           </template>
           新建设备
-        </n-button>
+        </UiButton>
       </template>
-    </PageHeader>
 
-    <CardSurface class="device-page__filter-card">
-      <div class="filter-row">
-        <n-input
-          v-model:value="keyword"
-          placeholder="搜索设备名称或 Code..."
-          clearable
-          size="small"
-          style="max-width: 360px;"
-          @input="onSearchInput"
-          @keyup.enter="fetchList"
-          @clear="onClearKeyword"
-        >
-          <template #prefix>
-            <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
-              <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" stroke-width="1.3"/>
-              <path d="M10 10l3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-            </svg>
-          </template>
-        </n-input>
-        <n-tag round :bordered="false" size="small">共 {{ metaData.totalCount }} 台</n-tag>
-      </div>
-    </CardSurface>
+    <template #toolbar>
+      <NiondToolbar>
+        <div class="filter-row">
+          <UiInput
+            v-model:value="keyword"
+            placeholder="搜索设备名称或 Code..."
+            clearable
+            size="small"
+            style="max-width: 360px;"
+            @input="onSearchInput"
+            @keyup.enter="fetchList"
+            @clear="onClearKeyword"
+          >
+            <template #prefix>
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
+                <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" stroke-width="1.3"/>
+                <path d="M10 10l3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+              </svg>
+            </template>
+          </UiInput>
+          <UiTag round :bordered="false" size="small">共 {{ metaData.totalCount }} 台</UiTag>
+        </div>
+      </NiondToolbar>
+    </template>
 
-    <CardSurface class="device-page__table-card" no-padding>
-      <n-data-table
+    <NiondTableCard class="device-page__table-card">
+      <UiDataTable
         class="device-page__table"
         :columns="columns"
         :data="devices"
@@ -53,9 +55,13 @@
         :single-line="false"
         :row-key="rowKey"
         size="small"
-      />
+      >
+        <template #empty>
+          <EmptyState title="未找到设备" description="当前没有设备数据或未找到匹配的结果。" />
+        </template>
+      </UiDataTable>
       <div v-if="metaData.totalPages > 1" class="pagination-wrap">
-        <n-pagination
+        <UiPagination
           :page="currentPage"
           :page-count="metaData.totalPages"
           :item-count="metaData.totalCount"
@@ -64,10 +70,10 @@
           @update:page="onPageChange"
         />
       </div>
-    </CardSurface>
+    </NiondTableCard>
 
     <!-- 新建设备 modal -->
-    <n-modal
+    <UiModal
       v-model:show="showRegisterModal"
       preset="card"
       title="新建设备"
@@ -77,11 +83,11 @@
       <div class="form-stack">
         <div class="form-field">
           <label class="form-label">设备名称 <span class="required">*</span></label>
-          <n-input v-model:value="registerForm.deviceName" placeholder="如：1号注液机" />
+          <UiInput v-model:value="registerForm.deviceName" placeholder="如：1号注液机" />
         </div>
         <div class="form-field">
           <label class="form-label">所属工序 <span class="required">*</span></label>
-          <n-select
+          <UiSelect
             v-model:value="registerForm.processId"
             :options="processOptions"
             placeholder="请选择工序"
@@ -97,20 +103,20 @@
       </div>
       <template #footer>
         <div class="modal-actions">
-          <n-button @click="showRegisterModal = false">取消</n-button>
-          <n-button
+          <UiButton @click="showRegisterModal = false">取消</UiButton>
+          <UiButton
             type="primary"
             :loading="submitting"
             @click="submitRegister"
           >
             确认创建
-          </n-button>
+          </UiButton>
         </div>
       </template>
-    </n-modal>
+    </UiModal>
 
     <!-- 编辑设备 modal -->
-    <n-modal
+    <UiModal
       v-model:show="showEditModal"
       preset="card"
       title="编辑设备名称"
@@ -120,7 +126,7 @@
       <div class="form-stack">
         <div class="form-field">
           <label class="form-label">设备名称 <span class="required">*</span></label>
-          <n-input v-model:value="editForm.deviceName" />
+          <UiInput v-model:value="editForm.deviceName" />
         </div>
         <div class="hint-card hint-card--subtle">
           <div class="hint-card__title">设备 Code 不可修改</div>
@@ -131,25 +137,25 @@
       </div>
       <template #footer>
         <div class="modal-actions">
-          <n-button @click="showEditModal = false">取消</n-button>
-          <n-button
+          <UiButton @click="showEditModal = false">取消</UiButton>
+          <UiButton
             type="primary"
             :loading="submitting"
             @click="submitEdit"
           >
             保存修改
-          </n-button>
+          </UiButton>
         </div>
       </template>
-    </n-modal>
+    </UiModal>
 
     <!-- 详情抽屉 -->
-    <n-drawer
+    <UiDrawer
       v-model:show="showDetailPanel"
       :width="380"
       placement="right"
     >
-      <n-drawer-content title="设备详情" closable>
+      <UiDrawerContent title="设备详情" closable>
         <div v-if="selectedDevice" class="detail-stack">
           <div class="detail-status-banner is-active">
             <span class="detail-status-banner__dot"></span>
@@ -165,14 +171,14 @@
               <span class="detail-row__value detail-row__value--mono detail-row__value--brand">
                 {{ selectedDevice.code }}
               </span>
-              <n-button
+              <UiButton
                 size="tiny"
                 quaternary
                 type="primary"
                 @click="copyCode(selectedDevice.code)"
               >
                 复制
-              </n-button>
+              </UiButton>
             </div>
           </div>
           <div class="detail-row">
@@ -187,20 +193,20 @@
               {{ processNameMap[selectedDevice.processId] || selectedDevice.processId }}
             </span>
           </div>
-          <n-button
+          <UiButton
             v-permission="'Device.Update'"
             secondary
             block
             @click="handleRotateBootstrapSecret(selectedDevice)"
           >
             轮换启动密钥
-          </n-button>
+          </UiButton>
         </div>
-      </n-drawer-content>
-    </n-drawer>
+      </UiDrawerContent>
+    </UiDrawer>
 
     <!-- 启动密钥揭示 modal -->
-    <n-modal
+    <UiModal
       v-model:show="bootstrapSecretDialog.show"
       preset="card"
       :title="bootstrapSecretDialog.title"
@@ -219,45 +225,45 @@
           <label class="form-label">设备 Code</label>
           <div class="secret-row">
             <code class="secret-row__value">{{ bootstrapSecretDialog.code }}</code>
-            <n-button
+            <UiButton
               size="small"
               secondary
               type="primary"
               @click="copyText(bootstrapSecretDialog.code, 'Code 已复制。')"
             >
               复制
-            </n-button>
+            </UiButton>
           </div>
         </div>
         <div class="form-field">
           <label class="form-label">启动密钥</label>
           <div class="secret-row">
             <code class="secret-row__value">{{ bootstrapSecretDialog.secret }}</code>
-            <n-button
+            <UiButton
               size="small"
               secondary
               type="primary"
               @click="copyText(bootstrapSecretDialog.secret, '启动密钥已复制。')"
             >
               复制
-            </n-button>
+            </UiButton>
           </div>
         </div>
       </div>
       <template #footer>
         <div class="modal-actions">
-          <n-button
+          <UiButton
             type="primary"
             @click="bootstrapSecretDialog.show = false"
           >
             我已保存
-          </n-button>
+          </UiButton>
         </div>
       </template>
-    </n-modal>
+    </UiModal>
 
     <!-- 通用确认 modal -->
-    <n-modal
+    <UiModal
       v-model:show="confirmDialog.show"
       preset="card"
       :title="confirmDialog.title"
@@ -267,34 +273,22 @@
       <p class="confirm-desc">{{ confirmDialog.desc }}</p>
       <template #footer>
         <div class="modal-actions">
-          <n-button @click="confirmDialog.show = false">取消</n-button>
-          <n-button
+          <UiButton @click="confirmDialog.show = false">取消</UiButton>
+          <UiButton
             :type="confirmDialog.danger ? 'error' : 'warning'"
             :loading="submitting"
             @click="confirmDialog.onConfirm()"
           >
             {{ confirmDialog.confirmText }}
-          </n-button>
+          </UiButton>
         </div>
       </template>
-    </n-modal>
-  </div>
+    </UiModal>
+  </NiondDataPage>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, h, onMounted } from 'vue';
-import {
-  NButton,
-  NInput,
-  NSelect,
-  NDataTable,
-  NPagination,
-  NModal,
-  NDrawer,
-  NDrawerContent,
-  NTag,
-} from 'naive-ui';
-import type { DataTableColumns } from 'naive-ui';
 import {
   getDevicePagedListApi,
   registerDeviceApi,
@@ -307,8 +301,20 @@ import {
 import { getAllProcessesApi, type ProcessSelectDto } from '../../api/masterData/processes';
 import { useAuthStore } from '../../stores/auth';
 import { Permissions } from '../../types/permissions';
-import PageHeader from '../../components/layout/PageHeader.vue';
-import CardSurface from '../../components/layout/CardSurface.vue';
+import NiondDataPage from '../../components/layout/NiondDataPage.vue';
+import NiondTableCard from '../../components/layout/NiondTableCard.vue';
+import NiondToolbar from '../../components/layout/NiondToolbar.vue';
+import EmptyState from '../../components/states/EmptyState.vue';
+import UiButton from '../../components/ui/UiButton.vue';
+import UiDataTable from '../../components/ui/UiDataTable.vue';
+import UiDrawer from '../../components/ui/UiDrawer.vue';
+import UiDrawerContent from '../../components/ui/UiDrawerContent.vue';
+import UiInput from '../../components/ui/UiInput.vue';
+import UiModal from '../../components/ui/UiModal.vue';
+import UiPagination from '../../components/ui/UiPagination.vue';
+import UiSelect from '../../components/ui/UiSelect.vue';
+import UiTag from '../../components/ui/UiTag.vue';
+import type { UiDataTableColumn } from '../../components/ui/types';
 
 const authStore = useAuthStore();
 const devices = ref<DeviceListItemDto[]>([]);
@@ -412,7 +418,7 @@ const copyCode = async (code: string) => {
 };
 
 // === 表格列 ===
-const columns: DataTableColumns<DeviceListItemDto> = [
+const columns: UiDataTableColumn<DeviceListItemDto>[] = [
   {
     title: '设备名称',
     key: 'deviceName',
@@ -429,7 +435,7 @@ const columns: DataTableColumns<DeviceListItemDto> = [
       return h('div', { class: 'cell-code-wrap' }, [
         h('code', { class: 'cell-code' }, row.code),
         h(
-          NButton,
+          UiButton,
           {
             size: 'tiny',
             quaternary: true,
@@ -450,7 +456,7 @@ const columns: DataTableColumns<DeviceListItemDto> = [
     width: 110,
     render() {
       return h(
-        NTag,
+        UiTag,
         { size: 'small', bordered: false, type: 'success' },
         { default: () => '已启用' },
       );
@@ -476,7 +482,7 @@ const columns: DataTableColumns<DeviceListItemDto> = [
     render(row) {
       const actions = [
         h(
-          NButton,
+          UiButton,
           {
             size: 'tiny',
             type: 'primary',
@@ -490,7 +496,7 @@ const columns: DataTableColumns<DeviceListItemDto> = [
       if (canUpdateDevice.value) {
         actions.push(
           h(
-            NButton,
+            UiButton,
             {
               size: 'tiny',
               type: 'info',
@@ -500,7 +506,7 @@ const columns: DataTableColumns<DeviceListItemDto> = [
             { default: () => '编辑' },
           ),
           h(
-            NButton,
+            UiButton,
             {
               size: 'tiny',
               type: 'warning',
@@ -515,7 +521,7 @@ const columns: DataTableColumns<DeviceListItemDto> = [
       if (canDeleteDevice.value) {
         actions.push(
           h(
-            NButton,
+            UiButton,
             {
               size: 'tiny',
               type: 'error',
@@ -758,11 +764,11 @@ onMounted(async () => {
   font-size: var(--fs-xs) !important;
   font-weight: var(--fw-semibold) !important;
   color: var(--text-2) !important;
-  letter-spacing: 1px;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 .device-page__table :deep(.n-data-table-tr:hover .n-data-table-td) {
-  background-color: rgba(8, 145, 178, 0.04) !important;
+  background-color: var(--bg-3) !important;
 }
 
 /* 表单 */
@@ -880,7 +886,7 @@ onMounted(async () => {
   font-size: var(--fs-xs);
   color: var(--text-2);
   text-transform: uppercase;
-  letter-spacing: 0.8px;
+  letter-spacing: 0;
   font-weight: var(--fw-medium);
 }
 .detail-row__value {

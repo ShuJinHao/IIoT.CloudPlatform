@@ -1,11 +1,12 @@
 <template>
-  <div class="employee-page">
-    <PageHeader
-      title="员工花名册"
+  <NiondDataPage
+    class="employee-page"
+    page-key="employees"
+    title="员工花名册"
       subtitle="管理车间操作人员档案与设备双维管辖权"
-    >
+  >
       <template #actions>
-        <n-button
+        <UiButton
           type="primary"
           v-permission="'Employee.Onboard'"
           @click="openOnboardModal"
@@ -16,35 +17,36 @@
             </svg>
           </template>
           员工入职
-        </n-button>
+        </UiButton>
       </template>
-    </PageHeader>
 
-    <CardSurface class="employee-page__filter-card">
-      <div class="filter-row">
-        <n-input
-          v-model:value="keyword"
-          placeholder="搜索工号或姓名..."
-          clearable
-          size="small"
-          style="max-width: 320px;"
-          @input="onSearchInput"
-          @keyup.enter="fetchList"
-          @clear="onClearKeyword"
-        >
-          <template #prefix>
-            <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
-              <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" stroke-width="1.3"/>
-              <path d="M10 10l3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-            </svg>
-          </template>
-        </n-input>
-        <n-tag round :bordered="false" size="small">共 {{ metaData.totalCount }} 人</n-tag>
-      </div>
-    </CardSurface>
+    <template #toolbar>
+      <NiondToolbar>
+        <div class="filter-row">
+          <UiInput
+            v-model:value="keyword"
+            placeholder="搜索工号或姓名..."
+            clearable
+            size="small"
+            style="max-width: 320px;"
+            @input="onSearchInput"
+            @keyup.enter="fetchList"
+            @clear="onClearKeyword"
+          >
+            <template #prefix>
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
+                <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" stroke-width="1.3"/>
+                <path d="M10 10l3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+              </svg>
+            </template>
+          </UiInput>
+          <UiTag round :bordered="false" size="small">共 {{ metaData.totalCount }} 人</UiTag>
+        </div>
+      </NiondToolbar>
+    </template>
 
-    <CardSurface class="employee-page__table-card" no-padding>
-      <n-data-table
+    <NiondTableCard class="employee-page__table-card">
+      <UiDataTable
         class="employee-page__table"
         :columns="columns"
         :data="employees"
@@ -53,9 +55,13 @@
         :single-line="false"
         :row-key="rowKey"
         size="small"
-      />
+      >
+        <template #empty>
+          <EmptyState title="未找到员工" description="没有任何人员档案或不满足当前的搜索条件。" />
+        </template>
+      </UiDataTable>
       <div v-if="metaData.totalPages > 1" class="pagination-wrap">
-        <n-pagination
+        <UiPagination
           :page="currentPage"
           :page-count="metaData.totalPages"
           :item-count="metaData.totalCount"
@@ -64,10 +70,10 @@
           @update:page="onPageChange"
         />
       </div>
-    </CardSurface>
+    </NiondTableCard>
 
     <!-- 入职 modal -->
-    <n-modal
+    <UiModal
       v-model:show="showOnboardModal"
       preset="card"
       title="员工入职建档"
@@ -79,15 +85,15 @@
         <div class="form-grid form-grid--2">
           <div class="form-field">
             <label class="form-label">工号 <span class="required">*</span></label>
-            <n-input v-model:value="onboardForm.EmployeeNo" placeholder="如：A10086" />
+            <UiInput v-model:value="onboardForm.EmployeeNo" placeholder="如：A10086" />
           </div>
           <div class="form-field">
             <label class="form-label">姓名 <span class="required">*</span></label>
-            <n-input v-model:value="onboardForm.RealName" placeholder="真实姓名" />
+            <UiInput v-model:value="onboardForm.RealName" placeholder="真实姓名" />
           </div>
           <div class="form-field">
             <label class="form-label">初始密码 <span class="required">*</span></label>
-            <n-input
+            <UiInput
               v-model:value="onboardForm.Password"
               type="password"
               show-password-on="click"
@@ -96,7 +102,7 @@
           </div>
           <div class="form-field">
             <label class="form-label">系统角色</label>
-            <n-select
+            <UiSelect
               v-model:value="onboardForm.RoleName"
               :options="roleOptions"
               placeholder="不分配角色"
@@ -111,20 +117,20 @@
       </div>
       <template #footer>
         <div class="modal-actions">
-          <n-button @click="showOnboardModal = false">取消</n-button>
-          <n-button
+          <UiButton @click="showOnboardModal = false">取消</UiButton>
+          <UiButton
             type="primary"
             :loading="submitting"
             @click="submitOnboard"
           >
             确认入职
-          </n-button>
+          </UiButton>
         </div>
       </template>
-    </n-modal>
+    </UiModal>
 
     <!-- 编辑档案 modal -->
-    <n-modal
+    <UiModal
       v-model:show="showEditModal"
       preset="card"
       title="编辑员工档案"
@@ -134,36 +140,36 @@
       <div class="form-stack">
         <div class="form-field">
           <label class="form-label">工号</label>
-          <n-input :value="editTarget?.employeeNo" disabled />
+          <UiInput :value="editTarget?.employeeNo" disabled />
         </div>
         <div class="form-field">
           <label class="form-label">姓名 <span class="required">*</span></label>
-          <n-input v-model:value="editForm.RealName" />
+          <UiInput v-model:value="editForm.RealName" />
         </div>
         <div class="form-field">
           <label class="form-label">账号状态</label>
           <div class="toggle-row">
-            <n-switch v-model:value="editForm.IsActive" />
+            <UiSwitch v-model:value="editForm.IsActive" />
             <span class="toggle-label">{{ editForm.IsActive ? '启用' : '停用' }}</span>
           </div>
         </div>
       </div>
       <template #footer>
         <div class="modal-actions">
-          <n-button @click="showEditModal = false">取消</n-button>
-          <n-button
+          <UiButton @click="showEditModal = false">取消</UiButton>
+          <UiButton
             type="primary"
             :loading="submitting"
             @click="submitEdit"
           >
             保存修改
-          </n-button>
+          </UiButton>
         </div>
       </template>
-    </n-modal>
+    </UiModal>
 
     <!-- 管辖权 modal -->
-    <n-modal
+    <UiModal
       v-model:show="showAccessModal"
       preset="card"
       title="配置设备管辖权"
@@ -180,34 +186,34 @@
             </span>
           </div>
           <div v-if="allDevices.length > 0" class="access-list">
-            <n-checkbox
+            <UiCheckbox
               v-for="d in allDevices"
               :key="d.id"
               :checked="accessForm.DeviceIds.includes(d.id)"
               @update:checked="(checked: boolean) => toggleDeviceAccess(d.id, checked)"
             >
               {{ d.deviceName }}
-            </n-checkbox>
+            </UiCheckbox>
           </div>
           <EmptyState v-else title="暂无设备数据" />
         </div>
       </div>
       <template #footer>
         <div class="modal-actions">
-          <n-button @click="showAccessModal = false">关闭</n-button>
-          <n-button
+          <UiButton @click="showAccessModal = false">关闭</UiButton>
+          <UiButton
             type="primary"
             :loading="submitting"
             @click="submitAccess"
           >
             保存管辖权
-          </n-button>
+          </UiButton>
         </div>
       </template>
-    </n-modal>
+    </UiModal>
 
     <!-- 详情 modal -->
-    <n-modal
+    <UiModal
       v-model:show="showDetailModal"
       preset="card"
       title="员工档案详情"
@@ -227,13 +233,13 @@
         </div>
         <div class="detail-row">
           <span class="detail-row__label">状态</span>
-          <n-tag
+          <UiTag
             size="small"
             :bordered="false"
             :type="detailData.isActive ? 'success' : 'default'"
           >
             {{ detailData.isActive ? '在职' : '停用' }}
-          </n-tag>
+          </UiTag>
         </div>
         <div class="detail-row">
           <span class="detail-row__label">系统 ID</span>
@@ -244,7 +250,7 @@
         <div class="detail-row detail-row--full">
           <span class="detail-row__label">机台管辖</span>
           <div v-if="detailData.deviceIds.length" class="detail-chips">
-            <n-tag
+            <UiTag
               v-for="id in detailData.deviceIds"
               :key="id"
               size="small"
@@ -252,20 +258,20 @@
               type="info"
             >
               {{ deviceNameMap[id] || id.substring(0, 8) + '…' }}
-            </n-tag>
+            </UiTag>
           </div>
           <span v-else class="detail-row__value detail-row__value--muted">未分配</span>
         </div>
       </div>
       <template #footer>
         <div class="modal-actions">
-          <n-button @click="showDetailModal = false">关闭</n-button>
+          <UiButton @click="showDetailModal = false">关闭</UiButton>
         </div>
       </template>
-    </n-modal>
+    </UiModal>
 
     <!-- 重置密码 modal -->
-    <n-modal
+    <UiModal
       v-model:show="showResetPwdModal"
       preset="card"
       title="重置员工密码"
@@ -281,7 +287,7 @@
         </div>
         <div class="form-field">
           <label class="form-label">新密码 <span class="required">*</span></label>
-          <n-input
+          <UiInput
             v-model:value="resetPwdForm.newPwd"
             type="password"
             show-password-on="click"
@@ -290,7 +296,7 @@
         </div>
         <div class="form-field">
           <label class="form-label">确认新密码 <span class="required">*</span></label>
-          <n-input
+          <UiInput
             v-model:value="resetPwdForm.confirm"
             type="password"
             show-password-on="click"
@@ -300,20 +306,20 @@
       </div>
       <template #footer>
         <div class="modal-actions">
-          <n-button @click="showResetPwdModal = false">取消</n-button>
-          <n-button
+          <UiButton @click="showResetPwdModal = false">取消</UiButton>
+          <UiButton
             type="primary"
             :loading="submitting"
             @click="submitResetPwd"
           >
             确认重置
-          </n-button>
+          </UiButton>
         </div>
       </template>
-    </n-modal>
+    </UiModal>
 
     <!-- 特批权限 modal -->
-    <n-modal
+    <UiModal
       v-model:show="showPersonalPermModal"
       preset="card"
       style="width: 720px;"
@@ -336,33 +342,33 @@
         >
           <div class="perm-group__title">{{ group.groupName }}</div>
           <div class="perm-group__items">
-            <n-checkbox
+            <UiCheckbox
               v-for="perm in group.permissions"
               :key="perm"
               :checked="personalPermForm.includes(perm)"
               @update:checked="(checked: boolean) => togglePersonalPerm(perm, checked)"
             >
               {{ perm }}
-            </n-checkbox>
+            </UiCheckbox>
           </div>
         </div>
       </div>
       <template #footer>
         <div class="modal-actions">
-          <n-button @click="showPersonalPermModal = false">取消</n-button>
-          <n-button
+          <UiButton @click="showPersonalPermModal = false">取消</UiButton>
+          <UiButton
             type="primary"
             :loading="submitting"
             @click="submitPersonalPerm"
           >
             保存特批权限
-          </n-button>
+          </UiButton>
         </div>
       </template>
-    </n-modal>
+    </UiModal>
 
     <!-- 通用确认 modal -->
-    <n-modal
+    <UiModal
       v-model:show="confirmDialog.show"
       preset="card"
       :title="confirmDialog.title"
@@ -372,34 +378,22 @@
       <p class="confirm-desc">{{ confirmDialog.desc }}</p>
       <template #footer>
         <div class="modal-actions">
-          <n-button @click="confirmDialog.show = false">取消</n-button>
-          <n-button
+          <UiButton @click="confirmDialog.show = false">取消</UiButton>
+          <UiButton
             type="error"
             :loading="submitting"
             @click="confirmDialog.onConfirm()"
           >
             {{ confirmDialog.confirmText }}
-          </n-button>
+          </UiButton>
         </div>
       </template>
-    </n-modal>
-  </div>
+    </UiModal>
+  </NiondDataPage>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, h, onMounted } from 'vue';
-import {
-  NButton,
-  NInput,
-  NSelect,
-  NSwitch,
-  NCheckbox,
-  NDataTable,
-  NPagination,
-  NModal,
-  NTag,
-} from 'naive-ui';
-import type { DataTableColumns } from 'naive-ui';
 import {
   getEmployeePagedListApi,
   getEmployeeDetailApi,
@@ -422,10 +416,21 @@ import {
   getAllDefinedPermissionsApi,
   type PermissionGroupDto,
 } from '../../api/identity';
-import PageHeader from '../../components/layout/PageHeader.vue';
-import CardSurface from '../../components/layout/CardSurface.vue';
+import NiondDataPage from '../../components/layout/NiondDataPage.vue';
+import NiondTableCard from '../../components/layout/NiondTableCard.vue';
+import NiondToolbar from '../../components/layout/NiondToolbar.vue';
 import LoadingState from '../../components/states/LoadingState.vue';
 import EmptyState from '../../components/states/EmptyState.vue';
+import UiButton from '../../components/ui/UiButton.vue';
+import UiCheckbox from '../../components/ui/UiCheckbox.vue';
+import UiDataTable from '../../components/ui/UiDataTable.vue';
+import UiInput from '../../components/ui/UiInput.vue';
+import UiModal from '../../components/ui/UiModal.vue';
+import UiPagination from '../../components/ui/UiPagination.vue';
+import UiSelect from '../../components/ui/UiSelect.vue';
+import UiSwitch from '../../components/ui/UiSwitch.vue';
+import UiTag from '../../components/ui/UiTag.vue';
+import type { UiDataTableColumn } from '../../components/ui/types';
 
 const employees = ref<EmployeeListItemDto[]>([]);
 const loading = ref(false);
@@ -494,7 +499,7 @@ const onPageChange = (p: number) => {
 };
 
 // === 表格列 ===
-const columns: DataTableColumns<EmployeeListItemDto> = [
+const columns: UiDataTableColumn<EmployeeListItemDto>[] = [
   {
     title: '工号',
     key: 'employeeNo',
@@ -517,7 +522,7 @@ const columns: DataTableColumns<EmployeeListItemDto> = [
     width: 100,
     render(row) {
       return h(
-        NTag,
+        UiTag,
         {
           size: 'small',
           bordered: false,
@@ -547,7 +552,7 @@ const columns: DataTableColumns<EmployeeListItemDto> = [
     render(row) {
       return h('div', { class: 'row-actions' }, [
         h(
-          NButton,
+          UiButton,
           {
             size: 'tiny',
             type: 'primary',
@@ -557,7 +562,7 @@ const columns: DataTableColumns<EmployeeListItemDto> = [
           { default: () => '详情' },
         ),
         h(
-          NButton,
+          UiButton,
           {
             size: 'tiny',
             type: 'info',
@@ -567,7 +572,7 @@ const columns: DataTableColumns<EmployeeListItemDto> = [
           { default: () => '编辑' },
         ),
         h(
-          NButton,
+          UiButton,
           {
             size: 'tiny',
             type: 'warning',
@@ -577,7 +582,7 @@ const columns: DataTableColumns<EmployeeListItemDto> = [
           { default: () => '重置密码' },
         ),
         h(
-          NButton,
+          UiButton,
           {
             size: 'tiny',
             type: 'primary',
@@ -587,7 +592,7 @@ const columns: DataTableColumns<EmployeeListItemDto> = [
           { default: () => '管辖权' },
         ),
         h(
-          NButton,
+          UiButton,
           {
             size: 'tiny',
             type: 'info',
@@ -598,7 +603,7 @@ const columns: DataTableColumns<EmployeeListItemDto> = [
         ),
         row.isActive
           ? h(
-              NButton,
+              UiButton,
               {
                 size: 'tiny',
                 type: 'warning',
@@ -609,7 +614,7 @@ const columns: DataTableColumns<EmployeeListItemDto> = [
             )
           : null,
         h(
-          NButton,
+          UiButton,
           {
             size: 'tiny',
             type: 'error',
@@ -973,11 +978,11 @@ onMounted(() => {
   font-size: var(--fs-xs) !important;
   font-weight: var(--fw-semibold) !important;
   color: var(--text-2) !important;
-  letter-spacing: 1px;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 .employee-page__table :deep(.n-data-table-tr:hover .n-data-table-td) {
-  background-color: rgba(8, 145, 178, 0.04) !important;
+  background-color: var(--bg-3) !important;
 }
 
 /* 表单 */
@@ -1006,7 +1011,7 @@ onMounted(() => {
   font-weight: var(--fw-semibold);
   color: var(--text-2);
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 0;
 }
 .form-hint {
   font-size: var(--fs-sm);
@@ -1088,7 +1093,7 @@ onMounted(() => {
 .reset-target__label {
   font-size: var(--fs-xs);
   color: var(--text-2);
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
 }
 .reset-target__value {
   font-size: var(--fs-base);
@@ -1114,7 +1119,7 @@ onMounted(() => {
   font-size: var(--fs-xs);
   color: var(--text-2);
   text-transform: uppercase;
-  letter-spacing: 0.8px;
+  letter-spacing: 0;
   font-weight: var(--fw-medium);
 }
 .detail-row__value {
@@ -1155,7 +1160,7 @@ onMounted(() => {
   font-weight: var(--fw-semibold);
   color: var(--text-2);
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 0;
   margin-bottom: var(--space-2);
   padding-bottom: var(--space-2);
   border-bottom: 1px solid var(--border);

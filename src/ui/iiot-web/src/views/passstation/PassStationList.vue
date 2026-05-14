@@ -1,16 +1,16 @@
 <template>
-  <div class="passstation-page">
-    <PageHeader
+  <NiondDataPage
+    class="passstation-page"
       :title="currentSchema?.title ?? '过站追溯'"
       :subtitle="currentSchema?.subtitle ?? '请选择已接入追溯能力的工序，查询过站记录。'"
-    />
+  >
 
     <!-- 工序选择栏 -->
-    <CardSurface class="passstation-page__context-card">
+    <NiondToolbar class="passstation-page__context-card">
       <div class="context-row">
         <div class="filter-field">
           <span class="filter-field__label">当前工序</span>
-          <n-select
+          <UiSelect
             v-model:value="currentProcessId"
             :options="processOptions"
             placeholder="请选择工序"
@@ -24,7 +24,7 @@
           工序编码：<code class="context-hint__code">{{ currentProcess.processCode }}</code>
         </div>
       </div>
-    </CardSurface>
+    </NiondToolbar>
 
     <!-- 查询模式 + 筛选条件 -->
     <CardSurface
@@ -34,26 +34,26 @@
       <div class="filter-stack">
         <div class="filter-field">
           <span class="filter-field__label">查询模式</span>
-          <n-radio-group
+          <UiRadioGroup
             v-model:value="currentMode"
             size="small"
             @update:value="switchMode"
           >
-            <n-radio-button
+            <UiRadioButton
               v-for="mode in activeQueryModes"
               :key="mode.key"
               :value="mode.key"
             >
               {{ mode.label }}
-            </n-radio-button>
-          </n-radio-group>
+            </UiRadioButton>
+          </UiRadioGroup>
         </div>
 
         <div class="filter-row">
           <template v-if="currentMode === 'barcode-process'">
             <div class="filter-field filter-field--wide">
               <span class="filter-field__label">条码</span>
-              <n-input
+              <UiInput
                 v-model:value="filters.barcode"
                 placeholder="请输入条码"
                 size="small"
@@ -66,7 +66,7 @@
           <template v-if="currentMode === 'time-process'">
             <div class="filter-field">
               <span class="filter-field__label">开始时间</span>
-              <n-date-picker
+              <UiDatePicker
                 v-model:formatted-value="filters.startTime"
                 value-format="yyyy-MM-dd'T'HH:mm"
                 type="datetime"
@@ -76,7 +76,7 @@
             </div>
             <div class="filter-field">
               <span class="filter-field__label">结束时间</span>
-              <n-date-picker
+              <UiDatePicker
                 v-model:formatted-value="filters.endTime"
                 value-format="yyyy-MM-dd'T'HH:mm"
                 type="datetime"
@@ -89,7 +89,7 @@
           <template v-if="currentMode === 'device-barcode'">
             <div class="filter-field">
               <span class="filter-field__label">设备</span>
-              <n-select
+              <UiSelect
                 v-model:value="filters.deviceId"
                 :options="deviceOptions"
                 placeholder="请选择设备"
@@ -101,7 +101,7 @@
             </div>
             <div class="filter-field filter-field--wide">
               <span class="filter-field__label">条码</span>
-              <n-input
+              <UiInput
                 v-model:value="filters.barcode"
                 placeholder="请输入条码"
                 size="small"
@@ -114,7 +114,7 @@
           <template v-if="currentMode === 'device-time'">
             <div class="filter-field">
               <span class="filter-field__label">设备</span>
-              <n-select
+              <UiSelect
                 v-model:value="filters.deviceId"
                 :options="deviceOptions"
                 placeholder="请选择设备"
@@ -126,7 +126,7 @@
             </div>
             <div class="filter-field">
               <span class="filter-field__label">开始时间</span>
-              <n-date-picker
+              <UiDatePicker
                 v-model:formatted-value="filters.startTime"
                 value-format="yyyy-MM-dd'T'HH:mm"
                 type="datetime"
@@ -136,7 +136,7 @@
             </div>
             <div class="filter-field">
               <span class="filter-field__label">结束时间</span>
-              <n-date-picker
+              <UiDatePicker
                 v-model:formatted-value="filters.endTime"
                 value-format="yyyy-MM-dd'T'HH:mm"
                 type="datetime"
@@ -149,7 +149,7 @@
           <template v-if="currentMode === 'device-latest'">
             <div class="filter-field">
               <span class="filter-field__label">设备</span>
-              <n-select
+              <UiSelect
                 v-model:value="filters.deviceId"
                 :options="deviceOptions"
                 placeholder="请选择设备"
@@ -162,7 +162,7 @@
             <div class="latest-hint">读取所选设备最新 200 条过站记录</div>
           </template>
 
-          <n-button type="primary" size="small" @click="doSearch">
+          <UiButton type="primary" size="small" @click="doSearch">
             <template #icon>
               <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
                 <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" stroke-width="1.3"/>
@@ -170,7 +170,7 @@
               </svg>
             </template>
             查询
-          </n-button>
+          </UiButton>
         </div>
       </div>
     </CardSurface>
@@ -184,10 +184,9 @@
     </CardSurface>
 
     <!-- 表格 -->
-    <CardSurface
+    <NiondTableCard
       v-if="currentSchema"
       class="passstation-page__table-card"
-      no-padding
     >
       <div v-if="!searched && !loading" class="hint-empty">
         <EmptyState
@@ -196,7 +195,7 @@
         />
       </div>
 
-      <n-data-table
+      <UiDataTable
         v-else
         class="passstation-page__table"
         :columns="columns"
@@ -210,7 +209,7 @@
       />
 
       <div v-if="metaData.totalPages > 1" class="pagination-wrap">
-        <n-pagination
+        <UiPagination
           :page="currentPage"
           :page-count="metaData.totalPages"
           :item-count="metaData.totalCount"
@@ -219,15 +218,15 @@
           @update:page="onPageChange"
         />
       </div>
-    </CardSurface>
+    </NiondTableCard>
 
     <!-- 详情抽屉 -->
-    <n-drawer
+    <UiDrawer
       v-model:show="showDetail"
       :width="460"
       placement="right"
     >
-      <n-drawer-content title="过站详情" closable>
+      <UiDrawerContent title="过站详情" closable>
         <LoadingState v-if="detailLoading" :rows="6" />
         <div v-else-if="detailData && currentSchema" class="detail-stack">
           <div
@@ -264,27 +263,13 @@
             </div>
           </div>
         </div>
-      </n-drawer-content>
-    </n-drawer>
-  </div>
+      </UiDrawerContent>
+    </UiDrawer>
+  </NiondDataPage>
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, reactive, ref, watch } from 'vue';
-import {
-  NButton,
-  NInput,
-  NSelect,
-  NRadioGroup,
-  NRadioButton,
-  NDatePicker,
-  NDataTable,
-  NPagination,
-  NDrawer,
-  NDrawerContent,
-  NTag,
-} from 'naive-ui';
-import type { DataTableColumns } from 'naive-ui';
+import { ref, reactive, computed, h, onMounted, watch } from 'vue';
 import { getAllActiveDevicesApi, type DeviceSelectDto } from '../../api/device';
 import { getAllProcessesApi, type ProcessSelectDto } from '../../api/masterData/processes';
 import {
@@ -302,10 +287,24 @@ import {
   normalizePassStationTypeKey,
   type PassStationSchema,
 } from './schema';
-import PageHeader from '../../components/layout/PageHeader.vue';
 import CardSurface from '../../components/layout/CardSurface.vue';
+import NiondDataPage from '../../components/layout/NiondDataPage.vue';
+import NiondTableCard from '../../components/layout/NiondTableCard.vue';
+import NiondToolbar from '../../components/layout/NiondToolbar.vue';
 import LoadingState from '../../components/states/LoadingState.vue';
 import EmptyState from '../../components/states/EmptyState.vue';
+import UiButton from '../../components/ui/UiButton.vue';
+import UiDataTable from '../../components/ui/UiDataTable.vue';
+import UiDatePicker from '../../components/ui/UiDatePicker.vue';
+import UiDrawer from '../../components/ui/UiDrawer.vue';
+import UiDrawerContent from '../../components/ui/UiDrawerContent.vue';
+import UiInput from '../../components/ui/UiInput.vue';
+import UiPagination from '../../components/ui/UiPagination.vue';
+import UiRadioButton from '../../components/ui/UiRadioButton.vue';
+import UiRadioGroup from '../../components/ui/UiRadioGroup.vue';
+import UiSelect from '../../components/ui/UiSelect.vue';
+import UiTag from '../../components/ui/UiTag.vue';
+import type { UiDataTableColumn } from '../../components/ui/types';
 
 const PAGE_SIZE = 10;
 
@@ -576,7 +575,7 @@ const openDetail = async (id: string) => {
 };
 
 // === 表格列（schema 驱动动态生成） ===
-const columns = computed<DataTableColumns<PassStationListItemDto>>(() => {
+const columns = computed<UiDataTableColumn<PassStationListItemDto>[]>(() => {
   if (!currentSchema.value) return [];
   return currentSchema.value.columns.map((col) => ({
     title: col.label,
@@ -590,7 +589,7 @@ const columns = computed<DataTableColumns<PassStationListItemDto>>(() => {
       if (col.variant === 'result') {
         const isOk = (record.cellResult ?? '').toUpperCase() === 'OK';
         return h(
-          NTag,
+          UiTag,
           {
             size: 'small',
             bordered: false,
@@ -675,7 +674,7 @@ onMounted(() => {
   font-size: var(--fs-xs);
   color: var(--text-2);
   font-weight: var(--fw-medium);
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
 }
 .latest-hint {
   font-size: var(--fs-sm);
@@ -725,11 +724,11 @@ onMounted(() => {
   font-size: var(--fs-xs) !important;
   font-weight: var(--fw-semibold) !important;
   color: var(--text-2) !important;
-  letter-spacing: 1px;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 .passstation-page__table :deep(.n-data-table-tr:hover .n-data-table-td) {
-  background-color: rgba(8, 145, 178, 0.04) !important;
+  background-color: var(--bg-3) !important;
 }
 
 /* 详情抽屉 */
@@ -773,7 +772,7 @@ onMounted(() => {
   font-weight: var(--fw-semibold);
   color: var(--text-2);
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 0;
   padding-bottom: var(--space-2);
   border-bottom: 1px solid var(--border);
 }
