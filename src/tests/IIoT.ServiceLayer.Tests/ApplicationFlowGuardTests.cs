@@ -925,6 +925,60 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
+    public async Task ReceiveHourlyCapacityHandler_ShouldVaryDeduplicationKeyWhenCountsChange()
+    {
+        var deviceId = Guid.NewGuid();
+        var date = new DateOnly(2026, 6, 6);
+        var mapperServices = new ServiceCollection();
+        mapperServices.AddLogging();
+        mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
+        var mapper = mapperServices.BuildServiceProvider().GetRequiredService<IMapper>();
+        var firstRegistry = new RecordingUploadReceiveRegistry();
+        var secondRegistry = new RecordingUploadReceiveRegistry();
+        var firstHandler = new ReceiveHourlyCapacityHandler(
+            new StubDeviceIdentityQueryService { Exists = true },
+            mapper,
+            firstRegistry,
+            new RecordingCacheService());
+        var secondHandler = new ReceiveHourlyCapacityHandler(
+            new StubDeviceIdentityQueryService { Exists = true },
+            mapper,
+            secondRegistry,
+            new RecordingCacheService());
+
+        await firstHandler.Handle(
+            new ReceiveHourlyCapacityCommand(
+                deviceId,
+                date,
+                "D",
+                9,
+                30,
+                "09:30",
+                100,
+                98,
+                2,
+                "PLC-01"),
+            CancellationToken.None);
+        await secondHandler.Handle(
+            new ReceiveHourlyCapacityCommand(
+                deviceId,
+                date,
+                "D",
+                9,
+                30,
+                "09:30",
+                150,
+                147,
+                3,
+                "PLC-01"),
+            CancellationToken.None);
+
+        Assert.StartsWith("legacy:", firstRegistry.LastDeduplicationKey, StringComparison.Ordinal);
+        Assert.StartsWith("legacy:", secondRegistry.LastDeduplicationKey, StringComparison.Ordinal);
+        Assert.NotEqual(firstRegistry.LastDeduplicationKey, secondRegistry.LastDeduplicationKey);
+    }
+
+    [Fact]
     public async Task ReceiveHourlyCapacityHandler_ShouldNotClearCapacityCachesWhenOutboxEnqueueFails()
     {
         var deviceId = Guid.NewGuid();

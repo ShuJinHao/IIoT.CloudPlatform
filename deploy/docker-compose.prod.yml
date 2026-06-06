@@ -193,6 +193,7 @@ services:
       - ${GATEWAY_HTTP_PORT:-80}:80
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${EDGE_UPDATES_DIR:-/srv/iiot/edge-updates}:/usr/share/nginx/html/edge-updates:ro
     depends_on:
       - iiot-gateway
       - iiot-web

@@ -29,6 +29,7 @@ Runtime topology stays fixed:
 External exposure:
 
 - `80/tcp` for the product entrypoint
+- `/edge-updates/*` on the same entrypoint for EdgeClient update packages
 - `127.0.0.1:5341` for Seq
 - `127.0.0.1:15672` for RabbitMQ management
 
@@ -53,21 +54,22 @@ npm run dev
 1. Copy `deploy/.env.example` to a real `.env`.
 2. Replace every placeholder secret and set the application image repositories for the real registry namespace.
 3. Keep `PUBLIC_BASE_URL` as an origin only, without a trailing slash.
-4. Validate the template before the first rollout:
+4. Create the EdgeClient update package directory on the server before publishing update packages. The default path is `/srv/iiot/edge-updates`; override it with `EDGE_UPDATES_DIR` only when the server uses a different path.
+5. Validate the template before the first rollout:
 
 ```powershell
 docker compose --env-file deploy/.env.example -f deploy/docker-compose.prod.yml config -q
 ```
 
-5. Use a `release_tag` produced by `cloud-image`. The only standard production version format in this batch is `sha-*`.
-6. First deployment, or a post-clean rebuild, may not have `deploy/releases/current-release.env` yet. That is normal for this stage.
-7. Keep the release scripts executable on the server:
+6. Use a `release_tag` produced by `cloud-image`. The only standard production version format in this batch is `sha-*`.
+7. First deployment, or a post-clean rebuild, may not have `deploy/releases/current-release.env` yet. That is normal for this stage.
+8. Keep the release scripts executable on the server:
 
 ```powershell
 chmod +x deploy/scripts/*.sh
 ```
 
-8. Manual release uses the standard release entrypoint:
+9. Manual release uses the standard release entrypoint:
 
 ```powershell
 $env:DEPLOY_GIT_SHA = "<git-sha>"
@@ -75,7 +77,7 @@ $env:DEPLOY_TRIGGERED_BY = "manual"
 bash deploy/scripts/deploy-release.sh sha-0123456789abcdef
 ```
 
-9. GitHub release uses the `cloud-deploy` workflow with the same `release_tag`.
+10. GitHub release uses the `cloud-deploy` workflow with the same `release_tag`.
 
 What the standard release entrypoint does:
 
@@ -156,6 +158,7 @@ Values that are template defaults and usually stay unchanged for the single-mach
 - `GATEWAY_HTTP_PORT`
 - `SEQ_HOST_PORT`
 - `RABBITMQ_MANAGEMENT_PORT`
+- `EDGE_UPDATES_DIR`
 - `FORWARDED_HEADERS_ENABLED`
 - `FORWARDED_HEADERS_FORWARDLIMIT`
 - `FORWARDED_HEADERS_KNOWNNETWORKS__0`
@@ -184,6 +187,7 @@ The nginx gateway keeps the existing route surfaces:
 - `/api/v1/human/*`
 - `/api/v1/edge/*`
 - `/api/v1/bootstrap/*`
+- `/edge-updates/*`
 
 Refresh endpoints included in this template:
 
@@ -193,6 +197,11 @@ Refresh endpoints included in this template:
 Edge bootstrap clients must use the Gateway public `/api/v1/bootstrap/*` surface and send
 `X-IIoT-Bootstrap-Secret` for `device-instance`. The old bootstrap alias paths are not supported
 deployment paths.
+
+EdgeClient update packages are served directly by `nginx-gateway` from `EDGE_UPDATES_DIR`.
+The client `launcher.update.json` `Source` should point to `<PUBLIC_BASE_URL>/edge-updates/`.
+`RELEASES` and `releases.*.json` are served with `Cache-Control: no-cache`; `*.nupkg`
+packages are served with long-lived immutable cache headers.
 
 ## Logs And Message Replay
 

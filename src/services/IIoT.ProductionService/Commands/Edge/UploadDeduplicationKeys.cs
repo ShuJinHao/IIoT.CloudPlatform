@@ -127,6 +127,8 @@ internal static class UploadDeduplicationKeys
             return Result.Success($"request:{normalizedRequestId}");
         }
 
+        // Content-hash fallback is the intended idempotency path for uploads without a RequestId.
+        // Hourly capacity counts must stay in the payload so updated slot snapshots are not dropped as duplicates.
         var payload = JsonSerializer.Serialize(legacyPayload, SerializerOptions);
         return Result.Success($"legacy:{ComputeSha256(payload)}");
     }

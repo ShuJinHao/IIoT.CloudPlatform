@@ -6,7 +6,7 @@ internal static class EventSchemaVersionGuard
 
     public static void EnsureSupported(int schemaVersion, string eventName)
     {
-        if (schemaVersion is 0 or CurrentSchemaVersion)
+        if (schemaVersion == CurrentSchemaVersion)
         {
             return;
         }

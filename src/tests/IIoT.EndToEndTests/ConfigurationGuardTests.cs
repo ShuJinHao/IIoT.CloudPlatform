@@ -9,6 +9,9 @@ namespace IIoT.EndToEndTests;
 
 public sealed class ConfigurationGuardTests
 {
+    private const string KnownWeakSeedAdminPassword = "Ljh123456!";
+    private const string KnownWeakJwtSecret = "iiot-cloud-jwt-secret-2026-04-22";
+
     [Fact]
     public void DesignTimeConnectionStringResolver_MissingConnectionString_ShouldThrowClearError()
     {
@@ -92,6 +95,83 @@ public sealed class ConfigurationGuardTests
         rootAspirateSource.Should().NotContain("10.98.90.154");
         appHostAspirateSource.Should().Contain("registry.example.com");
         appHostAspirateSource.Should().NotContain("10.98.90.154");
+    }
+
+    [Fact]
+    public void AppHostLaunchSettings_ShouldNotDefineProxyEnvironmentVariables()
+    {
+        var launchSettingsSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.AppHost", "Properties", "launchSettings.json"));
+
+        launchSettingsSource.Should().NotContain("HTTP_PROXY");
+        launchSettingsSource.Should().NotContain("HTTPS_PROXY");
+        launchSettingsSource.Should().NotContain("ALL_PROXY");
+        launchSettingsSource.Should().NotContain("http_proxy");
+        launchSettingsSource.Should().NotContain("https_proxy");
+        launchSettingsSource.Should().NotContain("all_proxy");
+        launchSettingsSource.Should().NotContain("NO_PROXY");
+        launchSettingsSource.Should().NotContain("no_proxy");
+    }
+
+    [Fact]
+    public void AppFixture_ShouldNormalizeProxyEnvironmentBeforeCreatingAspireBuilder()
+    {
+        var fixtureSource = File.ReadAllText(
+            FindRepoFile("src", "tests", "IIoT.EndToEndTests", "IIoTAppFixture.cs"));
+        var proxyIndex = fixtureSource.IndexOf("ConfigureAspireProxyEnvironment();", StringComparison.Ordinal);
+        var builderIndex = fixtureSource.IndexOf(
+            "DistributedApplicationTestingBuilder.CreateAsync",
+            StringComparison.Ordinal);
+
+        proxyIndex.Should().BeGreaterThanOrEqualTo(0);
+        builderIndex.Should().BeGreaterThan(proxyIndex);
+        fixtureSource.Should().Contain("\"HTTP_PROXY\"");
+        fixtureSource.Should().Contain("\"http_proxy\"");
+        fixtureSource.Should().Contain("SetEnvironmentVariable(name, null)");
+        fixtureSource.Should().Contain("SetEnvironmentVariable(\"NO_PROXY\", TestNoProxyValue)");
+    }
+
+    [Fact]
+    public void TestRuntimeCredentials_ShouldNotUseKnownWeakDeploymentSecrets()
+    {
+        IIoTAppFixture.SeedAdminPassword.Should().NotBe(KnownWeakSeedAdminPassword);
+        IIoTAppFixture.TestJwtSecret.Should().NotBe(KnownWeakJwtSecret);
+        IIoTAppFixture.SeedAdminPassword.Should().StartWith("E2eSeed-");
+        IIoTAppFixture.SeedAdminPassword.Should().EndWith("!");
+        IIoTAppFixture.TestJwtSecret.Should().StartWith("iiot-e2e-");
+    }
+
+    [Fact]
+    public void DeployScript_ShouldRejectKnownWeakDeploymentSecrets()
+    {
+        var deploySource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.AppHost", "aspirate-output", "deploy.ps1"));
+        var jwtSecretGuardLine = Regex.Match(
+            deploySource,
+            "Assert-Configured \"JWTSETTINGS__SECRET\"[^\\r\\n]*").Value;
+        var seedAdminPasswordGuardLine = Regex.Match(
+            deploySource,
+            "Assert-Configured \"SEED_ADMIN_PASSWORD\"[^\\r\\n]*").Value;
+
+        jwtSecretGuardLine.Should().Contain("change-me-jwt-secret");
+        jwtSecretGuardLine.Should().Contain(KnownWeakJwtSecret);
+        seedAdminPasswordGuardLine.Should().Contain("change-me-admin-password");
+        seedAdminPasswordGuardLine.Should().Contain(KnownWeakSeedAdminPassword);
+    }
+
+    [Fact]
+    public void LocalAspirateEnv_WhenPresent_ShouldNotUseKnownWeakDeploymentSecrets()
+    {
+        var envPath = FindRepoFile("src", "hosts", "IIoT.AppHost", "aspirate-output", ".env");
+        if (!File.Exists(envPath))
+        {
+            return;
+        }
+
+        var envSource = File.ReadAllText(envPath);
+
+        envSource.Should().NotContain($"JWTSETTINGS__SECRET={KnownWeakJwtSecret}");
+        envSource.Should().NotContain($"SEED_ADMIN_PASSWORD={KnownWeakSeedAdminPassword}");
     }
 
     [Fact]
@@ -321,6 +401,8 @@ public sealed class ConfigurationGuardTests
             FindRepoFile("src", "hosts", "IIoT.DataWorker", "Consumers", "Production", "DeviceLogConsumer.cs"),
             FindRepoFile("src", "hosts", "IIoT.DataWorker", "Consumers", "Production", "PassStationConsumer.cs")
         };
+        var schemaVersionGuardSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.DataWorker", "Consumers", "Production", "EventSchemaVersionGuard.cs"));
 
         foreach (var file in eventContractFiles)
         {
@@ -331,6 +413,9 @@ public sealed class ConfigurationGuardTests
         {
             File.ReadAllText(file).Should().Contain("EventSchemaVersionGuard.EnsureSupported");
         }
+
+        schemaVersionGuardSource.Should().Contain("schemaVersion == CurrentSchemaVersion");
+        schemaVersionGuardSource.Should().NotContain("schemaVersion is 0");
     }
 
     [Fact]

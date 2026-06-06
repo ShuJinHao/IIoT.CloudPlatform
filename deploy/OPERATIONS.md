@@ -94,6 +94,50 @@ Release success order is fixed:
 3. `./scripts/ops-check.sh` returns `0`
 4. `deploy/releases/current-release.env` points at the new `DEPLOY_RELEASE_ID`
 
+## Edge Update Package Distribution
+
+EdgeClient Velopack update packages are served by the existing `nginx-gateway` at:
+
+```text
+<PUBLIC_BASE_URL>/edge-updates/
+```
+
+Server-side package directory:
+
+```text
+/srv/iiot/edge-updates
+```
+
+The path defaults to `/srv/iiot/edge-updates`, can be overridden by `EDGE_UPDATES_DIR` in the production `.env` file, and is mounted read-only into `nginx-gateway`.
+
+Package contents are operator-managed:
+
+- `RELEASES`
+- `*.nupkg`
+- optional `releases.*.json` files when produced by the packaging flow
+
+Publishing order:
+
+1. Build the EdgeClient Velopack package set with the approved client release process.
+2. Copy `RELEASES`, `*.nupkg`, and any generated `releases.*.json` files into the effective update directory.
+3. Keep file ownership readable by the Docker daemon and the nginx container.
+4. Set the client `launcher.update.json` `Source` value to `<PUBLIC_BASE_URL>/edge-updates/`.
+5. Verify the published files before asking clients to check for updates.
+
+Validation examples:
+
+```sh
+curl -I http://127.0.0.1:80/edge-updates/RELEASES
+curl -I http://127.0.0.1:80/edge-updates/<package-name>.nupkg
+curl -I http://127.0.0.1:80/edge-updates/
+```
+
+Expected results:
+
+- `RELEASES` returns `200` and `Cache-Control: no-cache`.
+- `*.nupkg` returns `200` and can be downloaded.
+- `/edge-updates/` returns `403` or `404`; directory listing must not be exposed.
+
 ## Standard Backup
 
 Run the PostgreSQL backup script from the deploy directory:
