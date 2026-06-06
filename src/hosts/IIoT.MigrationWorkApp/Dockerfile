@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0.100 AS build
 WORKDIR /src
 
 COPY . .
@@ -14,4 +14,3 @@ ENV TZ=Asia/Shanghai
 COPY --from=build /app/publish .
 
 ENTRYPOINT ["dotnet", "IIoT.MigrationWorkApp.dll"]
-
