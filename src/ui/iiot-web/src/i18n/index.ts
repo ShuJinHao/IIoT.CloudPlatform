@@ -39,6 +39,7 @@ const messages = {
       passStation: '过站',
       capacity: '产能',
       logs: '日志',
+      clientReleases: '客户端',
       access: '权限',
     },
     layout: {
@@ -139,6 +140,7 @@ const messages = {
       capacity: { title: '产能看板', subtitle: '查看设备产量、合格率和班次产出' },
       capacityDetail: { title: '产能详情', subtitle: '按时间维度分析设备产能趋势' },
       logs: { title: '设备日志', subtitle: '查询设备告警、错误和运行日志' },
+      clientReleases: { title: '客户端下载中心', subtitle: '维护宿主与插件 catalog，查看设备版本差异' },
       roles: { title: '权限管理', subtitle: '配置角色权限与用户特批权限' },
     },
   },
@@ -176,6 +178,7 @@ const messages = {
       passStation: 'Pass Trace',
       capacity: 'Capacity',
       logs: 'Logs',
+      clientReleases: 'Client',
       access: 'Access',
     },
     layout: {
@@ -276,6 +279,7 @@ const messages = {
       capacity: { title: 'Capacity Board', subtitle: 'Review output, pass rate, and shift production' },
       capacityDetail: { title: 'Capacity Detail', subtitle: 'Analyze device capacity by time dimension' },
       logs: { title: 'Device Logs', subtitle: 'Query device warnings, errors, and runtime logs' },
+      clientReleases: { title: 'Client Downloads', subtitle: 'Maintain host and plugin catalog, and review device version drift' },
       roles: { title: 'Access Management', subtitle: 'Configure role permissions and user grants' },
     },
   },

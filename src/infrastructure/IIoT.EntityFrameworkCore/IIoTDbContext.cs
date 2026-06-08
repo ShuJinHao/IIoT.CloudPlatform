@@ -1,5 +1,6 @@
 ﻿using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.MasterData.Aggregates.MfgProcesses;
+using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.EntityFrameworkCore.Auditing;
@@ -21,6 +22,9 @@ public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)
     public DbSet<MfgProcess> MfgProcesses => Set<MfgProcess>();
     public DbSet<Device> Devices => Set<Device>();
     public DbSet<Recipe> Recipes => Set<Recipe>();
+    public DbSet<ClientHostRelease> ClientHostReleases => Set<ClientHostRelease>();
+    public DbSet<ClientPluginRelease> ClientPluginReleases => Set<ClientPluginRelease>();
+    public DbSet<DeviceClientVersionSnapshot> DeviceClientVersionSnapshots => Set<DeviceClientVersionSnapshot>();
     public DbSet<RefreshTokenSession> RefreshTokenSessions => Set<RefreshTokenSession>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<UploadReceiveRegistration> UploadReceiveRegistrations => Set<UploadReceiveRegistration>();
@@ -64,4 +68,3 @@ public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(IIoTDbContext).Assembly);
     }
 }
-

@@ -74,6 +74,12 @@ const routes: Array<RouteRecordRaw> = [
         meta: { requiresAuth: true, requiredPermission: Permissions.Device.Read, title: '设备日志' }
       },
       {
+        path: 'client-releases',
+        name: 'ClientReleases',
+        component: () => import('../views/clientReleases/ClientReleaseCenter.vue'),
+        meta: { requiresAuth: true, requiredPermission: Permissions.Device.Read, title: '客户端下载' }
+      },
+      {
         path: 'roles',
         name: 'Roles',
         component: () => import('../views/roles/RoleList.vue'),

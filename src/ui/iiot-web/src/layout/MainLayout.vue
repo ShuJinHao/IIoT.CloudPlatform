@@ -182,6 +182,7 @@ import {
 import {
   BarChart3,
   ClipboardList,
+  CloudDownload,
   Factory,
   Gauge,
   Languages,
@@ -228,6 +229,7 @@ const navItems: NavItem[] = [
   { name: 'PassStation', path: '/pass-station', labelKey: 'nav.passStation', icon: Route, permission: Permissions.Device.Read },
   { name: 'Capacity', path: '/capacity', labelKey: 'nav.capacity', icon: BarChart3, permission: Permissions.Device.Read },
   { name: 'DeviceLogs', path: '/device-logs', labelKey: 'nav.logs', icon: ScrollText, permission: Permissions.Device.Read },
+  { name: 'ClientReleases', path: '/client-releases', labelKey: 'nav.clientReleases', icon: CloudDownload, permission: Permissions.Device.Read },
   { name: 'Roles', path: '/roles', labelKey: 'nav.access', icon: Gauge, permission: Permissions.Role.Define },
 ];
 
