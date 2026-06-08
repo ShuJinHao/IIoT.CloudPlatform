@@ -62,6 +62,12 @@ curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' http:
 
 ## Standard Release
 
+Application images must already exist in Harbor before this step. Log in to Harbor on the private deployment server first:
+
+```sh
+docker login <OCI_REGISTRY> --username <OCI_REGISTRY_USERNAME>
+```
+
 Use the single release entrypoint:
 
 ```sh
@@ -80,7 +86,7 @@ Release flow is fixed:
 2. `postgres-backup.sh`
 3. write `staged-release.env`
 4. rewrite only the 5 application image coordinates in `.env`
-5. `docker compose pull`
+5. `docker compose pull` from Harbor
 6. keep infrastructure available
 7. run `iiot-migration`
 8. start application containers

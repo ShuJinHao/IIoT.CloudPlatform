@@ -1,242 +1,203 @@
-# IIoT Cloud Production Deploy
+# IIoT Cloud Harbor CICD And Private Server Deploy
 
-## Scope
+本目录是 `IIoT.CloudPlatform` 当前生产部署入口。云端部署以 Harbor 镜像仓库和私有服务器本地脚本为准；GitHub 只保留代码记录和可选 CI，不作为私有服务器直接部署入口。
 
-This folder is the hand-written production template for `IIoT.CloudPlatform`.
-It replaces `aspirate-output` as the source of truth for single-machine production deployment.
+## 部署口径
 
-Current production assumptions:
+- 当前目标是 single-machine production starter。
+- 生产版本统一使用 `release_tag = sha-*`，`latest` 不能作为生产应用版本。
+- `cloud-image` 负责构建并推送五个应用镜像到 Harbor。
+- 私有服务器通过本地上传 `deploy/` 和真实 `.env`，再在服务器执行部署脚本。
+- 本轮允许清理旧测试部署和旧数据，不做旧 `docker stack` 到新 `docker compose` 的数据迁移。
+- `deploy/scripts/deploy-release.sh` 是标准发布入口，`deploy/scripts/rollback-release.sh` 是应用镜像回滚入口。
+- 运维、备份、恢复和检查细节见 [OPERATIONS.md](./OPERATIONS.md)。
 
-- Single public IP
-- HTTP only
-- No public domain
-- No production TLS certificate yet
+## 运行拓扑
 
-`HTTPS`, `HSTS`, multi-replica rollout, and pseudo-high-availability are intentionally excluded from this batch.
+入口链路固定：
 
-Current rollout target is a single-machine production starter, not a multi-replica topology.
-`iiot-gateway` keeps one upstream `httpapi` destination in this batch on purpose.
-
-## Topology
-
-Runtime topology stays fixed:
-
-- `nginx-gateway -> iiot-gateway -> iiot-httpapi`
-- `iiot-dataworker` consumes RabbitMQ queues asynchronously
-- `iiot-migration` is a one-shot migration/bootstrap job
-- `seq` is the first centralized log entrypoint
-
-External exposure:
-
-- `80/tcp` for the product entrypoint
-- `/edge-updates/*` on the same entrypoint for EdgeClient update packages
-- `127.0.0.1:5341` for Seq
-- `127.0.0.1:15672` for RabbitMQ management
-
-## Development
-
-Development still uses Aspire:
-
-```powershell
-dotnet run --project src/hosts/IIoT.AppHost/IIoT.AppHost.csproj
+```text
+nginx-gateway -> iiot-gateway -> iiot-httpapi
+iiot-dataworker -> RabbitMQ queues
+iiot-migration -> one-shot migration/bootstrap job
 ```
 
-Frontend development still uses Vite:
+外部暴露：
 
-```powershell
-cd src/ui/iiot-web
-npm install
-npm run dev
+- `${GATEWAY_HTTP_PORT:-80}`：产品入口。
+- `/api/v1/human/*`：人工端 API。
+- `/api/v1/edge/*`：边端上传 API。
+- `/api/v1/bootstrap/*`：边端 bootstrap API。
+- `/edge-updates/*`：EdgeClient 自动更新包下载。
+
+正式 bootstrap 入口固定为：
+
+- `/api/v1/bootstrap/device-instance`
+- `/api/v1/bootstrap/edge-login`
+- `/api/v1/bootstrap/edge-refresh`
+
+边端 bootstrap 必须发送 `X-IIoT-Bootstrap-Secret`。旧 alias 不作为部署或联调入口，例如 `/api/v1/edge/bootstrap/device-instance`、`/api/v1/human/identity/edge-login` 必须 rejected。
+
+只允许服务器本机访问：
+
+- `GET /internal/healthz`
+- RabbitMQ management：`127.0.0.1:${RABBITMQ_MANAGEMENT_PORT:-15672}`
+- Seq：`127.0.0.1:${SEQ_HOST_PORT:-5341}`
+
+## Harbor 镜像
+
+CI 或本机构建必须把以下五个应用镜像推送到 Harbor，同一批版本使用同一个 `sha-*` tag：
+
+```text
+<OCI_REGISTRY>/<OCI_NAMESPACE>/iiot-httpapi:<release_tag>
+<OCI_REGISTRY>/<OCI_NAMESPACE>/iiot-gateway:<release_tag>
+<OCI_REGISTRY>/<OCI_NAMESPACE>/iiot-dataworker:<release_tag>
+<OCI_REGISTRY>/<OCI_NAMESPACE>/iiot-migrationworkapp:<release_tag>
+<OCI_REGISTRY>/<OCI_NAMESPACE>/iiot-web:<release_tag>
 ```
 
-## Single Machine Production
+Harbor 变量：
 
-1. Copy `deploy/.env.example` to a real `.env`.
-2. Replace every placeholder secret and set the application image repositories for the real registry namespace.
-3. Keep `PUBLIC_BASE_URL` as an origin only, without a trailing slash.
-4. Create the EdgeClient update package directory on the server before publishing update packages. The default path is `/srv/iiot/edge-updates`; override it with `EDGE_UPDATES_DIR` only when the server uses a different path.
-5. Validate the template before the first rollout:
+- `OCI_REGISTRY`：Harbor 地址，例如 `harbor.example.com`。
+- `OCI_NAMESPACE`：Harbor 项目/命名空间，例如 `iiot`。
+- `OCI_REGISTRY_USERNAME`：Harbor 登录用户名。
+- `OCI_REGISTRY_PASSWORD`：Harbor 登录密码或 robot account token。
 
-```powershell
-docker compose --env-file deploy/.env.example -f deploy/docker-compose.prod.yml config -q
+GitHub workflow `cloud-image` 可用于构建推送 Harbor，只要配置上述 OCI secrets。`cloud-deploy` 只适用于 CI 能 SSH 到服务器的环境；当前私有服务器默认不走它。
+
+## 服务器部署目录
+
+推荐服务器目录：
+
+```text
+/srv/iiot-cloud/deploy
 ```
 
-6. Use a `release_tag` produced by `cloud-image`. The only standard production version format in this batch is `sha-*`.
-7. First deployment, or a post-clean rebuild, may not have `deploy/releases/current-release.env` yet. That is normal for this stage.
-8. Keep the release scripts executable on the server:
+部署前从本地上传：
 
-```powershell
-chmod +x deploy/scripts/*.sh
+```text
+deploy/
+deploy/.env
 ```
 
-9. Manual release uses the standard release entrypoint:
+真实 `.env` 由运维管理，不提交仓库。`deploy/.env.example` 只作为模板。
 
-```powershell
-$env:DEPLOY_GIT_SHA = "<git-sha>"
-$env:DEPLOY_TRIGGERED_BY = "manual"
-bash deploy/scripts/deploy-release.sh sha-0123456789abcdef
+首次部署或明确允许清空测试环境时，可以删除旧 stack、旧 compose 容器和旧卷，再按新版 compose 重新启动。例子：
+
+```sh
+docker stack ls
+docker stack rm <old-stack-name>
+docker compose -f /srv/iiot-cloud/deploy/docker-compose.prod.yml down -v
+docker volume ls | grep -E 'iiot|postgres|rabbitmq|seq'
 ```
 
-10. GitHub release uses the `cloud-deploy` workflow with the same `release_tag`.
+只在确认旧数据不需要保留时执行清空动作。
 
-What the standard release entrypoint does:
+## .env 要点
 
-- runs `pre-deploy-check.sh`
-- forces a fresh PostgreSQL backup
-- rewrites only the 5 application image coordinates in `.env`
-- runs `iiot-migration`
-- starts the application containers
-- runs `post-deploy-check.sh`
-- writes `deploy/releases/current-release.env`, `previous-release.env`, `staged-release.env`, and `history/*`
+应用镜像坐标必须指向 Harbor 仓库，tag 可以先写任意 `sha-*`；发布脚本会按传入 release tag 重写五个应用镜像 tag：
 
-`/internal/healthz` remains the production readiness probe for this batch.
-It verifies `nginx -> iiot-gateway -> iiot-httpapi` and PostgreSQL connectivity.
-The nginx template only allows localhost access to this route. It is not a public anonymous health endpoint.
-
-## Standard Rollback
-
-Use the standard rollback entrypoint for application-only rollback:
-
-```powershell
-bash deploy/scripts/rollback-release.sh
+```text
+IIOT_HTTPAPI_IMAGE=harbor.example.com/iiot/iiot-httpapi:sha-0123456789abcdef
+IIOT_GATEWAY_IMAGE=harbor.example.com/iiot/iiot-gateway:sha-0123456789abcdef
+IIOT_DATAWORKER_IMAGE=harbor.example.com/iiot/iiot-dataworker:sha-0123456789abcdef
+IIOT_MIGRATION_IMAGE=harbor.example.com/iiot/iiot-migrationworkapp:sha-0123456789abcdef
+IIOT_WEB_IMAGE=harbor.example.com/iiot/iiot-web:sha-0123456789abcdef
 ```
 
-You can also target an explicit history record:
+这些值必须替换为生产真实值：
 
-```powershell
-bash deploy/scripts/rollback-release.sh releases/history/20260421T083000Z-sha-0123456789abcdef.env
-```
-
-Rollback rules for this batch:
-
-- Only the 5 application images are rolled back.
-- The rollback entrypoint does not run database downgrade logic.
-- The rollback entrypoint does not call the database restore flow automatically.
-- If a schema-changing release cannot pass health checks after application rollback, transfer to the existing database recovery flow or clear and rebuild the database in the current pre-launch environment.
-
-The operator workflow for release, rollback, backup, restore, and post-deploy checks is documented in [OPERATIONS.md](./OPERATIONS.md).
-
-## Recurring Backup And Verify
-
-This batch ships cron templates only. `cloud-deploy` does not modify system cron automatically.
-
-Standard operator steps:
-
-1. Replace `/srv/iiot-cloud/deploy` in `deploy/cron/iiot-backup.cron.example` and `deploy/cron/iiot-backup-verify.cron.example` with the real deploy directory on the server.
-2. Append both template entries to the deployment user's crontab.
-3. Keep the default cadence unless a later ops decision explicitly changes it:
-   - daily backup at `02:30`
-   - weekly restore verification at `03:30` every Sunday
-4. Confirm the deployment user can access Docker and run the scripts manually before enabling the cron entries.
-5. Verify the installed crontab includes both entries.
-
-## Configuration Ownership
-
-Use `deploy/.env.example` only as a template. Real production values should come from one of these sources:
-
-- CI secret `DEPLOY_ENV_FILE`, which is written to the server as `.env` during `cloud-deploy`
-- an operator-managed `.env` on the target server for manual rollout
-
-Values that must be replaced by secrets or environment-specific settings:
-
-- application image repositories for `IIOT_HTTPAPI_IMAGE`, `IIOT_GATEWAY_IMAGE`, `IIOT_DATAWORKER_IMAGE`, `IIOT_MIGRATION_IMAGE`, and `IIOT_WEB_IMAGE`
 - `PUBLIC_BASE_URL`
 - `PG_PASSWORD`
 - `RABBITMQ_DEFAULT_PASS`
 - `JWTSETTINGS__SECRET`
 - `SEQ_ADMIN_PASSWORD`
 - `SEED_ADMIN_PASSWORD`
-- `SEQ_API_KEY` if Seq ingestion is protected
+- `SEQ_API_KEY`（启用 Seq ingestion key 时）
 
-Values that are template defaults and usually stay unchanged for the single-machine starter:
+这些值通常保持模板默认：
 
-- `IIOT_NGINX_IMAGE`
-- `IIOT_POSTGRES_IMAGE`
-- `IIOT_REDIS_IMAGE`
-- `IIOT_RABBITMQ_IMAGE`
-- `IIOT_SEQ_IMAGE`
 - `GATEWAY_HTTP_PORT`
 - `SEQ_HOST_PORT`
 - `RABBITMQ_MANAGEMENT_PORT`
 - `EDGE_UPDATES_DIR`
-- `FORWARDED_HEADERS_ENABLED`
-- `FORWARDED_HEADERS_FORWARDLIMIT`
-- `FORWARDED_HEADERS_KNOWNNETWORKS__0`
-- `FORWARDED_HEADERS_KNOWNNETWORKS__1`
 - `BOOTSTRAP_AUTH_REQUIRE_SECRET`
 - `BACKUP_RETENTION_DAYS`
 - `BACKUP_MAX_AGE_HOURS`
 - `BACKUP_VERIFY_MAX_AGE_DAYS`
-- local Vite development CORS origins
 
-Optional values that stay empty unless the operator explicitly needs them:
+`PUBLIC_BASE_URL` 必须是 origin，不要以 `/` 结尾，例如：
 
-- `Infrastructure__EventBus__EndpointPrefix`
-- `SEQ_API_KEY`
+```text
+PUBLIC_BASE_URL=http://10.0.0.15
+```
 
-Release version ownership stays explicit:
+## 标准发布步骤
 
-- `DEPLOY_ENV_FILE` provides the registry/repository coordinates and secrets.
-- `release_tag` comes from `cloud-image` and is passed separately to `cloud-deploy`.
-- `latest` is not a standard production application version in this batch.
+在服务器上执行：
 
-## Gateway Notes
+```sh
+cd /srv/iiot-cloud/deploy
+chmod +x ./scripts/*.sh
+docker login <OCI_REGISTRY> --username <OCI_REGISTRY_USERNAME>
+DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-0123456789abcdef
+```
 
-The nginx gateway keeps the existing route surfaces:
+发布脚本会：
 
-- `/api/v1/human/*`
-- `/api/v1/edge/*`
-- `/api/v1/bootstrap/*`
-- `/edge-updates/*`
+1. 执行 `pre-deploy-check.sh`。
+2. 执行 `postgres-backup.sh`。
+3. 根据 release tag 重写五个应用镜像坐标。
+4. `docker compose pull` 从 Harbor 拉取应用镜像。
+5. 保持基础设施容器可用。
+6. 运行 `iiot-migration`。
+7. 启动应用容器和 `nginx-gateway`。
+8. 执行 `post-deploy-check.sh` 和运维检查。
+9. 写入 `deploy/releases/current-release.env`、`previous-release.env`、`staged-release.env` 和 `history/`。
 
-Refresh endpoints included in this template:
+成功条件：
 
-- `POST /api/v1/human/identity/refresh`
-- `POST /api/v1/bootstrap/edge-refresh`
+- `GET /internal/healthz` 在服务器本机返回 `200`。
+- `./scripts/post-deploy-check.sh` 返回 `0`。
+- `./scripts/ops-check.sh` 返回 `0`。
+- `deploy/releases/current-release.env` 指向当前 release。
 
-Edge bootstrap clients must use the Gateway public `/api/v1/bootstrap/*` surface and send
-`X-IIoT-Bootstrap-Secret` for `device-instance`. The old bootstrap alias paths are not supported
-deployment paths.
+## 定时备份
 
-EdgeClient update packages are served directly by `nginx-gateway` from `EDGE_UPDATES_DIR`.
-The client `launcher.update.json` `Source` should point to `<PUBLIC_BASE_URL>/edge-updates/`.
-`RELEASES` and `releases.*.json` are served with `Cache-Control: no-cache`; `*.nupkg`
-packages are served with long-lived immutable cache headers.
+本目录只提供 cron 模板，不自动修改服务器 crontab：
 
-## Logs And Message Replay
+- `deploy/cron/iiot-backup.cron.example`
+- `deploy/cron/iiot-backup-verify.cron.example`
 
-Seq is the current log aggregation baseline. Application services write both:
+默认节奏：
 
-- local rolling files under `/app/logs`
-- centralized events to Seq
-- gateway access and error logs to container stdout/stderr
+- daily backup at `02:30`
+- weekly restore verification at `03:30` every Sunday
 
-DataWorker queues are explicit and stable:
+## EdgeClient 自动更新包
 
-- `iiot-pass-station-batches`
-- `iiot-device-logs`
-- `iiot-hourly-capacities`
+EdgeClient Velopack 更新包由现有 `nginx-gateway` 直接提供：
 
-Failure policy:
+```text
+<PUBLIC_BASE_URL>/edge-updates/
+```
 
-- Immediate retry: 3 attempts with incremental backoff
-- Terminal consumer failure: RabbitMQ queue `<queue>_error`
-- Skipped or unmatched message: RabbitMQ queue `<queue>_skipped`
+服务器包目录默认：
 
-Replay guidance:
+```text
+/srv/iiot/edge-updates
+```
 
-1. Fix the root cause first.
-2. Inspect the original queue and the paired `_error` or `_skipped` queue in RabbitMQ management.
-3. Move messages back to the original queue in controlled batches.
-4. Watch Seq during replay and stop if the same failure pattern returns.
+可通过 `EDGE_UPDATES_DIR` 覆盖。目录中放：
 
-For backup, restore, health checking, and the standard manual handling order, use [OPERATIONS.md](./OPERATIONS.md).
+- `RELEASES`
+- `*.nupkg`
+- 可选 `releases.*.json`
 
-## Later Hardening
+客户端 `launcher.update.json` 的 `Source` 填：
 
-Future public-network hardening can cover:
+```text
+<PUBLIC_BASE_URL>/edge-updates/
+```
 
-- domain and certificate setup
-- TLS termination
-- `HTTPS` redirect policy
-- `HSTS`
+`RELEASES` 和 `releases.*.json` 使用 `Cache-Control: no-cache`，`*.nupkg` 使用长期缓存。
