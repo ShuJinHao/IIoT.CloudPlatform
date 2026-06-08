@@ -7,7 +7,7 @@ namespace IIoT.Services.CrossCutting.Behaviors;
 
 /// <summary>
 /// 请求分类守卫。
-/// 用来约束 HTTP 请求必须明确声明自己属于 human、edge、匿名 bootstrap 或 ai-read 四类之一，
+/// 用来约束 HTTP 请求必须明确声明自己属于 human、edge、匿名 bootstrap、public 或 ai-read 五类之一，
 /// 同时防止把不同入口的授权特性错误地混挂。
 /// </summary>
 public sealed class RequestKindGuardBehavior<TRequest, TResponse>(
@@ -71,6 +71,7 @@ public sealed class RequestKindGuardBehavior<TRequest, TResponse>(
                 definition == typeof(IHumanRequest<>) ||
                 definition == typeof(IDeviceRequest<>) ||
                 definition == typeof(IAnonymousBootstrapRequest<>) ||
+                definition == typeof(IPublicRequest<>) ||
                 definition == typeof(IAiReadRequest<>))
             .Distinct()
             .ToList();

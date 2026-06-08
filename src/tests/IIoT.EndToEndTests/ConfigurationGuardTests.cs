@@ -238,6 +238,7 @@ public sealed class ConfigurationGuardTests
                 var route = match.Groups[1].Value;
                 if (!route.StartsWith("api/v1/human/", StringComparison.Ordinal)
                     && !route.StartsWith("api/v1/edge/", StringComparison.Ordinal)
+                    && !route.StartsWith("api/v1/public/", StringComparison.Ordinal)
                     && !route.StartsWith("api/v1/ai/read", StringComparison.Ordinal)
                     && !route.StartsWith("api/v1/ai/identity", StringComparison.Ordinal))
                 {
@@ -1129,6 +1130,12 @@ public sealed class ConfigurationGuardTests
     public void AiReadRequestFolders_ShouldOnlyContainAiReadQueries()
     {
         AssertRequestFolderConvention("Queries", "AiRead", "IAiReadQuery");
+    }
+
+    [Fact]
+    public void PublicRequestFolders_ShouldOnlyContainPublicQueries()
+    {
+        AssertRequestFolderConvention("Queries", "Public", "IPublicQuery");
     }
 
     [Fact]

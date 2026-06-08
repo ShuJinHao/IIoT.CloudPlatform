@@ -1,10 +1,15 @@
+using System.Net;
+
 namespace IIoT.Services.Contracts.Identity;
 
 public sealed class OidcProviderOptions
 {
     public const string SectionName = "OidcProvider";
+    public const string AllowIntranetHttpOidcEnvironmentVariable = "ALLOW_INTRANET_HTTP_OIDC";
+    private const string HostCookiePrefix = "__Host-";
 
     public string Issuer { get; set; } = string.Empty;
+    public bool AllowIntranetHttpOidc { get; set; }
     public string AicopilotClientId { get; set; } = "aicopilot";
     public string[] AicopilotRedirectUris { get; set; } = [];
     public string[] AicopilotPostLogoutRedirectUris { get; set; } = [];
@@ -34,7 +39,8 @@ public sealed class OidcProviderOptions
         EnsureAllowedTransport(
             issuer,
             "OidcProvider:Issuer",
-            allowDevelopmentLoopbackHttp);
+            allowDevelopmentLoopbackHttp,
+            AllowIntranetHttpOidc);
 
         if (string.IsNullOrWhiteSpace(AicopilotClientId))
         {
@@ -54,7 +60,8 @@ public sealed class OidcProviderOptions
             EnsureAllowedTransport(
                 parsedRedirectUri,
                 $"OidcProvider:AicopilotRedirectUris contains an insecure URI: {redirectUri}",
-                allowDevelopmentLoopbackHttp);
+                allowDevelopmentLoopbackHttp,
+                AllowIntranetHttpOidc);
         }
 
         foreach (var postLogoutRedirectUri in AicopilotPostLogoutRedirectUris)
@@ -65,7 +72,8 @@ public sealed class OidcProviderOptions
             EnsureAllowedTransport(
                 parsedPostLogoutRedirectUri,
                 $"OidcProvider:AicopilotPostLogoutRedirectUris contains an insecure URI: {postLogoutRedirectUri}",
-                allowDevelopmentLoopbackHttp);
+                allowDevelopmentLoopbackHttp,
+                AllowIntranetHttpOidc);
         }
 
         if (AuthorizationCodeLifetimeMinutes <= 0)
@@ -94,6 +102,14 @@ public sealed class OidcProviderOptions
         }
     }
 
+    public string GetEffectiveSessionCookieName()
+    {
+        var cookieName = SessionCookieName.Trim();
+        return AllowIntranetHttpOidc && cookieName.StartsWith(HostCookiePrefix, StringComparison.Ordinal)
+            ? cookieName[HostCookiePrefix.Length..]
+            : cookieName;
+    }
+
     private static Uri ParseHttpUri(string value, string settingName)
     {
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
@@ -108,7 +124,8 @@ public sealed class OidcProviderOptions
     private static void EnsureAllowedTransport(
         Uri uri,
         string settingName,
-        bool allowDevelopmentLoopbackHttp)
+        bool allowDevelopmentLoopbackHttp,
+        bool allowIntranetHttpOidc)
     {
         if (uri.Scheme == Uri.UriSchemeHttps)
         {
@@ -120,7 +137,31 @@ public sealed class OidcProviderOptions
             return;
         }
 
+        if (allowIntranetHttpOidc && IsAllowedIntranetHttpHost(uri))
+        {
+            return;
+        }
+
         throw new InvalidOperationException(
-            $"{settingName} must use HTTPS; HTTP is only allowed for Development loopback endpoints.");
+            $"{settingName} must use HTTPS; HTTP is only allowed for Development loopback endpoints or explicit intranet OIDC endpoints.");
+    }
+
+    private static bool IsAllowedIntranetHttpHost(Uri uri)
+    {
+        if (uri.IsLoopback)
+        {
+            return true;
+        }
+
+        if (!IPAddress.TryParse(uri.Host, out var address))
+        {
+            return false;
+        }
+
+        var bytes = address.GetAddressBytes();
+        return bytes.Length == 4 &&
+            (bytes[0] == 10 ||
+             (bytes[0] == 192 && bytes[1] == 168) ||
+             (bytes[0] == 172 && bytes[1] is >= 16 and <= 31));
     }
 }

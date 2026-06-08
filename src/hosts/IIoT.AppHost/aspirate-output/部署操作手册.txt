@@ -41,7 +41,7 @@ Copy-Item .env.example .env
 4. `PUBLIC_BASE_URL` 使用正式外部访问地址，例如：
 
 ```text
-PUBLIC_BASE_URL=http://10.0.0.15
+PUBLIC_BASE_URL=http://iiot.example.internal
 ```
 
 注意：不要以 `/` 结尾。

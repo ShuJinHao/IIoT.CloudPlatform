@@ -1,0 +1,269 @@
+<template>
+  <main class="min-h-screen bg-[#eef3f1] px-6 py-6 text-[#111827] dark:bg-[#101113] dark:text-[#f5f5f4]">
+    <section class="mx-auto flex max-w-[1180px] items-center justify-between gap-4 pb-6">
+      <div class="flex items-center gap-3">
+        <div class="grid size-11 place-items-center rounded-[15px] bg-[#111827] text-[var(--primary)]">
+          <CloudDownload :size="22" :stroke-width="2.4" />
+        </div>
+        <div>
+          <h1 class="text-[25px] font-extrabold leading-tight tracking-[0]">客户端下载中心</h1>
+          <p class="mt-1 text-[13px] font-semibold text-[#647082] dark:text-[#b6bbc6]">下载通用宿主，插件版本由 Launcher 登录云端后按工序选择安装。</p>
+        </div>
+      </div>
+      <router-link class="rounded-[13px] bg-white px-4 py-2 text-[13px] font-extrabold text-[#111827] shadow-[var(--shadow-sm)] transition-colors hover:bg-[#f7faf9] dark:bg-[#18181b] dark:text-[#f5f5f4] dark:hover:bg-[#202024]" to="/login">
+        进入云平台
+      </router-link>
+    </section>
+
+    <section class="mx-auto grid max-w-[1180px] grid-cols-[minmax(0,1fr)_320px] gap-6 max-[960px]:grid-cols-1">
+      <div class="min-w-0 space-y-6">
+        <section class="rounded-[24px] bg-white p-6 shadow-[var(--shadow-sm)] dark:bg-[#18181b]">
+          <div class="mb-5 flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <p class="text-[12px] font-extrabold uppercase text-[#8290a3]">Windows 通用宿主</p>
+              <h2 class="mt-2 text-[28px] font-extrabold leading-tight tracking-[0]">EdgeClient 首装包</h2>
+            </div>
+            <div class="flex flex-wrap gap-3">
+              <label class="grid gap-1 text-[12px] font-bold text-[#657184]">
+                Channel
+                <input v-model.trim="channel" class="h-10 w-[132px] rounded-[12px] border border-[var(--border)] bg-[#f7fafb] px-3 text-[13px] font-extrabold text-[#111827] outline-none focus:border-[#111827] dark:bg-[#202024] dark:text-[#f5f5f4]" />
+              </label>
+              <label class="grid gap-1 text-[12px] font-bold text-[#657184]">
+                Runtime
+                <input v-model.trim="targetRuntime" class="h-10 w-[132px] rounded-[12px] border border-[var(--border)] bg-[#f7fafb] px-3 text-[13px] font-extrabold text-[#111827] outline-none focus:border-[#111827] dark:bg-[#202024] dark:text-[#f5f5f4]" />
+              </label>
+              <button class="mt-5 inline-flex h-10 items-center gap-2 rounded-[12px] bg-[#111827] px-4 text-[13px] font-extrabold text-white transition-colors hover:bg-[#263043] disabled:cursor-not-allowed disabled:opacity-60" type="button" :disabled="loading" @click="loadCatalog">
+                <RefreshCcw :size="16" :class="loading ? 'animate-spin' : ''" />
+                刷新
+              </button>
+            </div>
+          </div>
+
+          <div v-if="loading" class="grid min-h-[260px] place-items-center rounded-[18px] border border-dashed border-[var(--border)] bg-[#f7fafb] text-[13px] font-bold text-[#647082] dark:bg-[#202024]">
+            正在读取发布目录...
+          </div>
+
+          <div v-else-if="errorMessage" class="rounded-[18px] border border-[#fecaca] bg-[#fff1f1] p-5 text-[#991b1b]">
+            <div class="mb-2 flex items-center gap-2 text-[14px] font-extrabold">
+              <AlertTriangle :size="18" />
+              读取失败
+            </div>
+            <p class="text-[13px] font-semibold">{{ errorMessage }}</p>
+          </div>
+
+          <div v-else-if="catalog?.latestHost" class="grid grid-cols-[minmax(0,1fr)_220px] gap-5 rounded-[20px] border border-[var(--border)] bg-[#f8fbfa] p-5 dark:bg-[#202024] max-[760px]:grid-cols-1">
+            <div class="min-w-0">
+              <div class="mb-5 flex flex-wrap items-center gap-2">
+                <span class="rounded-full bg-[var(--primary)] px-3 py-1 text-[12px] font-extrabold text-[#111827]">v{{ catalog.latestHost.version }}</span>
+                <span class="rounded-full bg-white px-3 py-1 text-[12px] font-bold text-[#4b5563] dark:bg-[#18181b] dark:text-[#d4d4d8]">{{ catalog.latestHost.channel }} / {{ catalog.latestHost.targetRuntime }}</span>
+                <span class="rounded-full bg-white px-3 py-1 text-[12px] font-bold text-[#4b5563] dark:bg-[#18181b] dark:text-[#d4d4d8]">Host API {{ catalog.latestHost.hostApiVersion }}</span>
+              </div>
+
+              <dl class="grid grid-cols-2 gap-4 text-[13px] max-[680px]:grid-cols-1">
+                <div>
+                  <dt class="mb-1 font-bold text-[#7b8798]">发布时间</dt>
+                  <dd class="font-extrabold">{{ formatDate(catalog.latestHost.publishedAtUtc) }}</dd>
+                </div>
+                <div>
+                  <dt class="mb-1 font-bold text-[#7b8798]">包大小</dt>
+                  <dd class="font-extrabold">{{ formatBytes(catalog.latestHost.packageSize) }}</dd>
+                </div>
+                <div class="col-span-2 min-w-0 max-[680px]:col-span-1">
+                  <dt class="mb-1 font-bold text-[#7b8798]">SHA256</dt>
+                  <dd class="break-all font-mono text-[12px] font-bold text-[#334155] dark:text-[#d4d4d8]">{{ catalog.latestHost.sha256 }}</dd>
+                </div>
+              </dl>
+
+              <p v-if="catalog.latestHost.releaseNotes" class="mt-5 rounded-[16px] bg-white p-4 text-[13px] font-semibold leading-6 text-[#4b5563] dark:bg-[#18181b] dark:text-[#d4d4d8]">
+                {{ catalog.latestHost.releaseNotes }}
+              </p>
+            </div>
+
+            <div class="flex flex-col justify-between gap-4 rounded-[18px] bg-white p-4 dark:bg-[#18181b]">
+              <div>
+                <div class="mb-2 grid size-11 place-items-center rounded-[14px] bg-[#111827] text-[var(--primary)]">
+                  <Package :size="22" />
+                </div>
+                <p class="text-[13px] font-bold text-[#657184]">首次部署只下载通用宿主。工序插件由 Launcher 按设备身份安装。</p>
+              </div>
+              <a class="inline-flex h-11 items-center justify-center gap-2 rounded-[13px] bg-[var(--primary)] px-4 text-[14px] font-extrabold text-[#111827] transition-colors hover:brightness-95" :href="catalog.latestHost.downloadUrl">
+                <Download :size="17" />
+                下载客户端
+              </a>
+            </div>
+          </div>
+
+          <div v-else class="grid min-h-[260px] place-items-center rounded-[18px] border border-dashed border-[var(--border)] bg-[#f7fafb] p-8 text-center dark:bg-[#202024]">
+            <div>
+              <PackageX class="mx-auto mb-3 text-[#9aa3b2]" :size="34" />
+              <h3 class="text-[17px] font-extrabold">暂无已发布宿主包</h3>
+              <p class="mt-2 text-[13px] font-semibold text-[#647082] dark:text-[#b6bbc6]">请先在后台发布 {{ channel || 'stable' }} / {{ targetRuntime || 'win-x64' }} 的通用宿主安装包。</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="space-y-4">
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <h2 class="text-[20px] font-extrabold tracking-[0]">插件 catalog</h2>
+              <p class="mt-1 text-[13px] font-semibold text-[#647082] dark:text-[#b6bbc6]">这里只展示版本与兼容窗口，实际插件下载仍由设备 Launcher 完成。</p>
+            </div>
+            <span class="rounded-full bg-white px-3 py-2 text-[12px] font-extrabold text-[#4b5563] shadow-[var(--shadow-sm)] dark:bg-[#18181b] dark:text-[#d4d4d8]">{{ catalog?.plugins.length ?? 0 }} 个插件</span>
+          </div>
+
+          <div v-if="catalog?.plugins.length" class="grid grid-cols-2 gap-4 max-[760px]:grid-cols-1">
+            <article v-for="plugin in catalog.plugins" :key="plugin.moduleId" class="rounded-[20px] bg-white p-5 shadow-[var(--shadow-sm)] dark:bg-[#18181b]">
+              <div class="mb-4 flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <h3 class="truncate text-[17px] font-extrabold">{{ plugin.displayName || plugin.moduleId }}</h3>
+                  <p class="mt-1 truncate text-[12px] font-bold text-[#7b8798]">{{ plugin.moduleId }}</p>
+                </div>
+                <span class="shrink-0 rounded-full bg-[#eef3f1] px-3 py-1 text-[12px] font-extrabold text-[#111827] dark:bg-[#202024] dark:text-[#f5f5f4]">v{{ plugin.version }}</span>
+              </div>
+
+              <div class="grid gap-3 text-[12px] font-bold text-[#647082]">
+                <div class="flex items-center justify-between gap-3">
+                  <span>Host API</span>
+                  <strong class="text-[#111827] dark:text-[#f5f5f4]">{{ plugin.hostApiVersion }}</strong>
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                  <span>兼容宿主</span>
+                  <strong class="text-right text-[#111827] dark:text-[#f5f5f4]">{{ plugin.minHostVersion }} - {{ plugin.maxHostVersion }}</strong>
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                  <span>包大小</span>
+                  <strong class="text-[#111827] dark:text-[#f5f5f4]">{{ formatBytes(plugin.packageSize) }}</strong>
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                  <span>发布时间</span>
+                  <strong class="text-[#111827] dark:text-[#f5f5f4]">{{ formatDate(plugin.publishedAtUtc) }}</strong>
+                </div>
+              </div>
+
+              <p v-if="plugin.description || plugin.releaseNotes" class="mt-4 line-clamp-3 text-[13px] font-semibold leading-6 text-[#5b6678] dark:text-[#c4c4ca]">
+                {{ plugin.description || plugin.releaseNotes }}
+              </p>
+            </article>
+          </div>
+
+          <div v-else class="rounded-[20px] border border-dashed border-[var(--border)] bg-white p-8 text-center text-[13px] font-semibold text-[#647082] dark:bg-[#18181b] dark:text-[#b6bbc6]">
+            当前 channel/runtime 暂无已发布插件。
+          </div>
+        </section>
+      </div>
+
+      <aside class="space-y-4">
+        <section class="rounded-[22px] bg-white p-5 shadow-[var(--shadow-sm)] dark:bg-[#18181b]">
+          <div class="mb-4 flex items-center gap-2 text-[14px] font-extrabold">
+            <ShieldCheck :size="18" />
+            安装边界
+          </div>
+          <ul class="space-y-3 text-[13px] font-semibold leading-6 text-[#5b6678] dark:text-[#c4c4ca]">
+            <li>公开页面只下载通用宿主。</li>
+            <li>插件安装需要设备身份，仍走 ClientCode → bootstrap → DeviceId。</li>
+            <li>BootstrapSecret、设备 token、内部发布状态不会在这里展示。</li>
+          </ul>
+        </section>
+
+        <section class="rounded-[22px] bg-[#111827] p-5 text-white shadow-[var(--shadow-sm)]">
+          <div class="mb-3 text-[14px] font-extrabold">当前目录</div>
+          <div class="space-y-2 text-[13px] font-bold text-[#d1d5db]">
+            <div class="flex items-center justify-between gap-3">
+              <span>Channel</span>
+              <strong class="text-white">{{ catalog?.channel ?? channel }}</strong>
+            </div>
+            <div class="flex items-center justify-between gap-3">
+              <span>Runtime</span>
+              <strong class="text-white">{{ catalog?.targetRuntime ?? targetRuntime }}</strong>
+            </div>
+            <div class="flex items-center justify-between gap-3">
+              <span>生成时间</span>
+              <strong class="text-right text-white">{{ formatDate(catalog?.generatedAtUtc) }}</strong>
+            </div>
+          </div>
+        </section>
+      </aside>
+    </section>
+  </main>
+</template>
+
+<script setup lang="ts">
+import { onMounted, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import {
+  AlertTriangle,
+  CloudDownload,
+  Download,
+  Package,
+  PackageX,
+  RefreshCcw,
+  ShieldCheck,
+} from 'lucide-vue-next';
+import {
+  getPublicClientDownloadsApi,
+  type PublicClientDownloadCatalogDto,
+} from '../api/publicDownloads';
+
+const route = useRoute();
+const router = useRouter();
+
+const readQuery = (key: string, fallback: string) => {
+  const value = route.query[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+};
+
+const channel = ref(readQuery('channel', 'stable'));
+const targetRuntime = ref(readQuery('targetRuntime', 'win-x64'));
+const catalog = ref<PublicClientDownloadCatalogDto | null>(null);
+const loading = ref(false);
+const errorMessage = ref('');
+
+const loadCatalog = async () => {
+  loading.value = true;
+  errorMessage.value = '';
+  try {
+    catalog.value = await getPublicClientDownloadsApi({
+      channel: channel.value,
+      targetRuntime: targetRuntime.value,
+    });
+    await router.replace({
+      query: {
+        channel: channel.value || 'stable',
+        targetRuntime: targetRuntime.value || 'win-x64',
+      },
+    });
+  } catch (error) {
+    console.error(error);
+    errorMessage.value = '无法读取客户端发布目录，请确认云端服务和发布数据。';
+  } finally {
+    loading.value = false;
+  }
+};
+
+const formatBytes = (value?: number | null) => {
+  if (!value || value <= 0) return '-';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let size = value;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  return `${size.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+};
+
+const formatDate = (value?: string | null) => {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+};
+
+onMounted(loadCatalog);
+</script>

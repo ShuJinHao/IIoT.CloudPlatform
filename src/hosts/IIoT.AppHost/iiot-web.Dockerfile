@@ -5,6 +5,8 @@ COPY src/ui/iiot-web/package*.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
 
 COPY src/ui/iiot-web/ ./
+ARG VITE_AICOPILOT_CHALLENGE_URL=
+ENV VITE_AICOPILOT_CHALLENGE_URL=$VITE_AICOPILOT_CHALLENGE_URL
 RUN npm run build
 
 FROM nginx:1.27-alpine AS final

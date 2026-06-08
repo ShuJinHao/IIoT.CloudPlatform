@@ -95,13 +95,13 @@ Assert-Configured "DEPLOY_USER" $resolvedDeployUser @("deploy-user", "change-me-
 Assert-Configured "DEPLOY_PORT" $resolvedDeployPort
 Assert-Configured "STACK_NAME" $resolvedStackName
 Assert-Configured "DEPLOY_DIR" $resolvedDeployDir
-Assert-Configured "PUBLIC_BASE_URL" $resolvedPublicBaseUrl @("https://iiot.example.com", "http://iiot.example.com", "http://10.0.0.15")
+Assert-Configured "PUBLIC_BASE_URL" $resolvedPublicBaseUrl @("https://iiot.example.com", "http://iiot.example.com", "http://iiot.example.internal")
 Assert-Configured "JWTSETTINGS__SECRET" $resolvedJwtSecret @("change-me-jwt-secret", "iiot-cloud-jwt-secret-2026-04-22")
 Assert-Configured "SEED_ADMIN_NO" $resolvedSeedAdminNo @("change-me-admin-no")
 Assert-Configured "SEED_ADMIN_PASSWORD" $resolvedSeedAdminPassword @("change-me-admin-password", "Ljh123456!")
 
 if ($resolvedPublicBaseUrl.EndsWith("/")) {
-    throw "PUBLIC_BASE_URL must not end with '/'. Example: http://10.0.0.15"
+    throw "PUBLIC_BASE_URL must not end with '/'. Example: http://iiot.example.internal"
 }
 
 Write-Host ""

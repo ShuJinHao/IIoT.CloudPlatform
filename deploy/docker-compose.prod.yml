@@ -82,6 +82,13 @@ services:
       JwtSettings__Secret: ${JWTSETTINGS__SECRET}
       SEED_ADMIN_NO: ${SEED_ADMIN_NO}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD}
+      ALLOW_INTRANET_HTTP_OIDC: ${ALLOW_INTRANET_HTTP_OIDC:-false}
+      OidcProvider__Issuer: ${OIDC_PROVIDER_ISSUER}
+      OidcProvider__AllowIntranetHttpOidc: ${ALLOW_INTRANET_HTTP_OIDC:-false}
+      OidcProvider__AicopilotRedirectUris__0: ${AICOPILOT_OIDC_REDIRECT_URI}
+      OidcProvider__AicopilotPostLogoutRedirectUris__0: ${AICOPILOT_OIDC_POST_LOGOUT_REDIRECT_URI}
+      OidcProvider__SigningCertificatePath: ${OIDC_PROVIDER_SIGNING_CERTIFICATE_PATH:-}
+      OidcProvider__SigningCertificatePassword: ${OIDC_PROVIDER_SIGNING_CERTIFICATE_PASSWORD:-}
       Seq__Enabled: true
       Seq__ServerUrl: ${SEQ_SERVER_URL}
       Seq__ApiKey: ${SEQ_API_KEY}
@@ -113,11 +120,19 @@ services:
       Cors__AllowedOrigins__1: ${CORS_ALLOWED_ORIGIN_1}
       Cors__AllowedOrigins__2: ${CORS_ALLOWED_ORIGIN_2}
       BootstrapAuth__RequireSecret: ${BOOTSTRAP_AUTH_REQUIRE_SECRET}
+      ALLOW_INTRANET_HTTP_OIDC: ${ALLOW_INTRANET_HTTP_OIDC:-false}
+      OidcProvider__Issuer: ${OIDC_PROVIDER_ISSUER}
+      OidcProvider__AllowIntranetHttpOidc: ${ALLOW_INTRANET_HTTP_OIDC:-false}
+      OidcProvider__AicopilotRedirectUris__0: ${AICOPILOT_OIDC_REDIRECT_URI}
+      OidcProvider__AicopilotPostLogoutRedirectUris__0: ${AICOPILOT_OIDC_POST_LOGOUT_REDIRECT_URI}
+      OidcProvider__SigningCertificatePath: ${OIDC_PROVIDER_SIGNING_CERTIFICATE_PATH:-}
+      OidcProvider__SigningCertificatePassword: ${OIDC_PROVIDER_SIGNING_CERTIFICATE_PASSWORD:-}
       Infrastructure__EventBus__EndpointPrefix: ${Infrastructure__EventBus__EndpointPrefix}
       Seq__Enabled: true
       Seq__ServerUrl: ${SEQ_SERVER_URL}
       Seq__ApiKey: ${SEQ_API_KEY}
     volumes:
+      - ${OIDC_PROVIDER_CERTS_DIR:-/srv/iiot-cloud/deploy/certs}:/app/certs:ro
       - httpapi-logs:/app/logs
     depends_on:
       postgres:

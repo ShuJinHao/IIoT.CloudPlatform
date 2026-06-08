@@ -91,6 +91,46 @@ public sealed record DeviceClientPluginInventoryDto(
     string? LatestVersion,
     string? CompatibilityIssue);
 
+public sealed record PublicClientDownloadCatalogDto(
+    int CatalogSchemaVersion,
+    string Channel,
+    string TargetRuntime,
+    PublicClientHostDownloadDto? LatestHost,
+    IReadOnlyList<PublicClientPluginCatalogItemDto> Plugins,
+    DateTime GeneratedAtUtc);
+
+public sealed record PublicClientHostDownloadDto(
+    string Channel,
+    string Version,
+    string HostApiVersion,
+    string TargetRuntime,
+    string? TargetFramework,
+    string DownloadUrl,
+    string Sha256,
+    long PackageSize,
+    string? ReleaseNotes,
+    string? Publisher,
+    DateTime? PublishedAtUtc);
+
+public sealed record PublicClientPluginCatalogItemDto(
+    string ModuleId,
+    string DisplayName,
+    string? Description,
+    string? IconKind,
+    string? AccentColor,
+    string Channel,
+    string Version,
+    string HostApiVersion,
+    string MinHostVersion,
+    string MaxHostVersion,
+    string TargetRuntime,
+    string? TargetFramework,
+    long PackageSize,
+    string? ReleaseNotes,
+    JsonElement Dependencies,
+    string? Publisher,
+    DateTime? PublishedAtUtc);
+
 internal static class ClientReleaseMapping
 {
     private static readonly JsonElement EmptyArray = JsonDocument.Parse("[]").RootElement.Clone();

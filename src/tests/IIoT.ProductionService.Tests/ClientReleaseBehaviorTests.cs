@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.ProductionService.Commands.ClientReleases;
 using IIoT.ProductionService.Commands.ClientVersions;
+using IIoT.ProductionService.Queries.ClientReleases;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Repository;
@@ -94,6 +95,105 @@ public sealed class ClientReleaseBehaviorTests
         var plugin = Assert.Single(snapshot.InstalledPlugins);
         Assert.Equal("Homogenization", plugin.ModuleId);
         Assert.True(plugin.Enabled);
+    }
+
+    [Fact]
+    public async Task GetPublicClientDownloadsHandler_ShouldExposeOnlyPublishedHostAndPluginCatalog()
+    {
+        var hostRepository = new InMemoryRepository<ClientHostRelease>();
+        hostRepository.Items.Add(new ClientHostRelease(
+            "stable",
+            "99.0.0",
+            "1.0.0",
+            "win-x64",
+            "net10.0",
+            "https://download.example.test/host-draft.zip",
+            new string('a', 64),
+            1024,
+            null,
+            ClientReleaseStatus.Draft,
+            "draft-signature",
+            "IIoT"));
+        hostRepository.Items.Add(new ClientHostRelease(
+            "stable",
+            "1.1.0",
+            "1.0.0",
+            "win-x64",
+            "net10.0",
+            "https://download.example.test/host-1.1.0.zip",
+            new string('b', 64),
+            2048,
+            "host release",
+            ClientReleaseStatus.Published,
+            "host-signature",
+            "IIoT"));
+
+        var pluginRepository = new InMemoryRepository<ClientPluginRelease>();
+        pluginRepository.Items.Add(new ClientPluginRelease(
+            "Injection",
+            "注液",
+            "注液工序插件",
+            "Droplets",
+            "#10b981",
+            "stable",
+            "2.0.0",
+            "1.0.0",
+            "1.0.0",
+            "2.0.0",
+            "win-x64",
+            "net10.0",
+            "https://download.example.test/plugins/injection-2.0.0.zip",
+            new string('c', 64),
+            4096,
+            "plugin release",
+            """[{"moduleId":"Core","version":"1.0.0"}]""",
+            ClientReleaseStatus.Published,
+            "plugin-signature",
+            "IIoT"));
+        pluginRepository.Items.Add(new ClientPluginRelease(
+            "Welding",
+            "焊接",
+            "焊接工序插件",
+            "Wrench",
+            "#f59e0b",
+            "stable",
+            "99.0.0",
+            "1.0.0",
+            "1.0.0",
+            "2.0.0",
+            "win-x64",
+            "net10.0",
+            "https://download.example.test/plugins/welding-draft.zip",
+            new string('d', 64),
+            8192,
+            null,
+            "[]",
+            ClientReleaseStatus.Draft,
+            "draft-plugin-signature",
+            "IIoT"));
+
+        var handler = new GetPublicClientDownloadsHandler(hostRepository, pluginRepository);
+
+        var result = await handler.Handle(
+            new GetPublicClientDownloadsQuery("stable", "win-x64"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(result.Value);
+        Assert.Equal("1.1.0", result.Value!.LatestHost?.Version);
+        Assert.Equal("https://download.example.test/host-1.1.0.zip", result.Value.LatestHost?.DownloadUrl);
+
+        var plugin = Assert.Single(result.Value.Plugins);
+        Assert.Equal("Injection", plugin.ModuleId);
+        Assert.Equal("注液", plugin.DisplayName);
+        Assert.Equal(4096, plugin.PackageSize);
+        Assert.Equal(System.Text.Json.JsonValueKind.Array, plugin.Dependencies.ValueKind);
+
+        var publicPluginJson = System.Text.Json.JsonSerializer.Serialize(plugin);
+        Assert.DoesNotContain("DownloadUrl", publicPluginJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Sha256", publicPluginJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Signature", publicPluginJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("https://download.example.test/plugins/injection-2.0.0.zip", publicPluginJson, StringComparison.Ordinal);
     }
 
     private sealed class StubDeviceIdentityQueryService(DeviceIdentitySnapshot? snapshot) : IDeviceIdentityQueryService

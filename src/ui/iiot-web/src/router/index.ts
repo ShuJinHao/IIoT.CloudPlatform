@@ -11,6 +11,12 @@ const routes: Array<RouteRecordRaw> = [
     meta: { requiresAuth: false }
   },
   {
+    path: '/downloads',
+    name: 'PublicDownloads',
+    component: () => import('../views/PublicDownloadCenter.vue'),
+    meta: { requiresAuth: false }
+  },
+  {
     path: '/',
     component: () => import('../layout/MainLayout.vue'),
     meta: { requiresAuth: true },
@@ -105,7 +111,7 @@ router.beforeEach((to) => {
   const authStore = useAuthStore();
 
   if (to.meta.requiresAuth === false) {
-    if (authStore.isAuthenticated) return { name: 'Dashboard' };
+    if (to.name === 'Login' && authStore.isAuthenticated) return { name: 'Dashboard' };
     return true;
   }
 

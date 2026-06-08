@@ -94,6 +94,35 @@ public sealed class AiReadBehaviorTests
     }
 
     [Fact]
+    public async Task RequestKindGuard_ShouldAllowPublicRequestWithoutAuthorization()
+    {
+        var behavior = new RequestKindGuardBehavior<PublicDownloadQuery, Result<bool>>(
+            new HttpContextAccessor { HttpContext = new DefaultHttpContext() });
+
+        var result = await behavior.Handle(
+            new PublicDownloadQuery(),
+            _ => Task.FromResult(Result.Success(true)),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+    }
+
+    [Fact]
+    public async Task RequestKindGuard_ShouldRejectPublicRequestWithHumanAuthorization()
+    {
+        var behavior = new RequestKindGuardBehavior<PublicWithHumanAuthorizationQuery, Result<bool>>(
+            new HttpContextAccessor { HttpContext = new DefaultHttpContext() });
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            behavior.Handle(
+                new PublicWithHumanAuthorizationQuery(),
+                _ => Task.FromResult(Result.Success(true)),
+                CancellationToken.None));
+
+        Assert.Contains(nameof(AuthorizeRequirementAttribute), exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AiReadAuthorization_ShouldAllowAiServiceAccountWithRequiredPermission()
     {
         var behavior = new AiReadAuthorizationBehavior<ValidAiReadQuery, Result<bool>>(
@@ -272,6 +301,11 @@ public sealed class AiReadBehaviorTests
     private sealed record AiReadWithAdminOnlyQuery() : IAiReadQuery<Result<bool>>;
 
     private sealed record UnprotectedAiReadQuery() : IAiReadQuery<Result<bool>>;
+
+    private sealed record PublicDownloadQuery() : IPublicQuery<Result<bool>>;
+
+    [AuthorizeRequirement("Device.Read")]
+    private sealed record PublicWithHumanAuthorizationQuery() : IPublicQuery<Result<bool>>;
 
     [AuthorizeAiRead(AiReadPermissions.Device)]
     private sealed record AuditedAiReadQuery() : IAiReadQuery<Result<AiReadListResponse<int>>>;

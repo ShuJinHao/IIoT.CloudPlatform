@@ -91,6 +91,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VITE_AICOPILOT_CHALLENGE_URL=${{ vars.VITE_AICOPILOT_CHALLENGE_URL || 'http://10.98.90.154:82/api/identity/cloud-oidc/challenge' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-

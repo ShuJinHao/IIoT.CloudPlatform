@@ -64,6 +64,53 @@ public sealed class CloudOidcProviderBehaviorTests
         Assert.Throws<InvalidOperationException>(() => options.Validate(environmentName));
     }
 
+    [Theory]
+    [InlineData("http://10.98.90.154:81", "http://10.98.90.154:82/api/identity/cloud-oidc/callback", "http://10.98.90.154:82/login")]
+    [InlineData("http://192.168.1.10:81", "http://192.168.1.11:82/api/identity/cloud-oidc/callback", "http://192.168.1.11:82/login")]
+    [InlineData("http://172.16.0.10:81", "http://172.31.255.11:82/api/identity/cloud-oidc/callback", "http://172.31.255.11:82/login")]
+    [InlineData("http://localhost:8080", "http://localhost:5178/api/identity/cloud-oidc/callback", "http://localhost:5178/login")]
+    public void OidcProviderOptions_Validate_ShouldAllowExplicitIntranetHttpOidc(
+        string issuer,
+        string redirectUri,
+        string postLogoutRedirectUri)
+    {
+        var options = CreateValidOidcProviderOptions();
+        options.Issuer = issuer;
+        options.AllowIntranetHttpOidc = true;
+        options.AicopilotRedirectUris = [redirectUri];
+        options.AicopilotPostLogoutRedirectUris = [postLogoutRedirectUri];
+
+        options.Validate("Production");
+
+        Assert.Equal("IIoT-OidcSession", options.GetEffectiveSessionCookieName());
+    }
+
+    [Theory]
+    [InlineData("http://cloud.example.com", "http://10.98.90.154:82/api/identity/cloud-oidc/callback", "http://10.98.90.154:82/login")]
+    [InlineData("http://10.98.90.154:81", "http://ai.example.com/api/identity/cloud-oidc/callback", "http://10.98.90.154:82/login")]
+    [InlineData("http://10.98.90.154:81", "http://10.98.90.154:82/api/identity/cloud-oidc/callback", "http://ai.example.com/login")]
+    public void OidcProviderOptions_Validate_ShouldRejectPublicHttpEvenWhenIntranetHttpOidcIsEnabled(
+        string issuer,
+        string redirectUri,
+        string postLogoutRedirectUri)
+    {
+        var options = CreateValidOidcProviderOptions();
+        options.Issuer = issuer;
+        options.AllowIntranetHttpOidc = true;
+        options.AicopilotRedirectUris = [redirectUri];
+        options.AicopilotPostLogoutRedirectUris = [postLogoutRedirectUri];
+
+        Assert.Throws<InvalidOperationException>(() => options.Validate("Production"));
+    }
+
+    [Fact]
+    public void OidcProviderOptions_GetEffectiveSessionCookieName_ShouldKeepHostPrefixWhenHttpsMode()
+    {
+        var options = CreateValidOidcProviderOptions();
+
+        Assert.Equal("__Host-IIoT-OidcSession", options.GetEffectiveSessionCookieName());
+    }
+
     [Fact]
     public void CloudOidcUserProfile_ShouldKeepClaimsContractMinimal()
     {

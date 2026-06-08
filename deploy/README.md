@@ -28,6 +28,8 @@ iiot-migration -> one-shot migration/bootstrap job
 - `/api/v1/human/*`：人工端 API。
 - `/api/v1/edge/*`：边端上传 API。
 - `/api/v1/bootstrap/*`：边端 bootstrap API。
+- `/api/v1/public/client-downloads/latest`：公开客户端下载目录 API，只暴露已发布通用宿主下载和插件版本 catalog。
+- `/downloads`：公开客户端下载中心页面，不要求登录。
 - `/edge-updates/*`：EdgeClient 自动更新包下载。
 
 正式 bootstrap 入口固定为：
@@ -64,6 +66,14 @@ Harbor 变量：
 - `OCI_REGISTRY_PASSWORD`：Harbor 登录密码或 robot account token。
 
 GitHub workflow `cloud-image` 可用于构建推送 Harbor，只要配置上述 OCI secrets。`cloud-deploy` 只适用于 CI 能 SSH 到服务器的环境；当前私有服务器默认不走它。
+
+`iiot-web` 是 Vite 静态构建，Cloud 左侧“打开助手”按钮需要在构建镜像时注入 AICopilot challenge URL：
+
+```text
+VITE_AICOPILOT_CHALLENGE_URL=http://10.98.90.154:82/api/identity/cloud-oidc/challenge
+```
+
+未注入时按钮会按设计置灰。
 
 ## 服务器部署目录
 
@@ -129,7 +139,40 @@ IIOT_WEB_IMAGE=harbor.example.com/iiot/iiot-web:sha-0123456789abcdef
 `PUBLIC_BASE_URL` 必须是 origin，不要以 `/` 结尾，例如：
 
 ```text
-PUBLIC_BASE_URL=http://10.0.0.15
+PUBLIC_BASE_URL=http://10.98.90.154:81
+```
+
+内网 HTTP OIDC 要显式打开，且 Cloud issuer 和 AICopilot callback 必须使用内网地址：
+
+```text
+ALLOW_INTRANET_HTTP_OIDC=true
+OIDC_PROVIDER_ISSUER=http://10.98.90.154:81
+AICOPILOT_OIDC_REDIRECT_URI=http://10.98.90.154:82/api/identity/cloud-oidc/callback
+AICOPILOT_OIDC_POST_LOGOUT_REDIRECT_URI=http://10.98.90.154:82/login
+OIDC_PROVIDER_CERTS_DIR=/srv/iiot-cloud/deploy/certs
+OIDC_PROVIDER_SIGNING_CERTIFICATE_PATH=/app/certs/cloud-oidc-signing.pfx
+OIDC_PROVIDER_SIGNING_CERTIFICATE_PASSWORD=
+VITE_AICOPILOT_CHALLENGE_URL=http://10.98.90.154:82/api/identity/cloud-oidc/challenge
+```
+
+`AICOPILOT_OIDC_REDIRECT_URI` 改动后必须让 `iiot-migration` 重新跑一次，重新 seed OIDC client，否则 Cloud 仍会使用旧回调地址。
+
+OIDC 签名证书是 Cloud 本地 token 签名证书，不是公网 HTTPS 证书，不需要购买。首次部署前在服务器生成一次并持久化：
+
+```sh
+sudo mkdir -p /srv/iiot-cloud/deploy/certs
+openssl req -x509 -newkey rsa:2048 \
+  -keyout /tmp/cloud-oidc-signing.key \
+  -out /tmp/cloud-oidc-signing.crt \
+  -days 3650 -nodes \
+  -subj "/CN=IIoT Cloud OIDC"
+openssl pkcs12 -export \
+  -out /srv/iiot-cloud/deploy/certs/cloud-oidc-signing.pfx \
+  -inkey /tmp/cloud-oidc-signing.key \
+  -in /tmp/cloud-oidc-signing.crt \
+  -passout pass:
+rm -f /tmp/cloud-oidc-signing.key /tmp/cloud-oidc-signing.crt
+sudo chmod 600 /srv/iiot-cloud/deploy/certs/cloud-oidc-signing.pfx
 ```
 
 ## 标准发布步骤
@@ -158,6 +201,10 @@ DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh 
 成功条件：
 
 - `GET /internal/healthz` 在服务器本机返回 `200`。
+- `GET /downloads` 返回 `200`。
+- `GET /api/v1/public/client-downloads/latest?channel=stable&targetRuntime=win-x64` 返回 `200`。
+- `GET /.well-known/openid-configuration` 返回 HTTP issuer。
+- Cloud 左侧“打开助手”按钮不置灰，点击后进入 AICopilot Cloud OIDC challenge。
 - `./scripts/post-deploy-check.sh` 返回 `0`。
 - `./scripts/ops-check.sh` 返回 `0`。
 - `deploy/releases/current-release.env` 指向当前 release。
