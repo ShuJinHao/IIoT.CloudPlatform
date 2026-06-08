@@ -27,6 +27,7 @@ public sealed partial class CloudProductionFlowTests
         root.GetProperty("authorization_endpoint").GetString().Should().EndWith("/connect/authorize");
         root.GetProperty("token_endpoint").GetString().Should().EndWith("/connect/token");
         root.GetProperty("userinfo_endpoint").GetString().Should().EndWith("/connect/userinfo");
+        root.GetProperty("jwks_uri").GetString().Should().EndWith("/.well-known/jwks");
         root.GetProperty("end_session_endpoint").GetString().Should().EndWith("/connect/logout");
         ReadStringArray(root, "response_types_supported").Should().Contain("code");
         ReadStringArray(root, "grant_types_supported").Should().Contain("authorization_code");

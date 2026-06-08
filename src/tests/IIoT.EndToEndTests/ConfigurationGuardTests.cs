@@ -794,6 +794,8 @@ public sealed class ConfigurationGuardTests
 
         gatewayAppSettingsSource.Should().Contain("\"oidc-discovery\"");
         gatewayAppSettingsSource.Should().Contain("\"Path\": \"/.well-known/openid-configuration\"");
+        gatewayAppSettingsSource.Should().Contain("\"oidc-jwks\"");
+        gatewayAppSettingsSource.Should().Contain("\"Path\": \"/.well-known/jwks\"");
         gatewayAppSettingsSource.Should().Contain("\"oidc-connect\"");
         gatewayAppSettingsSource.Should().Contain("\"Path\": \"/connect/{**catch-all}\"");
         gatewayAppSettingsSource.Should().Contain("\"ai-identity\"");
