@@ -14,7 +14,7 @@ namespace IIoT.ProductionService.Commands.Devices;
 
 [AuthorizeRequirement("Device.Create")]
 [AdminOnly]
-[DistributedLock("iiot:lock:device-create:{ProcessId}:{DeviceName}", TimeoutSeconds = 5)]
+[DistributedLock("iiot:lock:device-create:{DeviceName}", TimeoutSeconds = 5)]
 public record RegisterDeviceCommand(
     string DeviceName,
     Guid ProcessId
@@ -54,6 +54,9 @@ public class RegisterDeviceHandler(
 
         if (!processExists)
             return await FailAsync(request, "设备注册失败：指定工序不存在", cancellationToken);
+
+        if (await deviceReadQueryService.NameExistsAsync(deviceName, cancellationToken: cancellationToken))
+            return await FailAsync(request, "设备注册失败：设备名称已存在，请换一个名称", cancellationToken);
 
         var code = await GenerateUniqueCodeAsync(deviceReadQueryService, cancellationToken);
         if (code is null)

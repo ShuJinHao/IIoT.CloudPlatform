@@ -1,0 +1,421 @@
+<template>
+  <div class="binding-panel">
+    <div class="binding-intro">
+      <h3>客户端安装包下载</h3>
+      <p>
+        勾选这台机器要装的工序插件，给每个插件指定它的设备唯一码，
+        下载即得配置好的安装包，装上即用，无需现场再配。
+      </p>
+      <p class="binding-warn">
+        注意：下载会为所选设备生成新的启动密钥（旧的随之失效）。配置内含密钥，请妥善保管，并始终使用最新下载的文件。
+      </p>
+    </div>
+
+    <div class="binding-field">
+      <label>云端地址（可选）</label>
+      <UiInput
+        v-model:value="baseUrl"
+        size="small"
+        placeholder="留空则使用安装包内置地址"
+      />
+    </div>
+
+    <div v-if="plugins.length" class="plugin-list">
+      <div
+        v-for="plugin in plugins"
+        :key="plugin.moduleId"
+        class="plugin-item"
+        :class="{ 'is-checked': isChecked(plugin.moduleId) }"
+      >
+        <div class="plugin-head">
+          <UiCheckbox
+            :checked="isChecked(plugin.moduleId)"
+            @update:checked="toggle(plugin.moduleId)"
+          />
+          <span class="plugin-name" @click="toggle(plugin.moduleId)">{{ plugin.displayName }}</span>
+        </div>
+        <button
+          v-if="isChecked(plugin.moduleId)"
+          type="button"
+          class="device-pick"
+          :class="{ 'is-empty': !choiceOf(plugin.moduleId).deviceId }"
+          @click="openPicker(plugin.moduleId)"
+        >
+          <template v-if="choiceOf(plugin.moduleId).deviceId">
+            <strong>{{ choiceOf(plugin.moduleId).deviceName }}</strong>
+            <code>{{ choiceOf(plugin.moduleId).clientCode }}</code>
+          </template>
+          <span v-else>选择设备唯一码</span>
+        </button>
+      </div>
+    </div>
+    <p v-else class="binding-empty">暂无可用插件，请先在发布区登记插件版本。</p>
+
+    <div class="binding-actions">
+      <span v-if="validationHint" class="binding-hint">{{ validationHint }}</span>
+      <UiButton type="primary" :disabled="!canGenerate || generating" @click="generate">
+        <Download :size="15" />
+        {{ generating ? '生成中…' : '下载安装包' }}
+      </UiButton>
+    </div>
+
+    <UiModal v-model:show="showPicker" preset="card" title="选择设备唯一码" style="width: 640px;">
+      <div class="picker">
+        <UiInput v-model:value="pickerKeyword" size="small" placeholder="搜索设备名称或唯一码" clearable />
+        <div class="picker-list">
+          <p v-if="!devices.length" class="picker-empty">
+            暂无可选设备，请先在「设备管理」注册设备。
+          </p>
+          <p v-else-if="!filteredDevices.length" class="picker-empty">没有匹配的设备。</p>
+          <button
+            v-for="device in filteredDevices"
+            :key="device.id"
+            type="button"
+            class="picker-item"
+            :class="{ 'is-used': isDeviceUsed(device.id) }"
+            :disabled="isDeviceUsed(device.id)"
+            @click="selectDevice(device)"
+          >
+            <strong>{{ device.deviceName }}</strong>
+            <code>{{ device.code }}</code>
+            <span v-if="isDeviceUsed(device.id)" class="picker-used-tag">已被其它插件占用</span>
+          </button>
+        </div>
+      </div>
+      <template #footer>
+        <UiButton @click="showPicker = false">关闭</UiButton>
+      </template>
+    </UiModal>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref } from 'vue';
+import { Download } from 'lucide-vue-next';
+import UiButton from '../../components/ui/UiButton.vue';
+import UiCheckbox from '../../components/ui/UiCheckbox.vue';
+import UiInput from '../../components/ui/UiInput.vue';
+import UiModal from '../../components/ui/UiModal.vue';
+import { getScopedDeviceSelectApi, type DeviceSelectDto } from '../../api/device';
+import { generateEdgeBindingBundleApi, type ClientPluginReleaseDto } from '../../api/clientRelease';
+
+const props = defineProps<{
+  pluginReleases: ClientPluginReleaseDto[];
+}>();
+
+interface BindingChoice {
+  deviceId: string;
+  deviceName: string;
+  clientCode: string;
+}
+
+// key = moduleId（勾选即为启用），value = 绑定的设备
+const selections = reactive<Record<string, BindingChoice>>({});
+const baseUrl = ref('');
+const devices = ref<DeviceSelectDto[]>([]);
+const showPicker = ref(false);
+const pickerModuleId = ref('');
+const pickerKeyword = ref('');
+const generating = ref(false);
+
+// 可选插件清单：按 moduleId 去重
+const plugins = computed(() => {
+  const map = new Map<string, string>();
+  for (const plugin of props.pluginReleases) {
+    if (!map.has(plugin.moduleId)) {
+      map.set(plugin.moduleId, plugin.displayName || plugin.moduleId);
+    }
+  }
+  return Array.from(map, ([moduleId, displayName]) => ({ moduleId, displayName }));
+});
+
+const isChecked = (moduleId: string) => moduleId in selections;
+
+// 模板只读：勾选时返回真实（响应式）选择对象，未勾选时返回安全默认值
+const choiceOf = (moduleId: string): BindingChoice =>
+  selections[moduleId] ?? { deviceId: '', deviceName: '', clientCode: '' };
+
+const toggle = (moduleId: string) => {
+  if (moduleId in selections) {
+    delete selections[moduleId];
+  } else {
+    selections[moduleId] = { deviceId: '', deviceName: '', clientCode: '' };
+  }
+};
+
+const isDeviceUsed = (deviceId: string) => {
+  for (const [moduleId, choice] of Object.entries(selections)) {
+    if (moduleId !== pickerModuleId.value && choice.deviceId === deviceId) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const filteredDevices = computed(() => {
+  const keyword = pickerKeyword.value.trim().toLowerCase();
+  if (!keyword) return devices.value;
+  return devices.value.filter(
+    (device) =>
+      device.deviceName.toLowerCase().includes(keyword) ||
+      device.code.toLowerCase().includes(keyword),
+  );
+});
+
+const validationHint = computed(() => {
+  const entries = Object.values(selections);
+  if (entries.length === 0) return '请至少勾选一个插件';
+  if (entries.some((choice) => !choice.deviceId)) return '有插件未指定设备唯一码';
+  return '';
+});
+
+const canGenerate = computed(() => Object.keys(selections).length > 0 && !validationHint.value);
+
+const openPicker = (moduleId: string) => {
+  pickerModuleId.value = moduleId;
+  pickerKeyword.value = '';
+  showPicker.value = true;
+};
+
+const selectDevice = (device: DeviceSelectDto) => {
+  const choice = selections[pickerModuleId.value];
+  if (!choice) return;
+  choice.deviceId = device.id;
+  choice.deviceName = device.deviceName;
+  choice.clientCode = device.code;
+  showPicker.value = false;
+};
+
+const downloadJson = (filename: string, data: unknown) => {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+};
+
+const generate = async () => {
+  if (!canGenerate.value || generating.value) return;
+
+  // 生成会为所选设备轮换启动密钥，旧密钥立即失效。强制二次确认，避免误操作打挂在线设备。
+  const deviceList = Object.values(selections)
+    .map((choice) => `${choice.deviceName}（${choice.clientCode}）`)
+    .join('、');
+  const confirmed = window.confirm(
+    `将为以下设备轮换启动密钥并生成配置：\n${deviceList}\n\n` +
+      '注意：生成后这些设备的旧密钥立即失效，必须把新下载的安装包部署到对应设备；' +
+      '否则现场仍在运行的旧客户端会连不上云端。确认继续？',
+  );
+  if (!confirmed) return;
+
+  generating.value = true;
+  try {
+    const bundle = await generateEdgeBindingBundleApi({
+      selections: Object.entries(selections).map(([moduleId, choice]) => ({
+        moduleId,
+        deviceId: choice.deviceId,
+      })),
+      baseUrl: baseUrl.value.trim() || null,
+    });
+    downloadJson('iiot-binding.json', bundle);
+  } catch {
+    // 业务错误已由 http 层统一弹窗提示，这里只需复位状态
+  } finally {
+    generating.value = false;
+  }
+};
+
+onMounted(async () => {
+  try {
+    devices.value = await getScopedDeviceSelectApi();
+  } catch {
+    // 设备列表加载失败已由 http 层统一提示
+  }
+});
+</script>
+
+<style scoped>
+.binding-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.binding-intro h3 {
+  margin: 0 0 var(--space-1);
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-semibold);
+  color: var(--text-0);
+}
+
+.binding-intro p {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.binding-warn {
+  margin-top: var(--space-1) !important;
+  color: var(--text-1);
+  font-weight: var(--fw-medium);
+}
+
+.binding-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-width: 480px;
+}
+
+.binding-field label {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--text-1);
+}
+
+.plugin-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.plugin-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  transition: border-color 0.15s ease;
+}
+
+.plugin-item.is-checked {
+  border-color: var(--brand);
+}
+
+.plugin-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.plugin-name {
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
+  color: var(--text-0);
+  cursor: pointer;
+}
+
+.device-pick {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 240px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-3);
+  color: var(--text-0);
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.device-pick:hover {
+  border-color: var(--brand);
+}
+
+.device-pick.is-empty {
+  color: var(--text-2);
+}
+
+.device-pick code,
+.picker-item code {
+  padding: 2px 6px;
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  color: var(--brand);
+  font-size: var(--fs-xs);
+}
+
+.binding-empty {
+  margin: 0;
+  padding: 24px;
+  text-align: center;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+}
+
+.binding-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+.binding-hint {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 360px;
+  overflow: auto;
+}
+
+.picker-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  color: var(--text-0);
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.picker-item:hover:not(:disabled) {
+  border-color: var(--brand);
+}
+
+.picker-item.is-used {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.picker-used-tag {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+.picker-empty {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+</style>

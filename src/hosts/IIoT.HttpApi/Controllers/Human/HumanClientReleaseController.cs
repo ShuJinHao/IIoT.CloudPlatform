@@ -38,6 +38,14 @@ public sealed class HumanClientReleaseController : ApiControllerBase
             cancellationToken));
     }
 
+    [HttpPost("binding-bundle")]
+    public async Task<IActionResult> GenerateBindingBundle(
+        [FromBody] GenerateEdgeBindingBundleCommand command,
+        CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(command, cancellationToken));
+    }
+
     [HttpPost("host-releases")]
     public async Task<IActionResult> UpsertHostRelease(
         [FromBody] UpsertClientHostReleaseCommand command,

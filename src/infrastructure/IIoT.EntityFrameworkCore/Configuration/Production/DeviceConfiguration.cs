@@ -39,6 +39,10 @@ public class DeviceConfiguration : IEntityTypeConfiguration<Device>
             .IsUnique()
             .HasDatabaseName("ix_devices_client_code");
 
+        builder.HasIndex(d => d.DeviceName)
+            .IsUnique()
+            .HasDatabaseName("ix_devices_device_name");
+
         builder.HasIndex(d => d.ProcessId)
             .HasDatabaseName("ix_devices_process_id");
     }

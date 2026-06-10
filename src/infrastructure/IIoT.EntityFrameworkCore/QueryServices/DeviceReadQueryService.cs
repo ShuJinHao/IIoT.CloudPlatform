@@ -43,4 +43,22 @@ public sealed class DeviceReadQueryService(IIoTDbContext dbContext) : IDeviceRea
 
         return query.AnyAsync(cancellationToken);
     }
+
+    public Task<bool> NameExistsAsync(
+        string name,
+        Guid? excludingDeviceId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedName = name.Trim();
+        var query = dbContext.Devices
+            .AsNoTracking()
+            .Where(device => device.DeviceName == normalizedName);
+
+        if (excludingDeviceId.HasValue)
+        {
+            query = query.Where(device => device.Id != excludingDeviceId.Value);
+        }
+
+        return query.AnyAsync(cancellationToken);
+    }
 }

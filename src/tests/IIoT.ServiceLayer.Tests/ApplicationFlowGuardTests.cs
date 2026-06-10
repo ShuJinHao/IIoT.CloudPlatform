@@ -17,6 +17,7 @@ using IIoT.ProductionService.Commands.Recipes;
 using IIoT.ProductionService.Caching;
 using IIoT.ProductionService.PassStations;
 using IIoT.ProductionService.Profiles;
+using IIoT.ProductionService.Commands.ClientReleases;
 using IIoT.ProductionService.Queries.Capacities;
 using IIoT.ProductionService.Queries.Devices;
 using IIoT.ProductionService.Queries.DeviceLogs;
@@ -179,6 +180,162 @@ public sealed class ApplicationFlowGuardTests
         Assert.Contains(auditTrail.Entries, x =>
             x.OperationType == "Device.Register"
             && !x.Succeeded);
+    }
+
+    [Fact]
+    public async Task RegisterDeviceHandler_ShouldRejectDuplicateName()
+    {
+        var repository = new InMemoryRepository<Device>();
+        var processQueries = new StubProcessReadQueryService { Exists = true };
+        var deviceQueries = new StubDeviceReadQueryService { NameExists = true };
+        var auditTrail = new RecordingAuditTrailService();
+        var handler = new RegisterDeviceHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "admin-001",
+                Role = SystemRoles.Admin,
+                IsAuthenticated = true
+            },
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            repository,
+            processQueries,
+            deviceQueries,
+            auditTrail);
+
+        var result = await handler.Handle(
+            new RegisterDeviceCommand("Injection-01", Guid.NewGuid()),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.Errors);
+        Assert.Contains(result.Errors, error => error.Contains("名称已存在", StringComparison.Ordinal));
+        Assert.Null(repository.AddedEntity);
+        Assert.Contains(auditTrail.Entries, x =>
+            x.OperationType == "Device.Register"
+            && x.TargetType == "Device"
+            && !x.Succeeded);
+    }
+
+    [Fact]
+    public async Task GenerateEdgeBindingBundleHandler_ShouldRotateSecretsAndEmitBindings()
+    {
+        var repository = new InMemoryRepository<Device>();
+        var homogenization = new Device("匀浆线1#", "DEV-AAAAAAAAAA", Guid.NewGuid());
+        var mixing = new Device("混合线2#", "DEV-BBBBBBBBBB", Guid.NewGuid());
+        repository.Add(homogenization);
+        repository.Add(mixing);
+
+        var handler = new GenerateEdgeBindingBundleHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "admin-001",
+                Role = SystemRoles.Admin,
+                IsAuthenticated = true
+            },
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            repository,
+            new RecordingCacheService(),
+            new RecordingAuditTrailService());
+
+        var result = await handler.Handle(
+            new GenerateEdgeBindingBundleCommand(
+                [
+                    new EdgeBindingSelection("Homogenization", homogenization.Id),
+                    new EdgeBindingSelection("Mixing", mixing.Id)
+                ],
+                "http://cloud.local"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var bundle = result.Value!;
+        Assert.Equal(1, bundle.SchemaVersion);
+        Assert.Equal("http://cloud.local", bundle.BaseUrl);
+        Assert.Equal(2, bundle.Bindings.Count);
+
+        var homogBinding = bundle.Bindings.Single(b => b.ModuleId == "Homogenization");
+        Assert.Equal("DEV-AAAAAAAAAA", homogBinding.ClientCode);
+        Assert.Equal("匀浆线1#", homogBinding.DeviceName);
+        // 下载时已轮换出启动密钥，且与设备保存的哈希匹配
+        Assert.False(string.IsNullOrWhiteSpace(homogBinding.BootstrapSecret));
+        Assert.True(BootstrapSecretHasher.Verify(homogBinding.BootstrapSecret, homogenization.BootstrapSecretHash!));
+
+        var mixingBinding = bundle.Bindings.Single(b => b.ModuleId == "Mixing");
+        Assert.Equal("DEV-BBBBBBBBBB", mixingBinding.ClientCode);
+        Assert.True(BootstrapSecretHasher.Verify(mixingBinding.BootstrapSecret, mixing.BootstrapSecretHash!));
+    }
+
+    [Fact]
+    public async Task GenerateEdgeBindingBundleHandler_ShouldRejectDuplicateModule()
+    {
+        var repository = new InMemoryRepository<Device>();
+        var deviceA = new Device("匀浆线1#", "DEV-AAAAAAAAAA", Guid.NewGuid());
+        var deviceB = new Device("匀浆线2#", "DEV-BBBBBBBBBB", Guid.NewGuid());
+        repository.Add(deviceA);
+        repository.Add(deviceB);
+
+        var handler = new GenerateEdgeBindingBundleHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "admin-001",
+                Role = SystemRoles.Admin,
+                IsAuthenticated = true
+            },
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            repository,
+            new RecordingCacheService(),
+            new RecordingAuditTrailService());
+
+        var result = await handler.Handle(
+            new GenerateEdgeBindingBundleCommand(
+                [
+                    new EdgeBindingSelection("Homogenization", deviceA.Id),
+                    new EdgeBindingSelection("Homogenization", deviceB.Id)
+                ]),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.Errors);
+        Assert.Contains(result.Errors, error => error.Contains("重复", StringComparison.Ordinal));
+        // 校验失败时不得轮换任何设备密钥
+        Assert.Null(deviceA.BootstrapSecretHash);
+        Assert.Null(deviceB.BootstrapSecretHash);
+    }
+
+    [Fact]
+    public async Task GenerateEdgeBindingBundleHandler_ShouldRejectNonAdmin()
+    {
+        var repository = new InMemoryRepository<Device>();
+        var device = new Device("匀浆线1#", "DEV-AAAAAAAAAA", Guid.NewGuid());
+        repository.Add(device);
+
+        var handler = new GenerateEdgeBindingBundleHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "operator-001",
+                Role = "Operator",
+                IsAuthenticated = true
+            },
+            new StubCurrentUserDeviceAccessService { IsAdministrator = false },
+            repository,
+            new RecordingCacheService(),
+            new RecordingAuditTrailService());
+
+        var result = await handler.Handle(
+            new GenerateEdgeBindingBundleCommand(
+                [
+                    new EdgeBindingSelection("Homogenization", device.Id)
+                ]),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.Errors);
+        Assert.Contains(result.Errors, error => error.Contains("管理员", StringComparison.Ordinal));
+        // 非管理员被拒：设备密钥未被轮换
+        Assert.Null(device.BootstrapSecretHash);
     }
 
     [Fact]

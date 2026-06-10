@@ -1,8 +1,9 @@
 <template>
   <NiondDataPage
+    class="release-page"
     page-key="clientReleases"
     title="客户端下载中心"
-    subtitle="维护通用宿主、工序插件 catalog，并查看设备当前版本与最新版本差异"
+    subtitle="查看宿主与插件版本，下载并配置客户端安装包"
   >
     <template #actions>
       <UiButton v-if="canManage" type="primary" size="small" @click="openHostModal">
@@ -29,28 +30,17 @@
               下载中心
             </button>
             <button
+              v-if="canManage"
               class="release-tab"
-              :class="{ 'is-active': activeView === 'inventory' }"
+              :class="{ 'is-active': activeView === 'binding' }"
               type="button"
-              @click="activeView = 'inventory'"
+              @click="activeView = 'binding'"
             >
-              <MonitorCheck :size="16" />
-              版本盘点
+              <Boxes :size="16" />
+              首装下载
             </button>
           </div>
           <div class="release-filters">
-            <UiInput v-model:value="channel" size="small" placeholder="channel" @keyup.enter="refresh" />
-            <UiInput v-model:value="targetRuntime" size="small" placeholder="target runtime" @keyup.enter="refresh" />
-            <UiInput
-              v-if="activeView === 'inventory'"
-              v-model:value="keyword"
-              size="small"
-              placeholder="搜索设备名称或 Code"
-              clearable
-              @keyup.enter="refresh"
-              @clear="refresh"
-            />
-            <UiCheckbox v-if="activeView === 'catalog'" v-model:checked="onlyPublished">只看已发布</UiCheckbox>
             <UiButton size="small" secondary @click="refresh">
               <RefreshCw :size="15" />
               刷新
@@ -60,35 +50,12 @@
       </NiondToolbar>
     </template>
 
-    <div class="release-metrics">
-      <div class="metric-card">
-        <span class="metric-card__label">最新宿主</span>
-        <strong>{{ catalog?.latestHost?.version || '-' }}</strong>
-        <small>{{ catalog?.latestHost?.hostApiVersion || 'hostApiVersion -' }}</small>
-      </div>
-      <div class="metric-card">
-        <span class="metric-card__label">宿主版本</span>
-        <strong>{{ catalog?.hostReleases.length ?? 0 }}</strong>
-        <small>{{ channelDisplay }} / {{ runtimeDisplay }}</small>
-      </div>
-      <div class="metric-card">
-        <span class="metric-card__label">插件版本</span>
-        <strong>{{ catalog?.pluginReleases.length ?? 0 }}</strong>
-        <small>按 moduleId 维护</small>
-      </div>
-      <div class="metric-card">
-        <span class="metric-card__label">有更新设备</span>
-        <strong>{{ updateDeviceCount }}</strong>
-        <small>{{ inventory.length }} 台已纳入盘点</small>
-      </div>
-    </div>
-
     <div v-if="activeView === 'catalog'" class="release-stack">
       <NiondTableCard>
         <div class="table-heading">
           <div>
             <h2>通用宿主</h2>
-            <p>Velopack 宿主包版本与下载地址</p>
+            <p>宿主各版本与下载</p>
           </div>
         </div>
         <UiDataTable
@@ -96,26 +63,51 @@
           :data="catalog?.hostReleases ?? []"
           :loading="loadingCatalog"
           :row-key="(row: ClientHostReleaseDto) => row.id"
-        />
+        >
+          <template #empty>
+            <EmptyState title="暂无宿主数据" description="当前条件下未找到任何通用宿主版本，请登记新版本。" />
+          </template>
+        </UiDataTable>
       </NiondTableCard>
 
       <NiondTableCard>
         <div class="table-heading">
           <div>
             <h2>工序插件</h2>
-            <p>外部插件目录消费的云端 catalog 条目</p>
+            <p>按工序分类，每个工序下是它的各个版本</p>
           </div>
         </div>
-        <UiDataTable
-          :columns="pluginColumns"
-          :data="catalog?.pluginReleases ?? []"
-          :loading="loadingCatalog"
-          :row-key="(row: ClientPluginReleaseDto) => row.id"
+        <div v-if="pluginGroups.length" class="plugin-groups">
+          <div v-for="group in pluginGroups" :key="group.moduleId" class="plugin-group">
+            <div class="plugin-group__head">
+              <strong>{{ group.displayName }}</strong>
+              <span>{{ group.moduleId }}</span>
+            </div>
+            <div v-for="ver in group.versions" :key="ver.id" class="plugin-version-row">
+              <span class="pv-version">{{ ver.version }}</span>
+              <UiTag :type="statusTone(ver.status)" size="small" :bordered="false">
+                {{ statusText(ver.status) }}
+              </UiTag>
+              <span class="pv-meta">{{ formatSize(ver.packageSize) }}</span>
+              <span class="pv-meta">{{ formatDate(ver.publishedAtUtc) }}</span>
+              <span class="pv-note">{{ ver.description || ver.releaseNotes || '-' }}</span>
+              <UiButton size="tiny" secondary type="primary" @click="openUrl(ver.downloadUrl)">
+                <ExternalLink :size="13" />
+                下载
+              </UiButton>
+            </div>
+          </div>
+        </div>
+        <EmptyState
+          v-else
+          title="暂无插件"
+          description="还没有登记任何工序插件版本。"
+          style="padding: 32px 24px"
         />
       </NiondTableCard>
     </div>
 
-    <NiondTableCard v-else>
+    <NiondTableCard v-else-if="activeView === 'inventory'">
       <div class="table-heading">
         <div>
           <h2>设备版本盘点</h2>
@@ -127,7 +119,15 @@
         :data="inventory"
         :loading="loadingInventory"
         :row-key="(row: DeviceClientVersionInventoryDto) => row.deviceId"
-      />
+      >
+        <template #empty>
+          <EmptyState title="暂无盘点数据" description="未找到匹配的设备版本上报数据。" />
+        </template>
+      </UiDataTable>
+    </NiondTableCard>
+
+    <NiondTableCard v-else-if="activeView === 'binding'">
+      <EdgeBindingDownloadPanel :plugin-releases="catalog?.pluginReleases ?? []" />
     </NiondTableCard>
 
     <UiDrawer v-model:show="showPluginDrawer" :width="520" placement="right">
@@ -216,6 +216,7 @@
 <script setup lang="ts">
 import { computed, h, onMounted, reactive, ref, watch } from 'vue';
 import {
+  Boxes,
   CloudDownload,
   Copy,
   ExternalLink,
@@ -242,6 +243,7 @@ import NiondDataPage from '../../components/layout/NiondDataPage.vue';
 import NiondTableCard from '../../components/layout/NiondTableCard.vue';
 import NiondToolbar from '../../components/layout/NiondToolbar.vue';
 import EmptyState from '../../components/states/EmptyState.vue';
+import EdgeBindingDownloadPanel from './EdgeBindingDownloadPanel.vue';
 import UiButton from '../../components/ui/UiButton.vue';
 import UiCheckbox from '../../components/ui/UiCheckbox.vue';
 import UiDataTable from '../../components/ui/UiDataTable.vue';
@@ -253,7 +255,7 @@ import UiSelect from '../../components/ui/UiSelect.vue';
 import UiTag from '../../components/ui/UiTag.vue';
 import type { UiDataTableColumn } from '../../components/ui/types';
 
-type ViewMode = 'catalog' | 'inventory';
+type ViewMode = 'catalog' | 'inventory' | 'binding';
 type TagTone = 'default' | 'primary' | 'info' | 'success' | 'warning' | 'error';
 type HostReleaseForm = Omit<UpsertClientHostReleasePayload, 'packageSize'> & { packageSize: string };
 type PluginReleaseForm = Omit<UpsertClientPluginReleasePayload, 'packageSize'> & { packageSize: string };
@@ -500,51 +502,61 @@ const formatDate = (value?: string | null) => {
   return new Date(value).toLocaleString();
 };
 
+// 工序插件按工序(moduleId)分类，每个工序下挂它的各个版本
+const pluginGroups = computed(() => {
+  const groups = new Map<string, { moduleId: string; displayName: string; versions: ClientPluginReleaseDto[] }>();
+  for (const plugin of catalog.value?.pluginReleases ?? []) {
+    let group = groups.get(plugin.moduleId);
+    if (!group) {
+      group = { moduleId: plugin.moduleId, displayName: plugin.displayName || plugin.moduleId, versions: [] };
+      groups.set(plugin.moduleId, group);
+    }
+    group.versions.push(plugin);
+  }
+  return Array.from(groups.values());
+});
+
 const hostColumns: UiDataTableColumn<ClientHostReleaseDto>[] = [
-  { title: '版本', key: 'version', minWidth: 120, render: (row) => h('strong', row.version) },
-  { title: 'Host API', key: 'hostApiVersion', minWidth: 120 },
-  { title: 'Runtime', key: 'targetRuntime', minWidth: 110 },
+  { title: '版本', key: 'version', minWidth: 110, render: (row) => h('strong', row.version) },
   {
     title: '状态',
     key: 'status',
-    width: 110,
+    width: 100,
     render: (row) => h(UiTag, { type: statusTone(row.status), size: 'small', bordered: false }, () => statusText(row.status)),
   },
   { title: '大小', key: 'packageSize', width: 110, render: (row) => h('span', formatSize(row.packageSize)) },
-  { title: '发布时间', key: 'publishedAtUtc', minWidth: 180, render: (row) => h('span', formatDate(row.publishedAtUtc)) },
+  { title: '发布时间', key: 'publishedAtUtc', minWidth: 170, render: (row) => h('span', formatDate(row.publishedAtUtc)) },
+  { title: '备注', key: 'releaseNotes', minWidth: 160, render: (row) => h('span', row.releaseNotes || '-') },
   {
     title: '操作',
     key: 'actions',
-    width: 160,
+    width: 110,
     align: 'right',
     render: (row) => h('div', { class: 'row-actions' }, [
       h(UiButton, { size: 'tiny', secondary: true, type: 'primary', onClick: () => openUrl(row.downloadUrl) }, () => [h(ExternalLink, { size: 13 }), '下载']),
-      h(UiButton, { size: 'tiny', quaternary: true, type: 'info', onClick: () => copyText(row.sha256) }, () => [h(Copy, { size: 13 }), 'SHA']),
     ]),
   },
 ];
 
 const pluginColumns: UiDataTableColumn<ClientPluginReleaseDto>[] = [
   { title: '插件', key: 'moduleId', minWidth: 190, render: (row) => h('div', { class: 'plugin-cell' }, [h('strong', row.displayName), h('span', row.moduleId)]) },
-  { title: '版本', key: 'version', width: 110 },
-  { title: 'Host API', key: 'hostApiVersion', width: 110 },
-  { title: '宿主窗口', key: 'minHostVersion', minWidth: 160, render: (row) => h('span', `${row.minHostVersion} - ${row.maxHostVersion}`) },
-  { title: 'Runtime', key: 'targetRuntime', width: 110 },
+  { title: '版本', key: 'version', width: 100 },
   {
     title: '状态',
     key: 'status',
-    width: 110,
+    width: 100,
     render: (row) => h(UiTag, { type: statusTone(row.status), size: 'small', bordered: false }, () => statusText(row.status)),
   },
   { title: '大小', key: 'packageSize', width: 110, render: (row) => h('span', formatSize(row.packageSize)) },
+  { title: '发布时间', key: 'publishedAtUtc', minWidth: 170, render: (row) => h('span', formatDate(row.publishedAtUtc)) },
+  { title: '备注', key: 'description', minWidth: 160, render: (row) => h('span', row.description || row.releaseNotes || '-') },
   {
     title: '操作',
     key: 'actions',
-    width: 160,
+    width: 110,
     align: 'right',
     render: (row) => h('div', { class: 'row-actions' }, [
       h(UiButton, { size: 'tiny', secondary: true, type: 'primary', onClick: () => openUrl(row.downloadUrl) }, () => [h(ExternalLink, { size: 13 }), '下载']),
-      h(UiButton, { size: 'tiny', quaternary: true, type: 'info', onClick: () => copyText(row.sha256) }, () => [h(Copy, { size: 13 }), 'SHA']),
     ]),
   },
 ];
@@ -567,11 +579,16 @@ const inventoryColumns: UiDataTableColumn<DeviceClientVersionInventoryDto>[] = [
 </script>
 
 <style scoped>
+.release-page {
+  font-family: var(--font-sans);
+  color: var(--text-0);
+}
+
 .release-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--space-4);
   flex-wrap: wrap;
 }
 
@@ -579,28 +596,28 @@ const inventoryColumns: UiDataTableColumn<DeviceClientVersionInventoryDto>[] = [
 .release-filters {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 
 .release-tab {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   height: 36px;
   border: 0;
-  border-radius: 12px;
-  padding: 0 12px;
+  border-radius: var(--radius-md);
+  padding: 0 var(--space-3);
   background: transparent;
-  color: #596273;
-  font-size: 13px;
-  font-weight: 900;
+  color: var(--text-1);
+  font-size: var(--fs-base);
+  font-weight: var(--fw-semibold);
   cursor: pointer;
 }
 
 .release-tab.is-active {
-  background: #111827;
-  color: #fff;
+  background: var(--bg-3);
+  color: var(--text-0);
 }
 
 .release-filters :deep(.ui-input),
@@ -611,60 +628,132 @@ const inventoryColumns: UiDataTableColumn<DeviceClientVersionInventoryDto>[] = [
 .release-metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
+  gap: var(--space-3);
 }
 
 .metric-card {
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 18px;
-  background: #fff;
-  padding: 16px;
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  padding: var(--space-4);
   box-shadow: var(--shadow-sm);
 }
 
 .metric-card__label,
 .metric-card small {
   display: block;
-  color: #7b8492;
-  font-size: 12px;
-  font-weight: 800;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
 }
 
 .metric-card strong {
   display: block;
-  margin: 6px 0;
-  color: #111827;
-  font-size: 28px;
-  font-weight: 950;
+  margin: var(--space-1) 0;
+  color: var(--text-0);
+  font-size: var(--fs-3xl);
+  font-weight: var(--fw-display);
   line-height: 1.1;
+}
+
+
+.metric-card strong.is-empty {
+  color: var(--text-2);
+}
+
+.metric-card small.empty-hint {
+  color: var(--brand);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+.metric-card small.empty-hint:hover {
+  color: var(--brand-hover);
 }
 
 .release-stack {
   display: grid;
-  gap: 18px;
+  gap: var(--space-4);
 }
 
 .table-heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 14px;
+  gap: var(--space-4);
+  padding: 22px 24px 0;
+  margin-bottom: var(--space-3);
 }
 
 .table-heading h2 {
   margin: 0;
-  color: #111827;
-  font-size: 17px;
-  font-weight: 950;
+  color: var(--text-0);
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-strong);
 }
 
 .table-heading p {
-  margin: 5px 0 0;
-  color: #7b8492;
-  font-size: 12px;
-  font-weight: 700;
+  margin: var(--space-1) 0 0;
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.plugin-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: 0 24px 22px;
+}
+
+.plugin-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.plugin-group__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 10px 16px;
+  background: var(--bg-2);
+}
+
+.plugin-group__head strong {
+  color: var(--text-0);
+  font-size: var(--fs-base);
+  font-weight: var(--fw-semibold);
+}
+
+.plugin-group__head span {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.plugin-version-row {
+  display: grid;
+  grid-template-columns: 80px 80px 90px 170px 1fr 92px;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-sm);
+  color: var(--text-1);
+}
+
+.pv-version {
+  font-weight: var(--fw-semibold);
+  color: var(--text-0);
+}
+
+.pv-note {
+  overflow: hidden;
+  color: var(--text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 :deep(.plugin-cell),
@@ -675,34 +764,34 @@ const inventoryColumns: UiDataTableColumn<DeviceClientVersionInventoryDto>[] = [
 
 :deep(.plugin-cell strong),
 :deep(.device-cell strong) {
-  color: #111827;
-  font-weight: 900;
+  color: var(--text-0);
+  font-weight: var(--fw-semibold);
 }
 
 :deep(.plugin-cell span),
 :deep(.device-cell code) {
-  color: #7b8492;
-  font-size: 12px;
-  font-weight: 800;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
 }
 
 :deep(.issue-text) {
-  color: #c24141;
-  font-weight: 800;
+  color: var(--error);
+  font-weight: var(--fw-medium);
 }
 
 .release-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: var(--space-3);
 }
 
 .release-form label {
   display: grid;
-  gap: 7px;
-  color: #596273;
-  font-size: 12px;
-  font-weight: 900;
+  gap: var(--space-2);
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
 }
 
 .release-form .is-wide {
@@ -712,76 +801,76 @@ const inventoryColumns: UiDataTableColumn<DeviceClientVersionInventoryDto>[] = [
 .modal-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
+  gap: var(--space-2);
 }
 
 .drawer-stack {
   display: grid;
-  gap: 14px;
+  gap: var(--space-3);
 }
 
 .drawer-summary,
 .plugin-version-card {
   border: 1px solid var(--border);
-  border-radius: 16px;
-  background: #fff;
-  padding: 14px;
+  border-radius: var(--radius-md);
+  background: var(--card);
+  padding: var(--space-3);
 }
 
 .drawer-summary {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .drawer-summary code {
-  color: #7b8492;
-  font-size: 12px;
-  font-weight: 800;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
 }
 
 .plugin-version-card {
   display: grid;
-  gap: 10px;
+  gap: var(--space-2);
 }
 
 .plugin-version-card > div:first-child {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .plugin-version-card span {
-  color: #7b8492;
-  font-size: 12px;
-  font-weight: 800;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
 }
 
 .plugin-version-card dl {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: var(--space-2);
   margin: 0;
 }
 
 .plugin-version-card dt {
-  color: #7b8492;
-  font-size: 11px;
-  font-weight: 800;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
 }
 
 .plugin-version-card dd {
   margin: 2px 0 0;
-  color: #111827;
-  font-size: 13px;
-  font-weight: 900;
+  color: var(--text-0);
+  font-size: var(--fs-base);
+  font-weight: var(--fw-semibold);
 }
 
 .plugin-version-card p {
   margin: 0;
-  color: #c24141;
-  font-size: 12px;
-  font-weight: 800;
+  color: var(--error);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
   line-height: 1.5;
 }
 

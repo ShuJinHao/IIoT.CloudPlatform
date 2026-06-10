@@ -1,3 +1,5 @@
+// @ts-ignore
+import '@fontsource-variable/inter/index.css';
 import './styles/tokens.css';
 import './styles/global.css';
 import { createApp } from 'vue';
