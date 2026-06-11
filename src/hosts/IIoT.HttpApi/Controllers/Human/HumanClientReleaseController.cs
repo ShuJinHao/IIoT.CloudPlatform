@@ -46,6 +46,21 @@ public sealed class HumanClientReleaseController : ApiControllerBase
         return ReturnResult(await Sender.Send(command, cancellationToken));
     }
 
+    [HttpPost("installer-package")]
+    public async Task<IActionResult> GenerateInstallerPackage(
+        [FromBody] GenerateEdgeInstallerPackageCommand command,
+        CancellationToken cancellationToken)
+    {
+        var result = await Sender.Send(command, cancellationToken);
+        if (!result.IsSuccess)
+        {
+            return ReturnResult(result);
+        }
+
+        Response.Headers.CacheControl = "no-store";
+        return File(result.Value!.Content, result.Value.ContentType, result.Value.FileName);
+    }
+
     [HttpPost("host-releases")]
     public async Task<IActionResult> UpsertHostRelease(
         [FromBody] UpsertClientHostReleaseCommand command,

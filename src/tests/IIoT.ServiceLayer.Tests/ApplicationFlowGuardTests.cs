@@ -1,7 +1,11 @@
 using AutoMapper;
+using System.Buffers.Binary;
+using System.IO.Compression;
+using System.Text;
 using System.Text.Json;
 using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.MasterData.Aggregates.MfgProcesses;
+using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.Devices.Events;
 using IIoT.Core.Production.Aggregates.Recipes;
@@ -15,6 +19,7 @@ using IIoT.ProductionService.Commands.Devices;
 using IIoT.ProductionService.Commands.PassStations;
 using IIoT.ProductionService.Commands.Recipes;
 using IIoT.ProductionService.Caching;
+using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.PassStations;
 using IIoT.ProductionService.Profiles;
 using IIoT.ProductionService.Commands.ClientReleases;
@@ -336,6 +341,126 @@ public sealed class ApplicationFlowGuardTests
         Assert.Contains(result.Errors, error => error.Contains("管理员", StringComparison.Ordinal));
         // 非管理员被拒：设备密钥未被轮换
         Assert.Null(device.BootstrapSecretHash);
+    }
+
+    [Fact]
+    public async Task GenerateEdgeInstallerPackageHandler_ShouldFailBeforeRotatingSecret_WhenArtifactMissing()
+    {
+        var oldSecret = BootstrapSecretGenerator.Generate();
+        var device = new Device("匀浆线1#", "DEV-AAAAAAAAAA", Guid.NewGuid());
+        device.SetBootstrapSecretHash(BootstrapSecretHasher.Hash(oldSecret));
+        var oldHash = device.BootstrapSecretHash;
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.Add(device);
+        var hostRepository = new InMemoryRepository<ClientHostRelease>
+        {
+            SingleOrDefaultResult = CreatePublishedHostRelease()
+        };
+
+        var artifactRoot = Path.Combine(Path.GetTempPath(), $"iiot-missing-installer-{Guid.NewGuid():N}");
+        try
+        {
+            var handler = CreateInstallerPackageHandler(
+                deviceRepository,
+                hostRepository,
+                new InMemoryRepository<ClientPluginRelease>(),
+                artifactRoot,
+                new RecordingCacheService(),
+                new RecordingAuditTrailService());
+
+            var result = await handler.Handle(
+                new GenerateEdgeInstallerPackageCommand(
+                    [new EdgeBindingSelection("Homogenization", device.Id)],
+                    HostVersion: "1.2.0"),
+                CancellationToken.None);
+
+            Assert.False(result.IsSuccess);
+            Assert.NotNull(result.Errors);
+            Assert.Contains(result.Errors, error => error.Contains("安装素材不存在", StringComparison.Ordinal));
+            Assert.Equal(oldHash, device.BootstrapSecretHash);
+            Assert.True(BootstrapSecretHasher.Verify(oldSecret, device.BootstrapSecretHash!));
+            Assert.Empty(deviceRepository.UpdatedEntities);
+        }
+        finally
+        {
+            if (Directory.Exists(artifactRoot))
+            {
+                Directory.Delete(artifactRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GenerateEdgeInstallerPackageHandler_ShouldAppendSelectedRuntimeAndBindingPayload()
+    {
+        var device = new Device("匀浆线1#", "DEV-AAAAAAAAAA", Guid.NewGuid());
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.Add(device);
+        var hostRepository = new InMemoryRepository<ClientHostRelease>
+        {
+            SingleOrDefaultResult = CreatePublishedHostRelease()
+        };
+        var pluginRepository = new InMemoryRepository<ClientPluginRelease>
+        {
+            SingleOrDefaultResult = CreatePublishedPluginRelease()
+        };
+        var cache = new RecordingCacheService();
+        var auditTrail = new RecordingAuditTrailService();
+        var artifactRoot = CreateInstallerArtifactFixture("stable", "1.2.0");
+
+        try
+        {
+            var handler = CreateInstallerPackageHandler(
+                deviceRepository,
+                hostRepository,
+                pluginRepository,
+                artifactRoot,
+                cache,
+                auditTrail);
+
+            var result = await handler.Handle(
+                new GenerateEdgeInstallerPackageCommand(
+                    [new EdgeBindingSelection("Homogenization", device.Id)],
+                    HostVersion: "1.2.0",
+                    BaseUrl: "http://cloud.local"),
+                CancellationToken.None);
+
+            Assert.True(result.IsSuccess);
+            var package = result.Value!;
+            Assert.EndsWith(".exe", package.FileName, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("application/vnd.microsoft.portable-executable", package.ContentType);
+            Assert.Equal((byte)'M', package.Content[0]);
+            Assert.Equal((byte)'Z', package.Content[1]);
+
+            var payload = ReadInstallerPayload(package.Content);
+            using var archive = new ZipArchive(new MemoryStream(payload), ZipArchiveMode.Read);
+            Assert.NotNull(archive.GetEntry("launcher/IIoT.Edge.Launcher.dll"));
+            Assert.NotNull(archive.GetEntry("launcher/iiot-binding.json"));
+            Assert.NotNull(archive.GetEntry("homogenization/IIoT.Edge.Shell.dll"));
+            Assert.NotNull(archive.GetEntry("homogenization/Modules/Homogenization/plugin.json"));
+            Assert.Null(archive.GetEntry("welding/IIoT.Edge.Shell.dll"));
+
+            var bindingJson = ReadZipEntryText(archive, "launcher/iiot-binding.json");
+            using var binding = JsonDocument.Parse(bindingJson);
+            var bindingItem = binding.RootElement.GetProperty("bindings")[0];
+            var bootstrapSecret = bindingItem.GetProperty("bootstrapSecret").GetString();
+            Assert.Equal("http://cloud.local", binding.RootElement.GetProperty("baseUrl").GetString());
+            Assert.Equal("Homogenization", bindingItem.GetProperty("moduleId").GetString());
+            Assert.Equal(device.Code, bindingItem.GetProperty("clientCode").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(bootstrapSecret));
+            Assert.True(BootstrapSecretHasher.Verify(bootstrapSecret!, device.BootstrapSecretHash!));
+            Assert.Contains(CacheKeys.DeviceCode(device.Code), cache.RemovedKeys);
+            Assert.DoesNotContain(auditTrail.Entries, entry =>
+                entry.Summary.Contains(bootstrapSecret!, StringComparison.Ordinal)
+                || (entry.FailureReason?.Contains(bootstrapSecret!, StringComparison.Ordinal) ?? false));
+        }
+        finally
+        {
+            if (Directory.Exists(artifactRoot))
+            {
+                Directory.Delete(artifactRoot, recursive: true);
+            }
+        }
     }
 
     [Fact]
@@ -2174,6 +2299,155 @@ public sealed class ApplicationFlowGuardTests
     {
         using var document = JsonDocument.Parse(json);
         return document.RootElement.Clone();
+    }
+
+    private static GenerateEdgeInstallerPackageHandler CreateInstallerPackageHandler(
+        InMemoryRepository<Device> deviceRepository,
+        InMemoryRepository<ClientHostRelease> hostRepository,
+        InMemoryRepository<ClientPluginRelease> pluginRepository,
+        string artifactRoot,
+        RecordingCacheService cache,
+        RecordingAuditTrailService auditTrail)
+    {
+        return new GenerateEdgeInstallerPackageHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "admin-001",
+                Role = SystemRoles.Admin,
+                IsAuthenticated = true
+            },
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            deviceRepository,
+            hostRepository,
+            pluginRepository,
+            cache,
+            auditTrail,
+            Options.Create(new EdgeInstallerArtifactOptions { RootPath = artifactRoot }));
+    }
+
+    private static ClientHostRelease CreatePublishedHostRelease()
+    {
+        return new ClientHostRelease(
+            "stable",
+            "1.2.0",
+            "1.0.0",
+            "win-x64",
+            "net10.0",
+            "/edge-updates/installers/stable/1.2.0/installer-artifact.json",
+            new string('a', 64),
+            1024,
+            null,
+            ClientReleaseStatus.Published,
+            null,
+            "IIoT");
+    }
+
+    private static ClientPluginRelease CreatePublishedPluginRelease()
+    {
+        return new ClientPluginRelease(
+            "Homogenization",
+            "匀浆",
+            "匀浆工序",
+            null,
+            null,
+            "stable",
+            "2.3.4",
+            "1.0.0",
+            "1.0.0",
+            "9.9.9",
+            "win-x64",
+            "net10.0",
+            "/edge-updates/installers/stable/1.2.0/installer-artifact.json#moduleId=Homogenization",
+            new string('b', 64),
+            512,
+            null,
+            "[]",
+            ClientReleaseStatus.Published,
+            null,
+            "IIoT");
+    }
+
+    private static string CreateInstallerArtifactFixture(string channel, string version)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"iiot-installer-artifact-{Guid.NewGuid():N}");
+        var artifactDirectory = Path.Combine(root, channel, version);
+        Directory.CreateDirectory(artifactDirectory);
+
+        File.WriteAllBytes(Path.Combine(artifactDirectory, "IIoT.Edge.Setup.exe"), "MZ-STUB"u8.ToArray());
+        var layoutZipPath = Path.Combine(artifactDirectory, "layout.zip");
+        using (var zip = ZipFile.Open(layoutZipPath, ZipArchiveMode.Create))
+        {
+            WriteZipEntry(zip, "launcher/IIoT.Edge.Launcher.dll", "launcher");
+            WriteZipEntry(zip, "launcher/launcher.profiles.json", "{}");
+            WriteZipEntry(zip, "homogenization/IIoT.Edge.Shell.dll", "shell");
+            WriteZipEntry(zip, "homogenization/Modules/Homogenization/plugin.json", "{}");
+            WriteZipEntry(zip, "welding/IIoT.Edge.Shell.dll", "shell");
+            WriteZipEntry(zip, "welding/Modules/Welding/plugin.json", "{}");
+        }
+
+        var manifest = """
+        {
+          "schemaVersion": 1,
+          "channel": "stable",
+          "version": "1.2.0",
+          "hostApiVersion": "1.0.0",
+          "targetRuntime": "win-x64",
+          "targetFramework": "net10.0",
+          "installerStubFile": "IIoT.Edge.Setup.exe",
+          "layoutZipFile": "layout.zip",
+          "launcherDirectory": "launcher",
+          "modules": [
+            {
+              "moduleId": "Homogenization",
+              "displayName": "匀浆",
+              "version": "2.3.4",
+              "hostApiVersion": "1.0.0",
+              "minHostVersion": "1.0.0",
+              "maxHostVersion": "9.9.9",
+              "runtimeId": "homogenization",
+              "runtimeDirectory": "homogenization"
+            },
+            {
+              "moduleId": "Welding",
+              "displayName": "焊接",
+              "version": "1.0.0",
+              "hostApiVersion": "1.0.0",
+              "minHostVersion": "1.0.0",
+              "maxHostVersion": "9.9.9",
+              "runtimeId": "welding",
+              "runtimeDirectory": "welding"
+            }
+          ]
+        }
+        """;
+        File.WriteAllText(Path.Combine(artifactDirectory, "installer-artifact.json"), manifest, Encoding.UTF8);
+        return root;
+    }
+
+    private static byte[] ReadInstallerPayload(byte[] package)
+    {
+        Assert.True(package.Length > 16);
+        Assert.Equal("IIOTEDG1"u8.ToArray(), package.AsSpan(package.Length - 8, 8).ToArray());
+
+        var payloadLength = BinaryPrimitives.ReadInt64LittleEndian(package.AsSpan(package.Length - 16, 8));
+        Assert.InRange(payloadLength, 1, package.Length - 16);
+        var payloadStart = package.Length - 16 - (int)payloadLength;
+        return package.AsSpan(payloadStart, (int)payloadLength).ToArray();
+    }
+
+    private static void WriteZipEntry(ZipArchive archive, string entryName, string content)
+    {
+        var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
+        using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(false));
+        writer.Write(content);
+    }
+
+    private static string ReadZipEntryText(ZipArchive archive, string entryName)
+    {
+        var entry = archive.GetEntry(entryName) ?? throw new InvalidOperationException($"Zip entry not found: {entryName}");
+        using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
+        return reader.ReadToEnd();
     }
 
     private static Pagination Page(int pageNumber = 1, int pageSize = 10)

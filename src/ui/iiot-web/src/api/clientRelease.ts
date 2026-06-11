@@ -187,3 +187,46 @@ export const generateEdgeBindingBundleApi = (payload: {
 }) => {
   return http.post<EdgeBindingBundleDto>(`${basePath}/binding-bundle`, payload);
 };
+
+export interface GenerateEdgeInstallerPackagePayload {
+  channel?: string | null;
+  targetRuntime?: string | null;
+  hostVersion?: string | null;
+  baseUrl?: string | null;
+  selections: EdgeBindingSelection[];
+}
+
+export interface EdgeInstallerPackageDownload {
+  blob: Blob;
+  fileName: string;
+}
+
+const parseDownloadFileName = (contentDisposition?: string): string | null => {
+  if (!contentDisposition) return null;
+
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(contentDisposition);
+  if (encoded?.[1]) {
+    try {
+      return decodeURIComponent(encoded[1].replace(/"/g, '').trim());
+    } catch {
+      return encoded[1].replace(/"/g, '').trim();
+    }
+  }
+
+  const plain = /filename="?([^";]+)"?/i.exec(contentDisposition);
+  return plain?.[1]?.trim() || null;
+};
+
+export const generateEdgeInstallerPackageApi = async (
+  payload: GenerateEdgeInstallerPackagePayload,
+): Promise<EdgeInstallerPackageDownload> => {
+  const response = await http.postRaw<Blob>(`${basePath}/installer-package`, payload, {
+    responseType: 'blob',
+    timeout: 120000,
+  });
+  const contentDisposition = response.headers['content-disposition'] as string | undefined;
+  return {
+    blob: response.data,
+    fileName: parseDownloadFileName(contentDisposition) || 'IIoT.EdgeClient-installer.exe',
+  };
+};

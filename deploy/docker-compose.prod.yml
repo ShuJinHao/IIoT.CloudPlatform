@@ -120,6 +120,7 @@ services:
       Cors__AllowedOrigins__1: ${CORS_ALLOWED_ORIGIN_1}
       Cors__AllowedOrigins__2: ${CORS_ALLOWED_ORIGIN_2}
       BootstrapAuth__RequireSecret: ${BOOTSTRAP_AUTH_REQUIRE_SECRET}
+      EdgeInstallerArtifacts__RootPath: /app/edge-updates/installers
       ALLOW_INTRANET_HTTP_OIDC: ${ALLOW_INTRANET_HTTP_OIDC:-false}
       OidcProvider__Issuer: ${OIDC_PROVIDER_ISSUER}
       OidcProvider__AllowIntranetHttpOidc: ${ALLOW_INTRANET_HTTP_OIDC:-false}
@@ -133,6 +134,7 @@ services:
       Seq__ApiKey: ${SEQ_API_KEY}
     volumes:
       - ${OIDC_PROVIDER_CERTS_DIR:-/srv/iiot-cloud/deploy/certs}:/app/certs:ro
+      - ${EDGE_UPDATES_DIR:-/srv/iiot/edge-updates}:/app/edge-updates:ro
       - httpapi-logs:/app/logs
     depends_on:
       postgres:

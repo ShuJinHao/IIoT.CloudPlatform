@@ -13,6 +13,7 @@ using IIoT.MasterDataService.Commands.Processes;
 using IIoT.ProductionService;
 using IIoT.ProductionService.AiRead;
 using IIoT.ProductionService.Caching;
+using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.PassStations;
 using IIoT.ProductionService.Profiles;
 using IIoT.Services.CrossCutting.Behaviors;
@@ -77,6 +78,9 @@ public static class DependencyInjection
             static options => options.Validate());
         builder.AddValidatedOptions<AiReadOptions>(
             AiReadOptions.SectionName,
+            static options => options.Validate());
+        builder.AddValidatedOptions<EdgeInstallerArtifactOptions>(
+            EdgeInstallerArtifactOptions.SectionName,
             static options => options.Validate());
         builder.Services.AddPassStationRuntime();
 

@@ -333,6 +333,7 @@ public sealed class ConfigurationGuardTests
         httpApiConfiguration.GetValue<int>("RateLimiting:PasswordLogin:PermitLimit").Should().BeGreaterThan(0);
         httpApiConfiguration.GetValue<int>("RateLimiting:PassStationUpload:TokenLimit").Should().BeGreaterThan(0);
         httpApiConfiguration.GetValue<bool>("BootstrapAuth:RequireSecret").Should().BeTrue();
+        httpApiConfiguration.GetValue<string>("EdgeInstallerArtifacts:RootPath").Should().Be("edge-updates/installers");
         httpApiConfiguration.GetValue<string>("OidcProvider:Issuer").Should().NotBeNullOrWhiteSpace();
         httpApiConfiguration.GetValue<string>("OidcProvider:AicopilotClientId").Should().Be("aicopilot");
         var aicopilotRedirectUris = httpApiConfiguration.GetSection("OidcProvider:AicopilotRedirectUris")
@@ -522,6 +523,8 @@ public sealed class ConfigurationGuardTests
         readmeSource.Should().Contain("single-machine production starter");
         readmeSource.Should().Contain("`release_tag = sha-*`");
         readmeSource.Should().Contain("`cloud-image` 负责构建并推送五个应用镜像到 Harbor");
+        readmeSource.Should().Contain("Edge 客户端安装素材不进 Harbor");
+        readmeSource.Should().Contain("EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers");
         readmeSource.Should().Contain("GET /internal/healthz");
         readmeSource.Should().Contain("[OPERATIONS.md](./OPERATIONS.md)");
         readmeSource.Should().Contain("deploy/scripts/deploy-release.sh");
@@ -551,11 +554,14 @@ public sealed class ConfigurationGuardTests
         envExampleSource.Should().Contain("GATEWAY_HTTP_PORT=81");
         envExampleSource.Should().Contain("BOOTSTRAP_AUTH_REQUIRE_SECRET=true");
         envExampleSource.Should().Contain("X-IIoT-Bootstrap-Secret");
+        envExampleSource.Should().Contain("installers/{channel}/{version}");
 
         composeSource.Should().Contain("Single-machine production starter for IIoT.CloudPlatform.");
         composeSource.Should().Contain("Single-node launch keeps one explicit upstream destination.");
         composeSource.Should().Contain("Infrastructure__EventBus__EndpointPrefix:");
         composeSource.Should().Contain("BootstrapAuth__RequireSecret: ${BOOTSTRAP_AUTH_REQUIRE_SECRET}");
+        composeSource.Should().Contain("EdgeInstallerArtifacts__RootPath: /app/edge-updates/installers");
+        composeSource.Should().Contain("${EDGE_UPDATES_DIR:-/srv/iiot/edge-updates}:/app/edge-updates:ro");
         composeSource.Should().Contain("postgres:");
         composeSource.Should().Contain("mem_limit: 1g");
         composeSource.Should().Contain("redis-cache:");
@@ -725,6 +731,7 @@ public sealed class ConfigurationGuardTests
         gatewayAppSettingsSource.Should().Contain("\"PathPrefix\": \"/api/v1/edge/bootstrap\"");
         gatewayAppSettingsSource.Should().Contain("\"Path\": \"/api/v1/human/identity/edge-login\"");
         gatewayAppSettingsSource.Should().Contain("/api/v1/human/{**catch-all}");
+        gatewayAppSettingsSource.Should().Contain("/api/v1/public/{**catch-all}");
         gatewayAppSettingsSource.Should().Contain("/api/v1/edge/{**catch-all}");
         gatewayAppSettingsSource.Should().Contain("/api/v1/ai/read/{**catch-all}");
         gatewayAppSettingsSource.Should().Contain("/internal/healthz");
@@ -737,6 +744,7 @@ public sealed class ConfigurationGuardTests
         gatewayAppSettingsSource.Should().NotContain("legacy-edge-bootstrap-device-instance");
         gatewayAppSettingsSource.Should().NotContain("legacy-human-edge-login");
         gatewayAppSettingsSource.Should().Contain("internal-health");
+        gatewayAppSettingsSource.Should().Contain("\"Set\": \"public\"");
         gatewayRouteCatalogSource.Should().Contain("GatewayRoutes:BlockedAliases");
         gatewayRouteCatalogSource.Should().Contain("ReverseProxy:Routes");
         gatewayRouteCatalogSource.Should().Contain("PathPrefix");

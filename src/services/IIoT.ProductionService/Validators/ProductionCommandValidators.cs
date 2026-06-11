@@ -119,6 +119,23 @@ public sealed class UpsertClientPluginReleaseCommandValidator : AbstractValidato
     }
 }
 
+public sealed class GenerateEdgeInstallerPackageCommandValidator : AbstractValidator<GenerateEdgeInstallerPackageCommand>
+{
+    public GenerateEdgeInstallerPackageCommandValidator()
+    {
+        RuleFor(x => x.Selections).NotNull().NotEmpty();
+        RuleForEach(x => x.Selections).ChildRules(selection =>
+        {
+            selection.RuleFor(x => x.ModuleId).NotEmpty().MaximumLength(128);
+            selection.RuleFor(x => x.DeviceId).NotEmpty();
+        });
+        RuleFor(x => x.Channel).MaximumLength(64).When(x => x.Channel is not null);
+        RuleFor(x => x.TargetRuntime).MaximumLength(64).When(x => x.TargetRuntime is not null);
+        RuleFor(x => x.HostVersion).MaximumLength(64).When(x => x.HostVersion is not null);
+        RuleFor(x => x.BaseUrl).MaximumLength(1024).When(x => x.BaseUrl is not null);
+    }
+}
+
 public sealed class CreateRecipeCommandValidator : AbstractValidator<CreateRecipeCommand>
 {
     private static readonly RecipeParametersJsonbValidator ParametersValidator = new();

@@ -7,7 +7,7 @@
         下载即得配置好的安装包，装上即用，无需现场再配。
       </p>
       <p class="binding-warn">
-        注意：下载会为所选设备生成新的启动密钥（旧的随之失效）。配置内含密钥，请妥善保管，并始终使用最新下载的文件。
+        注意：下载会为所选设备生成新的启动密钥（旧的随之失效）。安装包内含一次性首装配置，请妥善保管，并始终使用最新下载的文件。
       </p>
     </div>
 
@@ -97,10 +97,13 @@ import UiCheckbox from '../../components/ui/UiCheckbox.vue';
 import UiInput from '../../components/ui/UiInput.vue';
 import UiModal from '../../components/ui/UiModal.vue';
 import { getScopedDeviceSelectApi, type DeviceSelectDto } from '../../api/device';
-import { generateEdgeBindingBundleApi, type ClientPluginReleaseDto } from '../../api/clientRelease';
+import { generateEdgeInstallerPackageApi, type ClientPluginReleaseDto } from '../../api/clientRelease';
 
 const props = defineProps<{
   pluginReleases: ClientPluginReleaseDto[];
+  channel?: string;
+  targetRuntime?: string;
+  hostVersion?: string | null;
 }>();
 
 interface BindingChoice {
@@ -122,6 +125,9 @@ const generating = ref(false);
 const plugins = computed(() => {
   const map = new Map<string, string>();
   for (const plugin of props.pluginReleases) {
+    if (plugin.status.toLowerCase() !== 'published') {
+      continue;
+    }
     if (!map.has(plugin.moduleId)) {
       map.set(plugin.moduleId, plugin.displayName || plugin.moduleId);
     }
@@ -163,6 +169,7 @@ const filteredDevices = computed(() => {
 });
 
 const validationHint = computed(() => {
+  if (!props.hostVersion) return '暂无已发布宿主版本';
   const entries = Object.values(selections);
   if (entries.length === 0) return '请至少勾选一个插件';
   if (entries.some((choice) => !choice.deviceId)) return '有插件未指定设备唯一码';
@@ -186,8 +193,7 @@ const selectDevice = (device: DeviceSelectDto) => {
   showPicker.value = false;
 };
 
-const downloadJson = (filename: string, data: unknown) => {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+const downloadBlob = (filename: string, blob: Blob) => {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
@@ -206,7 +212,7 @@ const generate = async () => {
     .map((choice) => `${choice.deviceName}（${choice.clientCode}）`)
     .join('、');
   const confirmed = window.confirm(
-    `将为以下设备轮换启动密钥并生成配置：\n${deviceList}\n\n` +
+    `将为以下设备轮换启动密钥并生成安装包：\n${deviceList}\n\n` +
       '注意：生成后这些设备的旧密钥立即失效，必须把新下载的安装包部署到对应设备；' +
       '否则现场仍在运行的旧客户端会连不上云端。确认继续？',
   );
@@ -214,14 +220,17 @@ const generate = async () => {
 
   generating.value = true;
   try {
-    const bundle = await generateEdgeBindingBundleApi({
+    const installer = await generateEdgeInstallerPackageApi({
+      channel: props.channel || 'stable',
+      targetRuntime: props.targetRuntime || 'win-x64',
+      hostVersion: props.hostVersion || null,
       selections: Object.entries(selections).map(([moduleId, choice]) => ({
         moduleId,
         deviceId: choice.deviceId,
       })),
       baseUrl: baseUrl.value.trim() || null,
     });
-    downloadJson('iiot-binding.json', bundle);
+    downloadBlob(installer.fileName, installer.blob);
   } catch {
     // 业务错误已由 http 层统一弹窗提示，这里只需复位状态
   } finally {
@@ -243,6 +252,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  padding: 22px 24px;
 }
 
 .binding-intro h3 {

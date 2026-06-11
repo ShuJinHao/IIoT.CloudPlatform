@@ -127,7 +127,12 @@
     </NiondTableCard>
 
     <NiondTableCard v-else-if="activeView === 'binding'">
-      <EdgeBindingDownloadPanel :plugin-releases="catalog?.pluginReleases ?? []" />
+      <EdgeBindingDownloadPanel
+        :plugin-releases="catalog?.pluginReleases ?? []"
+        :channel="channelDisplay"
+        :target-runtime="targetRuntime || 'win-x64'"
+        :host-version="catalog?.latestHost?.version ?? null"
+      />
     </NiondTableCard>
 
     <UiDrawer v-model:show="showPluginDrawer" :width="520" placement="right">

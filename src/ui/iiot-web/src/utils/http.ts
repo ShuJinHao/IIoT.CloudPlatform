@@ -101,6 +101,9 @@ const http = {
   post<T>(url: string, data?: unknown, config?: AxiosRequestConfig) {
     return unwrap<T>(client.post<ApiResult<T> | T>(url, data, config));
   },
+  postRaw<T>(url: string, data?: unknown, config?: AxiosRequestConfig) {
+    return client.post<T>(url, data, config).catch(handleHttpError);
+  },
   put<T>(url: string, data?: unknown, config?: AxiosRequestConfig) {
     return unwrap<T>(client.put<ApiResult<T> | T>(url, data, config));
   },

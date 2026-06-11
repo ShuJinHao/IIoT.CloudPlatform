@@ -7,10 +7,12 @@
 - 当前目标是 single-machine production starter。
 - 生产版本统一使用 `release_tag = sha-*`，`latest` 不能作为生产应用版本。
 - `cloud-image` 负责构建并推送五个应用镜像到 Harbor。
+- Edge 客户端安装素材不进 Harbor；`IIoT.EdgeClient/scripts/PublishEdgeClientInstallerArtifact.ps1` 上传到服务器 `${EDGE_UPDATES_DIR}/installers/{channel}/{version}`。
 - 私有服务器通过本地上传 `deploy/` 和真实 `.env`，再在服务器执行部署脚本。
 - 本轮允许清理旧测试部署和旧数据，不做旧 `docker stack` 到新 `docker compose` 的数据迁移。
 - `deploy/scripts/deploy-release.sh` 是标准发布入口，`deploy/scripts/rollback-release.sh` 是应用镜像回滚入口。
 - 运维、备份、恢复和检查细节见 [OPERATIONS.md](./OPERATIONS.md)。
+- Cloud 下载中心生成 Edge 客户端 `.exe` 的上线顺序见 [EDGE_INSTALLER_GO_LIVE.md](./EDGE_INSTALLER_GO_LIVE.md)。
 
 ## 运行拓扑
 
@@ -30,7 +32,7 @@ iiot-migration -> one-shot migration/bootstrap job
 - `/api/v1/bootstrap/*`：边端 bootstrap API。
 - `/api/v1/public/client-downloads/latest`：公开客户端下载目录 API，只暴露已发布通用宿主下载和插件版本 catalog。
 - `/downloads`：公开客户端下载中心页面，不要求登录。
-- `/edge-updates/*`：EdgeClient 自动更新包下载。
+- `/edge-updates/*`：EdgeClient 自动更新包下载，以及安装素材静态只读下载。
 
 正式 bootstrap 入口固定为：
 
@@ -66,6 +68,33 @@ Harbor 变量：
 - `OCI_REGISTRY_PASSWORD`：Harbor 登录密码或 robot account token。
 
 GitHub workflow `cloud-image` 可用于构建推送 Harbor，只要配置上述 OCI secrets。`cloud-deploy` 只适用于 CI 能 SSH 到服务器的环境；当前私有服务器默认不走它。
+
+## Edge 安装素材
+
+Edge 客户端产物由 `IIoT.EdgeClient` 仓库发布脚本生成和上传，不属于 Cloud Docker 镜像：
+
+```powershell
+pwsh ./scripts/PublishEdgeClientInstallerArtifact.ps1 `
+  -Version 1.2.0 `
+  -ReleaseChannel stable `
+  -RemoteEdgeUpdatesDir /srv/iiot/edge-updates `
+  -SshTarget user@server `
+  -RegisterCloudCatalog `
+  -CloudApiBaseUrl http://10.98.90.154:81/api/v1 `
+  -CloudToken <admin-token> `
+  -PublicBaseUrl http://10.98.90.154:81
+```
+
+上传后的目录固定为：
+
+```text
+${EDGE_UPDATES_DIR}/installers/stable/1.2.0/
+  IIoT.Edge.Setup.exe
+  layout.zip
+  installer-artifact.json
+```
+
+`iiot-httpapi` 以只读方式挂载 `${EDGE_UPDATES_DIR}` 到 `/app/edge-updates`，通过 `EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers` 读取安装素材。登录 Cloud 后，“客户端下载中心 -> 首装下载”会把所选插件 runtime 和新生成的 `iiot-binding.json` 写入安装器 payload，并返回真正的 `.exe`。`iiot-binding.json` 不落盘、不写日志。
 
 `iiot-web` 是 Vite 静态构建，Cloud 左侧“打开助手”按钮需要在构建镜像时注入 AICopilot challenge URL：
 
