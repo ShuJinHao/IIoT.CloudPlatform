@@ -66,7 +66,6 @@ public sealed class GetPublicClientDownloadsHandler(
             release.HostApiVersion,
             release.TargetRuntime,
             release.TargetFramework,
-            release.DownloadUrl,
             release.Sha256,
             release.PackageSize,
             release.ReleaseNotes,

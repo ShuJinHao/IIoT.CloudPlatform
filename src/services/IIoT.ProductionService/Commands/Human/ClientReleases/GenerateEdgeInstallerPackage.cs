@@ -138,7 +138,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         var affected = await deviceRepository.SaveChangesAsync(cancellationToken);
         if (affected <= 0)
         {
-            return await FailAsync("生成安装包失败：保存设备启动密钥失败。", cancellationToken);
+            return await FailAsync("生成安装包失败：保存设备启动凭据失败。", cancellationToken);
         }
 
         await WriteSuccessAuditAsync(bindings, devices.DevicesById!, cancellationToken);
@@ -349,12 +349,12 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 new AuditTrailEntry(
                     ParseActorUserId(currentUser.Id),
                     currentUser.UserName,
-                    "Device.RotateBootstrapSecret",
+                    "Edge.GenerateInstallerPackage",
                     "Device",
                     device.Id.ToString(),
                     DateTime.UtcNow,
                     true,
-                    $"生成客户端安装包时轮换设备 {device.DeviceName}（{device.Code}）的启动密钥。",
+                    $"生成客户端首装包时更新设备 {device.DeviceName}（{device.Code}）的启动凭据。",
                     null),
                 cancellationToken);
         }
@@ -473,7 +473,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
 
             if (selection.DeviceId == Guid.Empty)
             {
-                error = $"生成安装包失败：插件 {moduleId} 未选择设备唯一码。";
+                error = $"生成安装包失败：插件 {moduleId} 未选择设备。";
                 return false;
             }
 

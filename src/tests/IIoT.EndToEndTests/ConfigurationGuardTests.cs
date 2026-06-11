@@ -208,6 +208,17 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
+    public void HumanDeviceController_ShouldNotExposeManualBootstrapSecretRotation()
+    {
+        var controllerSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Human", "HumanDeviceController.cs"));
+
+        controllerSource.Should().NotContain("bootstrap-secret/rotate");
+        controllerSource.Should().NotContain("RotateBootstrapSecret");
+        controllerSource.Should().NotContain("RotateDeviceBootstrapSecretCommand");
+    }
+
+    [Fact]
     public void BootstrapHardeningDesign_ShouldDocumentMandatorySecret()
     {
         var cloudRulesSource = File.ReadAllText(FindRepoFile("docs", "云端规则.md"));

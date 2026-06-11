@@ -1,34 +1,34 @@
 <template>
   <NiondDataPage
     class="release-page"
-    page-key="clientReleases"
-    title="客户端下载中心"
-    subtitle="查看宿主与插件版本，下载并配置客户端安装包"
+    :title="pageTitle"
+    :subtitle="pageSubtitle"
   >
     <template #actions>
-      <UiButton v-if="canManage" type="primary" size="small" @click="openHostModal">
-        <Plus :size="15" />
-        登记宿主
-      </UiButton>
-      <UiButton v-if="canManage" type="info" size="small" secondary @click="openPluginModal">
-        <PackagePlus :size="15" />
-        登记插件
+      <template v-if="isPublishRoute">
+        <UiButton size="small" secondary @click="goInstallerCenter">
+          <Boxes :size="15" />
+          首装生成
+        </UiButton>
+        <UiButton type="primary" size="small" @click="openHostModal">
+          <Plus :size="15" />
+          登记宿主
+        </UiButton>
+        <UiButton type="info" size="small" secondary @click="openPluginModal">
+          <PackagePlus :size="15" />
+          登记插件
+        </UiButton>
+      </template>
+      <UiButton v-else-if="canManage" type="info" size="small" secondary @click="goPublishManager">
+        <Settings2 :size="15" />
+        发布管理
       </UiButton>
     </template>
 
     <template #toolbar>
       <NiondToolbar>
         <div class="release-toolbar">
-          <div class="release-tabs">
-            <button
-              class="release-tab"
-              :class="{ 'is-active': activeView === 'catalog' }"
-              type="button"
-              @click="activeView = 'catalog'"
-            >
-              <CloudDownload :size="16" />
-              下载中心
-            </button>
+          <div v-if="!isPublishRoute" class="release-tabs">
             <button
               v-if="canManage"
               class="release-tab"
@@ -37,8 +37,31 @@
               @click="activeView = 'binding'"
             >
               <Boxes :size="16" />
-              首装下载
+              首装生成
             </button>
+            <button
+              class="release-tab"
+              :class="{ 'is-active': activeView === 'catalog' }"
+              type="button"
+              @click="activeView = 'catalog'"
+            >
+              <CloudDownload :size="16" />
+              版本 catalog
+            </button>
+            <button
+              v-if="canManage"
+              class="release-tab"
+              :class="{ 'is-active': activeView === 'inventory' }"
+              type="button"
+              @click="activeView = 'inventory'"
+            >
+              <MonitorCheck :size="16" />
+              设备盘点
+            </button>
+          </div>
+          <div v-else class="release-mode-label">
+            <Settings2 :size="16" />
+            客户端发布管理
           </div>
           <div class="release-filters">
             <UiButton size="small" secondary @click="refresh">
@@ -50,16 +73,16 @@
       </NiondToolbar>
     </template>
 
-    <div v-if="activeView === 'catalog'" class="release-stack">
+    <div v-if="isPublishRoute || activeView === 'catalog'" class="release-stack">
       <NiondTableCard>
         <div class="table-heading">
           <div>
             <h2>通用宿主</h2>
-            <p>宿主各版本与下载</p>
+            <p>{{ isPublishRoute ? '宿主各版本与发布记录' : '这里只展示宿主版本，首装包通过设备绑定生成' }}</p>
           </div>
         </div>
         <UiDataTable
-          :columns="hostColumns"
+          :columns="isPublishRoute ? publishHostColumns : catalogHostColumns"
           :data="catalog?.hostReleases ?? []"
           :loading="loadingCatalog"
           :row-key="(row: ClientHostReleaseDto) => row.id"
@@ -91,9 +114,15 @@
               <span class="pv-meta">{{ formatSize(ver.packageSize) }}</span>
               <span class="pv-meta">{{ formatDate(ver.publishedAtUtc) }}</span>
               <span class="pv-note">{{ ver.description || ver.releaseNotes || '-' }}</span>
-              <UiButton size="tiny" secondary type="primary" @click="openUrl(ver.downloadUrl)">
+              <UiButton
+                v-if="isPublishRoute"
+                size="tiny"
+                secondary
+                type="primary"
+                @click="openUrl(ver.downloadUrl)"
+              >
                 <ExternalLink :size="13" />
-                下载
+                打开
               </UiButton>
             </div>
           </div>
@@ -107,7 +136,7 @@
       </NiondTableCard>
     </div>
 
-    <NiondTableCard v-else-if="activeView === 'inventory'">
+    <NiondTableCard v-else-if="!isPublishRoute && activeView === 'inventory'">
       <div class="table-heading">
         <div>
           <h2>设备版本盘点</h2>
@@ -126,7 +155,7 @@
       </UiDataTable>
     </NiondTableCard>
 
-    <NiondTableCard v-else-if="activeView === 'binding'">
+    <NiondTableCard v-else-if="!isPublishRoute && activeView === 'binding'">
       <EdgeBindingDownloadPanel
         :plugin-releases="catalog?.pluginReleases ?? []"
         :channel="channelDisplay"
@@ -220,15 +249,16 @@
 
 <script setup lang="ts">
 import { computed, h, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import {
   Boxes,
   CloudDownload,
-  Copy,
   ExternalLink,
   MonitorCheck,
   PackagePlus,
   Plus,
   RefreshCw,
+  Settings2,
 } from 'lucide-vue-next';
 import {
   getClientReleaseCatalogApi,
@@ -250,7 +280,6 @@ import NiondToolbar from '../../components/layout/NiondToolbar.vue';
 import EmptyState from '../../components/states/EmptyState.vue';
 import EdgeBindingDownloadPanel from './EdgeBindingDownloadPanel.vue';
 import UiButton from '../../components/ui/UiButton.vue';
-import UiCheckbox from '../../components/ui/UiCheckbox.vue';
 import UiDataTable from '../../components/ui/UiDataTable.vue';
 import UiDrawer from '../../components/ui/UiDrawer.vue';
 import UiDrawerContent from '../../components/ui/UiDrawerContent.vue';
@@ -259,6 +288,7 @@ import UiModal from '../../components/ui/UiModal.vue';
 import UiSelect from '../../components/ui/UiSelect.vue';
 import UiTag from '../../components/ui/UiTag.vue';
 import type { UiDataTableColumn } from '../../components/ui/types';
+import { notifyWarning } from '../../utils/feedback';
 
 type ViewMode = 'catalog' | 'inventory' | 'binding';
 type TagTone = 'default' | 'primary' | 'info' | 'success' | 'warning' | 'error';
@@ -266,7 +296,8 @@ type HostReleaseForm = Omit<UpsertClientHostReleasePayload, 'packageSize'> & { p
 type PluginReleaseForm = Omit<UpsertClientPluginReleasePayload, 'packageSize'> & { packageSize: string };
 
 const authStore = useAuthStore();
-const activeView = ref<ViewMode>('catalog');
+const route = useRoute();
+const router = useRouter();
 const channel = ref('stable');
 const targetRuntime = ref('win-x64');
 const keyword = ref('');
@@ -282,14 +313,15 @@ const showPluginDrawer = ref(false);
 const selectedInventory = ref<DeviceClientVersionInventoryDto | null>(null);
 
 const canManage = computed(() => authStore.isAdmin || authStore.hasPermission(Permissions.Device.Update));
-const channelDisplay = computed(() => channel.value.trim() || 'stable');
-const runtimeDisplay = computed(() => targetRuntime.value.trim() || '全部 Runtime');
-const updateDeviceCount = computed(() =>
-  inventory.value.filter((device) =>
-    device.hostUpdateStatus === 'UpdateAvailable'
-    || device.plugins.some((plugin) => plugin.updateStatus === 'UpdateAvailable'),
-  ).length,
+const activeView = ref<ViewMode>(canManage.value ? 'binding' : 'catalog');
+const isPublishRoute = computed(() => route.name === 'ClientReleasePublish');
+const pageTitle = computed(() => (isPublishRoute.value ? '客户端发布管理' : '客户端首装生成'));
+const pageSubtitle = computed(() =>
+  isPublishRoute.value
+    ? '管理宿主与工序插件版本，发布素材只供首装打包链路读取。'
+    : '选择工序插件并绑定设备，生成已写入设备身份的客户端安装包。',
 );
+const channelDisplay = computed(() => channel.value.trim() || 'stable');
 
 const statusOptions = [
   { label: 'Draft', value: 'Draft' },
@@ -376,7 +408,22 @@ watch(activeView, () => {
   }
 });
 
+watch(canManage, (value) => {
+  if (!value && activeView.value !== 'catalog') {
+    activeView.value = 'catalog';
+  }
+}, { immediate: true });
+
 onMounted(refresh);
+
+const goPublishManager = () => {
+  router.push({ name: 'ClientReleasePublish' });
+};
+
+const goInstallerCenter = () => {
+  activeView.value = canManage.value ? 'binding' : 'catalog';
+  router.push({ name: 'ClientReleases' });
+};
 
 const openHostModal = () => {
   Object.assign(hostForm, {
@@ -424,7 +471,7 @@ const openPluginModal = () => {
 
 const submitHostRelease = async () => {
   if (!hostForm.version.trim() || !hostForm.downloadUrl.trim()) {
-    alert('请填写宿主版本和下载地址。');
+    notifyWarning('请填写宿主版本和下载地址。');
     return;
   }
 
@@ -443,7 +490,7 @@ const submitHostRelease = async () => {
 
 const submitPluginRelease = async () => {
   if (!pluginForm.moduleId.trim() || !pluginForm.displayName.trim() || !pluginForm.version.trim()) {
-    alert('请填写插件模块、名称和版本。');
+    notifyWarning('请填写插件模块、名称和版本。');
     return;
   }
 
@@ -463,11 +510,6 @@ const submitPluginRelease = async () => {
 const openPluginDrawer = (row: DeviceClientVersionInventoryDto) => {
   selectedInventory.value = row;
   showPluginDrawer.value = true;
-};
-
-const copyText = async (text: string) => {
-  if (!text) return;
-  await navigator.clipboard?.writeText(text);
 };
 
 const openUrl = (url: string) => {
@@ -521,7 +563,7 @@ const pluginGroups = computed(() => {
   return Array.from(groups.values());
 });
 
-const hostColumns: UiDataTableColumn<ClientHostReleaseDto>[] = [
+const catalogHostColumns: UiDataTableColumn<ClientHostReleaseDto>[] = [
   { title: '版本', key: 'version', minWidth: 110, render: (row) => h('strong', row.version) },
   {
     title: '状态',
@@ -532,36 +574,17 @@ const hostColumns: UiDataTableColumn<ClientHostReleaseDto>[] = [
   { title: '大小', key: 'packageSize', width: 110, render: (row) => h('span', formatSize(row.packageSize)) },
   { title: '发布时间', key: 'publishedAtUtc', minWidth: 170, render: (row) => h('span', formatDate(row.publishedAtUtc)) },
   { title: '备注', key: 'releaseNotes', minWidth: 160, render: (row) => h('span', row.releaseNotes || '-') },
-  {
-    title: '操作',
-    key: 'actions',
-    width: 110,
-    align: 'right',
-    render: (row) => h('div', { class: 'row-actions' }, [
-      h(UiButton, { size: 'tiny', secondary: true, type: 'primary', onClick: () => openUrl(row.downloadUrl) }, () => [h(ExternalLink, { size: 13 }), '下载']),
-    ]),
-  },
 ];
 
-const pluginColumns: UiDataTableColumn<ClientPluginReleaseDto>[] = [
-  { title: '插件', key: 'moduleId', minWidth: 190, render: (row) => h('div', { class: 'plugin-cell' }, [h('strong', row.displayName), h('span', row.moduleId)]) },
-  { title: '版本', key: 'version', width: 100 },
-  {
-    title: '状态',
-    key: 'status',
-    width: 100,
-    render: (row) => h(UiTag, { type: statusTone(row.status), size: 'small', bordered: false }, () => statusText(row.status)),
-  },
-  { title: '大小', key: 'packageSize', width: 110, render: (row) => h('span', formatSize(row.packageSize)) },
-  { title: '发布时间', key: 'publishedAtUtc', minWidth: 170, render: (row) => h('span', formatDate(row.publishedAtUtc)) },
-  { title: '备注', key: 'description', minWidth: 160, render: (row) => h('span', row.description || row.releaseNotes || '-') },
+const publishHostColumns: UiDataTableColumn<ClientHostReleaseDto>[] = [
+  ...catalogHostColumns,
   {
     title: '操作',
     key: 'actions',
     width: 110,
     align: 'right',
     render: (row) => h('div', { class: 'row-actions' }, [
-      h(UiButton, { size: 'tiny', secondary: true, type: 'primary', onClick: () => openUrl(row.downloadUrl) }, () => [h(ExternalLink, { size: 13 }), '下载']),
+      h(UiButton, { size: 'tiny', secondary: true, type: 'primary', onClick: () => openUrl(row.downloadUrl) }, () => [h(ExternalLink, { size: 13 }), '打开']),
     ]),
   },
 ];
@@ -623,6 +646,19 @@ const inventoryColumns: UiDataTableColumn<DeviceClientVersionInventoryDto>[] = [
 .release-tab.is-active {
   background: var(--bg-3);
   color: var(--text-0);
+}
+
+.release-mode-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: var(--bg-3);
+  color: var(--text-0);
+  padding: 0 var(--space-3);
+  font-size: var(--fs-base);
+  font-weight: var(--fw-semibold);
 }
 
 .release-filters :deep(.ui-input),

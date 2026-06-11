@@ -55,6 +55,26 @@ public sealed partial class CloudProductionFlowTests
     }
 
     [Fact]
+    public async Task CloudOidc_Authorize_ShouldShowLoginPage_WhenCloudSessionMissing()
+    {
+        _fixture.ClearAuthToken();
+
+        using var client = CreateNoRedirectGatewayClient();
+        using var response = await client.GetAsync(CreateAuthorizePath(
+            "state-login-required",
+            "nonce-login-required",
+            CreatePkceChallenge(CreatePkceVerifier()),
+            AicopilotOidcCallbackUri));
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized, body);
+        response.Content.Headers.ContentType?.MediaType.Should().Be("text/html");
+        body.Should().Contain("需要先登录 Cloud");
+        body.Should().Contain("/login?returnUrl=");
+        body.Should().Contain(Uri.EscapeDataString("/connect/authorize?"));
+    }
+
+    [Fact]
     public async Task CloudOidc_Token_ShouldRejectWrongPkceVerifierAndCodeReplay()
     {
         _fixture.ClearAuthToken();

@@ -104,11 +104,7 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal(processId, repository.AddedEntity!.ProcessId);
         Assert.StartsWith("DEV-", repository.AddedEntity.Code);
         Assert.Equal(repository.AddedEntity.Code, created.Code);
-        Assert.NotNull(repository.AddedEntity.BootstrapSecretHash);
-        Assert.NotEqual(repository.AddedEntity.BootstrapSecretHash, created.BootstrapSecret);
-        Assert.True(BootstrapSecretHasher.Verify(
-            created.BootstrapSecret,
-            repository.AddedEntity.BootstrapSecretHash));
+        Assert.Null(repository.AddedEntity.BootstrapSecretHash);
         Assert.Contains(repository.AddedEntity.DomainEvents, x =>
             x is DeviceRegisteredDomainEvent registered
             && registered.ProcessId == processId
@@ -220,127 +216,6 @@ public sealed class ApplicationFlowGuardTests
             x.OperationType == "Device.Register"
             && x.TargetType == "Device"
             && !x.Succeeded);
-    }
-
-    [Fact]
-    public async Task GenerateEdgeBindingBundleHandler_ShouldRotateSecretsAndEmitBindings()
-    {
-        var repository = new InMemoryRepository<Device>();
-        var homogenization = new Device("匀浆线1#", "DEV-AAAAAAAAAA", Guid.NewGuid());
-        var mixing = new Device("混合线2#", "DEV-BBBBBBBBBB", Guid.NewGuid());
-        repository.Add(homogenization);
-        repository.Add(mixing);
-
-        var handler = new GenerateEdgeBindingBundleHandler(
-            new TestCurrentUser
-            {
-                Id = Guid.NewGuid().ToString(),
-                UserName = "admin-001",
-                Role = SystemRoles.Admin,
-                IsAuthenticated = true
-            },
-            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
-            repository,
-            new RecordingCacheService(),
-            new RecordingAuditTrailService());
-
-        var result = await handler.Handle(
-            new GenerateEdgeBindingBundleCommand(
-                [
-                    new EdgeBindingSelection("Homogenization", homogenization.Id),
-                    new EdgeBindingSelection("Mixing", mixing.Id)
-                ],
-                "http://cloud.local"),
-            CancellationToken.None);
-
-        Assert.True(result.IsSuccess);
-        var bundle = result.Value!;
-        Assert.Equal(1, bundle.SchemaVersion);
-        Assert.Equal("http://cloud.local", bundle.BaseUrl);
-        Assert.Equal(2, bundle.Bindings.Count);
-
-        var homogBinding = bundle.Bindings.Single(b => b.ModuleId == "Homogenization");
-        Assert.Equal("DEV-AAAAAAAAAA", homogBinding.ClientCode);
-        Assert.Equal("匀浆线1#", homogBinding.DeviceName);
-        // 下载时已轮换出启动密钥，且与设备保存的哈希匹配
-        Assert.False(string.IsNullOrWhiteSpace(homogBinding.BootstrapSecret));
-        Assert.True(BootstrapSecretHasher.Verify(homogBinding.BootstrapSecret, homogenization.BootstrapSecretHash!));
-
-        var mixingBinding = bundle.Bindings.Single(b => b.ModuleId == "Mixing");
-        Assert.Equal("DEV-BBBBBBBBBB", mixingBinding.ClientCode);
-        Assert.True(BootstrapSecretHasher.Verify(mixingBinding.BootstrapSecret, mixing.BootstrapSecretHash!));
-    }
-
-    [Fact]
-    public async Task GenerateEdgeBindingBundleHandler_ShouldRejectDuplicateModule()
-    {
-        var repository = new InMemoryRepository<Device>();
-        var deviceA = new Device("匀浆线1#", "DEV-AAAAAAAAAA", Guid.NewGuid());
-        var deviceB = new Device("匀浆线2#", "DEV-BBBBBBBBBB", Guid.NewGuid());
-        repository.Add(deviceA);
-        repository.Add(deviceB);
-
-        var handler = new GenerateEdgeBindingBundleHandler(
-            new TestCurrentUser
-            {
-                Id = Guid.NewGuid().ToString(),
-                UserName = "admin-001",
-                Role = SystemRoles.Admin,
-                IsAuthenticated = true
-            },
-            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
-            repository,
-            new RecordingCacheService(),
-            new RecordingAuditTrailService());
-
-        var result = await handler.Handle(
-            new GenerateEdgeBindingBundleCommand(
-                [
-                    new EdgeBindingSelection("Homogenization", deviceA.Id),
-                    new EdgeBindingSelection("Homogenization", deviceB.Id)
-                ]),
-            CancellationToken.None);
-
-        Assert.False(result.IsSuccess);
-        Assert.NotNull(result.Errors);
-        Assert.Contains(result.Errors, error => error.Contains("重复", StringComparison.Ordinal));
-        // 校验失败时不得轮换任何设备密钥
-        Assert.Null(deviceA.BootstrapSecretHash);
-        Assert.Null(deviceB.BootstrapSecretHash);
-    }
-
-    [Fact]
-    public async Task GenerateEdgeBindingBundleHandler_ShouldRejectNonAdmin()
-    {
-        var repository = new InMemoryRepository<Device>();
-        var device = new Device("匀浆线1#", "DEV-AAAAAAAAAA", Guid.NewGuid());
-        repository.Add(device);
-
-        var handler = new GenerateEdgeBindingBundleHandler(
-            new TestCurrentUser
-            {
-                Id = Guid.NewGuid().ToString(),
-                UserName = "operator-001",
-                Role = "Operator",
-                IsAuthenticated = true
-            },
-            new StubCurrentUserDeviceAccessService { IsAdministrator = false },
-            repository,
-            new RecordingCacheService(),
-            new RecordingAuditTrailService());
-
-        var result = await handler.Handle(
-            new GenerateEdgeBindingBundleCommand(
-                [
-                    new EdgeBindingSelection("Homogenization", device.Id)
-                ]),
-            CancellationToken.None);
-
-        Assert.False(result.IsSuccess);
-        Assert.NotNull(result.Errors);
-        Assert.Contains(result.Errors, error => error.Contains("管理员", StringComparison.Ordinal));
-        // 非管理员被拒：设备密钥未被轮换
-        Assert.Null(device.BootstrapSecretHash);
     }
 
     [Fact]
@@ -735,6 +610,7 @@ public sealed class ApplicationFlowGuardTests
         };
         var handler = new UpdateDeviceProfileHandler(
             repository,
+            new StubDeviceReadQueryService(),
             new StubCurrentUserDeviceAccessService { IsAdministrator = true });
 
         var result = await handler.Handle(
@@ -2208,91 +2084,6 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal(ResultStatus.Unauthorized, wrongSecret.Status);
         Assert.True(validSecret.IsSuccess);
         Assert.Equal(device.Id, validSecret.Value!.DeviceIdentity.Id);
-    }
-
-    [Fact]
-    public async Task RotateDeviceBootstrapSecretHandler_ShouldReplaceHashAndClearBootstrapCache()
-    {
-        var device = new Device("Device-Rotate", "DEV-ROTATE01", Guid.NewGuid());
-        var oldSecret = BootstrapSecretGenerator.Generate();
-        device.SetBootstrapSecretHash(BootstrapSecretHasher.Hash(oldSecret));
-        var oldHash = device.BootstrapSecretHash;
-        var repository = new InMemoryRepository<Device>
-        {
-            SingleOrDefaultResult = device
-        };
-        var cache = new RecordingCacheService();
-        var auditTrail = new RecordingAuditTrailService();
-        var handler = new RotateDeviceBootstrapSecretHandler(
-            new TestCurrentUser
-            {
-                Id = Guid.NewGuid().ToString(),
-                UserName = "admin-001",
-                Role = SystemRoles.Admin,
-                IsAuthenticated = true
-            },
-            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
-            repository,
-            cache,
-            auditTrail);
-
-        var result = await handler.Handle(
-            new RotateDeviceBootstrapSecretCommand(device.Id),
-            CancellationToken.None);
-
-        Assert.True(result.IsSuccess);
-        var rotated = Assert.IsType<RotateDeviceBootstrapSecretResultDto>(result.Value);
-        Assert.Equal(device.Id, rotated.Id);
-        Assert.Equal(device.Code, rotated.Code);
-        Assert.NotEqual(oldHash, device.BootstrapSecretHash);
-        Assert.False(BootstrapSecretHasher.Verify(oldSecret, device.BootstrapSecretHash));
-        Assert.True(BootstrapSecretHasher.Verify(rotated.BootstrapSecret, device.BootstrapSecretHash));
-        Assert.Contains(CacheKeys.DeviceCode(device.Code), cache.RemovedKeys);
-        Assert.Contains(auditTrail.Entries, x =>
-            x.OperationType == "Device.RotateBootstrapSecret"
-            && x.Succeeded
-            && x.FailureReason is null
-            && !x.Summary.Contains(rotated.BootstrapSecret, StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task RotateDeviceBootstrapSecretHandler_ShouldRejectNonAdmin()
-    {
-        var device = new Device("Device-Rotate-Forbidden", "DEV-ROTATE02", Guid.NewGuid());
-        var oldSecret = BootstrapSecretGenerator.Generate();
-        device.SetBootstrapSecretHash(BootstrapSecretHasher.Hash(oldSecret));
-        var oldHash = device.BootstrapSecretHash;
-        var repository = new InMemoryRepository<Device>
-        {
-            SingleOrDefaultResult = device
-        };
-        var cache = new RecordingCacheService();
-        var auditTrail = new RecordingAuditTrailService();
-        var handler = new RotateDeviceBootstrapSecretHandler(
-            new TestCurrentUser
-            {
-                Id = Guid.NewGuid().ToString(),
-                UserName = "operator-001",
-                Role = "Operator",
-                IsAuthenticated = true
-            },
-            new StubCurrentUserDeviceAccessService(),
-            repository,
-            cache,
-            auditTrail);
-
-        var result = await handler.Handle(
-            new RotateDeviceBootstrapSecretCommand(device.Id),
-            CancellationToken.None);
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal(ResultStatus.Forbidden, result.Status);
-        Assert.Equal(oldHash, device.BootstrapSecretHash);
-        Assert.Empty(cache.RemovedKeys);
-        Assert.Contains(auditTrail.Entries, x =>
-            x.OperationType == "Device.RotateBootstrapSecret"
-            && !x.Succeeded
-            && x.FailureReason is not null);
     }
 
     private static JsonElement JsonPayload(string json)

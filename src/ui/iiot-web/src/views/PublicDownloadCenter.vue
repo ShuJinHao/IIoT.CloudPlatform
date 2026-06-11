@@ -6,8 +6,8 @@
           <CloudDownload :size="22" :stroke-width="2.4" />
         </div>
         <div>
-          <h1 class="text-[25px] font-[var(--fw-strong)] leading-tight tracking-[0]">客户端下载中心</h1>
-          <p class="mt-1 text-[var(--fs-base)] font-[var(--fw-semibold)] text-[var(--text-2)] dark:text-[var(--text-2)]">下载通用宿主，插件版本由 Launcher 登录云端后按工序选择安装。</p>
+          <h1 class="text-[25px] font-[var(--fw-strong)] leading-tight tracking-[0]">客户端版本中心</h1>
+          <p class="mt-1 text-[var(--fs-base)] font-[var(--fw-semibold)] text-[var(--text-2)] dark:text-[var(--text-2)]">公开页只展示宿主与插件版本，安装包必须登录云平台后按设备绑定生成。</p>
         </div>
       </div>
       <router-link class="rounded-[13px] bg-white px-4 py-2 text-[var(--fs-base)] font-[var(--fw-strong)] text-[var(--text-0)] shadow-[var(--shadow-sm)] transition-colors hover:bg-[var(--bg-2)]  dark:text-[var(--text-0)] dark:hover:bg-[var(--bg-3)]" to="/login">
@@ -21,7 +21,7 @@
           <div class="mb-5 flex flex-wrap items-end justify-between gap-4">
             <div>
               <p class="text-[var(--fs-sm)] font-[var(--fw-strong)] uppercase text-[var(--text-2)]">Windows 通用宿主</p>
-              <h2 class="mt-2 text-[28px] font-[var(--fw-strong)] leading-tight tracking-[0]">EdgeClient 首装包</h2>
+              <h2 class="mt-2 text-[28px] font-[var(--fw-strong)] leading-tight tracking-[0]">EdgeClient 版本</h2>
             </div>
             <div class="flex flex-wrap gap-3">
               <label class="grid gap-1 text-[var(--fs-sm)] font-[var(--fw-bold)] text-[var(--text-1)]">
@@ -84,12 +84,11 @@
                 <div class="mb-2 grid size-11 place-items-center rounded-[var(--radius-md)] bg-[var(--bg-1)] text-[var(--primary)]">
                   <Package :size="22" />
                 </div>
-                <p class="text-[var(--fs-base)] font-[var(--fw-bold)] text-[var(--text-1)]">首次部署只下载通用宿主。工序插件由 Launcher 按设备身份安装。</p>
+                <p class="text-[var(--fs-base)] font-[var(--fw-bold)] text-[var(--text-1)]">这里只显示当前版本信息。首装包登录云平台后按设备身份生成，后续更新由现场 Launcher 自动检测。</p>
               </div>
-              <a class="inline-flex h-11 items-center justify-center gap-2 rounded-[13px] bg-[var(--primary)] px-4 text-[var(--fs-md)] font-[var(--fw-strong)] text-[var(--text-0)] transition-colors hover:brightness-95" :href="catalog.latestHost.downloadUrl">
-                <Download :size="17" />
-                下载客户端
-              </a>
+              <div class="rounded-[13px] bg-[var(--primary)] px-4 py-3 text-center text-[var(--fs-sm)] font-[var(--fw-strong)] text-[var(--text-0)]">
+                网页不提供客户端更新下载
+              </div>
             </div>
           </div>
 
@@ -97,7 +96,7 @@
             <div>
               <PackageX class="mx-auto mb-3 text-[var(--text-2)]" :size="34" />
               <h3 class="text-[17px] font-[var(--fw-strong)]">暂无已发布宿主包</h3>
-              <p class="mt-2 text-[var(--fs-base)] font-[var(--fw-semibold)] text-[var(--text-2)] dark:text-[var(--text-2)]">请先在后台发布 {{ channel || 'stable' }} / {{ targetRuntime || 'win-x64' }} 的通用宿主安装包。</p>
+              <p class="mt-2 text-[var(--fs-base)] font-[var(--fw-semibold)] text-[var(--text-2)] dark:text-[var(--text-2)]">请先在后台登记 {{ channel || 'stable' }} / {{ targetRuntime || 'win-x64' }} 的通用宿主版本。</p>
             </div>
           </div>
         </section>
@@ -159,9 +158,9 @@
             安装边界
           </div>
           <ul class="space-y-3 text-[var(--fs-base)] font-[var(--fw-semibold)] leading-6 text-[var(--text-1)] dark:text-[var(--text-2)]">
-            <li>公开页面只下载通用宿主。</li>
+            <li>公开页面只展示版本，不提供安装包下载。</li>
             <li>插件安装需要设备身份，仍走 ClientCode → bootstrap → DeviceId。</li>
-            <li>BootstrapSecret、设备 token、内部发布状态不会在这里展示。</li>
+            <li>启动密钥、设备 token、内部发布状态不会在这里展示。</li>
           </ul>
         </section>
 
@@ -193,7 +192,6 @@ import { useRoute, useRouter } from 'vue-router';
 import {
   AlertTriangle,
   CloudDownload,
-  Download,
   Package,
   PackageX,
   RefreshCcw,

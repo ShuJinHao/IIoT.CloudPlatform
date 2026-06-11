@@ -4,6 +4,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Text.Json;
 using FluentAssertions;
 using IIoT.EventBus;
+using IIoT.ProductionService.Security;
 using IIoT.Services.Contracts.Events.DeviceLogs;
 using IIoT.SharedKernel.Configuration;
 using MassTransit;
@@ -527,7 +528,7 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HumanDevice_RotateBootstrapSecret_ShouldReturnNewSecret()
+    public async Task HumanDevice_RotateBootstrapSecretRoute_ShouldNotExist()
     {
         await AuthenticateAsAdminAsync();
 
@@ -536,16 +537,8 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
         using var response = await _fixture.HttpClient.PostAsync(
             $"/api/v1/human/devices/{device.DeviceId}/bootstrap-secret/rotate",
             content: null);
-        var body = await response.Content.ReadAsStringAsync();
 
-        response.IsSuccessStatusCode.Should().BeTrue(body);
-        var rotated = JsonSerializer.Deserialize<RotateDeviceBootstrapSecretResultDto>(body, JsonOptions)
-                      ?? throw new InvalidOperationException("Unable to deserialize rotate response.");
-
-        rotated.Id.Should().Be(device.DeviceId);
-        rotated.Code.Should().Be(device.Code);
-        rotated.BootstrapSecret.Should().NotBeNullOrWhiteSpace();
-        rotated.BootstrapSecret.Should().NotBe(device.BootstrapSecret);
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]
@@ -1033,12 +1026,34 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
         created.Id.Should().NotBe(Guid.Empty);
         created.Code.Should().StartWith("DEV-");
         created.Code.Should().NotBeNullOrWhiteSpace();
-        created.BootstrapSecret.Should().NotBeNullOrWhiteSpace();
-        created.BootstrapSecret.Should().NotBe(created.Code);
-        _deviceCodes[created.Id] = created.Code;
-        _deviceBootstrapSecrets[created.Id] = created.BootstrapSecret;
 
-        return new TestDeviceRegistration(created.Id, processId, created.Code, created.BootstrapSecret);
+        var bootstrapSecret = await CreateTestBootstrapSecretAsync(created.Id);
+        bootstrapSecret.Should().NotBeNullOrWhiteSpace();
+        bootstrapSecret.Should().NotBe(created.Code);
+
+        _deviceCodes[created.Id] = created.Code;
+        _deviceBootstrapSecrets[created.Id] = bootstrapSecret;
+
+        return new TestDeviceRegistration(created.Id, processId, created.Code, bootstrapSecret);
+    }
+
+    private async Task<string> CreateTestBootstrapSecretAsync(Guid deviceId)
+    {
+        var bootstrapSecret = BootstrapSecretGenerator.Generate();
+        var bootstrapSecretHash = BootstrapSecretHasher.Hash(bootstrapSecret);
+        var connectionString = await _fixture.GetConnectionStringAsync(ConnectionResourceNames.IiotDatabase);
+
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            "update devices set bootstrap_secret_hash = @hash where id = @id",
+            connection);
+        command.Parameters.AddWithValue("hash", bootstrapSecretHash);
+        command.Parameters.AddWithValue("id", deviceId);
+
+        var affected = await command.ExecuteNonQueryAsync();
+        affected.Should().Be(1);
+        return bootstrapSecret;
     }
 
     private static HttpRequestMessage CreateBootstrapRequest(
@@ -1346,13 +1361,7 @@ public sealed record EdgeBootstrapDto(
 
 public sealed record CreateDeviceResultDto(
     Guid Id,
-    string Code,
-    string BootstrapSecret);
-
-public sealed record RotateDeviceBootstrapSecretResultDto(
-    Guid Id,
-    string Code,
-    string BootstrapSecret);
+    string Code);
 
 public sealed record ProcessSelectDto(
     Guid Id,

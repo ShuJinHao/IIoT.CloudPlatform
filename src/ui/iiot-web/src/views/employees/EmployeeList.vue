@@ -431,6 +431,7 @@ import UiSelect from '../../components/ui/UiSelect.vue';
 import UiSwitch from '../../components/ui/UiSwitch.vue';
 import UiTag from '../../components/ui/UiTag.vue';
 import type { UiDataTableColumn } from '../../components/ui/types';
+import { notifySuccess, notifyWarning } from '../../utils/feedback';
 
 const employees = ref<EmployeeListItemDto[]>([]);
 const loading = ref(false);
@@ -661,7 +662,7 @@ const submitOnboard = async () => {
     !onboardForm.RealName.trim() ||
     !onboardForm.Password.trim()
   ) {
-    alert('工号、姓名和初始密码为必填项');
+    notifyWarning('工号、姓名和初始密码为必填项');
     return;
   }
   submitting.value = true;
@@ -695,7 +696,7 @@ const openEditModal = (emp: EmployeeListItemDto) => {
 
 const submitEdit = async () => {
   if (!editTarget.value || !editForm.RealName.trim()) {
-    alert('姓名不能为空');
+    notifyWarning('姓名不能为空');
     return;
   }
   submitting.value = true;
@@ -790,11 +791,11 @@ const openResetPwdModal = (emp: EmployeeListItemDto) => {
 const submitResetPwd = async () => {
   if (!resetPwdTarget.value) return;
   if (!resetPwdForm.newPwd || !resetPwdForm.confirm) {
-    alert('请输入新密码');
+    notifyWarning('请输入新密码');
     return;
   }
   if (resetPwdForm.newPwd !== resetPwdForm.confirm) {
-    alert('两次输入的密码不一致');
+    notifyWarning('两次输入的密码不一致');
     return;
   }
   submitting.value = true;
@@ -804,7 +805,7 @@ const submitResetPwd = async () => {
       newPassword: resetPwdForm.newPwd,
     });
     showResetPwdModal.value = false;
-    alert('密码重置成功');
+    notifySuccess('密码重置成功');
   } catch {
     /* */
   } finally {
@@ -859,7 +860,7 @@ const submitPersonalPerm = async () => {
       permissions: personalPermForm.value,
     });
     showPersonalPermModal.value = false;
-    alert('特批权限保存成功，员工重新登录后生效');
+    notifySuccess('特批权限保存成功，员工重新登录后生效');
   } catch {
     /* */
   } finally {

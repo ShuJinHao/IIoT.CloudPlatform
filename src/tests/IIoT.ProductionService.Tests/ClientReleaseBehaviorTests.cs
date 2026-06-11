@@ -181,7 +181,9 @@ public sealed class ClientReleaseBehaviorTests
         Assert.True(result.IsSuccess);
         Assert.NotNull(result.Value);
         Assert.Equal("1.1.0", result.Value!.LatestHost?.Version);
-        Assert.Equal("https://download.example.test/host-1.1.0.zip", result.Value.LatestHost?.DownloadUrl);
+        var publicHostJson = System.Text.Json.JsonSerializer.Serialize(result.Value.LatestHost);
+        Assert.DoesNotContain("DownloadUrl", publicHostJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("https://download.example.test/host-1.1.0.zip", publicHostJson, StringComparison.Ordinal);
 
         var plugin = Assert.Single(result.Value.Plugins);
         Assert.Equal("Injection", plugin.ModuleId);

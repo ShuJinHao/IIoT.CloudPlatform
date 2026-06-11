@@ -1,13 +1,13 @@
 <template>
   <div class="binding-panel">
     <div class="binding-intro">
-      <h3>客户端安装包下载</h3>
+      <h3>客户端首装包生成</h3>
       <p>
-        勾选这台机器要装的工序插件，给每个插件指定它的设备唯一码，
-        下载即得配置好的安装包，装上即用，无需现场再配。
+        勾选现场机器首次部署或重装需要的工序插件，给每个插件指定云端已注册设备，
+        云端会生成写入设备身份的一次性安装包。
       </p>
       <p class="binding-warn">
-        注意：下载会为所选设备生成新的启动密钥（旧的随之失效）。安装包内含一次性首装配置，请妥善保管，并始终使用最新下载的文件。
+        注意：生成会为所选设备写入新的启动密钥（旧的随之失效）。后续客户端更新由现场 Launcher 自动检测和执行，不从网页更新。
       </p>
     </div>
 
@@ -45,7 +45,7 @@
             <strong>{{ choiceOf(plugin.moduleId).deviceName }}</strong>
             <code>{{ choiceOf(plugin.moduleId).clientCode }}</code>
           </template>
-          <span v-else>选择设备唯一码</span>
+          <span v-else>选择设备</span>
         </button>
       </div>
     </div>
@@ -55,13 +55,13 @@
       <span v-if="validationHint" class="binding-hint">{{ validationHint }}</span>
       <UiButton type="primary" :disabled="!canGenerate || generating" @click="generate">
         <Download :size="15" />
-        {{ generating ? '生成中…' : '下载安装包' }}
+        {{ generating ? '生成中…' : '生成首装包' }}
       </UiButton>
     </div>
 
-    <UiModal v-model:show="showPicker" preset="card" title="选择设备唯一码" style="width: 640px;">
+    <UiModal v-model:show="showPicker" preset="card" title="选择设备" style="width: 640px;">
       <div class="picker">
-        <UiInput v-model:value="pickerKeyword" size="small" placeholder="搜索设备名称或唯一码" clearable />
+        <UiInput v-model:value="pickerKeyword" size="small" placeholder="搜索设备名称或 Code" clearable />
         <div class="picker-list">
           <p v-if="!devices.length" class="picker-empty">
             暂无可选设备，请先在「设备管理」注册设备。
@@ -98,6 +98,7 @@ import UiInput from '../../components/ui/UiInput.vue';
 import UiModal from '../../components/ui/UiModal.vue';
 import { getScopedDeviceSelectApi, type DeviceSelectDto } from '../../api/device';
 import { generateEdgeInstallerPackageApi, type ClientPluginReleaseDto } from '../../api/clientRelease';
+import { notifySuccess, requestConfirmation } from '../../utils/feedback';
 
 const props = defineProps<{
   pluginReleases: ClientPluginReleaseDto[];
@@ -172,7 +173,7 @@ const validationHint = computed(() => {
   if (!props.hostVersion) return '暂无已发布宿主版本';
   const entries = Object.values(selections);
   if (entries.length === 0) return '请至少勾选一个插件';
-  if (entries.some((choice) => !choice.deviceId)) return '有插件未指定设备唯一码';
+  if (entries.some((choice) => !choice.deviceId)) return '有插件未指定设备';
   return '';
 });
 
@@ -210,12 +211,19 @@ const generate = async () => {
   // 生成会为所选设备轮换启动密钥，旧密钥立即失效。强制二次确认，避免误操作打挂在线设备。
   const deviceList = Object.values(selections)
     .map((choice) => `${choice.deviceName}（${choice.clientCode}）`)
-    .join('、');
-  const confirmed = window.confirm(
-    `将为以下设备轮换启动密钥并生成安装包：\n${deviceList}\n\n` +
-      '注意：生成后这些设备的旧密钥立即失效，必须把新下载的安装包部署到对应设备；' +
-      '否则现场仍在运行的旧客户端会连不上云端。确认继续？',
-  );
+    .filter(Boolean);
+  const confirmed = await requestConfirmation({
+    type: 'warning',
+    title: '确认生成首装包',
+    message: '生成后会为所选设备写入新的启动密钥，旧密钥立即失效。',
+    details: [
+      `设备：${deviceList.join('、')}`,
+      '该文件仅用于首次部署或重装绑定，不作为客户端更新入口。',
+      '请把最新生成的安装包部署到对应设备，否则旧客户端会无法继续 bootstrap 云端身份。',
+    ],
+    confirmText: '生成首装包',
+    cancelText: '取消',
+  });
   if (!confirmed) return;
 
   generating.value = true;
@@ -231,6 +239,9 @@ const generate = async () => {
       baseUrl: baseUrl.value.trim() || null,
     });
     downloadBlob(installer.fileName, installer.blob);
+    notifySuccess('首装包已生成，浏览器正在下载。', {
+      title: '生成完成',
+    });
   } catch {
     // 业务错误已由 http 层统一弹窗提示，这里只需复位状态
   } finally {

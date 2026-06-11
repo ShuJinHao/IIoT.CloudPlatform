@@ -17,7 +17,6 @@ export interface PublicClientHostDownloadDto {
   hostApiVersion: string;
   targetRuntime: string;
   targetFramework?: string | null;
-  downloadUrl: string;
   sha256: string;
   packageSize: number;
   releaseNotes?: string | null;

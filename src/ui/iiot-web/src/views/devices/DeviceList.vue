@@ -3,22 +3,22 @@
     class="device-page"
     page-key="devices"
     title="设备台账"
-      subtitle="管理云端导入的设备档案、工序归属与现场使用的设备 Code"
+    subtitle="管理云端设备档案、工序归属与客户端寻址 Code"
   >
-      <template #actions>
-        <UiButton
-          v-if="authStore.isAdmin"
-          type="primary"
-          @click="openRegisterModal"
-        >
-          <template #icon>
-            <svg viewBox="0 0 16 16" fill="none">
-              <path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-            </svg>
-          </template>
-          新建设备
-        </UiButton>
-      </template>
+    <template #actions>
+      <UiButton
+        v-if="authStore.isAdmin"
+        type="primary"
+        @click="openRegisterModal"
+      >
+        <template #icon>
+          <svg viewBox="0 0 16 16" fill="none">
+            <path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </template>
+        新建设备
+      </UiButton>
+    </template>
 
     <template #toolbar>
       <NiondToolbar>
@@ -97,7 +97,7 @@
         <div class="hint-card">
           <div class="hint-card__title">设备 Code 由云端自动生成</div>
           <div class="hint-card__desc">
-            保存后会返回唯一 Code 和启动密钥，可直接复制给现场客户端配置使用。
+            保存后请到「客户端首装生成」为对应工序生成绑定安装包，现场无需手工配置密钥。
           </div>
         </div>
       </div>
@@ -167,19 +167,9 @@
           </div>
           <div class="detail-row">
             <span class="detail-row__label">设备 Code</span>
-            <div class="detail-row__copy">
-              <span class="detail-row__value detail-row__value--mono detail-row__value--brand">
-                {{ selectedDevice.code }}
-              </span>
-              <UiButton
-                size="tiny"
-                quaternary
-                type="primary"
-                @click="copyCode(selectedDevice.code)"
-              >
-                复制
-              </UiButton>
-            </div>
+            <span class="detail-row__value detail-row__value--mono detail-row__value--brand">
+              {{ selectedDevice.code }}
+            </span>
           </div>
           <div class="detail-row">
             <span class="detail-row__label">设备 ID</span>
@@ -193,74 +183,9 @@
               {{ processNameMap[selectedDevice.processId] || selectedDevice.processId }}
             </span>
           </div>
-          <UiButton
-            v-permission="'Device.Update'"
-            secondary
-            block
-            @click="handleRotateBootstrapSecret(selectedDevice)"
-          >
-            轮换启动密钥
-          </UiButton>
         </div>
       </UiDrawerContent>
     </UiDrawer>
-
-    <!-- 启动密钥揭示 modal -->
-    <UiModal
-      v-model:show="bootstrapSecretDialog.show"
-      preset="card"
-      :title="bootstrapSecretDialog.title"
-      style="width: 560px;"
-      :mask-closable="false"
-    >
-      <div class="form-stack">
-        <div class="warning-card">
-          <svg viewBox="0 0 16 16" width="16" height="16" fill="none">
-            <path d="M8 1.5L14 13H2L8 1.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
-            <path d="M8 6v3M8 10.5v.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-          </svg>
-          启动密钥只显示一次，请立即保存到边缘端配置。
-        </div>
-        <div class="form-field">
-          <label class="form-label">设备 Code</label>
-          <div class="secret-row">
-            <code class="secret-row__value">{{ bootstrapSecretDialog.code }}</code>
-            <UiButton
-              size="small"
-              secondary
-              type="primary"
-              @click="copyText(bootstrapSecretDialog.code, 'Code 已复制。')"
-            >
-              复制
-            </UiButton>
-          </div>
-        </div>
-        <div class="form-field">
-          <label class="form-label">启动密钥</label>
-          <div class="secret-row">
-            <code class="secret-row__value">{{ bootstrapSecretDialog.secret }}</code>
-            <UiButton
-              size="small"
-              secondary
-              type="primary"
-              @click="copyText(bootstrapSecretDialog.secret, '启动密钥已复制。')"
-            >
-              复制
-            </UiButton>
-          </div>
-        </div>
-      </div>
-      <template #footer>
-        <div class="modal-actions">
-          <UiButton
-            type="primary"
-            @click="bootstrapSecretDialog.show = false"
-          >
-            我已保存
-          </UiButton>
-        </div>
-      </template>
-    </UiModal>
 
     <!-- 通用确认 modal -->
     <UiModal
@@ -293,7 +218,6 @@ import {
   getDevicePagedListApi,
   registerDeviceApi,
   updateDeviceProfileApi,
-  rotateDeviceBootstrapSecretApi,
   deleteDeviceApi,
   type DeviceListItemDto,
   type PagedMetaData,
@@ -315,6 +239,7 @@ import UiPagination from '../../components/ui/UiPagination.vue';
 import UiSelect from '../../components/ui/UiSelect.vue';
 import UiTag from '../../components/ui/UiTag.vue';
 import type { UiDataTableColumn } from '../../components/ui/types';
+import { notifySuccess, notifyWarning } from '../../utils/feedback';
 
 const authStore = useAuthStore();
 const devices = ref<DeviceListItemDto[]>([]);
@@ -392,31 +317,6 @@ const onPageChange = (p: number) => {
   fetchList();
 };
 
-// === 复制工具 ===
-const copyText = async (text: string, successMessage: string) => {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const textarea = document.createElement('textarea');
-      textarea.value = text;
-      textarea.style.position = 'fixed';
-      textarea.style.opacity = '0';
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textarea);
-    }
-    alert(successMessage);
-  } catch {
-    alert('复制失败，请手动复制。');
-  }
-};
-
-const copyCode = async (code: string) => {
-  await copyText(code, `Code 已复制：${code}`);
-};
-
 // === 表格列 ===
 const columns: UiDataTableColumn<DeviceListItemDto>[] = [
   {
@@ -434,19 +334,6 @@ const columns: UiDataTableColumn<DeviceListItemDto>[] = [
     render(row) {
       return h('div', { class: 'cell-code-wrap' }, [
         h('code', { class: 'cell-code' }, row.code),
-        h(
-          UiButton,
-          {
-            size: 'tiny',
-            quaternary: true,
-            type: 'primary',
-            onClick: (e: MouseEvent) => {
-              e.stopPropagation();
-              copyCode(row.code);
-            },
-          },
-          { default: () => '复制' },
-        ),
       ]);
     },
   },
@@ -477,7 +364,7 @@ const columns: UiDataTableColumn<DeviceListItemDto>[] = [
   {
     title: '操作',
     key: 'actions',
-    width: 240,
+    width: 180,
     align: 'right',
     render(row) {
       const actions = [
@@ -504,16 +391,6 @@ const columns: UiDataTableColumn<DeviceListItemDto>[] = [
               onClick: () => openEditModal(row),
             },
             { default: () => '编辑' },
-          ),
-          h(
-            UiButton,
-            {
-              size: 'tiny',
-              type: 'warning',
-              secondary: true,
-              onClick: () => handleRotateBootstrapSecret(row),
-            },
-            { default: () => '轮换密钥' },
           ),
         );
       }
@@ -546,12 +423,6 @@ const registerForm = reactive({
   deviceName: '',
   processId: null as string | null,
 });
-const bootstrapSecretDialog = reactive({
-  show: false,
-  title: '',
-  code: '',
-  secret: '',
-});
 
 const openRegisterModal = async () => {
   registerForm.deviceName = '';
@@ -563,7 +434,7 @@ const openRegisterModal = async () => {
 const submitRegister = async () => {
   const deviceName = registerForm.deviceName.trim();
   if (!deviceName || !registerForm.processId) {
-    alert('请填写设备名称并选择所属工序。');
+    notifyWarning('请填写设备名称并选择所属工序。');
     return;
   }
   submitting.value = true;
@@ -580,17 +451,13 @@ const submitRegister = async () => {
     };
     showRegisterModal.value = false;
     openDetailPanel(createdDevice);
-    showBootstrapSecret('设备启动密钥', created.code, created.bootstrapSecret);
+    notifySuccess('设备已创建。请到客户端首装生成页为该设备生成绑定安装包。');
     await fetchList();
   } catch {
     /* */
   } finally {
     submitting.value = false;
   }
-};
-
-const showBootstrapSecret = (title: string, code: string, secret: string) => {
-  Object.assign(bootstrapSecretDialog, { show: true, title, code, secret });
 };
 
 // === 详情抽屉 ===
@@ -616,7 +483,7 @@ const openEditModal = (device: DeviceListItemDto) => {
 const submitEdit = async () => {
   const deviceName = editForm.deviceName.trim();
   if (!editTarget.value || !deviceName) {
-    alert('设备名称不能为空。');
+    notifyWarning('设备名称不能为空。');
     return;
   }
   submitting.value = true;
@@ -661,32 +528,6 @@ const handleDelete = (device: DeviceListItemDto) => {
         }
         confirmDialog.show = false;
         await fetchList();
-      } catch {
-        /* */
-      } finally {
-        submitting.value = false;
-      }
-    },
-  });
-};
-
-const handleRotateBootstrapSecret = (device: DeviceListItemDto) => {
-  Object.assign(confirmDialog, {
-    show: true,
-    danger: false,
-    title: '确认轮换启动密钥',
-    desc: `轮换后，设备【${device.deviceName}】旧启动密钥会立即失效。`,
-    confirmText: '确认轮换',
-    onConfirm: async () => {
-      submitting.value = true;
-      try {
-        const rotated = await rotateDeviceBootstrapSecretApi(device.id);
-        confirmDialog.show = false;
-        showBootstrapSecret(
-          '启动密钥已轮换',
-          rotated.code,
-          rotated.bootstrapSecret,
-        );
       } catch {
         /* */
       } finally {
@@ -819,38 +660,6 @@ onMounted(async () => {
   line-height: 1.6;
 }
 
-/* 警告 */
-.warning-card {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  background: var(--warn-soft);
-  border: 1px solid rgba(217, 119, 6, 0.22);
-  color: var(--warn);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
-}
-
-/* 启动密钥行 */
-.secret-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-.secret-row__value {
-  flex: 1;
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
-  color: var(--brand);
-  background: var(--brand-soft);
-  border: 1px solid rgba(8, 145, 178, 0.18);
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  word-break: break-all;
-}
-
 /* 详情抽屉 */
 .detail-stack {
   display: flex;
@@ -904,13 +713,6 @@ onMounted(async () => {
   font-size: var(--fs-xs);
   color: var(--text-2);
 }
-.detail-row__copy {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-
 .confirm-desc {
   font-size: var(--fs-base);
   color: var(--text-1);

@@ -3,6 +3,7 @@ using IIoT.Core.Production.Specifications.Devices;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.RecordQueries;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -17,6 +18,7 @@ public record UpdateDeviceProfileCommand(
 
 public class UpdateDeviceProfileHandler(
     IRepository<Device> deviceRepository,
+    IDeviceReadQueryService deviceReadQueryService,
     ICurrentUserDeviceAccessService currentUserDeviceAccessService)
     : ICommandHandler<UpdateDeviceProfileCommand, Result<bool>>
 {
@@ -42,6 +44,14 @@ public class UpdateDeviceProfileHandler(
         if (!deviceAccess.IsSuccess)
         {
             return Result.Failure(deviceAccess.Errors?.ToArray() ?? ["越权:未授权访问该设备"]);
+        }
+
+        if (await deviceReadQueryService.NameExistsAsync(
+                deviceName,
+                excludingDeviceId: device.Id,
+                cancellationToken: cancellationToken))
+        {
+            return Result.Failure("设备名称已存在，请换一个名称");
         }
 
         device.Rename(deviceName);

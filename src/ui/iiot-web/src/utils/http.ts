@@ -7,6 +7,7 @@ import type {
 import { useAuthStore } from '../stores/auth';
 import { ResultStatus } from '../types/api';
 import type { ApiResult } from '../types/api';
+import { notifyError } from './feedback';
 
 const client = axios.create({
   baseURL: '/api/v1',
@@ -34,19 +35,103 @@ function logoutAndRedirect() {
   authStore.logout({ redirectToLogin: true });
 }
 
-const handleHttpError = (error: unknown) => {
+interface ProblemDetailsPayload {
+  title?: string;
+  detail?: string;
+  errors?: unknown;
+  [key: string]: unknown;
+}
+
+const statusFallbackMessages: Record<number, string> = {
+  400: '请求无效，服务器没有返回具体原因。',
+  403: '当前账号无权访问该功能。',
+  404: '请求的资源不存在或已被删除。',
+  500: '服务端发生异常，请稍后重试。',
+};
+
+const normalizeErrors = (errors: unknown): string[] => {
+  if (!errors) return [];
+  if (Array.isArray(errors)) {
+    return errors
+      .map((item) => String(item).trim())
+      .filter(Boolean);
+  }
+  if (typeof errors === 'object') {
+    return Object.values(errors as Record<string, unknown>)
+      .flatMap((value) => Array.isArray(value) ? value : [value])
+      .map((item) => String(item).trim())
+      .filter(Boolean);
+  }
+  return [String(errors).trim()].filter(Boolean);
+};
+
+const readProblemDetails = async (data: unknown, contentType?: string): Promise<ProblemDetailsPayload | null> => {
+  if (!data) return null;
+
+  if (data instanceof Blob) {
+    const text = await data.text();
+    if (!text.trim()) return null;
+    if (contentType?.includes('json') || text.trimStart().startsWith('{')) {
+      try {
+        return JSON.parse(text) as ProblemDetailsPayload;
+      } catch {
+        return { detail: text };
+      }
+    }
+    return { detail: text };
+  }
+
+  if (typeof data === 'object') {
+    return data as ProblemDetailsPayload;
+  }
+
+  if (typeof data === 'string' && data.trim()) {
+    try {
+      return JSON.parse(data) as ProblemDetailsPayload;
+    } catch {
+      return { detail: data };
+    }
+  }
+
+  return null;
+};
+
+const notifyProblem = async (status: number, data: unknown, contentType?: string) => {
+  const problem = await readProblemDetails(data, contentType);
+  const details = [
+    ...normalizeErrors(problem?.errors),
+    ...normalizeErrors(problem?.extensions && (problem.extensions as Record<string, unknown>).errors),
+  ];
+  const message = problem?.detail?.trim()
+    || details[0]
+    || problem?.title?.trim()
+    || statusFallbackMessages[status]
+    || '请求失败，请稍后重试。';
+
+  notifyError(message, {
+    title: status === 400 ? '请求处理失败' : problem?.title || '请求失败',
+    details: details.filter((item) => item !== message),
+  });
+};
+
+const handleHttpError = async (error: unknown): Promise<never> => {
   if (axios.isAxiosError(error) && error.response) {
+    const contentType = error.response.headers?.['content-type'] as string | undefined;
     if (error.response.status === 401) {
       logoutAndRedirect();
     } else if (error.response.status === 403) {
-      alert('当前账号无权访问该功能。');
+      await notifyProblem(error.response.status, error.response.data, contentType);
     } else if (error.response.status === 400) {
-      alert('请求参数校验失败。');
+      await notifyProblem(error.response.status, error.response.data, contentType);
     } else if (error.response.status === 500) {
-      alert('服务端发生异常，请稍后重试。');
+      await notifyProblem(error.response.status, error.response.data, contentType);
+    } else {
+      await notifyProblem(error.response.status, error.response.data, contentType);
     }
   } else {
-    alert('网络异常，请检查后端服务是否正常。');
+    notifyError('网络异常，请检查后端服务是否正常。', {
+      title: '网络请求失败',
+    });
   }
 
   return Promise.reject(error);
@@ -72,13 +157,13 @@ const unwrap = async <T>(request: Promise<AxiosResponse<ApiResult<T> | T>>): Pro
       case ResultStatus.NotFound: {
         const errorMessage = apiResult.errors?.join('\n') || '业务请求失败。';
         console.error('业务拦截：', errorMessage);
-        alert(`提示：\n${errorMessage}`);
+        notifyError(errorMessage, { title: '请求处理失败' });
         return Promise.reject(apiResult);
       }
 
       case ResultStatus.Forbidden:
         console.warn('收到无权访问响应。');
-        alert('当前账号无权执行该操作。');
+        notifyError('当前账号无权执行该操作。', { title: '禁止访问' });
         return Promise.reject(apiResult);
 
       case ResultStatus.Unauthorized:
@@ -90,7 +175,7 @@ const unwrap = async <T>(request: Promise<AxiosResponse<ApiResult<T> | T>>): Pro
         return Promise.reject(apiResult);
     }
   } catch (error) {
-    return handleHttpError(error);
+    return await handleHttpError(error);
   }
 };
 

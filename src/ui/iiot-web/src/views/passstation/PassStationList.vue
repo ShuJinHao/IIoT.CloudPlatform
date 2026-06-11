@@ -305,6 +305,7 @@ import UiRadioGroup from '../../components/ui/UiRadioGroup.vue';
 import UiSelect from '../../components/ui/UiSelect.vue';
 import UiTag from '../../components/ui/UiTag.vue';
 import type { UiDataTableColumn } from '../../components/ui/types';
+import { notifyWarning } from '../../utils/feedback';
 
 const PAGE_SIZE = 10;
 
@@ -470,7 +471,7 @@ const fetchSelectData = async () => {
 
 const fetchData = async () => {
   if (!currentSchema.value || !currentProcess.value) {
-    alert('请先选择已支持追溯的工序。');
+    notifyWarning('请先选择已支持追溯的工序。');
     return;
   }
 
@@ -520,7 +521,7 @@ const fetchData = async () => {
 
 const doSearch = async () => {
   if (!currentSchema.value || !currentProcess.value) {
-    alert('请先选择已支持追溯的工序。');
+    notifyWarning('请先选择已支持追溯的工序。');
     return;
   }
   if (
@@ -528,7 +529,7 @@ const doSearch = async () => {
       currentMode.value === 'device-barcode') &&
     !filters.barcode.trim()
   ) {
-    alert('当前查询模式必须填写条码。');
+    notifyWarning('当前查询模式必须填写条码。');
     return;
   }
   if (
@@ -537,7 +538,7 @@ const doSearch = async () => {
       currentMode.value === 'device-latest') &&
     !filters.deviceId
   ) {
-    alert('请选择设备。');
+    notifyWarning('请选择设备。');
     return;
   }
   if (
@@ -545,7 +546,7 @@ const doSearch = async () => {
       currentMode.value === 'device-time') &&
     (!filters.startTime || !filters.endTime)
   ) {
-    alert('请同时填写开始时间和结束时间。');
+    notifyWarning('请同时填写开始时间和结束时间。');
     return;
   }
   currentPage.value = 1;

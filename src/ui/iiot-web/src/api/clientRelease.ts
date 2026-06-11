@@ -160,33 +160,11 @@ export const upsertClientPluginReleaseApi = (payload: UpsertClientPluginReleaseP
   return http.post<UpsertClientReleaseResultDto>(`${basePath}/plugin-releases`, payload);
 };
 
-// 首装绑定包：一行 = 一个插件 + 一台设备，云端据此生成 moduleId -> 唯一码 清单
+// 首装安装包：一行 = 一个插件 + 一台设备，云端据此生成带绑定 payload 的真实安装包。
 export interface EdgeBindingSelection {
   moduleId: string;
   deviceId: string;
 }
-
-export interface EdgeBindingItemDto {
-  moduleId: string;
-  clientCode: string;
-  bootstrapSecret: string;
-  deviceName: string;
-  processId: string;
-}
-
-export interface EdgeBindingBundleDto {
-  schemaVersion: number;
-  baseUrl?: string | null;
-  generatedAtUtc: string;
-  bindings: EdgeBindingItemDto[];
-}
-
-export const generateEdgeBindingBundleApi = (payload: {
-  selections: EdgeBindingSelection[];
-  baseUrl?: string | null;
-}) => {
-  return http.post<EdgeBindingBundleDto>(`${basePath}/binding-bundle`, payload);
-};
 
 export interface GenerateEdgeInstallerPackagePayload {
   channel?: string | null;

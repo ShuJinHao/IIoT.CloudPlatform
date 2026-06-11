@@ -105,7 +105,6 @@ public sealed record PublicClientHostDownloadDto(
     string HostApiVersion,
     string TargetRuntime,
     string? TargetFramework,
-    string DownloadUrl,
     string Sha256,
     long PackageSize,
     string? ReleaseNotes,

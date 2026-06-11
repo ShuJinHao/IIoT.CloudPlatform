@@ -26,6 +26,7 @@ public sealed class ProductionCommandBehaviorTests
         };
         var handler = new UpdateDeviceProfileHandler(
             repository,
+            new StubDeviceReadQueryService(),
             new StubCurrentUserDeviceAccessService { IsAdministrator = true });
 
         var result = await handler.Handle(
@@ -47,7 +48,30 @@ public sealed class ProductionCommandBehaviorTests
         };
         var handler = new UpdateDeviceProfileHandler(
             repository,
+            new StubDeviceReadQueryService(),
             new StubCurrentUserDeviceAccessService { FailureMessage = "forbidden" });
+
+        var result = await handler.Handle(
+            new UpdateDeviceProfileCommand(device.Id, "Device-02"),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("Device-01", device.DeviceName);
+        Assert.Empty(repository.UpdatedEntities);
+    }
+
+    [Fact]
+    public async Task UpdateDeviceProfileHandler_ShouldRejectDuplicateDeviceName()
+    {
+        var device = new Device("Device-01", "DEV-PRODTEST03", Guid.NewGuid());
+        var repository = new InMemoryRepository<Device>
+        {
+            SingleOrDefaultResult = device
+        };
+        var handler = new UpdateDeviceProfileHandler(
+            repository,
+            new StubDeviceReadQueryService { NameExists = true },
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true });
 
         var result = await handler.Handle(
             new UpdateDeviceProfileCommand(device.Id, "Device-02"),
@@ -235,6 +259,40 @@ public sealed class ProductionCommandBehaviorTests
             CancellationToken cancellationToken = default)
         {
             return Task.FromResult(VersionExists);
+        }
+    }
+
+    private sealed class StubDeviceReadQueryService : IDeviceReadQueryService
+    {
+        public bool NameExists { get; init; }
+
+        public Task<bool> ExistsAsync(Guid deviceId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> ExistsInProcessAsync(
+            Guid deviceId,
+            Guid processId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> CodeExistsAsync(
+            string code,
+            Guid? excludingDeviceId = null,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(false);
+        }
+
+        public Task<bool> NameExistsAsync(
+            string name,
+            Guid? excludingDeviceId = null,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(NameExists);
         }
     }
 }

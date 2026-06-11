@@ -114,7 +114,7 @@
               class="flex h-12 items-center justify-center rounded-[15px] border border-[rgba(17,24,39,0.10)] bg-white text-[var(--fs-base)] font-[var(--fw-strong)] text-[var(--text-0)] transition hover:bg-[var(--bg-2)]"
               to="/downloads"
             >
-              客户端下载中心
+              客户端版本中心
             </router-link>
           </div>
 
@@ -210,7 +210,7 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import {
   Activity,
@@ -233,6 +233,7 @@ import type { LoginPayload } from '../api/auth';
 import { setAppLocale, type AppLocale } from '../i18n';
 
 const router = useRouter();
+const route = useRoute();
 const authStore = useAuthStore();
 const { t, locale } = useI18n();
 
@@ -250,6 +251,14 @@ const toggleLocale = () => {
   setAppLocale(currentLocale.value === 'zh-CN' ? 'en-US' : 'zh-CN');
 };
 
+const getSafeReturnUrl = () => {
+  const value = route.query.returnUrl;
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('\\')) return null;
+  return trimmed;
+};
+
 const handleLogin = async () => {
   if (!loginForm.employeeNo || !loginForm.password) {
     errorMsg.value = t('login.required');
@@ -262,7 +271,16 @@ const handleLogin = async () => {
   try {
     const session = await loginApi(loginForm);
     authStore.setSession(session);
-    router.push('/');
+    const returnUrl = getSafeReturnUrl();
+    if (returnUrl?.startsWith('/connect/')) {
+      window.location.assign(returnUrl);
+      return;
+    }
+    if (returnUrl) {
+      await router.push(returnUrl);
+      return;
+    }
+    await router.push('/');
   } catch {
     errorMsg.value = t('login.failed');
   } finally {
