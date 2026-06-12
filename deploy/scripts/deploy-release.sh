@@ -52,7 +52,7 @@ load_dotenv
 
 compose pull iiot-httpapi iiot-gateway iiot-dataworker iiot-migration iiot-web
 compose up -d postgres redis-cache rabbitmq seq >/dev/null
-compose run --rm iiot-migration
+compose run -T --rm iiot-migration
 compose up -d iiot-httpapi iiot-gateway iiot-dataworker iiot-web nginx-gateway >/dev/null
 COMPOSE_ENV_FILE="$TEMP_RELEASE_ENV_FILE" "$SCRIPT_DIR/post-deploy-check.sh"
 
