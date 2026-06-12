@@ -316,11 +316,11 @@ public sealed class ApplicationFlowGuardTests
             Assert.NotNull(archive.GetEntry("launcher/IIoT.Edge.Launcher.dll"));
             Assert.NotNull(archive.GetEntry("launcher/iiot-binding.json"));
             Assert.NotNull(archive.GetEntry("launcher/iiot-enabled-plugins.json"));
-            Assert.NotNull(archive.GetEntry("homogenization/IIoT.Edge.Shell.dll"));
-            Assert.NotNull(archive.GetEntry("homogenization/Modules/Homogenization/plugin.json"));
-            Assert.NotNull(archive.GetEntry("homogenization/iiot-plugin-binding.json"));
-            Assert.Null(archive.GetEntry("welding/IIoT.Edge.Shell.dll"));
-            Assert.Null(archive.GetEntry("welding/iiot-plugin-binding.json"));
+            Assert.NotNull(archive.GetEntry("host/IIoT.Edge.Shell.dll"));
+            Assert.NotNull(archive.GetEntry("plugins/Homogenization/plugin.json"));
+            Assert.NotNull(archive.GetEntry("plugins/Homogenization/iiot-plugin-binding.json"));
+            Assert.Null(archive.GetEntry("plugins/Welding/plugin.json"));
+            Assert.Null(archive.GetEntry("plugins/Welding/iiot-plugin-binding.json"));
 
             var bindingJson = ReadZipEntryText(archive, "launcher/iiot-binding.json");
             using var binding = JsonDocument.Parse(bindingJson);
@@ -336,10 +336,10 @@ public sealed class ApplicationFlowGuardTests
             using var hostConfig = JsonDocument.Parse(hostConfigJson);
             var hostPlugin = hostConfig.RootElement.GetProperty("plugins")[0];
             Assert.Equal("Homogenization", hostPlugin.GetProperty("moduleId").GetString());
-            Assert.Equal("homogenization", hostPlugin.GetProperty("runtimeDirectory").GetString());
+            Assert.Equal("Homogenization", hostPlugin.GetProperty("pluginDirectory").GetString());
             Assert.Equal(device.Code, hostPlugin.GetProperty("clientCode").GetString());
 
-            var pluginBindingJson = ReadZipEntryText(archive, "homogenization/iiot-plugin-binding.json");
+            var pluginBindingJson = ReadZipEntryText(archive, "plugins/Homogenization/iiot-plugin-binding.json");
             using var pluginBinding = JsonDocument.Parse(pluginBindingJson);
             Assert.Equal("Homogenization", pluginBinding.RootElement.GetProperty("moduleId").GetString());
             Assert.Equal(device.Code, pluginBinding.RootElement.GetProperty("clientCode").GetString());
@@ -2189,14 +2189,13 @@ public sealed class ApplicationFlowGuardTests
         File.WriteAllBytes(Path.Combine(artifactDirectory, "IIoT.Edge.Setup.exe"), "MZ-STUB"u8.ToArray());
         WriteFixtureFile(artifactDirectory, "launcher/IIoT.Edge.Launcher.dll", "launcher");
         WriteFixtureFile(artifactDirectory, "launcher/launcher.profiles.json", "{}");
-        WriteFixtureFile(artifactDirectory, "homogenization/IIoT.Edge.Shell.dll", "shell");
-        WriteFixtureFile(artifactDirectory, "homogenization/Modules/Homogenization/plugin.json", "{}");
-        WriteFixtureFile(artifactDirectory, "welding/IIoT.Edge.Shell.dll", "shell");
-        WriteFixtureFile(artifactDirectory, "welding/Modules/Welding/plugin.json", "{}");
+        WriteFixtureFile(artifactDirectory, "host/IIoT.Edge.Shell.dll", "shell");
+        WriteFixtureFile(artifactDirectory, "plugins/Homogenization/plugin.json", "{}");
+        WriteFixtureFile(artifactDirectory, "plugins/Welding/plugin.json", "{}");
 
         var manifest = """
         {
-          "schemaVersion": 1,
+          "schemaVersion": 2,
           "channel": "stable",
           "version": "1.2.0",
           "hostApiVersion": "1.0.0",
@@ -2204,6 +2203,8 @@ public sealed class ApplicationFlowGuardTests
           "targetFramework": "net10.0",
           "installerStubFile": "IIoT.Edge.Setup.exe",
           "launcherDirectory": "launcher",
+          "hostDirectory": "host",
+          "pluginsRoot": "plugins",
           "modules": [
             {
               "moduleId": "Homogenization",
@@ -2212,8 +2213,7 @@ public sealed class ApplicationFlowGuardTests
               "hostApiVersion": "1.0.0",
               "minHostVersion": "1.0.0",
               "maxHostVersion": "9.9.9",
-              "runtimeId": "homogenization",
-              "runtimeDirectory": "homogenization"
+              "pluginDirectory": "Homogenization"
             },
             {
               "moduleId": "Welding",
@@ -2222,8 +2222,7 @@ public sealed class ApplicationFlowGuardTests
               "hostApiVersion": "1.0.0",
               "minHostVersion": "1.0.0",
               "maxHostVersion": "9.9.9",
-              "runtimeId": "welding",
-              "runtimeDirectory": "welding"
+              "pluginDirectory": "Welding"
             }
           ]
         }

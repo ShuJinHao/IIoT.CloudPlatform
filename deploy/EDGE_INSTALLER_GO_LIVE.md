@@ -23,7 +23,8 @@ pwsh ./scripts/TestEdgeClientInstallerArtifact.ps1 `
 publish/edge-installer-artifacts/stable/1.2.0/
   IIoT.Edge.Setup.exe
   launcher/
-  <plugin-runtime>/
+  host/
+  plugins/
   installer-artifact.json
 ```
 
@@ -101,14 +102,15 @@ pwsh ./scripts/PublishEdgeClientInstallerArtifact.ps1 `
 /srv/iiot/edge-updates/installers/stable/1.2.0/
   IIoT.Edge.Setup.exe
   launcher/
-  <plugin-runtime>/
+  host/
+  plugins/
   installer-artifact.json
 ```
 
 服务器检查：
 
 ```sh
-find /srv/iiot/edge-updates/installers/stable/1.2.0 -maxdepth 2 -printf '%y %P %s\n' | sort
+find /srv/iiot/edge-updates/installers/stable/1.2.0 -maxdepth 3 -printf '%y %P %s\n' | sort
 ```
 
 外部只读检查 catalog 和素材 URL：
@@ -138,7 +140,7 @@ docker inspect deploy-iiot-httpapi-1 \
   --format '{{range .Mounts}}{{println .Source "->" .Destination .Mode}}{{end}}'
 
 docker exec deploy-iiot-httpapi-1 /bin/sh -lc \
-  'find /app/edge-updates/installers/stable/1.2.0 -maxdepth 2 -printf "%y %P %s\n" | sort'
+  'find /app/edge-updates/installers/stable/1.2.0 -maxdepth 3 -printf "%y %P %s\n" | sort'
 
 curl -sS -I http://127.0.0.1:81/edge-updates/installers/stable/1.2.0/installer-artifact.json
 ```
@@ -165,8 +167,7 @@ curl -sS -I http://127.0.0.1:81/edge-updates/installers/stable/1.2.0/installer-a
    ```powershell
    pwsh <IIoT.EdgeClient>\scripts\TestEdgeDownloadedInstallerPackage.ps1 `
      -InstallerPath <下载到的 IIoT.Edge.Setup*.exe> `
-     -ExpectedModuleId Homogenization `
-     -ExpectedRuntimeDirectory homogenization
+     -ExpectedModuleId Homogenization
    ```
 
    该脚本只读 `.exe`，不执行安装，不打印 bootstrap secret。
@@ -180,8 +181,7 @@ curl -sS -I http://127.0.0.1:81/edge-updates/installers/stable/1.2.0/installer-a
 ```powershell
 pwsh <IIoT.EdgeClient>\scripts\InvokeEdgeInstallerWindowsAcceptance.ps1 `
   -InstallerPath <下载到的 IIoT.Edge.Setup*.exe> `
-  -ExpectedModuleId Homogenization `
-  -ExpectedRuntimeDirectory homogenization
+  -ExpectedModuleId Homogenization
 ```
 
 如果需要清理旧安装目录后做干净验收，必须显式确认：
@@ -190,12 +190,11 @@ pwsh <IIoT.EdgeClient>\scripts\InvokeEdgeInstallerWindowsAcceptance.ps1 `
 pwsh <IIoT.EdgeClient>\scripts\InvokeEdgeInstallerWindowsAcceptance.ps1 `
   -InstallerPath <下载到的 IIoT.Edge.Setup*.exe> `
   -ExpectedModuleId Homogenization `
-  -ExpectedRuntimeDirectory homogenization `
   -CleanInstallRoot `
   -ConfirmCleanInstallRoot
 ```
 
-该脚本会运行安装器并检查 `%LOCALAPPDATA%\IIoTEdge`、Launcher、工序 runtime、绑定导入摘要和机器配置；最后的 Cloud bootstrap 成功仍需看 Launcher/Cloud 运行状态确认。
+该脚本会运行安装器并检查 `%LOCALAPPDATA%\IIoTEdge`、Launcher、`host/`、`plugins/<ModuleId>/`、绑定导入摘要和机器配置；最后的 Cloud bootstrap 成功仍需看 Launcher/Cloud 运行状态确认。
 
 若需要绕过页面做 API 级下载验证，可在确认测试设备后运行：
 

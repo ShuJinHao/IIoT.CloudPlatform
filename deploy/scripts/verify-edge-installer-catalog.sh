@@ -17,7 +17,7 @@ Checks:
   - host version/runtime/channel match the expected values
   - at least one plugin is published in the catalog
   - installer-artifact.json is reachable
-  - installer-artifact.json describes an expanded launcher directory and plugin runtime directories
+  - installer-artifact.json describes v2 launcher/host/plugins directories
   - installer stub URL is reachable and Content-Length matches the manifest when size is present
 
 This script is read-only. It does not call installer-package and does not rotate device secrets.
@@ -131,26 +131,33 @@ if (artifact.get("targetRuntime") or "").lower() != target_runtime.lower():
 if expected_version and artifact.get("version") != expected_version:
     raise SystemExit(f"artifact version mismatch: {artifact.get('version')} != {expected_version}")
 
+if artifact.get("schemaVersion") != 2:
+    raise SystemExit(f"artifact schemaVersion must be 2, actual: {artifact.get('schemaVersion')}")
+
 if not artifact.get("modules"):
     raise SystemExit("artifact modules is empty")
 
 base = artifact_url.rsplit("/", 1)[0] + "/"
 stub_file = artifact.get("installerStubFile")
 launcher_directory = (artifact.get("launcherDirectory") or "").strip("/")
-if not stub_file or not launcher_directory:
-    raise SystemExit("artifact stub/launcher directory is empty")
+host_directory = (artifact.get("hostDirectory") or "").strip("/")
+plugins_root = (artifact.get("pluginsRoot") or "").strip("/")
+if not stub_file or not launcher_directory or not host_directory or not plugins_root:
+    raise SystemExit("artifact stub/launcher/host/plugins directory is empty")
 
 for module in artifact.get("modules") or []:
-    if not module.get("moduleId") or not module.get("runtimeDirectory"):
-        raise SystemExit("artifact module runtime mapping is incomplete")
+    if not module.get("moduleId") or not module.get("pluginDirectory"):
+        raise SystemExit("artifact module plugin mapping is incomplete")
 
 print(f"STUB_URL={urljoin(base, stub_file)}")
 print(f"STUB_SIZE={artifact.get('installerStubSize')}")
 print(
-    "artifact_version=%s launcher=%s artifact_modules=%s"
+    "artifact_version=%s launcher=%s host=%s pluginsRoot=%s artifact_modules=%s"
     % (
         artifact.get("version"),
         launcher_directory,
+        host_directory,
+        plugins_root,
         ",".join(module.get("moduleId", "") for module in artifact.get("modules", [])),
     )
 )

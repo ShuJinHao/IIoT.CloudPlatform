@@ -93,7 +93,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         var moduleById = artifact.Modules.ToDictionary(
             module => module.ModuleId,
             StringComparer.OrdinalIgnoreCase);
-        var selectedRuntimeDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var selectedModules = new List<EdgeInstallerArtifactModule>(selections.Count);
         foreach (var selection in selections)
         {
             if (!moduleById.TryGetValue(selection.ModuleId, out var module))
@@ -122,10 +122,10 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 return await FailAsync($"生成安装包失败：{issue}", cancellationToken);
             }
 
-            selectedRuntimeDirectories.Add(module.RuntimeDirectory);
+            selectedModules.Add(module);
         }
 
-        var layoutCheck = ValidateArtifactLayout(artifact, selectedRuntimeDirectories);
+        var layoutCheck = ValidateArtifactLayout(artifact, selectedModules);
         if (layoutCheck is not null)
         {
             return await FailAsync(layoutCheck, cancellationToken);
@@ -148,7 +148,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         {
             packageStream = BuildInstallerPackage(
                 artifact,
-                selectedRuntimeDirectories,
+                selectedModules,
                 bindingBundle);
         }
         catch (InvalidDataException)
@@ -233,7 +233,10 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         if (manifest is null
             || string.IsNullOrWhiteSpace(manifest.InstallerStubFile)
             || !IsSafeRelativeFile(manifest.InstallerStubFile)
+            || manifest.SchemaVersion != 2
             || !IsSafeZipDirectory(manifest.LauncherDirectory)
+            || !IsSafeZipDirectory(manifest.HostDirectory)
+            || !IsSafeZipDirectory(manifest.PluginsRoot)
             || manifest.Modules.Count == 0)
         {
             return ArtifactLoadResult.Fail("生成安装包失败：安装素材清单不完整。");
@@ -242,15 +245,15 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         if (manifest.Modules.Any(module =>
             string.IsNullOrWhiteSpace(module.ModuleId)
             || string.IsNullOrWhiteSpace(module.Version)
-            || !IsSafeZipDirectory(module.RuntimeDirectory)))
+            || !IsSafeZipDirectory(module.PluginDirectory)))
         {
-            return ArtifactLoadResult.Fail("生成安装包失败：安装素材清单包含非法 runtime 映射。");
+            return ArtifactLoadResult.Fail("生成安装包失败：安装素材清单包含非法插件目录映射。");
         }
 
         if (manifest.Modules.Select(module => module.ModuleId).Distinct(StringComparer.OrdinalIgnoreCase).Count() != manifest.Modules.Count
-            || manifest.Modules.Select(module => NormalizeZipDirectory(module.RuntimeDirectory)).Distinct(StringComparer.OrdinalIgnoreCase).Count() != manifest.Modules.Count)
+            || manifest.Modules.Select(module => NormalizeZipDirectory(module.PluginDirectory)).Distinct(StringComparer.OrdinalIgnoreCase).Count() != manifest.Modules.Count)
         {
-            return ArtifactLoadResult.Fail("生成安装包失败：安装素材清单包含重复插件或 runtime 目录。");
+            return ArtifactLoadResult.Fail("生成安装包失败：安装素材清单包含重复插件或插件目录。");
         }
 
         manifest.RootPath = artifactRoot;
@@ -308,7 +311,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
 
     private static string? ValidateArtifactLayout(
         EdgeInstallerArtifactManifest artifact,
-        IReadOnlyCollection<string> selectedRuntimeDirectories)
+        IReadOnlyCollection<EdgeInstallerArtifactModule> selectedModules)
     {
         try
         {
@@ -318,12 +321,20 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 return "生成安装包失败：安装素材缺少 launcher 运行目录。";
             }
 
-            foreach (var runtime in selectedRuntimeDirectories)
+            var hostDirectory = ResolveArtifactDirectoryPath(artifact, artifact.HostDirectory);
+            if (!Directory.Exists(hostDirectory) || !Directory.EnumerateFiles(hostDirectory, "*", SearchOption.AllDirectories).Any())
             {
-                var runtimeDirectory = ResolveArtifactDirectoryPath(artifact, runtime);
-                if (!Directory.Exists(runtimeDirectory) || !Directory.EnumerateFiles(runtimeDirectory, "*", SearchOption.AllDirectories).Any())
+                return "生成安装包失败：安装素材缺少 host 运行目录。";
+            }
+
+            foreach (var module in selectedModules)
+            {
+                var pluginDirectory = ResolveArtifactDirectoryPath(
+                    artifact,
+                    CombineZipPath(artifact.PluginsRoot, module.PluginDirectory));
+                if (!Directory.Exists(pluginDirectory) || !Directory.EnumerateFiles(pluginDirectory, "*", SearchOption.AllDirectories).Any())
                 {
-                    return $"生成安装包失败：安装素材缺少 runtime 目录 {runtime}。";
+                    return $"生成安装包失败：安装素材缺少插件目录 {module.ModuleId}。";
                 }
             }
 
@@ -365,7 +376,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
 
     private static Stream BuildInstallerPackage(
         EdgeInstallerArtifactManifest artifact,
-        IReadOnlyCollection<string> selectedRuntimeDirectories,
+        IReadOnlyCollection<EdgeInstallerArtifactModule> selectedModules,
         EdgeBindingBundleDto bindingBundle)
     {
         var tempPath = Path.Combine(
@@ -389,7 +400,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             var payloadLength = WritePayloadZipToPackage(
                 packageStream,
                 artifact,
-                selectedRuntimeDirectories,
+                selectedModules,
                 bindingBundle);
 
             Span<byte> trailer = stackalloc byte[16];
@@ -409,7 +420,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
     private static long WritePayloadZipToPackage(
         Stream packageStream,
         EdgeInstallerArtifactManifest artifact,
-        IReadOnlyCollection<string> selectedRuntimeDirectories,
+        IReadOnlyCollection<EdgeInstallerArtifactModule> selectedModules,
         EdgeBindingBundleDto bindingBundle)
     {
         var payloadTempPath = Path.Combine(
@@ -423,7 +434,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             bufferSize: 1024 * 1024,
             FileOptions.Asynchronous | FileOptions.DeleteOnClose | FileOptions.SequentialScan);
 
-        WritePayloadZip(payloadStream, artifact, selectedRuntimeDirectories, bindingBundle);
+        WritePayloadZip(payloadStream, artifact, selectedModules, bindingBundle);
         payloadStream.Position = 0;
         payloadStream.CopyTo(packageStream);
         return payloadStream.Length;
@@ -432,7 +443,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
     private static void WritePayloadZip(
         Stream packageStream,
         EdgeInstallerArtifactManifest artifact,
-        IReadOnlyCollection<string> selectedRuntimeDirectories,
+        IReadOnlyCollection<EdgeInstallerArtifactModule> selectedModules,
         EdgeBindingBundleDto bindingBundle)
     {
         using (var target = new ZipArchive(packageStream, ZipArchiveMode.Create, leaveOpen: true))
@@ -447,12 +458,19 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 reservedEntries,
                 writtenEntries);
 
-            foreach (var runtime in selectedRuntimeDirectories.OrderBy(runtime => runtime, StringComparer.OrdinalIgnoreCase))
+            AddDirectoryEntries(
+                target,
+                artifact,
+                artifact.HostDirectory,
+                reservedEntries,
+                writtenEntries);
+
+            foreach (var module in selectedModules.OrderBy(module => module.ModuleId, StringComparer.OrdinalIgnoreCase))
             {
                 AddDirectoryEntries(
                     target,
                     artifact,
-                    runtime,
+                    CombineZipPath(artifact.PluginsRoot, module.PluginDirectory),
                     reservedEntries,
                     writtenEntries);
             }
@@ -474,7 +492,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                     string.Equals(item.ModuleId, binding.ModuleId, StringComparison.OrdinalIgnoreCase));
                 WriteJsonEntry(
                     target,
-                    CombineZipPath(module.RuntimeDirectory, PluginBindingFileName),
+                    CombineZipPath(artifact.PluginsRoot, module.PluginDirectory, PluginBindingFileName),
                     BuildPluginBindingManifest(bindingBundle, binding),
                     writtenEntries);
             }
@@ -495,7 +513,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         {
             var module = artifact.Modules.Single(item =>
                 string.Equals(item.ModuleId, binding.ModuleId, StringComparison.OrdinalIgnoreCase));
-            entries.Add(CombineZipPath(module.RuntimeDirectory, PluginBindingFileName));
+            entries.Add(CombineZipPath(artifact.PluginsRoot, module.PluginDirectory, PluginBindingFileName));
         }
 
         return entries;
@@ -514,7 +532,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                     module.ModuleId,
                     module.DisplayName,
                     module.Version,
-                    module.RuntimeDirectory,
+                    module.PluginDirectory,
                     binding.ClientCode,
                     binding.DeviceName,
                     binding.ProcessId);
@@ -771,6 +789,10 @@ internal sealed class EdgeInstallerArtifactManifest
 
     public string LauncherDirectory { get; set; } = "launcher";
 
+    public string HostDirectory { get; set; } = "host";
+
+    public string PluginsRoot { get; set; } = "plugins";
+
     public List<EdgeInstallerArtifactModule> Modules { get; set; } = [];
 
     public string RootPath { get; set; } = string.Empty;
@@ -792,9 +814,7 @@ internal sealed class EdgeInstallerArtifactModule
 
     public string MaxHostVersion { get; set; } = string.Empty;
 
-    public string RuntimeId { get; set; } = string.Empty;
-
-    public string RuntimeDirectory { get; set; } = string.Empty;
+    public string PluginDirectory { get; set; } = string.Empty;
 }
 
 internal sealed record EdgeInstallerHostPluginManifest(
@@ -806,7 +826,7 @@ internal sealed record EdgeInstallerHostPluginItem(
     string ModuleId,
     string DisplayName,
     string Version,
-    string RuntimeDirectory,
+    string PluginDirectory,
     string ClientCode,
     string DeviceName,
     Guid ProcessId);

@@ -91,11 +91,12 @@ pwsh ./scripts/PublishEdgeClientInstallerArtifact.ps1 `
 ${EDGE_UPDATES_DIR}/installers/stable/1.2.0/
   IIoT.Edge.Setup.exe
   launcher/
-  <plugin-runtime>/
+  host/
+  plugins/
   installer-artifact.json
 ```
 
-`iiot-httpapi` 以只读方式挂载 `${EDGE_UPDATES_DIR}` 到 `/app/edge-updates`，通过 `EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers` 读取安装素材。登录 Cloud 后，“客户端下载中心 -> 首装下载”会按 `installer-artifact.json` 选择宿主目录和插件 runtime 目录，把 `launcher/iiot-binding.json`、`launcher/iiot-enabled-plugins.json`、`<plugin-runtime>/iiot-plugin-binding.json` 注入本次下载的安装器 payload，并返回真正的 `.exe`。这些绑定配置不写回素材目录、不落盘到共享模板、不写日志。
+`iiot-httpapi` 以只读方式挂载 `${EDGE_UPDATES_DIR}` 到 `/app/edge-updates`，通过 `EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers` 读取安装素材。登录 Cloud 后，“客户端下载中心 -> 首装下载”会按 `installer-artifact.json` v2 选择一份 `host/` 和所选 `plugins/<ModuleId>/`，把 `launcher/iiot-binding.json`、`launcher/iiot-enabled-plugins.json`、`plugins/<ModuleId>/iiot-plugin-binding.json` 注入本次下载的安装器 payload，并返回真正的 `.exe`。这些绑定配置不写回素材目录、不落盘到共享模板、不写日志。
 
 `iiot-web` 是 Vite 静态构建，Cloud 左侧“打开助手”按钮需要在构建镜像时注入 AICopilot challenge URL：
 
