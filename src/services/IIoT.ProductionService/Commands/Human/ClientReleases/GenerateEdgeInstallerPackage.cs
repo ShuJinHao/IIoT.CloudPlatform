@@ -30,7 +30,7 @@ public sealed record GenerateEdgeInstallerPackageCommand(
 public sealed record EdgeInstallerPackageDto(
     string FileName,
     string ContentType,
-    byte[] Content);
+    Stream Content);
 
 public sealed class GenerateEdgeInstallerPackageHandler(
     ICurrentUser currentUser,
@@ -44,6 +44,9 @@ public sealed class GenerateEdgeInstallerPackageHandler(
     : ICommandHandler<GenerateEdgeInstallerPackageCommand, Result<EdgeInstallerPackageDto>>
 {
     private static readonly byte[] InstallerMagic = "IIOTEDG1"u8.ToArray();
+    private const string BindingFileName = "iiot-binding.json";
+    private const string HostPluginManifestFileName = "iiot-enabled-plugins.json";
+    private const string PluginBindingFileName = "iiot-plugin-binding.json";
     private static readonly IComparer<string> VersionComparer = Comparer<string>.Create(ClientReleaseMapping.CompareVersions);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -135,27 +138,45 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         }
 
         var bindings = RotateDeviceSecrets(selections, devices.DevicesById!);
-        var affected = await deviceRepository.SaveChangesAsync(cancellationToken);
-        if (affected <= 0)
-        {
-            return await FailAsync("生成安装包失败：保存设备启动凭据失败。", cancellationToken);
-        }
-
-        await WriteSuccessAuditAsync(bindings, devices.DevicesById!, cancellationToken);
         var bindingBundle = new EdgeBindingBundleDto(
             1,
             NormalizeOptional(request.BaseUrl),
             DateTime.UtcNow,
             bindings);
-        var packageBytes = BuildInstallerPackage(
-            artifact,
-            selectedRuntimeDirectories,
-            bindingBundle);
+        Stream packageStream;
+        try
+        {
+            packageStream = BuildInstallerPackage(
+                artifact,
+                selectedRuntimeDirectories,
+                bindingBundle);
+        }
+        catch (InvalidDataException)
+        {
+            return await FailAsync("生成安装包失败：安装素材包格式无效。", cancellationToken);
+        }
+        catch (IOException)
+        {
+            return await FailAsync("生成安装包失败：服务器临时空间不足或安装素材无法读取。", cancellationToken);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return await FailAsync("生成安装包失败：服务器没有读取安装素材或写入临时文件的权限。", cancellationToken);
+        }
+
+        var affected = await deviceRepository.SaveChangesAsync(cancellationToken);
+        if (affected <= 0)
+        {
+            await packageStream.DisposeAsync();
+            return await FailAsync("生成安装包失败：保存设备启动凭据失败。", cancellationToken);
+        }
+
+        await WriteSuccessAuditAsync(bindings, devices.DevicesById!, cancellationToken);
         var fileName = BuildDownloadFileName(bindings, host.Version);
         return Result.Success(new EdgeInstallerPackageDto(
             fileName,
             "application/vnd.microsoft.portable-executable",
-            packageBytes));
+            packageStream));
     }
 
     private async Task<ClientHostRelease?> ResolveHostReleaseAsync(
@@ -211,7 +232,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
 
         if (manifest is null
             || string.IsNullOrWhiteSpace(manifest.InstallerStubFile)
-            || string.IsNullOrWhiteSpace(manifest.LayoutZipFile)
+            || !IsSafeRelativeFile(manifest.InstallerStubFile)
             || !IsSafeZipDirectory(manifest.LauncherDirectory)
             || manifest.Modules.Count == 0)
         {
@@ -226,12 +247,17 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             return ArtifactLoadResult.Fail("生成安装包失败：安装素材清单包含非法 runtime 映射。");
         }
 
-        manifest.RootPath = artifactRoot;
-        manifest.InstallerStubPath = Path.Combine(artifactRoot, manifest.InstallerStubFile);
-        manifest.LayoutZipPath = Path.Combine(artifactRoot, manifest.LayoutZipFile);
-        if (!File.Exists(manifest.InstallerStubPath) || !File.Exists(manifest.LayoutZipPath))
+        if (manifest.Modules.Select(module => module.ModuleId).Distinct(StringComparer.OrdinalIgnoreCase).Count() != manifest.Modules.Count
+            || manifest.Modules.Select(module => NormalizeZipDirectory(module.RuntimeDirectory)).Distinct(StringComparer.OrdinalIgnoreCase).Count() != manifest.Modules.Count)
         {
-            return ArtifactLoadResult.Fail("生成安装包失败：安装器外壳或布局包缺失。");
+            return ArtifactLoadResult.Fail("生成安装包失败：安装素材清单包含重复插件或 runtime 目录。");
+        }
+
+        manifest.RootPath = artifactRoot;
+        manifest.InstallerStubPath = ResolveArtifactPath(artifactRoot, manifest.InstallerStubFile);
+        if (!File.Exists(manifest.InstallerStubPath))
+        {
+            return ArtifactLoadResult.Fail("生成安装包失败：安装器外壳缺失。");
         }
 
         return ArtifactLoadResult.Success(manifest);
@@ -286,53 +312,30 @@ public sealed class GenerateEdgeInstallerPackageHandler(
     {
         try
         {
-            using var source = ZipFile.OpenRead(artifact.LayoutZipPath);
-            var hasLauncher = false;
-            var runtimeHits = selectedRuntimeDirectories.ToDictionary(
-                runtime => runtime,
-                _ => false,
-                StringComparer.OrdinalIgnoreCase);
-
-            foreach (var entry in source.Entries)
-            {
-                if (string.IsNullOrEmpty(entry.Name))
-                {
-                    continue;
-                }
-
-                var normalized = entry.FullName.Replace('\\', '/');
-                if (!IsSafeZipEntry(normalized))
-                {
-                    return "生成安装包失败：安装素材布局包包含非法路径。";
-                }
-
-                if (normalized.StartsWith($"{artifact.LauncherDirectory}/", StringComparison.OrdinalIgnoreCase))
-                {
-                    hasLauncher = true;
-                }
-
-                foreach (var runtime in selectedRuntimeDirectories)
-                {
-                    if (normalized.StartsWith($"{runtime}/", StringComparison.OrdinalIgnoreCase))
-                    {
-                        runtimeHits[runtime] = true;
-                    }
-                }
-            }
-
-            if (!hasLauncher)
+            var launcherDirectory = ResolveArtifactDirectoryPath(artifact, artifact.LauncherDirectory);
+            if (!Directory.Exists(launcherDirectory) || !Directory.EnumerateFiles(launcherDirectory, "*", SearchOption.AllDirectories).Any())
             {
                 return "生成安装包失败：安装素材缺少 launcher 运行目录。";
             }
 
-            var missingRuntime = runtimeHits.FirstOrDefault(item => !item.Value).Key;
-            return string.IsNullOrWhiteSpace(missingRuntime)
-                ? null
-                : $"生成安装包失败：安装素材缺少 runtime 目录 {missingRuntime}。";
+            foreach (var runtime in selectedRuntimeDirectories)
+            {
+                var runtimeDirectory = ResolveArtifactDirectoryPath(artifact, runtime);
+                if (!Directory.Exists(runtimeDirectory) || !Directory.EnumerateFiles(runtimeDirectory, "*", SearchOption.AllDirectories).Any())
+                {
+                    return $"生成安装包失败：安装素材缺少 runtime 目录 {runtime}。";
+                }
+            }
+
+            return null;
         }
-        catch (InvalidDataException)
+        catch (IOException)
         {
-            return "生成安装包失败：安装素材布局包无法读取。";
+            return "生成安装包失败：安装素材目录无法读取。";
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return "生成安装包失败：服务器没有读取安装素材目录的权限。";
         }
     }
 
@@ -360,69 +363,230 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         }
     }
 
-    private byte[] BuildInstallerPackage(
+    private static Stream BuildInstallerPackage(
         EdgeInstallerArtifactManifest artifact,
         IReadOnlyCollection<string> selectedRuntimeDirectories,
         EdgeBindingBundleDto bindingBundle)
     {
-        var payload = BuildPayloadZip(artifact, selectedRuntimeDirectories, bindingBundle);
-        var stub = File.ReadAllBytes(artifact.InstallerStubPath);
-        var output = new byte[stub.Length + payload.Length + 16];
+        var tempPath = Path.Combine(
+            Path.GetTempPath(),
+            $"iiot-edge-installer-{Guid.NewGuid():N}.exe");
+        var packageStream = new FileStream(
+            tempPath,
+            FileMode.CreateNew,
+            FileAccess.ReadWrite,
+            FileShare.Read,
+            bufferSize: 1024 * 1024,
+            FileOptions.Asynchronous | FileOptions.DeleteOnClose | FileOptions.SequentialScan);
 
-        Buffer.BlockCopy(stub, 0, output, 0, stub.Length);
-        Buffer.BlockCopy(payload, 0, output, stub.Length, payload.Length);
-        BinaryPrimitives.WriteInt64LittleEndian(output.AsSpan(stub.Length + payload.Length, 8), payload.Length);
-        InstallerMagic.CopyTo(output.AsSpan(stub.Length + payload.Length + 8, 8));
-        return output;
-    }
-
-    private static byte[] BuildPayloadZip(
-        EdgeInstallerArtifactManifest artifact,
-        IReadOnlyCollection<string> selectedRuntimeDirectories,
-        EdgeBindingBundleDto bindingBundle)
-    {
-        using var source = ZipFile.OpenRead(artifact.LayoutZipPath);
-        using var payloadStream = new MemoryStream();
-        using (var target = new ZipArchive(payloadStream, ZipArchiveMode.Create, leaveOpen: true))
+        try
         {
-            foreach (var entry in source.Entries)
+            using (var stubStream = File.OpenRead(artifact.InstallerStubPath))
             {
-                if (string.IsNullOrEmpty(entry.Name) || !IsAllowedEntry(entry.FullName, artifact, selectedRuntimeDirectories))
-                {
-                    continue;
-                }
-
-                CopyZipEntry(entry, target);
+                stubStream.CopyTo(packageStream);
             }
 
-            var bindingEntry = target.CreateEntry(
-                $"{artifact.LauncherDirectory}/iiot-binding.json",
-                CompressionLevel.Optimal);
-            using var writer = new StreamWriter(bindingEntry.Open(), new UTF8Encoding(false));
-            writer.Write(JsonSerializer.Serialize(bindingBundle, JsonOptions));
-        }
+            var payloadLength = WritePayloadZipToPackage(
+                packageStream,
+                artifact,
+                selectedRuntimeDirectories,
+                bindingBundle);
 
-        return payloadStream.ToArray();
+            Span<byte> trailer = stackalloc byte[16];
+            BinaryPrimitives.WriteInt64LittleEndian(trailer[..8], payloadLength);
+            InstallerMagic.CopyTo(trailer[8..]);
+            packageStream.Write(trailer);
+            packageStream.Position = 0;
+            return packageStream;
+        }
+        catch
+        {
+            packageStream.Dispose();
+            throw;
+        }
     }
 
-    private static bool IsAllowedEntry(
-        string entryName,
+    private static long WritePayloadZipToPackage(
+        Stream packageStream,
         EdgeInstallerArtifactManifest artifact,
-        IReadOnlyCollection<string> selectedRuntimeDirectories)
+        IReadOnlyCollection<string> selectedRuntimeDirectories,
+        EdgeBindingBundleDto bindingBundle)
     {
-        var normalized = entryName.Replace('\\', '/');
-        if (!IsSafeZipEntry(normalized))
+        var payloadTempPath = Path.Combine(
+            Path.GetTempPath(),
+            $"iiot-edge-payload-{Guid.NewGuid():N}.zip");
+        using var payloadStream = new FileStream(
+            payloadTempPath,
+            FileMode.CreateNew,
+            FileAccess.ReadWrite,
+            FileShare.None,
+            bufferSize: 1024 * 1024,
+            FileOptions.Asynchronous | FileOptions.DeleteOnClose | FileOptions.SequentialScan);
+
+        WritePayloadZip(payloadStream, artifact, selectedRuntimeDirectories, bindingBundle);
+        payloadStream.Position = 0;
+        payloadStream.CopyTo(packageStream);
+        return payloadStream.Length;
+    }
+
+    private static void WritePayloadZip(
+        Stream packageStream,
+        EdgeInstallerArtifactManifest artifact,
+        IReadOnlyCollection<string> selectedRuntimeDirectories,
+        EdgeBindingBundleDto bindingBundle)
+    {
+        using (var target = new ZipArchive(packageStream, ZipArchiveMode.Create, leaveOpen: true))
         {
-            return false;
+            var reservedEntries = BuildGeneratedEntryNames(artifact, bindingBundle);
+            var writtenEntries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            AddDirectoryEntries(
+                target,
+                artifact,
+                artifact.LauncherDirectory,
+                reservedEntries,
+                writtenEntries);
+
+            foreach (var runtime in selectedRuntimeDirectories.OrderBy(runtime => runtime, StringComparer.OrdinalIgnoreCase))
+            {
+                AddDirectoryEntries(
+                    target,
+                    artifact,
+                    runtime,
+                    reservedEntries,
+                    writtenEntries);
+            }
+
+            WriteJsonEntry(
+                target,
+                CombineZipPath(artifact.LauncherDirectory, BindingFileName),
+                bindingBundle,
+                writtenEntries);
+            WriteJsonEntry(
+                target,
+                CombineZipPath(artifact.LauncherDirectory, HostPluginManifestFileName),
+                BuildHostPluginManifest(artifact, bindingBundle),
+                writtenEntries);
+
+            foreach (var binding in bindingBundle.Bindings)
+            {
+                var module = artifact.Modules.Single(item =>
+                    string.Equals(item.ModuleId, binding.ModuleId, StringComparison.OrdinalIgnoreCase));
+                WriteJsonEntry(
+                    target,
+                    CombineZipPath(module.RuntimeDirectory, PluginBindingFileName),
+                    BuildPluginBindingManifest(bindingBundle, binding),
+                    writtenEntries);
+            }
+        }
+    }
+
+    private static HashSet<string> BuildGeneratedEntryNames(
+        EdgeInstallerArtifactManifest artifact,
+        EdgeBindingBundleDto bindingBundle)
+    {
+        var entries = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            CombineZipPath(artifact.LauncherDirectory, BindingFileName),
+            CombineZipPath(artifact.LauncherDirectory, HostPluginManifestFileName)
+        };
+
+        foreach (var binding in bindingBundle.Bindings)
+        {
+            var module = artifact.Modules.Single(item =>
+                string.Equals(item.ModuleId, binding.ModuleId, StringComparison.OrdinalIgnoreCase));
+            entries.Add(CombineZipPath(module.RuntimeDirectory, PluginBindingFileName));
         }
 
-        if (normalized.StartsWith($"{artifact.LauncherDirectory}/", StringComparison.OrdinalIgnoreCase))
+        return entries;
+    }
+
+    private static EdgeInstallerHostPluginManifest BuildHostPluginManifest(
+        EdgeInstallerArtifactManifest artifact,
+        EdgeBindingBundleDto bindingBundle)
+    {
+        var plugins = bindingBundle.Bindings
+            .Select(binding =>
+            {
+                var module = artifact.Modules.Single(item =>
+                    string.Equals(item.ModuleId, binding.ModuleId, StringComparison.OrdinalIgnoreCase));
+                return new EdgeInstallerHostPluginItem(
+                    module.ModuleId,
+                    module.DisplayName,
+                    module.Version,
+                    module.RuntimeDirectory,
+                    binding.ClientCode,
+                    binding.DeviceName,
+                    binding.ProcessId);
+            })
+            .ToList();
+        return new EdgeInstallerHostPluginManifest(1, bindingBundle.GeneratedAtUtc, plugins);
+    }
+
+    private static EdgeInstallerPluginBindingManifest BuildPluginBindingManifest(
+        EdgeBindingBundleDto bindingBundle,
+        EdgeBindingItemDto binding)
+        => new(
+            1,
+            bindingBundle.BaseUrl,
+            bindingBundle.GeneratedAtUtc,
+            binding.ModuleId,
+            binding.ClientCode,
+            binding.BootstrapSecret,
+            binding.DeviceName,
+            binding.ProcessId);
+
+    private static void AddDirectoryEntries(
+        ZipArchive target,
+        EdgeInstallerArtifactManifest artifact,
+        string sourceDirectory,
+        IReadOnlySet<string> reservedEntries,
+        ISet<string> writtenEntries)
+    {
+        var normalizedDirectory = NormalizeZipDirectory(sourceDirectory);
+        var sourcePath = ResolveArtifactDirectoryPath(artifact, normalizedDirectory);
+        foreach (var filePath in Directory.EnumerateFiles(sourcePath, "*", SearchOption.AllDirectories))
         {
-            return true;
+            var relativePath = Path.GetRelativePath(sourcePath, filePath)
+                .Replace(Path.DirectorySeparatorChar, '/')
+                .Replace(Path.AltDirectorySeparatorChar, '/');
+            var entryName = CombineZipPath(normalizedDirectory, relativePath);
+            if (!IsSafeZipEntry(entryName))
+            {
+                throw new InvalidDataException("Artifact contains unsafe path.");
+            }
+
+            if (reservedEntries.Contains(entryName) || !writtenEntries.Add(entryName))
+            {
+                continue;
+            }
+
+            var entry = target.CreateEntry(entryName, CompressionLevel.Fastest);
+            using var sourceStream = File.OpenRead(filePath);
+            using var targetStream = entry.Open();
+            sourceStream.CopyTo(targetStream);
+        }
+    }
+
+    private static void WriteJsonEntry(
+        ZipArchive target,
+        string entryName,
+        object value,
+        ISet<string> writtenEntries)
+    {
+        if (!IsSafeZipEntry(entryName))
+        {
+            throw new InvalidDataException("Generated config path is unsafe.");
         }
 
-        return selectedRuntimeDirectories.Any(runtime =>
-            normalized.StartsWith($"{runtime}/", StringComparison.OrdinalIgnoreCase));
+        if (!writtenEntries.Add(entryName))
+        {
+            throw new InvalidDataException("Generated config path collides with artifact file.");
+        }
+
+        var entry = target.CreateEntry(entryName, CompressionLevel.Fastest);
+        using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(false));
+        writer.Write(JsonSerializer.Serialize(value, JsonOptions));
     }
 
     private static bool IsSafeZipDirectory(string directory)
@@ -433,18 +597,43 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             && !normalized.Split('/').Any(part => part is "." or ".." or "");
     }
 
+    private static bool IsSafeRelativeFile(string filePath)
+    {
+        var normalized = filePath.Replace('\\', '/').Trim('/');
+        return !string.IsNullOrWhiteSpace(normalized)
+            && !normalized.EndsWith("/", StringComparison.Ordinal)
+            && !normalized.StartsWith("/", StringComparison.Ordinal)
+            && !normalized.Split('/').Any(part => part is "." or ".." or "");
+    }
+
     private static bool IsSafeZipEntry(string entryName)
     {
         return !entryName.StartsWith("/", StringComparison.Ordinal)
             && !entryName.Split('/').Any(part => part is "." or "..");
     }
 
-    private static void CopyZipEntry(ZipArchiveEntry sourceEntry, ZipArchive targetArchive)
+    private static string NormalizeZipDirectory(string directory)
+        => directory.Replace('\\', '/').Trim('/');
+
+    private static string CombineZipPath(params string[] parts)
+        => string.Join(
+            '/',
+            parts.Select(part => part.Replace('\\', '/').Trim('/')).Where(part => part.Length > 0));
+
+    private static string ResolveArtifactDirectoryPath(EdgeInstallerArtifactManifest artifact, string directory)
+        => ResolveArtifactPath(artifact.RootPath, NormalizeZipDirectory(directory));
+
+    private static string ResolveArtifactPath(string artifactRoot, string relativePath)
     {
-        var targetEntry = targetArchive.CreateEntry(sourceEntry.FullName.Replace('\\', '/'), CompressionLevel.Optimal);
-        using var sourceStream = sourceEntry.Open();
-        using var targetStream = targetEntry.Open();
-        sourceStream.CopyTo(targetStream);
+        var normalizedRoot = Path.GetFullPath(artifactRoot);
+        var normalizedRelative = relativePath.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
+        var fullPath = Path.GetFullPath(Path.Combine(normalizedRoot, normalizedRelative));
+        if (!fullPath.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("Artifact path escaped root.");
+        }
+
+        return fullPath;
     }
 
     private static bool TryNormalizeSelections(
@@ -580,8 +769,6 @@ internal sealed class EdgeInstallerArtifactManifest
 
     public string InstallerStubFile { get; set; } = string.Empty;
 
-    public string LayoutZipFile { get; set; } = string.Empty;
-
     public string LauncherDirectory { get; set; } = "launcher";
 
     public List<EdgeInstallerArtifactModule> Modules { get; set; } = [];
@@ -589,8 +776,6 @@ internal sealed class EdgeInstallerArtifactManifest
     public string RootPath { get; set; } = string.Empty;
 
     public string InstallerStubPath { get; set; } = string.Empty;
-
-    public string LayoutZipPath { get; set; } = string.Empty;
 }
 
 internal sealed class EdgeInstallerArtifactModule
@@ -611,3 +796,27 @@ internal sealed class EdgeInstallerArtifactModule
 
     public string RuntimeDirectory { get; set; } = string.Empty;
 }
+
+internal sealed record EdgeInstallerHostPluginManifest(
+    int SchemaVersion,
+    DateTime GeneratedAtUtc,
+    IReadOnlyList<EdgeInstallerHostPluginItem> Plugins);
+
+internal sealed record EdgeInstallerHostPluginItem(
+    string ModuleId,
+    string DisplayName,
+    string Version,
+    string RuntimeDirectory,
+    string ClientCode,
+    string DeviceName,
+    Guid ProcessId);
+
+internal sealed record EdgeInstallerPluginBindingManifest(
+    int SchemaVersion,
+    string? BaseUrl,
+    DateTime GeneratedAtUtc,
+    string ModuleId,
+    string ClientCode,
+    string BootstrapSecret,
+    string DeviceName,
+    Guid ProcessId);

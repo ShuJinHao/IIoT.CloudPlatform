@@ -266,7 +266,7 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
-    public async Task GenerateEdgeInstallerPackageHandler_ShouldAppendSelectedRuntimeAndBindingPayload()
+    public async Task GenerateEdgeInstallerPackageHandler_ShouldPackageSelectedRuntimeAndInjectJsonConfigs()
     {
         var device = new Device("匀浆线1#", "DEV-AAAAAAAAAA", Guid.NewGuid());
         var deviceRepository = new InMemoryRepository<Device>();
@@ -304,16 +304,23 @@ public sealed class ApplicationFlowGuardTests
             var package = result.Value!;
             Assert.EndsWith(".exe", package.FileName, StringComparison.OrdinalIgnoreCase);
             Assert.Equal("application/vnd.microsoft.portable-executable", package.ContentType);
-            Assert.Equal((byte)'M', package.Content[0]);
-            Assert.Equal((byte)'Z', package.Content[1]);
+            await using var packageContent = package.Content;
+            using var packageBuffer = new MemoryStream();
+            await packageContent.CopyToAsync(packageBuffer);
+            var packageBytes = packageBuffer.ToArray();
+            Assert.Equal((byte)'M', packageBytes[0]);
+            Assert.Equal((byte)'Z', packageBytes[1]);
 
-            var payload = ReadInstallerPayload(package.Content);
+            var payload = ReadInstallerPayload(packageBytes);
             using var archive = new ZipArchive(new MemoryStream(payload), ZipArchiveMode.Read);
             Assert.NotNull(archive.GetEntry("launcher/IIoT.Edge.Launcher.dll"));
             Assert.NotNull(archive.GetEntry("launcher/iiot-binding.json"));
+            Assert.NotNull(archive.GetEntry("launcher/iiot-enabled-plugins.json"));
             Assert.NotNull(archive.GetEntry("homogenization/IIoT.Edge.Shell.dll"));
             Assert.NotNull(archive.GetEntry("homogenization/Modules/Homogenization/plugin.json"));
+            Assert.NotNull(archive.GetEntry("homogenization/iiot-plugin-binding.json"));
             Assert.Null(archive.GetEntry("welding/IIoT.Edge.Shell.dll"));
+            Assert.Null(archive.GetEntry("welding/iiot-plugin-binding.json"));
 
             var bindingJson = ReadZipEntryText(archive, "launcher/iiot-binding.json");
             using var binding = JsonDocument.Parse(bindingJson);
@@ -324,6 +331,20 @@ public sealed class ApplicationFlowGuardTests
             Assert.Equal(device.Code, bindingItem.GetProperty("clientCode").GetString());
             Assert.False(string.IsNullOrWhiteSpace(bootstrapSecret));
             Assert.True(BootstrapSecretHasher.Verify(bootstrapSecret!, device.BootstrapSecretHash!));
+
+            var hostConfigJson = ReadZipEntryText(archive, "launcher/iiot-enabled-plugins.json");
+            using var hostConfig = JsonDocument.Parse(hostConfigJson);
+            var hostPlugin = hostConfig.RootElement.GetProperty("plugins")[0];
+            Assert.Equal("Homogenization", hostPlugin.GetProperty("moduleId").GetString());
+            Assert.Equal("homogenization", hostPlugin.GetProperty("runtimeDirectory").GetString());
+            Assert.Equal(device.Code, hostPlugin.GetProperty("clientCode").GetString());
+
+            var pluginBindingJson = ReadZipEntryText(archive, "homogenization/iiot-plugin-binding.json");
+            using var pluginBinding = JsonDocument.Parse(pluginBindingJson);
+            Assert.Equal("Homogenization", pluginBinding.RootElement.GetProperty("moduleId").GetString());
+            Assert.Equal(device.Code, pluginBinding.RootElement.GetProperty("clientCode").GetString());
+            Assert.Equal(bootstrapSecret, pluginBinding.RootElement.GetProperty("bootstrapSecret").GetString());
+
             Assert.Contains(CacheKeys.DeviceCode(device.Code), cache.RemovedKeys);
             Assert.DoesNotContain(auditTrail.Entries, entry =>
                 entry.Summary.Contains(bootstrapSecret!, StringComparison.Ordinal)
@@ -2166,16 +2187,12 @@ public sealed class ApplicationFlowGuardTests
         Directory.CreateDirectory(artifactDirectory);
 
         File.WriteAllBytes(Path.Combine(artifactDirectory, "IIoT.Edge.Setup.exe"), "MZ-STUB"u8.ToArray());
-        var layoutZipPath = Path.Combine(artifactDirectory, "layout.zip");
-        using (var zip = ZipFile.Open(layoutZipPath, ZipArchiveMode.Create))
-        {
-            WriteZipEntry(zip, "launcher/IIoT.Edge.Launcher.dll", "launcher");
-            WriteZipEntry(zip, "launcher/launcher.profiles.json", "{}");
-            WriteZipEntry(zip, "homogenization/IIoT.Edge.Shell.dll", "shell");
-            WriteZipEntry(zip, "homogenization/Modules/Homogenization/plugin.json", "{}");
-            WriteZipEntry(zip, "welding/IIoT.Edge.Shell.dll", "shell");
-            WriteZipEntry(zip, "welding/Modules/Welding/plugin.json", "{}");
-        }
+        WriteFixtureFile(artifactDirectory, "launcher/IIoT.Edge.Launcher.dll", "launcher");
+        WriteFixtureFile(artifactDirectory, "launcher/launcher.profiles.json", "{}");
+        WriteFixtureFile(artifactDirectory, "homogenization/IIoT.Edge.Shell.dll", "shell");
+        WriteFixtureFile(artifactDirectory, "homogenization/Modules/Homogenization/plugin.json", "{}");
+        WriteFixtureFile(artifactDirectory, "welding/IIoT.Edge.Shell.dll", "shell");
+        WriteFixtureFile(artifactDirectory, "welding/Modules/Welding/plugin.json", "{}");
 
         var manifest = """
         {
@@ -2186,7 +2203,6 @@ public sealed class ApplicationFlowGuardTests
           "targetRuntime": "win-x64",
           "targetFramework": "net10.0",
           "installerStubFile": "IIoT.Edge.Setup.exe",
-          "layoutZipFile": "layout.zip",
           "launcherDirectory": "launcher",
           "modules": [
             {
@@ -2227,11 +2243,13 @@ public sealed class ApplicationFlowGuardTests
         return package.AsSpan(payloadStart, (int)payloadLength).ToArray();
     }
 
-    private static void WriteZipEntry(ZipArchive archive, string entryName, string content)
+    private static void WriteFixtureFile(string artifactDirectory, string relativePath, string content)
     {
-        var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
-        using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(false));
-        writer.Write(content);
+        var path = Path.Combine(
+            artifactDirectory,
+            relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content, new UTF8Encoding(false));
     }
 
     private static string ReadZipEntryText(ZipArchive archive, string entryName)

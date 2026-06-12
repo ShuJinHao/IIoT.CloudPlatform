@@ -17,8 +17,8 @@ Checks:
   - host version/runtime/channel match the expected values
   - at least one plugin is published in the catalog
   - installer-artifact.json is reachable
-  - catalog host sha/size match installer-artifact.json layout zip sha/size
-  - installer stub and layout zip URLs are reachable and Content-Length matches the manifest
+  - installer-artifact.json describes an expanded launcher directory and plugin runtime directories
+  - installer stub URL is reachable and Content-Length matches the manifest when size is present
 
 This script is read-only. It does not call installer-package and does not rotate device secrets.
 USAGE
@@ -54,6 +54,7 @@ curl -fsS "$api_url" -o "$catalog_file"
 
 artifact_url=$(
   CATALOG_FILE="$catalog_file" \
+  BASE_URL="$BASE_URL" \
   CHANNEL="$CHANNEL" \
   TARGET_RUNTIME="$TARGET_RUNTIME" \
   EXPECTED_VERSION="$EXPECTED_VERSION" \
@@ -86,7 +87,10 @@ if expected_version and host.get("version") != expected_version:
 
 download_url = host.get("downloadUrl")
 if not download_url:
-    raise SystemExit("host downloadUrl is empty")
+    download_url = (
+        os.environ["BASE_URL"].rstrip("/")
+        + f"/edge-updates/installers/{channel}/{host.get('version')}/installer-artifact.json"
+    )
 
 print(download_url)
 print(
@@ -130,43 +134,30 @@ if expected_version and artifact.get("version") != expected_version:
 if not artifact.get("modules"):
     raise SystemExit("artifact modules is empty")
 
-host = catalog.get("latestHost") or {}
-if host.get("sha256") != artifact.get("layoutZipSha256"):
-    raise SystemExit(
-        "catalog host sha256 does not match artifact layoutZipSha256: "
-        f"{host.get('sha256')} != {artifact.get('layoutZipSha256')}"
-    )
-
-if int(host.get("packageSize") or 0) != int(artifact.get("layoutZipSize") or 0):
-    raise SystemExit(
-        "catalog host packageSize does not match artifact layoutZipSize: "
-        f"{host.get('packageSize')} != {artifact.get('layoutZipSize')}"
-    )
-
 base = artifact_url.rsplit("/", 1)[0] + "/"
 stub_file = artifact.get("installerStubFile")
-layout_file = artifact.get("layoutZipFile")
-if not stub_file or not layout_file:
-    raise SystemExit("artifact stub/layout file is empty")
+launcher_directory = (artifact.get("launcherDirectory") or "").strip("/")
+if not stub_file or not launcher_directory:
+    raise SystemExit("artifact stub/launcher directory is empty")
+
+for module in artifact.get("modules") or []:
+    if not module.get("moduleId") or not module.get("runtimeDirectory"):
+        raise SystemExit("artifact module runtime mapping is incomplete")
 
 print(f"STUB_URL={urljoin(base, stub_file)}")
-print(f"LAYOUT_URL={urljoin(base, layout_file)}")
 print(f"STUB_SIZE={artifact.get('installerStubSize')}")
-print(f"LAYOUT_SIZE={artifact.get('layoutZipSize')}")
 print(
-    "artifact_version=%s artifact_modules=%s layout_sha256=%s"
+    "artifact_version=%s launcher=%s artifact_modules=%s"
     % (
         artifact.get("version"),
+        launcher_directory,
         ",".join(module.get("moduleId", "") for module in artifact.get("modules", [])),
-        artifact.get("layoutZipSha256"),
     )
 )
 PY
 
 STUB_URL=$(awk -F= '/^STUB_URL=/{print $2}' "$tmp_dir/artifact-paths.env")
-LAYOUT_URL=$(awk -F= '/^LAYOUT_URL=/{print $2}' "$tmp_dir/artifact-paths.env")
 STUB_SIZE=$(awk -F= '/^STUB_SIZE=/{print $2}' "$tmp_dir/artifact-paths.env")
-LAYOUT_SIZE=$(awk -F= '/^LAYOUT_SIZE=/{print $2}' "$tmp_dir/artifact-paths.env")
 grep '^artifact_' "$tmp_dir/artifact-paths.env"
 
 check_head_content_length() {
@@ -180,7 +171,7 @@ check_head_content_length() {
     printf '%s HEAD response did not include Content-Length.\n' "$label" >&2
     exit 1
   fi
-  if [ "$actual_size" != "$expected_size" ]; then
+  if [ -n "$expected_size" ] && [ "$expected_size" != "None" ] && [ "$actual_size" != "$expected_size" ]; then
     printf '%s Content-Length mismatch: %s != %s\n' "$label" "$actual_size" "$expected_size" >&2
     exit 1
   fi
@@ -188,8 +179,5 @@ check_head_content_length() {
 
 printf 'Checking installer stub URL: %s\n' "$STUB_URL"
 check_head_content_length "$STUB_URL" "$STUB_SIZE" "installer-stub"
-
-printf 'Checking layout zip URL: %s\n' "$LAYOUT_URL"
-check_head_content_length "$LAYOUT_URL" "$LAYOUT_SIZE" "layout-zip"
 
 printf 'Edge installer catalog verification passed.\n'

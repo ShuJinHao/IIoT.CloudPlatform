@@ -22,7 +22,8 @@ pwsh ./scripts/TestEdgeClientInstallerArtifact.ps1 `
 ```text
 publish/edge-installer-artifacts/stable/1.2.0/
   IIoT.Edge.Setup.exe
-  layout.zip
+  launcher/
+  <plugin-runtime>/
   installer-artifact.json
 ```
 
@@ -99,14 +100,15 @@ pwsh ./scripts/PublishEdgeClientInstallerArtifact.ps1 `
 ```text
 /srv/iiot/edge-updates/installers/stable/1.2.0/
   IIoT.Edge.Setup.exe
-  layout.zip
+  launcher/
+  <plugin-runtime>/
   installer-artifact.json
 ```
 
 服务器检查：
 
 ```sh
-find /srv/iiot/edge-updates/installers/stable/1.2.0 -maxdepth 1 -type f -printf '%f %s\n' | sort
+find /srv/iiot/edge-updates/installers/stable/1.2.0 -maxdepth 2 -printf '%y %P %s\n' | sort
 ```
 
 外部只读检查 catalog 和素材 URL：
@@ -128,6 +130,20 @@ EXPECTED_VERSION=1.2.0 \
 ${EDGE_UPDATES_DIR}:/app/edge-updates:ro
 EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers
 ```
+
+生产服务器不要只验证 nginx 静态路径。nginx 能返回 `installer-artifact.json` 只代表浏览器能下载静态文件；首装生成由 `iiot-httpapi` 读取同一份素材，必须同时验证容器内可见：
+
+```sh
+docker inspect deploy-iiot-httpapi-1 \
+  --format '{{range .Mounts}}{{println .Source "->" .Destination .Mode}}{{end}}'
+
+docker exec deploy-iiot-httpapi-1 /bin/sh -lc \
+  'find /app/edge-updates/installers/stable/1.2.0 -maxdepth 2 -printf "%y %P %s\n" | sort'
+
+curl -sS -I http://127.0.0.1:81/edge-updates/installers/stable/1.2.0/installer-artifact.json
+```
+
+如果需要看访问日志，优先用 `docker logs deploy-nginx-gateway-1`。`/var/log/nginx/access.log` 在 nginx 容器内可能指向 stdout 设备，直接 `grep` 文件会卡住等待流。
 
 ## 4. 验收前建设备
 
@@ -202,4 +218,5 @@ pwsh .\deploy\scripts\InvokeEdgeInstallerPackageDownload.ps1 `
 - 下载仍是 JSON：线上 Web 或 API 没部署到新版本。
 - 接口 404：线上 HttpApi 没有 `installer-package`。
 - “安装素材不存在”：素材未上传到挂载目录，或 `EdgeInstallerArtifacts__RootPath` 不一致。
+- “服务器内部错误”且日志含 `System.OutOfMemoryException`：线上仍是旧版 `installer-package`，还在内存里重打旧 `layout.zip` 后 `ToArray()`。必须部署目录组合版本，并重新上传目录型素材；Cloud 只读取宿主/插件目录，把绑定 JSON 注入本次下载 payload，不写回共享素材目录。
 - bootstrap 失败：检查 `BOOTSTRAP_AUTH_REQUIRE_SECRET=true`、设备是否被重新生成安装包、Windows 使用的是否是最新 `.exe`。

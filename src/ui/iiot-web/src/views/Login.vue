@@ -110,15 +110,7 @@
               {{ loading ? t('login.submitting') : t('login.submit') }}
             </button>
 
-            <router-link
-              class="flex h-12 items-center justify-center rounded-[15px] border border-[rgba(17,24,39,0.10)] bg-white text-[var(--fs-base)] font-[var(--fw-strong)] text-[var(--text-0)] transition hover:bg-[var(--bg-2)]"
-              to="/downloads"
-            >
-              客户端版本中心
-            </router-link>
           </div>
-
-          <p class="mt-10 text-center text-[var(--fs-sm)] font-[var(--fw-semibold)] text-[var(--text-2)]">{{ t('login.version') }}</p>
         </div>
 
         <aside class="min-w-0 rounded-r-[28px] bg-[var(--bg-2)] p-6 max-[1120px]:hidden">

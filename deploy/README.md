@@ -90,11 +90,12 @@ pwsh ./scripts/PublishEdgeClientInstallerArtifact.ps1 `
 ```text
 ${EDGE_UPDATES_DIR}/installers/stable/1.2.0/
   IIoT.Edge.Setup.exe
-  layout.zip
+  launcher/
+  <plugin-runtime>/
   installer-artifact.json
 ```
 
-`iiot-httpapi` 以只读方式挂载 `${EDGE_UPDATES_DIR}` 到 `/app/edge-updates`，通过 `EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers` 读取安装素材。登录 Cloud 后，“客户端下载中心 -> 首装下载”会把所选插件 runtime 和新生成的 `iiot-binding.json` 写入安装器 payload，并返回真正的 `.exe`。`iiot-binding.json` 不落盘、不写日志。
+`iiot-httpapi` 以只读方式挂载 `${EDGE_UPDATES_DIR}` 到 `/app/edge-updates`，通过 `EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers` 读取安装素材。登录 Cloud 后，“客户端下载中心 -> 首装下载”会按 `installer-artifact.json` 选择宿主目录和插件 runtime 目录，把 `launcher/iiot-binding.json`、`launcher/iiot-enabled-plugins.json`、`<plugin-runtime>/iiot-plugin-binding.json` 注入本次下载的安装器 payload，并返回真正的 `.exe`。这些绑定配置不写回素材目录、不落盘到共享模板、不写日志。
 
 `iiot-web` 是 Vite 静态构建，Cloud 左侧“打开助手”按钮需要在构建镜像时注入 AICopilot challenge URL：
 
@@ -120,6 +121,15 @@ deploy/.env
 ```
 
 真实 `.env` 由运维管理，不提交仓库。`deploy/.env.example` 只作为模板。
+
+生产服务器以容器标签为准确认真实部署目录，不要按旧路径猜：
+
+```sh
+docker inspect deploy-iiot-httpapi-1 \
+  --format 'working={{index .Config.Labels "com.docker.compose.project.working_dir"}} config={{index .Config.Labels "com.docker.compose.project.config_files"}} project={{index .Config.Labels "com.docker.compose.project"}}'
+```
+
+2026-06-12 现场校准：`jms.hdc-group.cn` 的 Cloud compose 工作目录为 `/srv/iiot-cloud/deploy`，Edge 更新素材目录为 `/srv/iiot/edge-updates`。如果服务器目录和本文不一致，先用上面的标签命令对齐真实目录，再修改文档。
 
 首次部署或明确允许清空测试环境时，可以删除旧 stack、旧 compose 容器和旧卷，再按新版 compose 重新启动。例子：
 
