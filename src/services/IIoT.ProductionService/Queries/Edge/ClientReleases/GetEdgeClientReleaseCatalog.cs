@@ -5,6 +5,7 @@ using IIoT.Services.Contracts;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
+using Microsoft.Extensions.Options;
 
 namespace IIoT.ProductionService.Queries.ClientReleases;
 
@@ -16,7 +17,8 @@ public sealed record GetEdgeClientReleaseCatalogQuery(
 public sealed class GetEdgeClientReleaseCatalogHandler(
     IDeviceIdentityQueryService deviceIdentityQueryService,
     IReadRepository<ClientHostRelease> hostReleaseRepository,
-    IReadRepository<ClientPluginRelease> pluginReleaseRepository)
+    IReadRepository<ClientPluginRelease> pluginReleaseRepository,
+    IOptions<EdgeInstallerArtifactOptions> artifactOptions)
     : IQueryHandler<GetEdgeClientReleaseCatalogQuery, Result<ClientReleaseCatalogDto>>
 {
     public async Task<Result<ClientReleaseCatalogDto>> Handle(
@@ -60,7 +62,8 @@ public sealed class GetEdgeClientReleaseCatalogHandler(
                 .ThenByDescending(release => release.PublishedAtUtc ?? release.CreatedAtUtc)
                 .Select(ClientReleaseMapping.ToDto)
                 .ToList(),
-            DateTime.UtcNow));
+            DateTime.UtcNow,
+            artifactOptions.Value.BuildVelopackUpdateSource(channel)));
     }
 
     private static string? NormalizeOptional(string? value)

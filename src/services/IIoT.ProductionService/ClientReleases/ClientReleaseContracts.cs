@@ -15,7 +15,8 @@ public sealed record ClientReleaseCatalogDto(
     ClientHostReleaseDto? LatestHost,
     IReadOnlyList<ClientHostReleaseDto> HostReleases,
     IReadOnlyList<ClientPluginReleaseDto> PluginReleases,
-    DateTime GeneratedAtUtc);
+    DateTime GeneratedAtUtc,
+    string? HostUpdateSource = null);
 
 public sealed record ClientHostReleaseDto(
     Guid Id,

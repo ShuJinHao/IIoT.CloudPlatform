@@ -47,6 +47,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
     private const string BindingFileName = "iiot-binding.json";
     private const string HostPluginManifestFileName = "iiot-enabled-plugins.json";
     private const string PluginBindingFileName = "iiot-plugin-binding.json";
+    private const string UpdateConfigFileName = "launcher.update.json";
     private static readonly IComparer<string> VersionComparer = Comparer<string>.Create(ClientReleaseMapping.CompareVersions);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -496,6 +497,12 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                     BuildPluginBindingManifest(bindingBundle, binding),
                     writtenEntries);
             }
+
+            WriteJsonEntry(
+                target,
+                CombineZipPath(artifact.LauncherDirectory, UpdateConfigFileName),
+                BuildUpdateConfig(bindingBundle, artifact.Channel),
+                writtenEntries);
         }
     }
 
@@ -506,7 +513,8 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         var entries = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             CombineZipPath(artifact.LauncherDirectory, BindingFileName),
-            CombineZipPath(artifact.LauncherDirectory, HostPluginManifestFileName)
+            CombineZipPath(artifact.LauncherDirectory, HostPluginManifestFileName),
+            CombineZipPath(artifact.LauncherDirectory, UpdateConfigFileName)
         };
 
         foreach (var binding in bindingBundle.Bindings)
@@ -553,6 +561,19 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             binding.BootstrapSecret,
             binding.DeviceName,
             binding.ProcessId);
+
+    private static EdgeInstallerUpdateConfig BuildUpdateConfig(
+        EdgeBindingBundleDto bindingBundle,
+        string channel)
+    {
+        string? source = null;
+        if (!string.IsNullOrWhiteSpace(bindingBundle.BaseUrl))
+        {
+            source = $"{bindingBundle.BaseUrl.TrimEnd('/')}/edge-updates/velopack/{channel}/";
+        }
+
+        return new EdgeInstallerUpdateConfig(source, channel, "win-x64");
+    }
 
     private static void AddDirectoryEntries(
         ZipArchive target,
@@ -840,3 +861,8 @@ internal sealed record EdgeInstallerPluginBindingManifest(
     string BootstrapSecret,
     string DeviceName,
     Guid ProcessId);
+
+internal sealed record EdgeInstallerUpdateConfig(
+    string? Source,
+    string Channel,
+    string TargetRuntime);
