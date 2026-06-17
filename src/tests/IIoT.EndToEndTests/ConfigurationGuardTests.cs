@@ -533,10 +533,13 @@ public sealed class ConfigurationGuardTests
 
         readmeSource.Should().Contain("single-machine production starter");
         readmeSource.Should().Contain("`release_tag = sha-*`");
-        readmeSource.Should().Contain("`cloud-image` 负责构建并推送五个应用镜像到 Harbor");
+        readmeSource.Should().Contain("`cloud-image` 在内网 self-hosted runner `iiot-linux-prod` 上构建并推送五个应用镜像到 Harbor");
+        readmeSource.Should().Contain("runner 必须使用专用非 root 用户运行");
+        readmeSource.Should().Contain("Docker Hub 不作为生产依赖源");
         readmeSource.Should().Contain("Edge 客户端安装素材不进 Harbor");
         readmeSource.Should().Contain("EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers");
         readmeSource.Should().Contain("EdgeInstallerArtifacts__VelopackReleasesBaseUrl=${PUBLIC_BASE_URL}/edge-updates/velopack");
+        readmeSource.Should().Contain("[RUNNER.md](./RUNNER.md)");
         readmeSource.Should().Contain("GET /internal/healthz");
         readmeSource.Should().Contain("[OPERATIONS.md](./OPERATIONS.md)");
         readmeSource.Should().Contain("deploy/scripts/deploy-release.sh");
@@ -560,6 +563,16 @@ public sealed class ConfigurationGuardTests
         envExampleSource.Should().Contain("IIOT_MIGRATION_IMAGE=harbor.example.com/iiot/iiot-migrationworkapp:sha-");
         envExampleSource.Should().Contain("IIOT_WEB_IMAGE=harbor.example.com/iiot/iiot-web:sha-");
         envExampleSource.Should().NotContain("IIOT_HTTPAPI_IMAGE=harbor.example.com/iiot/iiot-httpapi:latest");
+        envExampleSource.Should().Contain("IIOT_NGINX_IMAGE=harbor.example.com/mirror/nginx:1.27-alpine");
+        envExampleSource.Should().Contain("IIOT_POSTGRES_IMAGE=harbor.example.com/mirror/timescaledb:latest-pg17");
+        envExampleSource.Should().Contain("IIOT_REDIS_IMAGE=harbor.example.com/mirror/redis:7.4-alpine");
+        envExampleSource.Should().Contain("IIOT_RABBITMQ_IMAGE=harbor.example.com/mirror/rabbitmq:3-management-alpine");
+        envExampleSource.Should().Contain("IIOT_SEQ_IMAGE=harbor.example.com/mirror/seq:2024.3");
+        envExampleSource.Should().NotContain("IIOT_NGINX_IMAGE=nginx:");
+        envExampleSource.Should().NotContain("IIOT_POSTGRES_IMAGE=timescale/");
+        envExampleSource.Should().NotContain("IIOT_REDIS_IMAGE=redis:");
+        envExampleSource.Should().NotContain("IIOT_RABBITMQ_IMAGE=rabbitmq:");
+        envExampleSource.Should().NotContain("IIOT_SEQ_IMAGE=datalust/");
         envExampleSource.Should().Contain("BACKUP_RETENTION_DAYS=14");
         envExampleSource.Should().Contain("BACKUP_MAX_AGE_HOURS=24");
         envExampleSource.Should().Contain("BACKUP_VERIFY_MAX_AGE_DAYS=7");
@@ -597,11 +610,14 @@ public sealed class ConfigurationGuardTests
         documentationSource.Should().Contain("OCI_NAMESPACE");
         documentationSource.Should().Contain("OCI_REGISTRY_USERNAME");
         documentationSource.Should().Contain("OCI_REGISTRY_PASSWORD");
-        documentationSource.Should().Contain("私有服务器默认不走");
-        documentationSource.Should().Contain("本轮允许清理旧测试部署和旧数据");
+        documentationSource.Should().Contain("iiot-linux-prod");
+        documentationSource.Should().Contain("github-runner");
+        documentationSource.Should().Contain("Docker Hub 不作为生产依赖源");
+        documentationSource.Should().Contain("mirror-third-party-images.sh");
         documentationSource.Should().Contain("docker login <OCI_REGISTRY>");
         documentationSource.Should().Contain("docker compose pull");
         envExampleSource.Should().Contain("IIOT_GATEWAY_IMAGE=harbor.example.com/iiot/iiot-gateway:sha-");
+        envExampleSource.Should().Contain("IIOT_REDIS_IMAGE=harbor.example.com/mirror/redis:7.4-alpine");
     }
 
     [Fact]
@@ -894,15 +910,48 @@ public sealed class ConfigurationGuardTests
 
         workflowSource.Should().Contain("release_tag:");
         workflowSource.Should().Contain("Release tag from cloud-image (sha-*)");
+        workflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
         workflowSource.Should().Contain("if [[ ! \"$release_tag\" =~ ^sha-[0-9a-f]+$ ]]");
         workflowSource.Should().Contain("RELEASE_TAG: ${{ inputs.release_tag }}");
         workflowSource.Should().Contain("DEPLOY_GIT_SHA: ${{ github.sha }}");
         workflowSource.Should().Contain("DEPLOY_TRIGGERED_BY: ${{ github.actor }}");
-        workflowSource.Should().Contain("envs: GITHUB_ACTOR,GITHUB_TOKEN,RELEASE_TAG,DEPLOY_GIT_SHA,DEPLOY_TRIGGERED_BY");
-        workflowSource.Should().Contain("chmod +x ./scripts/*.sh");
+        workflowSource.Should().Contain("DEPLOY_TARGET_DIR: ${{ secrets.DEPLOY_TARGET_DIR }}");
+        workflowSource.Should().Contain("DEPLOY_ENV_FILE: ${{ secrets.DEPLOY_ENV_FILE }}");
+        workflowSource.Should().Contain("Self-hosted runner must not run as root.");
+        workflowSource.Should().Contain("rsync -a --delete");
+        workflowSource.Should().Contain("printf '%s\\n' \"$DEPLOY_ENV_FILE\" > \"$DEPLOY_TARGET_DIR/.env\"");
+        workflowSource.Should().Contain("docker login \"${{ secrets.OCI_REGISTRY }}\"");
         workflowSource.Should().Contain("./scripts/deploy-release.sh \"$RELEASE_TAG\"");
+        workflowSource.Should().NotContain("runs-on: ubuntu-latest");
+        workflowSource.Should().NotContain("appleboy/ssh-action");
+        workflowSource.Should().NotContain("appleboy/scp-action");
+        workflowSource.Should().NotContain("ghcr.io");
+        workflowSource.Should().NotContain("envs: GITHUB_ACTOR,GITHUB_TOKEN,RELEASE_TAG,DEPLOY_GIT_SHA,DEPLOY_TRIGGERED_BY");
         workflowSource.Should().NotContain("compose run --rm iiot-migration");
         workflowSource.Should().NotContain("probe_status \"${public_base_url}/internal/healthz\" \"200\"");
+    }
+
+    [Fact]
+    public void CloudImageWorkflow_ShouldUseIntranetRunnerAndHarborMirrorBaseImages()
+    {
+        var workflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-image.yml"));
+        var webDockerfileSource = File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.AppHost", "iiot-web.Dockerfile"));
+
+        workflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
+        workflowSource.Should().Contain("Self-hosted runner must not run as root.");
+        workflowSource.Should().Contain("docker buildx build");
+        workflowSource.Should().Contain("--build-arg \"NODE_BASE_IMAGE=${{ steps.registry.outputs.registry }}/mirror/node:22-slim\"");
+        workflowSource.Should().Contain("--build-arg \"NGINX_BASE_IMAGE=${{ steps.registry.outputs.registry }}/mirror/nginx:1.27-alpine\"");
+        workflowSource.Should().NotContain("runs-on: ubuntu-latest");
+        workflowSource.Should().NotContain("ghcr.io");
+        workflowSource.Should().NotContain("docker/build-push-action");
+        workflowSource.Should().NotContain("docker/metadata-action");
+        workflowSource.Should().NotContain("docker/setup-buildx-action");
+
+        webDockerfileSource.Should().Contain("ARG NODE_BASE_IMAGE=node:22-slim");
+        webDockerfileSource.Should().Contain("FROM ${NODE_BASE_IMAGE} AS build");
+        webDockerfileSource.Should().Contain("ARG NGINX_BASE_IMAGE=nginx:1.27-alpine");
+        webDockerfileSource.Should().Contain("FROM ${NGINX_BASE_IMAGE} AS final");
     }
 
     [Fact]
@@ -914,6 +963,7 @@ public sealed class ConfigurationGuardTests
         var opsCheckSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "ops-check.sh"));
         var releaseCommonSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "release-common.sh"));
         var preDeploySource = File.ReadAllText(FindRepoFile("deploy", "scripts", "pre-deploy-check.sh"));
+        var mirrorImagesSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "mirror-third-party-images.sh"));
         var deployReleaseSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "deploy-release.sh"));
         var postDeploySource = File.ReadAllText(FindRepoFile("deploy", "scripts", "post-deploy-check.sh"));
         var rollbackSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "rollback-release.sh"));
@@ -970,16 +1020,32 @@ public sealed class ConfigurationGuardTests
         releaseCommonSource.Should().Contain("RELEASE_HISTORY_DIR");
         releaseCommonSource.Should().Contain("ensure_release_tag");
         releaseCommonSource.Should().Contain("Application image may not use :latest");
+        releaseCommonSource.Should().Contain("INFRA_IMAGE_KEYS");
+        releaseCommonSource.Should().Contain("ensure_infra_images_not_docker_hub");
+        releaseCommonSource.Should().Contain("Infrastructure image must be mirrored to Harbor");
+        releaseCommonSource.Should().Contain("Infrastructure image must include an explicit Harbor registry");
         releaseCommonSource.Should().Contain("write_release_manifest");
         releaseCommonSource.Should().Contain("record_release_history");
         releaseCommonSource.Should().Contain("apply_app_images_to_dotenv");
 
         preDeploySource.Should().Contain("ensure_release_tag \"$RELEASE_TAG\"");
         preDeploySource.Should().Contain("compose config -q");
+        preDeploySource.Should().Contain("require_infra_image_values");
+        preDeploySource.Should().Contain("ensure_infra_images_not_docker_hub");
         preDeploySource.Should().Contain("resolve_release_images \"$RELEASE_TAG\"");
         preDeploySource.Should().Contain("ensure_target_images_not_latest");
         preDeploySource.Should().Contain("probe_status \"${public_base_url}/internal/healthz\" \"200\" 3");
         preDeploySource.Should().Contain("\"$SCRIPT_DIR/ops-check.sh\"");
+
+        mirrorImagesSource.Should().Contain("MIRROR_REGISTRY=${MIRROR_REGISTRY:-10.98.90.154:80}");
+        mirrorImagesSource.Should().Contain("MIRROR_NAMESPACE=${MIRROR_NAMESPACE:-mirror}");
+        mirrorImagesSource.Should().Contain("timescale/timescaledb:latest-pg17");
+        mirrorImagesSource.Should().Contain("redis:7.4-alpine");
+        mirrorImagesSource.Should().Contain("rabbitmq:3-management-alpine");
+        mirrorImagesSource.Should().Contain("datalust/seq:2024.3");
+        mirrorImagesSource.Should().Contain("nginx:1.27-alpine");
+        mirrorImagesSource.Should().Contain("node:22-slim");
+        mirrorImagesSource.Should().Contain("docker push \"$target_image\"");
 
         deployReleaseSource.Should().Contain("\"$SCRIPT_DIR/pre-deploy-check.sh\" \"$RELEASE_TAG\"");
         deployReleaseSource.Should().Contain("\"$SCRIPT_DIR/postgres-backup.sh\"");
@@ -1021,6 +1087,9 @@ public sealed class ConfigurationGuardTests
         operationsSource.Should().Contain("./scripts/ops-check.sh");
         operationsSource.Should().Contain("./scripts/deploy-release.sh");
         operationsSource.Should().Contain("./scripts/rollback-release.sh");
+        operationsSource.Should().Contain("iiot-linux-prod");
+        operationsSource.Should().Contain("github-runner");
+        operationsSource.Should().Contain("Docker Hub is not a production dependency source");
         operationsSource.Should().Contain("current-release.env");
         operationsSource.Should().Contain("previous-release.env");
         operationsSource.Should().Contain("staged-release.env");

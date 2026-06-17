@@ -1,16 +1,19 @@
 # IIoT Cloud Harbor CICD And Private Server Deploy
 
-本目录是 `IIoT.CloudPlatform` 当前生产部署入口。云端部署以 Harbor 镜像仓库和私有服务器本地脚本为准；GitHub 只保留代码记录和可选 CI，不作为私有服务器直接部署入口。
+本目录是 `IIoT.CloudPlatform` 当前生产部署入口。云端部署以 Harbor 镜像仓库、内网 GitHub self-hosted runner 和服务器本地发布脚本为准；GitHub 托管 runner 不能访问 `10.98.90.154:80` Harbor，也不能 SSH 到内网服务器，不作为生产部署执行环境。
 
 ## 部署口径
 
 - 当前目标是 single-machine production starter。
 - 生产版本统一使用 `release_tag = sha-*`，`latest` 不能作为生产应用版本。
-- `cloud-image` 负责构建并推送五个应用镜像到 Harbor。
+- `cloud-image` 在内网 self-hosted runner `iiot-linux-prod` 上构建并推送五个应用镜像到 Harbor。
+- `cloud-deploy` 在同一内网 runner 上同步 `deploy/` 模板、写入生产 `.env`，再执行 `deploy/scripts/deploy-release.sh`。
+- runner 必须使用专用非 root 用户运行，例如 `github-runner`，不能用 root 跑 Actions 服务。
+- Docker Hub 不作为生产依赖源；compose 第三方镜像和 Web Dockerfile 的 Node/Nginx 基础镜像必须先同步到 Harbor mirror。
 - Edge 客户端安装素材不进 Harbor；`IIoT.EdgeClient/scripts/PublishEdgeClientInstallerArtifact.ps1` 上传到服务器 `${EDGE_UPDATES_DIR}/installers/{channel}/{version}`。
-- 私有服务器通过本地上传 `deploy/` 和真实 `.env`，再在服务器执行部署脚本。
-- 本轮允许清理旧测试部署和旧数据，不做旧 `docker stack` 到新 `docker compose` 的数据迁移。
+- 本地手工构建和 SSH 部署只作为应急 fallback，不是标准流程。
 - `deploy/scripts/deploy-release.sh` 是标准发布入口，`deploy/scripts/rollback-release.sh` 是应用镜像回滚入口。
+- self-hosted runner 安装和权限要求见 [RUNNER.md](./RUNNER.md)。
 - 运维、备份、恢复和检查细节见 [OPERATIONS.md](./OPERATIONS.md)。
 - Cloud 下载中心生成 Edge 客户端 `.exe` 的上线顺序见 [EDGE_INSTALLER_GO_LIVE.md](./EDGE_INSTALLER_GO_LIVE.md)。
 
@@ -67,7 +70,29 @@ Harbor 变量：
 - `OCI_REGISTRY_USERNAME`：Harbor 登录用户名。
 - `OCI_REGISTRY_PASSWORD`：Harbor 登录密码或 robot account token。
 
-GitHub workflow `cloud-image` 可用于构建推送 Harbor，只要配置上述 OCI secrets。`cloud-deploy` 只适用于 CI 能 SSH 到服务器的环境；当前私有服务器默认不走它。
+GitHub workflow `cloud-image` 和 `cloud-deploy` 是标准生产链路，但必须跑在带 `iiot-linux-prod` label 的内网 self-hosted runner 上。不要把这两个 workflow 改回 `ubuntu-latest`，公网 GitHub runner 访问不了内网 Harbor 和部署目录。
+
+## 第三方镜像 mirror
+
+生产服务器 Docker Hub 不通，不能在 `.env` 或 compose 里使用 `nginx:...`、`redis:...`、`rabbitmq:...`、`timescale/...`、`datalust/...` 这类 Docker Hub shorthand。第三方镜像统一推到 Harbor `mirror` 项目：
+
+```text
+<OCI_REGISTRY>/mirror/timescaledb:latest-pg17
+<OCI_REGISTRY>/mirror/redis:7.4-alpine
+<OCI_REGISTRY>/mirror/rabbitmq:3-management-alpine
+<OCI_REGISTRY>/mirror/seq:2024.3
+<OCI_REGISTRY>/mirror/nginx:1.27-alpine
+<OCI_REGISTRY>/mirror/node:22-slim
+```
+
+在能访问 Docker Hub 的机器，或已经有本地镜像缓存的机器上执行：
+
+```sh
+docker login <OCI_REGISTRY> --username <OCI_REGISTRY_USERNAME>
+MIRROR_REGISTRY=<OCI_REGISTRY> MIRROR_NAMESPACE=mirror ./deploy/scripts/mirror-third-party-images.sh
+```
+
+`deploy/.env.example` 已默认指向 Harbor mirror；`pre-deploy-check.sh` 会拒绝 Docker Hub shorthand，避免服务器重建或 `docker compose pull` 时卡在外网。
 
 ## Edge 安装素材
 
@@ -114,14 +139,14 @@ VITE_AICOPILOT_CHALLENGE_URL=http://10.98.90.154:82/api/identity/cloud-oidc/chal
 /srv/iiot-cloud/deploy
 ```
 
-部署前从本地上传：
+标准流程由 `cloud-deploy` workflow 自动同步：
 
 ```text
 deploy/
 deploy/.env
 ```
 
-真实 `.env` 由运维管理，不提交仓库。`deploy/.env.example` 只作为模板。
+真实 `.env` 由 GitHub secret `DEPLOY_ENV_FILE` 注入，不提交仓库。`deploy/.env.example` 只作为模板。应急手工部署时，才需要人工把 `deploy/` 和真实 `.env` 放到 `/srv/iiot-cloud/deploy`。
 
 生产服务器以容器标签为准确认真实部署目录，不要按旧路径猜：
 
@@ -216,6 +241,26 @@ sudo chmod 600 /srv/iiot-cloud/deploy/certs/cloud-oidc-signing.pfx
 ```
 
 ## 标准发布步骤
+
+标准路径：
+
+1. 合并或推送到 `main`。
+2. `cloud-image` 在 `iiot-linux-prod` self-hosted runner 上构建五个应用镜像，并推送到 Harbor，tag 为 `sha-${GITHUB_SHA}`。
+3. 人工触发 `cloud-deploy`，输入 `release_tag = sha-*`。
+4. `cloud-deploy` 校验 runner 非 root、同步 `deploy/`、写入 `DEPLOY_ENV_FILE`、登录 Harbor，并执行 `deploy/scripts/deploy-release.sh`。
+
+GitHub secrets：
+
+```text
+OCI_REGISTRY=10.98.90.154:80
+OCI_NAMESPACE=iiot
+OCI_REGISTRY_USERNAME=<harbor-robot-or-user>
+OCI_REGISTRY_PASSWORD=<harbor-password-or-token>
+DEPLOY_TARGET_DIR=/srv/iiot-cloud/deploy
+DEPLOY_ENV_FILE=<完整生产 .env 内容>
+```
+
+应急手工路径只在 Actions 不可用时使用。
 
 在服务器上执行：
 

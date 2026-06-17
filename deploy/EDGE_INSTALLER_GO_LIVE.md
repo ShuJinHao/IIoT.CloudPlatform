@@ -43,26 +43,21 @@ cd src/ui/iiot-web && npm run build
 
 必须先把当前 Cloud 后端和前端部署到服务器，否则线上没有 `installer-package` 接口，也没有新的 `.exe` 下载按钮。
 
-构建并推送五个应用镜像到 Harbor，所有镜像使用同一个 `sha-*` tag：
+标准方式是走 CloudPlatform 的 GitHub Actions：
 
-```bash
-TAG=sha-<current-commit-or-release>
-REGISTRY=10.98.90.154:80
-NAMESPACE=iiot
+1. 推送或合并到 `main`。
+2. 等 `cloud-image` 在 `iiot-linux-prod` self-hosted runner 上完成，五个应用镜像会推送到 `10.98.90.154:80` Harbor。
+3. 人工触发 `cloud-deploy`，输入 `release_tag = sha-<current-commit-or-release>`。
+4. 确认 `post-deploy-check.sh` 和 `ops-check.sh` 通过。
 
-docker buildx build --platform linux/amd64 -f src/hosts/IIoT.HttpApi/Dockerfile -t "$REGISTRY/$NAMESPACE/iiot-httpapi:$TAG" --push .
-docker buildx build --platform linux/amd64 -f src/hosts/IIoT.Gateway/Dockerfile -t "$REGISTRY/$NAMESPACE/iiot-gateway:$TAG" --push .
-docker buildx build --platform linux/amd64 -f src/hosts/IIoT.DataWorker/Dockerfile -t "$REGISTRY/$NAMESPACE/iiot-dataworker:$TAG" --push .
-docker buildx build --platform linux/amd64 -f src/hosts/IIoT.MigrationWorkApp/Dockerfile -t "$REGISTRY/$NAMESPACE/iiot-migrationworkapp:$TAG" --push .
-docker buildx build --platform linux/amd64 -f src/hosts/IIoT.AppHost/iiot-web.Dockerfile --build-arg VITE_AICOPILOT_CHALLENGE_URL=http://10.98.90.154:82/api/identity/cloud-oidc/challenge -t "$REGISTRY/$NAMESPACE/iiot-web:$TAG" --push .
-```
+`cloud-image` 会给 Web Dockerfile 传入 `VITE_AICOPILOT_CHALLENGE_URL`，并使用 Harbor mirror 中的 `node:22-slim`、`nginx:1.27-alpine` 基础镜像。服务器不依赖 Docker Hub。
 
-服务器部署：
+只有 GitHub Actions 不可用时，才走服务器应急手工部署：
 
 ```sh
 cd /srv/iiot-cloud/deploy
 chmod +x ./scripts/*.sh
-DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh "$TAG"
+DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-<current-commit-or-release>
 ```
 
 部署前确认 `.env` 里保持密钥模式：

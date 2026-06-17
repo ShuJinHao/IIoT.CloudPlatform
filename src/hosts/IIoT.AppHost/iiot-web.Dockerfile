@@ -1,4 +1,5 @@
-FROM node:22-slim AS build
+ARG NODE_BASE_IMAGE=node:22-slim
+FROM ${NODE_BASE_IMAGE} AS build
 WORKDIR /app
 
 COPY src/ui/iiot-web/package*.json ./
@@ -9,7 +10,8 @@ ARG VITE_AICOPILOT_CHALLENGE_URL=
 ENV VITE_AICOPILOT_CHALLENGE_URL=$VITE_AICOPILOT_CHALLENGE_URL
 RUN npm run build
 
-FROM nginx:1.27-alpine AS final
+ARG NGINX_BASE_IMAGE=nginx:1.27-alpine
+FROM ${NGINX_BASE_IMAGE} AS final
 
 COPY src/hosts/IIoT.AppHost/iiot-web.nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html

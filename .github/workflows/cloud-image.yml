@@ -15,11 +15,10 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   build-push:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, iiot-linux-prod]
     strategy:
       fail-fast: false
       matrix:
@@ -39,59 +38,76 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve registry target
+      - name: Resolve Harbor target
         id: registry
         shell: bash
+        env:
+          OCI_REGISTRY: ${{ secrets.OCI_REGISTRY }}
+          OCI_NAMESPACE: ${{ secrets.OCI_NAMESPACE }}
+          OCI_REGISTRY_USERNAME: ${{ secrets.OCI_REGISTRY_USERNAME }}
+          OCI_REGISTRY_PASSWORD: ${{ secrets.OCI_REGISTRY_PASSWORD }}
         run: |
-          registry="${{ secrets.OCI_REGISTRY }}"
-          namespace="${{ secrets.OCI_NAMESPACE }}"
-          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
-          if [ -z "$registry" ]; then
-            registry="ghcr.io"
+          set -euo pipefail
+          registry="${OCI_REGISTRY:-}"
+          namespace="${OCI_NAMESPACE:-}"
+          if [ -z "$registry" ] || [ -z "$namespace" ]; then
+            echo "OCI_REGISTRY and OCI_NAMESPACE are required for the intranet self-hosted runner flow." >&2
+            exit 64
           fi
-          if [ -z "$namespace" ]; then
-            namespace="$owner"
+          if [ -z "${OCI_REGISTRY_USERNAME:-}" ] || [ -z "${OCI_REGISTRY_PASSWORD:-}" ]; then
+            echo "OCI_REGISTRY_USERNAME and OCI_REGISTRY_PASSWORD are required for Harbor push." >&2
+            exit 64
           fi
           echo "registry=$registry" >> "$GITHUB_OUTPUT"
+          echo "namespace=$namespace" >> "$GITHUB_OUTPUT"
           echo "image=$registry/$namespace/${{ matrix.image }}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=sha-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Log in to GHCR
-        if: steps.registry.outputs.registry == 'ghcr.io'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Validate runner and Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$(id -u)" -eq 0 ]; then
+            echo "Self-hosted runner must not run as root." >&2
+            exit 64
+          fi
+          docker version >/dev/null
+          docker buildx version >/dev/null
 
-      - name: Log in to custom OCI registry
-        if: steps.registry.outputs.registry != 'ghcr.io'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ steps.registry.outputs.registry }}
-          username: ${{ secrets.OCI_REGISTRY_USERNAME }}
-          password: ${{ secrets.OCI_REGISTRY_PASSWORD }}
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ steps.registry.outputs.image }}
-          tags: |
-            type=sha,prefix=sha-
-            type=raw,value=latest,enable={{is_default_branch}}
+      - name: Log in to Harbor
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.OCI_REGISTRY_PASSWORD }}" |
+            docker login "${{ steps.registry.outputs.registry }}" \
+              --username "${{ secrets.OCI_REGISTRY_USERNAME }}" \
+              --password-stdin
 
       - name: Build and push image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VITE_AICOPILOT_CHALLENGE_URL=${{ vars.VITE_AICOPILOT_CHALLENGE_URL || 'http://10.98.90.154:82/api/identity/cloud-oidc/challenge' }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        shell: bash
+        env:
+          VITE_AICOPILOT_CHALLENGE_URL: ${{ vars.VITE_AICOPILOT_CHALLENGE_URL }}
+        run: |
+          set -euo pipefail
+          image="${{ steps.registry.outputs.image }}"
+          release_tag="${{ steps.registry.outputs.release_tag }}"
+          challenge_url="${VITE_AICOPILOT_CHALLENGE_URL:-http://10.98.90.154:82/api/identity/cloud-oidc/challenge}"
+          tags=(--tag "$image:$release_tag")
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            tags+=(--tag "$image:main-latest")
+          fi
+
+          docker buildx build \
+            --push \
+            --file "${{ matrix.dockerfile }}" \
+            --build-arg "VITE_AICOPILOT_CHALLENGE_URL=$challenge_url" \
+            --build-arg "NODE_BASE_IMAGE=${{ steps.registry.outputs.registry }}/mirror/node:22-slim" \
+            --build-arg "NGINX_BASE_IMAGE=${{ steps.registry.outputs.registry }}/mirror/nginx:1.27-alpine" \
+            "${tags[@]}" \
+            .
+
+          {
+            echo "### Cloud image"
+            echo "- Image: \`$image\`"
+            echo "- Release tag: \`$release_tag\`"
+          } >> "$GITHUB_STEP_SUMMARY"

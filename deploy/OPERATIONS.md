@@ -62,13 +62,26 @@ curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' http:
 
 ## Standard Release
 
-Application images must already exist in Harbor before this step. Log in to Harbor on the private deployment server first:
+Standard production release is driven by GitHub Actions on the intranet self-hosted runner labeled `iiot-linux-prod`.
+
+The standard sequence is:
+
+1. Push or merge to `main`.
+2. `cloud-image` runs on `iiot-linux-prod`, builds the five application images, and pushes them to Harbor with `sha-${GITHUB_SHA}`.
+3. Trigger `cloud-deploy` manually with the matching `release_tag = sha-*`.
+4. `cloud-deploy` runs on the same non-root runner, syncs `deploy/`, writes `DEPLOY_ENV_FILE`, logs in to Harbor, and calls `deploy-release.sh`.
+
+The runner must not run as root. See `RUNNER.md` for the required `github-runner` user, Docker group, labels, and server reachability checks.
+
+Application images and infrastructure images must already exist in Harbor before deploy. Docker Hub is not a production dependency source; `pre-deploy-check.sh` rejects Docker Hub shorthand infrastructure image values.
+
+Manual release from the server is an emergency fallback. Log in to Harbor on the private deployment server first:
 
 ```sh
 docker login <OCI_REGISTRY> --username <OCI_REGISTRY_USERNAME>
 ```
 
-Use the single release entrypoint:
+Then use the single release entrypoint:
 
 ```sh
 DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-0123456789abcdef
