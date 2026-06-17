@@ -149,6 +149,15 @@ public sealed class ClientPluginRelease : BaseEntity<Guid>
         Validate();
     }
 
+    public void ChangeStatus(ClientReleaseStatus status)
+    {
+        Status = status;
+        if (status == ClientReleaseStatus.Published && PublishedAtUtc is null)
+        {
+            PublishedAtUtc = DateTime.UtcNow;
+        }
+    }
+
     private void Validate()
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(ModuleId);

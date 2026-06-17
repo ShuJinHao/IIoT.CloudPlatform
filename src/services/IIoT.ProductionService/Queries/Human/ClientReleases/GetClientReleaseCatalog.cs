@@ -13,7 +13,8 @@ namespace IIoT.ProductionService.Queries.ClientReleases;
 public sealed record GetClientReleaseCatalogQuery(
     string? Channel = null,
     string? TargetRuntime = null,
-    bool OnlyPublished = false) : IHumanQuery<Result<ClientReleaseCatalogDto>>;
+    bool OnlyPublished = false,
+    bool IncludeArchived = false) : IHumanQuery<Result<ClientReleaseCatalogDto>>;
 
 public sealed class GetClientReleaseCatalogHandler(
     IReadRepository<ClientHostRelease> hostReleaseRepository,
@@ -26,35 +27,26 @@ public sealed class GetClientReleaseCatalogHandler(
     {
         var channel = NormalizeChannel(request.Channel);
         var hostReleases = await hostReleaseRepository.GetListAsync(
-            new ClientHostReleasesByChannelSpec(channel, request.TargetRuntime, request.OnlyPublished),
+            new ClientHostReleasesByChannelSpec(
+                channel,
+                request.TargetRuntime,
+                request.OnlyPublished,
+                request.IncludeArchived),
             cancellationToken);
         var pluginReleases = await pluginReleaseRepository.GetListAsync(
-            new ClientPluginReleasesByChannelSpec(channel, request.TargetRuntime, request.OnlyPublished),
+            new ClientPluginReleasesByChannelSpec(
+                channel,
+                request.TargetRuntime,
+                request.OnlyPublished,
+                request.IncludeArchived),
             cancellationToken);
-
-        var orderedHosts = hostReleases
-            .OrderByDescending(release => release.Status == ClientReleaseStatus.Published)
-            .ThenByDescending(release => release.PublishedAtUtc ?? release.CreatedAtUtc)
-            .ThenByDescending(release => release.Version, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        var orderedPlugins = pluginReleases
-            .OrderBy(release => release.ModuleId, StringComparer.OrdinalIgnoreCase)
-            .ThenByDescending(release => release.Status == ClientReleaseStatus.Published)
-            .ThenByDescending(release => release.PublishedAtUtc ?? release.CreatedAtUtc)
-            .ThenByDescending(release => release.Version, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        var latestHost = orderedHosts
-            .Where(release => release.Status == ClientReleaseStatus.Published)
-            .OrderByDescending(release => release, ClientHostReleaseVersionComparer.Instance)
-            .FirstOrDefault();
 
         return Result.Success(new ClientReleaseCatalogDto(
             ClientReleaseCatalogSchema.Version,
             channel,
             NormalizeOptional(request.TargetRuntime),
-            latestHost is null ? null : ClientReleaseMapping.ToDto(latestHost),
-            orderedHosts.Select(ClientReleaseMapping.ToDto).ToList(),
-            orderedPlugins.Select(ClientReleaseMapping.ToDto).ToList(),
+            ClientReleaseMapping.ToHostComponent(hostReleases),
+            ClientReleaseMapping.ToPluginComponents(pluginReleases),
             DateTime.UtcNow));
     }
 
@@ -67,36 +59,5 @@ public sealed class GetClientReleaseCatalogHandler(
     {
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
-    }
-
-    private sealed class ClientHostReleaseVersionComparer : IComparer<ClientHostRelease>
-    {
-        public static ClientHostReleaseVersionComparer Instance { get; } = new();
-
-        public int Compare(ClientHostRelease? x, ClientHostRelease? y)
-        {
-            if (x is null && y is null)
-            {
-                return 0;
-            }
-
-            if (x is null)
-            {
-                return -1;
-            }
-
-            if (y is null)
-            {
-                return 1;
-            }
-
-            var versionCompare = ClientReleaseMapping.CompareVersions(x.Version, y.Version);
-            if (versionCompare != 0)
-            {
-                return versionCompare;
-            }
-
-            return DateTime.Compare(x.PublishedAtUtc ?? x.CreatedAtUtc, y.PublishedAtUtc ?? y.CreatedAtUtc);
-        }
     }
 }

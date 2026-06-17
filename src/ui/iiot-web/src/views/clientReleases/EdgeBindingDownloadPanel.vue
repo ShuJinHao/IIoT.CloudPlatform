@@ -97,11 +97,11 @@ import UiCheckbox from '../../components/ui/UiCheckbox.vue';
 import UiInput from '../../components/ui/UiInput.vue';
 import UiModal from '../../components/ui/UiModal.vue';
 import { getScopedDeviceSelectApi, type DeviceSelectDto } from '../../api/device';
-import { generateEdgeInstallerPackageApi, type ClientPluginReleaseDto } from '../../api/clientRelease';
+import { generateEdgeInstallerPackageApi, type ClientPluginReleaseComponentDto } from '../../api/clientRelease';
 import { notifySuccess, requestConfirmation } from '../../utils/feedback';
 
 const props = defineProps<{
-  pluginReleases: ClientPluginReleaseDto[];
+  pluginComponents: ClientPluginReleaseComponentDto[];
   channel?: string;
   targetRuntime?: string;
   hostVersion?: string | null;
@@ -131,16 +131,17 @@ const generating = ref(false);
 
 // 可选插件清单：按 moduleId 去重
 const plugins = computed(() => {
-  const map = new Map<string, string>();
-  for (const plugin of props.pluginReleases) {
-    if (plugin.status.toLowerCase() !== 'published') {
+  const result: Array<{ moduleId: string; displayName: string }> = [];
+  for (const plugin of props.pluginComponents) {
+    if (!plugin.versions.some((version) => version.status.toLowerCase() === 'published')) {
       continue;
     }
-    if (!map.has(plugin.moduleId)) {
-      map.set(plugin.moduleId, plugin.displayName || plugin.moduleId);
-    }
+    result.push({
+      moduleId: plugin.moduleId,
+      displayName: plugin.displayName || plugin.moduleId,
+    });
   }
-  return Array.from(map, ([moduleId, displayName]) => ({ moduleId, displayName }));
+  return result;
 });
 
 const isChecked = (moduleId: string) => moduleId in selections;

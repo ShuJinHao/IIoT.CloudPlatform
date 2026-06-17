@@ -83,9 +83,9 @@
         </div>
         <UiDataTable
           :columns="isPublishRoute ? publishHostColumns : catalogHostColumns"
-          :data="catalog?.hostReleases ?? []"
+          :data="catalog?.host.versions ?? []"
           :loading="loadingCatalog"
-          :row-key="(row: ClientHostReleaseDto) => row.id"
+          :row-key="(row: ClientHostVersionEntryDto) => row.id"
         >
           <template #empty>
             <EmptyState title="暂无宿主数据" description="当前条件下未找到任何通用宿主版本，请登记新版本。" />
@@ -113,7 +113,7 @@
               </UiTag>
               <span class="pv-meta">{{ formatSize(ver.packageSize) }}</span>
               <span class="pv-meta">{{ formatDate(ver.publishedAtUtc) }}</span>
-              <span class="pv-note">{{ ver.description || ver.releaseNotes || '-' }}</span>
+              <span class="pv-note">{{ group.description || ver.releaseNotes || '-' }}</span>
               <UiButton
                 v-if="isPublishRoute"
                 size="tiny"
@@ -157,10 +157,10 @@
 
     <NiondTableCard v-else-if="!isPublishRoute && activeView === 'binding'">
       <EdgeBindingDownloadPanel
-        :plugin-releases="catalog?.pluginReleases ?? []"
+        :plugin-components="catalog?.plugins ?? []"
         :channel="channelDisplay"
         :target-runtime="targetRuntime || 'win-x64'"
-        :host-version="catalog?.latestHost?.version ?? null"
+        :host-version="selectedHostPackageVersion"
       />
     </NiondTableCard>
 
@@ -181,7 +181,6 @@
             </UiTag>
             <dl>
               <div><dt>当前</dt><dd>{{ plugin.version || '-' }}</dd></div>
-              <div><dt>最新</dt><dd>{{ plugin.latestVersion || '-' }}</dd></div>
               <div><dt>启用</dt><dd>{{ plugin.enabled ? '是' : '否' }}</dd></div>
             </dl>
             <p v-if="plugin.compatibilityIssue">{{ plugin.compatibilityIssue }}</p>
@@ -265,8 +264,7 @@ import {
   getDeviceClientVersionInventoryApi,
   upsertClientHostReleaseApi,
   upsertClientPluginReleaseApi,
-  type ClientHostReleaseDto,
-  type ClientPluginReleaseDto,
+  type ClientHostVersionEntryDto,
   type ClientReleaseCatalogDto,
   type DeviceClientVersionInventoryDto,
   type UpsertClientHostReleasePayload,
@@ -322,11 +320,17 @@ const pageSubtitle = computed(() =>
     : '选择工序插件并绑定设备，生成已写入设备身份的客户端安装包。',
 );
 const channelDisplay = computed(() => channel.value.trim() || 'stable');
+const selectedHostPackage = computed(() => {
+  const versions = catalog.value?.host.versions ?? [];
+  return versions.find((version) => version.status.toLowerCase() === 'published') ?? versions[0] ?? null;
+});
+const selectedHostPackageVersion = computed(() => selectedHostPackage.value?.version ?? null);
 
 const statusOptions = [
   { label: 'Draft', value: 'Draft' },
   { label: 'Published', value: 'Published' },
-  { label: 'Revoked', value: 'Revoked' },
+  { label: 'Deprecated', value: 'Deprecated' },
+  { label: 'Archived', value: 'Archived' },
 ];
 
 const defaultSha = '0'.repeat(64);
@@ -375,6 +379,7 @@ const fetchCatalog = async () => {
       channel: channel.value,
       targetRuntime: targetRuntime.value,
       onlyPublished: onlyPublished.value,
+      includeArchived: isPublishRoute.value,
     });
   } catch {
     catalog.value = null;
@@ -429,7 +434,7 @@ const openHostModal = () => {
   Object.assign(hostForm, {
     channel: channel.value || 'stable',
     version: '',
-    hostApiVersion: catalog.value?.latestHost?.hostApiVersion || '1.0.0',
+    hostApiVersion: selectedHostPackage.value?.hostApiVersion || '1.0.0',
     targetRuntime: targetRuntime.value || 'win-x64',
     targetFramework: 'net10.0',
     downloadUrl: '',
@@ -452,8 +457,8 @@ const openPluginModal = () => {
     accentColor: '',
     channel: channel.value || 'stable',
     version: '',
-    hostApiVersion: catalog.value?.latestHost?.hostApiVersion || '1.0.0',
-    minHostVersion: catalog.value?.latestHost?.version || '1.0.0',
+    hostApiVersion: selectedHostPackage.value?.hostApiVersion || '1.0.0',
+    minHostVersion: selectedHostPackage.value?.version || '1.0.0',
     maxHostVersion: '99.0.0',
     targetRuntime: targetRuntime.value || 'win-x64',
     targetFramework: 'net10.0',
@@ -521,7 +526,8 @@ const statusTone = (status: string): TagTone => {
   const normalized = status.toLowerCase();
   if (normalized === 'published' || normalized === 'latest') return 'success';
   if (normalized === 'updateavailable') return 'warning';
-  if (normalized === 'incompatible' || normalized === 'revoked') return 'error';
+  if (normalized === 'incompatible' || normalized === 'archived') return 'error';
+  if (normalized === 'deprecated') return 'warning';
   if (normalized === 'missingreport' || normalized === 'norelease') return 'default';
   return 'info';
 };
@@ -529,7 +535,8 @@ const statusTone = (status: string): TagTone => {
 const statusText = (status: string) => ({
   Draft: '草稿',
   Published: '已发布',
-  Revoked: '已撤回',
+  Deprecated: '已弃用',
+  Archived: '已归档',
   Latest: '已最新',
   UpdateAvailable: '可更新',
   Incompatible: '不兼容',
@@ -551,19 +558,15 @@ const formatDate = (value?: string | null) => {
 
 // 工序插件按工序(moduleId)分类，每个工序下挂它的各个版本
 const pluginGroups = computed(() => {
-  const groups = new Map<string, { moduleId: string; displayName: string; versions: ClientPluginReleaseDto[] }>();
-  for (const plugin of catalog.value?.pluginReleases ?? []) {
-    let group = groups.get(plugin.moduleId);
-    if (!group) {
-      group = { moduleId: plugin.moduleId, displayName: plugin.displayName || plugin.moduleId, versions: [] };
-      groups.set(plugin.moduleId, group);
-    }
-    group.versions.push(plugin);
-  }
-  return Array.from(groups.values());
+  return (catalog.value?.plugins ?? []).map((plugin) => ({
+    moduleId: plugin.moduleId,
+    displayName: plugin.displayName || plugin.moduleId,
+    description: plugin.description,
+    versions: plugin.versions,
+  }));
 });
 
-const catalogHostColumns: UiDataTableColumn<ClientHostReleaseDto>[] = [
+const catalogHostColumns: UiDataTableColumn<ClientHostVersionEntryDto>[] = [
   { title: '版本', key: 'version', minWidth: 110, render: (row) => h('strong', row.version) },
   {
     title: '状态',
@@ -576,7 +579,7 @@ const catalogHostColumns: UiDataTableColumn<ClientHostReleaseDto>[] = [
   { title: '备注', key: 'releaseNotes', minWidth: 160, render: (row) => h('span', row.releaseNotes || '-') },
 ];
 
-const publishHostColumns: UiDataTableColumn<ClientHostReleaseDto>[] = [
+const publishHostColumns: UiDataTableColumn<ClientHostVersionEntryDto>[] = [
   ...catalogHostColumns,
   {
     title: '操作',
@@ -593,7 +596,6 @@ const inventoryColumns: UiDataTableColumn<DeviceClientVersionInventoryDto>[] = [
   { title: '设备', key: 'deviceName', minWidth: 190, render: (row) => h('div', { class: 'device-cell' }, [h('strong', row.deviceName), h('code', row.clientCode)]) },
   { title: 'Channel', key: 'channel', width: 120, render: (row) => h('span', row.channel || '-') },
   { title: '宿主当前', key: 'hostVersion', width: 120, render: (row) => h('span', row.hostVersion || '-') },
-  { title: '宿主最新', key: 'latestHostVersion', width: 120, render: (row) => h('span', row.latestHostVersion || '-') },
   {
     title: '宿主状态',
     key: 'hostUpdateStatus',

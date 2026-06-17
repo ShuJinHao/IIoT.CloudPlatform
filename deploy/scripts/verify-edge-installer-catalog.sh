@@ -13,9 +13,9 @@ Usage:
     ./scripts/verify-edge-installer-catalog.sh
 
 Checks:
-  - public latest catalog returns a published host release
+  - public catalog v2 returns a published host version
   - host version/runtime/channel match the expected values
-  - at least one plugin is published in the catalog
+  - at least one plugin version is published in the catalog
   - installer-artifact.json is reachable
   - installer-artifact.json describes v2 launcher/host/plugins directories
   - installer stub URL is reachable and Content-Length matches the manifest when size is present
@@ -68,13 +68,24 @@ channel = os.environ["CHANNEL"]
 target_runtime = os.environ["TARGET_RUNTIME"]
 expected_version = os.environ.get("EXPECTED_VERSION", "").strip()
 
-host = catalog.get("latestHost")
-if not host:
-    raise SystemExit("catalog latestHost is empty")
+if catalog.get("catalogSchemaVersion") != 2:
+    raise SystemExit(f"catalogSchemaVersion must be 2, actual: {catalog.get('catalogSchemaVersion')}")
 
-plugins = catalog.get("plugins") or []
-if not plugins:
-    raise SystemExit("catalog plugins is empty")
+host_component = catalog.get("host") or {}
+host_versions = host_component.get("versions") or []
+if not host_versions:
+    raise SystemExit("catalog host.versions is empty")
+
+host = host_versions[0]
+
+plugin_components = catalog.get("plugins") or []
+plugin_versions = [
+    (component.get("moduleId", ""), version)
+    for component in plugin_components
+    for version in (component.get("versions") or [])
+]
+if not plugin_versions:
+    raise SystemExit("catalog plugin versions is empty")
 
 if (host.get("channel") or "").lower() != channel.lower():
     raise SystemExit(f"host channel mismatch: {host.get('channel')} != {channel}")
@@ -94,8 +105,8 @@ if not download_url:
 
 print(download_url)
 print(
-    f"host_version={host.get('version')} plugin_count={len(plugins)} "
-    f"plugins={','.join(p.get('moduleId', '') for p in plugins)}",
+    f"host_version={host.get('version')} plugin_version_count={len(plugin_versions)} "
+    f"plugins={','.join(module_id for module_id, _ in plugin_versions)}",
     file=sys.stderr,
 )
 PY

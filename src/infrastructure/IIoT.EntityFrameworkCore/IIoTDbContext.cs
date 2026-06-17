@@ -24,6 +24,7 @@ public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)
     public DbSet<Recipe> Recipes => Set<Recipe>();
     public DbSet<ClientHostRelease> ClientHostReleases => Set<ClientHostRelease>();
     public DbSet<ClientPluginRelease> ClientPluginReleases => Set<ClientPluginRelease>();
+    public DbSet<ClientReleaseRetentionPolicy> ClientReleaseRetentionPolicies => Set<ClientReleaseRetentionPolicy>();
     public DbSet<DeviceClientVersionSnapshot> DeviceClientVersionSnapshots => Set<DeviceClientVersionSnapshot>();
     public DbSet<RefreshTokenSession> RefreshTokenSessions => Set<RefreshTokenSession>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();

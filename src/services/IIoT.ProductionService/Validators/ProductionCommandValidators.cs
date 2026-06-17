@@ -66,7 +66,7 @@ public sealed class UpsertClientHostReleaseCommandValidator : AbstractValidator<
         RuleFor(x => x.Status)
             .NotEmpty()
             .Must(value => Enum.TryParse(value, ignoreCase: true, out ClientReleaseStatus _))
-            .WithMessage("发布状态必须是 Draft、Published 或 Revoked。");
+            .WithMessage("发布状态必须是 Draft、Published、Deprecated 或 Archived。");
         RuleFor(x => x.Publisher).MaximumLength(128).When(x => x.Publisher is not null);
     }
 }
@@ -97,7 +97,7 @@ public sealed class UpsertClientPluginReleaseCommandValidator : AbstractValidato
         RuleFor(x => x.Status)
             .NotEmpty()
             .Must(value => Enum.TryParse(value, ignoreCase: true, out ClientReleaseStatus _))
-            .WithMessage("发布状态必须是 Draft、Published 或 Revoked。");
+            .WithMessage("发布状态必须是 Draft、Published、Deprecated 或 Archived。");
         RuleFor(x => x.Publisher).MaximumLength(128).When(x => x.Publisher is not null);
     }
 

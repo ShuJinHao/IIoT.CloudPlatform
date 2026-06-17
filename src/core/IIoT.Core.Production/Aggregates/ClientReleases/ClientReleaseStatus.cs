@@ -7,5 +7,6 @@ public enum ClientReleaseStatus
 {
     Draft,
     Published,
-    Revoked
+    Deprecated,
+    Archived
 }

@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using IIoT.Core.Production.Aggregates.ClientReleases;
+using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.Commands.ClientReleases;
 using IIoT.ProductionService.Commands.ClientVersions;
 using IIoT.ProductionService.Queries.ClientReleases;
@@ -17,7 +18,7 @@ public sealed class ClientReleaseBehaviorTests
     public async Task UpsertClientHostReleaseHandler_ShouldCreateReleaseRecord()
     {
         var repository = new InMemoryRepository<ClientHostRelease>();
-        var handler = new UpsertClientHostReleaseHandler(repository);
+        var handler = new UpsertClientHostReleaseHandler(repository, new NoopRetentionService());
 
         var result = await handler.Handle(
             new UpsertClientHostReleaseCommand(
@@ -172,7 +173,7 @@ public sealed class ClientReleaseBehaviorTests
             "draft-plugin-signature",
             "IIoT"));
 
-        var handler = new GetPublicClientDownloadsHandler(hostRepository, pluginRepository);
+        var handler = new GetPublicClientDownloadsHandler(hostRepository, pluginRepository, new FixedRetentionPolicyReader());
 
         var result = await handler.Handle(
             new GetPublicClientDownloadsQuery("stable", "win-x64"),
@@ -180,18 +181,20 @@ public sealed class ClientReleaseBehaviorTests
 
         Assert.True(result.IsSuccess);
         Assert.NotNull(result.Value);
-        Assert.Equal("1.1.0", result.Value!.LatestHost?.Version);
-        var publicHostJson = System.Text.Json.JsonSerializer.Serialize(result.Value.LatestHost);
+        var hostVersion = Assert.Single(result.Value!.Host.Versions);
+        Assert.Equal("1.1.0", hostVersion.Version);
+        var publicHostJson = System.Text.Json.JsonSerializer.Serialize(hostVersion);
         Assert.DoesNotContain("DownloadUrl", publicHostJson, StringComparison.Ordinal);
         Assert.DoesNotContain("https://download.example.test/host-1.1.0.zip", publicHostJson, StringComparison.Ordinal);
 
         var plugin = Assert.Single(result.Value.Plugins);
         Assert.Equal("Injection", plugin.ModuleId);
         Assert.Equal("注液", plugin.DisplayName);
-        Assert.Equal(4096, plugin.PackageSize);
-        Assert.Equal(System.Text.Json.JsonValueKind.Array, plugin.Dependencies.ValueKind);
+        var pluginVersion = Assert.Single(plugin.Versions);
+        Assert.Equal(4096, pluginVersion.PackageSize);
+        Assert.Equal(System.Text.Json.JsonValueKind.Array, pluginVersion.Dependencies.ValueKind);
 
-        var publicPluginJson = System.Text.Json.JsonSerializer.Serialize(plugin);
+        var publicPluginJson = System.Text.Json.JsonSerializer.Serialize(pluginVersion);
         Assert.DoesNotContain("DownloadUrl", publicPluginJson, StringComparison.Ordinal);
         Assert.DoesNotContain("Sha256", publicPluginJson, StringComparison.Ordinal);
         Assert.DoesNotContain("Signature", publicPluginJson, StringComparison.Ordinal);
@@ -212,6 +215,39 @@ public sealed class ClientReleaseBehaviorTests
             CancellationToken cancellationToken = default)
         {
             return Task.FromResult(snapshot?.DeviceId == deviceId);
+        }
+    }
+
+    private sealed class FixedRetentionPolicyReader : IClientReleaseRetentionPolicyReader
+    {
+        public Task<int> GetMaxVersionsPerComponentAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(5);
+        }
+    }
+
+    private sealed class NoopRetentionService : IClientReleaseRetentionService
+    {
+        public Task<int> GetMaxVersionsPerComponentAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(5);
+        }
+
+        public Task ApplyHostPolicyAsync(
+            string channel,
+            string targetRuntime,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task ApplyPluginPolicyAsync(
+            string moduleId,
+            string channel,
+            string targetRuntime,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
         }
     }
 

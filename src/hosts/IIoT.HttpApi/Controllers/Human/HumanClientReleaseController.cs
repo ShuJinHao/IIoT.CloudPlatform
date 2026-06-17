@@ -19,10 +19,11 @@ public sealed class HumanClientReleaseController : ApiControllerBase
         [FromQuery] string? channel,
         [FromQuery] string? targetRuntime,
         [FromQuery] bool onlyPublished,
+        [FromQuery] bool includeArchived,
         CancellationToken cancellationToken)
     {
         return ReturnResult(await Sender.Send(
-            new GetClientReleaseCatalogQuery(channel, targetRuntime, onlyPublished),
+            new GetClientReleaseCatalogQuery(channel, targetRuntime, onlyPublished, includeArchived),
             cancellationToken));
     }
 
@@ -35,6 +36,43 @@ public sealed class HumanClientReleaseController : ApiControllerBase
     {
         return ReturnResult(await Sender.Send(
             new GetDeviceClientVersionInventoryQuery(channel, targetRuntime, keyword),
+            cancellationToken));
+    }
+
+    [HttpGet("retention-policy")]
+    public async Task<IActionResult> GetRetentionPolicy(CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(
+            new GetClientReleaseRetentionPolicyQuery(),
+            cancellationToken));
+    }
+
+    [HttpPut("retention-policy")]
+    public async Task<IActionResult> UpdateRetentionPolicy(
+        [FromBody] UpdateClientReleaseRetentionPolicyCommand command,
+        CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(command, cancellationToken));
+    }
+
+    [HttpDelete("{releaseId:guid}")]
+    public async Task<IActionResult> ArchiveRelease(
+        [FromRoute] Guid releaseId,
+        CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(
+            new ArchiveClientReleaseCommand(releaseId),
+            cancellationToken));
+    }
+
+    [HttpPut("{releaseId:guid}/status")]
+    public async Task<IActionResult> UpdateReleaseStatus(
+        [FromRoute] Guid releaseId,
+        [FromBody] UpdateClientReleaseStatusRequest request,
+        CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(
+            new UpdateClientReleaseStatusCommand(releaseId, request.Status),
             cancellationToken));
     }
 
@@ -73,3 +111,5 @@ public sealed class HumanClientReleaseController : ApiControllerBase
             result => $"/api/v1/human/client-releases/plugin-releases/{result.Id}");
     }
 }
+
+public sealed record UpdateClientReleaseStatusRequest(string Status);

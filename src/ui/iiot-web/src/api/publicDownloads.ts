@@ -6,12 +6,18 @@ export interface PublicClientDownloadCatalogDto {
   catalogSchemaVersion: number;
   channel: string;
   targetRuntime: string;
-  latestHost?: PublicClientHostDownloadDto | null;
-  plugins: PublicClientPluginCatalogItemDto[];
+  host: PublicClientHostDownloadComponentDto;
+  plugins: PublicClientPluginCatalogComponentDto[];
   generatedAtUtc: string;
 }
 
-export interface PublicClientHostDownloadDto {
+export interface PublicClientHostDownloadComponentDto {
+  componentKind: 'Host';
+  displayName: string;
+  versions: PublicClientHostVersionDto[];
+}
+
+export interface PublicClientHostVersionDto {
   channel: string;
   version: string;
   hostApiVersion: string;
@@ -20,16 +26,22 @@ export interface PublicClientHostDownloadDto {
   sha256: string;
   packageSize: number;
   releaseNotes?: string | null;
+  status: string;
   publisher?: string | null;
   publishedAtUtc?: string | null;
 }
 
-export interface PublicClientPluginCatalogItemDto {
+export interface PublicClientPluginCatalogComponentDto {
+  componentKind: 'Plugin';
   moduleId: string;
   displayName: string;
   description?: string | null;
   iconKind?: string | null;
   accentColor?: string | null;
+  versions: PublicClientPluginVersionDto[];
+}
+
+export interface PublicClientPluginVersionDto {
   channel: string;
   version: string;
   hostApiVersion: string;
@@ -40,6 +52,7 @@ export interface PublicClientPluginCatalogItemDto {
   packageSize: number;
   releaseNotes?: string | null;
   dependencies: unknown[];
+  status: string;
   publisher?: string | null;
   publishedAtUtc?: string | null;
 }

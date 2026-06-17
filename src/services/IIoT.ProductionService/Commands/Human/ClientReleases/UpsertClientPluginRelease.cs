@@ -34,7 +34,8 @@ public sealed record UpsertClientPluginReleaseCommand(
     string? Publisher) : IHumanCommand<Result<UpsertClientPluginReleaseResultDto>>;
 
 public sealed class UpsertClientPluginReleaseHandler(
-    IRepository<ClientPluginRelease> repository)
+    IRepository<ClientPluginRelease> repository,
+    IClientReleaseRetentionService retentionService)
     : ICommandHandler<UpsertClientPluginReleaseCommand, Result<UpsertClientPluginReleaseResultDto>>
 {
     public async Task<Result<UpsertClientPluginReleaseResultDto>> Handle(
@@ -103,6 +104,11 @@ public sealed class UpsertClientPluginReleaseHandler(
         }
 
         await repository.SaveChangesAsync(cancellationToken);
+        await retentionService.ApplyPluginPolicyAsync(
+            request.ModuleId,
+            request.Channel,
+            request.TargetRuntime,
+            cancellationToken);
         return Result.Success(new UpsertClientPluginReleaseResultDto(release.Id));
     }
 }

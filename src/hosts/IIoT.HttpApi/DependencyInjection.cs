@@ -82,6 +82,12 @@ public static class DependencyInjection
         builder.AddValidatedOptions<EdgeInstallerArtifactOptions>(
             EdgeInstallerArtifactOptions.SectionName,
             static options => options.Validate());
+        builder.AddValidatedOptions<EdgeReleaseRetentionOptions>(
+            EdgeReleaseRetentionOptions.SectionName,
+            static options => options.Validate());
+        builder.Services.AddScoped<IClientReleaseRetentionService, ClientReleaseRetentionService>();
+        builder.Services.AddScoped<IClientReleaseRetentionPolicyReader>(sp =>
+            sp.GetRequiredService<IClientReleaseRetentionService>());
         builder.Services.AddPassStationRuntime();
 
         builder.Services.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });

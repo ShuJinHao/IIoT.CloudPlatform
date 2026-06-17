@@ -51,31 +51,31 @@
             <p class="text-[var(--fs-base)] font-[var(--fw-semibold)]">{{ errorMessage }}</p>
           </div>
 
-          <div v-else-if="catalog?.latestHost" class="grid grid-cols-[minmax(0,1fr)_220px] gap-5 rounded-[20px] border border-[var(--border)] bg-[var(--bg-2)] p-5 dark:bg-[var(--bg-2)] max-[760px]:grid-cols-1">
+          <div v-else-if="selectedHostPackage" class="grid grid-cols-[minmax(0,1fr)_220px] gap-5 rounded-[20px] border border-[var(--border)] bg-[var(--bg-2)] p-5 dark:bg-[var(--bg-2)] max-[760px]:grid-cols-1">
             <div class="min-w-0">
               <div class="mb-5 flex flex-wrap items-center gap-2">
-                <span class="rounded-full bg-[var(--primary)] px-3 py-1 text-[var(--fs-sm)] font-[var(--fw-strong)] text-[var(--text-0)]">v{{ catalog.latestHost.version }}</span>
-                <span class="rounded-full bg-white px-3 py-1 text-[var(--fs-sm)] font-[var(--fw-bold)] text-[var(--text-2)]  dark:text-[var(--text-2)]">{{ catalog.latestHost.channel }} / {{ catalog.latestHost.targetRuntime }}</span>
-                <span class="rounded-full bg-white px-3 py-1 text-[var(--fs-sm)] font-[var(--fw-bold)] text-[var(--text-2)]  dark:text-[var(--text-2)]">Host API {{ catalog.latestHost.hostApiVersion }}</span>
+                <span class="rounded-full bg-[var(--primary)] px-3 py-1 text-[var(--fs-sm)] font-[var(--fw-strong)] text-[var(--text-0)]">v{{ selectedHostPackage.version }}</span>
+                <span class="rounded-full bg-white px-3 py-1 text-[var(--fs-sm)] font-[var(--fw-bold)] text-[var(--text-2)]  dark:text-[var(--text-2)]">{{ selectedHostPackage.channel }} / {{ selectedHostPackage.targetRuntime }}</span>
+                <span class="rounded-full bg-white px-3 py-1 text-[var(--fs-sm)] font-[var(--fw-bold)] text-[var(--text-2)]  dark:text-[var(--text-2)]">Host API {{ selectedHostPackage.hostApiVersion }}</span>
               </div>
 
               <dl class="grid grid-cols-2 gap-4 text-[var(--fs-base)] max-[680px]:grid-cols-1">
                 <div>
                   <dt class="mb-1 font-[var(--fw-bold)] text-[var(--text-2)]">发布时间</dt>
-                  <dd class="font-[var(--fw-strong)]">{{ formatDate(catalog.latestHost.publishedAtUtc) }}</dd>
+                  <dd class="font-[var(--fw-strong)]">{{ formatDate(selectedHostPackage.publishedAtUtc) }}</dd>
                 </div>
                 <div>
                   <dt class="mb-1 font-[var(--fw-bold)] text-[var(--text-2)]">包大小</dt>
-                  <dd class="font-[var(--fw-strong)]">{{ formatBytes(catalog.latestHost.packageSize) }}</dd>
+                  <dd class="font-[var(--fw-strong)]">{{ formatBytes(selectedHostPackage.packageSize) }}</dd>
                 </div>
                 <div class="col-span-2 min-w-0 max-[680px]:col-span-1">
                   <dt class="mb-1 font-[var(--fw-bold)] text-[var(--text-2)]">SHA256</dt>
-                  <dd class="break-all font-mono text-[var(--fs-sm)] font-[var(--fw-bold)] text-[var(--text-1)] dark:text-[var(--text-2)]">{{ catalog.latestHost.sha256 }}</dd>
+                  <dd class="break-all font-mono text-[var(--fs-sm)] font-[var(--fw-bold)] text-[var(--text-1)] dark:text-[var(--text-2)]">{{ selectedHostPackage.sha256 }}</dd>
                 </div>
               </dl>
 
-              <p v-if="catalog.latestHost.releaseNotes" class="mt-5 rounded-[var(--radius-md)] bg-white p-4 text-[var(--fs-base)] font-[var(--fw-semibold)] leading-6 text-[var(--text-2)]  dark:text-[var(--text-2)]">
-                {{ catalog.latestHost.releaseNotes }}
+              <p v-if="selectedHostPackage.releaseNotes" class="mt-5 rounded-[var(--radius-md)] bg-white p-4 text-[var(--fs-base)] font-[var(--fw-semibold)] leading-6 text-[var(--text-2)]  dark:text-[var(--text-2)]">
+                {{ selectedHostPackage.releaseNotes }}
               </p>
             </div>
 
@@ -110,37 +110,37 @@
             <span class="rounded-full bg-white px-3 py-2 text-[var(--fs-sm)] font-[var(--fw-strong)] text-[var(--text-2)] shadow-[var(--shadow-sm)]  dark:text-[var(--text-2)]">{{ catalog?.plugins.length ?? 0 }} 个插件</span>
           </div>
 
-          <div v-if="catalog?.plugins.length" class="grid grid-cols-2 gap-4 max-[760px]:grid-cols-1">
-            <article v-for="plugin in catalog.plugins" :key="plugin.moduleId" class="rounded-[20px] bg-white p-5 shadow-[var(--shadow-sm)] ">
+          <div v-if="pluginCards.length" class="grid grid-cols-2 gap-4 max-[760px]:grid-cols-1">
+            <article v-for="plugin in pluginCards" :key="plugin.moduleId" class="rounded-[20px] bg-white p-5 shadow-[var(--shadow-sm)] ">
               <div class="mb-4 flex items-start justify-between gap-3">
                 <div class="min-w-0">
                   <h3 class="truncate text-[17px] font-[var(--fw-strong)]">{{ plugin.displayName || plugin.moduleId }}</h3>
                   <p class="mt-1 truncate text-[var(--fs-sm)] font-[var(--fw-bold)] text-[var(--text-2)]">{{ plugin.moduleId }}</p>
                 </div>
-                <span class="shrink-0 rounded-full bg-[var(--bg-2)] px-3 py-1 text-[var(--fs-sm)] font-[var(--fw-strong)] text-[var(--text-0)] dark:bg-[var(--bg-2)] dark:text-[var(--text-0)]">v{{ plugin.version }}</span>
+                <span class="shrink-0 rounded-full bg-[var(--bg-2)] px-3 py-1 text-[var(--fs-sm)] font-[var(--fw-strong)] text-[var(--text-0)] dark:bg-[var(--bg-2)] dark:text-[var(--text-0)]">v{{ plugin.version.version }}</span>
               </div>
 
               <div class="grid gap-3 text-[var(--fs-sm)] font-[var(--fw-bold)] text-[var(--text-2)]">
                 <div class="flex items-center justify-between gap-3">
                   <span>Host API</span>
-                  <strong class="text-[var(--text-0)] dark:text-[var(--text-0)]">{{ plugin.hostApiVersion }}</strong>
+                  <strong class="text-[var(--text-0)] dark:text-[var(--text-0)]">{{ plugin.version.hostApiVersion }}</strong>
                 </div>
                 <div class="flex items-center justify-between gap-3">
                   <span>兼容宿主</span>
-                  <strong class="text-right text-[var(--text-0)] dark:text-[var(--text-0)]">{{ plugin.minHostVersion }} - {{ plugin.maxHostVersion }}</strong>
+                  <strong class="text-right text-[var(--text-0)] dark:text-[var(--text-0)]">{{ plugin.version.minHostVersion }} - {{ plugin.version.maxHostVersion }}</strong>
                 </div>
                 <div class="flex items-center justify-between gap-3">
                   <span>包大小</span>
-                  <strong class="text-[var(--text-0)] dark:text-[var(--text-0)]">{{ formatBytes(plugin.packageSize) }}</strong>
+                  <strong class="text-[var(--text-0)] dark:text-[var(--text-0)]">{{ formatBytes(plugin.version.packageSize) }}</strong>
                 </div>
                 <div class="flex items-center justify-between gap-3">
                   <span>发布时间</span>
-                  <strong class="text-[var(--text-0)] dark:text-[var(--text-0)]">{{ formatDate(plugin.publishedAtUtc) }}</strong>
+                  <strong class="text-[var(--text-0)] dark:text-[var(--text-0)]">{{ formatDate(plugin.version.publishedAtUtc) }}</strong>
                 </div>
               </div>
 
-              <p v-if="plugin.description || plugin.releaseNotes" class="mt-4 line-clamp-3 text-[var(--fs-base)] font-[var(--fw-semibold)] leading-6 text-[var(--text-1)] dark:text-[var(--text-2)]">
-                {{ plugin.description || plugin.releaseNotes }}
+              <p v-if="plugin.description || plugin.version.releaseNotes" class="mt-4 line-clamp-3 text-[var(--fs-base)] font-[var(--fw-semibold)] leading-6 text-[var(--text-1)] dark:text-[var(--text-2)]">
+                {{ plugin.description || plugin.version.releaseNotes }}
               </p>
             </article>
           </div>
@@ -187,7 +187,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   AlertTriangle,
@@ -215,6 +215,18 @@ const targetRuntime = ref(readQuery('targetRuntime', 'win-x64'));
 const catalog = ref<PublicClientDownloadCatalogDto | null>(null);
 const loading = ref(false);
 const errorMessage = ref('');
+const selectedHostPackage = computed(() => {
+  const versions = catalog.value?.host.versions ?? [];
+  return versions.find((version) => version.status.toLowerCase() === 'published') ?? versions[0] ?? null;
+});
+const pluginCards = computed(() => {
+  return (catalog.value?.plugins ?? [])
+    .flatMap((plugin) => {
+      const version =
+        plugin.versions.find((entry) => entry.status.toLowerCase() === 'published') ?? plugin.versions[0];
+      return version ? [{ ...plugin, version }] : [];
+    });
+});
 
 const loadCatalog = async () => {
   loading.value = true;

@@ -6,13 +6,28 @@ export interface ClientReleaseCatalogDto {
   catalogSchemaVersion: number;
   channel: string;
   targetRuntime?: string | null;
-  latestHost?: ClientHostReleaseDto | null;
-  hostReleases: ClientHostReleaseDto[];
-  pluginReleases: ClientPluginReleaseDto[];
+  host: ClientHostReleaseComponentDto;
+  plugins: ClientPluginReleaseComponentDto[];
   generatedAtUtc: string;
 }
 
-export interface ClientHostReleaseDto {
+export interface ClientHostReleaseComponentDto {
+  componentKind: 'Host';
+  displayName: string;
+  versions: ClientHostVersionEntryDto[];
+}
+
+export interface ClientPluginReleaseComponentDto {
+  componentKind: 'Plugin';
+  moduleId: string;
+  displayName: string;
+  description?: string | null;
+  iconKind?: string | null;
+  accentColor?: string | null;
+  versions: ClientPluginVersionEntryDto[];
+}
+
+export interface ClientHostVersionEntryDto {
   id: string;
   channel: string;
   version: string;
@@ -30,13 +45,8 @@ export interface ClientHostReleaseDto {
   publishedAtUtc?: string | null;
 }
 
-export interface ClientPluginReleaseDto {
+export interface ClientPluginVersionEntryDto {
   id: string;
-  moduleId: string;
-  displayName: string;
-  description?: string | null;
-  iconKind?: string | null;
-  accentColor?: string | null;
   channel: string;
   version: string;
   hostApiVersion: string;
@@ -106,7 +116,6 @@ export interface DeviceClientVersionInventoryDto {
   hostVersion?: string | null;
   hostApiVersion?: string | null;
   hostUpdateStatus: string;
-  latestHostVersion?: string | null;
   hostCompatibilityIssue?: string | null;
   reportedAtUtc?: string | null;
   receivedAtUtc?: string | null;
@@ -120,22 +129,46 @@ export interface DeviceClientPluginInventoryDto {
   hostApiVersion?: string | null;
   enabled: boolean;
   updateStatus: string;
-  latestVersion?: string | null;
   compatibilityIssue?: string | null;
+}
+
+export interface ClientReleaseRetentionPolicyDto {
+  maxVersionsPerComponent: number;
+  updatedAtUtc: string;
 }
 
 export const getClientReleaseCatalogApi = (params: {
   channel?: string;
   targetRuntime?: string;
   onlyPublished?: boolean;
+  includeArchived?: boolean;
 }) => {
   return http.get<ClientReleaseCatalogDto>(`${basePath}/catalog`, {
     params: {
       channel: params.channel || undefined,
       targetRuntime: params.targetRuntime || undefined,
       onlyPublished: params.onlyPublished ?? false,
+      includeArchived: params.includeArchived ?? false,
     },
   });
+};
+
+export const getClientReleaseRetentionPolicyApi = () => {
+  return http.get<ClientReleaseRetentionPolicyDto>(`${basePath}/retention-policy`);
+};
+
+export const updateClientReleaseRetentionPolicyApi = (payload: {
+  maxVersionsPerComponent: number;
+}) => {
+  return http.put<ClientReleaseRetentionPolicyDto>(`${basePath}/retention-policy`, payload);
+};
+
+export const archiveClientReleaseApi = (releaseId: string) => {
+  return http.delete<void>(`${basePath}/${releaseId}`);
+};
+
+export const updateClientReleaseStatusApi = (releaseId: string, status: string) => {
+  return http.put<void>(`${basePath}/${releaseId}/status`, { status });
 };
 
 export const getDeviceClientVersionInventoryApi = (params: {

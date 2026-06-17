@@ -18,6 +18,7 @@ public sealed class GetEdgeClientReleaseCatalogHandler(
     IDeviceIdentityQueryService deviceIdentityQueryService,
     IReadRepository<ClientHostRelease> hostReleaseRepository,
     IReadRepository<ClientPluginRelease> pluginReleaseRepository,
+    IClientReleaseRetentionPolicyReader retentionPolicyReader,
     IOptions<EdgeInstallerArtifactOptions> artifactOptions)
     : IQueryHandler<GetEdgeClientReleaseCatalogQuery, Result<ClientReleaseCatalogDto>>
 {
@@ -40,28 +41,14 @@ public sealed class GetEdgeClientReleaseCatalogHandler(
         var pluginReleases = await pluginReleaseRepository.GetListAsync(
             new ClientPluginReleasesByChannelSpec(channel, request.TargetRuntime, onlyPublished: true),
             cancellationToken);
-
-        var latestHost = hostReleases
-            .OrderByDescending(release => release.Version, VersionStringComparer.Instance)
-            .ThenByDescending(release => release.PublishedAtUtc ?? release.CreatedAtUtc)
-            .FirstOrDefault();
+        var maxVersions = await retentionPolicyReader.GetMaxVersionsPerComponentAsync(cancellationToken);
 
         return Result.Success(new ClientReleaseCatalogDto(
             ClientReleaseCatalogSchema.Version,
             channel,
             NormalizeOptional(request.TargetRuntime),
-            latestHost is null ? null : ClientReleaseMapping.ToDto(latestHost),
-            hostReleases
-                .OrderByDescending(release => release.Version, VersionStringComparer.Instance)
-                .ThenByDescending(release => release.PublishedAtUtc ?? release.CreatedAtUtc)
-                .Select(ClientReleaseMapping.ToDto)
-                .ToList(),
-            pluginReleases
-                .OrderBy(release => release.ModuleId, StringComparer.OrdinalIgnoreCase)
-                .ThenByDescending(release => release.Version, VersionStringComparer.Instance)
-                .ThenByDescending(release => release.PublishedAtUtc ?? release.CreatedAtUtc)
-                .Select(ClientReleaseMapping.ToDto)
-                .ToList(),
+            ClientReleaseMapping.ToHostComponent(hostReleases, maxVersions),
+            ClientReleaseMapping.ToPluginComponents(pluginReleases, maxVersions),
             DateTime.UtcNow,
             artifactOptions.Value.BuildVelopackUpdateSource(channel)));
     }
@@ -70,15 +57,5 @@ public sealed class GetEdgeClientReleaseCatalogHandler(
     {
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
-    }
-
-    private sealed class VersionStringComparer : IComparer<string>
-    {
-        public static VersionStringComparer Instance { get; } = new();
-
-        public int Compare(string? x, string? y)
-        {
-            return ClientReleaseMapping.CompareVersions(x, y);
-        }
     }
 }

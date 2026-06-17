@@ -26,7 +26,8 @@ public sealed record UpsertClientHostReleaseCommand(
     string? Publisher) : IHumanCommand<Result<UpsertClientHostReleaseResultDto>>;
 
 public sealed class UpsertClientHostReleaseHandler(
-    IRepository<ClientHostRelease> repository)
+    IRepository<ClientHostRelease> repository,
+    IClientReleaseRetentionService retentionService)
     : ICommandHandler<UpsertClientHostReleaseCommand, Result<UpsertClientHostReleaseResultDto>>
 {
     public async Task<Result<UpsertClientHostReleaseResultDto>> Handle(
@@ -76,6 +77,10 @@ public sealed class UpsertClientHostReleaseHandler(
         }
 
         await repository.SaveChangesAsync(cancellationToken);
+        await retentionService.ApplyHostPolicyAsync(
+            request.Channel,
+            request.TargetRuntime,
+            cancellationToken);
         return Result.Success(new UpsertClientHostReleaseResultDto(release.Id));
     }
 }
