@@ -60,7 +60,7 @@ public sealed partial class CloudProductionFlowTests
     }
 
     [Fact]
-    public async Task AiReadServiceAccount_ShouldReadFiveReadOnlySurfaces()
+    public async Task AiReadServiceAccount_ShouldReadProductionReadOnlySurfaces()
     {
         await AuthenticateAsAdminAsync();
 
@@ -70,15 +70,6 @@ public sealed partial class CloudProductionFlowTests
         var message = $"ai-read-log-{Guid.NewGuid():N}";
         var barcode = $"AI-{Guid.NewGuid():N}"[..14];
         var plcName = $"AI-{Guid.NewGuid():N}"[..10];
-        var recipeName = $"ai-r-{Guid.NewGuid():N}"[..14];
-
-        await PostJsonAsync<Guid>("/api/v1/human/recipes", new
-        {
-            RecipeName = recipeName,
-            ProcessId = device.ProcessId,
-            DeviceId = device.DeviceId,
-            ParametersJsonb = ValidRecipeParametersJson()
-        });
 
         await AuthenticateAsEdgeAsync(device.DeviceId);
 
@@ -142,22 +133,12 @@ public sealed partial class CloudProductionFlowTests
                 AiReadPermissions.Device,
                 AiReadPermissions.Capacity,
                 AiReadPermissions.DeviceLog,
-                AiReadPermissions.PassStation,
-                AiReadPermissions.Recipe
+                AiReadPermissions.PassStation
             ],
             [device.DeviceId]));
 
         var devices = await GetFromJsonAsync<AiReadListResponseDto<AiReadDeviceDto>>("/api/v1/ai/read/devices");
-        devices.Items.Should().ContainSingle(x => x.Id == device.DeviceId);
-
-        var recipeVersions = await GetFromJsonAsync<AiReadListResponseDto<AiReadRecipeVersionDto>>(
-            $"/api/v1/ai/read/recipes/versions?deviceId={device.DeviceId}");
-        recipeVersions.Source.Should().Be("recipe_versions");
-        recipeVersions.Items.Should().ContainSingle(x =>
-            x.DeviceId == device.DeviceId
-            && x.RecipeName == recipeName
-            && x.Version == "V1.0"
-            && x.Status == "Active");
+        devices.Items.Should().ContainSingle(x => x.Id == device.DeviceId && x.DeviceCode == device.Code);
 
         var startTime = Uri.EscapeDataString(completedTime.AddMinutes(-1).ToString("O"));
         var endTime = Uri.EscapeDataString(completedTime.AddMinutes(1).ToString("O"));
@@ -383,6 +364,7 @@ public sealed record AiReadListResponseDto<T>(
 
 public sealed record AiReadDeviceDto(
     Guid Id,
+    string DeviceCode,
     string DeviceName,
     Guid ProcessId);
 
@@ -411,14 +393,6 @@ public sealed record AiReadPassStationDto(
     DateTime? CompletedTime,
     DateTime? ReceivedAt,
     Dictionary<string, JsonElement> Fields);
-
-public sealed record AiReadRecipeVersionDto(
-    Guid Id,
-    Guid DeviceId,
-    Guid ProcessId,
-    string RecipeName,
-    string Version,
-    string Status);
 
 public sealed record AiReadAuditRow(
     bool Succeeded,

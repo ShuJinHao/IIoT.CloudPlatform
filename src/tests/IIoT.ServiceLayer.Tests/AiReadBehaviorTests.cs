@@ -1,5 +1,5 @@
 using System.Security.Claims;
-using IIoT.Core.Production.Aggregates.Recipes;
+using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.ProductionService.AiRead;
 using IIoT.ProductionService.Queries.AiRead;
 using IIoT.Services.Contracts;
@@ -236,36 +236,25 @@ public sealed class AiReadBehaviorTests
     }
 
     [Fact]
-    public async Task AiReadRecipeVersions_ShouldReturnOnlyAllowedDeviceSummary()
+    public async Task AiReadDevices_ShouldReturnDeviceCode()
     {
-        var allowedDeviceId = Guid.NewGuid();
-        var blockedDeviceId = Guid.NewGuid();
         var processId = Guid.NewGuid();
-        var repository = new InMemoryRepository<Recipe>();
-        repository.ListResult.Add(new Recipe("R-Allowed", processId, allowedDeviceId, """[{"name":"p1"}]"""));
-        repository.ListResult.Add(new Recipe("R-Blocked", processId, blockedDeviceId, """[{"name":"p2"}]"""));
-        var handler = new GetAiReadRecipeVersionsHandler(
+        var repository = new InMemoryRepository<Device>();
+        repository.ListResult.Add(new Device("Injection Device", "DEV-AIREAD-001", processId));
+        var handler = new GetAiReadDevicesHandler(
             repository,
-            new TestAiReadScopeAccessor { DelegatedDeviceIds = [allowedDeviceId] },
+            new TestAiReadScopeAccessor(),
             Options.Create(new AiReadOptions()));
 
         var result = await handler.Handle(
-            new GetAiReadRecipeVersionsQuery(allowedDeviceId),
+            new GetAiReadDevicesQuery(),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
         var item = Assert.Single(result.Value!.Items);
-        Assert.Equal(allowedDeviceId, item.DeviceId);
-        Assert.Equal("R-Allowed", item.RecipeName);
-        Assert.Equal("V1.0", item.Version);
-        Assert.Equal("Active", item.Status);
-
-        var forbidden = await handler.Handle(
-            new GetAiReadRecipeVersionsQuery(blockedDeviceId),
-            CancellationToken.None);
-
-        Assert.False(forbidden.IsSuccess);
-        Assert.Equal(ResultStatus.Forbidden, forbidden.Status);
+        Assert.Equal("DEV-AIREAD-001", item.DeviceCode);
+        Assert.Equal("Injection Device", item.DeviceName);
+        Assert.Equal(processId, item.ProcessId);
     }
 
     private static HttpContextAccessor CreateAccessor(string actorType, IEnumerable<string> permissions)
