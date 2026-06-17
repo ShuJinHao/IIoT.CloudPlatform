@@ -12,11 +12,11 @@
     </div>
 
     <div class="binding-field">
-      <label>云端地址（可选）</label>
+      <label>云端地址（必填）</label>
       <UiInput
         v-model:value="baseUrl"
         size="small"
-        placeholder="留空则使用安装包内置地址"
+        placeholder="例如 http://10.98.90.154:81"
       />
     </div>
 
@@ -115,7 +115,14 @@ interface BindingChoice {
 
 // key = moduleId（勾选即为启用），value = 绑定的设备
 const selections = reactive<Record<string, BindingChoice>>({});
-const baseUrl = ref('');
+const resolveDefaultBaseUrl = () => {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+  return window.location.origin;
+};
+
+const baseUrl = ref(resolveDefaultBaseUrl());
 const devices = ref<DeviceSelectDto[]>([]);
 const showPicker = ref(false);
 const pickerModuleId = ref('');
@@ -171,6 +178,7 @@ const filteredDevices = computed(() => {
 
 const validationHint = computed(() => {
   if (!props.hostVersion) return '暂无已发布宿主版本';
+  if (!baseUrl.value.trim()) return '请填写云端地址';
   const entries = Object.values(selections);
   if (entries.length === 0) return '请至少勾选一个插件';
   if (entries.some((choice) => !choice.deviceId)) return '有插件未指定设备';
@@ -236,7 +244,7 @@ const generate = async () => {
         moduleId,
         deviceId: choice.deviceId,
       })),
-      baseUrl: baseUrl.value.trim() || null,
+      baseUrl: baseUrl.value.trim(),
     });
     downloadBlob(installer.fileName, installer.blob);
     notifySuccess('首装包已生成，浏览器正在下载。', {

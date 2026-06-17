@@ -219,6 +219,38 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
+    public async Task GenerateEdgeInstallerPackageHandler_ShouldFailBeforeRotatingSecret_WhenBaseUrlMissing()
+    {
+        var oldSecret = BootstrapSecretGenerator.Generate();
+        var device = new Device("匀浆线1#", "DEV-AAAAAAAAAA", Guid.NewGuid());
+        device.SetBootstrapSecretHash(BootstrapSecretHasher.Hash(oldSecret));
+        var oldHash = device.BootstrapSecretHash;
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.Add(device);
+
+        var handler = CreateInstallerPackageHandler(
+            deviceRepository,
+            new InMemoryRepository<ClientHostRelease>(),
+            new InMemoryRepository<ClientPluginRelease>(),
+            Path.Combine(Path.GetTempPath(), $"iiot-baseurl-guard-{Guid.NewGuid():N}"),
+            new RecordingCacheService(),
+            new RecordingAuditTrailService());
+
+        var result = await handler.Handle(
+            new GenerateEdgeInstallerPackageCommand(
+                [new EdgeBindingSelection("Homogenization", device.Id)],
+                HostVersion: "1.2.0"),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.Errors);
+        Assert.Contains(result.Errors, error => error.Contains("云端地址必须填写", StringComparison.Ordinal));
+        Assert.Equal(oldHash, device.BootstrapSecretHash);
+        Assert.True(BootstrapSecretHasher.Verify(oldSecret, device.BootstrapSecretHash!));
+        Assert.Empty(deviceRepository.UpdatedEntities);
+    }
+
+    [Fact]
     public async Task GenerateEdgeInstallerPackageHandler_ShouldFailBeforeRotatingSecret_WhenArtifactMissing()
     {
         var oldSecret = BootstrapSecretGenerator.Generate();
@@ -246,7 +278,8 @@ public sealed class ApplicationFlowGuardTests
             var result = await handler.Handle(
                 new GenerateEdgeInstallerPackageCommand(
                     [new EdgeBindingSelection("Homogenization", device.Id)],
-                    HostVersion: "1.2.0"),
+                    HostVersion: "1.2.0",
+                    BaseUrl: "http://cloud.local"),
                 CancellationToken.None);
 
             Assert.False(result.IsSuccess);
@@ -268,20 +301,21 @@ public sealed class ApplicationFlowGuardTests
     [Fact]
     public async Task GenerateEdgeInstallerPackageHandler_ShouldPackageSelectedRuntimeAndInjectJsonConfigs()
     {
+        const string targetRuntime = "win-arm64";
         var device = new Device("匀浆线1#", "DEV-AAAAAAAAAA", Guid.NewGuid());
         var deviceRepository = new InMemoryRepository<Device>();
         deviceRepository.Add(device);
         var hostRepository = new InMemoryRepository<ClientHostRelease>
         {
-            SingleOrDefaultResult = CreatePublishedHostRelease()
+            SingleOrDefaultResult = CreatePublishedHostRelease(targetRuntime)
         };
         var pluginRepository = new InMemoryRepository<ClientPluginRelease>
         {
-            SingleOrDefaultResult = CreatePublishedPluginRelease()
+            SingleOrDefaultResult = CreatePublishedPluginRelease(targetRuntime)
         };
         var cache = new RecordingCacheService();
         var auditTrail = new RecordingAuditTrailService();
-        var artifactRoot = CreateInstallerArtifactFixture("stable", "1.2.0");
+        var artifactRoot = CreateInstallerArtifactFixture("stable", "1.2.0", targetRuntime);
 
         try
         {
@@ -296,8 +330,9 @@ public sealed class ApplicationFlowGuardTests
             var result = await handler.Handle(
                 new GenerateEdgeInstallerPackageCommand(
                     [new EdgeBindingSelection("Homogenization", device.Id)],
+                    TargetRuntime: targetRuntime,
                     HostVersion: "1.2.0",
-                    BaseUrl: "http://cloud.local"),
+                    BaseUrl: "http://cloud.local/"),
                 CancellationToken.None);
 
             Assert.True(result.IsSuccess);
@@ -331,6 +366,14 @@ public sealed class ApplicationFlowGuardTests
             Assert.Equal(device.Code, bindingItem.GetProperty("clientCode").GetString());
             Assert.False(string.IsNullOrWhiteSpace(bootstrapSecret));
             Assert.True(BootstrapSecretHasher.Verify(bootstrapSecret!, device.BootstrapSecretHash!));
+
+            var updateConfigJson = ReadZipEntryText(archive, "launcher/launcher.update.json");
+            using var updateConfig = JsonDocument.Parse(updateConfigJson);
+            Assert.Equal("http://cloud.local/edge-updates/velopack/stable/", updateConfig.RootElement.GetProperty("source").GetString());
+            Assert.Equal("stable", updateConfig.RootElement.GetProperty("channel").GetString());
+            Assert.Equal(targetRuntime, updateConfig.RootElement.GetProperty("targetRuntime").GetString());
+            Assert.False(updateConfig.RootElement.TryGetProperty("Source", out _));
+            Assert.False(updateConfig.RootElement.TryGetProperty("TargetRuntime", out _));
 
             var hostConfigJson = ReadZipEntryText(archive, "launcher/iiot-enabled-plugins.json");
             using var hostConfig = JsonDocument.Parse(hostConfigJson);
@@ -2138,13 +2181,13 @@ public sealed class ApplicationFlowGuardTests
             Options.Create(new EdgeInstallerArtifactOptions { RootPath = artifactRoot }));
     }
 
-    private static ClientHostRelease CreatePublishedHostRelease()
+    private static ClientHostRelease CreatePublishedHostRelease(string targetRuntime = "win-x64")
     {
         return new ClientHostRelease(
             "stable",
             "1.2.0",
             "1.0.0",
-            "win-x64",
+            targetRuntime,
             "net10.0",
             "/edge-updates/installers/stable/1.2.0/installer-artifact.json",
             new string('a', 64),
@@ -2155,7 +2198,7 @@ public sealed class ApplicationFlowGuardTests
             "IIoT");
     }
 
-    private static ClientPluginRelease CreatePublishedPluginRelease()
+    private static ClientPluginRelease CreatePublishedPluginRelease(string targetRuntime = "win-x64")
     {
         return new ClientPluginRelease(
             "Homogenization",
@@ -2168,7 +2211,7 @@ public sealed class ApplicationFlowGuardTests
             "1.0.0",
             "1.0.0",
             "9.9.9",
-            "win-x64",
+            targetRuntime,
             "net10.0",
             "/edge-updates/installers/stable/1.2.0/installer-artifact.json#moduleId=Homogenization",
             new string('b', 64),
@@ -2180,7 +2223,7 @@ public sealed class ApplicationFlowGuardTests
             "IIoT");
     }
 
-    private static string CreateInstallerArtifactFixture(string channel, string version)
+    private static string CreateInstallerArtifactFixture(string channel, string version, string targetRuntime = "win-x64")
     {
         var root = Path.Combine(Path.GetTempPath(), $"iiot-installer-artifact-{Guid.NewGuid():N}");
         var artifactDirectory = Path.Combine(root, channel, version);
@@ -2193,13 +2236,13 @@ public sealed class ApplicationFlowGuardTests
         WriteFixtureFile(artifactDirectory, "plugins/Homogenization/plugin.json", "{}");
         WriteFixtureFile(artifactDirectory, "plugins/Welding/plugin.json", "{}");
 
-        var manifest = """
+        var manifest = $$"""
         {
           "schemaVersion": 2,
           "channel": "stable",
           "version": "1.2.0",
           "hostApiVersion": "1.0.0",
-          "targetRuntime": "win-x64",
+          "targetRuntime": "{{targetRuntime}}",
           "targetFramework": "net10.0",
           "installerStubFile": "IIoT.Edge.Setup.exe",
           "launcherDirectory": "launcher",

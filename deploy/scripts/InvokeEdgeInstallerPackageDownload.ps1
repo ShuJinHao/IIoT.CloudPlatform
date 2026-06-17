@@ -33,6 +33,25 @@ function Resolve-DownloadPath {
     return [System.IO.Path]::GetFullPath($PathValue)
 }
 
+function Normalize-PublicBaseUrl {
+    param([Parameter(Mandatory = $true)][string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        throw 'BaseUrl is required. It must be the public Gateway origin, for example http://10.98.90.154:81.'
+    }
+
+    $uri = [System.Uri]$Value.Trim()
+    if (($uri.Scheme -ne 'http' -and $uri.Scheme -ne 'https') `
+        -or -not [string]::IsNullOrEmpty($uri.UserInfo) `
+        -or -not [string]::IsNullOrEmpty($uri.Query) `
+        -or -not [string]::IsNullOrEmpty($uri.Fragment) `
+        -or (-not [string]::IsNullOrEmpty($uri.AbsolutePath) -and $uri.AbsolutePath -ne '/')) {
+        throw 'BaseUrl must be the public Gateway origin only. Do not include /api/v1, path, query, or fragment.'
+    }
+
+    return $uri.GetLeftPart([System.UriPartial]::Authority).TrimEnd('/')
+}
+
 function Get-ContentDispositionFileName {
     param([string]$ContentDisposition)
 
@@ -89,6 +108,12 @@ $outputRoot = Resolve-DownloadPath -PathValue $OutputDirectory
 New-Item -Path $outputRoot -ItemType Directory -Force | Out-Null
 
 $apiRoot = $CloudApiBaseUrl.TrimEnd('/')
+$effectiveBaseUrl = if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
+    $apiUri = [System.Uri]$apiRoot
+    Normalize-PublicBaseUrl -Value $apiUri.GetLeftPart([System.UriPartial]::Authority)
+} else {
+    Normalize-PublicBaseUrl -Value $BaseUrl
+}
 $uri = "$apiRoot/human/client-releases/installer-package"
 $tempFile = Join-Path $outputRoot "IIoT.Edge.Setup.download-$([Guid]::NewGuid().ToString('N')).exe"
 
@@ -96,7 +121,7 @@ $payload = [ordered]@{
     channel = $Channel
     targetRuntime = $TargetRuntime
     hostVersion = if ([string]::IsNullOrWhiteSpace($HostVersion)) { $null } else { $HostVersion }
-    baseUrl = if ([string]::IsNullOrWhiteSpace($BaseUrl)) { $null } else { $BaseUrl }
+    baseUrl = $effectiveBaseUrl
     selections = @(
         [ordered]@{
             moduleId = $ModuleId

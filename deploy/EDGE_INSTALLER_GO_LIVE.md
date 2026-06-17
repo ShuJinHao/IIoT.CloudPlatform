@@ -131,6 +131,7 @@ EXPECTED_VERSION=1.2.0 \
 ```text
 ${EDGE_UPDATES_DIR}:/app/edge-updates:ro
 EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers
+EdgeInstallerArtifacts__VelopackReleasesBaseUrl=${PUBLIC_BASE_URL}/edge-updates/velopack
 ```
 
 生产服务器不要只验证 nginx 静态路径。nginx 能返回 `installer-artifact.json` 只代表浏览器能下载静态文件；首装生成由 `iiot-httpapi` 读取同一份素材，必须同时验证容器内可见：
@@ -211,6 +212,7 @@ pwsh .\deploy\scripts\InvokeEdgeInstallerPackageDownload.ps1 `
 ```
 
 该命令同样会轮换所选设备的 bootstrap secret，只能对确认的测试/部署设备执行。
+未显式传 `-BaseUrl` 时，脚本会从 `-CloudApiBaseUrl` 推导公开 Gateway origin 写入首装包。
 
 失败处理：
 

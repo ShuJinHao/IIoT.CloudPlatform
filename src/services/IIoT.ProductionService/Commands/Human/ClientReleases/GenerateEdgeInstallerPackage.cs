@@ -66,6 +66,11 @@ public sealed class GenerateEdgeInstallerPackageHandler(
 
         var channel = NormalizeDefault(request.Channel, "stable");
         var targetRuntime = NormalizeDefault(request.TargetRuntime, "win-x64");
+        if (!EdgeInstallerPublicBaseUrl.TryNormalize(request.BaseUrl, out var publicBaseUrl, out var baseUrlError))
+        {
+            return await FailAsync($"生成安装包失败：{baseUrlError}", cancellationToken);
+        }
+
         if (!TryNormalizeSelections(request.Selections, out var selections, out var selectionError))
         {
             return await FailAsync(selectionError!, cancellationToken);
@@ -141,7 +146,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         var bindings = RotateDeviceSecrets(selections, devices.DevicesById!);
         var bindingBundle = new EdgeBindingBundleDto(
             1,
-            NormalizeOptional(request.BaseUrl),
+            publicBaseUrl,
             DateTime.UtcNow,
             bindings);
         Stream packageStream;
@@ -150,7 +155,8 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             packageStream = BuildInstallerPackage(
                 artifact,
                 selectedModules,
-                bindingBundle);
+                bindingBundle,
+                targetRuntime);
         }
         catch (InvalidDataException)
         {
@@ -378,7 +384,8 @@ public sealed class GenerateEdgeInstallerPackageHandler(
     private static Stream BuildInstallerPackage(
         EdgeInstallerArtifactManifest artifact,
         IReadOnlyCollection<EdgeInstallerArtifactModule> selectedModules,
-        EdgeBindingBundleDto bindingBundle)
+        EdgeBindingBundleDto bindingBundle,
+        string targetRuntime)
     {
         var tempPath = Path.Combine(
             Path.GetTempPath(),
@@ -402,7 +409,8 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 packageStream,
                 artifact,
                 selectedModules,
-                bindingBundle);
+                bindingBundle,
+                targetRuntime);
 
             Span<byte> trailer = stackalloc byte[16];
             BinaryPrimitives.WriteInt64LittleEndian(trailer[..8], payloadLength);
@@ -422,7 +430,8 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         Stream packageStream,
         EdgeInstallerArtifactManifest artifact,
         IReadOnlyCollection<EdgeInstallerArtifactModule> selectedModules,
-        EdgeBindingBundleDto bindingBundle)
+        EdgeBindingBundleDto bindingBundle,
+        string targetRuntime)
     {
         var payloadTempPath = Path.Combine(
             Path.GetTempPath(),
@@ -435,7 +444,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             bufferSize: 1024 * 1024,
             FileOptions.Asynchronous | FileOptions.DeleteOnClose | FileOptions.SequentialScan);
 
-        WritePayloadZip(payloadStream, artifact, selectedModules, bindingBundle);
+        WritePayloadZip(payloadStream, artifact, selectedModules, bindingBundle, targetRuntime);
         payloadStream.Position = 0;
         payloadStream.CopyTo(packageStream);
         return payloadStream.Length;
@@ -445,7 +454,8 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         Stream packageStream,
         EdgeInstallerArtifactManifest artifact,
         IReadOnlyCollection<EdgeInstallerArtifactModule> selectedModules,
-        EdgeBindingBundleDto bindingBundle)
+        EdgeBindingBundleDto bindingBundle,
+        string targetRuntime)
     {
         using (var target = new ZipArchive(packageStream, ZipArchiveMode.Create, leaveOpen: true))
         {
@@ -501,7 +511,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             WriteJsonEntry(
                 target,
                 CombineZipPath(artifact.LauncherDirectory, UpdateConfigFileName),
-                BuildUpdateConfig(bindingBundle, artifact.Channel),
+                BuildUpdateConfig(bindingBundle, artifact.Channel, targetRuntime),
                 writtenEntries);
         }
     }
@@ -564,7 +574,8 @@ public sealed class GenerateEdgeInstallerPackageHandler(
 
     private static EdgeInstallerUpdateConfig BuildUpdateConfig(
         EdgeBindingBundleDto bindingBundle,
-        string channel)
+        string channel,
+        string targetRuntime)
     {
         string? source = null;
         if (!string.IsNullOrWhiteSpace(bindingBundle.BaseUrl))
@@ -572,7 +583,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             source = $"{bindingBundle.BaseUrl.TrimEnd('/')}/edge-updates/velopack/{channel}/";
         }
 
-        return new EdgeInstallerUpdateConfig(source, channel, "win-x64");
+        return new EdgeInstallerUpdateConfig(source, channel, targetRuntime);
     }
 
     private static void AddDirectoryEntries(
@@ -756,12 +767,6 @@ public sealed class GenerateEdgeInstallerPackageHandler(
     {
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? defaultValue : normalized;
-    }
-
-    private static string? NormalizeOptional(string? value)
-    {
-        var normalized = value?.Trim();
-        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
     private static Guid? ParseActorUserId(string? rawUserId)

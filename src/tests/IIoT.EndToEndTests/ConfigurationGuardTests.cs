@@ -536,6 +536,7 @@ public sealed class ConfigurationGuardTests
         readmeSource.Should().Contain("`cloud-image` 负责构建并推送五个应用镜像到 Harbor");
         readmeSource.Should().Contain("Edge 客户端安装素材不进 Harbor");
         readmeSource.Should().Contain("EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers");
+        readmeSource.Should().Contain("EdgeInstallerArtifacts__VelopackReleasesBaseUrl=${PUBLIC_BASE_URL}/edge-updates/velopack");
         readmeSource.Should().Contain("GET /internal/healthz");
         readmeSource.Should().Contain("[OPERATIONS.md](./OPERATIONS.md)");
         readmeSource.Should().Contain("deploy/scripts/deploy-release.sh");
@@ -572,6 +573,7 @@ public sealed class ConfigurationGuardTests
         composeSource.Should().Contain("Infrastructure__EventBus__EndpointPrefix:");
         composeSource.Should().Contain("BootstrapAuth__RequireSecret: ${BOOTSTRAP_AUTH_REQUIRE_SECRET}");
         composeSource.Should().Contain("EdgeInstallerArtifacts__RootPath: /app/edge-updates/installers");
+        composeSource.Should().Contain("EdgeInstallerArtifacts__VelopackReleasesBaseUrl: ${PUBLIC_BASE_URL}/edge-updates/velopack");
         composeSource.Should().Contain("${EDGE_UPDATES_DIR:-/srv/iiot/edge-updates}:/app/edge-updates:ro");
         composeSource.Should().Contain("postgres:");
         composeSource.Should().Contain("mem_limit: 1g");
@@ -984,7 +986,7 @@ public sealed class ConfigurationGuardTests
         deployReleaseSource.Should().Contain("write_release_manifest");
         deployReleaseSource.Should().Contain("apply_app_images_to_dotenv");
         deployReleaseSource.Should().Contain("compose pull iiot-httpapi iiot-gateway iiot-dataworker iiot-migration iiot-web");
-        deployReleaseSource.Should().Contain("compose run --rm iiot-migration");
+        deployReleaseSource.Should().Contain("compose run -T --rm iiot-migration");
         deployReleaseSource.Should().Contain("\"$SCRIPT_DIR/post-deploy-check.sh\"");
         deployReleaseSource.Should().Contain("cp \"$CURRENT_RELEASE_FILE\" \"$PREVIOUS_RELEASE_FILE\"");
         deployReleaseSource.Should().Contain("record_release_history");

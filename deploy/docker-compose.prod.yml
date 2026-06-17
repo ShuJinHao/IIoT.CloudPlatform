@@ -121,6 +121,7 @@ services:
       Cors__AllowedOrigins__2: ${CORS_ALLOWED_ORIGIN_2}
       BootstrapAuth__RequireSecret: ${BOOTSTRAP_AUTH_REQUIRE_SECRET}
       EdgeInstallerArtifacts__RootPath: /app/edge-updates/installers
+      EdgeInstallerArtifacts__VelopackReleasesBaseUrl: ${PUBLIC_BASE_URL}/edge-updates/velopack
       ALLOW_INTRANET_HTTP_OIDC: ${ALLOW_INTRANET_HTTP_OIDC:-false}
       OidcProvider__Issuer: ${OIDC_PROVIDER_ISSUER}
       OidcProvider__AllowIntranetHttpOidc: ${ALLOW_INTRANET_HTTP_OIDC:-false}

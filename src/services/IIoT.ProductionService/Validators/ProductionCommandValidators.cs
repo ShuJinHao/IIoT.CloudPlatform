@@ -10,6 +10,7 @@ using IIoT.ProductionService.Commands.DeviceLogs;
 using IIoT.ProductionService.Commands.Devices;
 using IIoT.ProductionService.Commands.PassStations;
 using IIoT.ProductionService.Commands.Recipes;
+using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.PassStations;
 using IIoT.Services.Contracts.Events.DeviceLogs;
 using IIoT.Services.Contracts.RecordQueries;
@@ -132,7 +133,12 @@ public sealed class GenerateEdgeInstallerPackageCommandValidator : AbstractValid
         RuleFor(x => x.Channel).MaximumLength(64).When(x => x.Channel is not null);
         RuleFor(x => x.TargetRuntime).MaximumLength(64).When(x => x.TargetRuntime is not null);
         RuleFor(x => x.HostVersion).MaximumLength(64).When(x => x.HostVersion is not null);
-        RuleFor(x => x.BaseUrl).MaximumLength(1024).When(x => x.BaseUrl is not null);
+        RuleFor(x => x.BaseUrl)
+            .Cascade(CascadeMode.Stop)
+            .NotEmpty()
+            .MaximumLength(1024)
+            .Must(value => EdgeInstallerPublicBaseUrl.TryNormalize(value, out _, out _))
+            .WithMessage(EdgeInstallerPublicBaseUrl.ValidationMessage);
     }
 }
 

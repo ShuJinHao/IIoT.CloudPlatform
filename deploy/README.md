@@ -96,7 +96,7 @@ ${EDGE_UPDATES_DIR}/installers/stable/1.2.0/
   installer-artifact.json
 ```
 
-`iiot-httpapi` 以只读方式挂载 `${EDGE_UPDATES_DIR}` 到 `/app/edge-updates`，通过 `EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers` 读取安装素材。登录 Cloud 后，“客户端下载中心 -> 首装下载”会按 `installer-artifact.json` v2 选择一份 `host/` 和所选 `plugins/<ModuleId>/`，把 `launcher/iiot-binding.json`、`launcher/iiot-enabled-plugins.json`、`plugins/<ModuleId>/iiot-plugin-binding.json` 注入本次下载的安装器 payload，并返回真正的 `.exe`。这些绑定配置不写回素材目录、不落盘到共享模板、不写日志。
+`iiot-httpapi` 以只读方式挂载 `${EDGE_UPDATES_DIR}` 到 `/app/edge-updates`，通过 `EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers` 读取安装素材，并通过 `EdgeInstallerArtifacts__VelopackReleasesBaseUrl=${PUBLIC_BASE_URL}/edge-updates/velopack` 返回运行时更新源。登录 Cloud 后，“客户端下载中心 -> 首装下载”会按 `installer-artifact.json` v2 选择一份 `host/` 和所选 `plugins/<ModuleId>/`，把 `launcher/iiot-binding.json`、`launcher/iiot-enabled-plugins.json`、`launcher/launcher.update.json`、`plugins/<ModuleId>/iiot-plugin-binding.json` 注入本次下载的安装器 payload，并返回真正的 `.exe`。这些绑定配置不写回素材目录、不落盘到共享模板、不写日志。
 
 `iiot-web` 是 Vite 静态构建，Cloud 左侧“打开助手”按钮需要在构建镜像时注入 AICopilot challenge URL：
 
@@ -266,13 +266,13 @@ DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh 
 EdgeClient Velopack 更新包由现有 `nginx-gateway` 直接提供：
 
 ```text
-<PUBLIC_BASE_URL>/edge-updates/
+<PUBLIC_BASE_URL>/edge-updates/velopack/{channel}/
 ```
 
 服务器包目录默认：
 
 ```text
-/srv/iiot/edge-updates
+/srv/iiot/edge-updates/velopack/{channel}
 ```
 
 可通过 `EDGE_UPDATES_DIR` 覆盖。目录中放：
@@ -281,10 +281,16 @@ EdgeClient Velopack 更新包由现有 `nginx-gateway` 直接提供：
 - `*.nupkg`
 - 可选 `releases.*.json`
 
+Cloud 生产配置中的 `EdgeInstallerArtifacts__VelopackReleasesBaseUrl` 填 channel 父目录：
+
+```text
+<PUBLIC_BASE_URL>/edge-updates/velopack
+```
+
 客户端 `launcher.update.json` 的 `Source` 填：
 
 ```text
-<PUBLIC_BASE_URL>/edge-updates/
+<PUBLIC_BASE_URL>/edge-updates/velopack/{channel}/
 ```
 
 `RELEASES` 和 `releases.*.json` 使用 `Cache-Control: no-cache`，`*.nupkg` 使用长期缓存。
