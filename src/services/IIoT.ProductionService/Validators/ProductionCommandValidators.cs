@@ -1,12 +1,16 @@
 using System.Text.Json;
 using FluentValidation;
+using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.ProductionService.Commands;
 using IIoT.ProductionService.Commands.Bootstrap.Devices;
 using IIoT.ProductionService.Commands.Capacities;
+using IIoT.ProductionService.Commands.ClientReleases;
+using IIoT.ProductionService.Commands.ClientVersions;
 using IIoT.ProductionService.Commands.DeviceLogs;
 using IIoT.ProductionService.Commands.Devices;
 using IIoT.ProductionService.Commands.PassStations;
 using IIoT.ProductionService.Commands.Recipes;
+using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.PassStations;
 using IIoT.Services.Contracts.Events.DeviceLogs;
 using IIoT.Services.Contracts.RecordQueries;
@@ -44,6 +48,97 @@ public sealed class DeleteDeviceCommandValidator : AbstractValidator<DeleteDevic
     public DeleteDeviceCommandValidator()
     {
         RuleFor(x => x.DeviceId).NotEmpty();
+    }
+}
+
+public sealed class UpsertClientHostReleaseCommandValidator : AbstractValidator<UpsertClientHostReleaseCommand>
+{
+    public UpsertClientHostReleaseCommandValidator()
+    {
+        RuleFor(x => x.Channel).NotEmpty().MaximumLength(64);
+        RuleFor(x => x.Version).NotEmpty().MaximumLength(64);
+        RuleFor(x => x.HostApiVersion).NotEmpty().MaximumLength(64);
+        RuleFor(x => x.TargetRuntime).NotEmpty().MaximumLength(64);
+        RuleFor(x => x.TargetFramework).MaximumLength(64).When(x => x.TargetFramework is not null);
+        RuleFor(x => x.DownloadUrl).NotEmpty().MaximumLength(1024);
+        RuleFor(x => x.Sha256).NotEmpty().Length(64);
+        RuleFor(x => x.PackageSize).GreaterThanOrEqualTo(0);
+        RuleFor(x => x.Status)
+            .NotEmpty()
+            .Must(value => Enum.TryParse(value, ignoreCase: true, out ClientReleaseStatus _))
+            .WithMessage("发布状态必须是 Draft、Published、Deprecated 或 Archived。");
+        RuleFor(x => x.Publisher).MaximumLength(128).When(x => x.Publisher is not null);
+    }
+}
+
+public sealed class UpsertClientPluginReleaseCommandValidator : AbstractValidator<UpsertClientPluginReleaseCommand>
+{
+    public UpsertClientPluginReleaseCommandValidator()
+    {
+        RuleFor(x => x.ModuleId).NotEmpty().MaximumLength(128);
+        RuleFor(x => x.DisplayName).NotEmpty().MaximumLength(128);
+        RuleFor(x => x.Description).MaximumLength(512).When(x => x.Description is not null);
+        RuleFor(x => x.IconKind).MaximumLength(64).When(x => x.IconKind is not null);
+        RuleFor(x => x.AccentColor).MaximumLength(32).When(x => x.AccentColor is not null);
+        RuleFor(x => x.Channel).NotEmpty().MaximumLength(64);
+        RuleFor(x => x.Version).NotEmpty().MaximumLength(64);
+        RuleFor(x => x.HostApiVersion).NotEmpty().MaximumLength(64);
+        RuleFor(x => x.MinHostVersion).NotEmpty().MaximumLength(64);
+        RuleFor(x => x.MaxHostVersion).NotEmpty().MaximumLength(64);
+        RuleFor(x => x.TargetRuntime).NotEmpty().MaximumLength(64);
+        RuleFor(x => x.TargetFramework).MaximumLength(64).When(x => x.TargetFramework is not null);
+        RuleFor(x => x.DownloadUrl).NotEmpty().MaximumLength(1024);
+        RuleFor(x => x.Sha256).NotEmpty().Length(64);
+        RuleFor(x => x.PackageSize).GreaterThanOrEqualTo(0);
+        RuleFor(x => x.DependenciesJson)
+            .Must(BeJsonArray)
+            .WithMessage("dependenciesJson 必须是 JSON 数组。")
+            .When(x => !string.IsNullOrWhiteSpace(x.DependenciesJson));
+        RuleFor(x => x.Status)
+            .NotEmpty()
+            .Must(value => Enum.TryParse(value, ignoreCase: true, out ClientReleaseStatus _))
+            .WithMessage("发布状态必须是 Draft、Published、Deprecated 或 Archived。");
+        RuleFor(x => x.Publisher).MaximumLength(128).When(x => x.Publisher is not null);
+    }
+
+    private static bool BeJsonArray(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return true;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(value);
+            return document.RootElement.ValueKind == JsonValueKind.Array;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+}
+
+public sealed class GenerateEdgeInstallerPackageCommandValidator : AbstractValidator<GenerateEdgeInstallerPackageCommand>
+{
+    public GenerateEdgeInstallerPackageCommandValidator()
+    {
+        RuleFor(x => x.Selections).NotNull().NotEmpty();
+        RuleForEach(x => x.Selections).ChildRules(selection =>
+        {
+            selection.RuleFor(x => x.ModuleId).NotEmpty().MaximumLength(128);
+            selection.RuleFor(x => x.DeviceId).NotEmpty();
+        });
+        RuleFor(x => x.Channel).MaximumLength(64).When(x => x.Channel is not null);
+        RuleFor(x => x.TargetRuntime).MaximumLength(64).When(x => x.TargetRuntime is not null);
+        RuleFor(x => x.HostVersion).MaximumLength(64).When(x => x.HostVersion is not null);
+        RuleFor(x => x.BaseUrl)
+            .Cascade(CascadeMode.Stop)
+            .NotEmpty()
+            .MaximumLength(1024)
+            .Must(value => EdgeInstallerPublicBaseUrl.TryNormalize(value, out _, out _))
+            .WithMessage(EdgeInstallerPublicBaseUrl.ValidationMessage);
     }
 }
 
@@ -110,6 +205,41 @@ public sealed class ReceiveDeviceLogCommandValidator : AbstractValidator<Receive
             .Must(x => x is not null && x.Count <= UploadValidationLimits.MaxDeviceLogItems)
             .WithMessage($"单次设备日志上传不能超过 {UploadValidationLimits.MaxDeviceLogItems} 条。");
         RuleForEach(x => x.Logs).SetValidator(new DeviceLogItemValidator());
+    }
+}
+
+public sealed class ReportDeviceClientVersionCommandValidator : AbstractValidator<ReportDeviceClientVersionCommand>
+{
+    public ReportDeviceClientVersionCommandValidator()
+    {
+        RuleFor(x => x.DeviceId).NotEmpty();
+        RuleFor(x => x.ClientCode).NotEmpty().MaximumLength(64);
+        RuleFor(x => x.HostVersion).NotEmpty().MaximumLength(64);
+        RuleFor(x => x.HostApiVersion).NotEmpty().MaximumLength(64);
+        RuleFor(x => x.Channel).NotEmpty().MaximumLength(64);
+        RuleFor(x => x.ReportedAtUtc)
+            .Must(UploadValidationRules.BeReasonableTimestamp)
+            .WithMessage("版本上报时间必须在有效范围内。");
+        RuleFor(x => x.InstalledPlugins)
+            .NotNull()
+            .Must(x => x is not null && x.Count <= 64)
+            .WithMessage("单次版本上报的插件数量不能超过 64 个。");
+        RuleFor(x => x.EnabledPlugins)
+            .NotNull()
+            .Must(x => x is not null && x.Count <= 64)
+            .WithMessage("单次版本上报的启用插件数量不能超过 64 个。");
+        RuleForEach(x => x.InstalledPlugins).SetValidator(new DeviceClientPluginVersionReportItemValidator());
+    }
+}
+
+public sealed class DeviceClientPluginVersionReportItemValidator : AbstractValidator<DeviceClientPluginVersionReportItem>
+{
+    public DeviceClientPluginVersionReportItemValidator()
+    {
+        RuleFor(x => x.ModuleId).NotEmpty().MaximumLength(128);
+        RuleFor(x => x.DisplayName).MaximumLength(128).When(x => x.DisplayName is not null);
+        RuleFor(x => x.Version).NotEmpty().MaximumLength(64);
+        RuleFor(x => x.HostApiVersion).MaximumLength(64).When(x => x.HostApiVersion is not null);
     }
 }
 

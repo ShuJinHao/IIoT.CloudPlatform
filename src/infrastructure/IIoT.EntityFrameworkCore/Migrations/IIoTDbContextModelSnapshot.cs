@@ -17,7 +17,7 @@ namespace IIoT.EntityFrameworkCore.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.7")
+                .HasAnnotation("ProductVersion", "10.0.9")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -111,6 +111,350 @@ namespace IIoT.EntityFrameworkCore.Migrations
                     b.ToTable("mfg_processes", (string)null);
                 });
 
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.ClientHostRelease", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("channel");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<string>("DownloadUrl")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)")
+                        .HasColumnName("download_url");
+
+                    b.Property<string>("HostApiVersion")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("host_api_version");
+
+                    b.Property<long>("PackageSize")
+                        .HasColumnType("bigint")
+                        .HasColumnName("package_size");
+
+                    b.Property<DateTime?>("PublishedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("published_at_utc");
+
+                    b.Property<string>("Publisher")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("publisher");
+
+                    b.Property<string>("ReleaseNotes")
+                        .HasColumnType("text")
+                        .HasColumnName("release_notes");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("sha256");
+
+                    b.Property<string>("Signature")
+                        .HasColumnType("text")
+                        .HasColumnName("signature");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("TargetFramework")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("target_framework");
+
+                    b.Property<string>("TargetRuntime")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("target_runtime");
+
+                    b.Property<string>("Version")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("version");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Channel", "TargetRuntime", "Status")
+                        .HasDatabaseName("ix_edge_client_host_releases_catalog");
+
+                    b.HasIndex("Channel", "Version", "TargetRuntime")
+                        .IsUnique()
+                        .HasDatabaseName("ux_edge_client_host_releases_identity");
+
+                    b.ToTable("edge_client_host_releases", (string)null);
+                });
+
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.ClientPluginRelease", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AccentColor")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("accent_color");
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("channel");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<string>("DependenciesJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("dependencies_json");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("description");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("display_name");
+
+                    b.Property<string>("DownloadUrl")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)")
+                        .HasColumnName("download_url");
+
+                    b.Property<string>("HostApiVersion")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("host_api_version");
+
+                    b.Property<string>("IconKind")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("icon_kind");
+
+                    b.Property<string>("MaxHostVersion")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("max_host_version");
+
+                    b.Property<string>("MinHostVersion")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("min_host_version");
+
+                    b.Property<string>("ModuleId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("module_id");
+
+                    b.Property<long>("PackageSize")
+                        .HasColumnType("bigint")
+                        .HasColumnName("package_size");
+
+                    b.Property<DateTime?>("PublishedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("published_at_utc");
+
+                    b.Property<string>("Publisher")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("publisher");
+
+                    b.Property<string>("ReleaseNotes")
+                        .HasColumnType("text")
+                        .HasColumnName("release_notes");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("sha256");
+
+                    b.Property<string>("Signature")
+                        .HasColumnType("text")
+                        .HasColumnName("signature");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("TargetFramework")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("target_framework");
+
+                    b.Property<string>("TargetRuntime")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("target_runtime");
+
+                    b.Property<string>("Version")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("version");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Channel", "TargetRuntime", "Status")
+                        .HasDatabaseName("ix_edge_client_plugin_releases_catalog");
+
+                    b.HasIndex("ModuleId", "Channel", "Version", "TargetRuntime")
+                        .IsUnique()
+                        .HasDatabaseName("ux_edge_client_plugin_releases_identity");
+
+                    b.ToTable("edge_client_plugin_releases", (string)null);
+                });
+
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.ClientReleaseRetentionPolicy", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int>("MaxVersionsPerComponent")
+                        .HasColumnType("integer")
+                        .HasColumnName("max_versions_per_component");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("edge_client_release_retention_policies", (string)null);
+                });
+
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.DeviceClientPluginVersion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("DeviceClientVersionSnapshotId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("device_client_version_snapshot_id");
+
+                    b.Property<string>("DisplayName")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("display_name");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("enabled");
+
+                    b.Property<string>("HostApiVersion")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("host_api_version");
+
+                    b.Property<string>("ModuleId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("module_id");
+
+                    b.Property<string>("Version")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("version");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DeviceClientVersionSnapshotId", "ModuleId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_edge_device_client_plugin_versions_module");
+
+                    b.ToTable("edge_device_client_plugin_versions", (string)null);
+                });
+
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.DeviceClientVersionSnapshot", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("channel");
+
+                    b.Property<string>("ClientCode")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("client_code");
+
+                    b.Property<Guid>("DeviceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("device_id");
+
+                    b.Property<string>("HostApiVersion")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("host_api_version");
+
+                    b.Property<string>("HostVersion")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("host_version");
+
+                    b.Property<DateTime>("ReceivedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at_utc");
+
+                    b.Property<DateTime>("ReportedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reported_at_utc");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DeviceId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_edge_device_client_version_snapshots_device");
+
+                    b.ToTable("edge_device_client_version_snapshots", (string)null);
+                });
+
             modelBuilder.Entity("IIoT.Core.Production.Aggregates.Devices.Device", b =>
                 {
                     b.Property<Guid>("Id")
@@ -150,6 +494,10 @@ namespace IIoT.EntityFrameworkCore.Migrations
                     b.HasIndex("Code")
                         .IsUnique()
                         .HasDatabaseName("ix_devices_client_code");
+
+                    b.HasIndex("DeviceName")
+                        .IsUnique()
+                        .HasDatabaseName("ix_devices_device_name");
 
                     b.HasIndex("ProcessId")
                         .HasDatabaseName("ix_devices_process_id");
@@ -875,6 +1223,24 @@ namespace IIoT.EntityFrameworkCore.Migrations
                     b.Navigation("Employee");
                 });
 
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.DeviceClientPluginVersion", b =>
+                {
+                    b.HasOne("IIoT.Core.Production.Aggregates.ClientReleases.DeviceClientVersionSnapshot", null)
+                        .WithMany("InstalledPlugins")
+                        .HasForeignKey("DeviceClientVersionSnapshotId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.DeviceClientVersionSnapshot", b =>
+                {
+                    b.HasOne("IIoT.Core.Production.Aggregates.Devices.Device", null)
+                        .WithOne()
+                        .HasForeignKey("IIoT.Core.Production.Aggregates.ClientReleases.DeviceClientVersionSnapshot", "DeviceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<System.Guid>", b =>
                 {
                     b.HasOne("Microsoft.AspNetCore.Identity.IdentityRole<System.Guid>", null)
@@ -953,6 +1319,11 @@ namespace IIoT.EntityFrameworkCore.Migrations
             modelBuilder.Entity("IIoT.Core.Employees.Aggregates.Employees.Employee", b =>
                 {
                     b.Navigation("DeviceAccesses");
+                });
+
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.DeviceClientVersionSnapshot", b =>
+                {
+                    b.Navigation("InstalledPlugins");
                 });
 
             modelBuilder.Entity("OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreApplication<System.Guid>", b =>

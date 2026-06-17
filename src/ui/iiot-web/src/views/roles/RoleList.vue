@@ -212,6 +212,7 @@ import UiCheckbox from '../../components/ui/UiCheckbox.vue';
 import UiInput from '../../components/ui/UiInput.vue';
 import UiModal from '../../components/ui/UiModal.vue';
 import UiTag from '../../components/ui/UiTag.vue';
+import { notifyWarning } from '../../utils/feedback';
 
 const roles = ref<string[]>([]);
 const rolePermissions = ref<Record<string, string[]>>({});
@@ -283,7 +284,7 @@ const toggleCreatePerm = (perm: string, checked: boolean) => {
 
 const submitCreate = async () => {
   if (!createForm.roleName.trim()) {
-    alert('角色名称不能为空');
+    notifyWarning('角色名称不能为空');
     return;
   }
   submitting.value = true;

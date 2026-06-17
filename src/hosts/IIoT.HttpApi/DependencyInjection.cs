@@ -13,6 +13,7 @@ using IIoT.MasterDataService.Commands.Processes;
 using IIoT.ProductionService;
 using IIoT.ProductionService.AiRead;
 using IIoT.ProductionService.Caching;
+using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.PassStations;
 using IIoT.ProductionService.Profiles;
 using IIoT.Services.CrossCutting.Behaviors;
@@ -78,6 +79,15 @@ public static class DependencyInjection
         builder.AddValidatedOptions<AiReadOptions>(
             AiReadOptions.SectionName,
             static options => options.Validate());
+        builder.AddValidatedOptions<EdgeInstallerArtifactOptions>(
+            EdgeInstallerArtifactOptions.SectionName,
+            static options => options.Validate());
+        builder.AddValidatedOptions<EdgeReleaseRetentionOptions>(
+            EdgeReleaseRetentionOptions.SectionName,
+            static options => options.Validate());
+        builder.Services.AddScoped<IClientReleaseRetentionService, ClientReleaseRetentionService>();
+        builder.Services.AddScoped<IClientReleaseRetentionPolicyReader>(sp =>
+            sp.GetRequiredService<IClientReleaseRetentionService>());
         builder.Services.AddPassStationRuntime();
 
         builder.Services.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
@@ -104,6 +114,7 @@ public static class DependencyInjection
         _ = builder.AddValidatedOptions<BootstrapAuthOptions>(
             BootstrapAuthOptions.SectionName,
             static options => options.Validate());
+        ApplyIntranetHttpOidcEnvironmentOverride(builder.Configuration);
         var oidcProviderOptions = builder.AddValidatedOptions<OidcProviderOptions>(
             OidcProviderOptions.SectionName,
             options => options.Validate(builder.Environment.EnvironmentName));
@@ -128,9 +139,11 @@ public static class DependencyInjection
             })
             .AddCookie(CloudOidcDefaults.SessionScheme, options =>
             {
-                options.Cookie.Name = oidcProviderOptions.SessionCookieName;
+                options.Cookie.Name = oidcProviderOptions.GetEffectiveSessionCookieName();
                 options.Cookie.HttpOnly = true;
-                options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+                options.Cookie.SecurePolicy = oidcProviderOptions.AllowIntranetHttpOidc
+                    ? CookieSecurePolicy.SameAsRequest
+                    : CookieSecurePolicy.Always;
                 options.Cookie.SameSite = SameSiteMode.Lax;
                 options.SlidingExpiration = true;
                 options.ExpireTimeSpan = TimeSpan.FromMinutes(oidcProviderOptions.SessionIdleMinutes);
@@ -177,7 +190,7 @@ public static class DependencyInjection
                     .EnableUserInfoEndpointPassthrough()
                     .EnableEndSessionEndpointPassthrough();
 
-                if (builder.Environment.IsDevelopment())
+                if (builder.Environment.IsDevelopment() || oidcProviderOptions.AllowIntranetHttpOidc)
                 {
                     aspNetCore.DisableTransportSecurityRequirement();
                 }
@@ -300,6 +313,10 @@ public static class DependencyInjection
         {
             builder.AddDevelopmentSigningCertificate();
         }
+        else if (options.AllowIntranetHttpOidc)
+        {
+            builder.AddEphemeralSigningKey();
+        }
         else
         {
             throw new InvalidOperationException(
@@ -314,10 +331,25 @@ public static class DependencyInjection
         {
             builder.AddDevelopmentEncryptionCertificate();
         }
+        else if (options.AllowIntranetHttpOidc)
+        {
+            builder.AddEphemeralEncryptionKey();
+        }
         else
         {
             throw new InvalidOperationException(
                 "OidcProvider:EncryptionCertificatePath is required outside Development.");
         }
+    }
+
+    private static void ApplyIntranetHttpOidcEnvironmentOverride(IConfiguration configuration)
+    {
+        var value = configuration[OidcProviderOptions.AllowIntranetHttpOidcEnvironmentVariable];
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        configuration[$"{OidcProviderOptions.SectionName}:{nameof(OidcProviderOptions.AllowIntranetHttpOidc)}"] = value;
     }
 }

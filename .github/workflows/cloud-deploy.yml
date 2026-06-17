@@ -10,11 +10,10 @@ on:
 
 permissions:
   contents: read
-  packages: read
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, iiot-linux-prod]
     environment: production
 
     steps:
@@ -24,56 +23,92 @@ jobs:
       - name: Validate release tag input
         shell: bash
         run: |
+          set -euo pipefail
           release_tag='${{ inputs.release_tag }}'
           if [[ ! "$release_tag" =~ ^sha-[0-9a-f]+$ ]]; then
             echo "release_tag must match sha-<hex>: $release_tag" >&2
             exit 1
           fi
 
-      - name: Copy deploy template
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          port: ${{ secrets.DEPLOY_PORT }}
-          source: "deploy/*"
-          target: ${{ secrets.DEPLOY_TARGET_DIR }}
-          strip_components: 1
+      - name: Validate runner and deploy inputs
+        shell: bash
+        env:
+          DEPLOY_TARGET_DIR: ${{ secrets.DEPLOY_TARGET_DIR }}
+          DEPLOY_ENV_FILE: ${{ secrets.DEPLOY_ENV_FILE }}
+          OCI_REGISTRY: ${{ secrets.OCI_REGISTRY }}
+          OCI_REGISTRY_USERNAME: ${{ secrets.OCI_REGISTRY_USERNAME }}
+          OCI_REGISTRY_PASSWORD: ${{ secrets.OCI_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ "$(id -u)" -eq 0 ]; then
+            echo "Self-hosted runner must not run as root." >&2
+            exit 64
+          fi
+          for required in DEPLOY_TARGET_DIR DEPLOY_ENV_FILE OCI_REGISTRY OCI_REGISTRY_USERNAME OCI_REGISTRY_PASSWORD
+          do
+            if [ -z "${!required:-}" ]; then
+              echo "$required is required for the intranet self-hosted deployment flow." >&2
+              exit 64
+            fi
+          done
+          command -v docker >/dev/null
+          docker compose version >/dev/null
+
+      - name: Sync deploy template
+        shell: bash
+        env:
+          DEPLOY_TARGET_DIR: ${{ secrets.DEPLOY_TARGET_DIR }}
+          DEPLOY_ENV_FILE: ${{ secrets.DEPLOY_ENV_FILE }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$DEPLOY_TARGET_DIR"
+          if command -v rsync >/dev/null 2>&1; then
+            rsync -a --delete \
+              --exclude '.env' \
+              --exclude 'backups/' \
+              --exclude 'certs/' \
+              --exclude 'releases/' \
+              deploy/ "$DEPLOY_TARGET_DIR/"
+          else
+            find "$DEPLOY_TARGET_DIR" -mindepth 1 -maxdepth 1 \
+              ! -name '.env' \
+              ! -name 'backups' \
+              ! -name 'certs' \
+              ! -name 'releases' \
+              -exec rm -rf {} +
+            cp -R deploy/. "$DEPLOY_TARGET_DIR/"
+            rm -f "$DEPLOY_TARGET_DIR/.env"
+          fi
+          umask 077
+          printf '%s\n' "$DEPLOY_ENV_FILE" > "$DEPLOY_TARGET_DIR/.env"
+          chmod +x "$DEPLOY_TARGET_DIR"/scripts/*.sh
+
+      - name: Log in to Harbor
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.OCI_REGISTRY_PASSWORD }}" |
+            docker login "${{ secrets.OCI_REGISTRY }}" \
+              --username "${{ secrets.OCI_REGISTRY_USERNAME }}" \
+              --password-stdin
 
       - name: Deploy cloud stack
-        uses: appleboy/ssh-action@v1.2.0
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           DEPLOY_GIT_SHA: ${{ github.sha }}
           DEPLOY_TRIGGERED_BY: ${{ github.actor }}
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          port: ${{ secrets.DEPLOY_PORT }}
-          script_stop: true
-          envs: GITHUB_ACTOR,GITHUB_TOKEN,RELEASE_TAG,DEPLOY_GIT_SHA,DEPLOY_TRIGGERED_BY
-          script: |
-            set -eu
-            mkdir -p "${{ secrets.DEPLOY_TARGET_DIR }}/nginx"
-            cat > "${{ secrets.DEPLOY_TARGET_DIR }}/.env" <<'EOF'
-            ${{ secrets.DEPLOY_ENV_FILE }}
-            EOF
+          DEPLOY_TARGET_DIR: ${{ secrets.DEPLOY_TARGET_DIR }}
+        run: |
+          set -euo pipefail
+          cd "$DEPLOY_TARGET_DIR"
+          RELEASE_TAG="$RELEASE_TAG" \
+            DEPLOY_GIT_SHA="$DEPLOY_GIT_SHA" \
+            DEPLOY_TRIGGERED_BY="$DEPLOY_TRIGGERED_BY" \
+            ./scripts/deploy-release.sh "$RELEASE_TAG"
 
-            registry="${{ secrets.OCI_REGISTRY }}"
-            username="${{ secrets.OCI_REGISTRY_USERNAME }}"
-            password="${{ secrets.OCI_REGISTRY_PASSWORD }}"
-
-            if [ -z "$registry" ]; then
-              registry="ghcr.io"
-              username="${GITHUB_ACTOR}"
-              password="${GITHUB_TOKEN}"
-            fi
-
-            echo "$password" | docker login "$registry" --username "$username" --password-stdin
-
-            cd "${{ secrets.DEPLOY_TARGET_DIR }}"
-            chmod +x ./scripts/*.sh
-            RELEASE_TAG="$RELEASE_TAG" DEPLOY_GIT_SHA="$DEPLOY_GIT_SHA" DEPLOY_TRIGGERED_BY="$DEPLOY_TRIGGERED_BY" ./scripts/deploy-release.sh "$RELEASE_TAG"
+          {
+            echo "### Cloud deploy"
+            echo "- Release tag: \`$RELEASE_TAG\`"
+            echo "- Target dir: \`$DEPLOY_TARGET_DIR\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -62,7 +62,26 @@ curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' http:
 
 ## Standard Release
 
-Use the single release entrypoint:
+Standard production release is driven by GitHub Actions on the intranet self-hosted runner labeled `iiot-linux-prod`.
+
+The standard sequence is:
+
+1. Push or merge to `main`.
+2. `cloud-image` runs on `iiot-linux-prod`, builds the five application images, and pushes them to Harbor with `sha-${GITHUB_SHA}`.
+3. Trigger `cloud-deploy` manually with the matching `release_tag = sha-*`.
+4. `cloud-deploy` runs on the same non-root runner, syncs `deploy/`, writes `DEPLOY_ENV_FILE`, logs in to Harbor, and calls `deploy-release.sh`.
+
+The runner must not run as root. See `RUNNER.md` for the required `github-runner` user, Docker group, labels, and server reachability checks.
+
+Application images and infrastructure images must already exist in Harbor before deploy. Docker Hub is not a production dependency source; `pre-deploy-check.sh` rejects Docker Hub shorthand infrastructure image values.
+
+Manual release from the server is an emergency fallback. Log in to Harbor on the private deployment server first:
+
+```sh
+docker login <OCI_REGISTRY> --username <OCI_REGISTRY_USERNAME>
+```
+
+Then use the single release entrypoint:
 
 ```sh
 DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-0123456789abcdef
@@ -80,7 +99,7 @@ Release flow is fixed:
 2. `postgres-backup.sh`
 3. write `staged-release.env`
 4. rewrite only the 5 application image coordinates in `.env`
-5. `docker compose pull`
+5. `docker compose pull` from Harbor
 6. keep infrastructure available
 7. run `iiot-migration`
 8. start application containers
@@ -93,6 +112,56 @@ Release success order is fixed:
 2. `./scripts/post-deploy-check.sh` returns `0`
 3. `./scripts/ops-check.sh` returns `0`
 4. `deploy/releases/current-release.env` points at the new `DEPLOY_RELEASE_ID`
+
+## Edge Update Package Distribution
+
+EdgeClient Velopack update packages are served by the existing `nginx-gateway` at:
+
+```text
+<PUBLIC_BASE_URL>/edge-updates/velopack/{channel}/
+```
+
+Server-side package directory:
+
+```text
+/srv/iiot/edge-updates/velopack/{channel}
+```
+
+The path defaults to `/srv/iiot/edge-updates`, can be overridden by `EDGE_UPDATES_DIR` in the production `.env` file, and is mounted read-only into `nginx-gateway`.
+
+Package contents are operator-managed:
+
+- `RELEASES`
+- `*.nupkg`
+- optional `releases.*.json` files when produced by the packaging flow
+
+The HttpApi production configuration must set `EdgeInstallerArtifacts__VelopackReleasesBaseUrl` to the channel parent directory:
+
+```text
+<PUBLIC_BASE_URL>/edge-updates/velopack
+```
+
+Publishing order:
+
+1. Build the EdgeClient Velopack package set with the approved client release process.
+2. Copy `RELEASES`, `*.nupkg`, and any generated `releases.*.json` files into the effective channel update directory.
+3. Keep file ownership readable by the Docker daemon and the nginx container.
+4. Set the client `launcher.update.json` `Source` value to `<PUBLIC_BASE_URL>/edge-updates/velopack/{channel}/`.
+5. Verify the published files before asking clients to check for updates.
+
+Validation examples:
+
+```sh
+curl -I http://127.0.0.1:80/edge-updates/velopack/stable/RELEASES
+curl -I http://127.0.0.1:80/edge-updates/velopack/stable/<package-name>.nupkg
+curl -I http://127.0.0.1:80/edge-updates/
+```
+
+Expected results:
+
+- `RELEASES` returns `200` and `Cache-Control: no-cache`.
+- `*.nupkg` returns `200` and can be downloaded.
+- `/edge-updates/` returns `403` or `404`; directory listing must not be exposed.
 
 ## Standard Backup
 

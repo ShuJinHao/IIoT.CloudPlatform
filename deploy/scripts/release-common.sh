@@ -6,6 +6,14 @@ IIOT_MIGRATION_IMAGE
 IIOT_WEB_IMAGE
 "
 
+INFRA_IMAGE_KEYS="
+IIOT_NGINX_IMAGE
+IIOT_POSTGRES_IMAGE
+IIOT_REDIS_IMAGE
+IIOT_RABBITMQ_IMAGE
+IIOT_SEQ_IMAGE
+"
+
 RUNTIME_SERVICES="
 iiot-httpapi
 iiot-gateway
@@ -119,6 +127,42 @@ require_app_image_values() {
   for key in $APP_IMAGE_KEYS
   do
     require_env_value "$key"
+  done
+}
+
+require_infra_image_values() {
+  for key in $INFRA_IMAGE_KEYS
+  do
+    require_env_value "$key"
+  done
+}
+
+ensure_infra_images_not_docker_hub() {
+  for key in $INFRA_IMAGE_KEYS
+  do
+    eval "image_ref=\${$key:-}"
+    image_registry=${image_ref%%/*}
+
+    case "$image_ref" in
+      docker.io/*|registry-1.docker.io/*)
+        printf 'Infrastructure image must be mirrored to Harbor, not pulled from Docker Hub: %s=%s\n' "$key" "$image_ref" >&2
+        exit 64
+        ;;
+    esac
+
+    if [ "$image_registry" = "$image_ref" ]; then
+      printf 'Infrastructure image must include an explicit Harbor registry: %s=%s\n' "$key" "$image_ref" >&2
+      exit 64
+    fi
+
+    case "$image_registry" in
+      *.*|*:*|localhost)
+        ;;
+      *)
+        printf 'Infrastructure image must include an explicit Harbor registry: %s=%s\n' "$key" "$image_ref" >&2
+        exit 64
+        ;;
+    esac
   done
 }
 

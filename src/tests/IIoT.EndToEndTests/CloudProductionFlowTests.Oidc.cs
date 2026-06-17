@@ -27,6 +27,7 @@ public sealed partial class CloudProductionFlowTests
         root.GetProperty("authorization_endpoint").GetString().Should().EndWith("/connect/authorize");
         root.GetProperty("token_endpoint").GetString().Should().EndWith("/connect/token");
         root.GetProperty("userinfo_endpoint").GetString().Should().EndWith("/connect/userinfo");
+        root.GetProperty("jwks_uri").GetString().Should().EndWith("/.well-known/jwks");
         root.GetProperty("end_session_endpoint").GetString().Should().EndWith("/connect/logout");
         ReadStringArray(root, "response_types_supported").Should().Contain("code");
         ReadStringArray(root, "grant_types_supported").Should().Contain("authorization_code");
@@ -51,6 +52,26 @@ public sealed partial class CloudProductionFlowTests
 
         response.IsSuccessStatusCode.Should().BeFalse(body);
         response.Headers.Location?.ToString().Should().NotStartWith("http://evil.example.com");
+    }
+
+    [Fact]
+    public async Task CloudOidc_Authorize_ShouldShowLoginPage_WhenCloudSessionMissing()
+    {
+        _fixture.ClearAuthToken();
+
+        using var client = CreateNoRedirectGatewayClient();
+        using var response = await client.GetAsync(CreateAuthorizePath(
+            "state-login-required",
+            "nonce-login-required",
+            CreatePkceChallenge(CreatePkceVerifier()),
+            AicopilotOidcCallbackUri));
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized, body);
+        response.Content.Headers.ContentType?.MediaType.Should().Be("text/html");
+        body.Should().Contain("需要先登录 Cloud");
+        body.Should().Contain("/login?returnUrl=");
+        body.Should().Contain(Uri.EscapeDataString("/connect/authorize?"));
     }
 
     [Fact]

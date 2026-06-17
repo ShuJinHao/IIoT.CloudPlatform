@@ -222,6 +222,7 @@ import UiRadioButton from '../../components/ui/UiRadioButton.vue';
 import UiRadioGroup from '../../components/ui/UiRadioGroup.vue';
 import UiSelect from '../../components/ui/UiSelect.vue';
 import type { UiDataTableColumn } from '../../components/ui/types';
+import { notifyWarning } from '../../utils/feedback';
 
 type QueryMode = 'level' | 'keyword' | 'date' | 'time-range' | 'date-keyword';
 
@@ -375,7 +376,7 @@ const rowKey = (row: DeviceLogListItemDto) => row.id;
 // === 数据加载 ===
 const fetchData = async () => {
   if (!selectedDeviceId.value) {
-    alert('请先选择设备。');
+    notifyWarning('请先选择设备。');
     return;
   }
 
@@ -398,7 +399,7 @@ const fetchData = async () => {
 
       case 'keyword':
         if (!filters.keyword.trim()) {
-          alert('请输入关键字。');
+          notifyWarning('请输入关键字。');
           loading.value = false;
           return;
         }
@@ -411,7 +412,7 @@ const fetchData = async () => {
 
       case 'date':
         if (!filters.date) {
-          alert('请选择日期。');
+          notifyWarning('请选择日期。');
           loading.value = false;
           return;
         }
@@ -424,7 +425,7 @@ const fetchData = async () => {
 
       case 'time-range':
         if (!filters.startTime || !filters.endTime) {
-          alert('请选择完整时间范围。');
+          notifyWarning('请选择完整时间范围。');
           loading.value = false;
           return;
         }
@@ -438,7 +439,7 @@ const fetchData = async () => {
 
       case 'date-keyword':
         if (!filters.date || !filters.keyword.trim()) {
-          alert('请选择日期并输入关键字。');
+          notifyWarning('请选择日期并输入关键字。');
           loading.value = false;
           return;
         }

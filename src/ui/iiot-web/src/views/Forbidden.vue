@@ -44,7 +44,7 @@ import UiButton from '../components/ui/UiButton.vue';
 
 .forbidden__code {
   margin-bottom: var(--space-4);
-  color: #111827;
+  color: var(--text-0);
   font-family: var(--font-mono);
   font-size: 100px;
   font-weight: var(--fw-strong);

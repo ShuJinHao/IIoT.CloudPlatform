@@ -283,6 +283,7 @@ import UiPagination from '../../components/ui/UiPagination.vue';
 import UiSelect from '../../components/ui/UiSelect.vue';
 import UiTag from '../../components/ui/UiTag.vue';
 import type { UiDataTableColumn } from '../../components/ui/types';
+import { notifyWarning } from '../../utils/feedback';
 
 const recipes = ref<RecipeListItemDto[]>([]);
 const loading = ref(false);
@@ -590,12 +591,12 @@ const openCreateModal = async () => {
 
 const submitCreate = async () => {
   if (!createForm.recipeName.trim() || !createForm.processId || !createForm.deviceId) {
-    alert('配方名称、归属工序和归属设备为必填项');
+    notifyWarning('配方名称、归属工序和归属设备为必填项');
     return;
   }
   const err = validateParams(createParams.value);
   if (err) {
-    alert(err);
+    notifyWarning(err);
     return;
   }
   submitting.value = true;
@@ -640,12 +641,12 @@ const openUpgradeModal = async (recipe: RecipeListItemDto) => {
 
 const submitUpgrade = async () => {
   if (!upgradeTarget.value || !upgradeForm.newVersion.trim()) {
-    alert('版本号不能为空');
+    notifyWarning('版本号不能为空');
     return;
   }
   const err = validateParams(upgradeParams.value);
   if (err) {
-    alert(err);
+    notifyWarning(err);
     return;
   }
   submitting.value = true;

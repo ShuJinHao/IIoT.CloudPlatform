@@ -15,4 +15,9 @@ public interface IDeviceReadQueryService
         string code,
         Guid? excludingDeviceId = null,
         CancellationToken cancellationToken = default);
+
+    Task<bool> NameExistsAsync(
+        string name,
+        Guid? excludingDeviceId = null,
+        CancellationToken cancellationToken = default);
 }

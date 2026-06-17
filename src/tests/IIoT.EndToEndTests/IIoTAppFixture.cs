@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Testing;
@@ -10,10 +11,25 @@ namespace IIoT.EndToEndTests;
 public sealed class IIoTAppFixture : IAsyncDisposable
 {
     public const string SeedAdminEmployeeNo = "101650";
-    public const string SeedAdminPassword = "Ljh123456!";
     public const string SeedAdminRealName = "\u7CFB\u7EDF\u7BA1\u7406\u5458";
     public const string TestPostgresPassword = "TestPg123!";
-    public const string TestJwtSecret = "iiot-e2e-jwt-secret-2026-ai-read-tests-32chars";
+    public static readonly string SeedAdminPassword = $"E2eSeed-{Convert.ToHexString(RandomNumberGenerator.GetBytes(16))}!";
+    public static readonly string TestJwtSecret = $"iiot-e2e-{Convert.ToHexString(RandomNumberGenerator.GetBytes(32))}";
+
+    private static readonly string[] ProxyEnvironmentVariableNames =
+    [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "NO_PROXY",
+        "no_proxy"
+    ];
+
+    private const string TestNoProxyValue =
+        "localhost,127.0.0.1,::1,host.docker.internal,0.0.0.0,*.local,169.254.0.0/16";
 
     private DistributedApplication? _app;
     private HttpClient? _httpClient;
@@ -27,6 +43,7 @@ public sealed class IIoTAppFixture : IAsyncDisposable
     {
         try
         {
+            ConfigureAspireProxyEnvironment();
             ConfigureSeedAdminEnvironment();
 
             var builder = await DistributedApplicationTestingBuilder.CreateAsync<Projects.IIoT_AppHost>();
@@ -100,6 +117,16 @@ public sealed class IIoTAppFixture : IAsyncDisposable
         }
     }
 
+    private void ConfigureAspireProxyEnvironment()
+    {
+        foreach (var name in ProxyEnvironmentVariableNames)
+        {
+            SetEnvironmentVariable(name, null);
+        }
+
+        SetEnvironmentVariable("NO_PROXY", TestNoProxyValue);
+    }
+
     private void ConfigureSeedAdminEnvironment()
     {
         SetEnvironmentVariable("Parameters__pg-password", TestPostgresPassword);
@@ -114,7 +141,7 @@ public sealed class IIoTAppFixture : IAsyncDisposable
         SetEnvironmentVariable("SEED_ADMIN_REAL_NAME", SeedAdminRealName);
     }
 
-    private void SetEnvironmentVariable(string name, string value)
+    private void SetEnvironmentVariable(string name, string? value)
     {
         if (!_originalEnvironment.ContainsKey(name))
         {

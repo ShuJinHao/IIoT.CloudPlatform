@@ -9,6 +9,9 @@ namespace IIoT.EndToEndTests;
 
 public sealed class ConfigurationGuardTests
 {
+    private const string KnownWeakSeedAdminPassword = "Ljh123456!";
+    private const string KnownWeakJwtSecret = "iiot-cloud-jwt-secret-2026-04-22";
+
     [Fact]
     public void DesignTimeConnectionStringResolver_MissingConnectionString_ShouldThrowClearError()
     {
@@ -95,6 +98,83 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
+    public void AppHostLaunchSettings_ShouldNotDefineProxyEnvironmentVariables()
+    {
+        var launchSettingsSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.AppHost", "Properties", "launchSettings.json"));
+
+        launchSettingsSource.Should().NotContain("HTTP_PROXY");
+        launchSettingsSource.Should().NotContain("HTTPS_PROXY");
+        launchSettingsSource.Should().NotContain("ALL_PROXY");
+        launchSettingsSource.Should().NotContain("http_proxy");
+        launchSettingsSource.Should().NotContain("https_proxy");
+        launchSettingsSource.Should().NotContain("all_proxy");
+        launchSettingsSource.Should().NotContain("NO_PROXY");
+        launchSettingsSource.Should().NotContain("no_proxy");
+    }
+
+    [Fact]
+    public void AppFixture_ShouldNormalizeProxyEnvironmentBeforeCreatingAspireBuilder()
+    {
+        var fixtureSource = File.ReadAllText(
+            FindRepoFile("src", "tests", "IIoT.EndToEndTests", "IIoTAppFixture.cs"));
+        var proxyIndex = fixtureSource.IndexOf("ConfigureAspireProxyEnvironment();", StringComparison.Ordinal);
+        var builderIndex = fixtureSource.IndexOf(
+            "DistributedApplicationTestingBuilder.CreateAsync",
+            StringComparison.Ordinal);
+
+        proxyIndex.Should().BeGreaterThanOrEqualTo(0);
+        builderIndex.Should().BeGreaterThan(proxyIndex);
+        fixtureSource.Should().Contain("\"HTTP_PROXY\"");
+        fixtureSource.Should().Contain("\"http_proxy\"");
+        fixtureSource.Should().Contain("SetEnvironmentVariable(name, null)");
+        fixtureSource.Should().Contain("SetEnvironmentVariable(\"NO_PROXY\", TestNoProxyValue)");
+    }
+
+    [Fact]
+    public void TestRuntimeCredentials_ShouldNotUseKnownWeakDeploymentSecrets()
+    {
+        IIoTAppFixture.SeedAdminPassword.Should().NotBe(KnownWeakSeedAdminPassword);
+        IIoTAppFixture.TestJwtSecret.Should().NotBe(KnownWeakJwtSecret);
+        IIoTAppFixture.SeedAdminPassword.Should().StartWith("E2eSeed-");
+        IIoTAppFixture.SeedAdminPassword.Should().EndWith("!");
+        IIoTAppFixture.TestJwtSecret.Should().StartWith("iiot-e2e-");
+    }
+
+    [Fact]
+    public void DeployScript_ShouldRejectKnownWeakDeploymentSecrets()
+    {
+        var deploySource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.AppHost", "aspirate-output", "deploy.ps1"));
+        var jwtSecretGuardLine = Regex.Match(
+            deploySource,
+            "Assert-Configured \"JWTSETTINGS__SECRET\"[^\\r\\n]*").Value;
+        var seedAdminPasswordGuardLine = Regex.Match(
+            deploySource,
+            "Assert-Configured \"SEED_ADMIN_PASSWORD\"[^\\r\\n]*").Value;
+
+        jwtSecretGuardLine.Should().Contain("change-me-jwt-secret");
+        jwtSecretGuardLine.Should().Contain(KnownWeakJwtSecret);
+        seedAdminPasswordGuardLine.Should().Contain("change-me-admin-password");
+        seedAdminPasswordGuardLine.Should().Contain(KnownWeakSeedAdminPassword);
+    }
+
+    [Fact]
+    public void LocalAspirateEnv_WhenPresent_ShouldNotUseKnownWeakDeploymentSecrets()
+    {
+        var envPath = FindRepoFile("src", "hosts", "IIoT.AppHost", "aspirate-output", ".env");
+        if (!File.Exists(envPath))
+        {
+            return;
+        }
+
+        var envSource = File.ReadAllText(envPath);
+
+        envSource.Should().NotContain($"JWTSETTINGS__SECRET={KnownWeakJwtSecret}");
+        envSource.Should().NotContain($"SEED_ADMIN_PASSWORD={KnownWeakSeedAdminPassword}");
+    }
+
+    [Fact]
     public void MigrationWorkApp_ShouldPrecheckAndNormalizeLegacyDeviceCodesBeforeCreatingUniqueIndex()
     {
         var orchestratorSource = File.ReadAllText(
@@ -128,21 +208,29 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
+    public void HumanDeviceController_ShouldNotExposeManualBootstrapSecretRotation()
+    {
+        var controllerSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Human", "HumanDeviceController.cs"));
+
+        controllerSource.Should().NotContain("bootstrap-secret/rotate");
+        controllerSource.Should().NotContain("RotateBootstrapSecret");
+        controllerSource.Should().NotContain("RotateDeviceBootstrapSecretCommand");
+    }
+
+    [Fact]
     public void BootstrapHardeningDesign_ShouldDocumentMandatorySecret()
     {
-        var documentSource = File.ReadAllText(FindRepoFile("docs", "bootstrap-auth-hardening.md"));
-        var triageSource = File.ReadAllText(FindRepoFile("docs", "deepseek-audit-triage-2026-04-29.md"));
+        var cloudRulesSource = File.ReadAllText(FindRepoFile("docs", "云端规则.md"));
+        var envExampleSource = File.ReadAllText(FindRepoFile("deploy", ".env.example"));
+        var deployReadmeSource = File.ReadAllText(FindRepoFile("deploy", "README.md"));
 
-        documentSource.Should().Contain("预共享启动密钥");
-        documentSource.Should().Contain("X-IIoT-Bootstrap-Secret");
-        documentSource.Should().Contain("BootstrapAuth:RequireSecret");
-        documentSource.Should().Contain("clientCode");
-        documentSource.Should().Contain("DeviceId");
-        triageSource.Should().Contain("A01 Bootstrap RequireSecret=true");
-        triageSource.Should().Contain("EdgeClient 已升级为携带 `X-IIoT-Bootstrap-Secret`");
-        triageSource.Should().Contain("不再保留无密钥启动或旧路径兼容口径");
-        triageSource.Should().Contain("PR-16");
-        triageSource.Should().Contain("PR-17");
+        cloudRulesSource.Should().Contain("ClientCode");
+        cloudRulesSource.Should().Contain("DeviceId");
+        deployReadmeSource.Should().Contain("/api/v1/bootstrap/device-instance");
+        deployReadmeSource.Should().Contain("X-IIoT-Bootstrap-Secret");
+        envExampleSource.Should().Contain("BOOTSTRAP_AUTH_REQUIRE_SECRET=true");
+        envExampleSource.Should().Contain("X-IIoT-Bootstrap-Secret");
     }
 
     [Fact]
@@ -161,6 +249,7 @@ public sealed class ConfigurationGuardTests
                 var route = match.Groups[1].Value;
                 if (!route.StartsWith("api/v1/human/", StringComparison.Ordinal)
                     && !route.StartsWith("api/v1/edge/", StringComparison.Ordinal)
+                    && !route.StartsWith("api/v1/public/", StringComparison.Ordinal)
                     && !route.StartsWith("api/v1/ai/read", StringComparison.Ordinal)
                     && !route.StartsWith("api/v1/ai/identity", StringComparison.Ordinal))
                 {
@@ -255,6 +344,7 @@ public sealed class ConfigurationGuardTests
         httpApiConfiguration.GetValue<int>("RateLimiting:PasswordLogin:PermitLimit").Should().BeGreaterThan(0);
         httpApiConfiguration.GetValue<int>("RateLimiting:PassStationUpload:TokenLimit").Should().BeGreaterThan(0);
         httpApiConfiguration.GetValue<bool>("BootstrapAuth:RequireSecret").Should().BeTrue();
+        httpApiConfiguration.GetValue<string>("EdgeInstallerArtifacts:RootPath").Should().Be("edge-updates/installers");
         httpApiConfiguration.GetValue<string>("OidcProvider:Issuer").Should().NotBeNullOrWhiteSpace();
         httpApiConfiguration.GetValue<string>("OidcProvider:AicopilotClientId").Should().Be("aicopilot");
         var aicopilotRedirectUris = httpApiConfiguration.GetSection("OidcProvider:AicopilotRedirectUris")
@@ -321,6 +411,8 @@ public sealed class ConfigurationGuardTests
             FindRepoFile("src", "hosts", "IIoT.DataWorker", "Consumers", "Production", "DeviceLogConsumer.cs"),
             FindRepoFile("src", "hosts", "IIoT.DataWorker", "Consumers", "Production", "PassStationConsumer.cs")
         };
+        var schemaVersionGuardSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.DataWorker", "Consumers", "Production", "EventSchemaVersionGuard.cs"));
 
         foreach (var file in eventContractFiles)
         {
@@ -331,6 +423,9 @@ public sealed class ConfigurationGuardTests
         {
             File.ReadAllText(file).Should().Contain("EventSchemaVersionGuard.EnsureSupported");
         }
+
+        schemaVersionGuardSource.Should().Contain("schemaVersion == CurrentSchemaVersion");
+        schemaVersionGuardSource.Should().NotContain("schemaVersion is 0");
     }
 
     [Fact]
@@ -437,8 +532,15 @@ public sealed class ConfigurationGuardTests
         var composeSource = File.ReadAllText(FindRepoFile("deploy", "docker-compose.prod.yml"));
 
         readmeSource.Should().Contain("single-machine production starter");
-        readmeSource.Should().Contain("`release_tag` produced by `cloud-image`");
-        readmeSource.Should().Contain("`/internal/healthz` remains the production readiness probe");
+        readmeSource.Should().Contain("`release_tag = sha-*`");
+        readmeSource.Should().Contain("`cloud-image` 在内网 self-hosted runner `iiot-linux-prod` 上构建并推送五个应用镜像到 Harbor");
+        readmeSource.Should().Contain("runner 必须使用专用非 root 用户运行");
+        readmeSource.Should().Contain("Docker Hub 不作为生产依赖源");
+        readmeSource.Should().Contain("Edge 客户端安装素材不进 Harbor");
+        readmeSource.Should().Contain("EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers");
+        readmeSource.Should().Contain("EdgeInstallerArtifacts__VelopackReleasesBaseUrl=${PUBLIC_BASE_URL}/edge-updates/velopack");
+        readmeSource.Should().Contain("[RUNNER.md](./RUNNER.md)");
+        readmeSource.Should().Contain("GET /internal/healthz");
         readmeSource.Should().Contain("[OPERATIONS.md](./OPERATIONS.md)");
         readmeSource.Should().Contain("deploy/scripts/deploy-release.sh");
         readmeSource.Should().Contain("deploy/scripts/rollback-release.sh");
@@ -447,30 +549,45 @@ public sealed class ConfigurationGuardTests
         readmeSource.Should().Contain("deploy/cron/iiot-backup-verify.cron.example");
         readmeSource.Should().Contain("daily backup at `02:30`");
         readmeSource.Should().Contain("weekly restore verification at `03:30` every Sunday");
-        readmeSource.Should().Contain("`latest` is not a standard production application version in this batch");
+        readmeSource.Should().Contain("`latest` 不能作为生产应用版本");
 
-        envExampleSource.Should().Contain("Must replace: application image repositories");
+        envExampleSource.Should().Contain("Must replace: Harbor application image repositories");
         envExampleSource.Should().Contain("Must replace: runtime secrets");
         envExampleSource.Should().Contain("Template defaults: single-machine published ports");
-        envExampleSource.Should().Contain("DEPLOY_ENV_FILE");
+        envExampleSource.Should().Contain("operator-managed .env");
+        envExampleSource.Should().Contain("pushed to Harbor");
         envExampleSource.Should().Contain("Infrastructure__EventBus__EndpointPrefix=");
-        envExampleSource.Should().Contain("IIOT_HTTPAPI_IMAGE=ghcr.io/example/iiot-httpapi:sha-");
-        envExampleSource.Should().Contain("IIOT_GATEWAY_IMAGE=ghcr.io/example/iiot-gateway:sha-");
-        envExampleSource.Should().Contain("IIOT_DATAWORKER_IMAGE=ghcr.io/example/iiot-dataworker:sha-");
-        envExampleSource.Should().Contain("IIOT_MIGRATION_IMAGE=ghcr.io/example/iiot-migrationworkapp:sha-");
-        envExampleSource.Should().Contain("IIOT_WEB_IMAGE=ghcr.io/example/iiot-web:sha-");
-        envExampleSource.Should().NotContain("IIOT_HTTPAPI_IMAGE=ghcr.io/example/iiot-httpapi:latest");
+        envExampleSource.Should().Contain("IIOT_HTTPAPI_IMAGE=harbor.example.com/iiot/iiot-httpapi:sha-");
+        envExampleSource.Should().Contain("IIOT_GATEWAY_IMAGE=harbor.example.com/iiot/iiot-gateway:sha-");
+        envExampleSource.Should().Contain("IIOT_DATAWORKER_IMAGE=harbor.example.com/iiot/iiot-dataworker:sha-");
+        envExampleSource.Should().Contain("IIOT_MIGRATION_IMAGE=harbor.example.com/iiot/iiot-migrationworkapp:sha-");
+        envExampleSource.Should().Contain("IIOT_WEB_IMAGE=harbor.example.com/iiot/iiot-web:sha-");
+        envExampleSource.Should().NotContain("IIOT_HTTPAPI_IMAGE=harbor.example.com/iiot/iiot-httpapi:latest");
+        envExampleSource.Should().Contain("IIOT_NGINX_IMAGE=harbor.example.com/mirror/nginx:1.27-alpine");
+        envExampleSource.Should().Contain("IIOT_POSTGRES_IMAGE=harbor.example.com/mirror/timescaledb:latest-pg17");
+        envExampleSource.Should().Contain("IIOT_REDIS_IMAGE=harbor.example.com/mirror/redis:7.4-alpine");
+        envExampleSource.Should().Contain("IIOT_RABBITMQ_IMAGE=harbor.example.com/mirror/rabbitmq:3-management-alpine");
+        envExampleSource.Should().Contain("IIOT_SEQ_IMAGE=harbor.example.com/mirror/seq:2024.3");
+        envExampleSource.Should().NotContain("IIOT_NGINX_IMAGE=nginx:");
+        envExampleSource.Should().NotContain("IIOT_POSTGRES_IMAGE=timescale/");
+        envExampleSource.Should().NotContain("IIOT_REDIS_IMAGE=redis:");
+        envExampleSource.Should().NotContain("IIOT_RABBITMQ_IMAGE=rabbitmq:");
+        envExampleSource.Should().NotContain("IIOT_SEQ_IMAGE=datalust/");
         envExampleSource.Should().Contain("BACKUP_RETENTION_DAYS=14");
         envExampleSource.Should().Contain("BACKUP_MAX_AGE_HOURS=24");
         envExampleSource.Should().Contain("BACKUP_VERIFY_MAX_AGE_DAYS=7");
         envExampleSource.Should().Contain("GATEWAY_HTTP_PORT=81");
         envExampleSource.Should().Contain("BOOTSTRAP_AUTH_REQUIRE_SECRET=true");
         envExampleSource.Should().Contain("X-IIoT-Bootstrap-Secret");
+        envExampleSource.Should().Contain("installers/{channel}/{version}");
 
         composeSource.Should().Contain("Single-machine production starter for IIoT.CloudPlatform.");
         composeSource.Should().Contain("Single-node launch keeps one explicit upstream destination.");
         composeSource.Should().Contain("Infrastructure__EventBus__EndpointPrefix:");
         composeSource.Should().Contain("BootstrapAuth__RequireSecret: ${BOOTSTRAP_AUTH_REQUIRE_SECRET}");
+        composeSource.Should().Contain("EdgeInstallerArtifacts__RootPath: /app/edge-updates/installers");
+        composeSource.Should().Contain("EdgeInstallerArtifacts__VelopackReleasesBaseUrl: ${PUBLIC_BASE_URL}/edge-updates/velopack");
+        composeSource.Should().Contain("${EDGE_UPDATES_DIR:-/srv/iiot/edge-updates}:/app/edge-updates:ro");
         composeSource.Should().Contain("postgres:");
         composeSource.Should().Contain("mem_limit: 1g");
         composeSource.Should().Contain("redis-cache:");
@@ -483,23 +600,24 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
-    public void CloudConfigurationMap_ShouldDocumentConfigOwnershipAndPrecedence()
+    public void HarborDeployReadme_ShouldDocumentRegistryOwnershipAndPrivateServerFlow()
     {
-        var documentationSource = File.ReadAllText(FindRepoFile("docs", "cloud-configuration-map.md"));
+        var documentationSource = File.ReadAllText(FindRepoFile("deploy", "README.md"));
+        var envExampleSource = File.ReadAllText(FindRepoFile("deploy", ".env.example"));
 
-        documentationSource.Should().Contain("宿主运行时配置");
-        documentationSource.Should().Contain("基础设施运行时配置");
-        documentationSource.Should().Contain("部署模板配置");
-        documentationSource.Should().Contain("本地开发 / 测试专用配置");
-        documentationSource.Should().Contain("脚本参数 > .env > 进程环境变量");
-        documentationSource.Should().Contain("ForwardedHeaders");
-        documentationSource.Should().Contain("PermissionCache");
-        documentationSource.Should().Contain("Infrastructure:Postgres");
-        documentationSource.Should().Contain("Infrastructure:EventBus");
-        documentationSource.Should().Contain("IIoT.Services.Contracts");
-        documentationSource.Should().Contain("IIoT.Services.CrossCutting");
-        documentationSource.Should().Contain("IIoT.Gateway");
-        documentationSource.Should().Contain("IIOT_GATEWAY_IMAGE");
+        documentationSource.Should().Contain("Harbor 变量");
+        documentationSource.Should().Contain("OCI_REGISTRY");
+        documentationSource.Should().Contain("OCI_NAMESPACE");
+        documentationSource.Should().Contain("OCI_REGISTRY_USERNAME");
+        documentationSource.Should().Contain("OCI_REGISTRY_PASSWORD");
+        documentationSource.Should().Contain("iiot-linux-prod");
+        documentationSource.Should().Contain("github-runner");
+        documentationSource.Should().Contain("Docker Hub 不作为生产依赖源");
+        documentationSource.Should().Contain("mirror-third-party-images.sh");
+        documentationSource.Should().Contain("docker login <OCI_REGISTRY>");
+        documentationSource.Should().Contain("docker compose pull");
+        envExampleSource.Should().Contain("IIOT_GATEWAY_IMAGE=harbor.example.com/iiot/iiot-gateway:sha-");
+        envExampleSource.Should().Contain("IIOT_REDIS_IMAGE=harbor.example.com/mirror/redis:7.4-alpine");
     }
 
     [Fact]
@@ -642,6 +760,7 @@ public sealed class ConfigurationGuardTests
         gatewayAppSettingsSource.Should().Contain("\"PathPrefix\": \"/api/v1/edge/bootstrap\"");
         gatewayAppSettingsSource.Should().Contain("\"Path\": \"/api/v1/human/identity/edge-login\"");
         gatewayAppSettingsSource.Should().Contain("/api/v1/human/{**catch-all}");
+        gatewayAppSettingsSource.Should().Contain("/api/v1/public/{**catch-all}");
         gatewayAppSettingsSource.Should().Contain("/api/v1/edge/{**catch-all}");
         gatewayAppSettingsSource.Should().Contain("/api/v1/ai/read/{**catch-all}");
         gatewayAppSettingsSource.Should().Contain("/internal/healthz");
@@ -654,6 +773,7 @@ public sealed class ConfigurationGuardTests
         gatewayAppSettingsSource.Should().NotContain("legacy-edge-bootstrap-device-instance");
         gatewayAppSettingsSource.Should().NotContain("legacy-human-edge-login");
         gatewayAppSettingsSource.Should().Contain("internal-health");
+        gatewayAppSettingsSource.Should().Contain("\"Set\": \"public\"");
         gatewayRouteCatalogSource.Should().Contain("GatewayRoutes:BlockedAliases");
         gatewayRouteCatalogSource.Should().Contain("ReverseProxy:Routes");
         gatewayRouteCatalogSource.Should().Contain("PathPrefix");
@@ -711,6 +831,8 @@ public sealed class ConfigurationGuardTests
 
         gatewayAppSettingsSource.Should().Contain("\"oidc-discovery\"");
         gatewayAppSettingsSource.Should().Contain("\"Path\": \"/.well-known/openid-configuration\"");
+        gatewayAppSettingsSource.Should().Contain("\"oidc-jwks\"");
+        gatewayAppSettingsSource.Should().Contain("\"Path\": \"/.well-known/jwks\"");
         gatewayAppSettingsSource.Should().Contain("\"oidc-connect\"");
         gatewayAppSettingsSource.Should().Contain("\"Path\": \"/connect/{**catch-all}\"");
         gatewayAppSettingsSource.Should().Contain("\"ai-identity\"");
@@ -788,15 +910,48 @@ public sealed class ConfigurationGuardTests
 
         workflowSource.Should().Contain("release_tag:");
         workflowSource.Should().Contain("Release tag from cloud-image (sha-*)");
+        workflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
         workflowSource.Should().Contain("if [[ ! \"$release_tag\" =~ ^sha-[0-9a-f]+$ ]]");
         workflowSource.Should().Contain("RELEASE_TAG: ${{ inputs.release_tag }}");
         workflowSource.Should().Contain("DEPLOY_GIT_SHA: ${{ github.sha }}");
         workflowSource.Should().Contain("DEPLOY_TRIGGERED_BY: ${{ github.actor }}");
-        workflowSource.Should().Contain("envs: GITHUB_ACTOR,GITHUB_TOKEN,RELEASE_TAG,DEPLOY_GIT_SHA,DEPLOY_TRIGGERED_BY");
-        workflowSource.Should().Contain("chmod +x ./scripts/*.sh");
+        workflowSource.Should().Contain("DEPLOY_TARGET_DIR: ${{ secrets.DEPLOY_TARGET_DIR }}");
+        workflowSource.Should().Contain("DEPLOY_ENV_FILE: ${{ secrets.DEPLOY_ENV_FILE }}");
+        workflowSource.Should().Contain("Self-hosted runner must not run as root.");
+        workflowSource.Should().Contain("rsync -a --delete");
+        workflowSource.Should().Contain("printf '%s\\n' \"$DEPLOY_ENV_FILE\" > \"$DEPLOY_TARGET_DIR/.env\"");
+        workflowSource.Should().Contain("docker login \"${{ secrets.OCI_REGISTRY }}\"");
         workflowSource.Should().Contain("./scripts/deploy-release.sh \"$RELEASE_TAG\"");
+        workflowSource.Should().NotContain("runs-on: ubuntu-latest");
+        workflowSource.Should().NotContain("appleboy/ssh-action");
+        workflowSource.Should().NotContain("appleboy/scp-action");
+        workflowSource.Should().NotContain("ghcr.io");
+        workflowSource.Should().NotContain("envs: GITHUB_ACTOR,GITHUB_TOKEN,RELEASE_TAG,DEPLOY_GIT_SHA,DEPLOY_TRIGGERED_BY");
         workflowSource.Should().NotContain("compose run --rm iiot-migration");
         workflowSource.Should().NotContain("probe_status \"${public_base_url}/internal/healthz\" \"200\"");
+    }
+
+    [Fact]
+    public void CloudImageWorkflow_ShouldUseIntranetRunnerAndHarborMirrorBaseImages()
+    {
+        var workflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-image.yml"));
+        var webDockerfileSource = File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.AppHost", "iiot-web.Dockerfile"));
+
+        workflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
+        workflowSource.Should().Contain("Self-hosted runner must not run as root.");
+        workflowSource.Should().Contain("docker buildx build");
+        workflowSource.Should().Contain("--build-arg \"NODE_BASE_IMAGE=${{ steps.registry.outputs.registry }}/mirror/node:22-slim\"");
+        workflowSource.Should().Contain("--build-arg \"NGINX_BASE_IMAGE=${{ steps.registry.outputs.registry }}/mirror/nginx:1.27-alpine\"");
+        workflowSource.Should().NotContain("runs-on: ubuntu-latest");
+        workflowSource.Should().NotContain("ghcr.io");
+        workflowSource.Should().NotContain("docker/build-push-action");
+        workflowSource.Should().NotContain("docker/metadata-action");
+        workflowSource.Should().NotContain("docker/setup-buildx-action");
+
+        webDockerfileSource.Should().Contain("ARG NODE_BASE_IMAGE=node:22-slim");
+        webDockerfileSource.Should().Contain("FROM ${NODE_BASE_IMAGE} AS build");
+        webDockerfileSource.Should().Contain("ARG NGINX_BASE_IMAGE=nginx:1.27-alpine");
+        webDockerfileSource.Should().Contain("FROM ${NGINX_BASE_IMAGE} AS final");
     }
 
     [Fact]
@@ -808,6 +963,7 @@ public sealed class ConfigurationGuardTests
         var opsCheckSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "ops-check.sh"));
         var releaseCommonSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "release-common.sh"));
         var preDeploySource = File.ReadAllText(FindRepoFile("deploy", "scripts", "pre-deploy-check.sh"));
+        var mirrorImagesSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "mirror-third-party-images.sh"));
         var deployReleaseSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "deploy-release.sh"));
         var postDeploySource = File.ReadAllText(FindRepoFile("deploy", "scripts", "post-deploy-check.sh"));
         var rollbackSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "rollback-release.sh"));
@@ -864,23 +1020,39 @@ public sealed class ConfigurationGuardTests
         releaseCommonSource.Should().Contain("RELEASE_HISTORY_DIR");
         releaseCommonSource.Should().Contain("ensure_release_tag");
         releaseCommonSource.Should().Contain("Application image may not use :latest");
+        releaseCommonSource.Should().Contain("INFRA_IMAGE_KEYS");
+        releaseCommonSource.Should().Contain("ensure_infra_images_not_docker_hub");
+        releaseCommonSource.Should().Contain("Infrastructure image must be mirrored to Harbor");
+        releaseCommonSource.Should().Contain("Infrastructure image must include an explicit Harbor registry");
         releaseCommonSource.Should().Contain("write_release_manifest");
         releaseCommonSource.Should().Contain("record_release_history");
         releaseCommonSource.Should().Contain("apply_app_images_to_dotenv");
 
         preDeploySource.Should().Contain("ensure_release_tag \"$RELEASE_TAG\"");
         preDeploySource.Should().Contain("compose config -q");
+        preDeploySource.Should().Contain("require_infra_image_values");
+        preDeploySource.Should().Contain("ensure_infra_images_not_docker_hub");
         preDeploySource.Should().Contain("resolve_release_images \"$RELEASE_TAG\"");
         preDeploySource.Should().Contain("ensure_target_images_not_latest");
         preDeploySource.Should().Contain("probe_status \"${public_base_url}/internal/healthz\" \"200\" 3");
         preDeploySource.Should().Contain("\"$SCRIPT_DIR/ops-check.sh\"");
+
+        mirrorImagesSource.Should().Contain("MIRROR_REGISTRY=${MIRROR_REGISTRY:-10.98.90.154:80}");
+        mirrorImagesSource.Should().Contain("MIRROR_NAMESPACE=${MIRROR_NAMESPACE:-mirror}");
+        mirrorImagesSource.Should().Contain("timescale/timescaledb:latest-pg17");
+        mirrorImagesSource.Should().Contain("redis:7.4-alpine");
+        mirrorImagesSource.Should().Contain("rabbitmq:3-management-alpine");
+        mirrorImagesSource.Should().Contain("datalust/seq:2024.3");
+        mirrorImagesSource.Should().Contain("nginx:1.27-alpine");
+        mirrorImagesSource.Should().Contain("node:22-slim");
+        mirrorImagesSource.Should().Contain("docker push \"$target_image\"");
 
         deployReleaseSource.Should().Contain("\"$SCRIPT_DIR/pre-deploy-check.sh\" \"$RELEASE_TAG\"");
         deployReleaseSource.Should().Contain("\"$SCRIPT_DIR/postgres-backup.sh\"");
         deployReleaseSource.Should().Contain("write_release_manifest");
         deployReleaseSource.Should().Contain("apply_app_images_to_dotenv");
         deployReleaseSource.Should().Contain("compose pull iiot-httpapi iiot-gateway iiot-dataworker iiot-migration iiot-web");
-        deployReleaseSource.Should().Contain("compose run --rm iiot-migration");
+        deployReleaseSource.Should().Contain("compose run -T --rm iiot-migration");
         deployReleaseSource.Should().Contain("\"$SCRIPT_DIR/post-deploy-check.sh\"");
         deployReleaseSource.Should().Contain("cp \"$CURRENT_RELEASE_FILE\" \"$PREVIOUS_RELEASE_FILE\"");
         deployReleaseSource.Should().Contain("record_release_history");
@@ -915,6 +1087,9 @@ public sealed class ConfigurationGuardTests
         operationsSource.Should().Contain("./scripts/ops-check.sh");
         operationsSource.Should().Contain("./scripts/deploy-release.sh");
         operationsSource.Should().Contain("./scripts/rollback-release.sh");
+        operationsSource.Should().Contain("iiot-linux-prod");
+        operationsSource.Should().Contain("github-runner");
+        operationsSource.Should().Contain("Docker Hub is not a production dependency source");
         operationsSource.Should().Contain("current-release.env");
         operationsSource.Should().Contain("previous-release.env");
         operationsSource.Should().Contain("staged-release.env");
@@ -991,7 +1166,7 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void GatewayIntegrationSurface_ShouldDocumentFormalRoutesAndRejectedAliases()
     {
-        var documentSource = File.ReadAllText(FindRepoFile("docs", "gateway-integration-surface.md"));
+        var documentSource = File.ReadAllText(FindRepoFile("deploy", "README.md"));
 
         documentSource.Should().Contain("/api/v1/human/*");
         documentSource.Should().Contain("/api/v1/edge/*");
@@ -1047,6 +1222,12 @@ public sealed class ConfigurationGuardTests
     public void AiReadRequestFolders_ShouldOnlyContainAiReadQueries()
     {
         AssertRequestFolderConvention("Queries", "AiRead", "IAiReadQuery");
+    }
+
+    [Fact]
+    public void PublicRequestFolders_ShouldOnlyContainPublicQueries()
+    {
+        AssertRequestFolderConvention("Queries", "Public", "IPublicQuery");
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using System.Net;
 using System.Security.Claims;
 using IIoT.HttpApi.Infrastructure.Oidc;
 using IIoT.Services.Contracts.Auditing;
@@ -58,7 +59,7 @@ public sealed class CloudOidcController(
                 "Cloud OIDC 会话不存在或无效。",
                 cancellationToken);
 
-            return Challenge(CloudOidcDefaults.SessionScheme);
+            return ShowLoginRequiredPage();
         }
 
         var profile = await profileService.GetByUserIdAsync(userId, cancellationToken);
@@ -363,6 +364,41 @@ public sealed class CloudOidcController(
             });
 
         return Forbid(properties, OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
+    }
+
+    private ContentResult ShowLoginRequiredPage()
+    {
+        var returnUrl = $"{Request.PathBase}{Request.Path}{Request.QueryString}";
+        var loginUrl = $"/login?returnUrl={Uri.EscapeDataString(returnUrl)}";
+        var encodedLoginUrl = WebUtility.HtmlEncode(loginUrl);
+
+        Response.StatusCode = StatusCodes.Status401Unauthorized;
+        return Content(
+            $$"""
+              <!doctype html>
+              <html lang="zh-CN">
+              <head>
+                <meta charset="utf-8" />
+                <meta name="viewport" content="width=device-width, initial-scale=1" />
+                <title>Cloud 登录已过期</title>
+                <style>
+                  body{margin:0;min-height:100vh;display:grid;place-items:center;background:#eef2f3;color:#111827;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+                  main{width:min(520px,calc(100vw - 32px));border-radius:24px;background:#fff;padding:32px;box-shadow:0 18px 60px rgba(15,23,42,.12)}
+                  h1{margin:0 0 12px;font-size:28px;line-height:1.2}
+                  p{margin:0 0 24px;color:#5b6472;font-size:15px;line-height:1.7}
+                  a{display:inline-flex;align-items:center;justify-content:center;height:44px;border-radius:14px;background:#111827;color:#fff;padding:0 18px;text-decoration:none;font-weight:800}
+                </style>
+              </head>
+              <body>
+                <main>
+                  <h1>需要先登录 Cloud</h1>
+                  <p>AICopilot 授权需要有效的 Cloud 登录会话。请先登录云平台，登录完成后会继续当前授权流程。</p>
+                  <a href="{{encodedLoginUrl}}">登录云平台</a>
+                </main>
+              </body>
+              </html>
+              """,
+            "text/html; charset=utf-8");
     }
 
     private Task WriteAuditAsync(

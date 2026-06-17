@@ -18,6 +18,8 @@ fi
 
 load_dotenv
 require_app_image_values
+require_infra_image_values
+ensure_infra_images_not_docker_hub
 resolve_release_images "$RELEASE_TAG"
 ensure_target_images_not_latest
 compose config -q

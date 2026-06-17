@@ -11,6 +11,12 @@ const routes: Array<RouteRecordRaw> = [
     meta: { requiresAuth: false }
   },
   {
+    path: '/downloads',
+    name: 'PublicDownloads',
+    component: () => import('../views/PublicDownloadCenter.vue'),
+    meta: { requiresAuth: false }
+  },
+  {
     path: '/',
     component: () => import('../layout/MainLayout.vue'),
     meta: { requiresAuth: true },
@@ -74,6 +80,18 @@ const routes: Array<RouteRecordRaw> = [
         meta: { requiresAuth: true, requiredPermission: Permissions.Device.Read, title: '设备日志' }
       },
       {
+        path: 'client-releases',
+        name: 'ClientReleases',
+        component: () => import('../views/clientReleases/ClientReleaseCenter.vue'),
+        meta: { requiresAuth: true, requiredPermission: Permissions.Device.Read, title: '客户端首装生成' }
+      },
+      {
+        path: 'client-releases/publish',
+        name: 'ClientReleasePublish',
+        component: () => import('../views/clientReleases/ClientReleaseCenter.vue'),
+        meta: { requiresAuth: true, requiredPermission: Permissions.Device.Update, title: '客户端发布管理' }
+      },
+      {
         path: 'roles',
         name: 'Roles',
         component: () => import('../views/roles/RoleList.vue'),
@@ -95,15 +113,29 @@ const router = createRouter({
   routes
 });
 
+const isSafeLocalReturnUrl = (value: unknown): value is string =>
+  typeof value === 'string'
+  && value.startsWith('/')
+  && !value.startsWith('//')
+  && !value.includes('\\');
+
 router.beforeEach((to) => {
   const authStore = useAuthStore();
+  const returnUrl = to.query.returnUrl;
+  const hasOidcReturnUrl =
+    to.name === 'Login'
+    && isSafeLocalReturnUrl(returnUrl)
+    && returnUrl.startsWith('/connect/');
 
   if (to.meta.requiresAuth === false) {
-    if (authStore.isAuthenticated) return { name: 'Dashboard' };
+    if (to.name === 'Login' && authStore.isAuthenticated && !hasOidcReturnUrl) {
+      if (isSafeLocalReturnUrl(returnUrl) && returnUrl !== '/login') return returnUrl;
+      return { name: 'Dashboard' };
+    }
     return true;
   }
 
-  if (!authStore.isAuthenticated) return { name: 'Login' };
+  if (!authStore.isAuthenticated) return { name: 'Login', query: { returnUrl: to.fullPath } };
 
   const requiredPermission = to.meta.requiredPermission as string | undefined;
   if (requiredPermission && !authStore.hasPermission(requiredPermission)) {

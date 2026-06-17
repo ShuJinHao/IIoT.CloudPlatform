@@ -9,6 +9,14 @@ var builder = Host.CreateApplicationBuilder(args);
 _ = builder.Configuration.GetRequiredValidatedOptions<PostgresOptions>(
     PostgresOptions.SectionName,
     static options => options.Validate());
+var allowIntranetHttpOidc = builder.Configuration[OidcProviderOptions.AllowIntranetHttpOidcEnvironmentVariable];
+if (!string.IsNullOrWhiteSpace(allowIntranetHttpOidc))
+{
+    builder.Configuration[
+        $"{OidcProviderOptions.SectionName}:{nameof(OidcProviderOptions.AllowIntranetHttpOidc)}"] =
+        allowIntranetHttpOidc;
+}
+
 _ = builder.AddValidatedOptions<OidcProviderOptions>(
     OidcProviderOptions.SectionName,
     options => options.Validate(builder.Environment.EnvironmentName));

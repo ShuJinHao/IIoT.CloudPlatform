@@ -28,6 +28,12 @@ public interface IAnonymousBootstrapRequest<out TResponse> : IRequest<TResponse>
 public interface IAiReadRequest<out TResponse> : IRequest<TResponse>;
 
 /// <summary>
+/// 公开只读请求标记。
+/// 这类请求允许未登录访问，但只能返回可公开展示的只读信息。
+/// </summary>
+public interface IPublicRequest<out TResponse> : IRequest<TResponse>;
+
+/// <summary>
 /// 人员端命令。
 /// 等价于“这是一个 Command，并且它属于 human/* 请求”。
 /// </summary>
@@ -57,6 +63,12 @@ public interface IDeviceQuery<out TResponse> : IQuery<TResponse>, IDeviceRequest
 /// 当前 bootstrap 只开放查询语义，不开放匿名写操作。
 /// </summary>
 public interface IAnonymousBootstrapQuery<out TResponse> : IQuery<TResponse>, IAnonymousBootstrapRequest<TResponse>;
+
+/// <summary>
+/// 公开只读查询。
+/// 等价于“这是一个 Query，并且它属于 public/* 匿名只读请求”。
+/// </summary>
+public interface IPublicQuery<out TResponse> : IQuery<TResponse>, IPublicRequest<TResponse>;
 
 /// <summary>
 /// AI 只读查询。

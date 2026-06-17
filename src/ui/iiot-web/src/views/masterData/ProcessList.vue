@@ -153,6 +153,7 @@ import UiModal from '../../components/ui/UiModal.vue';
 import UiPagination from '../../components/ui/UiPagination.vue';
 import UiTag from '../../components/ui/UiTag.vue';
 import type { UiDataTableColumn } from '../../components/ui/types';
+import { notifyWarning } from '../../utils/feedback';
 
 const processes = ref<ProcessListItemDto[]>([]);
 const loading = ref(false);
@@ -294,7 +295,7 @@ const openEditModal = (p: ProcessListItemDto) => {
 
 const submitForm = async () => {
   if (!formData.processCode.trim() || !formData.processName.trim()) {
-    alert('编码和名称均为必填项');
+    notifyWarning('编码和名称均为必填项');
     return;
   }
   submitting.value = true;

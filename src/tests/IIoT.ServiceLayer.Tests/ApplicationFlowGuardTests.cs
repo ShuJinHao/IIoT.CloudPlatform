@@ -1,7 +1,11 @@
 using AutoMapper;
+using System.Buffers.Binary;
+using System.IO.Compression;
+using System.Text;
 using System.Text.Json;
 using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.MasterData.Aggregates.MfgProcesses;
+using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.Devices.Events;
 using IIoT.Core.Production.Aggregates.Recipes;
@@ -15,8 +19,10 @@ using IIoT.ProductionService.Commands.Devices;
 using IIoT.ProductionService.Commands.PassStations;
 using IIoT.ProductionService.Commands.Recipes;
 using IIoT.ProductionService.Caching;
+using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.PassStations;
 using IIoT.ProductionService.Profiles;
+using IIoT.ProductionService.Commands.ClientReleases;
 using IIoT.ProductionService.Queries.Capacities;
 using IIoT.ProductionService.Queries.Devices;
 using IIoT.ProductionService.Queries.DeviceLogs;
@@ -98,11 +104,7 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal(processId, repository.AddedEntity!.ProcessId);
         Assert.StartsWith("DEV-", repository.AddedEntity.Code);
         Assert.Equal(repository.AddedEntity.Code, created.Code);
-        Assert.NotNull(repository.AddedEntity.BootstrapSecretHash);
-        Assert.NotEqual(repository.AddedEntity.BootstrapSecretHash, created.BootstrapSecret);
-        Assert.True(BootstrapSecretHasher.Verify(
-            created.BootstrapSecret,
-            repository.AddedEntity.BootstrapSecretHash));
+        Assert.Null(repository.AddedEntity.BootstrapSecretHash);
         Assert.Contains(repository.AddedEntity.DomainEvents, x =>
             x is DeviceRegisteredDomainEvent registered
             && registered.ProcessId == processId
@@ -179,6 +181,225 @@ public sealed class ApplicationFlowGuardTests
         Assert.Contains(auditTrail.Entries, x =>
             x.OperationType == "Device.Register"
             && !x.Succeeded);
+    }
+
+    [Fact]
+    public async Task RegisterDeviceHandler_ShouldRejectDuplicateName()
+    {
+        var repository = new InMemoryRepository<Device>();
+        var processQueries = new StubProcessReadQueryService { Exists = true };
+        var deviceQueries = new StubDeviceReadQueryService { NameExists = true };
+        var auditTrail = new RecordingAuditTrailService();
+        var handler = new RegisterDeviceHandler(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "admin-001",
+                Role = SystemRoles.Admin,
+                IsAuthenticated = true
+            },
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            repository,
+            processQueries,
+            deviceQueries,
+            auditTrail);
+
+        var result = await handler.Handle(
+            new RegisterDeviceCommand("Injection-01", Guid.NewGuid()),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.Errors);
+        Assert.Contains(result.Errors, error => error.Contains("名称已存在", StringComparison.Ordinal));
+        Assert.Null(repository.AddedEntity);
+        Assert.Contains(auditTrail.Entries, x =>
+            x.OperationType == "Device.Register"
+            && x.TargetType == "Device"
+            && !x.Succeeded);
+    }
+
+    [Fact]
+    public async Task GenerateEdgeInstallerPackageHandler_ShouldFailBeforeRotatingSecret_WhenBaseUrlMissing()
+    {
+        var oldSecret = BootstrapSecretGenerator.Generate();
+        var device = new Device("匀浆线1#", "DEV-AAAAAAAAAA", Guid.NewGuid());
+        device.SetBootstrapSecretHash(BootstrapSecretHasher.Hash(oldSecret));
+        var oldHash = device.BootstrapSecretHash;
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.Add(device);
+
+        var handler = CreateInstallerPackageHandler(
+            deviceRepository,
+            new InMemoryRepository<ClientHostRelease>(),
+            new InMemoryRepository<ClientPluginRelease>(),
+            Path.Combine(Path.GetTempPath(), $"iiot-baseurl-guard-{Guid.NewGuid():N}"),
+            new RecordingCacheService(),
+            new RecordingAuditTrailService());
+
+        var result = await handler.Handle(
+            new GenerateEdgeInstallerPackageCommand(
+                [new EdgeBindingSelection("Homogenization", device.Id)],
+                HostVersion: "1.2.0"),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.Errors);
+        Assert.Contains(result.Errors, error => error.Contains("云端地址必须填写", StringComparison.Ordinal));
+        Assert.Equal(oldHash, device.BootstrapSecretHash);
+        Assert.True(BootstrapSecretHasher.Verify(oldSecret, device.BootstrapSecretHash!));
+        Assert.Empty(deviceRepository.UpdatedEntities);
+    }
+
+    [Fact]
+    public async Task GenerateEdgeInstallerPackageHandler_ShouldFailBeforeRotatingSecret_WhenArtifactMissing()
+    {
+        var oldSecret = BootstrapSecretGenerator.Generate();
+        var device = new Device("匀浆线1#", "DEV-AAAAAAAAAA", Guid.NewGuid());
+        device.SetBootstrapSecretHash(BootstrapSecretHasher.Hash(oldSecret));
+        var oldHash = device.BootstrapSecretHash;
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.Add(device);
+        var hostRepository = new InMemoryRepository<ClientHostRelease>
+        {
+            SingleOrDefaultResult = CreatePublishedHostRelease()
+        };
+
+        var artifactRoot = Path.Combine(Path.GetTempPath(), $"iiot-missing-installer-{Guid.NewGuid():N}");
+        try
+        {
+            var handler = CreateInstallerPackageHandler(
+                deviceRepository,
+                hostRepository,
+                new InMemoryRepository<ClientPluginRelease>(),
+                artifactRoot,
+                new RecordingCacheService(),
+                new RecordingAuditTrailService());
+
+            var result = await handler.Handle(
+                new GenerateEdgeInstallerPackageCommand(
+                    [new EdgeBindingSelection("Homogenization", device.Id)],
+                    HostVersion: "1.2.0",
+                    BaseUrl: "http://cloud.local"),
+                CancellationToken.None);
+
+            Assert.False(result.IsSuccess);
+            Assert.NotNull(result.Errors);
+            Assert.Contains(result.Errors, error => error.Contains("安装素材不存在", StringComparison.Ordinal));
+            Assert.Equal(oldHash, device.BootstrapSecretHash);
+            Assert.True(BootstrapSecretHasher.Verify(oldSecret, device.BootstrapSecretHash!));
+            Assert.Empty(deviceRepository.UpdatedEntities);
+        }
+        finally
+        {
+            if (Directory.Exists(artifactRoot))
+            {
+                Directory.Delete(artifactRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GenerateEdgeInstallerPackageHandler_ShouldPackageSelectedRuntimeAndInjectJsonConfigs()
+    {
+        const string targetRuntime = "win-arm64";
+        var device = new Device("匀浆线1#", "DEV-AAAAAAAAAA", Guid.NewGuid());
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.Add(device);
+        var hostRepository = new InMemoryRepository<ClientHostRelease>
+        {
+            SingleOrDefaultResult = CreatePublishedHostRelease(targetRuntime)
+        };
+        var pluginRepository = new InMemoryRepository<ClientPluginRelease>
+        {
+            SingleOrDefaultResult = CreatePublishedPluginRelease(targetRuntime)
+        };
+        var cache = new RecordingCacheService();
+        var auditTrail = new RecordingAuditTrailService();
+        var artifactRoot = CreateInstallerArtifactFixture("stable", "1.2.0", targetRuntime);
+
+        try
+        {
+            var handler = CreateInstallerPackageHandler(
+                deviceRepository,
+                hostRepository,
+                pluginRepository,
+                artifactRoot,
+                cache,
+                auditTrail);
+
+            var result = await handler.Handle(
+                new GenerateEdgeInstallerPackageCommand(
+                    [new EdgeBindingSelection("Homogenization", device.Id)],
+                    TargetRuntime: targetRuntime,
+                    HostVersion: "1.2.0",
+                    BaseUrl: "http://cloud.local/"),
+                CancellationToken.None);
+
+            Assert.True(result.IsSuccess);
+            var package = result.Value!;
+            Assert.EndsWith(".exe", package.FileName, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("application/vnd.microsoft.portable-executable", package.ContentType);
+            await using var packageContent = package.Content;
+            using var packageBuffer = new MemoryStream();
+            await packageContent.CopyToAsync(packageBuffer);
+            var packageBytes = packageBuffer.ToArray();
+            Assert.Equal((byte)'M', packageBytes[0]);
+            Assert.Equal((byte)'Z', packageBytes[1]);
+
+            var payload = ReadInstallerPayload(packageBytes);
+            using var archive = new ZipArchive(new MemoryStream(payload), ZipArchiveMode.Read);
+            Assert.NotNull(archive.GetEntry("launcher/IIoT.Edge.Launcher.dll"));
+            Assert.NotNull(archive.GetEntry("launcher/iiot-binding.json"));
+            Assert.NotNull(archive.GetEntry("launcher/iiot-enabled-plugins.json"));
+            Assert.NotNull(archive.GetEntry("host/IIoT.Edge.Shell.dll"));
+            Assert.NotNull(archive.GetEntry("plugins/Homogenization/plugin.json"));
+            Assert.NotNull(archive.GetEntry("plugins/Homogenization/iiot-plugin-binding.json"));
+            Assert.Null(archive.GetEntry("plugins/Welding/plugin.json"));
+            Assert.Null(archive.GetEntry("plugins/Welding/iiot-plugin-binding.json"));
+
+            var bindingJson = ReadZipEntryText(archive, "launcher/iiot-binding.json");
+            using var binding = JsonDocument.Parse(bindingJson);
+            var bindingItem = binding.RootElement.GetProperty("bindings")[0];
+            var bootstrapSecret = bindingItem.GetProperty("bootstrapSecret").GetString();
+            Assert.Equal("http://cloud.local", binding.RootElement.GetProperty("baseUrl").GetString());
+            Assert.Equal("Homogenization", bindingItem.GetProperty("moduleId").GetString());
+            Assert.Equal(device.Code, bindingItem.GetProperty("clientCode").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(bootstrapSecret));
+            Assert.True(BootstrapSecretHasher.Verify(bootstrapSecret!, device.BootstrapSecretHash!));
+
+            var updateConfigJson = ReadZipEntryText(archive, "launcher/launcher.update.json");
+            using var updateConfig = JsonDocument.Parse(updateConfigJson);
+            Assert.Equal("http://cloud.local/edge-updates/velopack/stable/", updateConfig.RootElement.GetProperty("source").GetString());
+            Assert.Equal("stable", updateConfig.RootElement.GetProperty("channel").GetString());
+            Assert.Equal(targetRuntime, updateConfig.RootElement.GetProperty("targetRuntime").GetString());
+            Assert.False(updateConfig.RootElement.TryGetProperty("Source", out _));
+            Assert.False(updateConfig.RootElement.TryGetProperty("TargetRuntime", out _));
+
+            var hostConfigJson = ReadZipEntryText(archive, "launcher/iiot-enabled-plugins.json");
+            using var hostConfig = JsonDocument.Parse(hostConfigJson);
+            var hostPlugin = hostConfig.RootElement.GetProperty("plugins")[0];
+            Assert.Equal("Homogenization", hostPlugin.GetProperty("moduleId").GetString());
+            Assert.Equal("Homogenization", hostPlugin.GetProperty("pluginDirectory").GetString());
+            Assert.Equal(device.Code, hostPlugin.GetProperty("clientCode").GetString());
+
+            var pluginBindingJson = ReadZipEntryText(archive, "plugins/Homogenization/iiot-plugin-binding.json");
+            using var pluginBinding = JsonDocument.Parse(pluginBindingJson);
+            Assert.Equal("Homogenization", pluginBinding.RootElement.GetProperty("moduleId").GetString());
+            Assert.Equal(device.Code, pluginBinding.RootElement.GetProperty("clientCode").GetString());
+            Assert.Equal(bootstrapSecret, pluginBinding.RootElement.GetProperty("bootstrapSecret").GetString());
+
+            Assert.Contains(CacheKeys.DeviceCode(device.Code), cache.RemovedKeys);
+            Assert.DoesNotContain(auditTrail.Entries, entry =>
+                entry.Summary.Contains(bootstrapSecret!, StringComparison.Ordinal)
+                || (entry.FailureReason?.Contains(bootstrapSecret!, StringComparison.Ordinal) ?? false));
+        }
+        finally
+        {
+            if (Directory.Exists(artifactRoot))
+            {
+                Directory.Delete(artifactRoot, recursive: true);
+            }
+        }
     }
 
     [Fact]
@@ -453,6 +674,7 @@ public sealed class ApplicationFlowGuardTests
         };
         var handler = new UpdateDeviceProfileHandler(
             repository,
+            new StubDeviceReadQueryService(),
             new StubCurrentUserDeviceAccessService { IsAdministrator = true });
 
         var result = await handler.Handle(
@@ -922,6 +1144,60 @@ public sealed class ApplicationFlowGuardTests
         Assert.Contains(CacheKeys.CapacitySummaryPattern(deviceId), cache.RemovedPatterns);
         Assert.Contains(CacheKeys.CapacityRangePattern(deviceId), cache.RemovedPatterns);
         Assert.Contains(CacheKeys.CapacityPagedByDevicePattern(deviceId), cache.RemovedPatterns);
+    }
+
+    [Fact]
+    public async Task ReceiveHourlyCapacityHandler_ShouldVaryDeduplicationKeyWhenCountsChange()
+    {
+        var deviceId = Guid.NewGuid();
+        var date = new DateOnly(2026, 6, 6);
+        var mapperServices = new ServiceCollection();
+        mapperServices.AddLogging();
+        mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
+        var mapper = mapperServices.BuildServiceProvider().GetRequiredService<IMapper>();
+        var firstRegistry = new RecordingUploadReceiveRegistry();
+        var secondRegistry = new RecordingUploadReceiveRegistry();
+        var firstHandler = new ReceiveHourlyCapacityHandler(
+            new StubDeviceIdentityQueryService { Exists = true },
+            mapper,
+            firstRegistry,
+            new RecordingCacheService());
+        var secondHandler = new ReceiveHourlyCapacityHandler(
+            new StubDeviceIdentityQueryService { Exists = true },
+            mapper,
+            secondRegistry,
+            new RecordingCacheService());
+
+        await firstHandler.Handle(
+            new ReceiveHourlyCapacityCommand(
+                deviceId,
+                date,
+                "D",
+                9,
+                30,
+                "09:30",
+                100,
+                98,
+                2,
+                "PLC-01"),
+            CancellationToken.None);
+        await secondHandler.Handle(
+            new ReceiveHourlyCapacityCommand(
+                deviceId,
+                date,
+                "D",
+                9,
+                30,
+                "09:30",
+                150,
+                147,
+                3,
+                "PLC-01"),
+            CancellationToken.None);
+
+        Assert.StartsWith("legacy:", firstRegistry.LastDeduplicationKey, StringComparison.Ordinal);
+        Assert.StartsWith("legacy:", secondRegistry.LastDeduplicationKey, StringComparison.Ordinal);
+        Assert.NotEqual(firstRegistry.LastDeduplicationKey, secondRegistry.LastDeduplicationKey);
     }
 
     [Fact]
@@ -1874,20 +2150,21 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal(device.Id, validSecret.Value!.DeviceIdentity.Id);
     }
 
-    [Fact]
-    public async Task RotateDeviceBootstrapSecretHandler_ShouldReplaceHashAndClearBootstrapCache()
+    private static JsonElement JsonPayload(string json)
     {
-        var device = new Device("Device-Rotate", "DEV-ROTATE01", Guid.NewGuid());
-        var oldSecret = BootstrapSecretGenerator.Generate();
-        device.SetBootstrapSecretHash(BootstrapSecretHasher.Hash(oldSecret));
-        var oldHash = device.BootstrapSecretHash;
-        var repository = new InMemoryRepository<Device>
-        {
-            SingleOrDefaultResult = device
-        };
-        var cache = new RecordingCacheService();
-        var auditTrail = new RecordingAuditTrailService();
-        var handler = new RotateDeviceBootstrapSecretHandler(
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.Clone();
+    }
+
+    private static GenerateEdgeInstallerPackageHandler CreateInstallerPackageHandler(
+        InMemoryRepository<Device> deviceRepository,
+        InMemoryRepository<ClientHostRelease> hostRepository,
+        InMemoryRepository<ClientPluginRelease> pluginRepository,
+        string artifactRoot,
+        RecordingCacheService cache,
+        RecordingAuditTrailService auditTrail)
+    {
+        return new GenerateEdgeInstallerPackageHandler(
             new TestCurrentUser
             {
                 Id = Guid.NewGuid().ToString(),
@@ -1896,73 +2173,132 @@ public sealed class ApplicationFlowGuardTests
                 IsAuthenticated = true
             },
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
-            repository,
+            deviceRepository,
+            hostRepository,
+            pluginRepository,
             cache,
-            auditTrail);
-
-        var result = await handler.Handle(
-            new RotateDeviceBootstrapSecretCommand(device.Id),
-            CancellationToken.None);
-
-        Assert.True(result.IsSuccess);
-        var rotated = Assert.IsType<RotateDeviceBootstrapSecretResultDto>(result.Value);
-        Assert.Equal(device.Id, rotated.Id);
-        Assert.Equal(device.Code, rotated.Code);
-        Assert.NotEqual(oldHash, device.BootstrapSecretHash);
-        Assert.False(BootstrapSecretHasher.Verify(oldSecret, device.BootstrapSecretHash));
-        Assert.True(BootstrapSecretHasher.Verify(rotated.BootstrapSecret, device.BootstrapSecretHash));
-        Assert.Contains(CacheKeys.DeviceCode(device.Code), cache.RemovedKeys);
-        Assert.Contains(auditTrail.Entries, x =>
-            x.OperationType == "Device.RotateBootstrapSecret"
-            && x.Succeeded
-            && x.FailureReason is null
-            && !x.Summary.Contains(rotated.BootstrapSecret, StringComparison.Ordinal));
+            auditTrail,
+            Options.Create(new EdgeInstallerArtifactOptions { RootPath = artifactRoot }));
     }
 
-    [Fact]
-    public async Task RotateDeviceBootstrapSecretHandler_ShouldRejectNonAdmin()
+    private static ClientHostRelease CreatePublishedHostRelease(string targetRuntime = "win-x64")
     {
-        var device = new Device("Device-Rotate-Forbidden", "DEV-ROTATE02", Guid.NewGuid());
-        var oldSecret = BootstrapSecretGenerator.Generate();
-        device.SetBootstrapSecretHash(BootstrapSecretHasher.Hash(oldSecret));
-        var oldHash = device.BootstrapSecretHash;
-        var repository = new InMemoryRepository<Device>
+        return new ClientHostRelease(
+            "stable",
+            "1.2.0",
+            "1.0.0",
+            targetRuntime,
+            "net10.0",
+            "/edge-updates/installers/stable/1.2.0/installer-artifact.json",
+            new string('a', 64),
+            1024,
+            null,
+            ClientReleaseStatus.Published,
+            null,
+            "IIoT");
+    }
+
+    private static ClientPluginRelease CreatePublishedPluginRelease(string targetRuntime = "win-x64")
+    {
+        return new ClientPluginRelease(
+            "Homogenization",
+            "匀浆",
+            "匀浆工序",
+            null,
+            null,
+            "stable",
+            "2.3.4",
+            "1.0.0",
+            "1.0.0",
+            "9.9.9",
+            targetRuntime,
+            "net10.0",
+            "/edge-updates/installers/stable/1.2.0/installer-artifact.json#moduleId=Homogenization",
+            new string('b', 64),
+            512,
+            null,
+            "[]",
+            ClientReleaseStatus.Published,
+            null,
+            "IIoT");
+    }
+
+    private static string CreateInstallerArtifactFixture(string channel, string version, string targetRuntime = "win-x64")
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"iiot-installer-artifact-{Guid.NewGuid():N}");
+        var artifactDirectory = Path.Combine(root, channel, version);
+        Directory.CreateDirectory(artifactDirectory);
+
+        File.WriteAllBytes(Path.Combine(artifactDirectory, "IIoT.Edge.Setup.exe"), "MZ-STUB"u8.ToArray());
+        WriteFixtureFile(artifactDirectory, "launcher/IIoT.Edge.Launcher.dll", "launcher");
+        WriteFixtureFile(artifactDirectory, "launcher/launcher.profiles.json", "{}");
+        WriteFixtureFile(artifactDirectory, "host/IIoT.Edge.Shell.dll", "shell");
+        WriteFixtureFile(artifactDirectory, "plugins/Homogenization/plugin.json", "{}");
+        WriteFixtureFile(artifactDirectory, "plugins/Welding/plugin.json", "{}");
+
+        var manifest = $$"""
         {
-            SingleOrDefaultResult = device
-        };
-        var cache = new RecordingCacheService();
-        var auditTrail = new RecordingAuditTrailService();
-        var handler = new RotateDeviceBootstrapSecretHandler(
-            new TestCurrentUser
+          "schemaVersion": 2,
+          "channel": "stable",
+          "version": "1.2.0",
+          "hostApiVersion": "1.0.0",
+          "targetRuntime": "{{targetRuntime}}",
+          "targetFramework": "net10.0",
+          "installerStubFile": "IIoT.Edge.Setup.exe",
+          "launcherDirectory": "launcher",
+          "hostDirectory": "host",
+          "pluginsRoot": "plugins",
+          "modules": [
             {
-                Id = Guid.NewGuid().ToString(),
-                UserName = "operator-001",
-                Role = "Operator",
-                IsAuthenticated = true
+              "moduleId": "Homogenization",
+              "displayName": "匀浆",
+              "version": "2.3.4",
+              "hostApiVersion": "1.0.0",
+              "minHostVersion": "1.0.0",
+              "maxHostVersion": "9.9.9",
+              "pluginDirectory": "Homogenization"
             },
-            new StubCurrentUserDeviceAccessService(),
-            repository,
-            cache,
-            auditTrail);
-
-        var result = await handler.Handle(
-            new RotateDeviceBootstrapSecretCommand(device.Id),
-            CancellationToken.None);
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal(ResultStatus.Forbidden, result.Status);
-        Assert.Equal(oldHash, device.BootstrapSecretHash);
-        Assert.Empty(cache.RemovedKeys);
-        Assert.Contains(auditTrail.Entries, x =>
-            x.OperationType == "Device.RotateBootstrapSecret"
-            && !x.Succeeded
-            && x.FailureReason is not null);
+            {
+              "moduleId": "Welding",
+              "displayName": "焊接",
+              "version": "1.0.0",
+              "hostApiVersion": "1.0.0",
+              "minHostVersion": "1.0.0",
+              "maxHostVersion": "9.9.9",
+              "pluginDirectory": "Welding"
+            }
+          ]
+        }
+        """;
+        File.WriteAllText(Path.Combine(artifactDirectory, "installer-artifact.json"), manifest, Encoding.UTF8);
+        return root;
     }
 
-    private static JsonElement JsonPayload(string json)
+    private static byte[] ReadInstallerPayload(byte[] package)
     {
-        using var document = JsonDocument.Parse(json);
-        return document.RootElement.Clone();
+        Assert.True(package.Length > 16);
+        Assert.Equal("IIOTEDG1"u8.ToArray(), package.AsSpan(package.Length - 8, 8).ToArray());
+
+        var payloadLength = BinaryPrimitives.ReadInt64LittleEndian(package.AsSpan(package.Length - 16, 8));
+        Assert.InRange(payloadLength, 1, package.Length - 16);
+        var payloadStart = package.Length - 16 - (int)payloadLength;
+        return package.AsSpan(payloadStart, (int)payloadLength).ToArray();
+    }
+
+    private static void WriteFixtureFile(string artifactDirectory, string relativePath, string content)
+    {
+        var path = Path.Combine(
+            artifactDirectory,
+            relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content, new UTF8Encoding(false));
+    }
+
+    private static string ReadZipEntryText(ZipArchive archive, string entryName)
+    {
+        var entry = archive.GetEntry(entryName) ?? throw new InvalidOperationException($"Zip entry not found: {entryName}");
+        using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
+        return reader.ReadToEnd();
     }
 
     private static Pagination Page(int pageNumber = 1, int pageSize = 10)

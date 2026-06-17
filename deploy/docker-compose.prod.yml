@@ -82,6 +82,13 @@ services:
       JwtSettings__Secret: ${JWTSETTINGS__SECRET}
       SEED_ADMIN_NO: ${SEED_ADMIN_NO}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD}
+      ALLOW_INTRANET_HTTP_OIDC: ${ALLOW_INTRANET_HTTP_OIDC:-false}
+      OidcProvider__Issuer: ${OIDC_PROVIDER_ISSUER}
+      OidcProvider__AllowIntranetHttpOidc: ${ALLOW_INTRANET_HTTP_OIDC:-false}
+      OidcProvider__AicopilotRedirectUris__0: ${AICOPILOT_OIDC_REDIRECT_URI}
+      OidcProvider__AicopilotPostLogoutRedirectUris__0: ${AICOPILOT_OIDC_POST_LOGOUT_REDIRECT_URI}
+      OidcProvider__SigningCertificatePath: ${OIDC_PROVIDER_SIGNING_CERTIFICATE_PATH:-}
+      OidcProvider__SigningCertificatePassword: ${OIDC_PROVIDER_SIGNING_CERTIFICATE_PASSWORD:-}
       Seq__Enabled: true
       Seq__ServerUrl: ${SEQ_SERVER_URL}
       Seq__ApiKey: ${SEQ_API_KEY}
@@ -113,11 +120,22 @@ services:
       Cors__AllowedOrigins__1: ${CORS_ALLOWED_ORIGIN_1}
       Cors__AllowedOrigins__2: ${CORS_ALLOWED_ORIGIN_2}
       BootstrapAuth__RequireSecret: ${BOOTSTRAP_AUTH_REQUIRE_SECRET}
+      EdgeInstallerArtifacts__RootPath: /app/edge-updates/installers
+      EdgeInstallerArtifacts__VelopackReleasesBaseUrl: ${PUBLIC_BASE_URL}/edge-updates/velopack
+      ALLOW_INTRANET_HTTP_OIDC: ${ALLOW_INTRANET_HTTP_OIDC:-false}
+      OidcProvider__Issuer: ${OIDC_PROVIDER_ISSUER}
+      OidcProvider__AllowIntranetHttpOidc: ${ALLOW_INTRANET_HTTP_OIDC:-false}
+      OidcProvider__AicopilotRedirectUris__0: ${AICOPILOT_OIDC_REDIRECT_URI}
+      OidcProvider__AicopilotPostLogoutRedirectUris__0: ${AICOPILOT_OIDC_POST_LOGOUT_REDIRECT_URI}
+      OidcProvider__SigningCertificatePath: ${OIDC_PROVIDER_SIGNING_CERTIFICATE_PATH:-}
+      OidcProvider__SigningCertificatePassword: ${OIDC_PROVIDER_SIGNING_CERTIFICATE_PASSWORD:-}
       Infrastructure__EventBus__EndpointPrefix: ${Infrastructure__EventBus__EndpointPrefix}
       Seq__Enabled: true
       Seq__ServerUrl: ${SEQ_SERVER_URL}
       Seq__ApiKey: ${SEQ_API_KEY}
     volumes:
+      - ${OIDC_PROVIDER_CERTS_DIR:-/srv/iiot-cloud/deploy/certs}:/app/certs:ro
+      - ${EDGE_UPDATES_DIR:-/srv/iiot/edge-updates}:/app/edge-updates:ro
       - httpapi-logs:/app/logs
     depends_on:
       postgres:
@@ -152,6 +170,12 @@ services:
     image: ${IIOT_DATAWORKER_IMAGE}
     mem_limit: 512m
     cpus: 0.75
+    healthcheck:
+      test: ["CMD", "dotnet", "IIoT.DataWorker.dll", "--healthcheck"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 20s
     environment:
       DOTNET_ENVIRONMENT: Production
       ConnectionStrings__iiot-db: Host=postgres;Port=5432;Username=postgres;Password=${PG_PASSWORD};Database=iiot-db
@@ -193,6 +217,7 @@ services:
       - ${GATEWAY_HTTP_PORT:-80}:80
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${EDGE_UPDATES_DIR:-/srv/iiot/edge-updates}:/usr/share/nginx/html/edge-updates:ro
     depends_on:
       - iiot-gateway
       - iiot-web

@@ -277,7 +277,7 @@ const chartOption = computed(() => {
       right: 8,
       itemWidth: 12,
       itemHeight: 8,
-      textStyle: { color: '#6b7384', fontSize: 12 },
+      textStyle: { color: 'var(--text-2)', fontSize: 12 },
     },
     tooltip: {
       trigger: 'axis',
@@ -286,7 +286,7 @@ const chartOption = computed(() => {
       borderWidth: 1,
       extraCssText: 'box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);',
       textStyle: {
-        color: '#1a1d29',
+        color: 'var(--text-0)',
         fontFamily: "'Inter', sans-serif",
         fontSize: 12,
       },
@@ -297,7 +297,7 @@ const chartOption = computed(() => {
       data: xAxis,
       axisLine: { lineStyle: { color: 'rgba(15, 23, 42, 0.08)' } },
       axisLabel: {
-        color: '#6b7384',
+        color: 'var(--text-2)',
         fontFamily: "'JetBrains Mono', monospace",
         fontSize: 11,
         rotate: queryMode.value === 'day' && xAxis.length > 12 ? 35 : 0,
@@ -311,7 +311,7 @@ const chartOption = computed(() => {
       axisLine: { show: false },
       axisTick: { show: false },
       axisLabel: {
-        color: '#6b7384',
+        color: 'var(--text-2)',
         fontFamily: "'JetBrains Mono', monospace",
         fontSize: 11,
       },
@@ -323,7 +323,7 @@ const chartOption = computed(() => {
         stack: 'total',
         data: okData,
         itemStyle: {
-          color: '#0891b2',
+          color: 'var(--brand)',
           borderRadius: [0, 0, 0, 0],
         },
         barMaxWidth: 36,
@@ -334,7 +334,7 @@ const chartOption = computed(() => {
         stack: 'total',
         data: ngData,
         itemStyle: {
-          color: '#dc2626',
+          color: 'var(--error)',
           borderRadius: [4, 4, 0, 0],
         },
         barMaxWidth: 36,
