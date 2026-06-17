@@ -75,23 +75,19 @@ cd /srv/iiot-cloud/deploy
 docker compose ps
 ```
 
-## 3. 上传素材并登记 catalog
+## 3. 发布 Edge 素材
 
-`PublishEdgeClientInstallerArtifact.ps1` 可以一次性完成上传素材和登记 Cloud catalog。`CloudToken` 必须是 Cloud 管理员 token，只在命令行临时使用，不写入仓库。
+Edge 安装素材不在 CloudPlatform 仓库生成，也不通过 SSH/SCP 从本机上传。标准入口是 `IIoT.EdgeClient` 仓库的 `edge-runtime-package` workflow：
 
-```powershell
-pwsh ./scripts/PublishEdgeClientInstallerArtifact.ps1 `
-  -Version 1.2.0 `
-  -ReleaseChannel stable `
-  -RemoteEdgeUpdatesDir /srv/iiot/edge-updates `
-  -SshTarget root@10.98.90.154 `
-  -RegisterCloudCatalog `
-  -CloudApiBaseUrl http://10.98.90.154:81/api/v1 `
-  -CloudToken <admin-token> `
-  -PublicBaseUrl http://10.98.90.154:81
+```text
+workflow_dispatch
+  version = 1.2.0
+  channel = stable
 ```
 
-上传后服务器必须有：
+该 workflow 的 `package-runtime` job 必须跑在 GitHub hosted `windows-latest`，生成 `edge-installer-artifact` 和 `edge-velopack-releases`。随后 `publish-edge-updates` job 必须跑在内网 `[self-hosted, iiot-linux-prod]` runner，把 artifacts 本地发布到 `${EDGE_UPDATES_DIR:-/srv/iiot/edge-updates}`。
+
+发布后服务器必须有：
 
 ```text
 /srv/iiot/edge-updates/installers/stable/1.2.0/
@@ -99,7 +95,12 @@ pwsh ./scripts/PublishEdgeClientInstallerArtifact.ps1 `
   launcher/
   host/
   plugins/
+  velopack/
   installer-artifact.json
+/srv/iiot/edge-updates/velopack/stable/
+  releases.stable.json
+  assets.stable.json
+  *.nupkg
 ```
 
 服务器检查：

@@ -10,7 +10,7 @@
 - `cloud-deploy` 在同一内网 runner 上同步 `deploy/` 模板、写入生产 `.env`，再执行 `deploy/scripts/deploy-release.sh`。
 - runner 必须使用专用非 root 用户运行，例如 `github-runner`，不能用 root 跑 Actions 服务。
 - Docker Hub 不作为生产依赖源；compose 第三方镜像和 Web Dockerfile 的 Node/Nginx 基础镜像必须先同步到 Harbor mirror。
-- Edge 客户端安装素材不进 Harbor；`IIoT.EdgeClient/scripts/PublishEdgeClientInstallerArtifact.ps1` 上传到服务器 `${EDGE_UPDATES_DIR}/installers/{channel}/{version}`。
+- Edge 客户端安装素材不进 Harbor；由 `IIoT.EdgeClient` 的 `edge-runtime-package` workflow 发布到服务器 `${EDGE_UPDATES_DIR}/installers/{channel}/{version}` 和 `${EDGE_UPDATES_DIR}/velopack/{channel}`。
 - 本地手工构建和 SSH 部署只作为应急 fallback，不是标准流程。
 - `deploy/scripts/deploy-release.sh` 是标准发布入口，`deploy/scripts/rollback-release.sh` 是应用镜像回滚入口。
 - self-hosted runner 安装和权限要求见 [RUNNER.md](./RUNNER.md)。
@@ -96,21 +96,17 @@ MIRROR_REGISTRY=<OCI_REGISTRY> MIRROR_NAMESPACE=mirror ./deploy/scripts/mirror-t
 
 ## Edge 安装素材
 
-Edge 客户端产物由 `IIoT.EdgeClient` 仓库发布脚本生成和上传，不属于 Cloud Docker 镜像：
+Edge 客户端产物由 `IIoT.EdgeClient` 仓库的 `edge-runtime-package` workflow 发布，不属于 Cloud Docker 镜像，也不进入 Harbor。标准流程固定为：
 
-```powershell
-pwsh ./scripts/PublishEdgeClientInstallerArtifact.ps1 `
-  -Version 1.2.0 `
-  -ReleaseChannel stable `
-  -RemoteEdgeUpdatesDir /srv/iiot/edge-updates `
-  -SshTarget user@server `
-  -RegisterCloudCatalog `
-  -CloudApiBaseUrl http://10.98.90.154:81/api/v1 `
-  -CloudToken <admin-token> `
-  -PublicBaseUrl http://10.98.90.154:81
+```text
+IIoT.EdgeClient workflow_dispatch / push main
+-> windows-latest 构建 edge-installer-artifact 和 edge-velopack-releases
+-> 上传 GitHub Actions artifacts
+-> iiot-linux-prod 内网 self-hosted runner 下载 artifacts
+-> 本地发布到 ${EDGE_UPDATES_DIR:-/srv/iiot/edge-updates}
 ```
 
-上传后的目录固定为：
+CloudPlatform 不负责构建或上传 Edge 安装素材，只负责把 `${EDGE_UPDATES_DIR}` 只读挂载给 HttpApi 和 Nginx。发布后的目录固定为：
 
 ```text
 ${EDGE_UPDATES_DIR}/installers/stable/1.2.0/
@@ -118,7 +114,14 @@ ${EDGE_UPDATES_DIR}/installers/stable/1.2.0/
   launcher/
   host/
   plugins/
+  velopack/
   installer-artifact.json
+${EDGE_UPDATES_DIR}/velopack/stable/
+  releases.stable.json
+  assets.stable.json
+  *.nupkg
+  *-Setup.exe
+  *-Portable.zip
 ```
 
 `iiot-httpapi` 以只读方式挂载 `${EDGE_UPDATES_DIR}` 到 `/app/edge-updates`，通过 `EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers` 读取安装素材，并通过 `EdgeInstallerArtifacts__VelopackReleasesBaseUrl=${PUBLIC_BASE_URL}/edge-updates/velopack` 返回运行时更新源。登录 Cloud 后，“客户端下载中心 -> 首装下载”会按 `installer-artifact.json` v2 选择一份 `host/` 和所选 `plugins/<ModuleId>/`，把 `launcher/iiot-binding.json`、`launcher/iiot-enabled-plugins.json`、`launcher/launcher.update.json`、`plugins/<ModuleId>/iiot-plugin-binding.json` 注入本次下载的安装器 payload，并返回真正的 `.exe`。这些绑定配置不写回素材目录、不落盘到共享模板、不写日志。
