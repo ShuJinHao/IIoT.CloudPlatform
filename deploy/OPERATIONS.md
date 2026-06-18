@@ -156,13 +156,13 @@ Release success order is fixed:
 EdgeClient Velopack update packages are served by the existing `nginx-gateway` at:
 
 ```text
-<PUBLIC_BASE_URL>/edge-updates/velopack/{channel}/
+<PUBLIC_BASE_URL>/edge-updates/velopack/stable/
 ```
 
 Server-side package directory:
 
 ```text
-/srv/iiot/edge-updates/velopack/{channel}
+/srv/iiot/edge-updates/velopack/stable
 ```
 
 The path defaults to `/srv/iiot/edge-updates`, can be overridden by `EDGE_UPDATES_DIR` in the production `.env` file, and is mounted read-only into `nginx-gateway`.
@@ -184,7 +184,7 @@ Publishing order:
 1. Build the EdgeClient Velopack package set with the approved client release process.
 2. Copy `RELEASES`, `*.nupkg`, and any generated `releases.*.json` files into the effective channel update directory.
 3. Keep file ownership readable by the Docker daemon and the nginx container.
-4. Set the client `launcher.update.json` `Source` value to `<PUBLIC_BASE_URL>/edge-updates/velopack/{channel}/`.
+4. Set the client `launcher.update.json` `Source` value to `<PUBLIC_BASE_URL>/edge-updates/velopack/stable/`.
 5. Verify the published files before asking clients to check for updates.
 
 Validation examples:

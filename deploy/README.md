@@ -11,8 +11,9 @@
 - runner 必须使用专用非 root 用户运行，例如 `github-runner`，不能用 root 跑 Actions 服务。
 - 服务器 Docker Root Dir 固定为 `/data/docker`，runner 工作目录固定在 `/data/github-runner/*`，不要把构建缓存和 runner workdir 放回系统盘。
 - Docker Hub 不作为生产依赖源；compose 第三方镜像和 Web Dockerfile 的 Node/Nginx 基础镜像必须先同步到 Harbor mirror。
-- Edge 客户端安装素材不进 Harbor；日常 push main 只跑 smoke，完整 GitHub 打包只在 `workflow_dispatch` 或 `edge-v*` / `v*` tag 时执行；日常快发可以由操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1` 发布到服务器 `${EDGE_UPDATES_DIR}/installers/{channel}/{version}` 和 `${EDGE_UPDATES_DIR}/velopack/{channel}`。
-- Cloud catalog 会扫描 `/app/edge-updates/installers/{channel}/{version}/installer-artifact.json` 并与数据库 release 记录合并；同 key 数据库记录优先，可用于 Draft/Archived 抑制文件落盘版本。
+- Edge 客户端安装素材不进 Harbor；日常 push main 只跑 smoke，完整 GitHub 打包只在 `workflow_dispatch` 或 `edge-v*` / `v*` tag 时执行；日常快发可以由操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1` 发布到服务器 `${EDGE_UPDATES_DIR}/installers/stable/{version}` 和 `${EDGE_UPDATES_DIR}/velopack/stable`。
+- 生产服务器只允许 Edge `stable` 渠道；发布脚本必须拒绝并清理 `ci`、`dev`、`test` 等非 `stable` 渠道目录。
+- Cloud catalog 会扫描 `/app/edge-updates/installers/stable/{version}/installer-artifact.json` 并与数据库 release 记录合并；同 key 数据库记录优先，可用于 Draft/Archived 抑制文件落盘版本。
 - 本地手工 Docker 构建和服务器手工部署只作为应急 fallback，不是标准 Cloud/AI 发布流程。
 - `deploy/scripts/deploy-release.sh` 是标准发布入口，`deploy/scripts/rollback-release.sh` 是应用镜像回滚入口。
 - self-hosted runner 安装和权限要求见 [RUNNER.md](./RUNNER.md)。
@@ -105,8 +106,8 @@ MIRROR_REGISTRY=<OCI_REGISTRY> MIRROR_NAMESPACE=mirror ./deploy/scripts/mirror-t
 Edge 客户端产物不属于 Cloud Docker 镜像，也不进入 Harbor。当前流程分三类：
 
 - `push main`：只跑 smoke 编译和测试，不发布安装包。
-- `workflow_dispatch` 或 `edge-v*` / `v*` tag：由 GitHub hosted `windows-latest` 构建 runtime、installer artifact 和 Velopack releases，再由内网 `iiot-linux-prod` runner 把 GitHub Actions artifacts 发布到 `${EDGE_UPDATES_DIR}`。
-- 日常快发：操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1`，本机编译和打包后通过 rsync/scp 发布到 `${EDGE_UPDATES_DIR}`。这是本机运维快发路径，不是 GitHub CI/CD job。
+- `workflow_dispatch` 或 `edge-v*` / `v*` tag：由 GitHub hosted `windows-latest` 构建 runtime、installer artifact 和 Velopack releases，再由内网 `iiot-linux-prod` runner 把 GitHub Actions artifacts 发布到 `${EDGE_UPDATES_DIR}`，渠道固定为 `stable`。
+- 日常快发：操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1`，本机编译和打包后通过 rsync/scp 发布到 `${EDGE_UPDATES_DIR}`，渠道固定为 `stable`。这是本机运维快发路径，不是 GitHub CI/CD job。
 
 GitHub 完整打包流程固定为：
 
@@ -338,13 +339,13 @@ DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh 
 EdgeClient Velopack 更新包由现有 `nginx-gateway` 直接提供：
 
 ```text
-<PUBLIC_BASE_URL>/edge-updates/velopack/{channel}/
+<PUBLIC_BASE_URL>/edge-updates/velopack/stable/
 ```
 
 服务器包目录默认：
 
 ```text
-/srv/iiot/edge-updates/velopack/{channel}
+/srv/iiot/edge-updates/velopack/stable
 ```
 
 可通过 `EDGE_UPDATES_DIR` 覆盖。目录中放：
@@ -359,10 +360,10 @@ Cloud 生产配置中的 `EdgeInstallerArtifacts__VelopackReleasesBaseUrl` 填 c
 <PUBLIC_BASE_URL>/edge-updates/velopack
 ```
 
-客户端 `launcher.update.json` 的 `Source` 填：
+客户端 `launcher.update.json` 的 `Source` 固定填生产 `stable` 渠道：
 
 ```text
-<PUBLIC_BASE_URL>/edge-updates/velopack/{channel}/
+<PUBLIC_BASE_URL>/edge-updates/velopack/stable/
 ```
 
 `RELEASES` 和 `releases.*.json` 使用 `Cache-Control: no-cache`，`*.nupkg` 使用长期缓存。

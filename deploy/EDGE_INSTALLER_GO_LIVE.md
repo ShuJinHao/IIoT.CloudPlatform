@@ -79,15 +79,15 @@ docker compose ps
 
 Edge 安装素材不在 CloudPlatform 仓库生成。当前有两个有效发布入口：
 
-- 正式 GitHub 打包：`IIoT.EdgeClient` 的 `edge-pack-modules.yml` 只在 `workflow_dispatch` 或 `edge-v*` / `v*` tag 上完整构建和发布。
-- 日常快发：操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1`，本机编译、Velopack 打包、生成 installer artifact 后，通过 rsync/scp 发布到服务器。这是本机运维快发路径，不是 GitHub CI/CD job。
+- 正式 GitHub 打包：`IIoT.EdgeClient` 的 `edge-pack-modules.yml` 只在 `workflow_dispatch` 或 `edge-v*` / `v*` tag 上完整构建和发布，渠道固定为 `stable`。
+- 日常快发：操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1`，本机编译、Velopack 打包、生成 installer artifact 后，通过 rsync/scp 发布到服务器，渠道固定为 `stable`。这是本机运维快发路径，不是 GitHub CI/CD job。
+- 生产服务器只允许 `stable` 渠道，不保留 `ci`、`dev`、`test` 或其他测试渠道目录。
 
 正式 GitHub 打包入口：
 
 ```text
 workflow_dispatch
   version = 1.2.0
-  channel = stable
 ```
 
 该 workflow 的 `package-runtime` job 必须跑在 GitHub hosted `windows-latest`，生成 `edge-installer-artifact` 和 `edge-velopack-releases`。随后 `publish-edge-updates` job 必须跑在内网 `[self-hosted, iiot-linux-prod]` runner，把 artifacts 本地发布到 `${EDGE_UPDATES_DIR:-/srv/iiot/edge-updates}`。
