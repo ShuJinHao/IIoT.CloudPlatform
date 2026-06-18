@@ -248,9 +248,10 @@ sudo chmod 755 /srv/iiot-cloud/deploy/certs
 标准路径：
 
 1. 合并或推送到 `main`。
-2. `cloud-image` 在 `iiot-linux-prod` self-hosted runner 上构建五个应用镜像，并推送到 Harbor，tag 为 `sha-${GITHUB_SHA}`。
-3. 人工触发 `cloud-deploy`，输入 `release_tag = sha-*`。
-4. `cloud-deploy` 校验 runner 非 root、同步 `deploy/`、写入 `DEPLOY_ENV_FILE`、登录 Harbor，并执行 `deploy/scripts/deploy-release.sh`。
+2. `cloud-ci` 默认只跑快速验证：restore/build、ServiceLayer、ConfigurationGuard、前端 build、compose config；完整 EndToEnd 只在手动 `workflow_dispatch` 勾选时运行。
+3. `cloud-image` 在 `iiot-linux-prod` self-hosted runner 上构建五个应用镜像，并推送到 Harbor，tag 为 `sha-${GITHUB_SHA}`。
+4. 人工触发 `cloud-deploy`，输入 `release_tag = sha-*`。
+5. `cloud-deploy` 校验 runner 非 root、同步 `deploy/`、写入 `DEPLOY_ENV_FILE`、登录 Harbor，并执行 `deploy/scripts/deploy-release.sh`。
 
 GitHub secrets：
 

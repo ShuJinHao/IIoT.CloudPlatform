@@ -1,6 +1,13 @@
 name: cloud-ci
 
 on:
+  workflow_dispatch:
+    inputs:
+      include_end_to_end:
+        description: "Run the full IIoT.EndToEndTests suite"
+        required: false
+        type: boolean
+        default: true
   push:
     branches: [main]
     paths:
@@ -52,7 +59,12 @@ jobs:
       - name: Run service layer tests
         run: dotnet test src/tests/IIoT.ServiceLayer.Tests/IIoT.ServiceLayer.Tests.csproj -c Release --no-build
 
+      - name: Run configuration guard tests
+        run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --filter ConfigurationGuardTests
+
       - name: Run end-to-end tests
+        if: github.event_name == 'workflow_dispatch' && inputs.include_end_to_end == true
+        timeout-minutes: 15
         run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build
 
       - name: Build web app

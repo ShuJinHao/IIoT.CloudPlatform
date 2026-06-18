@@ -915,6 +915,21 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
+    public void CloudCiWorkflow_ShouldKeepPushCiFastAndGateFullEndToEndBehindManualDispatch()
+    {
+        var workflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-ci.yml"));
+
+        workflowSource.Should().Contain("workflow_dispatch:");
+        workflowSource.Should().Contain("include_end_to_end:");
+        workflowSource.Should().Contain("Run configuration guard tests");
+        workflowSource.Should().Contain("--filter ConfigurationGuardTests");
+        workflowSource.Should().Contain("if: github.event_name == 'workflow_dispatch' && inputs.include_end_to_end == true");
+        workflowSource.Should().Contain("timeout-minutes: 15");
+        workflowSource.Should().Contain("Run end-to-end tests");
+        workflowSource.Should().Contain("dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build");
+    }
+
+    [Fact]
     public void CloudDeployWorkflow_ShouldUseReleaseTagInputAndSharedDeployScript()
     {
         var workflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-deploy.yml"));

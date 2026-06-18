@@ -67,9 +67,10 @@ Standard production release is driven by GitHub Actions on the intranet self-hos
 The standard sequence is:
 
 1. Push or merge to `main`.
-2. `cloud-image` runs on `iiot-linux-prod`, builds only affected application images when path filters can narrow the change, and pushes them to Harbor with `sha-${GITHUB_SHA}`. Shared code, build configuration, or manual dispatch builds all application images.
-3. Trigger `cloud-deploy` manually with the matching `release_tag = sha-*`; leave `services` empty for a full release, or set comma-separated service names for an incremental release.
-4. `cloud-deploy` runs on the same non-root runner, syncs `deploy/`, writes `DEPLOY_ENV_FILE`, logs in to Harbor, and calls `deploy-release.sh`.
+2. `cloud-ci` runs the fast gate by default: restore/build, ServiceLayer tests, ConfigurationGuard tests, web build, and compose config. Full EndToEnd is manual via `workflow_dispatch`.
+3. `cloud-image` runs on `iiot-linux-prod`, builds only affected application images when path filters can narrow the change, and pushes them to Harbor with `sha-${GITHUB_SHA}`. Shared code, build configuration, or manual dispatch builds all application images.
+4. Trigger `cloud-deploy` manually with the matching `release_tag = sha-*`; leave `services` empty for a full release, or set comma-separated service names for an incremental release.
+5. `cloud-deploy` runs on the same non-root runner, syncs `deploy/`, writes `DEPLOY_ENV_FILE`, logs in to Harbor, and calls `deploy-release.sh`.
 
 The runner must not run as root. See `RUNNER.md` for the required `github-runner` user, Docker group, labels, and server reachability checks.
 
