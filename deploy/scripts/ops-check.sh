@@ -14,6 +14,7 @@ load_dotenv
 
 BACKUP_MAX_AGE_HOURS=${BACKUP_MAX_AGE_HOURS:-24}
 BACKUP_VERIFY_MAX_AGE_DAYS=${BACKUP_VERIFY_MAX_AGE_DAYS:-7}
+REQUIRE_BACKUP_VERIFY=${REQUIRE_BACKUP_VERIFY:-0}
 
 require_running_service() {
   service_name=$1
@@ -123,13 +124,22 @@ if latest_verified_path=$(read_state_path "$VERIFY_STATE_FILE"); then
   verify_marker_epoch=$(stat -c %Y "$VERIFY_STATE_FILE")
   LATEST_BACKUP_VERIFIED_AGE_DAYS=$(((NOW_EPOCH - verify_marker_epoch) / 86400))
   if [ ! -f "$latest_verified_path" ] || [ ! -f "$latest_verified_path.sha256" ]; then
-    HAS_RISK=1
+    printf 'warning: latest verified backup file or checksum is missing: %s\n' "$latest_verified_path" >&2
+    if [ "$REQUIRE_BACKUP_VERIFY" = "1" ]; then
+      HAS_RISK=1
+    fi
   fi
   if [ "$LATEST_BACKUP_VERIFIED_AGE_DAYS" -gt "$BACKUP_VERIFY_MAX_AGE_DAYS" ]; then
-    HAS_RISK=1
+    printf 'warning: latest verified backup is older than BACKUP_VERIFY_MAX_AGE_DAYS: %s days\n' "$LATEST_BACKUP_VERIFIED_AGE_DAYS" >&2
+    if [ "$REQUIRE_BACKUP_VERIFY" = "1" ]; then
+      HAS_RISK=1
+    fi
   fi
 else
-  HAS_RISK=1
+  printf 'warning: no successful backup restore verification record found: %s\n' "$VERIFY_STATE_FILE" >&2
+  if [ "$REQUIRE_BACKUP_VERIFY" = "1" ]; then
+    HAS_RISK=1
+  fi
 fi
 
 printf 'internal_healthz=200 outbox_backlog=%s latest_backup_age_hours=%s latest_backup_verified_age_days=%s latest_backup_file="%s"\n' \

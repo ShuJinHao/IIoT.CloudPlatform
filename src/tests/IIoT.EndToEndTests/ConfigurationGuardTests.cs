@@ -968,7 +968,7 @@ public sealed class ConfigurationGuardTests
         var postDeploySource = File.ReadAllText(FindRepoFile("deploy", "scripts", "post-deploy-check.sh"));
         var rollbackSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "rollback-release.sh"));
 
-        backupSource.Should().Contain("pg_dump -Fc -U postgres -d iiot-db");
+        backupSource.Should().Contain("pg_dump -h 127.0.0.1 -Fc -U postgres -d iiot-db");
         backupSource.Should().Contain("backups/postgres");
         backupSource.Should().Contain(".sha256");
         backupSource.Should().Contain("latest-successful-backup.txt");
@@ -979,7 +979,7 @@ public sealed class ConfigurationGuardTests
         restoreSource.Should().Contain("CHECKSUM_FILE=\"$DUMP_FILE.sha256\"");
         restoreSource.Should().Contain("sha256sum -c");
         restoreSource.Should().Contain("compose stop nginx-gateway iiot-web iiot-gateway iiot-httpapi iiot-dataworker");
-        restoreSource.Should().Contain("pg_restore --clean --if-exists --no-owner --no-privileges -U postgres -d iiot-db");
+        restoreSource.Should().Contain("pg_restore -h 127.0.0.1 --clean --if-exists --no-owner --no-privileges -U postgres -d iiot-db");
         restoreSource.Should().Contain("compose run --rm iiot-migration");
         restoreSource.Should().Contain("\"$SCRIPT_DIR/ops-check.sh\"");
 
@@ -988,8 +988,8 @@ public sealed class ConfigurationGuardTests
         verifySource.Should().Contain("CHECKSUM_FILE=\"$DUMP_FILE.sha256\"");
         verifySource.Should().Contain("sha256sum -c");
         verifySource.Should().Contain("iiot-restore-verify-");
-        verifySource.Should().Contain("createdb -U postgres");
-        verifySource.Should().Contain("dropdb --if-exists -U postgres");
+        verifySource.Should().Contain("createdb -h 127.0.0.1 -U postgres");
+        verifySource.Should().Contain("dropdb -h 127.0.0.1 --if-exists -U postgres");
         verifySource.Should().Contain("select count(*) from devices;");
         verifySource.Should().Contain("select count(*) from employees;");
         verifySource.Should().Contain("select count(*) from recipes;");
