@@ -57,12 +57,39 @@ public sealed class ConfigurationGuardTests
         var options = new SeedAdminOptions(
             IIoTAppFixture.SeedAdminEmployeeNo,
             null,
-            IIoTAppFixture.SeedAdminRealName);
+            IIoTAppFixture.SeedAdminRealName,
+            ResetPassword: false);
 
         var act = () => options.RequirePassword();
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage($"*{SeedAdminOptions.PasswordKey}*");
+    }
+
+    [Fact]
+    public void SeedAdminOptions_Load_ShouldOnlyRequestPasswordResetWhenExplicitlyEnabled()
+    {
+        var defaultConfiguration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [SeedAdminOptions.EmployeeNoKey] = IIoTAppFixture.SeedAdminEmployeeNo,
+                [SeedAdminOptions.PasswordKey] = IIoTAppFixture.SeedAdminPassword
+            })
+            .Build();
+
+        SeedAdminOptions.Load(defaultConfiguration).ResetPassword.Should().BeFalse();
+
+        var resetConfiguration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [SeedAdminOptions.EmployeeNoKey] = IIoTAppFixture.SeedAdminEmployeeNo,
+                [SeedAdminOptions.PasswordKey] = IIoTAppFixture.SeedAdminPassword,
+                [SeedAdminOptions.ResetPasswordKey] = "true"
+            })
+            .Build();
+
+        SeedAdminOptions.Load(resetConfiguration).ResetPassword.Should().BeTrue();
+        SeedAdminOptions.IsPasswordResetRequested(resetConfiguration).Should().BeTrue();
     }
 
     [Fact]

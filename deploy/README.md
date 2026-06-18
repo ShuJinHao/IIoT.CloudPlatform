@@ -202,8 +202,27 @@ IIOT_WEB_IMAGE=harbor.example.com/iiot/iiot-web:sha-0123456789abcdef
 - `RABBITMQ_DEFAULT_PASS`
 - `JWTSETTINGS__SECRET`
 - `SEQ_ADMIN_PASSWORD`
+- `SEED_ADMIN_NO`
 - `SEED_ADMIN_PASSWORD`
 - `SEQ_API_KEY`（启用 Seq ingestion key 时）
+
+### 固定 Cloud 管理员账号
+
+当前首部署管理员工号固定为：
+
+```text
+SEED_ADMIN_NO=101650
+```
+
+管理员密码不写入仓库、文档、日志或截图；真实值只允许保存在 GitHub secret `DEPLOY_ENV_FILE` 的 `SEED_ADMIN_PASSWORD` 中。该密码是操作者约定的固定生产登录密码，不允许部署脚本、CI、AI 或临时排障流程自动随机化、覆盖或猜测。
+
+`iiot-migration` 的播种规则是：
+
+- 数据库中不存在任何 `Admin` 用户时，使用 `SEED_ADMIN_NO` 和 `SEED_ADMIN_PASSWORD` 创建首个管理员。
+- 已存在 `Admin` 用户时，直接跳过管理员播种，不重置、不覆盖现有密码。
+- `SEED_ADMIN_PASSWORD` 只用于首个管理员创建；常规部署不会改管理员密码。
+
+Cloud 管理员密码和 Edge Launcher 本地样例账号密码是两套凭据。`launcher.accounts.sample.json` 里的 `101650` 只用于本地启动器样例，不是 Cloud 登录密码来源。Cloud 登录失败时，不得从样例文件、测试常量或历史弱密码推断生产密码；应按 `OPERATIONS.md` 的“Cloud 管理员登录排查”处理。
 
 这些值通常保持模板默认：
 

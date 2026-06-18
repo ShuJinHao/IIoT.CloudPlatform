@@ -120,6 +120,37 @@ Release success order is fixed:
 3. `./scripts/ops-check.sh` returns `0`
 4. `deploy/releases/current-release.env` points at the new `DEPLOY_RELEASE_ID`
 
+## Cloud 管理员登录排查
+
+生产 Cloud 首部署管理员工号固定为 `101650`，对应 `.env` 键为 `SEED_ADMIN_NO=101650`。密码明文不写入仓库文档；真实值只允许保存在 GitHub secret `DEPLOY_ENV_FILE` 的 `SEED_ADMIN_PASSWORD` 中。
+
+部署规则固定：
+
+- `iiot-migration` 只在数据库不存在任何 `Admin` 用户时创建首个管理员。
+- 一旦数据库已有 `Admin` 用户，后续部署只会跳过播种，不会修改管理员密码。
+- 不允许 CI、AI、脚本或临时排障流程自动随机化、覆盖或猜测管理员密码。
+
+登录失败时先区分凭据来源：
+
+- Cloud Web 登录使用 Cloud 数据库里的身份账号和 `SEED_ADMIN_PASSWORD` 首次播种结果。
+- Edge Launcher 本地样例账号不是 Cloud 密码来源，不能用 `launcher.accounts.sample.json` 反推 Cloud 密码。
+- GitHub Actions 日志会把 secret 值打码为 `***`，不能从日志反读密码。
+
+只读排查顺序：
+
+1. 查看最近 `cloud-deploy` 日志中 `iiot-migration` 的播种输出。
+   - `事务提交成功！账号 [...] 及员工业务数据已完整播种` 表示首个管理员刚被创建，工号来自当时的 `SEED_ADMIN_NO`。
+   - `检测到已存在的管理员账号，跳过播种逻辑` 表示本次部署没有改密码。
+2. 在服务器本机只读查询当前管理员工号，确认是不是 `101650`。
+3. 如果工号不是 `101650`，按当前首部署约定修正为 `101650`。
+4. 如果工号是 `101650` 但密码无法登录，只能在获得操作者明确确认后重置密码；不得猜测密码或尝试弱密码。
+
+重置边界：
+
+- 重置必须限定到 Cloud 管理员账号 `101650`。
+- 重置前必须确认不会改人员、设备、配方、生产数据、Edge bootstrap secret 或 AICopilot 账号。
+- 重置后必须立即用 `POST /api/v1/human/identity/login` 验证登录成功。
+
 ## Edge Update Package Distribution
 
 EdgeClient Velopack update packages are served by the existing `nginx-gateway` at:

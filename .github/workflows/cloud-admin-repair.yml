@@ -1,0 +1,201 @@
+name: cloud-admin-repair
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Migration image release tag containing the repair code (sha-*)
+        required: true
+        type: string
+      employee_no:
+        description: Fixed Cloud admin employee number
+        required: true
+        default: "101650"
+        type: string
+      reset_seed_admin_password:
+        description: Explicit confirmation to reset the fixed seed admin password from DEPLOY_ENV_FILE
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  reset-admin-password:
+    runs-on: [self-hosted, iiot-linux-prod]
+    environment: production
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        id: checkout
+        uses: actions/checkout@v4
+        continue-on-error: true
+
+      - name: Checkout via archive fallback
+        if: steps.checkout.outcome != 'success'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/source-${GITHUB_SHA}.zip"
+          extract_root="$(mktemp -d "$RUNNER_TEMP/source.XXXXXX")"
+          rm -f "$archive"
+          curl --fail --location --retry 5 --retry-delay 5 --connect-timeout 20 --max-time 300 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://codeload.github.com/${GITHUB_REPOSITORY}/zip/${GITHUB_SHA}" \
+            -o "$archive"
+          unzip -q "$archive" -d "$extract_root"
+          extracted="$(find "$extract_root" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          shopt -s dotglob
+          cp -a "$extracted"/* "$GITHUB_WORKSPACE"/
+
+      - name: Validate repair inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_tag='${{ inputs.release_tag }}'
+          employee_no='${{ inputs.employee_no }}'
+          reset_password='${{ inputs.reset_seed_admin_password }}'
+
+          if [[ ! "$release_tag" =~ ^sha-[0-9a-f]+$ ]]; then
+            echo "release_tag must match sha-<hex>: $release_tag" >&2
+            exit 64
+          fi
+
+          if [ "$employee_no" != "101650" ]; then
+            echo "Only the fixed Cloud admin employee number 101650 can be repaired by this workflow." >&2
+            exit 64
+          fi
+
+          if [ "$reset_password" != "true" ]; then
+            echo "reset_seed_admin_password must be true for this explicit repair workflow." >&2
+            exit 64
+          fi
+
+      - name: Validate runner and deploy inputs
+        shell: bash
+        env:
+          DEPLOY_TARGET_DIR: ${{ secrets.DEPLOY_TARGET_DIR }}
+          DEPLOY_ENV_FILE: ${{ secrets.DEPLOY_ENV_FILE }}
+          OCI_REGISTRY: ${{ secrets.OCI_REGISTRY }}
+          OCI_REGISTRY_USERNAME: ${{ secrets.OCI_REGISTRY_USERNAME }}
+          OCI_REGISTRY_PASSWORD: ${{ secrets.OCI_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ "$(id -u)" -eq 0 ]; then
+            echo "Self-hosted runner must not run as root." >&2
+            exit 64
+          fi
+          for required in DEPLOY_TARGET_DIR DEPLOY_ENV_FILE OCI_REGISTRY OCI_REGISTRY_USERNAME OCI_REGISTRY_PASSWORD
+          do
+            if [ -z "${!required:-}" ]; then
+              echo "$required is required for the intranet self-hosted repair flow." >&2
+              exit 64
+            fi
+          done
+          command -v docker >/dev/null
+          command -v curl >/dev/null
+          docker compose version >/dev/null
+
+      - name: Sync deploy template
+        shell: bash
+        env:
+          DEPLOY_TARGET_DIR: ${{ secrets.DEPLOY_TARGET_DIR }}
+          DEPLOY_ENV_FILE: ${{ secrets.DEPLOY_ENV_FILE }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$DEPLOY_TARGET_DIR"
+          if command -v rsync >/dev/null 2>&1; then
+            rsync -a --delete \
+              --exclude '.env' \
+              --exclude 'backups/' \
+              --exclude 'certs/' \
+              --exclude 'releases/' \
+              deploy/ "$DEPLOY_TARGET_DIR/"
+          else
+            find "$DEPLOY_TARGET_DIR" -mindepth 1 -maxdepth 1 \
+              ! -name '.env' \
+              ! -name 'backups' \
+              ! -name 'certs' \
+              ! -name 'releases' \
+              -exec rm -rf {} +
+            cp -R deploy/. "$DEPLOY_TARGET_DIR/"
+            rm -f "$DEPLOY_TARGET_DIR/.env"
+          fi
+          umask 077
+          printf '%s\n' "$DEPLOY_ENV_FILE" > "$DEPLOY_TARGET_DIR/.env"
+          chmod +x "$DEPLOY_TARGET_DIR"/scripts/*.sh
+
+      - name: Log in to Harbor
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.OCI_REGISTRY_PASSWORD }}" |
+            docker login "${{ secrets.OCI_REGISTRY }}" \
+              --username "${{ secrets.OCI_REGISTRY_USERNAME }}" \
+              --password-stdin
+
+      - name: Reset fixed Cloud admin password
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EMPLOYEE_NO: ${{ inputs.employee_no }}
+          DEPLOY_TARGET_DIR: ${{ secrets.DEPLOY_TARGET_DIR }}
+        run: |
+          set -euo pipefail
+          cd "$DEPLOY_TARGET_DIR"
+          DEPLOY_DIR="$DEPLOY_TARGET_DIR"
+          . "$DEPLOY_TARGET_DIR/scripts/release-common.sh"
+
+          ensure_release_tag "$RELEASE_TAG"
+          require_docker_compose
+          load_dotenv "$DEPLOY_TARGET_DIR/.env"
+          require_env_value SEED_ADMIN_PASSWORD
+          require_env_value PUBLIC_BASE_URL
+
+          temp_env="$(mktemp "$DEPLOY_TARGET_DIR/.admin-repair-env.XXXXXX")"
+          cleanup() {
+            rm -f "$temp_env"
+          }
+          trap cleanup EXIT HUP INT TERM
+
+          cp "$DEPLOY_TARGET_DIR/.env" "$temp_env"
+          target_migration_image="$(resolve_target_image IIOT_MIGRATION_IMAGE "$RELEASE_TAG")"
+          replace_env_value "$temp_env" IIOT_MIGRATION_IMAGE "$target_migration_image"
+
+          docker compose --env-file "$temp_env" -f "$DEPLOY_TARGET_DIR/docker-compose.prod.yml" pull iiot-migration
+          docker compose --env-file "$temp_env" -f "$DEPLOY_TARGET_DIR/docker-compose.prod.yml" run -T --rm \
+            -e SEED_ADMIN_NO="$EMPLOYEE_NO" \
+            -e SEED_ADMIN_RESET_PASSWORD=true \
+            -e SEED_ADMIN_PASSWORD="$SEED_ADMIN_PASSWORD" \
+            iiot-migration
+
+          login_body="$(mktemp "$RUNNER_TEMP/cloud-admin-login.XXXXXX")"
+          login_status="$(curl --silent --show-error --output "$login_body" --write-out '%{http_code}' \
+            --max-time 15 \
+            --request POST \
+            --header 'Content-Type: application/json' \
+            --data @- \
+            "${PUBLIC_BASE_URL%/}/api/v1/human/identity/login" <<JSON
+          {"employeeNo":"$EMPLOYEE_NO","password":"$SEED_ADMIN_PASSWORD"}
+          JSON
+          )"
+
+          if [ "$login_status" != "200" ]; then
+            echo "Cloud admin login verification failed with HTTP $login_status" >&2
+            cat "$login_body" >&2
+            exit 1
+          fi
+
+          echo "Cloud admin password reset and login verification succeeded for employee $EMPLOYEE_NO."
+          {
+            echo "### Cloud admin repair"
+            echo "- Employee: \`$EMPLOYEE_NO\`"
+            echo "- Migration image: \`$target_migration_image\`"
+            echo "- Login verification: passed"
+          } >> "$GITHUB_STEP_SUMMARY"
