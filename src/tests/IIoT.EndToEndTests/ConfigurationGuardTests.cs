@@ -1145,7 +1145,7 @@ public sealed class ConfigurationGuardTests
         deployReleaseSource.Should().Contain("\"$SCRIPT_DIR/postgres-backup.sh\"");
         deployReleaseSource.Should().Contain("write_release_manifest");
         deployReleaseSource.Should().Contain("normalize_services");
-        deployReleaseSource.Should().Contain("apply_app_images_to_dotenv_for_keys");
+        deployReleaseSource.Should().Contain("apply_app_images_to_dotenv \"$TEMP_RELEASE_ENV_FILE\"");
         deployReleaseSource.Should().Contain("compose pull $SELECTED_SERVICES");
         deployReleaseSource.Should().Contain("compose up -d $RUNTIME_SELECTED_SERVICES");
         deployReleaseSource.Should().Contain("compose run -T --rm iiot-migration");
