@@ -9,6 +9,7 @@
 - `cloud-image` 在内网 self-hosted runner `iiot-linux-prod` 上构建并推送五个应用镜像到 Harbor。
 - `cloud-deploy` 在同一内网 runner 上同步 `deploy/` 模板、写入生产 `.env`，再执行 `deploy/scripts/deploy-release.sh`。
 - runner 必须使用专用非 root 用户运行，例如 `github-runner`，不能用 root 跑 Actions 服务。
+- 服务器 Docker Root Dir 固定为 `/data/docker`，runner 工作目录固定在 `/data/github-runner/*`，不要把构建缓存和 runner workdir 放回系统盘。
 - Docker Hub 不作为生产依赖源；compose 第三方镜像和 Web Dockerfile 的 Node/Nginx 基础镜像必须先同步到 Harbor mirror。
 - Edge 客户端安装素材不进 Harbor；由 `IIoT.EdgeClient` 的 `edge-runtime-package` workflow 发布到服务器 `${EDGE_UPDATES_DIR}/installers/{channel}/{version}` 和 `${EDGE_UPDATES_DIR}/velopack/{channel}`。
 - 本地手工构建和 SSH 部署只作为应急 fallback，不是标准流程。
@@ -158,7 +159,7 @@ docker inspect deploy-iiot-httpapi-1 \
   --format 'working={{index .Config.Labels "com.docker.compose.project.working_dir"}} config={{index .Config.Labels "com.docker.compose.project.config_files"}} project={{index .Config.Labels "com.docker.compose.project"}}'
 ```
 
-2026-06-12 现场校准：`jms.hdc-group.cn` 的 Cloud compose 工作目录为 `/srv/iiot-cloud/deploy`，Edge 更新素材目录为 `/srv/iiot/edge-updates`。如果服务器目录和本文不一致，先用上面的标签命令对齐真实目录，再修改文档。
+2026-06-18 现场校准：`jms.hdc-group.cn` / `10.98.90.154` 的 Cloud compose 工作目录为 `/srv/iiot-cloud/deploy`，Docker Root Dir 为 `/data/docker`，Edge 更新素材目录为 `/srv/iiot/edge-updates -> /data/iiot/edge-updates`，Cloud runner 工作目录为 `/data/github-runner/cloud`。如果服务器目录和本文不一致，先用上面的标签命令对齐真实目录，再修改文档。
 
 首次部署或明确允许清空测试环境时，可以删除旧 stack、旧 compose 容器和旧卷，再按新版 compose 重新启动。例子：
 
@@ -225,22 +226,12 @@ VITE_AICOPILOT_CHALLENGE_URL=http://10.98.90.154:82/api/identity/cloud-oidc/chal
 
 `AICOPILOT_OIDC_REDIRECT_URI` 改动后必须让 `iiot-migration` 重新跑一次，重新 seed OIDC client，否则 Cloud 仍会使用旧回调地址。
 
-OIDC 签名证书是 Cloud 本地 token 签名证书，不是公网 HTTPS 证书，不需要购买。首次部署前在服务器生成一次并持久化：
+OIDC 签名证书是 Cloud 本地 token 签名证书，不是公网 HTTPS 证书，不需要购买。`pre-deploy-check.sh` 会调用 `ensure-oidc-signing-cert.sh`，在 `OIDC_PROVIDER_CERTS_DIR` 下没有 PFX 时自动生成持久化自签名 PFX，并设置为 `600`。前提是该目录存在且 `github-runner` 可写：
 
 ```sh
 sudo mkdir -p /srv/iiot-cloud/deploy/certs
-openssl req -x509 -newkey rsa:2048 \
-  -keyout /tmp/cloud-oidc-signing.key \
-  -out /tmp/cloud-oidc-signing.crt \
-  -days 3650 -nodes \
-  -subj "/CN=IIoT Cloud OIDC"
-openssl pkcs12 -export \
-  -out /srv/iiot-cloud/deploy/certs/cloud-oidc-signing.pfx \
-  -inkey /tmp/cloud-oidc-signing.key \
-  -in /tmp/cloud-oidc-signing.crt \
-  -passout pass:
-rm -f /tmp/cloud-oidc-signing.key /tmp/cloud-oidc-signing.crt
-sudo chmod 600 /srv/iiot-cloud/deploy/certs/cloud-oidc-signing.pfx
+sudo chown -R github-runner:github-runner /srv/iiot-cloud/deploy/certs
+sudo chmod 755 /srv/iiot-cloud/deploy/certs
 ```
 
 ## 标准发布步骤
@@ -296,6 +287,8 @@ DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh 
 - `./scripts/post-deploy-check.sh` 返回 `0`。
 - `./scripts/ops-check.sh` 返回 `0`。
 - `deploy/releases/current-release.env` 指向当前 release。
+
+干净首部署时 `latest-successful-verify.txt` 可能尚不存在，`ops-check.sh` 会打印 warning 但默认不阻断部署；每周恢复验证 cron 正常跑过后该字段会更新。若要把恢复验证缺失或过期作为强制失败，手工执行时设置 `REQUIRE_BACKUP_VERIFY=1 ./scripts/ops-check.sh`。
 
 ## 定时备份
 

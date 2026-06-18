@@ -295,6 +295,8 @@ It checks:
 - latest successful backup age
 - latest successful restore verification age
 
+Fresh clean deployments may not have `latest-successful-verify.txt` yet. In that case the script prints a warning and still returns `0` when all runtime health, backup, Outbox, and queue checks are clean. To make restore verification freshness a hard gate, run with `REQUIRE_BACKUP_VERIFY=1`.
+
 Business queue scope is fixed:
 
 - `iiot-pass-station-batches`
@@ -311,9 +313,9 @@ Output fields always include:
 
 Exit codes:
 
-- `0`: service is available, Outbox backlog is `0`, `_error` / `_skipped` queue depth is `0`, and backup/verification freshness are both within policy
+- `0`: service is available, Outbox backlog is `0`, `_error` / `_skipped` queue depth is `0`, latest backup freshness is within policy, and restore verification is either fresh or only warning because `REQUIRE_BACKUP_VERIFY` is not set
 - `1`: `GET /internal/healthz` failed or a required container is not running
-- `2`: service is available, but Outbox backlog is non-zero, an `_error` / `_skipped` queue has pending messages, no successful backup exists, the latest backup is older than `BACKUP_MAX_AGE_HOURS`, or the latest restore verification is older than `BACKUP_VERIFY_MAX_AGE_DAYS`
+- `2`: service is available, but Outbox backlog is non-zero, an `_error` / `_skipped` queue has pending messages, no successful backup exists, the latest backup is older than `BACKUP_MAX_AGE_HOURS`, or restore verification is missing/older than `BACKUP_VERIFY_MAX_AGE_DAYS` while `REQUIRE_BACKUP_VERIFY=1`
 
 ## Manual Handling Order
 

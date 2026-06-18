@@ -18,6 +18,7 @@ fi
 
 load_dotenv
 "$SCRIPT_DIR/ensure-oidc-signing-cert.sh"
+ensure_required_secret_values_changed
 require_app_image_values
 require_infra_image_values
 ensure_infra_images_not_docker_hub

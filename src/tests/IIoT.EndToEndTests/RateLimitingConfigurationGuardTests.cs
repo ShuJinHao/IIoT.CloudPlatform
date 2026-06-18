@@ -70,25 +70,20 @@ public sealed class RateLimitingConfigurationGuardTests
     [Fact]
     public void NginxTemplates_ShouldUseCoarseUploadProtection_AndSeparateRefreshLimit()
     {
-        var aspirateNginx = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.AppHost", "aspirate-output", "nginx.conf"));
         var deployNginx = File.ReadAllText(
             FindRepoFile("deploy", "nginx", "nginx.conf"));
 
-        foreach (var source in new[] { aspirateNginx, deployNginx })
-        {
-            source.Should().Contain("zone=login_limit:10m rate=10r/m");
-            source.Should().Contain("zone=refresh_limit:10m rate=60r/m");
-            source.Should().Contain("zone=bootstrap_limit:10m rate=60r/m");
-            source.Should().Contain("zone=edge_upload_limit:20m rate=1200r/m");
-            source.Should().Contain("zone=api_limit:20m rate=300r/m");
-            source.Should().Contain("location = /api/v1/human/identity/refresh");
-            source.Should().Contain("location /api/v1/bootstrap/");
-            source.Should().NotContain("location = /api/v1/human/identity/edge-login");
-            source.Should().NotContain("location /api/v1/edge/bootstrap/");
-            source.Should().Contain("limit_req zone=refresh_limit burst=30 nodelay;");
-            source.Should().Contain("limit_req zone=edge_upload_limit burst=400 nodelay;");
-        }
+        deployNginx.Should().Contain("zone=login_limit:10m rate=10r/m");
+        deployNginx.Should().Contain("zone=refresh_limit:10m rate=60r/m");
+        deployNginx.Should().Contain("zone=bootstrap_limit:10m rate=60r/m");
+        deployNginx.Should().Contain("zone=edge_upload_limit:20m rate=1200r/m");
+        deployNginx.Should().Contain("zone=api_limit:20m rate=300r/m");
+        deployNginx.Should().Contain("location = /api/v1/human/identity/refresh");
+        deployNginx.Should().Contain("location /api/v1/bootstrap/");
+        deployNginx.Should().NotContain("location = /api/v1/human/identity/edge-login");
+        deployNginx.Should().NotContain("location /api/v1/edge/bootstrap/");
+        deployNginx.Should().Contain("limit_req zone=refresh_limit burst=30 nodelay;");
+        deployNginx.Should().Contain("limit_req zone=edge_upload_limit burst=400 nodelay;");
     }
 
     private static string FindRepoFile(params string[] relativeSegments)

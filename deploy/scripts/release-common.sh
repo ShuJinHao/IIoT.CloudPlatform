@@ -137,6 +137,34 @@ require_infra_image_values() {
   done
 }
 
+require_changed_secret_value() {
+  key=$1
+  eval "value=\${$key:-}"
+
+  require_env_value "$key"
+
+  shift
+  for forbidden_value in "$@"
+  do
+    if [ "$value" = "$forbidden_value" ]; then
+      printf 'Required secret still uses a template or known weak value: %s\n' "$key" >&2
+      exit 64
+    fi
+  done
+}
+
+ensure_required_secret_values_changed() {
+  require_changed_secret_value \
+    JWTSETTINGS__SECRET \
+    change-me-jwt-secret \
+    iiot-cloud-jwt-secret-2026-04-22
+
+  require_changed_secret_value \
+    SEED_ADMIN_PASSWORD \
+    change-me-admin-password \
+    Ljh123456!
+}
+
 ensure_infra_images_not_docker_hub() {
   for key in $INFRA_IMAGE_KEYS
   do

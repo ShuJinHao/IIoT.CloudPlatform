@@ -142,16 +142,18 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
-    public void DeployScript_ShouldRejectKnownWeakDeploymentSecrets()
+    public void DeployPrecheck_ShouldRejectKnownWeakDeploymentSecrets()
     {
-        var deploySource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.AppHost", "aspirate-output", "deploy.ps1"));
+        var preDeploySource = File.ReadAllText(FindRepoFile("deploy", "scripts", "pre-deploy-check.sh"));
+        var releaseCommonSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "release-common.sh"));
+
+        preDeploySource.Should().Contain("ensure_required_secret_values_changed");
         var jwtSecretGuardLine = Regex.Match(
-            deploySource,
-            "Assert-Configured \"JWTSETTINGS__SECRET\"[^\\r\\n]*").Value;
+            releaseCommonSource,
+            "require_changed_secret_value[\\s\\\\\\r\\n]+JWTSETTINGS__SECRET[\\s\\S]*?iiot-cloud-jwt-secret-2026-04-22").Value;
         var seedAdminPasswordGuardLine = Regex.Match(
-            deploySource,
-            "Assert-Configured \"SEED_ADMIN_PASSWORD\"[^\\r\\n]*").Value;
+            releaseCommonSource,
+            "require_changed_secret_value[\\s\\\\\\r\\n]+SEED_ADMIN_PASSWORD[\\s\\S]*?Ljh123456!").Value;
 
         jwtSecretGuardLine.Should().Contain("change-me-jwt-secret");
         jwtSecretGuardLine.Should().Contain(KnownWeakJwtSecret);
@@ -160,9 +162,9 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
-    public void LocalAspirateEnv_WhenPresent_ShouldNotUseKnownWeakDeploymentSecrets()
+    public void LocalDeployEnv_WhenPresent_ShouldNotUseKnownWeakDeploymentSecrets()
     {
-        var envPath = FindRepoFile("src", "hosts", "IIoT.AppHost", "aspirate-output", ".env");
+        var envPath = FindRepoFile("deploy", ".env");
         if (!File.Exists(envPath))
         {
             return;
@@ -429,44 +431,59 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
-    public void DeploymentTemplates_ShouldExternalizeSecretsAndSecureDashboard()
+    public void DeploymentTemplates_ShouldExternalizeSecretsAndUseStandardDeployEntry()
     {
         var gitIgnoreSource = File.ReadAllText(FindRepoFile(".gitignore"));
-        var envExampleSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.AppHost", "aspirate-output", ".env.example"));
-        var composeSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.AppHost", "aspirate-output", "docker-compose.yaml"));
+        var envExampleSource = File.ReadAllText(FindRepoFile("deploy", ".env.example"));
+        var composeSource = File.ReadAllText(FindRepoFile("deploy", "docker-compose.prod.yml"));
 
-        gitIgnoreSource.Should().Contain("src/hosts/IIoT.AppHost/aspirate-output/.env");
+        gitIgnoreSource.Should().Contain("deploy/.env");
+        gitIgnoreSource.Should().Contain("deploy/certs/");
         gitIgnoreSource.Should().Contain("aspirate-state.json");
         envExampleSource.Should().Contain("change-me-postgres-password");
         envExampleSource.Should().Contain("IIOT_GATEWAY_IMAGE");
-        envExampleSource.Should().Contain("DEPLOY_HOST=");
-        envExampleSource.Should().Contain("DEPLOY_USER=");
-        envExampleSource.Should().Contain("DEPLOY_PORT=");
-        envExampleSource.Should().Contain("STACK_NAME=");
-        envExampleSource.Should().Contain("DEPLOY_DIR=");
         envExampleSource.Should().Contain("PUBLIC_BASE_URL=");
-        envExampleSource.Should().Contain("ASPIRE_DASHBOARD_FRONTEND_BROWSERTOKEN");
         envExampleSource.Should().Contain("FORWARDED_HEADERS_ENABLED");
         envExampleSource.Should().Contain("FORWARDED_HEADERS_KNOWNNETWORKS__0");
+        envExampleSource.Should().Contain("OIDC_PROVIDER_SIGNING_CERTIFICATE_PATH=/app/certs/cloud-oidc-signing.pfx");
+        envExampleSource.Should().Contain("EDGE_UPDATES_DIR=/srv/iiot/edge-updates");
+        envExampleSource.Should().NotContain("DEPLOY_HOST=");
+        envExampleSource.Should().NotContain("DEPLOY_USER=");
+        envExampleSource.Should().NotContain("STACK_NAME=");
         envExampleSource.Should().NotContain("SERVER_IP");
         envExampleSource.Should().NotContain("TLS_CERT_FILE");
         envExampleSource.Should().NotContain("TLS_KEY_FILE");
         envExampleSource.Should().NotContain("GATEWAY_HTTPS_PORT");
 
-        composeSource.Should().Contain("DASHBOARD__FRONTEND__AUTHMODE: \"BrowserToken\"");
-        composeSource.Should().Contain("DASHBOARD__OTLP__AUTHMODE: \"ApiKey\"");
-        composeSource.Should().Contain("ASPIRE_DASHBOARD_OTLP_PRIMARYAPIKEY");
         composeSource.Should().Contain("iiot-gateway:");
         composeSource.Should().Contain("ReverseProxy__Clusters__httpapi__Destinations__primary__Address");
         composeSource.Should().Contain("ForwardedHeaders__Enabled:");
         composeSource.Should().Contain("ForwardedHeaders__KnownNetworks__0:");
-        composeSource.Should().Contain("VITE_API_URL=${PUBLIC_BASE_URL}/api");
+        composeSource.Should().Contain("nginx-gateway:");
+        composeSource.Should().Contain("EdgeInstallerArtifacts__RootPath: /app/edge-updates/installers");
+        composeSource.Should().Contain("${IIOT_NGINX_IMAGE}");
         composeSource.Should().NotContain("SERVER_IP");
         composeSource.Should().NotContain("TLS_CERT_FILE");
         composeSource.Should().NotContain("GATEWAY_HTTPS_PORT");
         composeSource.Should().NotContain("ALLOW_ANONYMOUS: \"true\"");
+    }
+
+    [Fact]
+    public void LegacyAspirateDeploymentArtifacts_ShouldBeRemovedFromRepository()
+    {
+        var repositoryRoot = Path.GetDirectoryName(FindRepoFile(".gitignore"))
+                             ?? throw new DirectoryNotFoundException("Could not resolve repository root.");
+        var legacyArtifacts = new[]
+        {
+            Path.Combine(repositoryRoot, "src", "hosts", "IIoT.AppHost", "aspirate-output", ".env.example"),
+            Path.Combine(repositoryRoot, "src", "hosts", "IIoT.AppHost", "aspirate-output", "build-push.ps1"),
+            Path.Combine(repositoryRoot, "src", "hosts", "IIoT.AppHost", "aspirate-output", "deploy.ps1"),
+            Path.Combine(repositoryRoot, "src", "hosts", "IIoT.AppHost", "aspirate-output", "docker-compose.yaml"),
+            Path.Combine(repositoryRoot, "src", "hosts", "IIoT.AppHost", "aspirate-output", "nginx.conf"),
+            Path.Combine(repositoryRoot, "src", "hosts", "IIoT.AppHost", "aspirate-output", "部署操作手册.txt")
+        };
+
+        legacyArtifacts.Should().OnlyContain(path => !File.Exists(path));
     }
 
     [Fact]
@@ -491,37 +508,27 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
-    public void DeploymentScriptsAndManual_ShouldUseStandardizedCloudSettings()
+    public void StandardDeploymentDocs_ShouldUseSelfHostedRunnerAndNoSshDeployPath()
     {
-        var buildPushSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.AppHost", "aspirate-output", "build-push.ps1"));
-        var deploySource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.AppHost", "aspirate-output", "deploy.ps1"));
-        var manualSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.AppHost", "aspirate-output", "部署操作手册.txt"));
+        var readmeSource = File.ReadAllText(FindRepoFile("deploy", "README.md"));
+        var runnerSource = File.ReadAllText(FindRepoFile("deploy", "RUNNER.md"));
+        var imageWorkflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-image.yml"));
+        var deployWorkflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-deploy.yml"));
 
-        buildPushSource.Should().Contain("IIOT_REGISTRY");
-        buildPushSource.Should().Contain(".env");
-        buildPushSource.Should().NotContain("10.98.90.154");
-        buildPushSource.Should().NotContain("SERVER_IP");
+        readmeSource.Should().Contain("GitHub 托管 runner 不能访问 `10.98.90.154:80` Harbor");
+        runnerSource.Should().Contain("/data/github-runner/cloud");
+        runnerSource.Should().Contain("github-runner");
+        imageWorkflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
+        deployWorkflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
 
-        deploySource.Should().Contain("DEPLOY_HOST");
-        deploySource.Should().Contain("DEPLOY_USER");
-        deploySource.Should().Contain("DEPLOY_PORT");
-        deploySource.Should().Contain("STACK_NAME");
-        deploySource.Should().Contain("DEPLOY_DIR");
-        deploySource.Should().Contain("PUBLIC_BASE_URL");
-        deploySource.Should().NotContain("10.98.90.154");
-        deploySource.Should().NotContain("SERVER_IP");
-        deploySource.Should().NotContain("\"root\"");
-
-        manualSource.Should().Contain("PUBLIC_BASE_URL");
-        manualSource.Should().Contain("DEPLOY_HOST");
-        manualSource.Should().Contain("RABBITMQ_DEFAULT_USER");
-        manualSource.Should().Contain("iiot-gateway");
-        manualSource.Should().Contain("HTTP");
-        manualSource.Should().NotContain("10.98.90.154");
-        manualSource.Should().NotContain("guest/guest");
+        foreach (var source in new[] { readmeSource, runnerSource, imageWorkflowSource, deployWorkflowSource })
+        {
+            source.Should().NotContain("appleboy/ssh-action");
+            source.Should().NotContain("appleboy/scp-action");
+            source.Should().NotContain("DEPLOY_HOST");
+            source.Should().NotContain("DEPLOY_SSH");
+            source.Should().NotContain("ghcr.io");
+        }
     }
 
     [Fact]
@@ -683,13 +690,14 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void NginxTemplate_ShouldRouteApiTrafficThroughGatewayOverHttp()
     {
-        var source = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.AppHost", "aspirate-output", "nginx.conf"));
+        var source = File.ReadAllText(FindRepoFile("deploy", "nginx", "nginx.conf"));
 
         source.Should().Contain("listen 80;");
         source.Should().Contain("Content-Security-Policy");
         source.Should().Contain("limit_req_zone");
-        source.Should().Contain("http://iiot-gateway:8080");
+        source.Should().Contain("upstream gateway_pool");
+        source.Should().Contain("server iiot-gateway:8080;");
+        source.Should().Contain("proxy_pass http://gateway_pool;");
         source.Should().Contain("location /api/v1/bootstrap/");
         source.Should().NotContain("include /etc/nginx/proxy_params;");
         source.Should().NotContain("listen 443 ssl http2;");
@@ -698,7 +706,8 @@ public sealed class ConfigurationGuardTests
         source.Should().Contain("proxy_set_header X-Real-IP $remote_addr;");
         source.Should().Contain("proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;");
         source.Should().Contain("proxy_set_header X-Forwarded-Proto $scheme;");
-        source.Should().Contain("proxy_set_header X-Forwarded-Host $host;");
+        source.Should().Contain("proxy_set_header X-Forwarded-Host $http_host;");
+        source.Should().Contain("proxy_set_header X-Request-Id $request_id;");
     }
 
     [Fact]
