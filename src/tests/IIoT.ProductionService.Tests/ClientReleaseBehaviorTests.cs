@@ -173,7 +173,11 @@ public sealed class ClientReleaseBehaviorTests
             "draft-plugin-signature",
             "IIoT"));
 
-        var handler = new GetPublicClientDownloadsHandler(hostRepository, pluginRepository, new FixedRetentionPolicyReader());
+        var handler = new GetPublicClientDownloadsHandler(
+            hostRepository,
+            pluginRepository,
+            new FixedRetentionPolicyReader(),
+            new StubArtifactCatalogReader());
 
         var result = await handler.Handle(
             new GetPublicClientDownloadsQuery("stable", "win-x64"),
@@ -201,6 +205,119 @@ public sealed class ClientReleaseBehaviorTests
         Assert.DoesNotContain("https://download.example.test/plugins/injection-2.0.0.zip", publicPluginJson, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task GetPublicClientDownloadsHandler_ShouldExposeInstallerArtifactsFromDirectory()
+    {
+        var artifactRoot = CreateArtifactRoot(
+            "ci",
+            "0.0.189-ci",
+            "win-x64",
+            "Homogenization",
+            "匀浆");
+        try
+        {
+            var handler = new GetPublicClientDownloadsHandler(
+                new InMemoryRepository<ClientHostRelease>(),
+                new InMemoryRepository<ClientPluginRelease>(),
+                new FixedRetentionPolicyReader(),
+                new EdgeInstallerArtifactCatalogReader(
+                    Microsoft.Extensions.Options.Options.Create(new EdgeInstallerArtifactOptions { RootPath = artifactRoot })));
+
+            var result = await handler.Handle(
+                new GetPublicClientDownloadsQuery("ci", "win-x64"),
+                CancellationToken.None);
+
+            Assert.True(result.IsSuccess);
+            Assert.NotNull(result.Value);
+            var hostVersion = Assert.Single(result.Value!.Host.Versions);
+            Assert.Equal("0.0.189-ci", hostVersion.Version);
+            Assert.Equal("win-x64", hostVersion.TargetRuntime);
+            Assert.Equal(new string('a', 64), hostVersion.Sha256);
+
+            var plugin = Assert.Single(result.Value.Plugins);
+            Assert.Equal("Homogenization", plugin.ModuleId);
+            Assert.Equal("匀浆", plugin.DisplayName);
+            var pluginVersion = Assert.Single(plugin.Versions);
+            Assert.Equal("1.0.0", pluginVersion.Version);
+            Assert.Equal(2048, pluginVersion.PackageSize);
+        }
+        finally
+        {
+            Directory.Delete(artifactRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task GetPublicClientDownloadsHandler_ShouldLetDatabaseStatusSuppressDirectoryArtifact()
+    {
+        var artifactRoot = CreateArtifactRoot(
+            "ci",
+            "0.0.189-ci",
+            "win-x64",
+            "Homogenization",
+            "匀浆");
+        try
+        {
+            var hostRepository = new InMemoryRepository<ClientHostRelease>();
+            hostRepository.Items.Add(new ClientHostRelease(
+                "ci",
+                "0.0.189-ci",
+                "1.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/installers/ci/0.0.189-ci/installer-artifact.json",
+                new string('a', 64),
+                4096,
+                null,
+                ClientReleaseStatus.Archived,
+                null,
+                "IIoT"));
+
+            var pluginRepository = new InMemoryRepository<ClientPluginRelease>();
+            pluginRepository.Items.Add(new ClientPluginRelease(
+                "Homogenization",
+                "匀浆",
+                null,
+                null,
+                null,
+                "ci",
+                "1.0.0",
+                "1.0.0",
+                "1.0.0",
+                "99.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/installers/ci/0.0.189-ci/installer-artifact.json#moduleId=Homogenization",
+                new string('b', 64),
+                2048,
+                null,
+                "[]",
+                ClientReleaseStatus.Archived,
+                null,
+                "IIoT"));
+
+            var handler = new GetPublicClientDownloadsHandler(
+                hostRepository,
+                pluginRepository,
+                new FixedRetentionPolicyReader(),
+                new EdgeInstallerArtifactCatalogReader(
+                    Microsoft.Extensions.Options.Options.Create(new EdgeInstallerArtifactOptions { RootPath = artifactRoot })));
+
+            var result = await handler.Handle(
+                new GetPublicClientDownloadsQuery("ci", "win-x64"),
+                CancellationToken.None);
+
+            Assert.True(result.IsSuccess);
+            Assert.NotNull(result.Value);
+            Assert.Empty(result.Value!.Host.Versions);
+            Assert.Empty(result.Value.Plugins);
+        }
+        finally
+        {
+            Directory.Delete(artifactRoot, recursive: true);
+        }
+    }
+
     private sealed class StubDeviceIdentityQueryService(DeviceIdentitySnapshot? snapshot) : IDeviceIdentityQueryService
     {
         public Task<DeviceIdentitySnapshot?> GetByDeviceIdAsync(
@@ -224,6 +341,62 @@ public sealed class ClientReleaseBehaviorTests
         {
             return Task.FromResult(5);
         }
+    }
+
+    private sealed class StubArtifactCatalogReader(
+        EdgeInstallerArtifactCatalogSnapshot? snapshot = null)
+        : IEdgeInstallerArtifactCatalogReader
+    {
+        public Task<EdgeInstallerArtifactCatalogSnapshot> ReadAsync(
+            string channel,
+            string? targetRuntime,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(snapshot ?? EdgeInstallerArtifactCatalogSnapshot.Empty);
+        }
+    }
+
+    private static string CreateArtifactRoot(
+        string channel,
+        string version,
+        string targetRuntime,
+        string moduleId,
+        string displayName)
+    {
+        var artifactRoot = Path.Combine(Path.GetTempPath(), $"iiot-edge-artifacts-{Guid.NewGuid():N}");
+        var versionDirectory = Path.Combine(artifactRoot, channel, version);
+        Directory.CreateDirectory(versionDirectory);
+        File.WriteAllText(
+            Path.Combine(versionDirectory, "installer-artifact.json"),
+            $$"""
+            {
+              "schemaVersion": 2,
+              "channel": "{{channel}}",
+              "version": "{{version}}",
+              "hostApiVersion": "1.0.0",
+              "targetRuntime": "{{targetRuntime}}",
+              "targetFramework": "net10.0",
+              "generatedAtUtc": "2026-06-18T00:00:00Z",
+              "installerStubSha256": "{{new string('c', 64)}}",
+              "installerStubSize": 1024,
+              "hostDirectorySha256": "{{new string('a', 64)}}",
+              "hostDirectorySize": 4096,
+              "modules": [
+                {
+                  "moduleId": "{{moduleId}}",
+                  "displayName": "{{displayName}}",
+                  "version": "1.0.0",
+                  "hostApiVersion": "1.0.0",
+                  "minHostVersion": "1.0.0",
+                  "maxHostVersion": "99.0.0",
+                  "pluginSha256": "{{new string('b', 64)}}",
+                  "pluginSize": 2048
+                }
+              ]
+            }
+            """);
+
+        return artifactRoot;
     }
 
     private sealed class NoopRetentionService : IClientReleaseRetentionService

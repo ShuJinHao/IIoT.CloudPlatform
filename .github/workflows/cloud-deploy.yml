@@ -7,6 +7,10 @@ on:
         description: Release tag from cloud-image (sha-*)
         required: true
         type: string
+      services:
+        description: "Optional comma/space separated services: httpapi,gateway,dataworker,migration,web"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -51,6 +55,20 @@ jobs:
           if [[ ! "$release_tag" =~ ^sha-[0-9a-f]+$ ]]; then
             echo "release_tag must match sha-<hex>: $release_tag" >&2
             exit 1
+          fi
+          services='${{ inputs.services }}'
+          if [ -n "$services" ]; then
+            for service in $(printf '%s' "$services" | tr ',' ' ')
+            do
+              case "$service" in
+                httpapi|iiot-httpapi|gateway|iiot-gateway|dataworker|iiot-dataworker|migration|iiot-migration|web|iiot-web)
+                  ;;
+                *)
+                  echo "Unsupported service: $service" >&2
+                  exit 64
+                  ;;
+              esac
+            done
           fi
 
       - name: Validate runner and deploy inputs
@@ -119,19 +137,25 @@ jobs:
         shell: bash
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
+          DEPLOY_SERVICES: ${{ inputs.services }}
           DEPLOY_GIT_SHA: ${{ github.sha }}
           DEPLOY_TRIGGERED_BY: ${{ github.actor }}
           DEPLOY_TARGET_DIR: ${{ secrets.DEPLOY_TARGET_DIR }}
         run: |
           set -euo pipefail
           cd "$DEPLOY_TARGET_DIR"
+          deploy_args=("$RELEASE_TAG")
+          if [ -n "${DEPLOY_SERVICES:-}" ]; then
+            deploy_args+=(--services "$DEPLOY_SERVICES")
+          fi
           RELEASE_TAG="$RELEASE_TAG" \
             DEPLOY_GIT_SHA="$DEPLOY_GIT_SHA" \
             DEPLOY_TRIGGERED_BY="$DEPLOY_TRIGGERED_BY" \
-            ./scripts/deploy-release.sh "$RELEASE_TAG"
+            ./scripts/deploy-release.sh "${deploy_args[@]}"
 
           {
             echo "### Cloud deploy"
             echo "- Release tag: \`$RELEASE_TAG\`"
+            echo "- Services: \`${DEPLOY_SERVICES:-all}\`"
             echo "- Target dir: \`$DEPLOY_TARGET_DIR\`"
           } >> "$GITHUB_STEP_SUMMARY"

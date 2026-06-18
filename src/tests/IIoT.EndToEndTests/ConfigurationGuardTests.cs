@@ -540,7 +540,9 @@ public sealed class ConfigurationGuardTests
 
         readmeSource.Should().Contain("single-machine production starter");
         readmeSource.Should().Contain("`release_tag = sha-*`");
-        readmeSource.Should().Contain("`cloud-image` 在内网 self-hosted runner `iiot-linux-prod` 上构建并推送五个应用镜像到 Harbor");
+        readmeSource.Should().Contain("`cloud-image` 在内网 self-hosted runner `iiot-linux-prod` 上按变更路径构建并推送受影响的应用镜像到 Harbor");
+        readmeSource.Should().Contain("传入 `services` 时只拉取并重启指定服务");
+        readmeSource.Should().Contain("Cloud catalog 会扫描 `/app/edge-updates/installers/{channel}/{version}/installer-artifact.json`");
         readmeSource.Should().Contain("runner 必须使用专用非 root 用户运行");
         readmeSource.Should().Contain("Docker Hub 不作为生产依赖源");
         readmeSource.Should().Contain("Edge 客户端安装素材不进 Harbor");
@@ -930,7 +932,11 @@ public sealed class ConfigurationGuardTests
         workflowSource.Should().Contain("rsync -a --delete");
         workflowSource.Should().Contain("printf '%s\\n' \"$DEPLOY_ENV_FILE\" > \"$DEPLOY_TARGET_DIR/.env\"");
         workflowSource.Should().Contain("docker login \"${{ secrets.OCI_REGISTRY }}\"");
-        workflowSource.Should().Contain("./scripts/deploy-release.sh \"$RELEASE_TAG\"");
+        workflowSource.Should().Contain("services:");
+        workflowSource.Should().Contain("DEPLOY_SERVICES: ${{ inputs.services }}");
+        workflowSource.Should().Contain("deploy_args=(\"$RELEASE_TAG\")");
+        workflowSource.Should().Contain("deploy_args+=(--services \"$DEPLOY_SERVICES\")");
+        workflowSource.Should().Contain("./scripts/deploy-release.sh \"${deploy_args[@]}\"");
         workflowSource.Should().NotContain("runs-on: ubuntu-latest");
         workflowSource.Should().NotContain("appleboy/ssh-action");
         workflowSource.Should().NotContain("appleboy/scp-action");
@@ -1036,6 +1042,8 @@ public sealed class ConfigurationGuardTests
         releaseCommonSource.Should().Contain("write_release_manifest");
         releaseCommonSource.Should().Contain("record_release_history");
         releaseCommonSource.Should().Contain("apply_app_images_to_dotenv");
+        releaseCommonSource.Should().Contain("resolve_release_images_for_keys");
+        releaseCommonSource.Should().Contain("apply_app_images_to_dotenv_for_keys");
 
         preDeploySource.Should().Contain("ensure_release_tag \"$RELEASE_TAG\"");
         preDeploySource.Should().Contain("compose config -q");
@@ -1059,8 +1067,10 @@ public sealed class ConfigurationGuardTests
         deployReleaseSource.Should().Contain("\"$SCRIPT_DIR/pre-deploy-check.sh\" \"$RELEASE_TAG\"");
         deployReleaseSource.Should().Contain("\"$SCRIPT_DIR/postgres-backup.sh\"");
         deployReleaseSource.Should().Contain("write_release_manifest");
-        deployReleaseSource.Should().Contain("apply_app_images_to_dotenv");
-        deployReleaseSource.Should().Contain("compose pull iiot-httpapi iiot-gateway iiot-dataworker iiot-migration iiot-web");
+        deployReleaseSource.Should().Contain("normalize_services");
+        deployReleaseSource.Should().Contain("apply_app_images_to_dotenv_for_keys");
+        deployReleaseSource.Should().Contain("compose pull $SELECTED_SERVICES");
+        deployReleaseSource.Should().Contain("compose up -d $RUNTIME_SELECTED_SERVICES");
         deployReleaseSource.Should().Contain("compose run -T --rm iiot-migration");
         deployReleaseSource.Should().Contain("\"$SCRIPT_DIR/post-deploy-check.sh\"");
         deployReleaseSource.Should().Contain("cp \"$CURRENT_RELEASE_FILE\" \"$PREVIOUS_RELEASE_FILE\"");

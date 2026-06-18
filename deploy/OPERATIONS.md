@@ -67,8 +67,8 @@ Standard production release is driven by GitHub Actions on the intranet self-hos
 The standard sequence is:
 
 1. Push or merge to `main`.
-2. `cloud-image` runs on `iiot-linux-prod`, builds the five application images, and pushes them to Harbor with `sha-${GITHUB_SHA}`.
-3. Trigger `cloud-deploy` manually with the matching `release_tag = sha-*`.
+2. `cloud-image` runs on `iiot-linux-prod`, builds only affected application images when path filters can narrow the change, and pushes them to Harbor with `sha-${GITHUB_SHA}`. Shared code, build configuration, or manual dispatch builds all application images.
+3. Trigger `cloud-deploy` manually with the matching `release_tag = sha-*`; leave `services` empty for a full release, or set comma-separated service names for an incremental release.
 4. `cloud-deploy` runs on the same non-root runner, syncs `deploy/`, writes `DEPLOY_ENV_FILE`, logs in to Harbor, and calls `deploy-release.sh`.
 
 The runner must not run as root. See `RUNNER.md` for the required `github-runner` user, Docker group, labels, and server reachability checks.
@@ -87,6 +87,12 @@ Then use the single release entrypoint:
 DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-0123456789abcdef
 ```
 
+For an incremental release, pass only the services that were rebuilt:
+
+```sh
+DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-0123456789abcdef --services httpapi,gateway
+```
+
 Release rules are fixed:
 
 - Standard production version input is `release_tag = sha-*`.
@@ -98,11 +104,11 @@ Release flow is fixed:
 1. `pre-deploy-check.sh`
 2. `postgres-backup.sh`
 3. write `staged-release.env`
-4. rewrite only the 5 application image coordinates in `.env`
-5. `docker compose pull` from Harbor
+4. rewrite the selected application image coordinates in `.env` (`--services` empty means all five)
+5. `docker compose pull` selected application services from Harbor
 6. keep infrastructure available
-7. run `iiot-migration`
-8. start application containers
+7. run `iiot-migration` only when migration is part of the selected service set
+8. start selected application containers
 9. `post-deploy-check.sh`
 10. rotate `current` / `previous` and append `history`
 

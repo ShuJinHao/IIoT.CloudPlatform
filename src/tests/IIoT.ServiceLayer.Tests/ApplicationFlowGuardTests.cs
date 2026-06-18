@@ -2178,6 +2178,8 @@ public sealed class ApplicationFlowGuardTests
             pluginRepository,
             cache,
             auditTrail,
+            new EdgeInstallerArtifactCatalogReader(
+                Options.Create(new EdgeInstallerArtifactOptions { RootPath = artifactRoot })),
             Options.Create(new EdgeInstallerArtifactOptions { RootPath = artifactRoot }));
     }
 

@@ -1,6 +1,6 @@
 # Edge 客户端安装包上线清单
 
-本文档用于把“Cloud 下载中心生成真实 `.exe` 安装包”上线到私有服务器。执行顺序不能倒：先部署 Cloud，再上传 Edge 安装素材并登记 catalog，最后在 Windows 真机验收。
+本文档用于把“Cloud 下载中心生成真实 `.exe` 安装包”上线到私有服务器。执行顺序不能倒：先部署 Cloud，再上传 Edge 安装素材，最后在 Windows 真机验收。Edge 安装素材落盘后由 Cloud 扫描 `installer-artifact.json` 并合并到 catalog；不再需要手工登记数据库 release 才能让版本可见。
 
 ## 1. 本地前置检查
 
@@ -46,8 +46,8 @@ cd src/ui/iiot-web && npm run build
 标准方式是走 CloudPlatform 的 GitHub Actions：
 
 1. 推送或合并到 `main`。
-2. 等 `cloud-image` 在 `iiot-linux-prod` self-hosted runner 上完成，五个应用镜像会推送到 `10.98.90.154:80` Harbor。
-3. 人工触发 `cloud-deploy`，输入 `release_tag = sha-<current-commit-or-release>`。
+2. 等 `cloud-image` 在 `iiot-linux-prod` self-hosted runner 上完成；workflow 会按变更路径构建受影响镜像，公共代码或手动触发会构建全部五个应用镜像并推送到 `10.98.90.154:80` Harbor。
+3. 人工触发 `cloud-deploy`，输入 `release_tag = sha-<current-commit-or-release>`；如果只发布部分服务，在 `services` 输入 `httpapi`、`gateway`、`web`、`dataworker`、`migration` 或逗号组合。
 4. 确认 `post-deploy-check.sh` 和 `ops-check.sh` 通过。
 
 `cloud-image` 会给 Web Dockerfile 传入 `VITE_AICOPILOT_CHALLENGE_URL`，并使用 Harbor mirror 中的 `node:22-slim`、`nginx:1.27-alpine` 基础镜像。服务器不依赖 Docker Hub。
@@ -77,7 +77,12 @@ docker compose ps
 
 ## 3. 发布 Edge 素材
 
-Edge 安装素材不在 CloudPlatform 仓库生成，也不通过 SSH/SCP 从本机上传。标准入口是 `IIoT.EdgeClient` 仓库的 `edge-runtime-package` workflow：
+Edge 安装素材不在 CloudPlatform 仓库生成。当前有两个有效发布入口：
+
+- 正式 GitHub 打包：`IIoT.EdgeClient` 的 `edge-pack-modules.yml` 只在 `workflow_dispatch` 或 `edge-v*` / `v*` tag 上完整构建和发布。
+- 日常快发：操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1`，本机编译、Velopack 打包、生成 installer artifact 后，通过 rsync/scp 发布到服务器。这是本机运维快发路径，不是 GitHub CI/CD job。
+
+正式 GitHub 打包入口：
 
 ```text
 workflow_dispatch
@@ -86,6 +91,19 @@ workflow_dispatch
 ```
 
 该 workflow 的 `package-runtime` job 必须跑在 GitHub hosted `windows-latest`，生成 `edge-installer-artifact` 和 `edge-velopack-releases`。随后 `publish-edge-updates` job 必须跑在内网 `[self-hosted, iiot-linux-prod]` runner，把 artifacts 本地发布到 `${EDGE_UPDATES_DIR:-/srv/iiot/edge-updates}`。
+
+日常快发入口示例：
+
+```powershell
+pwsh <IIoT.EdgeClient>\scripts\LocalPublishAndDeploy.ps1 `
+  -Version 1.2.0 `
+  -Channel stable `
+  -DeployHost 10.98.90.154 `
+  -DeployUser root `
+  -EdgeUpdatesDir /srv/iiot/edge-updates
+```
+
+快发脚本完成后，Cloud 会在 catalog 请求时扫描 `/app/edge-updates/installers/stable/1.2.0/installer-artifact.json`。如果数据库里没有同 key release 记录，该文件版本会以 Published 状态进入公开下载目录、Edge catalog 和 Human catalog；如果数据库有同 key Draft/Archived 记录，则数据库状态优先并抑制文件版本。
 
 发布后服务器必须有：
 

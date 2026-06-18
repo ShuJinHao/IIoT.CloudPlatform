@@ -332,6 +332,28 @@ apply_app_images_to_dotenv() {
   done
 }
 
+resolve_release_images_for_keys() {
+  release_tag=$1
+  shift
+
+  for key in "$@"
+  do
+    target_image=$(resolve_target_image "$key" "$release_tag")
+    eval "$key=\$target_image"
+  done
+}
+
+apply_app_images_to_dotenv_for_keys() {
+  env_file=$1
+  shift
+
+  for key in "$@"
+  do
+    eval "value=\${$key:-}"
+    replace_env_value "$env_file" "$key" "$value"
+  done
+}
+
 write_release_manifest() {
   output_path=$1
   release_id=$2

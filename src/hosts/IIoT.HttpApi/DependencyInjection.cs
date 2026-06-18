@@ -85,6 +85,7 @@ public static class DependencyInjection
         builder.AddValidatedOptions<EdgeReleaseRetentionOptions>(
             EdgeReleaseRetentionOptions.SectionName,
             static options => options.Validate());
+        builder.Services.AddScoped<IEdgeInstallerArtifactCatalogReader, EdgeInstallerArtifactCatalogReader>();
         builder.Services.AddScoped<IClientReleaseRetentionService, ClientReleaseRetentionService>();
         builder.Services.AddScoped<IClientReleaseRetentionPolicyReader>(sp =>
             sp.GetRequiredService<IClientReleaseRetentionService>());

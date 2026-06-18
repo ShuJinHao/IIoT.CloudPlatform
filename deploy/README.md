@@ -6,13 +6,14 @@
 
 - 当前目标是 single-machine production starter。
 - 生产版本统一使用 `release_tag = sha-*`，`latest` 不能作为生产应用版本。
-- `cloud-image` 在内网 self-hosted runner `iiot-linux-prod` 上构建并推送五个应用镜像到 Harbor。
-- `cloud-deploy` 在同一内网 runner 上同步 `deploy/` 模板、写入生产 `.env`，再执行 `deploy/scripts/deploy-release.sh`。
+- `cloud-image` 在内网 self-hosted runner `iiot-linux-prod` 上按变更路径构建并推送受影响的应用镜像到 Harbor；共享代码、构建配置或手动触发会构建全部应用镜像。
+- `cloud-deploy` 在同一内网 runner 上同步 `deploy/` 模板、写入生产 `.env`，再执行 `deploy/scripts/deploy-release.sh`；未传 `services` 时全量发布，传入 `services` 时只拉取并重启指定服务。
 - runner 必须使用专用非 root 用户运行，例如 `github-runner`，不能用 root 跑 Actions 服务。
 - 服务器 Docker Root Dir 固定为 `/data/docker`，runner 工作目录固定在 `/data/github-runner/*`，不要把构建缓存和 runner workdir 放回系统盘。
 - Docker Hub 不作为生产依赖源；compose 第三方镜像和 Web Dockerfile 的 Node/Nginx 基础镜像必须先同步到 Harbor mirror。
-- Edge 客户端安装素材不进 Harbor；由 `IIoT.EdgeClient` 的 `edge-runtime-package` workflow 发布到服务器 `${EDGE_UPDATES_DIR}/installers/{channel}/{version}` 和 `${EDGE_UPDATES_DIR}/velopack/{channel}`。
-- 本地手工构建和 SSH 部署只作为应急 fallback，不是标准流程。
+- Edge 客户端安装素材不进 Harbor；日常 push main 只跑 smoke，完整 GitHub 打包只在 `workflow_dispatch` 或 `edge-v*` / `v*` tag 时执行；日常快发可以由操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1` 发布到服务器 `${EDGE_UPDATES_DIR}/installers/{channel}/{version}` 和 `${EDGE_UPDATES_DIR}/velopack/{channel}`。
+- Cloud catalog 会扫描 `/app/edge-updates/installers/{channel}/{version}/installer-artifact.json` 并与数据库 release 记录合并；同 key 数据库记录优先，可用于 Draft/Archived 抑制文件落盘版本。
+- 本地手工 Docker 构建和服务器手工部署只作为应急 fallback，不是标准 Cloud/AI 发布流程。
 - `deploy/scripts/deploy-release.sh` 是标准发布入口，`deploy/scripts/rollback-release.sh` 是应用镜像回滚入口。
 - self-hosted runner 安装和权限要求见 [RUNNER.md](./RUNNER.md)。
 - 运维、备份、恢复和检查细节见 [OPERATIONS.md](./OPERATIONS.md)。
@@ -54,7 +55,7 @@ iiot-migration -> one-shot migration/bootstrap job
 
 ## Harbor 镜像
 
-CI 或本机构建必须把以下五个应用镜像推送到 Harbor，同一批版本使用同一个 `sha-*` tag：
+Cloud 应用镜像统一推送到 Harbor，同一批版本使用同一个 `sha-*` tag。全量发布包含以下五个应用镜像；按需发布时只要求受影响服务的镜像存在：
 
 ```text
 <OCI_REGISTRY>/<OCI_NAMESPACE>/iiot-httpapi:<release_tag>
@@ -72,6 +73,8 @@ Harbor 变量：
 - `OCI_REGISTRY_PASSWORD`：Harbor 登录密码或 robot account token。
 
 GitHub workflow `cloud-image` 和 `cloud-deploy` 是标准生产链路，但必须跑在带 `iiot-linux-prod` label 的内网 self-hosted runner 上。不要把这两个 workflow 改回 `ubuntu-latest`，公网 GitHub runner 访问不了内网 Harbor 和部署目录。
+
+`cloud-image` 会按路径判断需要构建的镜像：只改 `src/hosts/IIoT.HttpApi/` 时只构建 `iiot-httpapi`，只改 `src/ui/iiot-web/` 时只构建 `iiot-web`；改 `src/core/`、`src/shared/`、`src/services/`、`src/infrastructure/`、`Directory.Build.props`、`global.json` 或手动触发时构建全部应用镜像。构建使用 Harbor registry cache，第二次构建会复用已有 Docker layer。
 
 ## 第三方镜像 mirror
 
@@ -97,10 +100,16 @@ MIRROR_REGISTRY=<OCI_REGISTRY> MIRROR_NAMESPACE=mirror ./deploy/scripts/mirror-t
 
 ## Edge 安装素材
 
-Edge 客户端产物由 `IIoT.EdgeClient` 仓库的 `edge-runtime-package` workflow 发布，不属于 Cloud Docker 镜像，也不进入 Harbor。标准流程固定为：
+Edge 客户端产物不属于 Cloud Docker 镜像，也不进入 Harbor。当前流程分三类：
+
+- `push main`：只跑 smoke 编译和测试，不发布安装包。
+- `workflow_dispatch` 或 `edge-v*` / `v*` tag：由 GitHub hosted `windows-latest` 构建 runtime、installer artifact 和 Velopack releases，再由内网 `iiot-linux-prod` runner 把 GitHub Actions artifacts 发布到 `${EDGE_UPDATES_DIR}`。
+- 日常快发：操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1`，本机编译和打包后通过 rsync/scp 发布到 `${EDGE_UPDATES_DIR}`。这是本机运维快发路径，不是 GitHub CI/CD job。
+
+GitHub 完整打包流程固定为：
 
 ```text
-IIoT.EdgeClient workflow_dispatch / push main
+IIoT.EdgeClient workflow_dispatch / tag
 -> windows-latest 构建 edge-installer-artifact 和 edge-velopack-releases
 -> 上传 GitHub Actions artifacts
 -> iiot-linux-prod 内网 self-hosted runner 下载 artifacts
@@ -125,7 +134,7 @@ ${EDGE_UPDATES_DIR}/velopack/stable/
   *-Portable.zip
 ```
 
-`iiot-httpapi` 以只读方式挂载 `${EDGE_UPDATES_DIR}` 到 `/app/edge-updates`，通过 `EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers` 读取安装素材，并通过 `EdgeInstallerArtifacts__VelopackReleasesBaseUrl=${PUBLIC_BASE_URL}/edge-updates/velopack` 返回运行时更新源。登录 Cloud 后，“客户端下载中心 -> 首装下载”会按 `installer-artifact.json` v2 选择一份 `host/` 和所选 `plugins/<ModuleId>/`，把 `launcher/iiot-binding.json`、`launcher/iiot-enabled-plugins.json`、`launcher/launcher.update.json`、`plugins/<ModuleId>/iiot-plugin-binding.json` 注入本次下载的安装器 payload，并返回真正的 `.exe`。这些绑定配置不写回素材目录、不落盘到共享模板、不写日志。
+`iiot-httpapi` 以只读方式挂载 `${EDGE_UPDATES_DIR}` 到 `/app/edge-updates`，通过 `EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers` 读取安装素材，并通过 `EdgeInstallerArtifacts__VelopackReleasesBaseUrl=${PUBLIC_BASE_URL}/edge-updates/velopack` 返回运行时更新源。Cloud 的公开下载目录、Edge catalog 和 Human catalog 会扫描 `installer-artifact.json` v2 并与数据库 release 记录合并，因此本机快发文件落盘后可以被客户端看到；如果数据库已有同 channel/version/runtime 或 module/channel/version/runtime 记录，则数据库状态优先，Draft/Archived 可抑制同 key 文件版本。登录 Cloud 后，“客户端下载中心 -> 首装下载”会按 `installer-artifact.json` v2 选择一份 `host/` 和所选 `plugins/<ModuleId>/`，把 `launcher/iiot-binding.json`、`launcher/iiot-enabled-plugins.json`、`launcher/launcher.update.json`、`plugins/<ModuleId>/iiot-plugin-binding.json` 注入本次下载的安装器 payload，并返回真正的 `.exe`。这些绑定配置不写回素材目录、不落盘到共享模板、不写日志。
 
 `iiot-web` 是 Vite 静态构建，Cloud 左侧“打开助手”按钮需要在构建镜像时注入 AICopilot challenge URL：
 
@@ -174,7 +183,7 @@ docker volume ls | grep -E 'iiot|postgres|rabbitmq|seq'
 
 ## .env 要点
 
-应用镜像坐标必须指向 Harbor 仓库，tag 可以先写任意 `sha-*`；发布脚本会按传入 release tag 重写五个应用镜像 tag：
+应用镜像坐标必须指向 Harbor 仓库，tag 可以先写任意 `sha-*`；全量发布时发布脚本会按传入 release tag 重写五个应用镜像 tag，按需发布时只重写所选服务对应的镜像 tag：
 
 ```text
 IIOT_HTTPAPI_IMAGE=harbor.example.com/iiot/iiot-httpapi:sha-0123456789abcdef

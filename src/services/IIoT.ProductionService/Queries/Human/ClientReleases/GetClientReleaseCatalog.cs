@@ -18,7 +18,8 @@ public sealed record GetClientReleaseCatalogQuery(
 
 public sealed class GetClientReleaseCatalogHandler(
     IReadRepository<ClientHostRelease> hostReleaseRepository,
-    IReadRepository<ClientPluginRelease> pluginReleaseRepository)
+    IReadRepository<ClientPluginRelease> pluginReleaseRepository,
+    IEdgeInstallerArtifactCatalogReader artifactCatalogReader)
     : IQueryHandler<GetClientReleaseCatalogQuery, Result<ClientReleaseCatalogDto>>
 {
     public async Task<Result<ClientReleaseCatalogDto>> Handle(
@@ -30,16 +31,27 @@ public sealed class GetClientReleaseCatalogHandler(
             new ClientHostReleasesByChannelSpec(
                 channel,
                 request.TargetRuntime,
-                request.OnlyPublished,
-                request.IncludeArchived),
+                onlyPublished: false,
+                includeArchived: true),
             cancellationToken);
         var pluginReleases = await pluginReleaseRepository.GetListAsync(
             new ClientPluginReleasesByChannelSpec(
                 channel,
                 request.TargetRuntime,
-                request.OnlyPublished,
-                request.IncludeArchived),
+                onlyPublished: false,
+                includeArchived: true),
             cancellationToken);
+        var artifactCatalog = await artifactCatalogReader.ReadAsync(channel, request.TargetRuntime, cancellationToken);
+        hostReleases = ClientReleaseCatalogMerge.MergeHostReleases(
+            hostReleases,
+            artifactCatalog.HostReleases,
+            request.OnlyPublished,
+            request.IncludeArchived).ToList();
+        pluginReleases = ClientReleaseCatalogMerge.MergePluginReleases(
+            pluginReleases,
+            artifactCatalog.PluginReleases,
+            request.OnlyPublished,
+            request.IncludeArchived).ToList();
 
         return Result.Success(new ClientReleaseCatalogDto(
             ClientReleaseCatalogSchema.Version,

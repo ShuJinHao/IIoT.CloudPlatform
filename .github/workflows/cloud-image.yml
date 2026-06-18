@@ -24,14 +24,19 @@ jobs:
       matrix:
         include:
           - image: iiot-httpapi
+            service: httpapi
             dockerfile: src/hosts/IIoT.HttpApi/Dockerfile
           - image: iiot-gateway
+            service: gateway
             dockerfile: src/hosts/IIoT.Gateway/Dockerfile
           - image: iiot-dataworker
+            service: dataworker
             dockerfile: src/hosts/IIoT.DataWorker/Dockerfile
           - image: iiot-migrationworkapp
+            service: migration
             dockerfile: src/hosts/IIoT.MigrationWorkApp/Dockerfile
           - image: iiot-web
+            service: web
             dockerfile: src/hosts/IIoT.AppHost/iiot-web.Dockerfile
 
     steps:
@@ -61,7 +66,61 @@ jobs:
           shopt -s dotglob
           cp -a "$extracted"/* "$GITHUB_WORKSPACE"/
 
+      - name: Detect image relevance
+        id: changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          service="${{ matrix.service }}"
+          build=false
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            build=true
+          else
+            before="${{ github.event.before }}"
+            if [ -z "$before" ] || printf '%s' "$before" | grep -Eq '^0+$'; then
+              build=true
+            else
+              changed_files="$(mktemp)"
+              git diff --name-only "$before" "$GITHUB_SHA" > "$changed_files"
+
+              if grep -Eq '^(Directory\.Build\.props|global\.json|IIoT\.CloudPlatform\.slnx|\.dockerignore)$' "$changed_files" \
+                || grep -Eq '^src/(core|shared|services|infrastructure)/' "$changed_files" \
+                || grep -Eq '^src/hosts/IIoT\.ServiceDefaults/' "$changed_files"; then
+                build=true
+              else
+                case "$service" in
+                  httpapi)
+                    grep -Eq '^src/hosts/IIoT\.HttpApi/' "$changed_files" && build=true
+                    ;;
+                  gateway)
+                    grep -Eq '^src/hosts/IIoT\.Gateway/' "$changed_files" && build=true
+                    ;;
+                  dataworker)
+                    grep -Eq '^src/hosts/IIoT\.DataWorker/' "$changed_files" && build=true
+                    ;;
+                  migration)
+                    grep -Eq '^src/hosts/IIoT\.MigrationWorkApp/' "$changed_files" && build=true
+                    ;;
+                  web)
+                    grep -Eq '^(src/ui/iiot-web/|src/hosts/IIoT\.AppHost/iiot-web\.Dockerfile)$' "$changed_files" && build=true
+                    ;;
+                  *)
+                    echo "Unknown service in matrix: $service" >&2
+                    exit 64
+                    ;;
+                esac
+              fi
+            fi
+          fi
+
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          if [ "$build" != "true" ]; then
+            echo "No relevant changes for ${{ matrix.image }}; skipping Docker build." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Resolve Harbor target
+        if: steps.changes.outputs.build == 'true'
         id: registry
         shell: bash
         env:
@@ -87,6 +146,7 @@ jobs:
           echo "release_tag=sha-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Validate runner and Docker
+        if: steps.changes.outputs.build == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -98,6 +158,7 @@ jobs:
           docker buildx version >/dev/null
 
       - name: Log in to Harbor
+        if: steps.changes.outputs.build == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -107,6 +168,7 @@ jobs:
               --password-stdin
 
       - name: Build and push image
+        if: steps.changes.outputs.build == 'true'
         shell: bash
         env:
           VITE_AICOPILOT_CHALLENGE_URL: ${{ vars.VITE_AICOPILOT_CHALLENGE_URL }}
@@ -114,6 +176,7 @@ jobs:
           set -euo pipefail
           image="${{ steps.registry.outputs.image }}"
           release_tag="${{ steps.registry.outputs.release_tag }}"
+          cache_ref="$image:buildcache"
           challenge_url="${VITE_AICOPILOT_CHALLENGE_URL:-http://10.98.90.154:82/api/identity/cloud-oidc/challenge}"
           tags=(--tag "$image:$release_tag")
           if [ "${{ github.ref }}" = "refs/heads/main" ]; then
@@ -128,6 +191,8 @@ jobs:
             --build-arg "VITE_AICOPILOT_CHALLENGE_URL=$challenge_url" \
             --build-arg "NODE_BASE_IMAGE=${{ steps.registry.outputs.registry }}/mirror/node:22-slim" \
             --build-arg "NGINX_BASE_IMAGE=${{ steps.registry.outputs.registry }}/mirror/nginx:1.27-alpine" \
+            --cache-from "type=registry,ref=$cache_ref" \
+            --cache-to "type=registry,ref=$cache_ref,mode=max" \
             "${tags[@]}" \
             .
 

@@ -19,7 +19,8 @@ public sealed class GetEdgeClientReleaseCatalogHandler(
     IReadRepository<ClientHostRelease> hostReleaseRepository,
     IReadRepository<ClientPluginRelease> pluginReleaseRepository,
     IClientReleaseRetentionPolicyReader retentionPolicyReader,
-    IOptions<EdgeInstallerArtifactOptions> artifactOptions)
+    IOptions<EdgeInstallerArtifactOptions> artifactOptions,
+    IEdgeInstallerArtifactCatalogReader artifactCatalogReader)
     : IQueryHandler<GetEdgeClientReleaseCatalogQuery, Result<ClientReleaseCatalogDto>>
 {
     public async Task<Result<ClientReleaseCatalogDto>> Handle(
@@ -35,12 +36,21 @@ public sealed class GetEdgeClientReleaseCatalogHandler(
         }
 
         var channel = string.IsNullOrWhiteSpace(request.Channel) ? "stable" : request.Channel.Trim();
-        var hostReleases = await hostReleaseRepository.GetListAsync(
-            new ClientHostReleasesByChannelSpec(channel, request.TargetRuntime, onlyPublished: true),
+        var databaseHostReleases = await hostReleaseRepository.GetListAsync(
+            new ClientHostReleasesByChannelSpec(channel, request.TargetRuntime, onlyPublished: false, includeArchived: true),
             cancellationToken);
-        var pluginReleases = await pluginReleaseRepository.GetListAsync(
-            new ClientPluginReleasesByChannelSpec(channel, request.TargetRuntime, onlyPublished: true),
+        var databasePluginReleases = await pluginReleaseRepository.GetListAsync(
+            new ClientPluginReleasesByChannelSpec(channel, request.TargetRuntime, onlyPublished: false, includeArchived: true),
             cancellationToken);
+        var artifactCatalog = await artifactCatalogReader.ReadAsync(channel, request.TargetRuntime, cancellationToken);
+        var hostReleases = ClientReleaseCatalogMerge.MergeHostReleases(
+            databaseHostReleases,
+            artifactCatalog.HostReleases,
+            onlyPublished: true);
+        var pluginReleases = ClientReleaseCatalogMerge.MergePluginReleases(
+            databasePluginReleases,
+            artifactCatalog.PluginReleases,
+            onlyPublished: true);
         var maxVersions = await retentionPolicyReader.GetMaxVersionsPerComponentAsync(cancellationToken);
 
         return Result.Success(new ClientReleaseCatalogDto(

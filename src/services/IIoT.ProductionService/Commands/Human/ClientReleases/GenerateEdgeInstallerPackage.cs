@@ -40,6 +40,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
     IReadRepository<ClientPluginRelease> pluginReleaseRepository,
     ICacheService cacheService,
     IAuditTrailService auditTrailService,
+    IEdgeInstallerArtifactCatalogReader artifactCatalogReader,
     IOptions<EdgeInstallerArtifactOptions> options)
     : ICommandHandler<GenerateEdgeInstallerPackageCommand, Result<EdgeInstallerPackageDto>>
 {
@@ -99,6 +100,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         var moduleById = artifact.Modules.ToDictionary(
             module => module.ModuleId,
             StringComparer.OrdinalIgnoreCase);
+        var artifactCatalog = await artifactCatalogReader.ReadAsync(channel, targetRuntime, cancellationToken);
         var selectedModules = new List<EdgeInstallerArtifactModule>(selections.Count);
         foreach (var selection in selections)
         {
@@ -109,14 +111,14 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                     cancellationToken);
             }
 
-            var plugin = await pluginReleaseRepository.GetSingleOrDefaultAsync(
-                new ClientPluginReleaseByIdentitySpec(
-                    module.ModuleId,
-                    channel,
-                    module.Version,
-                    targetRuntime),
+            var plugin = await ResolvePluginReleaseAsync(
+                module.ModuleId,
+                channel,
+                module.Version,
+                targetRuntime,
+                artifactCatalog.PluginReleases,
                 cancellationToken);
-            if (plugin is null || plugin.Status != ClientReleaseStatus.Published)
+            if (plugin is null)
             {
                 return await FailAsync(
                     $"生成安装包失败：插件 {module.ModuleId} 未登记为已发布版本。",
@@ -194,19 +196,61 @@ public sealed class GenerateEdgeInstallerPackageHandler(
     {
         if (!string.IsNullOrWhiteSpace(requestedVersion))
         {
-            var release = await hostReleaseRepository.GetSingleOrDefaultAsync(
-                new ClientHostReleaseByIdentitySpec(channel, requestedVersion, targetRuntime),
+            var requested = requestedVersion.Trim();
+            var databaseRelease = await hostReleaseRepository.GetSingleOrDefaultAsync(
+                new ClientHostReleaseByIdentitySpec(channel, requested, targetRuntime),
                 cancellationToken);
-            return release?.Status == ClientReleaseStatus.Published ? release : null;
+            if (databaseRelease is not null)
+            {
+                return databaseRelease.Status == ClientReleaseStatus.Published ? databaseRelease : null;
+            }
+
+            var artifactCatalog = await artifactCatalogReader.ReadAsync(channel, targetRuntime, cancellationToken);
+            return artifactCatalog.HostReleases.FirstOrDefault(release =>
+                string.Equals(release.Version, requested, StringComparison.OrdinalIgnoreCase)
+                && release.Status == ClientReleaseStatus.Published);
         }
 
-        var releases = await hostReleaseRepository.GetListAsync(
-            new ClientHostReleasesByChannelSpec(channel, targetRuntime, onlyPublished: true),
+        var databaseReleases = await hostReleaseRepository.GetListAsync(
+            new ClientHostReleasesByChannelSpec(channel, targetRuntime, onlyPublished: false, includeArchived: true),
             cancellationToken);
+        var snapshot = await artifactCatalogReader.ReadAsync(channel, targetRuntime, cancellationToken);
+        var releases = ClientReleaseCatalogMerge.MergeHostReleases(
+            databaseReleases,
+            snapshot.HostReleases,
+            onlyPublished: true);
         return releases
             .OrderByDescending(release => release.Version, VersionComparer)
             .ThenByDescending(release => release.PublishedAtUtc ?? release.CreatedAtUtc)
             .FirstOrDefault();
+    }
+
+    private async Task<ClientPluginRelease?> ResolvePluginReleaseAsync(
+        string moduleId,
+        string channel,
+        string version,
+        string targetRuntime,
+        IReadOnlyList<ClientPluginRelease> artifactPluginReleases,
+        CancellationToken cancellationToken)
+    {
+        var databaseRelease = await pluginReleaseRepository.GetSingleOrDefaultAsync(
+            new ClientPluginReleaseByIdentitySpec(
+                moduleId,
+                channel,
+                version,
+                targetRuntime),
+            cancellationToken);
+        if (databaseRelease is not null)
+        {
+            return databaseRelease.Status == ClientReleaseStatus.Published ? databaseRelease : null;
+        }
+
+        return artifactPluginReleases.FirstOrDefault(release =>
+            string.Equals(release.ModuleId, moduleId, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(release.Channel, channel, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(release.Version, version, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(release.TargetRuntime, targetRuntime, StringComparison.OrdinalIgnoreCase)
+            && release.Status == ClientReleaseStatus.Published);
     }
 
     private ArtifactLoadResult LoadArtifact(string channel, string version)
