@@ -36,7 +36,30 @@ jobs:
 
     steps:
       - name: Checkout
+        id: checkout
         uses: actions/checkout@v4
+        continue-on-error: true
+
+      - name: Checkout via archive fallback
+        if: steps.checkout.outcome != 'success'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/source-${GITHUB_SHA}.zip"
+          extract_root="$(mktemp -d "$RUNNER_TEMP/source.XXXXXX")"
+          rm -f "$archive"
+          curl --fail --location --retry 5 --retry-delay 5 --connect-timeout 20 --max-time 300 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://codeload.github.com/${GITHUB_REPOSITORY}/zip/${GITHUB_SHA}" \
+            -o "$archive"
+          unzip -q "$archive" -d "$extract_root"
+          extracted="$(find "$extract_root" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          shopt -s dotglob
+          cp -a "$extracted"/* "$GITHUB_WORKSPACE"/
 
       - name: Resolve Harbor target
         id: registry
