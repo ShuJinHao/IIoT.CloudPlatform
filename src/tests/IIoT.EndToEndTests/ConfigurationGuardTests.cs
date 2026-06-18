@@ -569,7 +569,7 @@ public sealed class ConfigurationGuardTests
         readmeSource.Should().Contain("`release_tag = sha-*`");
         readmeSource.Should().Contain("`cloud-image` 在内网 self-hosted runner `iiot-linux-prod` 上按变更路径构建并推送受影响的应用镜像到 Harbor");
         readmeSource.Should().Contain("传入 `services` 时只拉取并重启指定服务");
-        readmeSource.Should().Contain("Cloud catalog 会扫描 `/app/edge-updates/installers/{channel}/{version}/installer-artifact.json`");
+        readmeSource.Should().Contain("Cloud catalog 会扫描 `/app/edge-updates/installers/stable/{version}/installer-artifact.json`");
         readmeSource.Should().Contain("runner 必须使用专用非 root 用户运行");
         readmeSource.Should().Contain("Docker Hub 不作为生产依赖源");
         readmeSource.Should().Contain("Edge 客户端安装素材不进 Harbor");
@@ -615,7 +615,7 @@ public sealed class ConfigurationGuardTests
         envExampleSource.Should().Contain("GATEWAY_HTTP_PORT=81");
         envExampleSource.Should().Contain("BOOTSTRAP_AUTH_REQUIRE_SECRET=true");
         envExampleSource.Should().Contain("X-IIoT-Bootstrap-Secret");
-        envExampleSource.Should().Contain("installers/{channel}/{version}");
+        envExampleSource.Should().Contain("installers/stable/{version}");
 
         composeSource.Should().Contain("Single-machine production starter for IIoT.CloudPlatform.");
         composeSource.Should().Contain("Single-node launch keeps one explicit upstream destination.");
