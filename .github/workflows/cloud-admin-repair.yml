@@ -167,6 +167,7 @@ jobs:
           cp "$DEPLOY_TARGET_DIR/.env" "$temp_env"
           target_migration_image="$(resolve_target_image IIOT_MIGRATION_IMAGE "$RELEASE_TAG")"
           replace_env_value "$temp_env" IIOT_MIGRATION_IMAGE "$target_migration_image"
+          export IIOT_MIGRATION_IMAGE="$target_migration_image"
 
           docker compose --env-file "$temp_env" -f "$DEPLOY_TARGET_DIR/docker-compose.prod.yml" pull iiot-migration
           docker compose --env-file "$temp_env" -f "$DEPLOY_TARGET_DIR/docker-compose.prod.yml" run -T --rm \
