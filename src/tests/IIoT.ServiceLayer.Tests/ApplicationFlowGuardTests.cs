@@ -50,6 +50,8 @@ namespace IIoT.ServiceLayer.Tests;
 
 public sealed class ApplicationFlowGuardTests
 {
+    private const string VelopackSetupFixtureFile = "velopack/IIoT.EdgeClient.Homogenization-stable-Setup.exe";
+
     [Fact]
     public async Task CreateProcessHandler_ShouldRejectDuplicateProcessCode()
     {
@@ -299,6 +301,126 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
+    public async Task GenerateEdgeInstallerPackageHandler_ShouldFailBeforeRotatingSecret_WhenVelopackSetupFileMissingFromManifest()
+    {
+        var oldSecret = BootstrapSecretGenerator.Generate();
+        var device = new Device("匀浆线1#", "DEV-AAAAAAAAAA", Guid.NewGuid());
+        device.SetBootstrapSecretHash(BootstrapSecretHasher.Hash(oldSecret));
+        var oldHash = device.BootstrapSecretHash;
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.Add(device);
+        var hostRepository = new InMemoryRepository<ClientHostRelease>
+        {
+            SingleOrDefaultResult = CreatePublishedHostRelease()
+        };
+        var pluginRepository = new InMemoryRepository<ClientPluginRelease>
+        {
+            SingleOrDefaultResult = CreatePublishedPluginRelease()
+        };
+        var artifactRoot = CreateInstallerArtifactFixture(
+            "stable",
+            "1.2.0",
+            includeVelopackSetupFile: false);
+
+        try
+        {
+            var handler = CreateInstallerPackageHandler(
+                deviceRepository,
+                hostRepository,
+                pluginRepository,
+                artifactRoot,
+                new RecordingCacheService(),
+                new RecordingAuditTrailService());
+
+            var result = await handler.Handle(
+                new GenerateEdgeInstallerPackageCommand(
+                    [new EdgeBindingSelection("Homogenization", device.Id)],
+                    HostVersion: "1.2.0",
+                    BaseUrl: "http://cloud.local"),
+                CancellationToken.None);
+
+            Assert.False(result.IsSuccess);
+            Assert.NotNull(result.Errors);
+            Assert.Contains(result.Errors, error => error.Contains("安装素材未包含 Velopack Setup", StringComparison.Ordinal));
+            Assert.Equal(oldHash, device.BootstrapSecretHash);
+            Assert.True(BootstrapSecretHasher.Verify(oldSecret, device.BootstrapSecretHash!));
+            Assert.Empty(deviceRepository.UpdatedEntities);
+        }
+        finally
+        {
+            if (Directory.Exists(artifactRoot))
+            {
+                Directory.Delete(artifactRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GenerateEdgeInstallerPackageHandler_ShouldFailBeforeRotatingSecret_WhenVelopackSetupFileDoesNotExist()
+    {
+        var oldSecret = BootstrapSecretGenerator.Generate();
+        var device = new Device("匀浆线1#", "DEV-AAAAAAAAAA", Guid.NewGuid());
+        device.SetBootstrapSecretHash(BootstrapSecretHasher.Hash(oldSecret));
+        var oldHash = device.BootstrapSecretHash;
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.Add(device);
+        var hostRepository = new InMemoryRepository<ClientHostRelease>
+        {
+            SingleOrDefaultResult = CreatePublishedHostRelease()
+        };
+        var pluginRepository = new InMemoryRepository<ClientPluginRelease>
+        {
+            SingleOrDefaultResult = CreatePublishedPluginRelease()
+        };
+        var artifactRoot = CreateInstallerArtifactFixture(
+            "stable",
+            "1.2.0",
+            writeVelopackSetupFile: false);
+
+        try
+        {
+            var handler = CreateInstallerPackageHandler(
+                deviceRepository,
+                hostRepository,
+                pluginRepository,
+                artifactRoot,
+                new RecordingCacheService(),
+                new RecordingAuditTrailService());
+
+            var result = await handler.Handle(
+                new GenerateEdgeInstallerPackageCommand(
+                    [new EdgeBindingSelection("Homogenization", device.Id)],
+                    HostVersion: "1.2.0",
+                    BaseUrl: "http://cloud.local"),
+                CancellationToken.None);
+
+            Assert.False(result.IsSuccess);
+            Assert.NotNull(result.Errors);
+            Assert.Contains(result.Errors, error => error.Contains("安装素材缺少 Velopack Setup 文件", StringComparison.Ordinal));
+            Assert.Equal(oldHash, device.BootstrapSecretHash);
+            Assert.True(BootstrapSecretHasher.Verify(oldSecret, device.BootstrapSecretHash!));
+            Assert.Empty(deviceRepository.UpdatedEntities);
+        }
+        finally
+        {
+            if (Directory.Exists(artifactRoot))
+            {
+                Directory.Delete(artifactRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void EdgeInstallerArtifactManifest_ShouldExposeVelopackSetupFileContract()
+    {
+        var manifestType = typeof(GenerateEdgeInstallerPackageHandler).Assembly.GetType(
+            "IIoT.ProductionService.Commands.ClientReleases.EdgeInstallerArtifactManifest");
+
+        Assert.NotNull(manifestType);
+        Assert.NotNull(manifestType!.GetProperty("VelopackSetupFile"));
+    }
+
+    [Fact]
     public async Task GenerateEdgeInstallerPackageHandler_ShouldPackageSelectedRuntimeAndInjectJsonConfigs()
     {
         const string targetRuntime = "win-arm64";
@@ -352,6 +474,7 @@ public sealed class ApplicationFlowGuardTests
             Assert.NotNull(archive.GetEntry("launcher/iiot-binding.json"));
             Assert.NotNull(archive.GetEntry("launcher/iiot-enabled-plugins.json"));
             Assert.NotNull(archive.GetEntry("host/IIoT.Edge.Shell.dll"));
+            Assert.NotNull(archive.GetEntry(VelopackSetupFixtureFile));
             Assert.NotNull(archive.GetEntry("plugins/Homogenization/plugin.json"));
             Assert.NotNull(archive.GetEntry("plugins/Homogenization/iiot-plugin-binding.json"));
             Assert.Null(archive.GetEntry("plugins/Welding/plugin.json"));
@@ -2225,7 +2348,12 @@ public sealed class ApplicationFlowGuardTests
             "IIoT");
     }
 
-    private static string CreateInstallerArtifactFixture(string channel, string version, string targetRuntime = "win-x64")
+    private static string CreateInstallerArtifactFixture(
+        string channel,
+        string version,
+        string targetRuntime = "win-x64",
+        bool includeVelopackSetupFile = true,
+        bool writeVelopackSetupFile = true)
     {
         var root = Path.Combine(Path.GetTempPath(), $"iiot-installer-artifact-{Guid.NewGuid():N}");
         var artifactDirectory = Path.Combine(root, channel, version);
@@ -2237,12 +2365,20 @@ public sealed class ApplicationFlowGuardTests
         WriteFixtureFile(artifactDirectory, "host/IIoT.Edge.Shell.dll", "shell");
         WriteFixtureFile(artifactDirectory, "plugins/Homogenization/plugin.json", "{}");
         WriteFixtureFile(artifactDirectory, "plugins/Welding/plugin.json", "{}");
+        if (writeVelopackSetupFile)
+        {
+            WriteFixtureFile(artifactDirectory, VelopackSetupFixtureFile, "velopack setup");
+        }
+
+        var velopackSetupManifestProperty = includeVelopackSetupFile
+            ? $"  \"velopackSetupFile\": \"{VelopackSetupFixtureFile}\","
+            : string.Empty;
 
         var manifest = $$"""
         {
           "schemaVersion": 2,
-          "channel": "stable",
-          "version": "1.2.0",
+          "channel": "{{channel}}",
+          "version": "{{version}}",
           "hostApiVersion": "1.0.0",
           "targetRuntime": "{{targetRuntime}}",
           "targetFramework": "net10.0",
@@ -2250,6 +2386,7 @@ public sealed class ApplicationFlowGuardTests
           "launcherDirectory": "launcher",
           "hostDirectory": "host",
           "pluginsRoot": "plugins",
+        {{velopackSetupManifestProperty}}
           "modules": [
             {
               "moduleId": "Homogenization",

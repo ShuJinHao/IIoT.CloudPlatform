@@ -389,7 +389,30 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 }
             }
 
+            if (string.IsNullOrWhiteSpace(artifact.VelopackSetupFile))
+            {
+                return "生成安装包失败：安装素材未包含 Velopack Setup，无法生成安装包。";
+            }
+
+            var normalizedVelopackSetupFile = artifact.VelopackSetupFile.Replace('\\', '/').Trim('/');
+            if (!IsSafeRelativeFile(normalizedVelopackSetupFile)
+                || !normalizedVelopackSetupFile.StartsWith("velopack/", StringComparison.OrdinalIgnoreCase)
+                || !normalizedVelopackSetupFile.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+            {
+                return "生成安装包失败：安装素材 Velopack Setup 路径无效。";
+            }
+
+            var velopackSetupPath = ResolveArtifactPath(artifact.RootPath, normalizedVelopackSetupFile);
+            if (!File.Exists(velopackSetupPath))
+            {
+                return "生成安装包失败：安装素材缺少 Velopack Setup 文件。";
+            }
+
             return null;
+        }
+        catch (InvalidDataException)
+        {
+            return "生成安装包失败：安装素材路径无效。";
         }
         catch (IOException)
         {
@@ -530,6 +553,13 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                     writtenEntries);
             }
 
+            AddFileEntry(
+                target,
+                artifact,
+                artifact.VelopackSetupFile!,
+                reservedEntries,
+                writtenEntries);
+
             WriteJsonEntry(
                 target,
                 CombineZipPath(artifact.LauncherDirectory, BindingFileName),
@@ -660,6 +690,31 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             using var targetStream = entry.Open();
             sourceStream.CopyTo(targetStream);
         }
+    }
+
+    private static void AddFileEntry(
+        ZipArchive target,
+        EdgeInstallerArtifactManifest artifact,
+        string sourceFile,
+        IReadOnlySet<string> reservedEntries,
+        ISet<string> writtenEntries)
+    {
+        var entryName = sourceFile.Replace('\\', '/').Trim('/');
+        if (!IsSafeRelativeFile(entryName) || !IsSafeZipEntry(entryName))
+        {
+            throw new InvalidDataException("Artifact contains unsafe path.");
+        }
+
+        if (reservedEntries.Contains(entryName) || !writtenEntries.Add(entryName))
+        {
+            throw new InvalidDataException("Artifact contains duplicate generated path.");
+        }
+
+        var sourcePath = ResolveArtifactPath(artifact.RootPath, entryName);
+        var entry = target.CreateEntry(entryName, CompressionLevel.Fastest);
+        using var sourceStream = File.OpenRead(sourcePath);
+        using var targetStream = entry.Open();
+        sourceStream.CopyTo(targetStream);
     }
 
     private static void WriteJsonEntry(
@@ -862,6 +917,8 @@ internal sealed class EdgeInstallerArtifactManifest
     public string HostDirectory { get; set; } = "host";
 
     public string PluginsRoot { get; set; } = "plugins";
+
+    public string? VelopackSetupFile { get; set; }
 
     public List<EdgeInstallerArtifactModule> Modules { get; set; } = [];
 
