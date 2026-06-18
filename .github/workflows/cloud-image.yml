@@ -82,34 +82,47 @@ jobs:
               build=true
             else
               changed_files="$(mktemp)"
-              git diff --name-only "$before" "$GITHUB_SHA" > "$changed_files"
+              if [ -d .git ]; then
+                git fetch --no-tags --prune --depth=50 origin "${GITHUB_REF_NAME:-main}" || true
+              fi
 
-              if grep -Eq '^(Directory\.Build\.props|global\.json|IIoT\.CloudPlatform\.slnx|\.dockerignore)$' "$changed_files" \
-                || grep -Eq '^src/(core|shared|services|infrastructure)/' "$changed_files" \
-                || grep -Eq '^src/hosts/IIoT\.ServiceDefaults/' "$changed_files"; then
-                build=true
+              if [ -d .git ] \
+                && git cat-file -e "$before^{commit}" 2>/dev/null \
+                && git cat-file -e "$GITHUB_SHA^{commit}" 2>/dev/null; then
+                git diff --name-only "$before" "$GITHUB_SHA" > "$changed_files"
               else
-                case "$service" in
-                  httpapi)
-                    grep -Eq '^src/hosts/IIoT\.HttpApi/' "$changed_files" && build=true
-                    ;;
-                  gateway)
-                    grep -Eq '^src/hosts/IIoT\.Gateway/' "$changed_files" && build=true
-                    ;;
-                  dataworker)
-                    grep -Eq '^src/hosts/IIoT\.DataWorker/' "$changed_files" && build=true
-                    ;;
-                  migration)
-                    grep -Eq '^src/hosts/IIoT\.MigrationWorkApp/' "$changed_files" && build=true
-                    ;;
-                  web)
-                    grep -Eq '^(src/ui/iiot-web/|src/hosts/IIoT\.AppHost/iiot-web\.Dockerfile)$' "$changed_files" && build=true
-                    ;;
-                  *)
-                    echo "Unknown service in matrix: $service" >&2
-                    exit 64
-                    ;;
-                esac
+                echo "Git history is unavailable for path filtering; building $service image." >> "$GITHUB_STEP_SUMMARY"
+                build=true
+              fi
+
+              if [ "$build" != "true" ]; then
+                if grep -Eq '^(Directory\.Build\.props|global\.json|IIoT\.CloudPlatform\.slnx|\.dockerignore)$' "$changed_files" \
+                  || grep -Eq '^src/(core|shared|services|infrastructure)/' "$changed_files" \
+                  || grep -Eq '^src/hosts/IIoT\.ServiceDefaults/' "$changed_files"; then
+                  build=true
+                else
+                  case "$service" in
+                    httpapi)
+                      grep -Eq '^src/hosts/IIoT\.HttpApi/' "$changed_files" && build=true
+                      ;;
+                    gateway)
+                      grep -Eq '^src/hosts/IIoT\.Gateway/' "$changed_files" && build=true
+                      ;;
+                    dataworker)
+                      grep -Eq '^src/hosts/IIoT\.DataWorker/' "$changed_files" && build=true
+                      ;;
+                    migration)
+                      grep -Eq '^src/hosts/IIoT\.MigrationWorkApp/' "$changed_files" && build=true
+                      ;;
+                    web)
+                      grep -Eq '^(src/ui/iiot-web/|src/hosts/IIoT\.AppHost/iiot-web\.Dockerfile)$' "$changed_files" && build=true
+                      ;;
+                    *)
+                      echo "Unknown service in matrix: $service" >&2
+                      exit 64
+                      ;;
+                  esac
+                fi
               fi
             fi
           fi
