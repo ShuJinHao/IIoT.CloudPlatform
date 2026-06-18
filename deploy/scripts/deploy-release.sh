@@ -25,10 +25,13 @@ do
       ;;
     *)
       if [ -n "$RELEASE_TAG" ]; then
-        printf 'Unexpected deploy-release argument: %s\n' "$1" >&2
-        exit 64
+        if [ "$RELEASE_TAG" != "$1" ]; then
+          printf 'Unexpected deploy-release argument: %s\n' "$1" >&2
+          exit 64
+        fi
+      else
+        RELEASE_TAG=$1
       fi
-      RELEASE_TAG=$1
       ;;
   esac
   shift
