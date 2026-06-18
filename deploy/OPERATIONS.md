@@ -70,7 +70,7 @@ The standard sequence is:
 2. `cloud-ci` runs the fast gate by default: restore/build, ServiceLayer tests, ConfigurationGuard tests, web build, and compose config. Full EndToEnd is manual via `workflow_dispatch`.
 3. `cloud-image` runs on `iiot-linux-prod`, builds only affected application images when path filters can narrow the change, and pushes them to Harbor with `sha-${GITHUB_SHA}`. Shared code, build configuration, or manual dispatch builds all application images.
 4. Trigger `cloud-deploy` manually with the matching `release_tag = sha-*`; leave `services` empty for a full release, or set comma-separated service names for an incremental release.
-5. `cloud-deploy` runs on the same non-root runner, syncs `deploy/`, writes `DEPLOY_ENV_FILE`, logs in to Harbor, and calls `deploy-release.sh`.
+5. `cloud-deploy` runs on the same non-root runner, syncs `deploy/`, writes `DEPLOY_ENV_FILE`, overwrites the server `.env` `SEED_ADMIN_PASSWORD` from the dedicated GitHub secret, logs in to Harbor, and calls `deploy-release.sh`.
 
 The runner must not run as root. See `RUNNER.md` for the required `github-runner` user, Docker group, labels, and server reachability checks.
 
@@ -122,17 +122,17 @@ Release success order is fixed:
 
 ## Cloud 管理员登录排查
 
-生产 Cloud 首部署管理员工号固定为 `101650`，对应 `.env` 键为 `SEED_ADMIN_NO=101650`。密码明文不写入仓库文档；真实值只允许保存在 GitHub secret `DEPLOY_ENV_FILE` 的 `SEED_ADMIN_PASSWORD` 中。
+生产 Cloud 首部署管理员工号固定为 `101650`，对应 `.env` 键为 `SEED_ADMIN_NO=101650`。管理员密码只允许来自 GitHub secret `SEED_ADMIN_PASSWORD`，不放入 `DEPLOY_ENV_FILE`、仓库文档或日志。
 
 部署规则固定：
 
 - `iiot-migration` 只在数据库不存在任何 `Admin` 用户时创建首个管理员。
 - 一旦数据库已有 `Admin` 用户，后续部署只会跳过播种，不会修改管理员密码。
-- 不允许 CI、AI、脚本或临时排障流程自动随机化、覆盖或猜测管理员密码。
+- 不允许 CI、AI、脚本或临时排障流程自动随机化、猜测管理员密码；只有 `cloud-admin-repair` 可以按显式确认把 `101650` 重置为 `SEED_ADMIN_PASSWORD`。
 
 登录失败时先区分凭据来源：
 
-- Cloud Web 登录使用 Cloud 数据库里的身份账号和 `SEED_ADMIN_PASSWORD` 首次播种结果。
+- Cloud Web 登录使用 Cloud 数据库里的身份账号和 GitHub secret `SEED_ADMIN_PASSWORD`。
 - Edge Launcher 本地样例账号不是 Cloud 密码来源，不能用 `launcher.accounts.sample.json` 反推 Cloud 密码。
 - GitHub Actions 日志会把 secret 值打码为 `***`，不能从日志反读密码。
 

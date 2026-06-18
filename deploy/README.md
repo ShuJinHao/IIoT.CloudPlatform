@@ -161,7 +161,7 @@ deploy/
 deploy/.env
 ```
 
-真实 `.env` 由 GitHub secret `DEPLOY_ENV_FILE` 注入，不提交仓库。`deploy/.env.example` 只作为模板。应急手工部署时，才需要人工把 `deploy/` 和真实 `.env` 放到 `/srv/iiot-cloud/deploy`。
+真实 `.env` 由 GitHub secret `DEPLOY_ENV_FILE` 注入，不提交仓库。Cloud 管理员密码由单独的 GitHub secret `SEED_ADMIN_PASSWORD` 管理，`cloud-deploy` 写服务器 `.env` 时会强制覆盖 `SEED_ADMIN_PASSWORD`。`deploy/.env.example` 只作为模板。应急手工部署时，才需要人工把 `deploy/` 和真实 `.env` 放到 `/srv/iiot-cloud/deploy`。
 
 生产服务器以容器标签为准确认真实部署目录，不要按旧路径猜：
 
@@ -203,7 +203,6 @@ IIOT_WEB_IMAGE=harbor.example.com/iiot/iiot-web:sha-0123456789abcdef
 - `JWTSETTINGS__SECRET`
 - `SEQ_ADMIN_PASSWORD`
 - `SEED_ADMIN_NO`
-- `SEED_ADMIN_PASSWORD`
 - `SEQ_API_KEY`（启用 Seq ingestion key 时）
 
 ### 固定 Cloud 管理员账号
@@ -214,13 +213,13 @@ IIOT_WEB_IMAGE=harbor.example.com/iiot/iiot-web:sha-0123456789abcdef
 SEED_ADMIN_NO=101650
 ```
 
-管理员密码不写入仓库、文档、日志或截图；真实值只允许保存在 GitHub secret `DEPLOY_ENV_FILE` 的 `SEED_ADMIN_PASSWORD` 中。该密码是操作者约定的固定生产登录密码，不允许部署脚本、CI、AI 或临时排障流程自动随机化、覆盖或猜测。
+管理员密码由 GitHub secret `SEED_ADMIN_PASSWORD` 单独管理，不放入 `DEPLOY_ENV_FILE`、仓库、文档或日志。该密码是操作者约定的固定生产登录密码，不允许部署脚本、CI、AI 或临时排障流程自动随机化、覆盖或猜测。
 
 `iiot-migration` 的播种规则是：
 
-- 数据库中不存在任何 `Admin` 用户时，使用 `SEED_ADMIN_NO` 和 `SEED_ADMIN_PASSWORD` 创建首个管理员。
+- 数据库中不存在任何 `Admin` 用户时，使用 `SEED_ADMIN_NO` 和 GitHub secret `SEED_ADMIN_PASSWORD` 创建首个管理员。
 - 已存在 `Admin` 用户时，直接跳过管理员播种，不重置、不覆盖现有密码。
-- `SEED_ADMIN_PASSWORD` 只用于首个管理员创建；常规部署不会改管理员密码。
+- `SEED_ADMIN_PASSWORD` 只用于首个管理员创建和显式管理员修复；常规部署不会改管理员密码。
 
 Cloud 管理员密码和 Edge Launcher 本地样例账号密码是两套凭据。`launcher.accounts.sample.json` 里的 `101650` 只用于本地启动器样例，不是 Cloud 登录密码来源。Cloud 登录失败时，不得从样例文件、测试常量或历史弱密码推断生产密码；应按 `OPERATIONS.md` 的“Cloud 管理员登录排查”处理。
 
@@ -272,7 +271,7 @@ sudo chmod 755 /srv/iiot-cloud/deploy/certs
 2. `cloud-ci` 默认只跑快速验证：restore/build、ServiceLayer、ConfigurationGuard、前端 build、compose config；完整 EndToEnd 只在手动 `workflow_dispatch` 勾选时运行。
 3. `cloud-image` 在 `iiot-linux-prod` self-hosted runner 上构建五个应用镜像，并推送到 Harbor，tag 为 `sha-${GITHUB_SHA}`。
 4. 人工触发 `cloud-deploy`，输入 `release_tag = sha-*`。
-5. `cloud-deploy` 校验 runner 非 root、同步 `deploy/`、写入 `DEPLOY_ENV_FILE`、登录 Harbor，并执行 `deploy/scripts/deploy-release.sh`。
+5. `cloud-deploy` 校验 runner 非 root、同步 `deploy/`、写入 `DEPLOY_ENV_FILE`、用 `SEED_ADMIN_PASSWORD` 覆盖服务器 `.env` 中的管理员密码、登录 Harbor，并执行 `deploy/scripts/deploy-release.sh`。
 
 GitHub secrets：
 
@@ -283,6 +282,7 @@ OCI_REGISTRY_USERNAME=<harbor-robot-or-user>
 OCI_REGISTRY_PASSWORD=<harbor-password-or-token>
 DEPLOY_TARGET_DIR=/srv/iiot-cloud/deploy
 DEPLOY_ENV_FILE=<完整生产 .env 内容>
+SEED_ADMIN_PASSWORD=<固定 Cloud 管理员密码>
 ```
 
 应急手工路径只在 Actions 不可用时使用。

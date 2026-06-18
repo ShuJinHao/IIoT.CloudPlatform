@@ -55,9 +55,11 @@ OCI_REGISTRY_USERNAME=<Harbor robot 或用户>
 OCI_REGISTRY_PASSWORD=<Harbor 密码或 token>
 DEPLOY_TARGET_DIR=/srv/iiot-cloud/deploy
 DEPLOY_ENV_FILE=<完整生产 .env 内容>
+SEED_ADMIN_PASSWORD=<固定 Cloud 管理员密码>
 ```
 
 `DEPLOY_ENV_FILE` 是完整 `.env` 文本，不是文件路径。
+Cloud 管理员密码不放入 `DEPLOY_ENV_FILE`；`cloud-deploy` 和 `cloud-admin-repair` 使用单独的 `SEED_ADMIN_PASSWORD` secret 写入服务器 `.env`。
 
 ## 验收
 

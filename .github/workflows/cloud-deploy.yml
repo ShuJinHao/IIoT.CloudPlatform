@@ -76,6 +76,7 @@ jobs:
         env:
           DEPLOY_TARGET_DIR: ${{ secrets.DEPLOY_TARGET_DIR }}
           DEPLOY_ENV_FILE: ${{ secrets.DEPLOY_ENV_FILE }}
+          SEED_ADMIN_PASSWORD: ${{ secrets.SEED_ADMIN_PASSWORD }}
           OCI_REGISTRY: ${{ secrets.OCI_REGISTRY }}
           OCI_REGISTRY_USERNAME: ${{ secrets.OCI_REGISTRY_USERNAME }}
           OCI_REGISTRY_PASSWORD: ${{ secrets.OCI_REGISTRY_PASSWORD }}
@@ -85,7 +86,7 @@ jobs:
             echo "Self-hosted runner must not run as root." >&2
             exit 64
           fi
-          for required in DEPLOY_TARGET_DIR DEPLOY_ENV_FILE OCI_REGISTRY OCI_REGISTRY_USERNAME OCI_REGISTRY_PASSWORD
+          for required in DEPLOY_TARGET_DIR DEPLOY_ENV_FILE SEED_ADMIN_PASSWORD OCI_REGISTRY OCI_REGISTRY_USERNAME OCI_REGISTRY_PASSWORD
           do
             if [ -z "${!required:-}" ]; then
               echo "$required is required for the intranet self-hosted deployment flow." >&2
@@ -100,6 +101,7 @@ jobs:
         env:
           DEPLOY_TARGET_DIR: ${{ secrets.DEPLOY_TARGET_DIR }}
           DEPLOY_ENV_FILE: ${{ secrets.DEPLOY_ENV_FILE }}
+          SEED_ADMIN_PASSWORD: ${{ secrets.SEED_ADMIN_PASSWORD }}
         run: |
           set -euo pipefail
           mkdir -p "$DEPLOY_TARGET_DIR"
@@ -122,6 +124,9 @@ jobs:
           fi
           umask 077
           printf '%s\n' "$DEPLOY_ENV_FILE" > "$DEPLOY_TARGET_DIR/.env"
+          DEPLOY_DIR="$DEPLOY_TARGET_DIR"
+          . "$DEPLOY_TARGET_DIR/scripts/release-common.sh"
+          replace_env_value "$DEPLOY_TARGET_DIR/.env" SEED_ADMIN_PASSWORD "$SEED_ADMIN_PASSWORD"
           chmod +x "$DEPLOY_TARGET_DIR"/scripts/*.sh
 
       - name: Log in to Harbor

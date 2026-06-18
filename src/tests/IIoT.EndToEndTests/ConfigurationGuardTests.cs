@@ -970,9 +970,11 @@ public sealed class ConfigurationGuardTests
         workflowSource.Should().Contain("DEPLOY_TRIGGERED_BY: ${{ github.actor }}");
         workflowSource.Should().Contain("DEPLOY_TARGET_DIR: ${{ secrets.DEPLOY_TARGET_DIR }}");
         workflowSource.Should().Contain("DEPLOY_ENV_FILE: ${{ secrets.DEPLOY_ENV_FILE }}");
+        workflowSource.Should().Contain("SEED_ADMIN_PASSWORD: ${{ secrets.SEED_ADMIN_PASSWORD }}");
         workflowSource.Should().Contain("Self-hosted runner must not run as root.");
         workflowSource.Should().Contain("rsync -a --delete");
         workflowSource.Should().Contain("printf '%s\\n' \"$DEPLOY_ENV_FILE\" > \"$DEPLOY_TARGET_DIR/.env\"");
+        workflowSource.Should().Contain("replace_env_value \"$DEPLOY_TARGET_DIR/.env\" SEED_ADMIN_PASSWORD \"$SEED_ADMIN_PASSWORD\"");
         workflowSource.Should().Contain("docker login \"${{ secrets.OCI_REGISTRY }}\"");
         workflowSource.Should().Contain("services:");
         workflowSource.Should().Contain("DEPLOY_SERVICES: ${{ inputs.services }}");
