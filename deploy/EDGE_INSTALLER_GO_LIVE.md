@@ -138,7 +138,7 @@ EXPECTED_VERSION=1.2.0 \
 ./scripts/verify-edge-installer-catalog.sh
 ```
 
-该脚本不会调用 `installer-package`，也不会轮换设备启动密钥。
+该脚本不会调用 `installer-package`，也不会轮换设备启动密钥。它会读取 `installer-artifact.json` 中的 `installerStubFile`，对实际安装器 URL 执行 HEAD 和 GET 校验；GET 必须返回 HTTP 200，且下载字节数大于 0 并匹配 manifest 中的安装器大小。
 
 若下载中心提示“安装素材不存在”，优先检查 `iiot-httpapi` 的挂载和配置：
 

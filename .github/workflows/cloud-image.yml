@@ -5,8 +5,14 @@ on:
   push:
     branches: [main]
     paths:
-      - "src/**"
-      - "deploy/**"
+      - "src/hosts/**"
+      - "src/core/**"
+      - "src/shared/**"
+      - "src/services/**"
+      - "src/infrastructure/**"
+      - "src/ui/iiot-web/**"
+      - "deploy/docker-compose.prod.yml"
+      - "deploy/nginx/**"
       - ".dockerignore"
       - "Directory.Build.props"
       - "global.json"

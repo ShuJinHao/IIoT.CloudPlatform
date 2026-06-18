@@ -966,12 +966,31 @@ public sealed class ConfigurationGuardTests
     {
         var workflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-image.yml"));
         var webDockerfileSource = File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.AppHost", "iiot-web.Dockerfile"));
+        var backendDockerfileSources = new[]
+        {
+            File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.HttpApi", "Dockerfile")),
+            File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.Gateway", "Dockerfile")),
+            File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.DataWorker", "Dockerfile")),
+            File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.MigrationWorkApp", "Dockerfile")),
+        };
 
         workflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
         workflowSource.Should().Contain("Self-hosted runner must not run as root.");
         workflowSource.Should().Contain("docker buildx build");
+        workflowSource.Should().Contain("--build-arg \"DOTNET_SDK_IMAGE=${{ steps.registry.outputs.registry }}/mirror/dotnet-sdk:10.0.301\"");
+        workflowSource.Should().Contain("--build-arg \"DOTNET_ASPNET_IMAGE=${{ steps.registry.outputs.registry }}/mirror/dotnet-aspnet:10.0.9\"");
         workflowSource.Should().Contain("--build-arg \"NODE_BASE_IMAGE=${{ steps.registry.outputs.registry }}/mirror/node:22-slim\"");
         workflowSource.Should().Contain("--build-arg \"NGINX_BASE_IMAGE=${{ steps.registry.outputs.registry }}/mirror/nginx:1.27-alpine\"");
+        workflowSource.Should().Contain("      - \"src/hosts/**\"");
+        workflowSource.Should().Contain("      - \"src/core/**\"");
+        workflowSource.Should().Contain("      - \"src/shared/**\"");
+        workflowSource.Should().Contain("      - \"src/services/**\"");
+        workflowSource.Should().Contain("      - \"src/infrastructure/**\"");
+        workflowSource.Should().Contain("      - \"src/ui/iiot-web/**\"");
+        workflowSource.Should().Contain("      - \"deploy/docker-compose.prod.yml\"");
+        workflowSource.Should().Contain("      - \"deploy/nginx/**\"");
+        workflowSource.Should().NotContain("      - \"src/**\"");
+        workflowSource.Should().NotContain("      - \"deploy/**\"");
         workflowSource.Should().NotContain("runs-on: ubuntu-latest");
         workflowSource.Should().NotContain("ghcr.io");
         workflowSource.Should().NotContain("docker/build-push-action");
@@ -982,6 +1001,15 @@ public sealed class ConfigurationGuardTests
         webDockerfileSource.Should().Contain("FROM ${NODE_BASE_IMAGE} AS build");
         webDockerfileSource.Should().Contain("ARG NGINX_BASE_IMAGE=nginx:1.27-alpine");
         webDockerfileSource.Should().Contain("FROM ${NGINX_BASE_IMAGE} AS final");
+
+        foreach (var dockerfileSource in backendDockerfileSources)
+        {
+            dockerfileSource.Should().Contain("ARG DOTNET_SDK_IMAGE=");
+            dockerfileSource.Should().Contain("ARG DOTNET_ASPNET_IMAGE=");
+            dockerfileSource.Should().Contain("FROM ${DOTNET_SDK_IMAGE} AS build");
+            dockerfileSource.Should().Contain("FROM ${DOTNET_ASPNET_IMAGE} AS final");
+            dockerfileSource.Should().NotContain("mcr.microsoft.com");
+        }
     }
 
     [Fact]
@@ -1059,6 +1087,11 @@ public sealed class ConfigurationGuardTests
         releaseCommonSource.Should().Contain("apply_app_images_to_dotenv");
         releaseCommonSource.Should().Contain("resolve_release_images_for_keys");
         releaseCommonSource.Should().Contain("apply_app_images_to_dotenv_for_keys");
+
+        mirrorImagesSource.Should().Contain("mcr.microsoft.com/dotnet/sdk:10.0.301");
+        mirrorImagesSource.Should().Contain("dotnet-sdk:10.0.301");
+        mirrorImagesSource.Should().Contain("mcr.microsoft.com/dotnet/aspnet:10.0.9");
+        mirrorImagesSource.Should().Contain("dotnet-aspnet:10.0.9");
 
         preDeploySource.Should().Contain("ensure_release_tag \"$RELEASE_TAG\"");
         preDeploySource.Should().Contain("compose config -q");

@@ -1,5 +1,5 @@
-ARG DOTNET_SDK_IMAGE=mcr.microsoft.com/dotnet/sdk:10.0.301
-ARG DOTNET_ASPNET_IMAGE=mcr.microsoft.com/dotnet/aspnet:10.0.9
+ARG DOTNET_SDK_IMAGE=10.98.90.154:80/mirror/dotnet-sdk:10.0.301
+ARG DOTNET_ASPNET_IMAGE=10.98.90.154:80/mirror/dotnet-aspnet:10.0.9
 
 FROM ${DOTNET_SDK_IMAGE} AS build
 WORKDIR /src

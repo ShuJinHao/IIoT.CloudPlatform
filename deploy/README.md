@@ -74,17 +74,19 @@ Harbor 变量：
 
 GitHub workflow `cloud-image` 和 `cloud-deploy` 是标准生产链路，但必须跑在带 `iiot-linux-prod` label 的内网 self-hosted runner 上。不要把这两个 workflow 改回 `ubuntu-latest`，公网 GitHub runner 访问不了内网 Harbor 和部署目录。
 
-`cloud-image` 会按路径判断需要构建的镜像：只改 `src/hosts/IIoT.HttpApi/` 时只构建 `iiot-httpapi`，只改 `src/ui/iiot-web/` 时只构建 `iiot-web`；改 `src/core/`、`src/shared/`、`src/services/`、`src/infrastructure/`、`Directory.Build.props`、`global.json` 或手动触发时构建全部应用镜像。构建使用 Harbor registry cache，第二次构建会复用已有 Docker layer。
+`cloud-image` 会按路径判断需要构建的镜像：只改 `src/hosts/IIoT.HttpApi/` 时只构建 `iiot-httpapi`，只改 `src/ui/iiot-web/` 时只构建 `iiot-web`；改 `src/core/`、`src/shared/`、`src/services/`、`src/infrastructure/`、`Directory.Build.props`、`global.json` 或手动触发时构建全部应用镜像。push 触发范围只覆盖宿主、共享代码、Web、compose 和 nginx 配置，文档类变更不会触发镜像构建。构建使用 Harbor registry cache，第二次构建会复用已有 Docker layer。
 
 ## 第三方镜像 mirror
 
-生产服务器 Docker Hub 不通，不能在 `.env` 或 compose 里使用 `nginx:...`、`redis:...`、`rabbitmq:...`、`timescale/...`、`datalust/...` 这类 Docker Hub shorthand。第三方镜像统一推到 Harbor `mirror` 项目：
+生产服务器 Docker Hub 不通，不能在 `.env`、compose 或 Dockerfile 默认 ARG 里使用 `nginx:...`、`redis:...`、`rabbitmq:...`、`timescale/...`、`datalust/...`、`mcr.microsoft.com/...` 这类公网源作为生产默认值。运行时第三方镜像和构建基础镜像统一推到 Harbor `mirror` 项目：
 
 ```text
 <OCI_REGISTRY>/mirror/timescaledb:latest-pg17
 <OCI_REGISTRY>/mirror/redis:7.4-alpine
 <OCI_REGISTRY>/mirror/rabbitmq:3-management-alpine
 <OCI_REGISTRY>/mirror/seq:2024.3
+<OCI_REGISTRY>/mirror/dotnet-sdk:10.0.301
+<OCI_REGISTRY>/mirror/dotnet-aspnet:10.0.9
 <OCI_REGISTRY>/mirror/nginx:1.27-alpine
 <OCI_REGISTRY>/mirror/node:22-slim
 ```
@@ -96,7 +98,7 @@ docker login <OCI_REGISTRY> --username <OCI_REGISTRY_USERNAME>
 MIRROR_REGISTRY=<OCI_REGISTRY> MIRROR_NAMESPACE=mirror ./deploy/scripts/mirror-third-party-images.sh
 ```
 
-`deploy/.env.example` 已默认指向 Harbor mirror；`pre-deploy-check.sh` 会拒绝 Docker Hub shorthand，避免服务器重建或 `docker compose pull` 时卡在外网。
+`deploy/.env.example` 和后端 Dockerfile 默认 ARG 已指向 Harbor mirror；`pre-deploy-check.sh` 会拒绝 Docker Hub shorthand，避免服务器重建或 `docker compose pull` 时卡在外网。
 
 ## Edge 安装素材
 

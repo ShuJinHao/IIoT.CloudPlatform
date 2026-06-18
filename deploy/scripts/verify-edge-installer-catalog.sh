@@ -19,6 +19,7 @@ Checks:
   - installer-artifact.json is reachable
   - installer-artifact.json describes v2 launcher/host/plugins directories
   - installer stub URL is reachable and Content-Length matches the manifest when size is present
+  - installer stub can be downloaded with HTTP 200 and non-zero bytes
 
 This script is read-only. It does not call installer-package and does not rotate device secrets.
 USAGE
@@ -195,7 +196,29 @@ check_head_content_length() {
   fi
 }
 
+check_get_download() {
+  url=$1
+  expected_size=$2
+  label=$3
+  result=$(curl -fsSL --output /dev/null --write-out '%{http_code} %{size_download}' "$url")
+  status=$(printf '%s' "$result" | awk '{print $1}')
+  actual_size=$(printf '%s' "$result" | awk '{print $2}')
+  if [ "$status" != "200" ]; then
+    printf '%s GET returned HTTP %s.\n' "$label" "$status" >&2
+    exit 1
+  fi
+  if [ -z "$actual_size" ] || [ "$actual_size" -le 0 ]; then
+    printf '%s GET returned no bytes.\n' "$label" >&2
+    exit 1
+  fi
+  if [ -n "$expected_size" ] && [ "$expected_size" != "None" ] && [ "$actual_size" != "$expected_size" ]; then
+    printf '%s download size mismatch: %s != %s\n' "$label" "$actual_size" "$expected_size" >&2
+    exit 1
+  fi
+}
+
 printf 'Checking installer stub URL: %s\n' "$STUB_URL"
 check_head_content_length "$STUB_URL" "$STUB_SIZE" "installer-stub"
+check_get_download "$STUB_URL" "$STUB_SIZE" "installer-stub"
 
 printf 'Edge installer catalog verification passed.\n'
