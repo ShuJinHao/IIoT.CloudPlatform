@@ -27,6 +27,7 @@ RELEASE_HISTORY_DIR="$RELEASES_DIR/history"
 CURRENT_RELEASE_FILE="$RELEASES_DIR/current-release.env"
 PREVIOUS_RELEASE_FILE="$RELEASES_DIR/previous-release.env"
 STAGED_RELEASE_FILE="$RELEASES_DIR/staged-release.env"
+CURRENT_RELEASE_SUMMARY_FILE="$RELEASES_DIR/current-release.summary.md"
 BACKUP_STATE_FILE="$DEPLOY_DIR/backups/postgres/latest-successful-backup.txt"
 
 compose_env_file_path() {
@@ -390,6 +391,33 @@ record_release_history() {
   history_file="$RELEASE_HISTORY_DIR/$history_timestamp-$safe_release_id.env"
   cp "$source_file" "$history_file"
   printf '%s\n' "$history_file"
+}
+
+write_release_summary() {
+  output_path=$1
+  release_id=$2
+  deploy_git_sha=$3
+  deploy_triggered_by=$4
+  deployed_at_utc=$5
+  deployed_services=$6
+  release_notes=${7:-}
+
+  umask 077
+  {
+    printf '### Cloud deploy\n\n'
+    printf -- '- Release tag: `%s`\n' "$release_id"
+    printf -- '- Git SHA: `%s`\n' "$deploy_git_sha"
+    printf -- '- Triggered by: `%s`\n' "$deploy_triggered_by"
+    printf -- '- Deployed at UTC: `%s`\n' "$deployed_at_utc"
+    printf -- '- Services: `%s`\n' "${deployed_services:-all}"
+    printf '\n#### Changes\n'
+
+    if [ -n "$release_notes" ]; then
+      printf '%s\n' "$release_notes" | sed '/^[[:space:]]*$/d; s/^/- /'
+    else
+      printf -- '- No git summary available.\n'
+    fi
+  } > "$output_path"
 }
 
 read_manifest_value() {

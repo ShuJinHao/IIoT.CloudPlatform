@@ -75,7 +75,7 @@ Harbor 变量：
 
 GitHub workflow `cloud-image` 和 `cloud-deploy` 是标准生产链路，但必须跑在带 `iiot-linux-prod` label 的内网 self-hosted runner 上。不要把这两个 workflow 改回 `ubuntu-latest`，公网 GitHub runner 访问不了内网 Harbor 和部署目录。
 
-`cloud-image` 会按路径判断需要构建的镜像：只改 `src/hosts/IIoT.HttpApi/` 时只构建 `iiot-httpapi`，只改 `src/ui/iiot-web/` 时只构建 `iiot-web`；改 `src/core/`、`src/shared/`、`src/services/`、`src/infrastructure/`、`Directory.Build.props`、`global.json` 或手动触发时构建全部应用镜像。push 触发范围只覆盖宿主、共享代码、Web、compose 和 nginx 配置，文档类变更不会触发镜像构建。构建使用 Harbor registry cache，第二次构建会复用已有 Docker layer。
+`cloud-image` 会按路径判断需要构建的镜像：只改 `src/hosts/IIoT.HttpApi/` 时只构建 `iiot-httpapi`，只改 `src/ui/iiot-web/` 时只构建 `iiot-web`；改 `src/core/`、`src/shared/`、`src/services/`、`src/infrastructure/`、`Directory.Build.props`、`global.json` 或手动触发时构建全部应用镜像。push 触发范围只覆盖宿主、共享代码、Web、compose 和 nginx 配置，文档类变更不会触发镜像构建。构建使用 Harbor registry cache，第二次构建会复用已有 Docker layer。每个真正构建的 matrix job 会上传 `cloud-built-service-<service>` artifact，并在 Step Summary 写出 `Deploy services input`，部署时照这个值填写 `cloud-deploy.services`，不要人工猜测。
 
 ## 第三方镜像 mirror
 
@@ -270,9 +270,9 @@ sudo chmod 755 /srv/iiot-cloud/deploy/certs
 
 1. 合并或推送到 `main`。
 2. `cloud-ci` 默认只跑快速验证：restore/build、ServiceLayer、ConfigurationGuard、前端 build、compose config；完整 EndToEnd 只在手动 `workflow_dispatch` 勾选时运行。
-3. `cloud-image` 在 `iiot-linux-prod` self-hosted runner 上构建五个应用镜像，并推送到 Harbor，tag 为 `sha-${GITHUB_SHA}`。
+3. `cloud-image` 在 `iiot-linux-prod` self-hosted runner 上构建受影响应用镜像，并推送到 Harbor，tag 为 `sha-${GITHUB_SHA}`；Step Summary 和 `cloud-built-service-*` artifact 会列出下一步应填的 `services`。
 4. 人工触发 `cloud-deploy`，输入 `release_tag = sha-*`。
-5. `cloud-deploy` 校验 runner 非 root、同步 `deploy/`、写入 `DEPLOY_ENV_FILE`、用 `SEED_ADMIN_PASSWORD` 覆盖服务器 `.env` 中的管理员密码、登录 Harbor，并执行 `deploy/scripts/deploy-release.sh`。
+5. `cloud-deploy` 校验 runner 非 root、同步 `deploy/`、写入 `DEPLOY_ENV_FILE`、用 `SEED_ADMIN_PASSWORD` 覆盖服务器 `.env` 中的管理员密码、登录 Harbor，并执行 `deploy/scripts/deploy-release.sh`。部署完成后会把服务器落盘的 `deploy/releases/current-release.summary.md` 回贴到 GitHub Step Summary。
 
 GitHub secrets：
 
@@ -301,13 +301,13 @@ DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh 
 
 1. 执行 `pre-deploy-check.sh`。
 2. 执行 `postgres-backup.sh`。
-3. 根据 release tag 重写五个应用镜像坐标。
+3. 根据 release tag 重写应用镜像坐标；全量发布重写五个应用镜像，按需发布必须已有 `current-release.env`，并基于当前 release 保留未选服务镜像。
 4. `docker compose pull` 从 Harbor 拉取应用镜像。
 5. 保持基础设施容器可用。
 6. 运行 `iiot-migration`。
 7. 启动应用容器和 `nginx-gateway`。
 8. 执行 `post-deploy-check.sh` 和运维检查。
-9. 写入 `deploy/releases/current-release.env`、`previous-release.env`、`staged-release.env` 和 `history/`。
+9. 写入 `deploy/releases/current-release.env`、`previous-release.env`、`staged-release.env`、`current-release.summary.md` 和 `history/`。
 
 成功条件：
 
@@ -319,6 +319,7 @@ DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh 
 - `./scripts/post-deploy-check.sh` 返回 `0`。
 - `./scripts/ops-check.sh` 返回 `0`。
 - `deploy/releases/current-release.env` 指向当前 release。
+- `deploy/releases/current-release.summary.md` 包含本次部署的服务列表和 git 更新摘要。
 
 干净首部署时 `latest-successful-verify.txt` 可能尚不存在，`ops-check.sh` 会打印 warning 但默认不阻断部署；每周恢复验证 cron 正常跑过后该字段会更新。若要把恢复验证缺失或过期作为强制失败，手工执行时设置 `REQUIRE_BACKUP_VERIFY=1 ./scripts/ops-check.sh`。
 

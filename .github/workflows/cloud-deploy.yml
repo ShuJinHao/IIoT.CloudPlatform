@@ -148,19 +148,53 @@ jobs:
           DEPLOY_TARGET_DIR: ${{ secrets.DEPLOY_TARGET_DIR }}
         run: |
           set -euo pipefail
+          release_git_sha="${RELEASE_TAG#sha-}"
+          if ! git cat-file -e "$release_git_sha^{commit}" 2>/dev/null; then
+            release_git_sha="$DEPLOY_GIT_SHA"
+          fi
+
+          previous_sha=""
+          current_release_file="$DEPLOY_TARGET_DIR/releases/current-release.env"
+          if [ -f "$current_release_file" ]; then
+            previous_sha="$(sed -n 's/^DEPLOY_GIT_SHA=//p' "$current_release_file" | tail -n 1)"
+          fi
+
+          release_notes=""
+          if [ -n "$previous_sha" ] \
+            && git cat-file -e "$previous_sha^{commit}" 2>/dev/null \
+            && git cat-file -e "$release_git_sha^{commit}" 2>/dev/null; then
+            release_notes="$(git log --oneline --no-decorate "$previous_sha..$release_git_sha" || true)"
+          fi
+          if [ -z "$release_notes" ] && git cat-file -e "$release_git_sha^{commit}" 2>/dev/null; then
+            release_notes="$(git log --oneline --no-decorate -n 20 "$release_git_sha" || true)"
+          fi
+          if [ -z "$release_notes" ]; then
+            release_notes="Cloud deploy $RELEASE_TAG"
+          fi
+
           cd "$DEPLOY_TARGET_DIR"
           deploy_args=("$RELEASE_TAG")
           if [ -n "${DEPLOY_SERVICES:-}" ]; then
             deploy_args+=(--services "$DEPLOY_SERVICES")
           fi
           RELEASE_TAG="$RELEASE_TAG" \
-            DEPLOY_GIT_SHA="$DEPLOY_GIT_SHA" \
+            DEPLOY_GIT_SHA="$release_git_sha" \
             DEPLOY_TRIGGERED_BY="$DEPLOY_TRIGGERED_BY" \
+            DEPLOY_RELEASE_NOTES="$release_notes" \
             ./scripts/deploy-release.sh "${deploy_args[@]}"
 
-          {
-            echo "### Cloud deploy"
-            echo "- Release tag: \`$RELEASE_TAG\`"
-            echo "- Services: \`${DEPLOY_SERVICES:-all}\`"
-            echo "- Target dir: \`$DEPLOY_TARGET_DIR\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          summary_path="$DEPLOY_TARGET_DIR/releases/current-release.summary.md"
+          if [ -f "$summary_path" ]; then
+            cat "$summary_path" >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo ""
+              echo "- Target dir: \`$DEPLOY_TARGET_DIR\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### Cloud deploy"
+              echo "- Release tag: \`$RELEASE_TAG\`"
+              echo "- Services: \`${DEPLOY_SERVICES:-all}\`"
+              echo "- Target dir: \`$DEPLOY_TARGET_DIR\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

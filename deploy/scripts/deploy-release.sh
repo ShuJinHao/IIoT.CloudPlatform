@@ -142,6 +142,15 @@ if [ -z "$PRE_DEPLOY_BACKUP_FILE" ]; then
   exit 1
 fi
 
+if [ -n "$REQUESTED_SERVICES" ]; then
+  if [ ! -f "$CURRENT_RELEASE_FILE" ]; then
+    printf 'Incremental deploy requires an existing current release: %s\n' "$CURRENT_RELEASE_FILE" >&2
+    exit 64
+  fi
+
+  load_release_images_from_manifest "$CURRENT_RELEASE_FILE"
+fi
+
 resolve_release_images_for_keys "$RELEASE_TAG" $SELECTED_IMAGE_KEYS
 ensure_target_images_not_latest
 
@@ -149,6 +158,7 @@ DEPLOY_RELEASE_ID="$RELEASE_TAG"
 DEPLOY_GIT_SHA_VALUE=${DEPLOY_GIT_SHA:-unknown}
 DEPLOY_TRIGGERED_BY_VALUE=${DEPLOY_TRIGGERED_BY:-manual}
 DEPLOYED_AT_UTC_VALUE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+DEPLOY_RELEASE_NOTES_VALUE=${DEPLOY_RELEASE_NOTES:-}
 
 write_release_manifest \
   "$STAGED_RELEASE_FILE" \
@@ -161,7 +171,7 @@ write_release_manifest \
 TEMP_RELEASE_ENV_FILE=$(mktemp "$DEPLOY_DIR/.release-env.XXXXXX")
 trap cleanup_temp_release_env EXIT HUP INT TERM
 cp "$DEPLOY_DIR/.env" "$TEMP_RELEASE_ENV_FILE"
-apply_app_images_to_dotenv_for_keys "$TEMP_RELEASE_ENV_FILE" $SELECTED_IMAGE_KEYS
+apply_app_images_to_dotenv "$TEMP_RELEASE_ENV_FILE"
 export COMPOSE_ENV_FILE="$TEMP_RELEASE_ENV_FILE"
 load_dotenv
 
@@ -183,10 +193,22 @@ fi
 
 cp "$STAGED_RELEASE_FILE" "$CURRENT_RELEASE_FILE"
 history_file=$(record_release_history "$CURRENT_RELEASE_FILE" "$DEPLOY_RELEASE_ID")
+write_release_summary \
+  "$CURRENT_RELEASE_SUMMARY_FILE" \
+  "$DEPLOY_RELEASE_ID" \
+  "$DEPLOY_GIT_SHA_VALUE" \
+  "$DEPLOY_TRIGGERED_BY_VALUE" \
+  "$DEPLOYED_AT_UTC_VALUE" \
+  "$SELECTED_SERVICES" \
+  "$DEPLOY_RELEASE_NOTES_VALUE"
+history_summary_file=${history_file%.env}.summary.md
+cp "$CURRENT_RELEASE_SUMMARY_FILE" "$history_summary_file"
 cleanup_temp_release_env
 unset COMPOSE_ENV_FILE
 trap - EXIT HUP INT TERM
 
 printf 'Release deployed successfully: %s\n' "$DEPLOY_RELEASE_ID"
 printf 'Current release manifest: %s\n' "$CURRENT_RELEASE_FILE"
+printf 'Current release summary: %s\n' "$CURRENT_RELEASE_SUMMARY_FILE"
 printf 'Release history record: %s\n' "$history_file"
+printf 'Release history summary: %s\n' "$history_summary_file"

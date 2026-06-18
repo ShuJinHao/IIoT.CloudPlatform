@@ -19,10 +19,12 @@ Application release state is stored only on the server under `deploy/releases/`:
 ```text
 releases/
   current-release.env
+  current-release.summary.md
   previous-release.env
   staged-release.env
   history/
     <timestamp>-<release-id>.env
+    <timestamp>-<release-id>.summary.md
 ```
 
 Each release record keeps only:
@@ -33,6 +35,7 @@ Each release record keeps only:
 - `DEPLOY_TRIGGERED_BY`
 - `DEPLOYED_AT_UTC`
 - `PRE_DEPLOY_BACKUP_FILE`
+- a markdown summary with deployed services and git changes
 
 It does not duplicate database passwords or other runtime secrets.
 
@@ -68,8 +71,8 @@ The standard sequence is:
 
 1. Push or merge to `main`.
 2. `cloud-ci` runs the fast gate by default: restore/build, ServiceLayer tests, ConfigurationGuard tests, web build, and compose config. Full EndToEnd is manual via `workflow_dispatch`.
-3. `cloud-image` runs on `iiot-linux-prod`, builds only affected application images when path filters can narrow the change, and pushes them to Harbor with `sha-${GITHUB_SHA}`. Shared code, build configuration, or manual dispatch builds all application images.
-4. Trigger `cloud-deploy` manually with the matching `release_tag = sha-*`; leave `services` empty for a full release, or set comma-separated service names for an incremental release.
+3. `cloud-image` runs on `iiot-linux-prod`, builds only affected application images when path filters can narrow the change, and pushes them to Harbor with `sha-${GITHUB_SHA}`. Shared code, build configuration, or manual dispatch builds all application images. The workflow uploads `cloud-built-service-*` artifacts and prints the exact `Deploy services input`.
+4. Trigger `cloud-deploy` manually with the matching `release_tag = sha-*`; leave `services` empty for a full release, or copy the built-services value for an incremental release.
 5. `cloud-deploy` runs on the same non-root runner, syncs `deploy/`, writes `DEPLOY_ENV_FILE`, overwrites the server `.env` `SEED_ADMIN_PASSWORD` from the dedicated GitHub secret, logs in to Harbor, and calls `deploy-release.sh`.
 
 The runner must not run as root. See `RUNNER.md` for the required `github-runner` user, Docker group, labels, and server reachability checks.
@@ -94,6 +97,8 @@ For an incremental release, pass only the services that were rebuilt:
 DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-0123456789abcdef --services httpapi,gateway
 ```
 
+Incremental release requires an existing `current-release.env`; first deployment must be full. The script preserves image coordinates for services not included in `--services` by reading the current release manifest before rewriting selected services.
+
 Release rules are fixed:
 
 - Standard production version input is `release_tag = sha-*`.
@@ -105,13 +110,13 @@ Release flow is fixed:
 1. `pre-deploy-check.sh`
 2. `postgres-backup.sh`
 3. write `staged-release.env`
-4. rewrite the selected application image coordinates in `.env` (`--services` empty means all five)
+4. rewrite the selected application image coordinates in `.env` (`--services` empty means all five; incremental keeps unselected images from `current-release.env`)
 5. `docker compose pull` selected application services from Harbor
 6. keep infrastructure available
 7. run `iiot-migration` only when migration is part of the selected service set
 8. start selected application containers
 9. `post-deploy-check.sh`
-10. rotate `current` / `previous` and append `history`
+10. rotate `current` / `previous`, write `current-release.summary.md`, and append `history`
 
 Release success order is fixed:
 
@@ -119,6 +124,7 @@ Release success order is fixed:
 2. `./scripts/post-deploy-check.sh` returns `0`
 3. `./scripts/ops-check.sh` returns `0`
 4. `deploy/releases/current-release.env` points at the new `DEPLOY_RELEASE_ID`
+5. `deploy/releases/current-release.summary.md` records deployed services and git changes
 
 ## Cloud 管理员登录排查
 

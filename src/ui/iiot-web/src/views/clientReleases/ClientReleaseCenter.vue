@@ -56,7 +56,7 @@
               @click="activeView = 'inventory'"
             >
               <MonitorCheck :size="16" />
-              设备盘点
+              设备安装状态
             </button>
           </div>
           <div v-else class="release-mode-label">
@@ -77,69 +77,27 @@
       <NiondTableCard>
         <div class="table-heading">
           <div>
-            <h2>通用宿主</h2>
-            <p>{{ isPublishRoute ? '宿主各版本与发布记录' : '这里只展示宿主版本，首装包通过设备绑定生成' }}</p>
+            <h2>版本 catalog</h2>
+            <p>宿主和工序插件统一展示，历史版本从行内查看</p>
           </div>
         </div>
         <UiDataTable
-          :columns="isPublishRoute ? publishHostColumns : catalogHostColumns"
-          :data="catalog?.host.versions ?? []"
+          :columns="releaseCatalogColumns"
+          :data="releaseCatalogRows"
           :loading="loadingCatalog"
-          :row-key="(row: ClientHostVersionEntryDto) => row.id"
+          :row-key="(row: ReleaseCatalogRow) => row.key"
         >
           <template #empty>
-            <EmptyState title="暂无宿主数据" description="当前条件下未找到任何通用宿主版本，请登记新版本。" />
+            <EmptyState title="暂无版本数据" description="当前条件下未找到宿主或工序插件版本。" />
           </template>
         </UiDataTable>
-      </NiondTableCard>
-
-      <NiondTableCard>
-        <div class="table-heading">
-          <div>
-            <h2>工序插件</h2>
-            <p>按工序分类，每个工序下是它的各个版本</p>
-          </div>
-        </div>
-        <div v-if="pluginGroups.length" class="plugin-groups">
-          <div v-for="group in pluginGroups" :key="group.moduleId" class="plugin-group">
-            <div class="plugin-group__head">
-              <strong>{{ group.displayName }}</strong>
-              <span>{{ group.moduleId }}</span>
-            </div>
-            <div v-for="ver in group.versions" :key="ver.id" class="plugin-version-row">
-              <span class="pv-version">{{ ver.version }}</span>
-              <UiTag :type="statusTone(ver.status)" size="small" :bordered="false">
-                {{ statusText(ver.status) }}
-              </UiTag>
-              <span class="pv-meta">{{ formatSize(ver.packageSize) }}</span>
-              <span class="pv-meta">{{ formatDate(ver.publishedAtUtc) }}</span>
-              <span class="pv-note">{{ group.description || ver.releaseNotes || '-' }}</span>
-              <UiButton
-                v-if="isPublishRoute"
-                size="tiny"
-                secondary
-                type="primary"
-                @click="openUrl(ver.downloadUrl)"
-              >
-                <ExternalLink :size="13" />
-                打开
-              </UiButton>
-            </div>
-          </div>
-        </div>
-        <EmptyState
-          v-else
-          title="暂无插件"
-          description="还没有登记任何工序插件版本。"
-          style="padding: 32px 24px"
-        />
       </NiondTableCard>
     </div>
 
     <NiondTableCard v-else-if="!isPublishRoute && activeView === 'inventory'">
       <div class="table-heading">
         <div>
-          <h2>设备版本盘点</h2>
+          <h2>设备安装状态</h2>
           <p>最近一次客户端版本上报与当前 catalog 最新版本的差异</p>
         </div>
       </div>
@@ -150,7 +108,7 @@
         :row-key="(row: DeviceClientVersionInventoryDto) => row.deviceId"
       >
         <template #empty>
-          <EmptyState title="暂无盘点数据" description="未找到匹配的设备版本上报数据。" />
+          <EmptyState title="暂无安装状态" description="未找到匹配的设备版本上报数据。" />
         </template>
       </UiDataTable>
     </NiondTableCard>
@@ -189,6 +147,34 @@
         </div>
       </UiDrawerContent>
     </UiDrawer>
+
+    <UiModal v-model:show="showHistoryModal" preset="card" :title="historyModalTitle" style="width: 860px;">
+      <div v-if="selectedReleaseRow" class="history-modal">
+        <div class="history-summary">
+          <div>
+            <strong>{{ selectedReleaseRow.componentName }}</strong>
+            <code>{{ selectedReleaseRow.componentCode }}</code>
+          </div>
+          <UiTag :type="selectedReleaseRow.kind === 'host' ? 'default' : 'info'" size="small" :bordered="false">
+            {{ selectedReleaseRow.kindLabel }}
+          </UiTag>
+        </div>
+        <UiDataTable
+          :columns="historyColumns"
+          :data="selectedHistoryVersions"
+          :row-key="(row: ReleaseVersionEntry) => row.id"
+        >
+          <template #empty>
+            <EmptyState title="无历史版本" description="当前组件只有一个可见版本。" />
+          </template>
+        </UiDataTable>
+      </div>
+      <template #footer>
+        <div class="modal-actions">
+          <UiButton @click="showHistoryModal = false">关闭</UiButton>
+        </div>
+      </template>
+    </UiModal>
 
     <UiModal v-model:show="showHostModal" preset="card" title="登记宿主版本" style="width: 720px;" :mask-closable="false">
       <div class="release-form">
@@ -253,6 +239,7 @@ import {
   Boxes,
   CloudDownload,
   ExternalLink,
+  History,
   MonitorCheck,
   PackagePlus,
   Plus,
@@ -265,6 +252,7 @@ import {
   upsertClientHostReleaseApi,
   upsertClientPluginReleaseApi,
   type ClientHostVersionEntryDto,
+  type ClientPluginVersionEntryDto,
   type ClientReleaseCatalogDto,
   type DeviceClientVersionInventoryDto,
   type UpsertClientHostReleasePayload,
@@ -292,6 +280,18 @@ type ViewMode = 'catalog' | 'inventory' | 'binding';
 type TagTone = 'default' | 'primary' | 'info' | 'success' | 'warning' | 'error';
 type HostReleaseForm = Omit<UpsertClientHostReleasePayload, 'packageSize'> & { packageSize: string };
 type PluginReleaseForm = Omit<UpsertClientPluginReleasePayload, 'packageSize'> & { packageSize: string };
+type ReleaseKind = 'host' | 'plugin';
+type ReleaseVersionEntry = ClientHostVersionEntryDto | ClientPluginVersionEntryDto;
+
+interface ReleaseCatalogRow {
+  key: string;
+  kind: ReleaseKind;
+  kindLabel: string;
+  componentName: string;
+  componentCode: string;
+  currentVersion: ReleaseVersionEntry;
+  historyVersions: ReleaseVersionEntry[];
+}
 
 const authStore = useAuthStore();
 const route = useRoute();
@@ -308,7 +308,9 @@ const submitting = ref(false);
 const showHostModal = ref(false);
 const showPluginModal = ref(false);
 const showPluginDrawer = ref(false);
+const showHistoryModal = ref(false);
 const selectedInventory = ref<DeviceClientVersionInventoryDto | null>(null);
+const selectedReleaseRow = ref<ReleaseCatalogRow | null>(null);
 
 const canManage = computed(() => authStore.isAdmin || authStore.hasPermission(Permissions.Device.Update));
 const activeView = ref<ViewMode>(canManage.value ? 'binding' : 'catalog');
@@ -322,7 +324,7 @@ const pageSubtitle = computed(() =>
 const channelDisplay = computed(() => channel.value.trim() || 'stable');
 const selectedHostPackage = computed(() => {
   const versions = catalog.value?.host.versions ?? [];
-  return versions.find((version) => version.status.toLowerCase() === 'published') ?? versions[0] ?? null;
+  return versions.find((version) => version.status.toLowerCase() === 'published') ?? null;
 });
 const selectedHostPackageVersion = computed(() => selectedHostPackage.value?.version ?? null);
 
@@ -379,7 +381,7 @@ const fetchCatalog = async () => {
       channel: channel.value,
       targetRuntime: targetRuntime.value,
       onlyPublished: onlyPublished.value,
-      includeArchived: isPublishRoute.value,
+      includeArchived: true,
     });
   } catch {
     catalog.value = null;
@@ -517,6 +519,12 @@ const openPluginDrawer = (row: DeviceClientVersionInventoryDto) => {
   showPluginDrawer.value = true;
 };
 
+const openHistoryModal = (row: ReleaseCatalogRow) => {
+  if (row.historyVersions.length === 0) return;
+  selectedReleaseRow.value = row;
+  showHistoryModal.value = true;
+};
+
 const openUrl = (url: string) => {
   if (!url) return;
   window.open(url, '_blank', 'noopener,noreferrer');
@@ -556,41 +564,165 @@ const formatDate = (value?: string | null) => {
   return new Date(value).toLocaleString();
 };
 
-// 工序插件按工序(moduleId)分类，每个工序下挂它的各个版本
-const pluginGroups = computed(() => {
-  return (catalog.value?.plugins ?? []).map((plugin) => ({
-    moduleId: plugin.moduleId,
-    displayName: plugin.displayName || plugin.moduleId,
-    description: plugin.description,
-    versions: plugin.versions,
-  }));
+const pickCurrentVersion = <T extends ReleaseVersionEntry>(versions: T[]) => {
+  return versions.find((version) => version.status.toLowerCase() === 'published')
+    ?? versions.find((version) => version.status.toLowerCase() === 'deprecated')
+    ?? versions.find((version) => version.status.toLowerCase() === 'draft')
+    ?? versions[0]
+    ?? null;
+};
+
+const releaseCatalogRows = computed<ReleaseCatalogRow[]>(() => {
+  const rows: ReleaseCatalogRow[] = [];
+  const hostVersions = catalog.value?.host.versions ?? [];
+  const currentHost = pickCurrentVersion(hostVersions);
+
+  if (currentHost) {
+    rows.push({
+      key: `host:${currentHost.channel}:${currentHost.targetRuntime}`,
+      kind: 'host',
+      kindLabel: '宿主',
+      componentName: catalog.value?.host.displayName || '通用宿主',
+      componentCode: currentHost.targetRuntime,
+      currentVersion: currentHost,
+      historyVersions: hostVersions.filter((version) => version.id !== currentHost.id),
+    });
+  }
+
+  for (const plugin of catalog.value?.plugins ?? []) {
+    const currentPlugin = pickCurrentVersion(plugin.versions);
+    if (!currentPlugin) continue;
+    rows.push({
+      key: `plugin:${plugin.moduleId}`,
+      kind: 'plugin',
+      kindLabel: '工序插件',
+      componentName: plugin.displayName || plugin.moduleId,
+      componentCode: plugin.moduleId,
+      currentVersion: currentPlugin,
+      historyVersions: plugin.versions.filter((version) => version.id !== currentPlugin.id),
+    });
+  }
+
+  return rows;
 });
 
-const catalogHostColumns: UiDataTableColumn<ClientHostVersionEntryDto>[] = [
-  { title: '版本', key: 'version', minWidth: 110, render: (row) => h('strong', row.version) },
-  {
-    title: '状态',
-    key: 'status',
-    width: 100,
-    render: (row) => h(UiTag, { type: statusTone(row.status), size: 'small', bordered: false }, () => statusText(row.status)),
-  },
-  { title: '大小', key: 'packageSize', width: 110, render: (row) => h('span', formatSize(row.packageSize)) },
-  { title: '发布时间', key: 'publishedAtUtc', minWidth: 170, render: (row) => h('span', formatDate(row.publishedAtUtc)) },
-  { title: '备注', key: 'releaseNotes', minWidth: 160, render: (row) => h('span', row.releaseNotes || '-') },
-];
+const selectedHistoryVersions = computed(() => selectedReleaseRow.value?.historyVersions ?? []);
+const historyModalTitle = computed(() => (
+  selectedReleaseRow.value ? `${selectedReleaseRow.value.componentName} - 历史版本` : '历史版本'
+));
 
-const publishHostColumns: UiDataTableColumn<ClientHostVersionEntryDto>[] = [
-  ...catalogHostColumns,
-  {
-    title: '操作',
-    key: 'actions',
-    width: 110,
-    align: 'right',
-    render: (row) => h('div', { class: 'row-actions' }, [
-      h(UiButton, { size: 'tiny', secondary: true, type: 'primary', onClick: () => openUrl(row.downloadUrl) }, () => [h(ExternalLink, { size: 13 }), '打开']),
-    ]),
-  },
-];
+const releaseCatalogColumns = computed<UiDataTableColumn<ReleaseCatalogRow>[]>(() => {
+  const columns: UiDataTableColumn<ReleaseCatalogRow>[] = [
+    {
+      title: '组件 / 工序',
+      key: 'componentName',
+      minWidth: 220,
+      render: (row) => h('div', { class: 'release-cell' }, [
+        h('strong', row.componentName),
+        h('code', row.componentCode),
+      ]),
+    },
+    {
+      title: '类型',
+      key: 'kind',
+      width: 110,
+      render: (row) => h(UiTag, {
+        type: row.kind === 'host' ? 'default' : 'info',
+        size: 'small',
+        bordered: false,
+      }, () => row.kindLabel),
+    },
+    { title: '当前版本', key: 'version', width: 120, render: (row) => h('strong', row.currentVersion.version) },
+    {
+      title: '状态',
+      key: 'status',
+      width: 100,
+      render: (row) => h(UiTag, {
+        type: statusTone(row.currentVersion.status),
+        size: 'small',
+        bordered: false,
+      }, () => statusText(row.currentVersion.status)),
+    },
+    {
+      title: '发布时间',
+      key: 'publishedAtUtc',
+      minWidth: 170,
+      render: (row) => h('span', formatDate(row.currentVersion.publishedAtUtc)),
+    },
+    { title: '大小', key: 'packageSize', width: 110, render: (row) => h('span', formatSize(row.currentVersion.packageSize)) },
+    {
+      title: '更新内容',
+      key: 'releaseNotes',
+      minWidth: 220,
+      render: (row) => h('span', { class: 'release-note' }, row.currentVersion.releaseNotes || '-'),
+    },
+    {
+      title: '历史版本',
+      key: 'history',
+      width: 130,
+      render: (row) => row.historyVersions.length > 0
+        ? h(UiButton, {
+            size: 'tiny',
+            secondary: true,
+            type: 'info',
+            onClick: () => openHistoryModal(row),
+          }, () => [h(History, { size: 13 }), `查看 ${row.historyVersions.length}`])
+        : h('span', { class: 'history-empty' }, '无历史版本'),
+    },
+  ];
+
+  if (isPublishRoute.value) {
+    columns.push({
+      title: '操作',
+      key: 'actions',
+      width: 110,
+      align: 'right',
+      render: (row) => h('div', { class: 'row-actions' }, [
+        h(UiButton, {
+          size: 'tiny',
+          secondary: true,
+          type: 'primary',
+          onClick: () => openUrl(row.currentVersion.downloadUrl),
+        }, () => [h(ExternalLink, { size: 13 }), '打开']),
+      ]),
+    });
+  }
+
+  return columns;
+});
+
+const historyColumns = computed<UiDataTableColumn<ReleaseVersionEntry>[]>(() => {
+  const columns: UiDataTableColumn<ReleaseVersionEntry>[] = [
+    { title: '版本', key: 'version', width: 120, render: (row) => h('strong', row.version) },
+    {
+      title: '状态',
+      key: 'status',
+      width: 110,
+      render: (row) => h(UiTag, { type: statusTone(row.status), size: 'small', bordered: false }, () => statusText(row.status)),
+    },
+    { title: '发布时间', key: 'publishedAtUtc', minWidth: 170, render: (row) => h('span', formatDate(row.publishedAtUtc)) },
+    { title: '更新内容', key: 'releaseNotes', minWidth: 240, render: (row) => h('span', { class: 'release-note' }, row.releaseNotes || '-') },
+  ];
+
+  if (isPublishRoute.value) {
+    columns.push({
+      title: '操作',
+      key: 'actions',
+      width: 110,
+      align: 'right',
+      render: (row) => h('div', { class: 'row-actions' }, [
+        h(UiButton, {
+          size: 'tiny',
+          secondary: true,
+          type: 'primary',
+          onClick: () => openUrl(row.downloadUrl),
+        }, () => [h(ExternalLink, { size: 13 }), '打开']),
+      ]),
+    });
+  }
+
+  return columns;
+});
 
 const inventoryColumns: UiDataTableColumn<DeviceClientVersionInventoryDto>[] = [
   { title: '设备', key: 'deviceName', minWidth: 190, render: (row) => h('div', { class: 'device-cell' }, [h('strong', row.deviceName), h('code', row.clientCode)]) },
@@ -744,75 +876,36 @@ const inventoryColumns: UiDataTableColumn<DeviceClientVersionInventoryDto>[] = [
   font-weight: var(--fw-medium);
 }
 
-.plugin-groups {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding: 0 24px 22px;
-}
-
-.plugin-group {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-}
-
-.plugin-group__head {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  padding: 10px 16px;
-  background: var(--bg-2);
-}
-
-.plugin-group__head strong {
-  color: var(--text-0);
-  font-size: var(--fs-base);
-  font-weight: var(--fw-semibold);
-}
-
-.plugin-group__head span {
-  color: var(--text-2);
-  font-size: var(--fs-xs);
-}
-
-.plugin-version-row {
-  display: grid;
-  grid-template-columns: 80px 80px 90px 170px 1fr 92px;
-  align-items: center;
-  gap: var(--space-3);
-  padding: 10px 16px;
-  border-top: 1px solid var(--border);
-  font-size: var(--fs-sm);
-  color: var(--text-1);
-}
-
-.pv-version {
-  font-weight: var(--fw-semibold);
-  color: var(--text-0);
-}
-
-.pv-note {
-  overflow: hidden;
-  color: var(--text-2);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-:deep(.plugin-cell),
+:deep(.release-cell),
 :deep(.device-cell) {
   display: grid;
   gap: 3px;
+  min-width: 0;
 }
 
-:deep(.plugin-cell strong),
+:deep(.release-cell strong),
 :deep(.device-cell strong) {
   color: var(--text-0);
   font-weight: var(--fw-semibold);
 }
 
-:deep(.plugin-cell span),
+:deep(.release-cell code),
 :deep(.device-cell code) {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+:deep(.release-note) {
+  display: block;
+  max-width: 360px;
+  overflow: hidden;
+  color: var(--text-1);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:deep(.history-empty) {
   color: var(--text-2);
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
@@ -845,6 +938,39 @@ const inventoryColumns: UiDataTableColumn<DeviceClientVersionInventoryDto>[] = [
   display: flex;
   justify-content: flex-end;
   gap: var(--space-2);
+}
+
+.history-modal {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.history-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-2);
+  padding: var(--space-3) var(--space-4);
+}
+
+.history-summary > div {
+  display: grid;
+  gap: 3px;
+}
+
+.history-summary strong {
+  color: var(--text-0);
+  font-size: var(--fs-base);
+  font-weight: var(--fw-semibold);
+}
+
+.history-summary code {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
 }
 
 .drawer-stack {

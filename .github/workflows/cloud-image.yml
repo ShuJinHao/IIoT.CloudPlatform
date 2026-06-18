@@ -217,6 +217,20 @@ jobs:
 
           {
             echo "### Cloud image"
+            echo "- Service: \`${{ matrix.service }}\`"
             echo "- Image: \`$image\`"
             echo "- Release tag: \`$release_tag\`"
+            echo "- Deploy services input: \`${{ matrix.service }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          mkdir -p "$RUNNER_TEMP/cloud-built-services"
+          printf '%s\n' "${{ matrix.service }}" > "$RUNNER_TEMP/cloud-built-services/${{ matrix.service }}.txt"
+
+      - name: Upload built service hint
+        if: steps.changes.outputs.build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloud-built-service-${{ matrix.service }}
+          path: ${{ runner.temp }}/cloud-built-services/${{ matrix.service }}.txt
+          if-no-files-found: error
+          retention-days: 14
