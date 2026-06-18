@@ -41,11 +41,11 @@ require_docker_compose
 load_dotenv
 
 cleanup_temp_database() {
-  compose exec -T postgres dropdb --if-exists -U postgres "$VERIFY_DATABASE" >/dev/null 2>&1 || true
+  compose exec -T postgres dropdb -h 127.0.0.1 --if-exists -U postgres "$VERIFY_DATABASE" >/dev/null 2>&1 || true
 }
 
 drop_temp_database_strict() {
-  compose exec -T postgres dropdb --if-exists -U postgres "$VERIFY_DATABASE" >/dev/null
+  compose exec -T postgres dropdb -h 127.0.0.1 --if-exists -U postgres "$VERIFY_DATABASE" >/dev/null
 }
 
 compose up -d postgres >/dev/null
@@ -55,9 +55,9 @@ compose up -d postgres >/dev/null
 )
 
 trap cleanup_temp_database EXIT INT TERM
-compose exec -T postgres createdb -U postgres "$VERIFY_DATABASE"
-cat "$DUMP_FILE" | compose exec -T postgres pg_restore --clean --if-exists --no-owner --no-privileges -U postgres -d "$VERIFY_DATABASE"
-compose exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d "$VERIFY_DATABASE" <<'SQL'
+compose exec -T postgres createdb -h 127.0.0.1 -U postgres "$VERIFY_DATABASE"
+cat "$DUMP_FILE" | compose exec -T postgres pg_restore -h 127.0.0.1 --clean --if-exists --no-owner --no-privileges -U postgres -d "$VERIFY_DATABASE"
+compose exec -T postgres psql -h 127.0.0.1 -v ON_ERROR_STOP=1 -U postgres -d "$VERIFY_DATABASE" <<'SQL'
 select count(*) from devices;
 select count(*) from employees;
 select count(*) from recipes;

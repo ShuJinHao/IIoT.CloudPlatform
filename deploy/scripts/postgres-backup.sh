@@ -15,6 +15,7 @@ require_docker_compose
 load_dotenv
 
 BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-14}
+POSTGRES_READY_ATTEMPTS=${POSTGRES_READY_ATTEMPTS:-30}
 
 cleanup_old_backups() {
   find "$BACKUP_DIR" -maxdepth 1 -type f -name 'iiot-db-*.dump' -mtime +"$BACKUP_RETENTION_DAYS" -print |
@@ -37,7 +38,24 @@ cleanup_old_backups() {
 
 mkdir -p "$BACKUP_DIR"
 compose up -d postgres >/dev/null
-compose exec -T postgres pg_dump -Fc -U postgres -d iiot-db > "$BACKUP_FILE"
+
+attempt=1
+while [ "$attempt" -le "$POSTGRES_READY_ATTEMPTS" ]
+do
+  if compose exec -T postgres pg_isready -h 127.0.0.1 -U postgres -d iiot-db >/dev/null 2>&1; then
+    break
+  fi
+
+  if [ "$attempt" -eq "$POSTGRES_READY_ATTEMPTS" ]; then
+    printf 'PostgreSQL was not ready for backup after %s attempts.\n' "$POSTGRES_READY_ATTEMPTS" >&2
+    exit 1
+  fi
+
+  sleep 2
+  attempt=$((attempt + 1))
+done
+
+compose exec -T postgres pg_dump -h 127.0.0.1 -Fc -U postgres -d iiot-db > "$BACKUP_FILE"
 (
   cd "$BACKUP_DIR"
   sha256sum "$(basename "$BACKUP_FILE")" > "$(basename "$CHECKSUM_FILE")"

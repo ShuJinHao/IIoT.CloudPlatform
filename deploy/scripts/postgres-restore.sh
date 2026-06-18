@@ -35,7 +35,7 @@ load_dotenv
 
 compose up -d postgres redis-cache rabbitmq seq >/dev/null
 compose stop nginx-gateway iiot-web iiot-gateway iiot-httpapi iiot-dataworker >/dev/null
-cat "$DUMP_FILE" | compose exec -T postgres pg_restore --clean --if-exists --no-owner --no-privileges -U postgres -d iiot-db
+cat "$DUMP_FILE" | compose exec -T postgres pg_restore -h 127.0.0.1 --clean --if-exists --no-owner --no-privileges -U postgres -d iiot-db
 compose run --rm iiot-migration
 compose up -d iiot-httpapi iiot-gateway iiot-dataworker iiot-web nginx-gateway >/dev/null
 "$SCRIPT_DIR/ops-check.sh"
