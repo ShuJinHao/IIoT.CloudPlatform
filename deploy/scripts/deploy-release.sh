@@ -173,6 +173,14 @@ hydrate_unselected_images_from_running_containers() {
     service=$(service_for_image_key "$key")
     container_id=$(compose ps -q "$service" 2>/dev/null | head -n 1 || true)
     if [ -z "$container_id" ]; then
+      if [ "$key" = "IIOT_MIGRATION_IMAGE" ]; then
+        dotenv_image_ref=$(read_manifest_value "$DEPLOY_DIR/.env" "$key")
+        if ! image_ref_is_placeholder "$dotenv_image_ref"; then
+          eval "$key=\$dotenv_image_ref"
+          continue
+        fi
+      fi
+
       printf 'Current release image is not usable and no running container was found: %s=%s\n' "$key" "$image_ref" >&2
       exit 66
     fi
