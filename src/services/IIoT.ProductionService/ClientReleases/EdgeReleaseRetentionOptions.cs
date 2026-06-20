@@ -4,7 +4,7 @@ public sealed class EdgeReleaseRetentionOptions
 {
     public const string SectionName = "EdgeRelease";
 
-    public int MaxVersionsPerComponent { get; set; } = 5;
+    public int MaxVersionsPerComponent { get; set; } = 3;
 
     public void Validate()
     {

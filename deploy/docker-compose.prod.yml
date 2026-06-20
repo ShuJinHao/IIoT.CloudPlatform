@@ -122,6 +122,9 @@ services:
       BootstrapAuth__RequireSecret: ${BOOTSTRAP_AUTH_REQUIRE_SECRET}
       EdgeInstallerArtifacts__RootPath: /app/edge-updates/installers
       EdgeInstallerArtifacts__VelopackReleasesBaseUrl: ${PUBLIC_BASE_URL}/edge-updates/velopack
+      EdgeRelease__MaxVersionsPerComponent: ${EDGE_RELEASE_MAX_VERSIONS_PER_COMPONENT:-3}
+      EdgeReleaseUpload__MaxUploadMbps: ${EDGE_RELEASE_UPLOAD_MAX_MBPS:-100}
+      EdgeReleaseUpload__MaxBundleBytes: ${EDGE_RELEASE_UPLOAD_MAX_BUNDLE_BYTES:-2147483648}
       ALLOW_INTRANET_HTTP_OIDC: ${ALLOW_INTRANET_HTTP_OIDC:-false}
       OidcProvider__Issuer: ${OIDC_PROVIDER_ISSUER}
       OidcProvider__AllowIntranetHttpOidc: ${ALLOW_INTRANET_HTTP_OIDC:-false}
@@ -135,7 +138,8 @@ services:
       Seq__ApiKey: ${SEQ_API_KEY}
     volumes:
       - ${OIDC_PROVIDER_CERTS_DIR:-/srv/iiot-cloud/deploy/certs}:/app/certs:ro
-      - ${EDGE_UPDATES_DIR:-/srv/iiot/edge-updates}:/app/edge-updates:ro
+      # 内网受控 Edge HTTP 发布需要 HttpApi 写 staging 和最终发布目录；nginx 仍只读对外提供下载。
+      - ${EDGE_UPDATES_DIR:-/srv/iiot/edge-updates}:/app/edge-updates:rw
       - httpapi-logs:/app/logs
     depends_on:
       postgres:
@@ -157,6 +161,7 @@ services:
       ASPNETCORE_URLS: http://+:8080
       # Single-node launch keeps one explicit upstream destination.
       ReverseProxy__Clusters__httpapi__Destinations__primary__Address: http://iiot-httpapi:8080/
+      EdgeReleaseUpload__MaxBundleBytes: ${EDGE_RELEASE_UPLOAD_MAX_BUNDLE_BYTES:-2147483648}
       Seq__Enabled: true
       Seq__ServerUrl: ${SEQ_SERVER_URL}
       Seq__ApiKey: ${SEQ_API_KEY}

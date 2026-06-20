@@ -3,6 +3,12 @@ using IIoT.Infrastructure.Logging;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.Limits.MaxRequestBodySize = builder.Configuration
+        .GetValue<long?>("EdgeReleaseUpload:MaxBundleBytes")
+        ?? 2L * 1024 * 1024 * 1024;
+});
 
 builder.AddSerilog("gateway");
 builder.AddServiceDefaults();

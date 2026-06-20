@@ -42,6 +42,11 @@ export const Permissions = {
     Define: 'Role.Define',
     Update: 'Role.Update',
   },
+
+  // ===== 客户端发布 =====
+  ClientRelease: {
+    Publish: 'ClientRelease.Publish',
+  },
 } as const;
 
 // 提取所有权限点的联合类型，用于 TypeScript 严格校验

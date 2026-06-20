@@ -1,19 +1,289 @@
 using System.Linq.Expressions;
+using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.Commands.ClientReleases;
 using IIoT.ProductionService.Commands.ClientVersions;
 using IIoT.ProductionService.Queries.ClientReleases;
+using IIoT.Services.Contracts.Auditing;
+using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.RecordQueries;
+using IIoT.Services.CrossCutting.Attributes;
 using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Specification;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace IIoT.ProductionService.Tests;
 
 public sealed class ClientReleaseBehaviorTests
 {
+    [Fact]
+    public void EdgeReleaseRetentionOptions_ShouldDefaultToThreeVersions()
+    {
+        var options = new EdgeReleaseRetentionOptions();
+
+        Assert.Equal(3, options.MaxVersionsPerComponent);
+    }
+
+    [Fact]
+    public void EdgeReleaseUploadOptions_ShouldDefaultToControlledLargeBundleUpload()
+    {
+        var options = new EdgeReleaseUploadOptions();
+
+        Assert.Equal(100, options.MaxUploadMbps);
+        Assert.Equal(EdgeReleaseUploadOptions.DefaultMaxBundleBytes, options.MaxBundleBytes);
+        Assert.Equal(".staging", options.StagingDirectoryName);
+    }
+
+    [Fact]
+    public void PublishEdgeReleaseBundleCommand_ShouldRequirePublishPermissionAndAdminOnly()
+    {
+        var permission = typeof(PublishEdgeReleaseBundleCommand)
+            .GetCustomAttributes(typeof(AuthorizeRequirementAttribute), inherit: false)
+            .Cast<AuthorizeRequirementAttribute>()
+            .Single();
+
+        Assert.Equal(ClientReleasePermissions.Publish, permission.Permission);
+        Assert.NotEmpty(typeof(PublishEdgeReleaseBundleCommand)
+            .GetCustomAttributes(typeof(AdminOnlyAttribute), inherit: false));
+    }
+
+    [Fact]
+    public async Task PublishEdgeReleaseBundleHandler_ShouldPublishFilesRowsAuditAndSummary()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-edge-upload-root");
+        var bundle = CreateEdgeReleaseBundle("1.2.0");
+        try
+        {
+            var hostRepository = new InMemoryRepository<ClientHostRelease>();
+            var pluginRepository = new InMemoryRepository<ClientPluginRelease>();
+            var auditTrail = new RecordingAuditTrailService();
+            var handler = CreatePublishHandler(edgeRoot, hostRepository, pluginRepository, new NoopRetentionService(), auditTrail);
+
+            var result = await PublishBundleAsync(handler, bundle.ZipPath);
+
+            Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
+            Assert.NotNull(result.Value);
+            Assert.Equal("1.2.0", result.Value!.Version);
+            Assert.True(result.Value.CleanupSucceeded);
+            Assert.Null(result.Value.CleanupWarning);
+            Assert.True(Directory.Exists(Path.Combine(edgeRoot, "installers", "stable", "1.2.0")));
+            Assert.True(File.Exists(Path.Combine(edgeRoot, "velopack", "stable", "releases.stable.json")));
+            Assert.Single(hostRepository.Items);
+            Assert.Single(pluginRepository.Items);
+            Assert.Contains(auditTrail.Entries, entry => entry.Succeeded && entry.OperationType == "ClientRelease.Publish");
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            bundle.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task PublishEdgeReleaseBundleHandler_ShouldRollbackFilesAndHideCatalog_WhenDatabaseCommitFails()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-edge-upload-root");
+        var bundle = CreateEdgeReleaseBundle("1.2.1");
+        Directory.CreateDirectory(Path.Combine(edgeRoot, "velopack", "stable"));
+        File.WriteAllText(Path.Combine(edgeRoot, "velopack", "stable", "releases.stable.json"), "old-manifest");
+        File.WriteAllText(Path.Combine(edgeRoot, "velopack", "stable", "assets.stable.json"), "old-assets");
+        File.WriteAllText(Path.Combine(edgeRoot, "velopack", "stable", "old-1.0.0.nupkg"), "old");
+        try
+        {
+            var hostRepository = new InMemoryRepository<ClientHostRelease>
+            {
+                SaveChangesException = new InvalidOperationException("db unavailable")
+            };
+            var pluginRepository = new InMemoryRepository<ClientPluginRelease>();
+            var auditTrail = new RecordingAuditTrailService();
+            var handler = CreatePublishHandler(edgeRoot, hostRepository, pluginRepository, new NoopRetentionService(), auditTrail);
+
+            var result = await PublishBundleAsync(handler, bundle.ZipPath);
+
+            Assert.False(result.IsSuccess);
+            Assert.False(Directory.Exists(Path.Combine(edgeRoot, "installers", "stable", "1.2.1")));
+            Assert.Equal("old-manifest", File.ReadAllText(Path.Combine(edgeRoot, "velopack", "stable", "releases.stable.json")));
+            Assert.Equal("old-assets", File.ReadAllText(Path.Combine(edgeRoot, "velopack", "stable", "assets.stable.json")));
+            Assert.False(File.Exists(Path.Combine(edgeRoot, "velopack", "stable", "IIoT.EdgeClient-1.2.1-full.nupkg")));
+
+            var artifactCatalog = await new EdgeInstallerArtifactCatalogReader(
+                    Options.Create(new EdgeInstallerArtifactOptions
+                    {
+                        RootPath = Path.Combine(edgeRoot, "installers")
+                    }))
+                .ReadAsync("stable", "win-x64");
+            Assert.Empty(artifactCatalog.HostReleases);
+            Assert.Contains(auditTrail.Entries, entry => !entry.Succeeded && entry.FailureReason?.Contains("db unavailable", StringComparison.Ordinal) == true);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            bundle.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task PublishEdgeReleaseBundleHandler_ShouldKeepPublishedVersion_WhenRetentionCleanupFails()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-edge-upload-root");
+        var bundle = CreateEdgeReleaseBundle("1.2.2");
+        try
+        {
+            var hostRepository = new InMemoryRepository<ClientHostRelease>();
+            var pluginRepository = new InMemoryRepository<ClientPluginRelease>();
+            var auditTrail = new RecordingAuditTrailService();
+            var handler = CreatePublishHandler(
+                edgeRoot,
+                hostRepository,
+                pluginRepository,
+                new ThrowingRetentionService("retention down"),
+                auditTrail);
+
+            var result = await PublishBundleAsync(handler, bundle.ZipPath);
+
+            Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
+            Assert.NotNull(result.Value);
+            Assert.False(result.Value!.CleanupSucceeded);
+            Assert.Contains("retention down", result.Value.CleanupWarning, StringComparison.Ordinal);
+            Assert.True(Directory.Exists(Path.Combine(edgeRoot, "installers", "stable", "1.2.2")));
+            Assert.Single(hostRepository.Items);
+            Assert.Single(pluginRepository.Items);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            bundle.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task PublishEdgeReleaseBundleHandler_ShouldNotDeleteArchivedNupkgReferencedByCurrentVelopackManifest()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-edge-upload-root");
+        var oldNupkg = Path.Combine(edgeRoot, "velopack", "stable", "IIoT.EdgeClient-1.0.0-full.nupkg");
+        Directory.CreateDirectory(Path.GetDirectoryName(oldNupkg)!);
+        File.WriteAllText(oldNupkg, "old nupkg");
+        Directory.CreateDirectory(Path.Combine(edgeRoot, "installers", "stable", "1.0.0"));
+        File.WriteAllText(Path.Combine(edgeRoot, "installers", "stable", "1.0.0", "installer-artifact.json"), "{}");
+
+        var bundle = CreateEdgeReleaseBundle(
+            "1.2.4",
+            mutateVelopackRoot: velopackRoot =>
+            {
+                WriteFile(
+                    Path.Combine(velopackRoot, "releases.stable.json"),
+                    """{"packages":["IIoT.EdgeClient-1.0.0-full.nupkg","IIoT.EdgeClient-1.2.4-full.nupkg"]}""");
+                WriteFile(
+                    Path.Combine(velopackRoot, "assets.stable.json"),
+                    """{"assets":["IIoT.EdgeClient-1.0.0-full.nupkg","IIoT.EdgeClient-1.2.4-full.nupkg"]}""");
+            });
+        try
+        {
+            var hostRepository = new InMemoryRepository<ClientHostRelease>();
+            hostRepository.Items.Add(new ClientHostRelease(
+                "stable",
+                "1.0.0",
+                "1.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/installers/stable/1.0.0/installer-artifact.json",
+                new string('c', 64),
+                1024,
+                "old",
+                ClientReleaseStatus.Archived,
+                null,
+                "IIoT"));
+
+            var pluginRepository = new InMemoryRepository<ClientPluginRelease>();
+            var handler = CreatePublishHandler(
+                edgeRoot,
+                hostRepository,
+                pluginRepository,
+                new NoopRetentionService(),
+                new RecordingAuditTrailService());
+
+            var result = await PublishBundleAsync(handler, bundle.ZipPath);
+
+            Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
+            Assert.False(Directory.Exists(Path.Combine(edgeRoot, "installers", "stable", "1.0.0")));
+            Assert.True(File.Exists(oldNupkg));
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            bundle.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task PublishEdgeReleaseBundleHandler_ShouldRejectForbiddenFilesWithoutLeavingInstaller()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-edge-upload-root");
+        var bundle = CreateEdgeReleaseBundle(
+            "1.2.3",
+            installerRoot => File.WriteAllText(Path.Combine(installerRoot, "launcher", "launcher.accounts.json"), "{}"));
+        try
+        {
+            var handler = CreatePublishHandler(
+                edgeRoot,
+                new InMemoryRepository<ClientHostRelease>(),
+                new InMemoryRepository<ClientPluginRelease>(),
+                new NoopRetentionService(),
+                new RecordingAuditTrailService());
+
+            var result = await PublishBundleAsync(handler, bundle.ZipPath);
+
+            Assert.False(result.IsSuccess);
+            Assert.Contains(result.Errors ?? [], error => error.Contains("禁止上传", StringComparison.Ordinal));
+            Assert.False(Directory.Exists(Path.Combine(edgeRoot, "installers", "stable", "1.2.3")));
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            bundle.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task PublishEdgeReleaseBundleHandler_ShouldRejectZipTraversal()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-edge-upload-root");
+        var bundlePath = Path.Combine(CreateTempDirectory("iiot-edge-upload-bundle"), "bundle.zip");
+        try
+        {
+            using (var archive = ZipFile.Open(bundlePath, ZipArchiveMode.Create))
+            {
+                var entry = archive.CreateEntry("../evil.txt");
+                await using var stream = entry.Open();
+                await stream.WriteAsync("evil"u8.ToArray());
+            }
+
+            var handler = CreatePublishHandler(
+                edgeRoot,
+                new InMemoryRepository<ClientHostRelease>(),
+                new InMemoryRepository<ClientPluginRelease>(),
+                new NoopRetentionService(),
+                new RecordingAuditTrailService());
+
+            var result = await PublishBundleAsync(handler, bundlePath);
+
+            Assert.False(result.IsSuccess);
+            Assert.Contains(result.Errors ?? [], error => error.Contains("非法 zip 路径", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            TryDeleteDirectory(Path.GetDirectoryName(bundlePath)!);
+        }
+    }
+
     [Fact]
     public async Task UpsertClientHostReleaseHandler_ShouldCreateReleaseRecord()
     {
@@ -318,6 +588,268 @@ public sealed class ClientReleaseBehaviorTests
         }
     }
 
+    private static PublishEdgeReleaseBundleHandler CreatePublishHandler(
+        string edgeRoot,
+        InMemoryRepository<ClientHostRelease> hostRepository,
+        InMemoryRepository<ClientPluginRelease> pluginRepository,
+        IClientReleaseRetentionService retentionService,
+        RecordingAuditTrailService auditTrail)
+    {
+        return new PublishEdgeReleaseBundleHandler(
+            Options.Create(new EdgeInstallerArtifactOptions
+            {
+                RootPath = Path.Combine(edgeRoot, "installers")
+            }),
+            Options.Create(new EdgeReleaseUploadOptions
+            {
+                MaxUploadMbps = 1000,
+                MaxBundleBytes = EdgeReleaseUploadOptions.DefaultMaxBundleBytes,
+                StagingDirectoryName = ".staging"
+            }),
+            hostRepository,
+            pluginRepository,
+            retentionService,
+            new TestCurrentUser(),
+            auditTrail);
+    }
+
+    private static async Task<IIoT.SharedKernel.Result.Result<EdgeReleaseBundlePublishResultDto>> PublishBundleAsync(
+        PublishEdgeReleaseBundleHandler handler,
+        string bundlePath)
+    {
+        await using var stream = File.OpenRead(bundlePath);
+        return await handler.Handle(
+            new PublishEdgeReleaseBundleCommand(
+                stream,
+                new FileInfo(bundlePath).Length,
+                "application/zip",
+                "127.0.0.1"),
+            CancellationToken.None);
+    }
+
+    private static EdgeReleaseBundleFixture CreateEdgeReleaseBundle(
+        string version,
+        Action<string>? mutateInstallerRoot = null,
+        Action<string>? mutateVelopackRoot = null)
+    {
+        var workingRoot = CreateTempDirectory("iiot-edge-upload-bundle");
+        var bundleRoot = Path.Combine(workingRoot, "bundle");
+        var installerRoot = Path.Combine(bundleRoot, "installer");
+        var velopackRoot = Path.Combine(bundleRoot, "velopack");
+        Directory.CreateDirectory(installerRoot);
+        Directory.CreateDirectory(velopackRoot);
+
+        WriteFile(Path.Combine(installerRoot, "IIoT.Edge.Setup.exe"), $"setup {version}");
+        WriteFile(Path.Combine(installerRoot, "launcher", "launcher.txt"), "launcher");
+        WriteFile(Path.Combine(installerRoot, "host", "host.dll"), $"host {version}");
+        WriteFile(Path.Combine(installerRoot, "plugins", "Homogenization", "plugin.dll"), $"plugin {version}");
+        WriteFile(Path.Combine(installerRoot, "velopack", "IIoT.Edge.Setup.exe"), $"velopack setup {version}");
+
+        WriteFile(Path.Combine(velopackRoot, $"IIoT.EdgeClient-{version}-full.nupkg"), $"nupkg {version}");
+        WriteFile(Path.Combine(velopackRoot, "releases.stable.json"), $$"""{"packages":["IIoT.EdgeClient-{{version}}-full.nupkg"]}""");
+        WriteFile(Path.Combine(velopackRoot, "assets.stable.json"), $$"""{"assets":["IIoT.EdgeClient-{{version}}-full.nupkg"]}""");
+
+        mutateInstallerRoot?.Invoke(installerRoot);
+        mutateVelopackRoot?.Invoke(velopackRoot);
+
+        var setupPath = Path.Combine(installerRoot, "IIoT.Edge.Setup.exe");
+        var hostRoot = Path.Combine(installerRoot, "host");
+        var velopackSetupPath = Path.Combine(installerRoot, "velopack", "IIoT.Edge.Setup.exe");
+        var pluginRoot = Path.Combine(installerRoot, "plugins", "Homogenization");
+        var manifest = new
+        {
+            schemaVersion = ClientReleaseCatalogSchema.Version,
+            channel = "stable",
+            version,
+            hostApiVersion = "1.0.0",
+            targetRuntime = "win-x64",
+            targetFramework = "net10.0",
+            generatedAtUtc = DateTime.UtcNow,
+            sourceCommit = new string('a', 40),
+            previousVersion = "1.1.9",
+            previousSourceCommit = new string('b', 40),
+            releaseNotes = $"release {version}\n- changed",
+            installerStubFile = "IIoT.Edge.Setup.exe",
+            installerStubSha256 = HashFile(setupPath),
+            installerStubSize = new FileInfo(setupPath).Length,
+            launcherDirectory = "launcher",
+            hostDirectory = "host",
+            hostDirectorySha256 = HashDirectory(hostRoot),
+            hostDirectorySize = GetDirectorySize(hostRoot),
+            pluginsRoot = "plugins",
+            velopackSetupFile = "velopack/IIoT.Edge.Setup.exe",
+            velopackSetupSha256 = HashFile(velopackSetupPath),
+            velopackSetupSize = new FileInfo(velopackSetupPath).Length,
+            modules = new[]
+            {
+                new
+                {
+                    moduleId = "Homogenization",
+                    displayName = "匀浆",
+                    description = "匀浆工序插件",
+                    version = "1.0.0",
+                    hostApiVersion = "1.0.0",
+                    minHostVersion = "1.0.0",
+                    maxHostVersion = "99.0.0",
+                    pluginDirectory = "Homogenization",
+                    pluginSha256 = HashDirectory(pluginRoot),
+                    pluginSize = GetDirectorySize(pluginRoot)
+                }
+            }
+        };
+        File.WriteAllText(
+            Path.Combine(installerRoot, "installer-artifact.json"),
+            JsonSerializer.Serialize(manifest, new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+            new UTF8Encoding(false));
+
+        var zipPath = Path.Combine(workingRoot, "bundle.zip");
+        ZipFile.CreateFromDirectory(bundleRoot, zipPath);
+        return new EdgeReleaseBundleFixture(workingRoot, zipPath);
+    }
+
+    private static string CreateTempDirectory(string prefix)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"{prefix}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    private static void WriteFile(string path, string content)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content, new UTF8Encoding(false));
+    }
+
+    private static string HashFile(string file)
+    {
+        using var stream = File.OpenRead(file);
+        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+    }
+
+    private static string HashDirectory(string directory)
+    {
+        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
+                     .OrderBy(path => Path.GetRelativePath(directory, path).Replace('\\', '/'), StringComparer.Ordinal))
+        {
+            var relativePath = Path.GetRelativePath(directory, file).Replace('\\', '/');
+            hasher.AppendData(Encoding.UTF8.GetBytes(relativePath));
+            hasher.AppendData([0]);
+            using var stream = File.OpenRead(file);
+            stream.CopyTo(new HashAppendStream(hasher));
+            hasher.AppendData([10]);
+        }
+
+        return Convert.ToHexString(hasher.GetHashAndReset()).ToLowerInvariant();
+    }
+
+    private static long GetDirectorySize(string directory)
+        => Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
+            .Sum(file => new FileInfo(file).Length);
+
+    private static void TryDeleteDirectory(string path)
+    {
+        if (Directory.Exists(path))
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    private sealed record EdgeReleaseBundleFixture(string WorkingRoot, string ZipPath) : IDisposable
+    {
+        public void Dispose()
+        {
+            TryDeleteDirectory(WorkingRoot);
+        }
+    }
+
+    private sealed class RecordingAuditTrailService : IAuditTrailService
+    {
+        public List<AuditTrailEntry> Entries { get; } = [];
+
+        public Task TryWriteAsync(AuditTrailEntry entry, CancellationToken cancellationToken = default)
+        {
+            Entries.Add(entry);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class TestCurrentUser : ICurrentUser
+    {
+        public string? Id { get; init; } = Guid.NewGuid().ToString();
+
+        public string? UserName { get; init; } = "tester";
+
+        public string? Role { get; init; } = "Administrator";
+
+        public Guid? DeviceId => null;
+
+        public bool IsAuthenticated => true;
+    }
+
+    private sealed class ThrowingRetentionService(string message) : IClientReleaseRetentionService
+    {
+        public Task<int> GetMaxVersionsPerComponentAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(3);
+        }
+
+        public Task ApplyHostPolicyAsync(
+            string channel,
+            string targetRuntime,
+            CancellationToken cancellationToken = default)
+        {
+            throw new InvalidOperationException(message);
+        }
+
+        public Task ApplyPluginPolicyAsync(
+            string moduleId,
+            string channel,
+            string targetRuntime,
+            CancellationToken cancellationToken = default)
+        {
+            throw new InvalidOperationException(message);
+        }
+    }
+
+    private sealed class HashAppendStream(IncrementalHash hasher) : Stream
+    {
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin)
+            => throw new NotSupportedException();
+
+        public override void SetLength(long value)
+            => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+            => hasher.AppendData(buffer.AsSpan(offset, count));
+    }
+
     private sealed class StubDeviceIdentityQueryService(DeviceIdentitySnapshot? snapshot) : IDeviceIdentityQueryService
     {
         public Task<DeviceIdentitySnapshot?> GetByDeviceIdAsync(
@@ -431,6 +963,8 @@ public sealed class ClientReleaseBehaviorTests
 
         public T? AddedEntity { get; private set; }
 
+        public Exception? SaveChangesException { get; init; }
+
         public T Add(T entity)
         {
             AddedEntity = entity;
@@ -449,6 +983,11 @@ public sealed class ClientReleaseBehaviorTests
 
         public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
         {
+            if (SaveChangesException is not null)
+            {
+                throw SaveChangesException;
+            }
+
             return Task.FromResult(1);
         }
 

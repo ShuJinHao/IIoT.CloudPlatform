@@ -1,6 +1,8 @@
 using IIoT.HttpApi.Infrastructure;
 using IIoT.ProductionService.Commands.ClientReleases;
+using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.Queries.ClientReleases;
+using IIoT.SharedKernel.Result;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -89,6 +91,34 @@ public sealed class HumanClientReleaseController : ApiControllerBase
 
         Response.Headers.CacheControl = "no-store";
         return File(result.Value!.Content, result.Value.ContentType, result.Value.FileName);
+    }
+
+    [HttpPost("edge-release-bundles")]
+    [RequestSizeLimit(EdgeReleaseUploadOptions.DefaultMaxBundleBytes)]
+    public async Task<IActionResult> PublishEdgeReleaseBundle(CancellationToken cancellationToken)
+    {
+        var result = await Sender.Send(
+            new PublishEdgeReleaseBundleCommand(
+                Request.Body,
+                Request.ContentLength,
+                Request.ContentType,
+                HttpContext.Connection.RemoteIpAddress?.ToString()),
+            cancellationToken);
+
+        if (!result.IsSuccess
+            && result.Status == ResultStatus.Invalid
+            && result.Errors?.Contains(PublishEdgeReleaseBundleHandler.UploadInProgressMessage) == true)
+        {
+            return Conflict(new ProblemDetails
+            {
+                Status = StatusCodes.Status409Conflict,
+                Title = "Edge 发布上传正在执行",
+                Detail = result.Errors.Single(),
+                Instance = HttpContext.Request.Path
+            });
+        }
+
+        return ReturnResult(result);
     }
 
     [HttpPost("host-releases")]

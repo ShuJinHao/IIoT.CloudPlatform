@@ -910,15 +910,37 @@ internal sealed class EdgeInstallerArtifactManifest
 
     public string? TargetFramework { get; set; }
 
+    public DateTime? GeneratedAtUtc { get; set; }
+
+    public string? SourceCommit { get; set; }
+
+    public string? PreviousVersion { get; set; }
+
+    public string? PreviousSourceCommit { get; set; }
+
+    public string? ReleaseNotes { get; set; }
+
     public string InstallerStubFile { get; set; } = string.Empty;
+
+    public string? InstallerStubSha256 { get; set; }
+
+    public long InstallerStubSize { get; set; }
 
     public string LauncherDirectory { get; set; } = "launcher";
 
     public string HostDirectory { get; set; } = "host";
 
+    public string? HostDirectorySha256 { get; set; }
+
+    public long HostDirectorySize { get; set; }
+
     public string PluginsRoot { get; set; } = "plugins";
 
     public string? VelopackSetupFile { get; set; }
+
+    public string? VelopackSetupSha256 { get; set; }
+
+    public long VelopackSetupSize { get; set; }
 
     public List<EdgeInstallerArtifactModule> Modules { get; set; } = [];
 
@@ -933,6 +955,8 @@ internal sealed class EdgeInstallerArtifactModule
 
     public string DisplayName { get; set; } = string.Empty;
 
+    public string? Description { get; set; }
+
     public string Version { get; set; } = string.Empty;
 
     public string HostApiVersion { get; set; } = string.Empty;
@@ -942,6 +966,10 @@ internal sealed class EdgeInstallerArtifactModule
     public string MaxHostVersion { get; set; } = string.Empty;
 
     public string PluginDirectory { get; set; } = string.Empty;
+
+    public string? PluginSha256 { get; set; }
+
+    public long PluginSize { get; set; }
 }
 
 internal sealed record EdgeInstallerHostPluginManifest(

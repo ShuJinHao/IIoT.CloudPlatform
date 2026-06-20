@@ -2,6 +2,7 @@ using IIoT.HttpApi;
 using IIoT.HttpApi.Infrastructure;
 using IIoT.HttpApi.Infrastructure.OpenApi;
 using IIoT.Infrastructure.Logging;
+using IIoT.ProductionService.ClientReleases;
 using IIoT.SharedKernel.Paging;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -9,6 +10,12 @@ using Microsoft.OpenApi;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.Limits.MaxRequestBodySize = builder.Configuration
+        .GetValue<long?>($"{EdgeReleaseUploadOptions.SectionName}:{nameof(EdgeReleaseUploadOptions.MaxBundleBytes)}")
+        ?? EdgeReleaseUploadOptions.DefaultMaxBundleBytes;
+});
 builder.Configuration.AddJsonFile("config/pass-station-types.json", optional: false, reloadOnChange: false);
 
 builder.AddSerilog("httpapi");

@@ -12,7 +12,7 @@
 - runner 必须使用专用非 root 用户运行，例如 `github-runner`，不能用 root 跑 Actions 服务。
 - 服务器 Docker Root Dir 固定为 `/data/docker`，runner 工作目录固定在 `/data/github-runner/*`，不要把构建缓存和 runner workdir 放回系统盘。
 - Docker Hub 不作为生产依赖源；compose 第三方镜像和 Web Dockerfile 的 Node/Nginx 基础镜像必须先同步到 Harbor mirror。
-- Edge 客户端安装素材不进 Harbor；日常 push main 只跑 smoke，完整 GitHub 打包只在 `workflow_dispatch` 或 `edge-v*` / `v*` tag 时执行；日常快发可以由操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1` 发布到服务器 `${EDGE_UPDATES_DIR}/installers/stable/{version}` 和 `${EDGE_UPDATES_DIR}/velopack/stable`。
+- Edge 客户端安装素材不进 Harbor；日常 push main 只跑 smoke，完整 GitHub 打包只在 `workflow_dispatch` 或 `edge-v*` / `v*` tag 时执行；日常快发由操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1 -Transport http`，本机完成编译打包后通过内网受控 HTTP 上传到服务器 `${EDGE_UPDATES_DIR}/installers/stable/{version}` 和 `${EDGE_UPDATES_DIR}/velopack/stable`。`rsync/scp` 只作为 HTTP 通道不可用时的 fallback。
 - 生产服务器只允许 Edge `stable` 渠道；发布脚本必须拒绝并清理 `ci`、`dev`、`test` 等非 `stable` 渠道目录。
 - Cloud catalog 会扫描 `/app/edge-updates/installers/stable/{version}/installer-artifact.json` 并与数据库 release 记录合并；同 key 数据库记录优先，可用于 Draft/Archived 抑制文件落盘版本。
 - 本地手工 Docker 构建和服务器手工部署只作为应急 fallback，不是标准 Cloud/AI 发布流程。
@@ -112,7 +112,7 @@ Edge 客户端产物不属于 Cloud Docker 镜像，也不进入 Harbor。当前
 
 - `push main`：只跑 smoke 编译和测试，不发布安装包。
 - `workflow_dispatch` 或 `edge-v*` / `v*` tag：由 GitHub hosted `windows-latest` 构建 runtime、installer artifact 和 Velopack releases，再由内网 `iiot-linux-prod` runner 把 GitHub Actions artifacts 发布到 `${EDGE_UPDATES_DIR}`，渠道固定为 `stable`。
-- 日常快发：操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1`，本机编译和打包后通过 rsync/scp 发布到 `${EDGE_UPDATES_DIR}`，渠道固定为 `stable`。这是本机运维快发路径，不是 GitHub CI/CD job。
+- 日常快发：操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1 -Transport http`，本机编译、Velopack 打包、生成 installer artifact 后，通过 Cloud Human API 上传 release bundle。上传默认限速 `100 Mbps`、单并发、服务端审计，渠道固定为 `stable`。这是本机运维快发路径，不是 GitHub CI/CD job。`rsync/scp` 仅保留为 fallback。
 
 GitHub 完整打包流程固定为：
 
@@ -124,7 +124,7 @@ IIoT.EdgeClient workflow_dispatch / tag
 -> 本地发布到 ${EDGE_UPDATES_DIR:-/srv/iiot/edge-updates}
 ```
 
-CloudPlatform 不负责构建或上传 Edge 安装素材，只负责把 `${EDGE_UPDATES_DIR}` 只读挂载给 HttpApi 和 Nginx。发布后的目录固定为：
+CloudPlatform 不负责构建 Edge 安装素材。日常快发时，Cloud Human API 负责接收本机生成的 release bundle、校验、限速、落盘和登记 DB release 行；Nginx 仍只读提供静态下载。发布后的目录固定为：
 
 ```text
 ${EDGE_UPDATES_DIR}/installers/stable/1.2.0/
@@ -142,7 +142,7 @@ ${EDGE_UPDATES_DIR}/velopack/stable/
   *-Portable.zip
 ```
 
-`iiot-httpapi` 以只读方式挂载 `${EDGE_UPDATES_DIR}` 到 `/app/edge-updates`，通过 `EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers` 读取安装素材，并通过 `EdgeInstallerArtifacts__VelopackReleasesBaseUrl=${PUBLIC_BASE_URL}/edge-updates/velopack` 返回运行时更新源。Cloud 的公开下载目录、Edge catalog 和 Human catalog 会扫描 `installer-artifact.json` v2 并与数据库 release 记录合并，因此本机快发文件落盘后可以被客户端看到；如果数据库已有同 channel/version/runtime 或 module/channel/version/runtime 记录，则数据库状态优先，Draft/Archived 可抑制同 key 文件版本。登录 Cloud 后，“客户端下载中心 -> 首装下载”会按 `installer-artifact.json` v2 选择一份 `host/` 和所选 `plugins/<ModuleId>/`，把 `launcher/iiot-binding.json`、`launcher/iiot-enabled-plugins.json`、`launcher/launcher.update.json`、`plugins/<ModuleId>/iiot-plugin-binding.json` 注入本次下载的安装器 payload，并返回真正的 `.exe`。这些绑定配置不写回素材目录、不落盘到共享模板、不写日志。
+`iiot-httpapi` 以可写方式挂载 `${EDGE_UPDATES_DIR}` 到 `/app/edge-updates`，仅用于内网受控 Edge HTTP 发布；`nginx-gateway` 仍以只读方式挂载同一目录。HttpApi 通过 `EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers` 读取安装素材，并通过 `EdgeInstallerArtifacts__VelopackReleasesBaseUrl=${PUBLIC_BASE_URL}/edge-updates/velopack` 返回运行时更新源。Cloud 的公开下载目录、Edge catalog 和 Human catalog 会扫描 `installer-artifact.json` v2 并与数据库 release 记录合并；HTTP 上传成功后，服务端会从 manifest 派生 host/plugin DB release 行，文件存在性以落盘 bundle 为准，可见性和生命周期以 DB 状态为准。保留策略默认每个 stable/runtime/component 最多 3 次，旧版本先 Archived/Deprecated，只有已归档且无设备在用的文件才会回收。登录 Cloud 后，“客户端下载中心 -> 首装下载”会按 `installer-artifact.json` v2 选择一份 `host/` 和所选 `plugins/<ModuleId>/`，把 `launcher/iiot-binding.json`、`launcher/iiot-enabled-plugins.json`、`launcher/launcher.update.json`、`plugins/<ModuleId>/iiot-plugin-binding.json` 注入本次下载的安装器 payload，并返回真正的 `.exe`。这些绑定配置不写回素材目录、不落盘到共享模板、不写日志。
 
 `iiot-web` 是 Vite 静态构建，Cloud 左侧“打开助手”按钮需要在构建镜像时注入 AICopilot challenge URL：
 

@@ -86,7 +86,7 @@ docker compose ps
 Edge 安装素材不在 CloudPlatform 仓库生成。当前有两个有效发布入口：
 
 - 正式 GitHub 打包：`IIoT.EdgeClient` 的 `edge-pack-modules.yml` 只在 `workflow_dispatch` 或 `edge-v*` / `v*` tag 上完整构建和发布，渠道固定为 `stable`。
-- 日常快发：操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1`，本机编译、Velopack 打包、生成 installer artifact 后，通过 rsync/scp 发布到服务器，渠道固定为 `stable`。这是本机运维快发路径，不是 GitHub CI/CD job。
+- 日常快发：操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1 -Transport http`，本机编译、Velopack 打包、生成 installer artifact 后，通过 Cloud Human API 上传到服务器，渠道固定为 `stable`。这是本机运维快发路径，不是 GitHub CI/CD job；`rsync/scp` 只作为 HTTP 发布不可用时的 fallback。
 - 生产服务器只允许 `stable` 渠道，不保留 `ci`、`dev`、`test` 或其他测试渠道目录。
 
 正式 GitHub 打包入口：
@@ -102,14 +102,14 @@ workflow_dispatch
 
 ```powershell
 pwsh <IIoT.EdgeClient>\scripts\LocalPublishAndDeploy.ps1 `
-  -Version 1.2.0 `
   -Channel stable `
-  -DeployHost 10.98.90.154 `
-  -DeployUser root `
-  -EdgeUpdatesDir /srv/iiot/edge-updates
+  -Transport http `
+  -CloudApiBaseUrl http://10.98.90.154:81/api/v1 `
+  -CloudToken $env:IIOT_CLOUD_TOKEN `
+  -UploadRateLimitMbps 100
 ```
 
-快发脚本完成后，Cloud 会在 catalog 请求时扫描 `/app/edge-updates/installers/stable/1.2.0/installer-artifact.json`。如果数据库里没有同 key release 记录，该文件版本会以 Published 状态进入公开下载目录、Edge catalog 和 Human catalog；如果数据库有同 key Draft/Archived 记录，则数据库状态优先并抑制文件版本。
+快发脚本未传 `-Version` 时会通过 Cloud Human catalog 查询 stable 最新版本并自动递增 patch。上传完成后，Cloud 服务端先校验和落盘 bundle，再从 manifest 派生 DB release 行、写入审计、执行最多保留 3 次的策略，并返回本次部署总结。脚本必须打印 version、sourceCommit、releaseNotes、上传耗时、限速、清理结果和 HTTP 验证结果。
 
 发布后服务器必须有：
 
@@ -149,7 +149,7 @@ EXPECTED_VERSION=1.2.0 \
 若下载中心提示“安装素材不存在”，优先检查 `iiot-httpapi` 的挂载和配置：
 
 ```text
-${EDGE_UPDATES_DIR}:/app/edge-updates:ro
+${EDGE_UPDATES_DIR}:/app/edge-updates:rw
 EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers
 EdgeInstallerArtifacts__VelopackReleasesBaseUrl=${PUBLIC_BASE_URL}/edge-updates/velopack
 ```

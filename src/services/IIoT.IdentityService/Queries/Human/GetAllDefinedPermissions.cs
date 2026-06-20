@@ -38,6 +38,9 @@ public class GetAllDefinedPermissionsHandler(
         // 角色管理
         "Role.Define", "Role.Update",
 
+        // 客户端发布
+        ClientReleasePermissions.Publish,
+
         // AI 只读接口
         AiReadPermissions.Device, AiReadPermissions.Capacity, AiReadPermissions.DeviceLog, AiReadPermissions.PassStation,
         AiReadPermissions.IdentityStatus,
