@@ -179,6 +179,9 @@ hydrate_unselected_images_from_running_containers() {
           eval "$key=\$dotenv_image_ref"
           continue
         fi
+
+        printf 'warning: keeping placeholder image for unselected one-shot migration service: %s\n' "$key" >&2
+        continue
       fi
 
       printf 'Current release image is not usable and no running container was found: %s=%s\n' "$key" "$image_ref" >&2

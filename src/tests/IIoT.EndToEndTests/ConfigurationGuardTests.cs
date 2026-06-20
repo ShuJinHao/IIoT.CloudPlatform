@@ -1156,6 +1156,7 @@ public sealed class ConfigurationGuardTests
         deployReleaseSource.Should().Contain("hydrate_unselected_images_from_running_containers");
         deployReleaseSource.Should().Contain("if [ \"$key\" = \"IIOT_MIGRATION_IMAGE\" ]; then");
         deployReleaseSource.Should().Contain("read_manifest_value \"$DEPLOY_DIR/.env\" \"$key\"");
+        deployReleaseSource.Should().Contain("warning: keeping placeholder image for unselected one-shot migration service");
         deployReleaseSource.Should().Contain("compose up -d --no-deps $RUNTIME_SELECTED_SERVICES");
         deployReleaseSource.Should().Contain("compose up -d $RUNTIME_SELECTED_SERVICES");
         deployReleaseSource.Should().Contain("compose run -T --rm iiot-migration");
