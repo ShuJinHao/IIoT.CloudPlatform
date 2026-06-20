@@ -46,18 +46,24 @@ cd src/ui/iiot-web && npm run build
 标准方式是走 CloudPlatform 的 GitHub Actions：
 
 1. 推送或合并到 `main`。
-2. 等 `cloud-image` 在 `iiot-linux-prod` self-hosted runner 上完成；workflow 会按变更路径构建受影响镜像，公共代码或手动触发会构建全部五个应用镜像并推送到 `10.98.90.154:80` Harbor。
-3. 人工触发 `cloud-deploy`，输入 `release_tag = sha-<current-commit-or-release>`；如果只发布部分服务，在 `services` 输入 `httpapi`、`gateway`、`web`、`dataworker`、`migration` 或逗号组合。
+2. 等 push 自动触发的 `cloud-image` 在 `iiot-linux-prod` self-hosted runner 上完成；workflow 会按变更路径构建受影响镜像并推送到 `10.98.90.154:80` Harbor。不要手动触发 `cloud-image` 的 `workflow_dispatch` 做日常发布，手动触发会全量构建全部应用镜像。
+3. 人工触发 `cloud-deploy`，输入 `release_tag = sha-<current-commit-or-release>`，并把 `cloud-image` Step Summary 里的 `Deploy services input` 原样填入 `services`。只有首部署、明确全量发布或应急恢复时才允许留空 `services`。
 4. 确认 `post-deploy-check.sh` 和 `ops-check.sh` 通过。
 
 `cloud-image` 会给 Web Dockerfile 传入 `VITE_AICOPILOT_CHALLENGE_URL`，并使用 Harbor mirror 中的 `node:22-slim`、`nginx:1.27-alpine` 基础镜像。服务器不依赖 Docker Hub。
 
-只有 GitHub Actions 不可用时，才走服务器应急手工部署：
+只有 GitHub Actions 不可用时，才走服务器应急手工部署。全量应急恢复命令如下：
 
 ```sh
 cd /srv/iiot-cloud/deploy
 chmod +x ./scripts/*.sh
 DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-<current-commit-or-release>
+```
+
+如果应急路径只发布前端，命令必须显式带上 `--services web`，不能留空触发全量发布：
+
+```sh
+DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-<current-commit-or-release> --services web
 ```
 
 部署前确认 `.env` 里保持密钥模式：

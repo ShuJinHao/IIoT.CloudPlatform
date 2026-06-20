@@ -67,12 +67,18 @@ curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' http:
 
 Standard production release is driven by GitHub Actions on the intranet self-hosted runner labeled `iiot-linux-prod`.
 
+Routine deployment red lines:
+
+- Do not manually run `cloud-image` via `workflow_dispatch` for routine deployment. Manual `cloud-image` bypasses path narrowing and builds every application image.
+- Use the push-triggered `cloud-image` run, then copy the exact `Deploy services input` from its Step Summary or `cloud-built-service-*` artifact into `cloud-deploy.services`.
+- Leave `cloud-deploy.services` empty only for first deployment, an explicitly approved full release, or emergency recovery.
+
 The standard sequence is:
 
 1. Push or merge to `main`.
 2. `cloud-ci` runs the fast gate by default: restore/build, ServiceLayer tests, ConfigurationGuard tests, web build, and compose config. Full EndToEnd is manual via `workflow_dispatch`.
-3. `cloud-image` runs on `iiot-linux-prod`, builds only affected application images when path filters can narrow the change, and pushes them to Harbor with `sha-${GITHUB_SHA}`. Shared code, build configuration, or manual dispatch builds all application images. The workflow uploads `cloud-built-service-*` artifacts and prints the exact `Deploy services input`.
-4. Trigger `cloud-deploy` manually with the matching `release_tag = sha-*`; leave `services` empty for a full release, or copy the built-services value for an incremental release.
+3. The push-triggered `cloud-image` run executes on `iiot-linux-prod`, builds only affected application images when path filters can narrow the change, and pushes them to Harbor with `sha-${GITHUB_SHA}`. Shared code or build configuration changes currently build all application images. The workflow uploads `cloud-built-service-*` artifacts and prints the exact `Deploy services input`.
+4. Trigger `cloud-deploy` manually with the matching `release_tag = sha-*` and copy the built-services value into `services` for an incremental release. Do not leave `services` empty unless this is a first deployment, an explicitly approved full release, or emergency recovery.
 5. `cloud-deploy` runs on the same non-root runner, syncs `deploy/`, writes `DEPLOY_ENV_FILE`, overwrites the server `.env` `SEED_ADMIN_PASSWORD` from the dedicated GitHub secret, logs in to Harbor, and calls `deploy-release.sh`.
 
 The runner must not run as root. See `RUNNER.md` for the required `github-runner` user, Docker group, labels, and server reachability checks.
@@ -85,16 +91,16 @@ Manual release from the server is an emergency fallback. Log in to Harbor on the
 docker login <OCI_REGISTRY> --username <OCI_REGISTRY_USERNAME>
 ```
 
-Then use the single release entrypoint:
+For a full emergency release, use the single release entrypoint without `--services`:
 
 ```sh
 DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-0123456789abcdef
 ```
 
-For an incremental release, pass only the services that were rebuilt:
+For an incremental release, pass only the services that were rebuilt. For example, frontend-only deployment must use `--services web`:
 
 ```sh
-DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-0123456789abcdef --services httpapi,gateway
+DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-0123456789abcdef --services web
 ```
 
 Incremental release requires an existing `current-release.env`; first deployment must be full. The script preserves image coordinates for services not included in `--services` by reading the current release manifest before rewriting selected services.

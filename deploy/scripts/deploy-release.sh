@@ -181,7 +181,11 @@ if [ "$RUN_MIGRATION" = "true" ]; then
   compose run -T --rm iiot-migration
 fi
 if [ -n "$RUNTIME_SELECTED_SERVICES" ]; then
-  compose up -d $RUNTIME_SELECTED_SERVICES >/dev/null
+  if [ -n "$REQUESTED_SERVICES" ]; then
+    compose up -d --no-deps $RUNTIME_SELECTED_SERVICES >/dev/null
+  else
+    compose up -d $RUNTIME_SELECTED_SERVICES >/dev/null
+  fi
 fi
 COMPOSE_ENV_FILE="$TEMP_RELEASE_ENV_FILE" "$SCRIPT_DIR/post-deploy-check.sh"
 

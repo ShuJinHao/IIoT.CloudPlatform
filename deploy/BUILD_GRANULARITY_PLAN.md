@@ -1,6 +1,6 @@
 # Cloud build granularity plan
 
-本文只记录 Cloud 镜像构建粒度的依赖事实和后续方案。本次不修改 `cloud-image.yml` 的路径映射，避免在没有完整验证前漏构建生产镜像。
+本文只记录 Cloud 镜像构建粒度的依赖事实和后续方案，不是部署执行入口。本次不修改 `cloud-image.yml` 的路径映射，避免在没有完整验证前漏构建生产镜像。日常部署流程必须以 `deploy/README.md` 和 `deploy/OPERATIONS.md` 为准。
 
 ## 当前构建口径
 
@@ -12,7 +12,7 @@
 - `migration`
 - `web`
 
-当前规则保守：宿主目录只构建对应镜像；`src/core/`、`src/shared/`、`src/services/`、`src/infrastructure/`、构建配置或手动触发会构建全部后端镜像。
+当前规则保守：宿主目录只构建对应镜像；`src/core/`、`src/shared/`、`src/services/`、`src/infrastructure/` 或构建配置变更会构建全部应用镜像。`workflow_dispatch` 手动触发是全量重建入口，不属于日常按需部署流程。
 
 ## 真实项目引用
 
@@ -66,4 +66,4 @@ flowchart LR
 
 1. 用 `dotnet build` 分别验证 `IIoT.HttpApi`、`IIoT.Gateway`、`IIoT.DataWorker`、`IIoT.MigrationWorkApp`。
 2. 对每个收窄映射做一次模拟 changed-files 输入，确认不会漏掉依赖宿主。
-3. 只在确认后修改 `cloud-image.yml`，并保留 `workflow_dispatch` 全量构建入口。
+3. 只在确认后修改 `cloud-image.yml`，并保留 `workflow_dispatch` 作为明确全量重建和应急恢复入口；日常部署不得使用该入口。

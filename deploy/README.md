@@ -6,8 +6,9 @@
 
 - 当前目标是 single-machine production starter。
 - 生产版本统一使用 `release_tag = sha-*`，`latest` 不能作为生产应用版本。
-- `cloud-image` 在内网 self-hosted runner `iiot-linux-prod` 上按变更路径构建并推送受影响的应用镜像到 Harbor；共享代码、构建配置或手动触发会构建全部应用镜像。
-- `cloud-deploy` 在同一内网 runner 上同步 `deploy/` 模板、写入生产 `.env`，再执行 `deploy/scripts/deploy-release.sh`；未传 `services` 时全量发布，传入 `services` 时只拉取并重启指定服务。
+- 日常部署禁止手动触发 `cloud-image` 的 `workflow_dispatch`。手动触发会绕过路径过滤并构建全部应用镜像，只允许在明确要求全量重建或生产应急恢复时使用。
+- 日常部署必须通过 push/merge 到 `main` 自动触发 `cloud-image`。该 workflow 在内网 self-hosted runner `iiot-linux-prod` 上按变更路径构建并推送受影响的应用镜像到 Harbor；共享代码或构建配置变更才会按规则构建全部应用镜像。
+- `cloud-deploy` 在同一内网 runner 上同步 `deploy/` 模板、写入生产 `.env`，再执行 `deploy/scripts/deploy-release.sh`；传入 `services` 时只拉取并重启指定服务。未传 `services` 等同全量发布，只允许首部署、明确全量发布或应急恢复使用。
 - runner 必须使用专用非 root 用户运行，例如 `github-runner`，不能用 root 跑 Actions 服务。
 - 服务器 Docker Root Dir 固定为 `/data/docker`，runner 工作目录固定在 `/data/github-runner/*`，不要把构建缓存和 runner workdir 放回系统盘。
 - Docker Hub 不作为生产依赖源；compose 第三方镜像和 Web Dockerfile 的 Node/Nginx 基础镜像必须先同步到 Harbor mirror。
@@ -75,7 +76,11 @@ Harbor 变量：
 
 GitHub workflow `cloud-image` 和 `cloud-deploy` 是标准生产链路，但必须跑在带 `iiot-linux-prod` label 的内网 self-hosted runner 上。不要把这两个 workflow 改回 `ubuntu-latest`，公网 GitHub runner 访问不了内网 Harbor 和部署目录。
 
-`cloud-image` 会按路径判断需要构建的镜像：只改 `src/hosts/IIoT.HttpApi/` 时只构建 `iiot-httpapi`，只改 `src/ui/iiot-web/` 时只构建 `iiot-web`；改 `src/core/`、`src/shared/`、`src/services/`、`src/infrastructure/`、`Directory.Build.props`、`global.json` 或手动触发时构建全部应用镜像。push 触发范围只覆盖宿主、共享代码、Web、compose 和 nginx 配置，文档类变更不会触发镜像构建。构建使用 Harbor registry cache，第二次构建会复用已有 Docker layer。每个真正构建的 matrix job 会上传 `cloud-built-service-<service>` artifact，并在 Step Summary 写出 `Deploy services input`，部署时照这个值填写 `cloud-deploy.services`，不要人工猜测。
+`cloud-image` 会按 push 变更路径判断需要构建的镜像：只改 `src/hosts/IIoT.HttpApi/` 时只构建 `iiot-httpapi`，只改 `src/ui/iiot-web/` 时只构建 `iiot-web`；改 `src/core/`、`src/shared/`、`src/services/`、`src/infrastructure/`、`Directory.Build.props` 或 `global.json` 时构建全部应用镜像。push 触发范围只覆盖宿主、共享代码、Web、compose 和 nginx 配置，文档类变更不会触发镜像构建。构建使用 Harbor registry cache，第二次构建会复用已有 Docker layer。
+
+每个真正构建的 matrix job 会上传 `cloud-built-service-<service>` artifact，并在 Step Summary 写出 `Deploy services input`。部署时必须把这个值原样填入 `cloud-deploy.services`，不要人工猜测，也不要在增量发布时留空。例如 Step Summary 写 `Deploy services input: web`，部署就填 `services=web`。
+
+禁止把 `cloud-image` 的手动 `workflow_dispatch` 当成日常部署入口。该入口的行为是全量构建，保留它只是为了首部署、明确全量重建和生产应急恢复；只改前端、只改单个宿主或只改局部后端时不得使用。
 
 ## 第三方镜像 mirror
 
@@ -270,8 +275,8 @@ sudo chmod 755 /srv/iiot-cloud/deploy/certs
 
 1. 合并或推送到 `main`。
 2. `cloud-ci` 默认只跑快速验证：restore/build、ServiceLayer、ConfigurationGuard、前端 build、compose config；完整 EndToEnd 只在手动 `workflow_dispatch` 勾选时运行。
-3. `cloud-image` 在 `iiot-linux-prod` self-hosted runner 上构建受影响应用镜像，并推送到 Harbor，tag 为 `sha-${GITHUB_SHA}`；Step Summary 和 `cloud-built-service-*` artifact 会列出下一步应填的 `services`。
-4. 人工触发 `cloud-deploy`，输入 `release_tag = sha-*`。
+3. 等 push 自动触发的 `cloud-image` 在 `iiot-linux-prod` self-hosted runner 上完成。它只构建受影响应用镜像，并推送到 Harbor，tag 为 `sha-${GITHUB_SHA}`；Step Summary 和 `cloud-built-service-*` artifact 会列出下一步应填的 `services`。
+4. 人工触发 `cloud-deploy`，输入 `release_tag = sha-*`，并把上一步 Step Summary 的 `Deploy services input` 原样填入 `services`。只有首部署、明确全量发布或应急恢复时，才允许留空 `services`。
 5. `cloud-deploy` 校验 runner 非 root、同步 `deploy/`、写入 `DEPLOY_ENV_FILE`、用 `SEED_ADMIN_PASSWORD` 覆盖服务器 `.env` 中的管理员密码、登录 Harbor，并执行 `deploy/scripts/deploy-release.sh`。部署完成后会把服务器落盘的 `deploy/releases/current-release.summary.md` 回贴到 GitHub Step Summary。
 
 GitHub secrets：
@@ -288,13 +293,19 @@ SEED_ADMIN_PASSWORD=<固定 Cloud 管理员密码>
 
 应急手工路径只在 Actions 不可用时使用。
 
-在服务器上执行：
+全量应急恢复时，在服务器上执行：
 
 ```sh
 cd /srv/iiot-cloud/deploy
 chmod +x ./scripts/*.sh
 docker login <OCI_REGISTRY> --username <OCI_REGISTRY_USERNAME>
 DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-0123456789abcdef
+```
+
+如果应急路径只发布部分服务，必须加 `--services`，例如只发布前端：
+
+```sh
+DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-0123456789abcdef --services web
 ```
 
 发布脚本会：

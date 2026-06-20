@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Release tag from cloud-image (sha-*)
+        description: Release tag from push-triggered cloud-image (sha-*)
         required: true
         type: string
       services:
-        description: "Optional comma/space separated services: httpapi,gateway,dataworker,migration,web"
+        description: "Copy Deploy services input from cloud-image Step Summary; empty means full release only"
         required: false
         type: string
 
