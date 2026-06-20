@@ -567,7 +567,8 @@ public sealed class ConfigurationGuardTests
 
         readmeSource.Should().Contain("single-machine production starter");
         readmeSource.Should().Contain("`release_tag = sha-*`");
-        readmeSource.Should().Contain("`cloud-image` 在内网 self-hosted runner `iiot-linux-prod` 上按变更路径构建并推送受影响的应用镜像到 Harbor");
+        readmeSource.Should().Contain("日常部署禁止手动触发 `cloud-image` 的 `workflow_dispatch`");
+        readmeSource.Should().Contain("日常部署必须通过 push/merge 到 `main` 自动触发 `cloud-image`");
         readmeSource.Should().Contain("传入 `services` 时只拉取并重启指定服务");
         readmeSource.Should().Contain("Cloud catalog 会扫描 `/app/edge-updates/installers/stable/{version}/installer-artifact.json`");
         readmeSource.Should().Contain("runner 必须使用专用非 root 用户运行");
@@ -962,7 +963,8 @@ public sealed class ConfigurationGuardTests
         var workflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-deploy.yml"));
 
         workflowSource.Should().Contain("release_tag:");
-        workflowSource.Should().Contain("Release tag from cloud-image (sha-*)");
+        workflowSource.Should().Contain("Release tag from push-triggered cloud-image (sha-*)");
+        workflowSource.Should().Contain("Copy Deploy services input from cloud-image Step Summary; empty means full release only");
         workflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
         workflowSource.Should().Contain("if [[ ! \"$release_tag\" =~ ^sha-[0-9a-f]+$ ]]");
         workflowSource.Should().Contain("RELEASE_TAG: ${{ inputs.release_tag }}");
@@ -1147,6 +1149,8 @@ public sealed class ConfigurationGuardTests
         deployReleaseSource.Should().Contain("normalize_services");
         deployReleaseSource.Should().Contain("apply_app_images_to_dotenv \"$TEMP_RELEASE_ENV_FILE\"");
         deployReleaseSource.Should().Contain("compose pull $SELECTED_SERVICES");
+        deployReleaseSource.Should().Contain("hydrate_unselected_images_from_running_containers");
+        deployReleaseSource.Should().Contain("compose up -d --no-deps $RUNTIME_SELECTED_SERVICES");
         deployReleaseSource.Should().Contain("compose up -d $RUNTIME_SELECTED_SERVICES");
         deployReleaseSource.Should().Contain("compose run -T --rm iiot-migration");
         deployReleaseSource.Should().Contain("\"$SCRIPT_DIR/post-deploy-check.sh\"");
