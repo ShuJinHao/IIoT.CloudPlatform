@@ -124,6 +124,8 @@ Release flow is fixed:
 9. `post-deploy-check.sh`
 10. rotate `current` / `previous`, write `current-release.summary.md`, and append `history`
 
+`pre-deploy-check.sh` runs the runtime parts of `ops-check.sh` with `REQUIRE_BACKUP=0` because the release sequence creates a fresh PostgreSQL backup in the next step before any container update. Normal operator runs of `./scripts/ops-check.sh` keep the default `REQUIRE_BACKUP=1` and still fail when the latest backup file, checksum, or freshness policy is not valid.
+
 Release success order is fixed:
 
 1. `GET /internal/healthz` returns `200`

@@ -14,6 +14,7 @@ load_dotenv
 
 BACKUP_MAX_AGE_HOURS=${BACKUP_MAX_AGE_HOURS:-24}
 BACKUP_VERIFY_MAX_AGE_DAYS=${BACKUP_VERIFY_MAX_AGE_DAYS:-7}
+REQUIRE_BACKUP=${REQUIRE_BACKUP:-1}
 REQUIRE_BACKUP_VERIFY=${REQUIRE_BACKUP_VERIFY:-0}
 
 require_running_service() {
@@ -110,13 +111,22 @@ if latest_backup_path=$(read_state_path "$BACKUP_STATE_FILE"); then
   backup_marker_epoch=$(stat -c %Y "$BACKUP_STATE_FILE")
   LATEST_BACKUP_AGE_HOURS=$(((NOW_EPOCH - backup_marker_epoch) / 3600))
   if [ ! -f "$latest_backup_path" ] || [ ! -f "$latest_backup_path.sha256" ]; then
-    HAS_RISK=1
+    printf 'warning: latest backup file or checksum is missing: %s\n' "$latest_backup_path" >&2
+    if [ "$REQUIRE_BACKUP" = "1" ]; then
+      HAS_RISK=1
+    fi
   fi
   if [ "$LATEST_BACKUP_AGE_HOURS" -gt "$BACKUP_MAX_AGE_HOURS" ]; then
-    HAS_RISK=1
+    printf 'warning: latest backup is older than BACKUP_MAX_AGE_HOURS: %s hours\n' "$LATEST_BACKUP_AGE_HOURS" >&2
+    if [ "$REQUIRE_BACKUP" = "1" ]; then
+      HAS_RISK=1
+    fi
   fi
 else
-  HAS_RISK=1
+  printf 'warning: no successful backup record found: %s\n' "$BACKUP_STATE_FILE" >&2
+  if [ "$REQUIRE_BACKUP" = "1" ]; then
+    HAS_RISK=1
+  fi
 fi
 
 LATEST_BACKUP_VERIFIED_AGE_DAYS="missing"

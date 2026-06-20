@@ -320,6 +320,8 @@ DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh 
 8. 执行 `post-deploy-check.sh` 和运维检查。
 9. 写入 `deploy/releases/current-release.env`、`previous-release.env`、`staged-release.env`、`current-release.summary.md` 和 `history/`。
 
+`pre-deploy-check.sh` 会复用 `ops-check.sh` 检查运行状态、Outbox、队列和 Timescale 状态，但发布前不把旧备份状态作为强 gate；发布流程下一步会立即执行 `postgres-backup.sh`，备份失败会在任何容器更新前中止。日常手工巡检直接执行 `./scripts/ops-check.sh` 时仍默认要求最新备份文件、checksum 和新鲜度有效。
+
 成功条件：
 
 - `GET /internal/healthz` 在服务器本机返回 `200`。

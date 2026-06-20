@@ -1093,6 +1093,8 @@ public sealed class ConfigurationGuardTests
         opsCheckSource.Should().Contain("latest-successful-verify.txt");
         opsCheckSource.Should().Contain("BACKUP_MAX_AGE_HOURS");
         opsCheckSource.Should().Contain("BACKUP_VERIFY_MAX_AGE_DAYS");
+        opsCheckSource.Should().Contain("REQUIRE_BACKUP=${REQUIRE_BACKUP:-1}");
+        opsCheckSource.Should().Contain("if [ \"$REQUIRE_BACKUP\" = \"1\" ]; then");
         opsCheckSource.Should().Contain("latest_backup_age_hours=");
         opsCheckSource.Should().Contain("latest_backup_verified_age_days=");
         opsCheckSource.Should().Contain("latest_backup_file=");
@@ -1131,6 +1133,7 @@ public sealed class ConfigurationGuardTests
         preDeploySource.Should().Contain("resolve_release_images \"$RELEASE_TAG\"");
         preDeploySource.Should().Contain("ensure_target_images_not_latest");
         preDeploySource.Should().Contain("probe_status \"${public_base_url}/internal/healthz\" \"200\" 3");
+        preDeploySource.Should().Contain("REQUIRE_BACKUP=0");
         preDeploySource.Should().Contain("BACKUP_MAX_AGE_HOURS=${PRE_DEPLOY_BACKUP_MAX_AGE_HOURS:-999999}");
         preDeploySource.Should().Contain("\"$SCRIPT_DIR/ops-check.sh\"");
 
