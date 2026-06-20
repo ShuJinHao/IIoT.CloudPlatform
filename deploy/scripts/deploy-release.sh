@@ -110,6 +110,83 @@ image_key_for_service() {
   esac
 }
 
+service_for_image_key() {
+  case "$1" in
+    IIOT_HTTPAPI_IMAGE)
+      printf '%s\n' iiot-httpapi
+      ;;
+    IIOT_GATEWAY_IMAGE)
+      printf '%s\n' iiot-gateway
+      ;;
+    IIOT_DATAWORKER_IMAGE)
+      printf '%s\n' iiot-dataworker
+      ;;
+    IIOT_MIGRATION_IMAGE)
+      printf '%s\n' iiot-migration
+      ;;
+    IIOT_WEB_IMAGE)
+      printf '%s\n' iiot-web
+      ;;
+    *)
+      printf 'Unsupported image key: %s\n' "$1" >&2
+      exit 64
+      ;;
+  esac
+}
+
+image_key_is_selected() {
+  key=$1
+  case " $SELECTED_IMAGE_KEYS " in
+    *" $key "*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+image_ref_is_placeholder() {
+  image_ref=${1:-}
+  case "$image_ref" in
+    ""|*:sha-0000000000000000)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+hydrate_unselected_images_from_running_containers() {
+  for key in $APP_IMAGE_KEYS
+  do
+    if image_key_is_selected "$key"; then
+      continue
+    fi
+
+    eval "image_ref=\${$key:-}"
+    if ! image_ref_is_placeholder "$image_ref"; then
+      continue
+    fi
+
+    service=$(service_for_image_key "$key")
+    container_id=$(compose ps -q "$service" 2>/dev/null | head -n 1 || true)
+    if [ -z "$container_id" ]; then
+      printf 'Current release image is not usable and no running container was found: %s=%s\n' "$key" "$image_ref" >&2
+      exit 66
+    fi
+
+    running_image=$(docker inspect --format '{{.Config.Image}}' "$container_id" 2>/dev/null || true)
+    if [ -z "$running_image" ]; then
+      printf 'Could not inspect running image for unselected service: %s\n' "$service" >&2
+      exit 66
+    fi
+
+    eval "$key=\$running_image"
+  done
+}
+
 SELECTED_SERVICES=$(normalize_services "$REQUESTED_SERVICES")
 SELECTED_IMAGE_KEYS=""
 RUNTIME_SELECTED_SERVICES=""
@@ -149,6 +226,7 @@ if [ -n "$REQUESTED_SERVICES" ]; then
   fi
 
   load_release_images_from_manifest "$CURRENT_RELEASE_FILE"
+  hydrate_unselected_images_from_running_containers
 fi
 
 resolve_release_images_for_keys "$RELEASE_TAG" $SELECTED_IMAGE_KEYS
