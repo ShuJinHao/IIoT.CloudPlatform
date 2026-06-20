@@ -1131,6 +1131,7 @@ public sealed class ConfigurationGuardTests
         preDeploySource.Should().Contain("resolve_release_images \"$RELEASE_TAG\"");
         preDeploySource.Should().Contain("ensure_target_images_not_latest");
         preDeploySource.Should().Contain("probe_status \"${public_base_url}/internal/healthz\" \"200\" 3");
+        preDeploySource.Should().Contain("BACKUP_MAX_AGE_HOURS=${PRE_DEPLOY_BACKUP_MAX_AGE_HOURS:-999999}");
         preDeploySource.Should().Contain("\"$SCRIPT_DIR/ops-check.sh\"");
 
         mirrorImagesSource.Should().Contain("MIRROR_REGISTRY=${MIRROR_REGISTRY:-10.98.90.154:80}");

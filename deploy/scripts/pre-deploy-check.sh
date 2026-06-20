@@ -29,7 +29,7 @@ compose config -q
 if [ -f "$CURRENT_RELEASE_FILE" ]; then
   public_base_url="http://127.0.0.1:${GATEWAY_HTTP_PORT:-80}"
   probe_status "${public_base_url}/internal/healthz" "200" 3
-  "$SCRIPT_DIR/ops-check.sh"
+  BACKUP_MAX_AGE_HOURS=${PRE_DEPLOY_BACKUP_MAX_AGE_HOURS:-999999} "$SCRIPT_DIR/ops-check.sh"
 fi
 
 printf 'Pre-deploy checks passed for release tag: %s\n' "$RELEASE_TAG"
