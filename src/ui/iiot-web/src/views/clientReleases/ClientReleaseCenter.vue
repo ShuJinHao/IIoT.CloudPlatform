@@ -176,6 +176,49 @@
       </template>
     </UiModal>
 
+    <UiModal v-model:show="showReleaseDetailModal" preset="card" title="更新内容详情" style="width: 720px;">
+      <div v-if="selectedReleaseDetail" class="release-detail-modal">
+        <div class="release-detail-summary">
+          <div class="release-detail-heading">
+            <strong>{{ selectedReleaseDetail.componentName }}</strong>
+            <code>{{ selectedReleaseDetail.componentCode }}</code>
+          </div>
+          <UiTag :type="selectedReleaseDetail.kind === 'host' ? 'default' : 'info'" size="small" :bordered="false">
+            {{ selectedReleaseDetail.kindLabel }}
+          </UiTag>
+        </div>
+        <div class="release-detail-meta">
+          <div>
+            <span>版本</span>
+            <strong>{{ selectedReleaseDetail.version }}</strong>
+          </div>
+          <div>
+            <span>状态</span>
+            <UiTag :type="selectedReleaseDetail.statusTone" size="small" :bordered="false">
+              {{ selectedReleaseDetail.statusText }}
+            </UiTag>
+          </div>
+          <div>
+            <span>发布时间</span>
+            <strong>{{ selectedReleaseDetail.publishedAt }}</strong>
+          </div>
+          <div>
+            <span>大小</span>
+            <strong>{{ selectedReleaseDetail.packageSize }}</strong>
+          </div>
+        </div>
+        <section class="release-detail-notes">
+          <h3>完整更新内容</h3>
+          <p>{{ selectedReleaseDetail.releaseNotes }}</p>
+        </section>
+      </div>
+      <template #footer>
+        <div class="modal-actions">
+          <UiButton @click="showReleaseDetailModal = false">关闭</UiButton>
+        </div>
+      </template>
+    </UiModal>
+
     <UiModal v-model:show="showHostModal" preset="card" title="登记宿主版本" style="width: 720px;" :mask-closable="false">
       <div class="release-form">
         <label>Channel<UiInput v-model:value="hostForm.channel" /></label>
@@ -240,6 +283,7 @@ import {
   CloudDownload,
   ExternalLink,
   History,
+  Info,
   MonitorCheck,
   PackagePlus,
   Plus,
@@ -293,6 +337,19 @@ interface ReleaseCatalogRow {
   historyVersions: ReleaseVersionEntry[];
 }
 
+interface ReleaseDetail {
+  kind: ReleaseKind;
+  kindLabel: string;
+  componentName: string;
+  componentCode: string;
+  version: string;
+  statusText: string;
+  statusTone: TagTone;
+  publishedAt: string;
+  packageSize: string;
+  releaseNotes: string;
+}
+
 const authStore = useAuthStore();
 const route = useRoute();
 const router = useRouter();
@@ -309,8 +366,10 @@ const showHostModal = ref(false);
 const showPluginModal = ref(false);
 const showPluginDrawer = ref(false);
 const showHistoryModal = ref(false);
+const showReleaseDetailModal = ref(false);
 const selectedInventory = ref<DeviceClientVersionInventoryDto | null>(null);
 const selectedReleaseRow = ref<ReleaseCatalogRow | null>(null);
+const selectedReleaseDetail = ref<ReleaseDetail | null>(null);
 
 const canManage = computed(() => authStore.isAdmin || authStore.hasPermission(Permissions.Device.Update));
 const activeView = ref<ViewMode>(canManage.value ? 'binding' : 'catalog');
@@ -525,6 +584,22 @@ const openHistoryModal = (row: ReleaseCatalogRow) => {
   showHistoryModal.value = true;
 };
 
+const openReleaseDetailModal = (version: ReleaseVersionEntry, row: ReleaseCatalogRow | null) => {
+  selectedReleaseDetail.value = {
+    kind: row?.kind ?? 'plugin',
+    kindLabel: row?.kindLabel ?? '组件',
+    componentName: row?.componentName ?? '-',
+    componentCode: row?.componentCode ?? '-',
+    version: version.version,
+    statusText: statusText(version.status),
+    statusTone: statusTone(version.status),
+    publishedAt: formatDate(version.publishedAtUtc),
+    packageSize: formatSize(version.packageSize),
+    releaseNotes: formatReleaseNotes(version.releaseNotes, '暂无更新内容'),
+  };
+  showReleaseDetailModal.value = true;
+};
+
 const openUrl = (url: string) => {
   if (!url) return;
   window.open(url, '_blank', 'noopener,noreferrer');
@@ -562,6 +637,11 @@ const formatSize = (size: number) => {
 const formatDate = (value?: string | null) => {
   if (!value) return '-';
   return new Date(value).toLocaleString();
+};
+
+const formatReleaseNotes = (value?: string | null, fallback = '-') => {
+  const text = value?.trim();
+  return text && text.length > 0 ? text : fallback;
 };
 
 const pickCurrentVersion = <T extends ReleaseVersionEntry>(versions: T[]) => {
@@ -653,8 +733,16 @@ const releaseCatalogColumns = computed<UiDataTableColumn<ReleaseCatalogRow>[]>((
     {
       title: '更新内容',
       key: 'releaseNotes',
-      minWidth: 220,
-      render: (row) => h('span', { class: 'release-note' }, row.currentVersion.releaseNotes || '-'),
+      minWidth: 280,
+      render: (row) => h('div', { class: 'release-note-cell' }, [
+        h('span', { class: 'release-note' }, formatReleaseNotes(row.currentVersion.releaseNotes)),
+        h(UiButton, {
+          size: 'tiny',
+          secondary: true,
+          type: 'info',
+          onClick: () => openReleaseDetailModal(row.currentVersion, row),
+        }, () => [h(Info, { size: 13 }), '详情']),
+      ]),
     },
     {
       title: '历史版本',
@@ -701,7 +789,20 @@ const historyColumns = computed<UiDataTableColumn<ReleaseVersionEntry>[]>(() => 
       render: (row) => h(UiTag, { type: statusTone(row.status), size: 'small', bordered: false }, () => statusText(row.status)),
     },
     { title: '发布时间', key: 'publishedAtUtc', minWidth: 170, render: (row) => h('span', formatDate(row.publishedAtUtc)) },
-    { title: '更新内容', key: 'releaseNotes', minWidth: 240, render: (row) => h('span', { class: 'release-note' }, row.releaseNotes || '-') },
+    {
+      title: '更新内容',
+      key: 'releaseNotes',
+      minWidth: 280,
+      render: (row) => h('div', { class: 'release-note-cell' }, [
+        h('span', { class: 'release-note' }, formatReleaseNotes(row.releaseNotes)),
+        h(UiButton, {
+          size: 'tiny',
+          secondary: true,
+          type: 'info',
+          onClick: () => openReleaseDetailModal(row, selectedReleaseRow.value),
+        }, () => [h(Info, { size: 13 }), '详情']),
+      ]),
+    },
   ];
 
   if (isPublishRoute.value) {
@@ -896,13 +997,22 @@ const inventoryColumns: UiDataTableColumn<DeviceClientVersionInventoryDto>[] = [
   font-weight: var(--fw-medium);
 }
 
+:deep(.release-note-cell) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
 :deep(.release-note) {
-  display: block;
-  max-width: 360px;
+  display: -webkit-box;
   overflow: hidden;
   color: var(--text-1);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
 }
 
 :deep(.history-empty) {
@@ -1043,6 +1153,97 @@ const inventoryColumns: UiDataTableColumn<DeviceClientVersionInventoryDto>[] = [
   line-height: 1.5;
 }
 
+.release-detail-modal {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.release-detail-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-2);
+  padding: var(--space-3) var(--space-4);
+}
+
+.release-detail-heading {
+  display: grid;
+  gap: 3px;
+}
+
+.release-detail-heading strong {
+  color: var(--text-0);
+  font-size: var(--fs-base);
+  font-weight: var(--fw-semibold);
+}
+
+.release-detail-heading code {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.release-detail-meta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.release-detail-meta > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  padding: var(--space-3);
+}
+
+.release-detail-meta span {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.release-detail-meta strong {
+  min-width: 0;
+  color: var(--text-0);
+  font-size: var(--fs-base);
+  font-weight: var(--fw-semibold);
+  overflow-wrap: anywhere;
+}
+
+.release-detail-notes {
+  display: grid;
+  gap: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-2);
+  padding: var(--space-4);
+}
+
+.release-detail-notes h3 {
+  margin: 0;
+  color: var(--text-0);
+  font-size: var(--fs-base);
+  font-weight: var(--fw-semibold);
+}
+
+.release-detail-notes p {
+  max-height: 360px;
+  margin: 0;
+  overflow: auto;
+  color: var(--text-1);
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 1180px) {
   .release-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1051,7 +1252,8 @@ const inventoryColumns: UiDataTableColumn<DeviceClientVersionInventoryDto>[] = [
 
 @media (max-width: 760px) {
   .release-metrics,
-  .release-form {
+  .release-form,
+  .release-detail-meta {
     grid-template-columns: 1fr;
   }
 
