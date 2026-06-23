@@ -1069,6 +1069,19 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
+    public void WebNginxTemplate_ShouldAvoidStaleSpaChunkFallbacks()
+    {
+        var source = File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.AppHost", "iiot-web.nginx.conf"));
+
+        source.Should().Contain("location = /index.html");
+        source.Should().Contain("Cache-Control \"no-cache, no-store, must-revalidate\"");
+        source.Should().Contain("location /assets/");
+        source.Should().Contain("Cache-Control \"public, max-age=31536000, immutable\"");
+        source.Should().Contain("try_files $uri =404;");
+        source.Should().Contain("try_files $uri $uri/ /index.html;");
+    }
+
+    [Fact]
     public void DeployOperationsScripts_ShouldExistAndUseExpectedCommands()
     {
         var backupSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "postgres-backup.sh"));

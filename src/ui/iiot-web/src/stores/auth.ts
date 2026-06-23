@@ -19,7 +19,9 @@ const REFRESH_RETRY_DELAY_MS = 30 * 1000;
 const REFRESH_NOTICE_THROTTLE_MS = 60 * 1000;
 const AUTH_SYNC_EVENT_KEY = 'iiot-auth-sync-event';
 const AUTH_REFRESH_LOCK_KEY = 'iiot-auth-refresh-lock';
+const AUTH_STORAGE_VERSION = '2';
 const STORAGE_KEYS = {
+  storageVersion: 'authStorageVersion',
   token: 'token',
   refreshToken: 'refreshToken',
   accessTokenExpiresAt: 'accessTokenExpiresAt',
@@ -64,10 +66,10 @@ let storageSyncInitialized = false;
 let lastRefreshFailureNoticeAt = 0;
 
 export const useAuthStore = defineStore('auth', () => {
-  const token = ref<string | null>(localStorage.getItem(STORAGE_KEYS.token));
-  const refreshToken = ref<string | null>(localStorage.getItem(STORAGE_KEYS.refreshToken));
-  const accessTokenExpiresAt = ref<string | null>(localStorage.getItem(STORAGE_KEYS.accessTokenExpiresAt));
-  const refreshTokenExpiresAt = ref<string | null>(localStorage.getItem(STORAGE_KEYS.refreshTokenExpiresAt));
+  const token = ref<string | null>(readVersionedStorageValue(STORAGE_KEYS.token));
+  const refreshToken = ref<string | null>(readVersionedStorageValue(STORAGE_KEYS.refreshToken));
+  const accessTokenExpiresAt = ref<string | null>(readVersionedStorageValue(STORAGE_KEYS.accessTokenExpiresAt));
+  const refreshTokenExpiresAt = ref<string | null>(readVersionedStorageValue(STORAGE_KEYS.refreshTokenExpiresAt));
   const userId = ref<string>('');
   const employeeNo = ref<string>('');
   const role = ref<string>('');
@@ -265,6 +267,7 @@ export const useAuthStore = defineStore('auth', () => {
     accessTokenExpiresAt.value = session.accessTokenExpiresAt;
     refreshTokenExpiresAt.value = session.refreshTokenExpiresAt;
 
+    localStorage.setItem(STORAGE_KEYS.storageVersion, AUTH_STORAGE_VERSION);
     localStorage.setItem(STORAGE_KEYS.token, session.accessToken);
     localStorage.setItem(STORAGE_KEYS.refreshToken, session.refreshToken);
     localStorage.setItem(STORAGE_KEYS.accessTokenExpiresAt, session.accessTokenExpiresAt);
@@ -287,6 +290,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function clearStoredSession() {
+    localStorage.removeItem(STORAGE_KEYS.storageVersion);
     localStorage.removeItem(STORAGE_KEYS.token);
     localStorage.removeItem(STORAGE_KEYS.refreshToken);
     localStorage.removeItem(STORAGE_KEYS.accessTokenExpiresAt);
@@ -294,6 +298,10 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function readStoredSession(): AuthSessionPayload | null {
+    if (localStorage.getItem(STORAGE_KEYS.storageVersion) !== AUTH_STORAGE_VERSION) {
+      return null;
+    }
+
     const savedToken = localStorage.getItem(STORAGE_KEYS.token);
     const savedRefreshToken = localStorage.getItem(STORAGE_KEYS.refreshToken);
     const savedAccessTokenExpiresAt = localStorage.getItem(STORAGE_KEYS.accessTokenExpiresAt);
@@ -495,4 +503,12 @@ function delay(timeoutMs: number): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, timeoutMs);
   });
+}
+
+function readVersionedStorageValue(key: Exclude<keyof typeof STORAGE_KEYS, 'storageVersion'>): string | null {
+  if (localStorage.getItem(STORAGE_KEYS.storageVersion) !== AUTH_STORAGE_VERSION) {
+    return null;
+  }
+
+  return localStorage.getItem(STORAGE_KEYS[key]);
 }
