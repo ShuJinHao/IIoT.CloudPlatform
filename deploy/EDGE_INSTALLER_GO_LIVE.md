@@ -1,6 +1,6 @@
 # Edge 客户端安装包上线清单
 
-本文档用于把“Cloud 下载中心生成真实 `.exe` 安装包”上线到私有服务器。执行顺序不能倒：先部署 Cloud，再上传 Edge 安装素材，最后在 Windows 真机验收。Edge 安装素材落盘后由 Cloud 扫描 `installer-artifact.json` 并合并到 catalog；不再需要手工登记数据库 release 才能让版本可见。
+本文档用于把“Cloud 下载中心生成真实 `.exe` 安装包”上线到私有服务器。执行顺序不能倒：先部署 Cloud，再上传 Edge 安装素材，最后在 Windows 真机验收。Edge 安装素材落盘后由 Cloud 扫描 `installer-artifact.json` 并合并到 catalog；不再需要手工登记数据库 release 才能让版本可见。三项目上传部署统一入口见 [上传部署总览](../../docs/上传部署总览.md)。
 
 ## 1. 本地前置检查
 
@@ -55,7 +55,7 @@ cd src/ui/iiot-web && npm run build
 只有 GitHub Actions 不可用时，才走服务器应急手工部署。全量应急恢复命令如下：
 
 ```sh
-cd /srv/iiot-cloud/deploy
+cd /data/iiot-platform/cloud/deploy
 chmod +x ./scripts/*.sh
 DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-<current-commit-or-release>
 ```
@@ -70,13 +70,13 @@ DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh 
 
 ```text
 BOOTSTRAP_AUTH_REQUIRE_SECRET=true
-EDGE_UPDATES_DIR=/srv/iiot/edge-updates
+EDGE_UPDATES_DIR=/data/iiot-platform/edge-client/edge-updates
 ```
 
 部署后在服务器本机确认：
 
 ```sh
-cd /srv/iiot-cloud/deploy
+cd /data/iiot-platform/cloud/deploy
 ./scripts/post-deploy-check.sh
 docker compose ps
 ```
@@ -86,7 +86,8 @@ docker compose ps
 Edge 安装素材不在 CloudPlatform 仓库生成。当前有两个有效发布入口：
 
 - 正式 GitHub 打包：`IIoT.EdgeClient` 的 `edge-pack-modules.yml` 只在 `workflow_dispatch` 或 `edge-v*` / `v*` tag 上完整构建和发布，渠道固定为 `stable`。
-- 日常快发：操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1 -Transport http`，本机编译、Velopack 打包、生成 installer artifact 后，通过 Cloud Human API 上传到服务器，渠道固定为 `stable`。这是本机运维快发路径，不是 GitHub CI/CD job；`rsync/scp` 只作为 HTTP 发布不可用时的 fallback。
+- 日常宿主快发：操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1 -Transport http`，本机编译、Velopack 打包、生成 installer artifact 后，通过 Cloud Human API 上传到服务器，渠道固定为 `stable`。这是本机运维快发路径，不是 GitHub CI/CD job；生产 stable 不允许 `rsync/scp`。
+- 日常插件快发：只改工序插件时运行 `IIoT.EdgeClient/scripts/PublishEdgePluginRelease.ps1`，只上传独立插件 zip 并登记插件 release，不生成宿主版本。
 - 生产服务器只允许 `stable` 渠道，不保留 `ci`、`dev`、`test` 或其他测试渠道目录。
 
 正式 GitHub 打包入口：
@@ -96,7 +97,7 @@ workflow_dispatch
   version = 1.2.0
 ```
 
-该 workflow 的 `package-runtime` job 必须跑在 GitHub hosted `windows-latest`，生成 `edge-installer-artifact` 和 `edge-velopack-releases`。随后 `publish-edge-updates` job 必须跑在内网 `[self-hosted, iiot-linux-prod]` runner，把 artifacts 本地发布到 `${EDGE_UPDATES_DIR:-/srv/iiot/edge-updates}`。
+该 workflow 的 `package-runtime` job 必须跑在 GitHub hosted `windows-latest`，生成 `edge-installer-artifact` 和 `edge-velopack-releases`。随后 `publish-edge-updates` job 必须跑在内网 `[self-hosted, iiot-linux-prod]` runner，把 artifacts 本地发布到 `${EDGE_UPDATES_DIR}`。当前生产服务器 `EDGE_UPDATES_DIR=/data/iiot-platform/edge-client/edge-updates`。
 
 日常快发入口示例：
 
@@ -106,6 +107,7 @@ pwsh <IIoT.EdgeClient>\scripts\LocalPublishAndDeploy.ps1 `
   -Transport http `
   -CloudApiBaseUrl http://10.98.90.154:81/api/v1 `
   -CloudToken $env:IIOT_CLOUD_TOKEN `
+  -ReleaseNotesPath <本次更新说明.md> `
   -UploadRateLimitMbps 100
 ```
 
@@ -114,14 +116,14 @@ pwsh <IIoT.EdgeClient>\scripts\LocalPublishAndDeploy.ps1 `
 发布后服务器必须有：
 
 ```text
-/srv/iiot/edge-updates/installers/stable/1.2.0/
+${EDGE_UPDATES_DIR}/installers/stable/1.2.0/
   IIoT.Edge.Setup.exe
   launcher/
   host/
   plugins/
   velopack/
   installer-artifact.json
-/srv/iiot/edge-updates/velopack/stable/
+${EDGE_UPDATES_DIR}/velopack/stable/
   releases.stable.json
   assets.stable.json
   *.nupkg
@@ -130,7 +132,7 @@ pwsh <IIoT.EdgeClient>\scripts\LocalPublishAndDeploy.ps1 `
 服务器检查：
 
 ```sh
-find /srv/iiot/edge-updates/installers/stable/1.2.0 -maxdepth 3 -printf '%y %P %s\n' | sort
+find /data/iiot-platform/edge-client/edge-updates/installers/stable/1.2.0 -maxdepth 3 -printf '%y %P %s\n' | sort
 ```
 
 外部只读检查 catalog 和素材 URL：

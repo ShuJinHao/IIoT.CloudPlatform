@@ -17,6 +17,7 @@ public sealed class RefreshTokenOptions
 
     public int HumanTtlDays { get; set; } = 7;
     public int EdgeBootstrapTtlDays { get; set; } = 30;
+    public int HumanMaxActiveSessions { get; set; } = 3;
 
     public void Validate()
     {
@@ -28,6 +29,11 @@ public sealed class RefreshTokenOptions
         if (EdgeBootstrapTtlDays <= 0)
         {
             throw new InvalidOperationException("Refresh token edge/bootstrap TTL must be greater than zero.");
+        }
+
+        if (HumanMaxActiveSessions < 0)
+        {
+            throw new InvalidOperationException("Refresh token human active session limit cannot be negative.");
         }
     }
 }

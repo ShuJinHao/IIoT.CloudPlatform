@@ -1,5 +1,7 @@
 # IIoT Cloud Operations
 
+三项目上传部署统一入口见 [上传部署总览](../../docs/上传部署总览.md)。
+
 ## Scope
 
 This document defines the minimum operations baseline for the current single-machine production starter.
@@ -80,6 +82,8 @@ The standard sequence is:
 3. The push-triggered `cloud-image` run executes on `iiot-linux-prod`, builds only affected application images when path filters can narrow the change, and pushes them to Harbor with `sha-${GITHUB_SHA}`. Shared code or build configuration changes currently build all application images. The workflow uploads `cloud-built-service-*` artifacts and prints the exact `Deploy services input`.
 4. Trigger `cloud-deploy` manually with the matching `release_tag = sha-*` and copy the built-services value into `services` for an incremental release. Do not leave `services` empty unless this is a first deployment, an explicitly approved full release, or emergency recovery.
 5. `cloud-deploy` runs on the same non-root runner, syncs `deploy/`, writes `DEPLOY_ENV_FILE`, overwrites the server `.env` `SEED_ADMIN_PASSWORD` from the dedicated GitHub secret, logs in to Harbor, and calls `deploy-release.sh`.
+
+Harbor application repositories keep only the newest 3 `sha-*` tags. `cloud-image` calls `deploy/scripts/harbor-retention.sh` after a successful push; the Harbor robot must have tag delete permission. Tag deletion only removes references, so Harbor Garbage Collection must run on a schedule to reclaim disk.
 
 The runner must not run as root. See `RUNNER.md` for the required `github-runner` user, Docker group, labels, and server reachability checks.
 
@@ -173,13 +177,13 @@ EdgeClient Velopack update packages are served by the existing `nginx-gateway` a
 <PUBLIC_BASE_URL>/edge-updates/velopack/stable/
 ```
 
-Server-side package directory:
+Server-side package directory, determined by `EDGE_UPDATES_DIR`:
 
 ```text
-/srv/iiot/edge-updates/velopack/stable
+/data/iiot-platform/edge-client/edge-updates/velopack/stable
 ```
 
-The path defaults to `/srv/iiot/edge-updates`, can be overridden by `EDGE_UPDATES_DIR` in the production `.env` file, and is mounted read-only into `nginx-gateway`.
+The current production value is `EDGE_UPDATES_DIR=/data/iiot-platform/edge-client/edge-updates`, and the directory is mounted read-only into `nginx-gateway`.
 
 Package contents are operator-managed:
 

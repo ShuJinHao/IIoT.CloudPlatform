@@ -46,6 +46,15 @@ public sealed class DeviceClientVersionSnapshotConfiguration : IEntityTypeConfig
             .IsRequired()
             .HasColumnName("received_at_utc");
 
+        builder.Property(snapshot => snapshot.LocalIpAddressesJson)
+            .IsRequired()
+            .HasColumnType("jsonb")
+            .HasColumnName("local_ip_addresses_json");
+
+        builder.Property(snapshot => snapshot.RemoteIpAddress)
+            .HasMaxLength(128)
+            .HasColumnName("remote_ip_address");
+
         builder.HasIndex(snapshot => snapshot.DeviceId)
             .IsUnique()
             .HasDatabaseName("ux_edge_device_client_version_snapshots_device");

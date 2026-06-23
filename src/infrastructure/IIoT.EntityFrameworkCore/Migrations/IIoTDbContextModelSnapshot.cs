@@ -438,9 +438,19 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .HasColumnType("character varying(64)")
                         .HasColumnName("host_version");
 
+                    b.Property<string>("LocalIpAddressesJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("local_ip_addresses_json");
+
                     b.Property<DateTime>("ReceivedAtUtc")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("received_at_utc");
+
+                    b.Property<string>("RemoteIpAddress")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("remote_ip_address");
 
                     b.Property<DateTime>("ReportedAtUtc")
                         .HasColumnType("timestamp with time zone")

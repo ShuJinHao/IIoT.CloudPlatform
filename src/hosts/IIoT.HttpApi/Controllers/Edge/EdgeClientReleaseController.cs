@@ -29,6 +29,22 @@ public sealed class EdgeClientReleaseController : ApiControllerBase
         [FromBody] ReportDeviceClientVersionCommand command,
         CancellationToken cancellationToken)
     {
-        return ReturnResult(await Sender.Send(command, cancellationToken));
+        var remoteIp = HttpContext.Connection.RemoteIpAddress?.ToString();
+        if (Request.Headers.TryGetValue("X-Forwarded-For", out var forwardedFor)
+            && forwardedFor.Count > 0)
+        {
+            var firstForwarded = forwardedFor[0]?
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(firstForwarded))
+            {
+                remoteIp = firstForwarded;
+            }
+        }
+
+        return ReturnResult(await Sender.Send(command with
+        {
+            RemoteIpAddress = remoteIp
+        }, cancellationToken));
     }
 }

@@ -63,6 +63,10 @@ public sealed class UpsertClientHostReleaseCommandValidator : AbstractValidator<
         RuleFor(x => x.DownloadUrl).NotEmpty().MaximumLength(1024);
         RuleFor(x => x.Sha256).NotEmpty().Length(64);
         RuleFor(x => x.PackageSize).GreaterThanOrEqualTo(0);
+        RuleFor(x => x.ReleaseNotes)
+            .NotEmpty()
+            .WithMessage("发布状态为 Published 时必须填写更新内容。")
+            .When(x => string.Equals(x.Status, nameof(ClientReleaseStatus.Published), StringComparison.OrdinalIgnoreCase));
         RuleFor(x => x.Status)
             .NotEmpty()
             .Must(value => Enum.TryParse(value, ignoreCase: true, out ClientReleaseStatus _))
@@ -90,6 +94,10 @@ public sealed class UpsertClientPluginReleaseCommandValidator : AbstractValidato
         RuleFor(x => x.DownloadUrl).NotEmpty().MaximumLength(1024);
         RuleFor(x => x.Sha256).NotEmpty().Length(64);
         RuleFor(x => x.PackageSize).GreaterThanOrEqualTo(0);
+        RuleFor(x => x.ReleaseNotes)
+            .NotEmpty()
+            .WithMessage("发布状态为 Published 时必须填写更新内容。")
+            .When(x => string.Equals(x.Status, nameof(ClientReleaseStatus.Published), StringComparison.OrdinalIgnoreCase));
         RuleFor(x => x.DependenciesJson)
             .Must(BeJsonArray)
             .WithMessage("dependenciesJson 必须是 JSON 数组。")
@@ -228,6 +236,15 @@ public sealed class ReportDeviceClientVersionCommandValidator : AbstractValidato
             .NotNull()
             .Must(x => x is not null && x.Count <= 64)
             .WithMessage("单次版本上报的启用插件数量不能超过 64 个。");
+        RuleFor(x => x.LocalIpAddresses)
+            .Must(x => x is null || x.Count <= 16)
+            .WithMessage("单次版本上报的 IP 地址数量不能超过 16 个。");
+        RuleForEach(x => x.LocalIpAddresses)
+            .MaximumLength(128)
+            .When(x => x.LocalIpAddresses is not null);
+        RuleFor(x => x.RemoteIpAddress)
+            .MaximumLength(128)
+            .When(x => x.RemoteIpAddress is not null);
         RuleForEach(x => x.InstalledPlugins).SetValidator(new DeviceClientPluginVersionReportItemValidator());
     }
 }

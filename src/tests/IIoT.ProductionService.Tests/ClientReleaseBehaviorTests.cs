@@ -7,6 +7,7 @@ using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.Commands.ClientReleases;
 using IIoT.ProductionService.Commands.ClientVersions;
+using IIoT.ProductionService.Validators;
 using IIoT.ProductionService.Queries.ClientReleases;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
@@ -76,13 +77,191 @@ public sealed class ClientReleaseBehaviorTests
             Assert.True(Directory.Exists(Path.Combine(edgeRoot, "installers", "stable", "1.2.0")));
             Assert.True(File.Exists(Path.Combine(edgeRoot, "velopack", "stable", "releases.stable.json")));
             Assert.Single(hostRepository.Items);
-            Assert.Single(pluginRepository.Items);
+            var pluginRelease = Assert.Single(pluginRepository.Items);
+            Assert.StartsWith("/edge-updates/plugins/stable/Homogenization/1.0.0/", pluginRelease.DownloadUrl);
+            var pluginPackage = Assert.Single(Directory.GetFiles(
+                Path.Combine(edgeRoot, "plugins", "stable", "Homogenization", "1.0.0"),
+                "*.zip"));
+            Assert.Equal(HashFile(pluginPackage), pluginRelease.Sha256);
+            Assert.Equal(new FileInfo(pluginPackage).Length, pluginRelease.PackageSize);
             Assert.Contains(auditTrail.Entries, entry => entry.Succeeded && entry.OperationType == "ClientRelease.Publish");
         }
         finally
         {
             TryDeleteDirectory(edgeRoot);
             bundle.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task PublishEdgeReleaseBundleHandler_ShouldNotOverwriteExistingPluginRelease_WhenHostVersionChangesOnly()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-edge-upload-root");
+        var bundle = CreateEdgeReleaseBundle("1.2.5");
+        try
+        {
+            var existingPlugin = new ClientPluginRelease(
+                "Homogenization",
+                "匀浆",
+                null,
+                null,
+                null,
+                "stable",
+                "1.0.0",
+                "1.0.0",
+                "1.0.0",
+                "99.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/plugins/stable/Homogenization/1.0.0/existing.zip",
+                new string('e', 64),
+                123,
+                "existing plugin notes",
+                "[]",
+                ClientReleaseStatus.Published,
+                null,
+                "IIoT");
+            var pluginRepository = new InMemoryRepository<ClientPluginRelease>();
+            pluginRepository.Items.Add(existingPlugin);
+            var handler = CreatePublishHandler(
+                edgeRoot,
+                new InMemoryRepository<ClientHostRelease>(),
+                pluginRepository,
+                new NoopRetentionService(),
+                new RecordingAuditTrailService());
+
+            var result = await PublishBundleAsync(handler, bundle.ZipPath);
+
+            Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
+            Assert.Single(pluginRepository.Items);
+            Assert.Equal("/edge-updates/plugins/stable/Homogenization/1.0.0/existing.zip", existingPlugin.DownloadUrl);
+            Assert.Equal("existing plugin notes", existingPlugin.ReleaseNotes);
+            Assert.False(Directory.Exists(Path.Combine(edgeRoot, "plugins", "stable", "Homogenization", "1.0.0")));
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            bundle.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task PublishEdgePluginPackageHandler_ShouldPublishIndependentPluginZip()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-edge-plugin-upload-root");
+        var wrapper = CreatePluginReleaseWrapper("Homogenization", "1.1.0");
+        try
+        {
+            var pluginRepository = new InMemoryRepository<ClientPluginRelease>();
+            var auditTrail = new RecordingAuditTrailService();
+            var handler = CreatePluginPackageHandler(edgeRoot, pluginRepository, new NoopRetentionService(), auditTrail);
+
+            var result = await PublishPluginPackageAsync(handler, wrapper.ZipPath);
+
+            Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
+            Assert.NotNull(result.Value);
+            Assert.Equal("Homogenization", result.Value!.ModuleId);
+            var release = Assert.Single(pluginRepository.Items);
+            Assert.Equal("1.1.0", release.Version);
+            Assert.Equal("独立插件更新", release.ReleaseNotes);
+            Assert.StartsWith("/edge-updates/plugins/stable/Homogenization/1.1.0/", release.DownloadUrl);
+            var package = Assert.Single(Directory.GetFiles(Path.Combine(edgeRoot, "plugins", "stable", "Homogenization", "1.1.0"), "*.zip"));
+            Assert.Equal(HashFile(package), release.Sha256);
+            Assert.Contains(auditTrail.Entries, entry => entry.Succeeded && entry.OperationType == "ClientRelease.PublishPlugin");
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            wrapper.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task PublishEdgePluginPackageHandler_ShouldRejectDuplicatePluginVersion()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-edge-plugin-upload-root");
+        var wrapper = CreatePluginReleaseWrapper("Homogenization", "1.1.1");
+        try
+        {
+            var pluginRepository = new InMemoryRepository<ClientPluginRelease>();
+            pluginRepository.Items.Add(new ClientPluginRelease(
+                "Homogenization",
+                "匀浆",
+                null,
+                null,
+                null,
+                "stable",
+                "1.1.1",
+                "1.0.0",
+                "1.0.0",
+                "99.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/plugins/stable/Homogenization/1.1.1/existing.zip",
+                new string('f', 64),
+                100,
+                "old",
+                "[]",
+                ClientReleaseStatus.Published,
+                null,
+                "IIoT"));
+            var handler = CreatePluginPackageHandler(
+                edgeRoot,
+                pluginRepository,
+                new NoopRetentionService(),
+                new RecordingAuditTrailService());
+
+            var result = await PublishPluginPackageAsync(handler, wrapper.ZipPath);
+
+            Assert.False(result.IsSuccess);
+            Assert.Contains(result.Errors ?? [], error => error.Contains("插件版本已存在", StringComparison.Ordinal));
+            Assert.Single(pluginRepository.Items);
+            Assert.False(Directory.Exists(Path.Combine(edgeRoot, "plugins", "stable", "Homogenization", "1.1.1")));
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            wrapper.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task PublishEdgePluginPackageHandler_ShouldRejectCloudApiSecretsInPluginZip()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-edge-plugin-upload-root");
+        var wrapper = CreatePluginReleaseWrapper(
+            "Homogenization",
+            "1.1.2",
+            packageRoot => WriteFile(
+                Path.Combine(packageRoot, "appsettings.Production.json"),
+                """
+                {
+                  "CloudApi": {
+                    "ClientCode": "real-client-code",
+                    "BootstrapSecret": "real-secret"
+                  }
+                }
+                """));
+        try
+        {
+            var pluginRepository = new InMemoryRepository<ClientPluginRelease>();
+            var handler = CreatePluginPackageHandler(
+                edgeRoot,
+                pluginRepository,
+                new NoopRetentionService(),
+                new RecordingAuditTrailService());
+
+            var result = await PublishPluginPackageAsync(handler, wrapper.ZipPath);
+
+            Assert.False(result.IsSuccess);
+            Assert.Contains(result.Errors ?? [], error => error.Contains("CloudApi:ClientCode", StringComparison.Ordinal));
+            Assert.Empty(pluginRepository.Items);
+            Assert.False(Directory.Exists(Path.Combine(edgeRoot, "plugins", "stable", "Homogenization", "1.1.2")));
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            wrapper.Dispose();
         }
     }
 
@@ -314,6 +493,54 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
+    public void UpsertClientReleaseValidators_ShouldRejectPublishedReleaseWithoutNotes()
+    {
+        var hostResult = new UpsertClientHostReleaseCommandValidator().Validate(
+            new UpsertClientHostReleaseCommand(
+                "stable",
+                "1.2.0",
+                "1.0.0",
+                "win-x64",
+                "net10.0",
+                "https://example.test/releases/host.zip",
+                new string('a', 64),
+                1024,
+                null,
+                "Published",
+                null,
+                "IIoT"));
+
+        Assert.False(hostResult.IsValid);
+        Assert.Contains(hostResult.Errors, error => error.PropertyName == nameof(UpsertClientHostReleaseCommand.ReleaseNotes));
+
+        var pluginResult = new UpsertClientPluginReleaseCommandValidator().Validate(
+            new UpsertClientPluginReleaseCommand(
+                "Homogenization",
+                "匀浆",
+                null,
+                null,
+                null,
+                "stable",
+                "1.2.0",
+                "1.0.0",
+                "1.0.0",
+                "99.0.0",
+                "win-x64",
+                "net10.0",
+                "https://example.test/releases/host.zip#moduleId=Homogenization",
+                new string('b', 64),
+                1024,
+                " ",
+                "[]",
+                "Published",
+                null,
+                "IIoT"));
+
+        Assert.False(pluginResult.IsValid);
+        Assert.Contains(pluginResult.Errors, error => error.PropertyName == nameof(UpsertClientPluginReleaseCommand.ReleaseNotes));
+    }
+
+    [Fact]
     public async Task ReportDeviceClientVersionHandler_ShouldRejectMismatchedClientCode()
     {
         var deviceId = Guid.NewGuid();
@@ -509,11 +736,11 @@ public sealed class ClientReleaseBehaviorTests
             Assert.Equal("匀浆", plugin.DisplayName);
             var pluginVersion = Assert.Single(plugin.Versions);
             Assert.Equal("1.0.0", pluginVersion.Version);
-            Assert.Equal(2048, pluginVersion.PackageSize);
+            Assert.True(pluginVersion.PackageSize > 0);
         }
         finally
         {
-            Directory.Delete(artifactRoot, recursive: true);
+            Directory.Delete(Directory.GetParent(artifactRoot)!.FullName, recursive: true);
         }
     }
 
@@ -584,7 +811,7 @@ public sealed class ClientReleaseBehaviorTests
         }
         finally
         {
-            Directory.Delete(artifactRoot, recursive: true);
+            Directory.Delete(Directory.GetParent(artifactRoot)!.FullName, recursive: true);
         }
     }
 
@@ -613,6 +840,29 @@ public sealed class ClientReleaseBehaviorTests
             auditTrail);
     }
 
+    private static PublishEdgePluginPackageHandler CreatePluginPackageHandler(
+        string edgeRoot,
+        InMemoryRepository<ClientPluginRelease> pluginRepository,
+        IClientReleaseRetentionService retentionService,
+        RecordingAuditTrailService auditTrail)
+    {
+        return new PublishEdgePluginPackageHandler(
+            Options.Create(new EdgeInstallerArtifactOptions
+            {
+                RootPath = Path.Combine(edgeRoot, "installers")
+            }),
+            Options.Create(new EdgeReleaseUploadOptions
+            {
+                MaxUploadMbps = 1000,
+                MaxBundleBytes = EdgeReleaseUploadOptions.DefaultMaxBundleBytes,
+                StagingDirectoryName = ".staging"
+            }),
+            pluginRepository,
+            retentionService,
+            new TestCurrentUser(),
+            auditTrail);
+    }
+
     private static async Task<IIoT.SharedKernel.Result.Result<EdgeReleaseBundlePublishResultDto>> PublishBundleAsync(
         PublishEdgeReleaseBundleHandler handler,
         string bundlePath)
@@ -622,6 +872,20 @@ public sealed class ClientReleaseBehaviorTests
             new PublishEdgeReleaseBundleCommand(
                 stream,
                 new FileInfo(bundlePath).Length,
+                "application/zip",
+                "127.0.0.1"),
+            CancellationToken.None);
+    }
+
+    private static async Task<IIoT.SharedKernel.Result.Result<EdgePluginPackagePublishResultDto>> PublishPluginPackageAsync(
+        PublishEdgePluginPackageHandler handler,
+        string wrapperPath)
+    {
+        await using var stream = File.OpenRead(wrapperPath);
+        return await handler.Handle(
+            new PublishEdgePluginPackageCommand(
+                stream,
+                new FileInfo(wrapperPath).Length,
                 "application/zip",
                 "127.0.0.1"),
             CancellationToken.None);
@@ -642,6 +906,19 @@ public sealed class ClientReleaseBehaviorTests
         WriteFile(Path.Combine(installerRoot, "IIoT.Edge.Setup.exe"), $"setup {version}");
         WriteFile(Path.Combine(installerRoot, "launcher", "launcher.txt"), "launcher");
         WriteFile(Path.Combine(installerRoot, "host", "host.dll"), $"host {version}");
+        WriteFile(
+            Path.Combine(installerRoot, "plugins", "Homogenization", "plugin.json"),
+            """
+            {
+              "moduleId": "Homogenization",
+              "displayName": "匀浆",
+              "version": "1.0.0",
+              "hostApiVersion": "1.0.0",
+              "minHostVersion": "1.0.0",
+              "maxHostVersion": "99.0.0",
+              "entryAssembly": "plugin.dll"
+            }
+            """);
         WriteFile(Path.Combine(installerRoot, "plugins", "Homogenization", "plugin.dll"), $"plugin {version}");
         WriteFile(Path.Combine(installerRoot, "velopack", "IIoT.Edge.Setup.exe"), $"velopack setup {version}");
 
@@ -704,6 +981,67 @@ public sealed class ClientReleaseBehaviorTests
 
         var zipPath = Path.Combine(workingRoot, "bundle.zip");
         ZipFile.CreateFromDirectory(bundleRoot, zipPath);
+        return new EdgeReleaseBundleFixture(workingRoot, zipPath);
+    }
+
+    private static EdgeReleaseBundleFixture CreatePluginReleaseWrapper(
+        string moduleId,
+        string version,
+        Action<string>? mutatePackageRoot = null)
+    {
+        var workingRoot = CreateTempDirectory("iiot-edge-plugin-wrapper");
+        var packageRoot = Path.Combine(workingRoot, "package-root");
+        WriteFile(
+            Path.Combine(packageRoot, "plugin.json"),
+            $$"""
+            {
+              "moduleId": "{{moduleId}}",
+              "displayName": "匀浆",
+              "version": "{{version}}",
+              "hostApiVersion": "1.0.0",
+              "minHostVersion": "1.0.0",
+              "maxHostVersion": "99.0.0",
+              "entryAssembly": "{{moduleId}}.dll"
+            }
+            """);
+        WriteFile(Path.Combine(packageRoot, $"{moduleId}.dll"), $"plugin {version}");
+        mutatePackageRoot?.Invoke(packageRoot);
+
+        var packageFileName = $"IIoT.EdgePlugin.{moduleId}-{version}-win-x64.zip";
+        var packagePath = Path.Combine(workingRoot, packageFileName);
+        ZipFile.CreateFromDirectory(packageRoot, packagePath);
+        var wrapperRoot = Path.Combine(workingRoot, "wrapper");
+        Directory.CreateDirectory(Path.Combine(wrapperRoot, "plugin"));
+        File.Copy(packagePath, Path.Combine(wrapperRoot, "plugin", packageFileName));
+        var manifest = new
+        {
+            packageSchemaVersion = 1,
+            channel = "stable",
+            moduleId,
+            processType = "homogenization",
+            displayName = "匀浆",
+            version,
+            hostApiVersion = "1.0.0",
+            minHostVersion = "1.0.0",
+            maxHostVersion = "99.0.0",
+            dependencies = Array.Empty<string>(),
+            targetRuntime = "win-x64",
+            targetFramework = "net10.0",
+            packageFileName,
+            packageSize = new FileInfo(packagePath).Length,
+            sha256 = HashFile(packagePath),
+            signature = "",
+            publisher = "IIoT",
+            releaseNotes = "独立插件更新",
+            createdAtUtc = DateTime.UtcNow
+        };
+        File.WriteAllText(
+            Path.Combine(wrapperRoot, "plugin-release.json"),
+            JsonSerializer.Serialize(manifest, new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+            new UTF8Encoding(false));
+
+        var zipPath = Path.Combine(workingRoot, "wrapper.zip");
+        ZipFile.CreateFromDirectory(wrapperRoot, zipPath);
         return new EdgeReleaseBundleFixture(workingRoot, zipPath);
     }
 
@@ -895,9 +1233,30 @@ public sealed class ClientReleaseBehaviorTests
         string moduleId,
         string displayName)
     {
-        var artifactRoot = Path.Combine(Path.GetTempPath(), $"iiot-edge-artifacts-{Guid.NewGuid():N}");
+        var edgeRoot = Path.Combine(Path.GetTempPath(), $"iiot-edge-artifacts-{Guid.NewGuid():N}");
+        var artifactRoot = Path.Combine(edgeRoot, "installers");
         var versionDirectory = Path.Combine(artifactRoot, channel, version);
         Directory.CreateDirectory(versionDirectory);
+        var pluginStagingDirectory = Path.Combine(edgeRoot, ".plugin-staging", moduleId);
+        WriteFile(
+            Path.Combine(pluginStagingDirectory, "plugin.json"),
+            $$"""
+            {
+              "moduleId": "{{moduleId}}",
+              "displayName": "{{displayName}}",
+              "version": "1.0.0",
+              "hostApiVersion": "1.0.0",
+              "minHostVersion": "1.0.0",
+              "maxHostVersion": "99.0.0",
+              "entryAssembly": "{{moduleId}}.dll"
+            }
+            """);
+        WriteFile(Path.Combine(pluginStagingDirectory, $"{moduleId}.dll"), "plugin");
+        var pluginPackageDirectory = Path.Combine(edgeRoot, "plugins", channel, moduleId, "1.0.0");
+        Directory.CreateDirectory(pluginPackageDirectory);
+        ZipFile.CreateFromDirectory(
+            pluginStagingDirectory,
+            Path.Combine(pluginPackageDirectory, $"IIoT.EdgePlugin.{moduleId}-1.0.0-{targetRuntime}.zip"));
         File.WriteAllText(
             Path.Combine(versionDirectory, "installer-artifact.json"),
             $$"""

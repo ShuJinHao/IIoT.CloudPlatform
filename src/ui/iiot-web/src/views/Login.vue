@@ -219,7 +219,7 @@ import {
   Users,
   Wifi,
 } from 'lucide-vue-next';
-import { loginApi } from '../api/auth';
+import { AuthRequestError, loginApi } from '../api/auth';
 import { useAuthStore } from '../stores/auth';
 import type { LoginPayload } from '../api/auth';
 import { setAppLocale, type AppLocale } from '../i18n';
@@ -251,6 +251,29 @@ const getSafeReturnUrl = () => {
   return trimmed;
 };
 
+const resolveLoginErrorMessage = (error: unknown) => {
+  if (!(error instanceof AuthRequestError)) {
+    return t('login.unknownFailed');
+  }
+
+  switch (error.kind) {
+    case 'invalid-credentials':
+      return error.detail || t('login.failed');
+    case 'network':
+      return t('login.networkFailed');
+    case 'timeout':
+      return t('login.timeout');
+    case 'rate-limited':
+      return error.detail || t('login.rateLimited');
+    case 'server':
+      return t('login.serverUnavailable');
+    case 'invalid-response':
+      return t('login.invalidResponse');
+    default:
+      return error.detail || t('login.unknownFailed');
+  }
+};
+
 const handleLogin = async () => {
   if (!loginForm.employeeNo || !loginForm.password) {
     errorMsg.value = t('login.required');
@@ -273,8 +296,8 @@ const handleLogin = async () => {
       return;
     }
     await router.push('/');
-  } catch {
-    errorMsg.value = t('login.failed');
+  } catch (error) {
+    errorMsg.value = resolveLoginErrorMessage(error);
   } finally {
     loading.value = false;
   }

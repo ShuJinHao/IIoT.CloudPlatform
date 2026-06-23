@@ -1,4 +1,5 @@
 using IIoT.SharedKernel.Domain;
+using System.Text.Json;
 
 namespace IIoT.Core.Production.Aggregates.ClientReleases;
 
@@ -20,7 +21,9 @@ public sealed class DeviceClientVersionSnapshot : BaseEntity<Guid>
         string hostApiVersion,
         string channel,
         DateTime reportedAtUtc,
-        IEnumerable<DeviceClientPluginVersion> installedPlugins)
+        IEnumerable<DeviceClientPluginVersion> installedPlugins,
+        IEnumerable<string>? localIpAddresses = null,
+        string? remoteIpAddress = null)
     {
         if (deviceId == Guid.Empty)
         {
@@ -29,7 +32,15 @@ public sealed class DeviceClientVersionSnapshot : BaseEntity<Guid>
 
         Id = deviceId;
         DeviceId = deviceId;
-        ReplaceReport(clientCode, hostVersion, hostApiVersion, channel, reportedAtUtc, installedPlugins);
+        ReplaceReport(
+            clientCode,
+            hostVersion,
+            hostApiVersion,
+            channel,
+            reportedAtUtc,
+            installedPlugins,
+            localIpAddresses,
+            remoteIpAddress);
     }
 
     public Guid DeviceId { get; private set; }
@@ -46,6 +57,10 @@ public sealed class DeviceClientVersionSnapshot : BaseEntity<Guid>
 
     public DateTime ReceivedAtUtc { get; private set; }
 
+    public string LocalIpAddressesJson { get; private set; } = "[]";
+
+    public string? RemoteIpAddress { get; private set; }
+
     public IReadOnlyCollection<DeviceClientPluginVersion> InstalledPlugins => _installedPlugins.AsReadOnly();
 
     public void ReplaceReport(
@@ -54,7 +69,9 @@ public sealed class DeviceClientVersionSnapshot : BaseEntity<Guid>
         string hostApiVersion,
         string channel,
         DateTime reportedAtUtc,
-        IEnumerable<DeviceClientPluginVersion> installedPlugins)
+        IEnumerable<DeviceClientPluginVersion> installedPlugins,
+        IEnumerable<string>? localIpAddresses = null,
+        string? remoteIpAddress = null)
     {
         ClientCode = NormalizeRequired(clientCode, nameof(clientCode)).ToUpperInvariant();
         HostVersion = NormalizeRequired(hostVersion, nameof(hostVersion));
@@ -64,14 +81,53 @@ public sealed class DeviceClientVersionSnapshot : BaseEntity<Guid>
             ? DateTime.SpecifyKind(reportedAtUtc, DateTimeKind.Utc)
             : reportedAtUtc.ToUniversalTime();
         ReceivedAtUtc = DateTime.UtcNow;
+        LocalIpAddressesJson = SerializeIpAddresses(localIpAddresses);
+        RemoteIpAddress = NormalizeOptional(remoteIpAddress);
 
         _installedPlugins.Clear();
         _installedPlugins.AddRange(installedPlugins);
+    }
+
+    public IReadOnlyList<string> GetLocalIpAddresses()
+    {
+        if (string.IsNullOrWhiteSpace(LocalIpAddressesJson))
+        {
+            return [];
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<string>>(LocalIpAddressesJson) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
     }
 
     private static string NormalizeRequired(string value, string paramName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value, paramName);
         return value.Trim();
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private static string SerializeIpAddresses(IEnumerable<string>? values)
+    {
+        var normalized = (values ?? [])
+            .Select(NormalizeOptional)
+            .Where(value => value is not null)
+            .Select(value => value!)
+            .Where(value => value.Length <= 128)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(16)
+            .ToList();
+
+        return JsonSerializer.Serialize(normalized);
     }
 }

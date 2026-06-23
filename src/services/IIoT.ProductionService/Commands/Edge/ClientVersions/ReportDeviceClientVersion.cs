@@ -22,7 +22,9 @@ public sealed record ReportDeviceClientVersionCommand(
     IReadOnlyList<DeviceClientPluginVersionReportItem> InstalledPlugins,
     IReadOnlyList<string> EnabledPlugins,
     string Channel,
-    DateTime ReportedAtUtc) : IDeviceCommand<Result<DeviceClientVersionReportResultDto>>;
+    DateTime ReportedAtUtc,
+    IReadOnlyList<string>? LocalIpAddresses = null,
+    string? RemoteIpAddress = null) : IDeviceCommand<Result<DeviceClientVersionReportResultDto>>;
 
 public sealed class ReportDeviceClientVersionHandler(
     IDeviceIdentityQueryService deviceIdentityQueryService,
@@ -75,7 +77,9 @@ public sealed class ReportDeviceClientVersionHandler(
                 request.HostApiVersion,
                 request.Channel,
                 request.ReportedAtUtc,
-                pluginVersions);
+                pluginVersions,
+                request.LocalIpAddresses,
+                request.RemoteIpAddress);
             repository.Add(snapshot);
         }
         else
@@ -86,7 +90,9 @@ public sealed class ReportDeviceClientVersionHandler(
                 request.HostApiVersion,
                 request.Channel,
                 request.ReportedAtUtc,
-                pluginVersions);
+                pluginVersions,
+                request.LocalIpAddresses,
+                request.RemoteIpAddress);
         }
 
         await repository.SaveChangesAsync(cancellationToken);

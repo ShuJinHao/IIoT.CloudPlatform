@@ -513,6 +513,7 @@ public sealed class InfrastructureBehaviorTests
             "OutboxMessageDispatcher.cs"));
 
         Assert.Contains("FOR UPDATE SKIP LOCKED", source, StringComparison.Ordinal);
+        Assert.Contains("CreateExecutionStrategy", source, StringComparison.Ordinal);
         Assert.Contains("BeginTransactionAsync", source, StringComparison.Ordinal);
         Assert.Contains("abandoned_at_utc IS NULL", source, StringComparison.Ordinal);
     }

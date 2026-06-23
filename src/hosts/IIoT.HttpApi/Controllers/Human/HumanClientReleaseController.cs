@@ -121,6 +121,34 @@ public sealed class HumanClientReleaseController : ApiControllerBase
         return ReturnResult(result);
     }
 
+    [HttpPost("plugin-packages")]
+    [RequestSizeLimit(EdgeReleaseUploadOptions.DefaultMaxBundleBytes)]
+    public async Task<IActionResult> PublishEdgePluginPackage(CancellationToken cancellationToken)
+    {
+        var result = await Sender.Send(
+            new PublishEdgePluginPackageCommand(
+                Request.Body,
+                Request.ContentLength,
+                Request.ContentType,
+                HttpContext.Connection.RemoteIpAddress?.ToString()),
+            cancellationToken);
+
+        if (!result.IsSuccess
+            && result.Status == ResultStatus.Invalid
+            && result.Errors?.Contains(PublishEdgePluginPackageHandler.UploadInProgressMessage) == true)
+        {
+            return Conflict(new ProblemDetails
+            {
+                Status = StatusCodes.Status409Conflict,
+                Title = "Edge 发布上传正在执行",
+                Detail = result.Errors.Single(),
+                Instance = HttpContext.Request.Path
+            });
+        }
+
+        return ReturnResult(result);
+    }
+
     [HttpPost("host-releases")]
     public async Task<IActionResult> UpsertHostRelease(
         [FromBody] UpsertClientHostReleaseCommand command,

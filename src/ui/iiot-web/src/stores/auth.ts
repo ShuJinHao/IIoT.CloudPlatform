@@ -1,14 +1,22 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { jwtDecode } from 'jwt-decode';
-import { refreshHumanSessionApi, type AuthSessionPayload } from '../api/auth';
+import {
+  isSessionInvalidAuthError,
+  isTransientAuthError,
+  refreshHumanSessionApi,
+  type AuthSessionPayload,
+} from '../api/auth';
 import type { PermissionKey } from '../types/permissions';
+import { notifyWarning } from '../utils/feedback';
 
 const ROLE_CLAIM_KEY = 'http://schemas.microsoft.com/ws/2008/06/identity/claims/role';
 const PERMISSION_CLAIM_KEY = 'Permission';
 const REFRESH_LEAD_TIME_MS = 2 * 60 * 1000;
 const REFRESH_LOCK_TTL_MS = 30 * 1000;
 const REFRESH_LOCK_POLL_INTERVAL_MS = 250;
+const REFRESH_RETRY_DELAY_MS = 30 * 1000;
+const REFRESH_NOTICE_THROTTLE_MS = 60 * 1000;
 const AUTH_SYNC_EVENT_KEY = 'iiot-auth-sync-event';
 const AUTH_REFRESH_LOCK_KEY = 'iiot-auth-refresh-lock';
 const STORAGE_KEYS = {
@@ -53,6 +61,7 @@ const tabId =
 let refreshTimer: number | null = null;
 let refreshPromise: Promise<string | null> | null = null;
 let storageSyncInitialized = false;
+let lastRefreshFailureNoticeAt = 0;
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref<string | null>(localStorage.getItem(STORAGE_KEYS.token));
@@ -93,19 +102,38 @@ export const useAuthStore = defineStore('auth', () => {
     }
 
     try {
-      if (new Date(savedSession.refreshTokenExpiresAt).getTime() <= Date.now()) {
+      const now = Date.now();
+      const refreshTokenExpiresAtMs = new Date(savedSession.refreshTokenExpiresAt).getTime();
+      const accessTokenExpiresAtMs = new Date(savedSession.accessTokenExpiresAt).getTime();
+
+      if (!Number.isFinite(refreshTokenExpiresAtMs) || refreshTokenExpiresAtMs <= now) {
         logout({ broadcast: false });
         return;
       }
 
-      if (new Date(savedSession.accessTokenExpiresAt).getTime() <= Date.now() + REFRESH_LEAD_TIME_MS) {
+      if (!Number.isFinite(accessTokenExpiresAtMs)) {
+        logout({ broadcast: false });
+        return;
+      }
+
+      if (accessTokenExpiresAtMs <= now) {
+        await refreshSession();
+        return;
+      }
+
+      if (accessTokenExpiresAtMs <= now + REFRESH_LEAD_TIME_MS) {
         setSession(savedSession, { broadcast: false });
         await refreshSession();
         return;
       }
 
       setSession(savedSession, { broadcast: false });
-    } catch {
+    } catch (error) {
+      if (isTransientAuthError(error)) {
+        scheduleRefreshRetry();
+        return;
+      }
+
       logout({ broadcast: false });
     }
   }
@@ -170,7 +198,18 @@ export const useAuthStore = defineStore('auth', () => {
       const session = await refreshHumanSessionApi(refreshToken.value!);
       setSession(session);
       return session.accessToken;
-    } catch {
+    } catch (error) {
+      if (isSessionInvalidAuthError(error)) {
+        logout();
+        return null;
+      }
+
+      if (isTransientAuthError(error)) {
+        notifyRefreshDeferred();
+        scheduleRefreshRetry();
+        return token.value;
+      }
+
       logout();
       return null;
     } finally {
@@ -349,6 +388,25 @@ export const useAuthStore = defineStore('auth', () => {
       window.clearTimeout(refreshTimer);
       refreshTimer = null;
     }
+  }
+
+  function scheduleRefreshRetry() {
+    clearRefreshTimer();
+    refreshTimer = window.setTimeout(() => {
+      void refreshSession();
+    }, REFRESH_RETRY_DELAY_MS);
+  }
+
+  function notifyRefreshDeferred() {
+    const now = Date.now();
+    if (now - lastRefreshFailureNoticeAt < REFRESH_NOTICE_THROTTLE_MS) {
+      return;
+    }
+
+    lastRefreshFailureNoticeAt = now;
+    notifyWarning('云端连接异常，已保留当前登录状态，系统会自动重试。', {
+      title: '网络连接异常',
+    });
   }
 
   function tryAcquireRefreshLock(): boolean {

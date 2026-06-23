@@ -25,6 +25,8 @@ public sealed class GetDeviceClientVersionInventoryHandler(
     IReadRepository<ClientPluginRelease> pluginReleaseRepository)
     : IQueryHandler<GetDeviceClientVersionInventoryQuery, Result<IReadOnlyList<DeviceClientVersionInventoryDto>>>
 {
+    private static readonly TimeSpan ReportStaleThreshold = TimeSpan.FromHours(24);
+
     public async Task<Result<IReadOnlyList<DeviceClientVersionInventoryDto>>> Handle(
         GetDeviceClientVersionInventoryQuery request,
         CancellationToken cancellationToken)
@@ -90,16 +92,27 @@ public sealed class GetDeviceClientVersionInventoryHandler(
             .OrderBy(plugin => plugin.ModuleId, StringComparer.OrdinalIgnoreCase)
             .Select(plugin => BuildPluginInventory(snapshot, plugin, referencePluginsByModule))
             .ToList();
+        var localIpAddresses = snapshot?.GetLocalIpAddresses() ?? [];
+        var primaryIp = localIpAddresses.FirstOrDefault()
+            ?? NormalizeOptional(snapshot?.RemoteIpAddress);
+        var installStatus = ResolveInstallStatus(snapshot, hostStatus, pluginRows);
+        var issue = ResolveIssue(snapshot, hostStatus, hostIssue, pluginRows);
 
         return new DeviceClientVersionInventoryDto(
             device.Id,
             device.DeviceName,
             device.Code,
+            primaryIp,
+            localIpAddresses,
+            snapshot?.RemoteIpAddress,
             snapshot?.Channel,
             snapshot?.HostVersion,
             snapshot?.HostApiVersion,
             hostStatus,
             hostIssue,
+            installStatus,
+            BuildCurrentVersion(snapshot, pluginRows),
+            issue,
             snapshot?.ReportedAtUtc,
             snapshot?.ReceivedAtUtc,
             pluginRows);
@@ -130,6 +143,100 @@ public sealed class GetDeviceClientVersionInventoryHandler(
         return ClientReleaseMapping.CompareVersions(snapshot.HostVersion, referenceHost.Version) < 0
             ? "UpdateAvailable"
             : "Latest";
+    }
+
+    private static string ResolveInstallStatus(
+        DeviceClientVersionSnapshot? snapshot,
+        string hostStatus,
+        IReadOnlyList<DeviceClientPluginInventoryDto> plugins)
+    {
+        if (snapshot is null)
+        {
+            return "MissingReport";
+        }
+
+        if (DateTime.UtcNow - snapshot.ReceivedAtUtc.ToUniversalTime() > ReportStaleThreshold)
+        {
+            return "Offline";
+        }
+
+        if (hostStatus == "Incompatible" || plugins.Any(plugin => plugin.UpdateStatus == "Incompatible"))
+        {
+            return "Incompatible";
+        }
+
+        if (hostStatus == "UpdateAvailable" || plugins.Any(plugin => plugin.UpdateStatus == "UpdateAvailable"))
+        {
+            return "UpdateAvailable";
+        }
+
+        if (hostStatus == "NoRelease" || plugins.Any(plugin => plugin.UpdateStatus == "NoRelease"))
+        {
+            return "NoRelease";
+        }
+
+        return "Normal";
+    }
+
+    private static string? ResolveIssue(
+        DeviceClientVersionSnapshot? snapshot,
+        string hostStatus,
+        string? hostIssue,
+        IReadOnlyList<DeviceClientPluginInventoryDto> plugins)
+    {
+        if (snapshot is null)
+        {
+            return "客户端尚未上报安装状态。";
+        }
+
+        if (DateTime.UtcNow - snapshot.ReceivedAtUtc.ToUniversalTime() > ReportStaleThreshold)
+        {
+            return "超过 24 小时未上报。";
+        }
+
+        if (!string.IsNullOrWhiteSpace(hostIssue))
+        {
+            return hostIssue;
+        }
+
+        var pluginIssue = plugins
+            .Select(plugin => plugin.CompatibilityIssue)
+            .FirstOrDefault(issue => !string.IsNullOrWhiteSpace(issue));
+        if (!string.IsNullOrWhiteSpace(pluginIssue))
+        {
+            return pluginIssue;
+        }
+
+        if (hostStatus == "UpdateAvailable" || plugins.Any(plugin => plugin.UpdateStatus == "UpdateAvailable"))
+        {
+            return "存在可安装的新版本。";
+        }
+
+        if (hostStatus == "NoRelease")
+        {
+            return "当前渠道暂无可对比的宿主发布版本。";
+        }
+
+        if (plugins.Any(plugin => plugin.UpdateStatus == "NoRelease"))
+        {
+            return "部分插件暂无可对比的发布版本。";
+        }
+
+        return null;
+    }
+
+    private static string BuildCurrentVersion(
+        DeviceClientVersionSnapshot? snapshot,
+        IReadOnlyList<DeviceClientPluginInventoryDto> plugins)
+    {
+        if (snapshot is null)
+        {
+            return "-";
+        }
+
+        return plugins.Count == 0
+            ? $"宿主 {snapshot.HostVersion}"
+            : $"宿主 {snapshot.HostVersion} / 插件 {plugins.Count} 个";
     }
 
     private static DeviceClientPluginInventoryDto BuildPluginInventory(
@@ -170,6 +277,12 @@ public sealed class GetDeviceClientVersionInventoryHandler(
             plugin.Enabled,
             updateStatus,
             compatibilityIssue);
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
     private sealed class VersionStringComparer : IComparer<string>

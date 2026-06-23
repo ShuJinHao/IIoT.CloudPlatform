@@ -11,6 +11,7 @@ public sealed class EfRefreshTokenService(
     IIoTDbContext dbContext,
     IOptions<RefreshTokenOptions> refreshTokenOptions) : IRefreshTokenService
 {
+    private const string SessionLimitRevokedReason = "session-limit";
     private readonly RefreshTokenOptions _options = refreshTokenOptions.Value;
 
     public async Task<RefreshTokenEnvelope> IssueAsync(
@@ -18,9 +19,11 @@ public sealed class EfRefreshTokenService(
         Guid subjectId,
         CancellationToken cancellationToken = default)
     {
+        var now = DateTimeOffset.UtcNow;
         var token = GenerateToken();
-        var session = CreateSession(actorType, subjectId, token);
+        var session = CreateSession(actorType, subjectId, token, now);
 
+        await RevokeOverflowHumanSessionsAsync(actorType, subjectId, now, cancellationToken);
         dbContext.RefreshTokenSessions.Add(session);
         await dbContext.SaveChangesAsync(cancellationToken);
 
@@ -46,7 +49,7 @@ public sealed class EfRefreshTokenService(
         }
 
         var replacementToken = GenerateToken();
-        var replacementSession = CreateSession(actorType, existing.SubjectId, replacementToken);
+        var replacementSession = CreateSession(actorType, existing.SubjectId, replacementToken, now);
 
         existing.RevokedAtUtc = now;
         existing.RevokedReason = "rotated";
@@ -95,12 +98,50 @@ public sealed class EfRefreshTokenService(
         }
     }
 
+    private async Task RevokeOverflowHumanSessionsAsync(
+        string actorType,
+        Guid subjectId,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        if (!string.Equals(actorType, IIoTClaimTypes.HumanActor, StringComparison.Ordinal) ||
+            _options.HumanMaxActiveSessions <= 0)
+        {
+            return;
+        }
+
+        var activeQuery = dbContext.RefreshTokenSessions
+            .Where(x =>
+                x.ActorType == actorType &&
+                x.SubjectId == subjectId &&
+                !x.RevokedAtUtc.HasValue &&
+                x.ExpiresAtUtc > now);
+
+        var overflowCount = await activeQuery.CountAsync(cancellationToken) - _options.HumanMaxActiveSessions + 1;
+        if (overflowCount <= 0)
+        {
+            return;
+        }
+
+        var sessionsToRevoke = await activeQuery
+            .OrderBy(x => x.CreatedAtUtc)
+            .ThenBy(x => x.Id)
+            .Take(overflowCount)
+            .ToListAsync(cancellationToken);
+
+        foreach (var session in sessionsToRevoke)
+        {
+            session.RevokedAtUtc = now;
+            session.RevokedReason = SessionLimitRevokedReason;
+        }
+    }
+
     private RefreshTokenSession CreateSession(
         string actorType,
         Guid subjectId,
-        string token)
+        string token,
+        DateTimeOffset now)
     {
-        var now = DateTimeOffset.UtcNow;
         return new RefreshTokenSession
         {
             Id = Guid.NewGuid(),

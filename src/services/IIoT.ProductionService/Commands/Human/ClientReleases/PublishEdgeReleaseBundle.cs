@@ -114,6 +114,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
         var commitPointReached = false;
         string? installerTargetForRollback = null;
         VelopackFilePublishTransaction? velopackTransaction = null;
+        var pluginPackageRollbackTargets = new List<string>();
 
         try
         {
@@ -152,10 +153,18 @@ public sealed class PublishEdgeReleaseBundleHandler(
 
             Directory.Move(artifact.InstallerRoot!, installerTarget);
             installerTargetForRollback = installerTarget;
+            var pluginPackages = await PublishMissingPluginPackagesAsync(
+                edgeRoot,
+                manifest,
+                installerTarget,
+                stagingRoot,
+                pluginPackageRollbackTargets,
+                cancellationToken);
 
             await UpsertDatabaseRowsAsync(
                 manifest,
                 BuildManifestDownloadUrl(channel, version),
+                pluginPackages,
                 cancellationToken);
 
             commitPointReached = true;
@@ -198,7 +207,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 cleanup.DeletedVelopackFiles,
                 cleanupSucceeded,
                 cleanupWarning,
-                BuildVerificationUrls(channel, version));
+                BuildVerificationUrls(channel, version, pluginPackages.Values));
 
             await WriteAuditAsync(result, request.SourceIp, succeeded: true, cleanupWarning, CancellationToken.None);
             succeeded = true;
@@ -211,7 +220,8 @@ public sealed class PublishEdgeReleaseBundleHandler(
             {
                 var rollbackWarnings = RollbackPreCommitArtifacts(
                     installerTargetForRollback,
-                    velopackTransaction);
+                    velopackTransaction,
+                    pluginPackageRollbackTargets);
                 if (rollbackWarnings.Count > 0)
                 {
                     failureMessage = $"{failureMessage} 回滚警告：{string.Join("；", rollbackWarnings)}";
@@ -253,9 +263,15 @@ public sealed class PublishEdgeReleaseBundleHandler(
 
     private static IReadOnlyList<string> RollbackPreCommitArtifacts(
         string? installerTarget,
-        VelopackFilePublishTransaction? velopackTransaction)
+        VelopackFilePublishTransaction? velopackTransaction,
+        IEnumerable<string> pluginPackageTargets)
     {
         var warnings = new List<string>();
+        foreach (var pluginPackageTarget in pluginPackageTargets)
+        {
+            TryDeleteDirectory(pluginPackageTarget, warnings);
+        }
+
         if (!string.IsNullOrWhiteSpace(installerTarget))
         {
             TryDeleteDirectory(installerTarget, warnings);
@@ -651,9 +667,93 @@ public sealed class PublishEdgeReleaseBundleHandler(
         return new VelopackFilePublishTransaction(targetRoot, changes);
     }
 
+    private async Task<IReadOnlyDictionary<string, PluginPackagePublishArtifact>> PublishMissingPluginPackagesAsync(
+        string edgeRoot,
+        EdgeInstallerArtifactManifest manifest,
+        string installerTarget,
+        string stagingRoot,
+        ICollection<string> rollbackTargets,
+        CancellationToken cancellationToken)
+    {
+        var published = new Dictionary<string, PluginPackagePublishArtifact>(StringComparer.OrdinalIgnoreCase);
+        var stagingPackagesRoot = Path.Combine(stagingRoot, "plugin-packages");
+        Directory.CreateDirectory(stagingPackagesRoot);
+
+        foreach (var module in manifest.Modules)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var existing = await pluginRepository.GetSingleOrDefaultAsync(
+                new ClientPluginReleaseByIdentitySpec(
+                    module.ModuleId,
+                    manifest.Channel,
+                    module.Version,
+                    manifest.TargetRuntime),
+                cancellationToken);
+            if (existing is not null)
+            {
+                continue;
+            }
+
+            var pluginDirectory = Path.Combine(installerTarget, manifest.PluginsRoot, module.PluginDirectory);
+            if (!Directory.Exists(pluginDirectory))
+            {
+                throw new InvalidDataException($"Edge 发布包缺少插件目录: {module.ModuleId}。");
+            }
+
+            var pluginManifestPath = Path.Combine(pluginDirectory, "plugin.json");
+            if (!File.Exists(pluginManifestPath))
+            {
+                throw new InvalidDataException($"Edge 发布包插件目录缺少 plugin.json: {module.ModuleId}。");
+            }
+
+            var packageFileName = BuildPluginPackageFileName(module.ModuleId, module.Version, manifest.TargetRuntime);
+            var stagingPackagePath = Path.Combine(stagingPackagesRoot, packageFileName);
+            if (File.Exists(stagingPackagePath))
+            {
+                File.Delete(stagingPackagePath);
+            }
+
+            ZipFile.CreateFromDirectory(
+                pluginDirectory,
+                stagingPackagePath,
+                CompressionLevel.Optimal,
+                includeBaseDirectory: false);
+
+            var sha256 = HashFile(stagingPackagePath);
+            var size = new FileInfo(stagingPackagePath).Length;
+            var packageDirectory = Path.Combine(
+                edgeRoot,
+                "plugins",
+                manifest.Channel,
+                EscapeFileSystemSegment(module.ModuleId),
+                module.Version);
+            if (Directory.Exists(packageDirectory))
+            {
+                throw new InvalidDataException(
+                    $"Edge 插件包版本目录已存在，拒绝覆盖: {manifest.Channel}/{module.ModuleId}/{module.Version}。");
+            }
+
+            Directory.CreateDirectory(packageDirectory);
+            rollbackTargets.Add(packageDirectory);
+            var packagePath = Path.Combine(packageDirectory, packageFileName);
+            File.Move(stagingPackagePath, packagePath);
+            published[module.ModuleId] = new PluginPackagePublishArtifact(
+                module.ModuleId,
+                module.Version,
+                packagePath,
+                BuildPluginDownloadUrl(manifest.Channel, module.ModuleId, module.Version, packageFileName),
+                sha256,
+                size);
+        }
+
+        return published;
+    }
+
     private async Task UpsertDatabaseRowsAsync(
         EdgeInstallerArtifactManifest manifest,
         string manifestDownloadUrl,
+        IReadOnlyDictionary<string, PluginPackagePublishArtifact> pluginPackages,
         CancellationToken cancellationToken)
     {
         var host = await hostRepository.GetSingleOrDefaultAsync(
@@ -705,52 +805,39 @@ public sealed class PublishEdgeReleaseBundleHandler(
                     manifest.TargetRuntime),
                 cancellationToken);
 
-            if (plugin is null)
+            if (plugin is not null)
             {
-                plugin = new ClientPluginRelease(
-                    module.ModuleId,
-                    string.IsNullOrWhiteSpace(module.DisplayName) ? module.ModuleId : module.DisplayName,
-                    module.Description,
-                    null,
-                    null,
-                    manifest.Channel,
-                    module.Version,
-                    module.HostApiVersion,
-                    module.MinHostVersion,
-                    module.MaxHostVersion,
-                    manifest.TargetRuntime,
-                    manifest.TargetFramework,
-                    $"{manifestDownloadUrl}#moduleId={Uri.EscapeDataString(module.ModuleId)}",
-                    module.PluginSha256!,
-                    module.PluginSize,
-                    manifest.ReleaseNotes,
-                    "[]",
-                    ClientReleaseStatus.Published,
-                    null,
-                    "IIoT",
-                    manifest.GeneratedAtUtc);
-                pluginRepository.Add(plugin);
+                continue;
             }
-            else
+
+            if (!pluginPackages.TryGetValue(module.ModuleId, out var package))
             {
-                plugin.UpdateRelease(
-                    string.IsNullOrWhiteSpace(module.DisplayName) ? module.ModuleId : module.DisplayName,
-                    module.Description,
-                    null,
-                    null,
-                    module.HostApiVersion,
-                    module.MinHostVersion,
-                    module.MaxHostVersion,
-                    manifest.TargetFramework,
-                    $"{manifestDownloadUrl}#moduleId={Uri.EscapeDataString(module.ModuleId)}",
-                    module.PluginSha256!,
-                    module.PluginSize,
-                    manifest.ReleaseNotes,
-                    "[]",
-                    ClientReleaseStatus.Published,
-                    null,
-                    "IIoT");
+                throw new InvalidDataException($"插件 {module.ModuleId} 缺少可安装的独立发布包。");
             }
+
+            plugin = new ClientPluginRelease(
+                module.ModuleId,
+                string.IsNullOrWhiteSpace(module.DisplayName) ? module.ModuleId : module.DisplayName,
+                module.Description,
+                null,
+                null,
+                manifest.Channel,
+                module.Version,
+                module.HostApiVersion,
+                module.MinHostVersion,
+                module.MaxHostVersion,
+                manifest.TargetRuntime,
+                manifest.TargetFramework,
+                package.DownloadUrl,
+                package.Sha256,
+                package.PackageSize,
+                manifest.ReleaseNotes,
+                "[]",
+                ClientReleaseStatus.Published,
+                null,
+                "IIoT",
+                manifest.GeneratedAtUtc);
+            pluginRepository.Add(plugin);
 
         }
 
@@ -808,8 +895,34 @@ public sealed class PublishEdgeReleaseBundleHandler(
         var deletedVelopackFiles = CleanupVelopackFiles(
             Path.Combine(edgeRoot, "velopack", channel),
             removableVersions);
+        await CleanupArchivedPluginFilesAsync(edgeRoot, channel, targetRuntime, cancellationToken);
 
         return new FileCleanupResult(archivedVersions, deletedInstallers, deletedVelopackFiles);
+    }
+
+    private async Task CleanupArchivedPluginFilesAsync(
+        string edgeRoot,
+        string channel,
+        string targetRuntime,
+        CancellationToken cancellationToken)
+    {
+        var pluginReleases = await pluginRepository.GetListAsync(
+            new ClientPluginReleasesByChannelSpec(channel, targetRuntime, onlyPublished: false, includeArchived: true),
+            cancellationToken);
+
+        foreach (var release in pluginReleases.Where(release => release.Status == ClientReleaseStatus.Archived))
+        {
+            var directory = Path.Combine(
+                edgeRoot,
+                "plugins",
+                release.Channel,
+                EscapeFileSystemSegment(release.ModuleId),
+                release.Version);
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
     }
 
     private static IReadOnlyList<string> CleanupVelopackFiles(
@@ -882,15 +995,48 @@ public sealed class PublishEdgeReleaseBundleHandler(
     private static string BuildManifestDownloadUrl(string channel, string version)
         => $"/edge-updates/installers/{Uri.EscapeDataString(channel)}/{Uri.EscapeDataString(version)}/installer-artifact.json";
 
-    private static IReadOnlyList<string> BuildVerificationUrls(string channel, string version)
+    private static string BuildPluginDownloadUrl(
+        string channel,
+        string moduleId,
+        string version,
+        string packageFileName)
+        => $"/edge-updates/plugins/{Uri.EscapeDataString(channel)}/{Uri.EscapeDataString(moduleId)}/{Uri.EscapeDataString(version)}/{Uri.EscapeDataString(packageFileName)}";
+
+    private static string BuildPluginPackageFileName(
+        string moduleId,
+        string version,
+        string targetRuntime)
+        => $"IIoT.EdgePlugin.{SanitizeFileNameSegment(moduleId)}-{SanitizeFileNameSegment(version)}-{SanitizeFileNameSegment(targetRuntime)}.zip";
+
+    private static string EscapeFileSystemSegment(string value)
+        => Uri.EscapeDataString(value.Trim());
+
+    private static string SanitizeFileNameSegment(string value)
     {
-        return
-        [
+        var invalid = Path.GetInvalidFileNameChars().ToHashSet();
+        var builder = new StringBuilder(value.Trim().Length);
+        foreach (var ch in value.Trim())
+        {
+            builder.Append(invalid.Contains(ch) ? '_' : ch);
+        }
+
+        return builder.Length == 0 ? "unknown" : builder.ToString();
+    }
+
+    private static IReadOnlyList<string> BuildVerificationUrls(
+        string channel,
+        string version,
+        IEnumerable<PluginPackagePublishArtifact> pluginPackages)
+    {
+        var urls = new List<string>
+        {
             $"/edge-updates/installers/{channel}/{version}/installer-artifact.json",
             $"/edge-updates/installers/{channel}/{version}/IIoT.Edge.Setup.exe",
             $"/edge-updates/velopack/{channel}/releases.{channel}.json",
             $"/edge-updates/velopack/{channel}/assets.{channel}.json"
-        ];
+        };
+        urls.AddRange(pluginPackages.Select(package => package.DownloadUrl));
+        return urls;
     }
 
     private static IReadOnlyList<string> BuildComponentSummary(EdgeInstallerArtifactManifest manifest)
@@ -1124,6 +1270,14 @@ public sealed class PublishEdgeReleaseBundleHandler(
     {
         public static FileCleanupResult Empty { get; } = new([], [], []);
     }
+
+    private sealed record PluginPackagePublishArtifact(
+        string ModuleId,
+        string Version,
+        string PackagePath,
+        string DownloadUrl,
+        string Sha256,
+        long PackageSize);
 
     private sealed record VelopackFilePublishTransaction(
         string TargetRoot,

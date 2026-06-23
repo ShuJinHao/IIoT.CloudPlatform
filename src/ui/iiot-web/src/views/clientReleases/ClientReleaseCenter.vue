@@ -122,32 +122,6 @@
       />
     </NiondTableCard>
 
-    <UiDrawer v-model:show="showPluginDrawer" :width="520" placement="right">
-      <UiDrawerContent title="设备插件版本" closable>
-        <div v-if="selectedInventory" class="drawer-stack">
-          <div class="drawer-summary">
-            <strong>{{ selectedInventory.deviceName }}</strong>
-            <code>{{ selectedInventory.clientCode }}</code>
-          </div>
-          <div v-for="plugin in selectedInventory.plugins" :key="plugin.moduleId" class="plugin-version-card">
-            <div>
-              <strong>{{ plugin.displayName || plugin.moduleId }}</strong>
-              <span>{{ plugin.moduleId }}</span>
-            </div>
-            <UiTag :type="statusTone(plugin.updateStatus)" size="small" :bordered="false">
-              {{ statusText(plugin.updateStatus) }}
-            </UiTag>
-            <dl>
-              <div><dt>当前</dt><dd>{{ plugin.version || '-' }}</dd></div>
-              <div><dt>启用</dt><dd>{{ plugin.enabled ? '是' : '否' }}</dd></div>
-            </dl>
-            <p v-if="plugin.compatibilityIssue">{{ plugin.compatibilityIssue }}</p>
-          </div>
-          <EmptyState v-if="selectedInventory.plugins.length === 0" title="暂无插件上报" description="该设备最近一次版本上报中没有插件明细。" />
-        </div>
-      </UiDrawerContent>
-    </UiDrawer>
-
     <UiModal v-model:show="showHistoryModal" preset="card" :title="historyModalTitle" style="width: 860px;">
       <div v-if="selectedReleaseRow" class="history-modal">
         <div class="history-summary">
@@ -311,8 +285,6 @@ import EmptyState from '../../components/states/EmptyState.vue';
 import EdgeBindingDownloadPanel from './EdgeBindingDownloadPanel.vue';
 import UiButton from '../../components/ui/UiButton.vue';
 import UiDataTable from '../../components/ui/UiDataTable.vue';
-import UiDrawer from '../../components/ui/UiDrawer.vue';
-import UiDrawerContent from '../../components/ui/UiDrawerContent.vue';
 import UiInput from '../../components/ui/UiInput.vue';
 import UiModal from '../../components/ui/UiModal.vue';
 import UiSelect from '../../components/ui/UiSelect.vue';
@@ -364,10 +336,8 @@ const loadingInventory = ref(false);
 const submitting = ref(false);
 const showHostModal = ref(false);
 const showPluginModal = ref(false);
-const showPluginDrawer = ref(false);
 const showHistoryModal = ref(false);
 const showReleaseDetailModal = ref(false);
-const selectedInventory = ref<DeviceClientVersionInventoryDto | null>(null);
 const selectedReleaseRow = ref<ReleaseCatalogRow | null>(null);
 const selectedReleaseDetail = ref<ReleaseDetail | null>(null);
 
@@ -573,11 +543,6 @@ const submitPluginRelease = async () => {
   }
 };
 
-const openPluginDrawer = (row: DeviceClientVersionInventoryDto) => {
-  selectedInventory.value = row;
-  showPluginDrawer.value = true;
-};
-
 const openHistoryModal = (row: ReleaseCatalogRow) => {
   if (row.historyVersions.length === 0) return;
   selectedReleaseRow.value = row;
@@ -608,8 +573,10 @@ const openUrl = (url: string) => {
 const statusTone = (status: string): TagTone => {
   const normalized = status.toLowerCase();
   if (normalized === 'published' || normalized === 'latest') return 'success';
+  if (normalized === 'normal') return 'success';
   if (normalized === 'updateavailable') return 'warning';
   if (normalized === 'incompatible' || normalized === 'archived') return 'error';
+  if (normalized === 'offline') return 'error';
   if (normalized === 'deprecated') return 'warning';
   if (normalized === 'missingreport' || normalized === 'norelease') return 'default';
   return 'info';
@@ -625,6 +592,8 @@ const statusText = (status: string) => ({
   Incompatible: '不兼容',
   MissingReport: '未上报',
   NoRelease: '无发布',
+  Offline: '上报超时',
+  Normal: '正常',
 }[status] || status);
 
 const formatSize = (size: number) => {
@@ -643,6 +612,8 @@ const formatReleaseNotes = (value?: string | null, fallback = '-') => {
   const text = value?.trim();
   return text && text.length > 0 ? text : fallback;
 };
+
+const formatCurrentVersion = (row: DeviceClientVersionInventoryDto) => row.hostVersion || row.currentVersion || '-';
 
 const pickCurrentVersion = <T extends ReleaseVersionEntry>(versions: T[]) => {
   return versions.find((version) => version.status.toLowerCase() === 'published')
@@ -826,18 +797,17 @@ const historyColumns = computed<UiDataTableColumn<ReleaseVersionEntry>[]>(() => 
 });
 
 const inventoryColumns: UiDataTableColumn<DeviceClientVersionInventoryDto>[] = [
-  { title: '设备', key: 'deviceName', minWidth: 190, render: (row) => h('div', { class: 'device-cell' }, [h('strong', row.deviceName), h('code', row.clientCode)]) },
-  { title: 'Channel', key: 'channel', width: 120, render: (row) => h('span', row.channel || '-') },
-  { title: '宿主当前', key: 'hostVersion', width: 120, render: (row) => h('span', row.hostVersion || '-') },
+  { title: '设备名称', key: 'deviceName', minWidth: 190, render: (row) => h('strong', { class: 'device-name' }, row.deviceName) },
+  { title: 'IP', key: 'primaryIp', width: 150, render: (row) => h('span', row.primaryIp || '-') },
+  { title: '最近上报时间', key: 'reportedAtUtc', minWidth: 170, render: (row) => h('span', formatDate(row.reportedAtUtc || row.receivedAtUtc)) },
   {
-    title: '宿主状态',
-    key: 'hostUpdateStatus',
+    title: '安装状态',
+    key: 'installStatus',
     width: 120,
-    render: (row) => h(UiTag, { type: statusTone(row.hostUpdateStatus), size: 'small', bordered: false }, () => statusText(row.hostUpdateStatus)),
+    render: (row) => h(UiTag, { type: statusTone(row.installStatus), size: 'small', bordered: false }, () => statusText(row.installStatus)),
   },
-  { title: '插件', key: 'plugins', width: 110, render: (row) => h(UiButton, { size: 'tiny', secondary: true, type: 'info', onClick: () => openPluginDrawer(row) }, () => `${row.plugins.length} 个`) },
-  { title: '上报时间', key: 'reportedAtUtc', minWidth: 180, render: (row) => h('span', formatDate(row.reportedAtUtc)) },
-  { title: '问题', key: 'hostCompatibilityIssue', minWidth: 240, render: (row) => h('span', { class: row.hostCompatibilityIssue ? 'issue-text' : '' }, row.hostCompatibilityIssue || '-') },
+  { title: '当前版本', key: 'currentVersion', minWidth: 140, render: (row) => h('strong', { class: 'current-version' }, formatCurrentVersion(row)) },
+  { title: '问题', key: 'issue', minWidth: 240, render: (row) => h('span', { class: row.issue ? 'issue-text' : '' }, row.issue || '-') },
 ];
 </script>
 
@@ -977,21 +947,20 @@ const inventoryColumns: UiDataTableColumn<DeviceClientVersionInventoryDto>[] = [
   font-weight: var(--fw-medium);
 }
 
-:deep(.release-cell),
-:deep(.device-cell) {
+:deep(.release-cell) {
   display: grid;
   gap: 3px;
   min-width: 0;
 }
 
 :deep(.release-cell strong),
-:deep(.device-cell strong) {
+:deep(.device-name),
+:deep(.current-version) {
   color: var(--text-0);
   font-weight: var(--fw-semibold);
 }
 
-:deep(.release-cell code),
-:deep(.device-cell code) {
+:deep(.release-cell code) {
   color: var(--text-2);
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
@@ -1081,76 +1050,6 @@ const inventoryColumns: UiDataTableColumn<DeviceClientVersionInventoryDto>[] = [
   color: var(--text-2);
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
-}
-
-.drawer-stack {
-  display: grid;
-  gap: var(--space-3);
-}
-
-.drawer-summary,
-.plugin-version-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--card);
-  padding: var(--space-3);
-}
-
-.drawer-summary {
-  display: grid;
-  gap: var(--space-1);
-}
-
-.drawer-summary code {
-  color: var(--text-2);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
-}
-
-.plugin-version-card {
-  display: grid;
-  gap: var(--space-2);
-}
-
-.plugin-version-card > div:first-child {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.plugin-version-card span {
-  color: var(--text-2);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
-}
-
-.plugin-version-card dl {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-2);
-  margin: 0;
-}
-
-.plugin-version-card dt {
-  color: var(--text-2);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-medium);
-}
-
-.plugin-version-card dd {
-  margin: 2px 0 0;
-  color: var(--text-0);
-  font-size: var(--fs-base);
-  font-weight: var(--fw-semibold);
-}
-
-.plugin-version-card p {
-  margin: 0;
-  color: var(--error);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
-  line-height: 1.5;
 }
 
 .release-detail-modal {

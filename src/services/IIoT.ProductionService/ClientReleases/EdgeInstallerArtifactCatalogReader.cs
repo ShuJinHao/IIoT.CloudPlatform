@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Security.Cryptography;
 using IIoT.Core.Production.Aggregates.ClientReleases;
 using Microsoft.Extensions.Options;
 
@@ -166,8 +167,25 @@ public sealed class EdgeInstallerArtifactCatalogReader(
                 || string.IsNullOrWhiteSpace(module.HostApiVersion)
                 || string.IsNullOrWhiteSpace(module.MinHostVersion)
                 || string.IsNullOrWhiteSpace(module.MaxHostVersion)
-                || string.IsNullOrWhiteSpace(module.PluginSha256)
-                || module.PluginSize <= 0)
+                || string.IsNullOrWhiteSpace(manifest.TargetRuntime))
+            {
+                continue;
+            }
+
+            var packageFileName = BuildPluginPackageFileName(module.ModuleId, module.Version, manifest.TargetRuntime);
+            var packagePath = ResolvePluginPackagePath(
+                artifactDirectory,
+                manifest.Channel,
+                module.ModuleId,
+                module.Version,
+                packageFileName);
+            if (packagePath is null || !File.Exists(packagePath))
+            {
+                continue;
+            }
+
+            var packageSize = new FileInfo(packagePath).Length;
+            if (packageSize <= 0)
             {
                 continue;
             }
@@ -188,9 +206,9 @@ public sealed class EdgeInstallerArtifactCatalogReader(
                     module.MaxHostVersion,
                     manifest.TargetRuntime,
                     manifest.TargetFramework,
-                    BuildPluginDownloadUrl(manifest.Channel, manifest.Version, module.ModuleId),
-                    module.PluginSha256,
-                    module.PluginSize,
+                    BuildPluginDownloadUrl(manifest.Channel, module.ModuleId, module.Version, packageFileName),
+                    HashFile(packagePath),
+                    packageSize,
                     null,
                     "[]",
                     ClientReleaseStatus.Published,
@@ -224,8 +242,55 @@ public sealed class EdgeInstallerArtifactCatalogReader(
     private static string BuildManifestDownloadUrl(string channel, string version)
         => $"/edge-updates/installers/{Uri.EscapeDataString(channel)}/{Uri.EscapeDataString(version)}/{ManifestFileName}";
 
-    private static string BuildPluginDownloadUrl(string channel, string version, string moduleId)
-        => $"{BuildManifestDownloadUrl(channel, version)}#moduleId={Uri.EscapeDataString(moduleId)}";
+    private static string BuildPluginDownloadUrl(
+        string channel,
+        string moduleId,
+        string version,
+        string packageFileName)
+        => $"/edge-updates/plugins/{Uri.EscapeDataString(channel)}/{Uri.EscapeDataString(moduleId)}/{Uri.EscapeDataString(version)}/{Uri.EscapeDataString(packageFileName)}";
+
+    private static string BuildPluginPackageFileName(
+        string moduleId,
+        string version,
+        string targetRuntime)
+        => $"IIoT.EdgePlugin.{SanitizeFileNameSegment(moduleId)}-{SanitizeFileNameSegment(version)}-{SanitizeFileNameSegment(targetRuntime)}.zip";
+
+    private static string? ResolvePluginPackagePath(
+        string artifactDirectory,
+        string channel,
+        string moduleId,
+        string version,
+        string packageFileName)
+    {
+        var channelDirectory = Directory.GetParent(artifactDirectory);
+        var installersDirectory = channelDirectory?.Parent;
+        var edgeRoot = installersDirectory?.Parent;
+        if (edgeRoot is null)
+        {
+            return null;
+        }
+
+        return Path.Combine(
+            edgeRoot.FullName,
+            "plugins",
+            channel,
+            Uri.EscapeDataString(moduleId.Trim()),
+            version,
+            packageFileName);
+    }
+
+    private static string SanitizeFileNameSegment(string value)
+    {
+        var invalid = Path.GetInvalidFileNameChars().ToHashSet();
+        var normalized = value.Trim();
+        return new string(normalized.Select(ch => invalid.Contains(ch) ? '_' : ch).ToArray());
+    }
+
+    private static string HashFile(string file)
+    {
+        using var stream = File.OpenRead(file);
+        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+    }
 
     private static string NormalizeRequired(string value)
     {

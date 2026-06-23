@@ -76,14 +76,15 @@ public sealed class RateLimitingConfigurationGuardTests
         deployNginx.Should().Contain("zone=login_limit:10m rate=10r/m");
         deployNginx.Should().Contain("zone=refresh_limit:10m rate=60r/m");
         deployNginx.Should().Contain("zone=bootstrap_limit:10m rate=60r/m");
-        deployNginx.Should().Contain("zone=edge_upload_limit:20m rate=1200r/m");
+        deployNginx.Should().Contain("zone=edge_upload_limit:20m rate=12000r/m");
         deployNginx.Should().Contain("zone=api_limit:20m rate=300r/m");
         deployNginx.Should().Contain("location = /api/v1/human/identity/refresh");
         deployNginx.Should().Contain("location /api/v1/bootstrap/");
         deployNginx.Should().NotContain("location = /api/v1/human/identity/edge-login");
         deployNginx.Should().NotContain("location /api/v1/edge/bootstrap/");
         deployNginx.Should().Contain("limit_req zone=refresh_limit burst=30 nodelay;");
-        deployNginx.Should().Contain("limit_req zone=edge_upload_limit burst=400 nodelay;");
+        deployNginx.Should().Contain("location ~ ^/api/v1/edge/(capacity/hourly|device-logs|pass-stations|process-records)");
+        deployNginx.Should().Contain("limit_req zone=edge_upload_limit burst=2000 nodelay;");
     }
 
     private static string FindRepoFile(params string[] relativeSegments)

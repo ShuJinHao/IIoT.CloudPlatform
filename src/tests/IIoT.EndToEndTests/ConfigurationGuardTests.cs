@@ -546,6 +546,8 @@ public sealed class ConfigurationGuardTests
         runnerSource.Should().Contain("/data/github-runner/cloud");
         runnerSource.Should().Contain("github-runner");
         imageWorkflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
+        imageWorkflowSource.Should().Contain("harbor-retention.sh");
+        imageWorkflowSource.Should().Contain("HARBOR_KEEP_SHA_TAGS: 3");
         deployWorkflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
 
         foreach (var source in new[] { readmeSource, runnerSource, imageWorkflowSource, deployWorkflowSource })
@@ -574,6 +576,7 @@ public sealed class ConfigurationGuardTests
         readmeSource.Should().Contain("runner 必须使用专用非 root 用户运行");
         readmeSource.Should().Contain("Docker Hub 不作为生产依赖源");
         readmeSource.Should().Contain("Edge 客户端安装素材不进 Harbor");
+        readmeSource.Should().Contain("应用镜像仓库只保留最近 3 个 `sha-*` tag");
         readmeSource.Should().Contain("EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers");
         readmeSource.Should().Contain("EdgeInstallerArtifacts__VelopackReleasesBaseUrl=${PUBLIC_BASE_URL}/edge-updates/velopack");
         readmeSource.Should().Contain("[RUNNER.md](./RUNNER.md)");
@@ -617,6 +620,13 @@ public sealed class ConfigurationGuardTests
         envExampleSource.Should().Contain("BOOTSTRAP_AUTH_REQUIRE_SECRET=true");
         envExampleSource.Should().Contain("X-IIoT-Bootstrap-Secret");
         envExampleSource.Should().Contain("installers/stable/{version}");
+        envExampleSource.Should().Contain("POSTGRES_MEM_LIMIT=4g");
+        envExampleSource.Should().Contain("HTTPAPI_MEM_LIMIT=1536m");
+        envExampleSource.Should().Contain("DATAWORKER_MEM_LIMIT=1536m");
+        envExampleSource.Should().Contain("OUTBOX_BATCH_SIZE=500");
+        envExampleSource.Should().Contain("OUTBOX_POLLING_INTERVAL_SECONDS=1");
+        envExampleSource.Should().Contain("PASS_STATION_CONSUMER_CONCURRENCY=16");
+        envExampleSource.Should().Contain("RATE_LIMIT_PASS_STATION_UPLOAD_TOKEN_LIMIT=3000");
 
         composeSource.Should().Contain("Single-machine production starter for IIoT.CloudPlatform.");
         composeSource.Should().Contain("Single-node launch keeps one explicit upstream destination.");
@@ -624,16 +634,24 @@ public sealed class ConfigurationGuardTests
         composeSource.Should().Contain("BootstrapAuth__RequireSecret: ${BOOTSTRAP_AUTH_REQUIRE_SECRET}");
         composeSource.Should().Contain("EdgeInstallerArtifacts__RootPath: /app/edge-updates/installers");
         composeSource.Should().Contain("EdgeInstallerArtifacts__VelopackReleasesBaseUrl: ${PUBLIC_BASE_URL}/edge-updates/velopack");
-        composeSource.Should().Contain("${EDGE_UPDATES_DIR:-/srv/iiot/edge-updates}:/app/edge-updates:ro");
+        composeSource.Should().Contain("${EDGE_UPDATES_DIR:-/srv/iiot/edge-updates}:/app/edge-updates:rw");
+        composeSource.Should().Contain("${EDGE_UPDATES_DIR:-/srv/iiot/edge-updates}:/usr/share/nginx/html/edge-updates:ro");
         composeSource.Should().Contain("postgres:");
-        composeSource.Should().Contain("mem_limit: 1g");
+        composeSource.Should().Contain("mem_limit: ${POSTGRES_MEM_LIMIT:-4g}");
+        composeSource.Should().Contain("cpus: ${POSTGRES_CPUS:-2.0}");
         composeSource.Should().Contain("redis-cache:");
-        composeSource.Should().Contain("mem_limit: 256m");
+        composeSource.Should().Contain("mem_limit: ${REDIS_MEM_LIMIT:-512m}");
         composeSource.Should().Contain("rabbitmq:");
-        composeSource.Should().Contain("mem_limit: 512m");
+        composeSource.Should().Contain("mem_limit: ${RABBITMQ_MEM_LIMIT:-1g}");
         composeSource.Should().Contain("seq:");
         composeSource.Should().Contain("nginx-gateway:");
-        composeSource.Should().Contain("mem_limit: 128m");
+        composeSource.Should().Contain("mem_limit: ${NGINX_MEM_LIMIT:-256m}");
+        composeSource.Should().Contain("mem_limit: ${HTTPAPI_MEM_LIMIT:-1536m}");
+        composeSource.Should().Contain("mem_limit: ${DATAWORKER_MEM_LIMIT:-1536m}");
+        composeSource.Should().Contain("Outbox__BatchSize: ${OUTBOX_BATCH_SIZE:-500}");
+        composeSource.Should().Contain("Outbox__PollingIntervalSeconds: ${OUTBOX_POLLING_INTERVAL_SECONDS:-1}");
+        composeSource.Should().Contain("Infrastructure__EventBus__Consumers__PassStationConcurrentMessageLimit: ${PASS_STATION_CONSUMER_CONCURRENCY:-16}");
+        composeSource.Should().Contain("RateLimiting__PassStationUpload__TokenLimit: ${RATE_LIMIT_PASS_STATION_UPLOAD_TOKEN_LIMIT:-3000}");
     }
 
     [Fact]
@@ -996,6 +1014,7 @@ public sealed class ConfigurationGuardTests
     public void CloudImageWorkflow_ShouldUseIntranetRunnerAndHarborMirrorBaseImages()
     {
         var workflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-image.yml"));
+        var harborRetentionScript = File.ReadAllText(FindRepoFile("deploy", "scripts", "harbor-retention.sh"));
         var webDockerfileSource = File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.AppHost", "iiot-web.Dockerfile"));
         var backendDockerfileSources = new[]
         {
@@ -1008,6 +1027,8 @@ public sealed class ConfigurationGuardTests
         workflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
         workflowSource.Should().Contain("Self-hosted runner must not run as root.");
         workflowSource.Should().Contain("docker buildx build");
+        workflowSource.Should().Contain("Prune old Harbor image tags");
+        workflowSource.Should().Contain("bash deploy/scripts/harbor-retention.sh \"${{ matrix.image }}\"");
         workflowSource.Should().Contain("--build-arg \"DOTNET_SDK_IMAGE=${{ steps.registry.outputs.registry }}/mirror/dotnet-sdk:10.0.301\"");
         workflowSource.Should().Contain("--build-arg \"DOTNET_ASPNET_IMAGE=${{ steps.registry.outputs.registry }}/mirror/dotnet-aspnet:10.0.9\"");
         workflowSource.Should().Contain("--build-arg \"NODE_BASE_IMAGE=${{ steps.registry.outputs.registry }}/mirror/node:22-slim\"");
@@ -1027,6 +1048,10 @@ public sealed class ConfigurationGuardTests
         workflowSource.Should().NotContain("docker/build-push-action");
         workflowSource.Should().NotContain("docker/metadata-action");
         workflowSource.Should().NotContain("docker/setup-buildx-action");
+
+        harborRetentionScript.Should().Contain("HARBOR_KEEP_SHA_TAGS");
+        harborRetentionScript.Should().Contain("sha-[0-9a-f]");
+        harborRetentionScript.Should().Contain("Harbor GC must run");
 
         webDockerfileSource.Should().Contain("ARG NODE_BASE_IMAGE=node:22-slim");
         webDockerfileSource.Should().Contain("FROM ${NODE_BASE_IMAGE} AS build");

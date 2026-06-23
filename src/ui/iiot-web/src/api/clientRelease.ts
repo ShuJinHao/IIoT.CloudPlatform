@@ -112,11 +112,17 @@ export interface DeviceClientVersionInventoryDto {
   deviceId: string;
   deviceName: string;
   clientCode: string;
+  primaryIp?: string | null;
+  localIpAddresses: string[];
+  remoteIpAddress?: string | null;
   channel?: string | null;
   hostVersion?: string | null;
   hostApiVersion?: string | null;
   hostUpdateStatus: string;
   hostCompatibilityIssue?: string | null;
+  installStatus: string;
+  currentVersion: string;
+  issue?: string | null;
   reportedAtUtc?: string | null;
   receivedAtUtc?: string | null;
   plugins: DeviceClientPluginInventoryDto[];

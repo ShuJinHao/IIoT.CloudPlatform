@@ -234,3 +234,16 @@ jobs:
           path: ${{ runner.temp }}/cloud-built-services/${{ matrix.service }}.txt
           if-no-files-found: error
           retention-days: 14
+
+      - name: Prune old Harbor image tags
+        if: steps.changes.outputs.build == 'true'
+        shell: bash
+        env:
+          HARBOR_URL: ${{ steps.registry.outputs.registry }}
+          HARBOR_PROJECT: ${{ steps.registry.outputs.namespace }}
+          HARBOR_USERNAME: ${{ secrets.OCI_REGISTRY_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.OCI_REGISTRY_PASSWORD }}
+          HARBOR_KEEP_SHA_TAGS: 3
+        run: |
+          set -euo pipefail
+          bash deploy/scripts/harbor-retention.sh "${{ matrix.image }}"

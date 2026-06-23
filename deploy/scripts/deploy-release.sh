@@ -198,6 +198,18 @@ hydrate_unselected_images_from_running_containers() {
   done
 }
 
+restart_nginx_gateway_if_needed() {
+  case " $RUNTIME_SELECTED_SERVICES " in
+    *" iiot-web "*|*" iiot-gateway "*)
+      nginx_gateway_container=$(compose ps -q nginx-gateway 2>/dev/null || true)
+      if [ -n "$nginx_gateway_container" ]; then
+        printf 'Restarting nginx-gateway to refresh upstream DNS...\n'
+        compose restart nginx-gateway >/dev/null
+      fi
+      ;;
+  esac
+}
+
 SELECTED_SERVICES=$(normalize_services "$REQUESTED_SERVICES")
 SELECTED_IMAGE_KEYS=""
 RUNTIME_SELECTED_SERVICES=""
@@ -276,6 +288,7 @@ if [ -n "$RUNTIME_SELECTED_SERVICES" ]; then
     compose up -d $RUNTIME_SELECTED_SERVICES >/dev/null
   fi
 fi
+restart_nginx_gateway_if_needed
 COMPOSE_ENV_FILE="$TEMP_RELEASE_ENV_FILE" "$SCRIPT_DIR/post-deploy-check.sh"
 
 cp "$TEMP_RELEASE_ENV_FILE" "$DEPLOY_DIR/.env"

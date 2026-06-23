@@ -18,7 +18,13 @@ public sealed class OutboxMessageDispatcher(
     public async Task<OutboxDispatchResult> DispatchPendingAsync(CancellationToken cancellationToken = default)
     {
         _options.Validate();
+        var strategy = dbContext.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(
+            async () => await DispatchPendingCoreAsync(cancellationToken));
+    }
 
+    private async Task<OutboxDispatchResult> DispatchPendingCoreAsync(CancellationToken cancellationToken)
+    {
         var useSkipLocked = UsesPostgresProvider();
         await using var transaction = useSkipLocked
             ? await dbContext.Database.BeginTransactionAsync(cancellationToken)
