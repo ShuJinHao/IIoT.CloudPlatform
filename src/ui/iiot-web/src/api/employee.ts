@@ -31,6 +31,7 @@ export interface EmployeeDetailDto {
   realName: string;
   isActive: boolean;
   deviceIds: string[];
+  roleNames: string[];
 }
 
 export interface EmployeeAccessDto {
@@ -48,6 +49,7 @@ export interface UpdateProfilePayload {
   employeeId: string;
   realName: string;
   isActive: boolean;
+  roleName?: string | null;
 }
 
 export interface UpdateAccessPayload {

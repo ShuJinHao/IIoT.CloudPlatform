@@ -63,6 +63,34 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
+    public void HumanClientReleaseRequests_ShouldUseDedicatedPermissionsWithoutAdminOnly()
+    {
+        var expectedPermissions = new Dictionary<Type, string>
+        {
+            [typeof(GetClientReleaseCatalogQuery)] = ClientReleasePermissions.Read,
+            [typeof(GetDeviceClientVersionInventoryQuery)] = ClientReleasePermissions.Read,
+            [typeof(GetClientReleaseRetentionPolicyQuery)] = ClientReleasePermissions.Read,
+            [typeof(GenerateEdgeInstallerPackageCommand)] = ClientReleasePermissions.GenerateInstaller,
+            [typeof(UpsertClientHostReleaseCommand)] = ClientReleasePermissions.Manage,
+            [typeof(UpsertClientPluginReleaseCommand)] = ClientReleasePermissions.Manage,
+            [typeof(ArchiveClientReleaseCommand)] = ClientReleasePermissions.Manage,
+            [typeof(UpdateClientReleaseStatusCommand)] = ClientReleasePermissions.Manage,
+            [typeof(UpdateClientReleaseRetentionPolicyCommand)] = ClientReleasePermissions.Manage
+        };
+
+        foreach (var (requestType, expectedPermission) in expectedPermissions)
+        {
+            var permission = requestType
+                .GetCustomAttributes(typeof(AuthorizeRequirementAttribute), inherit: false)
+                .Cast<AuthorizeRequirementAttribute>()
+                .Single();
+
+            Assert.Equal(expectedPermission, permission.Permission);
+            Assert.Empty(requestType.GetCustomAttributes(typeof(AdminOnlyAttribute), inherit: false));
+        }
+    }
+
+    [Fact]
     public async Task PublishEdgeReleaseBundleHandler_ShouldPublishFilesRowsAuditAndSummary()
     {
         var edgeRoot = CreateTempDirectory("iiot-edge-upload-root");

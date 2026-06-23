@@ -100,7 +100,7 @@
               placeholder="至少 8 位，含大小写和数字"
             />
           </div>
-          <div class="form-field">
+          <div v-if="canUpdateAccess" class="form-field">
             <label class="form-label">系统角色</label>
             <UiSelect
               v-model:value="onboardForm.RoleName"
@@ -152,6 +152,19 @@
             <UiSwitch v-model:value="editForm.IsActive" />
             <span class="toggle-label">{{ editForm.IsActive ? '启用' : '停用' }}</span>
           </div>
+        </div>
+        <div v-if="canUpdateAccess" class="form-field">
+          <label class="form-label">系统角色</label>
+          <UiSelect
+            v-model:value="editForm.RoleName"
+            :options="roleOptions"
+            placeholder="不分配角色"
+            clearable
+            :disabled="editRoleLoadFailed"
+          />
+          <p v-if="editRoleLoadFailed" class="form-error">
+            角色信息加载失败，本次保存不会变更系统角色。
+          </p>
         </div>
       </div>
       <template #footer>
@@ -407,6 +420,7 @@ import {
   type EmployeeListItemDto,
   type EmployeeDetailDto,
   type PagedMetaData,
+  type UpdateProfilePayload,
 } from '../../api/employee';
 import { getAllActiveDevicesApi, type DeviceSelectDto } from '../../api/device';
 import {
@@ -432,6 +446,8 @@ import UiSwitch from '../../components/ui/UiSwitch.vue';
 import UiTag from '../../components/ui/UiTag.vue';
 import type { UiDataTableColumn } from '../../components/ui/types';
 import { notifySuccess, notifyWarning } from '../../utils/feedback';
+import { useAuthStore } from '../../stores/auth';
+import { Permissions } from '../../types/permissions';
 
 const employees = ref<EmployeeListItemDto[]>([]);
 const loading = ref(false);
@@ -443,8 +459,23 @@ const metaData = ref<PagedMetaData>({
   currentPage: 1,
   totalPages: 1,
 });
+const emptyMetaData = (): PagedMetaData => ({
+  totalCount: 0,
+  pageSize: 10,
+  currentPage: 1,
+  totalPages: 1,
+});
 const availableRoles = ref<string[]>([]);
 const submitting = ref(false);
+const authStore = useAuthStore();
+const canUpdateEmployee = computed(() => authStore.hasPermission(Permissions.Employee.Update));
+const canUpdateAccess = computed(() => authStore.hasPermission(Permissions.Employee.UpdateAccess));
+const canDeactivateEmployee = computed(() => authStore.hasPermission(Permissions.Employee.Deactivate));
+const canTerminateEmployee = computed(() => authStore.hasPermission(Permissions.Employee.Terminate));
+const canManagePersonalPermissions = computed(() =>
+  authStore.hasPermission(Permissions.Employee.UpdateAccess)
+  && authStore.hasPermission(Permissions.Role.Define),
+);
 
 const allDevices = ref<DeviceSelectDto[]>([]);
 
@@ -489,8 +520,18 @@ const fetchList = async () => {
     employees.value = response.items;
   } catch {
     employees.value = [];
+    metaData.value = emptyMetaData();
+    currentPage.value = 1;
   } finally {
     loading.value = false;
+  }
+};
+
+const refreshAfterMutation = async () => {
+  await fetchList();
+  if (employees.value.length === 0 && currentPage.value > 1) {
+    currentPage.value -= 1;
+    await fetchList();
   }
 };
 
@@ -562,47 +603,55 @@ const columns: UiDataTableColumn<EmployeeListItemDto>[] = [
           },
           { default: () => '详情' },
         ),
-        h(
-          UiButton,
-          {
-            size: 'tiny',
-            type: 'info',
-            secondary: true,
-            onClick: () => openEditModal(row),
-          },
-          { default: () => '编辑' },
-        ),
-        h(
-          UiButton,
-          {
-            size: 'tiny',
-            type: 'warning',
-            secondary: true,
-            onClick: () => openResetPwdModal(row),
-          },
-          { default: () => '重置密码' },
-        ),
-        h(
-          UiButton,
-          {
-            size: 'tiny',
-            type: 'primary',
-            secondary: true,
-            onClick: () => openAccessModal(row.id),
-          },
-          { default: () => '管辖权' },
-        ),
-        h(
-          UiButton,
-          {
-            size: 'tiny',
-            type: 'info',
-            secondary: true,
-            onClick: () => openPersonalPermModal(row),
-          },
-          { default: () => '特批权限' },
-        ),
-        row.isActive
+        canUpdateEmployee.value
+          ? h(
+              UiButton,
+              {
+                size: 'tiny',
+                type: 'info',
+                secondary: true,
+                onClick: () => openEditModal(row),
+              },
+              { default: () => '编辑' },
+            )
+          : null,
+        canUpdateEmployee.value
+          ? h(
+              UiButton,
+              {
+                size: 'tiny',
+                type: 'warning',
+                secondary: true,
+                onClick: () => openResetPwdModal(row),
+              },
+              { default: () => '重置密码' },
+            )
+          : null,
+        canUpdateAccess.value
+          ? h(
+              UiButton,
+              {
+                size: 'tiny',
+                type: 'primary',
+                secondary: true,
+                onClick: () => openAccessModal(row.id),
+              },
+              { default: () => '管辖权' },
+            )
+          : null,
+        canManagePersonalPermissions.value
+          ? h(
+              UiButton,
+              {
+                size: 'tiny',
+                type: 'info',
+                secondary: true,
+                onClick: () => openPersonalPermModal(row),
+              },
+              { default: () => '特批权限' },
+            )
+          : null,
+        row.isActive && canDeactivateEmployee.value
           ? h(
               UiButton,
               {
@@ -614,16 +663,18 @@ const columns: UiDataTableColumn<EmployeeListItemDto>[] = [
               { default: () => '停用' },
             )
           : null,
-        h(
-          UiButton,
-          {
-            size: 'tiny',
-            type: 'error',
-            secondary: true,
-            onClick: () => handleTerminate(row),
-          },
-          { default: () => '离职' },
-        ),
+        canTerminateEmployee.value
+          ? h(
+              UiButton,
+              {
+                size: 'tiny',
+                type: 'error',
+                secondary: true,
+                onClick: () => handleTerminate(row),
+              },
+              { default: () => '离职' },
+            )
+          : null,
       ]);
     },
   },
@@ -648,6 +699,11 @@ const openOnboardModal = async () => {
     RoleName: null,
   });
   showOnboardModal.value = true;
+  if (!canUpdateAccess.value) {
+    availableRoles.value = [];
+    return;
+  }
+
   try {
     const roles = await getAllRolesApi();
     availableRoles.value = roles.filter((r) => r !== 'Admin');
@@ -671,10 +727,10 @@ const submitOnboard = async () => {
       employeeNo: onboardForm.EmployeeNo,
       realName: onboardForm.RealName,
       password: onboardForm.Password,
-      roleName: onboardForm.RoleName || undefined,
+      roleName: canUpdateAccess.value ? onboardForm.RoleName || undefined : undefined,
     });
     showOnboardModal.value = false;
-    fetchList();
+    await fetchList();
   } catch {
     /* */
   } finally {
@@ -685,12 +741,39 @@ const submitOnboard = async () => {
 // === 编辑 ===
 const showEditModal = ref(false);
 const editTarget = ref<EmployeeListItemDto | null>(null);
-const editForm = reactive({ RealName: '', IsActive: true });
+const editForm = reactive({
+  RealName: '',
+  IsActive: true,
+  RoleName: null as string | null,
+});
+const editRoleLoaded = ref(false);
+const editRoleLoadFailed = ref(false);
 
-const openEditModal = (emp: EmployeeListItemDto) => {
+const openEditModal = async (emp: EmployeeListItemDto) => {
   editTarget.value = emp;
   editForm.RealName = emp.realName;
   editForm.IsActive = emp.isActive;
+  editForm.RoleName = null;
+  editRoleLoaded.value = false;
+  editRoleLoadFailed.value = false;
+  if (!canUpdateAccess.value) {
+    availableRoles.value = [];
+    showEditModal.value = true;
+    return;
+  }
+
+  try {
+    const [roles, detail] = await Promise.all([
+      getAllRolesApi(),
+      getEmployeeDetailApi(emp.id),
+    ]);
+    availableRoles.value = roles.filter((r) => r !== 'Admin');
+    editForm.RoleName = detail.roleNames.find((role) => role !== 'Admin') ?? null;
+    editRoleLoaded.value = true;
+  } catch {
+    availableRoles.value = [];
+    editRoleLoadFailed.value = true;
+  }
   showEditModal.value = true;
 };
 
@@ -701,13 +784,20 @@ const submitEdit = async () => {
   }
   submitting.value = true;
   try {
-    await updateEmployeeProfileApi(editTarget.value.id, {
+    const payload: UpdateProfilePayload = {
       employeeId: editTarget.value.id,
       realName: editForm.RealName,
       isActive: editForm.IsActive,
-    });
+    };
+    if (canUpdateAccess.value && editRoleLoaded.value) {
+      payload.roleName = editForm.RoleName ?? '';
+    } else if (canUpdateAccess.value && editRoleLoadFailed.value) {
+      notifyWarning('角色信息未加载成功，本次只保存基础档案');
+    }
+
+    await updateEmployeeProfileApi(editTarget.value.id, payload);
     showEditModal.value = false;
-    fetchList();
+    await fetchList();
   } catch {
     /* */
   } finally {
@@ -755,7 +845,7 @@ const submitAccess = async () => {
       deviceIds: accessForm.DeviceIds,
     });
     showAccessModal.value = false;
-    fetchList();
+    await fetchList();
   } catch {
     /* */
   } finally {
@@ -888,7 +978,7 @@ const handleDeactivate = (emp: EmployeeListItemDto) => {
       try {
         await deactivateEmployeeApi(emp.id);
         confirmDialog.show = false;
-        fetchList();
+        await refreshAfterMutation();
       } finally {
         submitting.value = false;
       }
@@ -907,7 +997,7 @@ const handleTerminate = (emp: EmployeeListItemDto) => {
       try {
         await terminateEmployeeApi(emp.id);
         confirmDialog.show = false;
-        fetchList();
+        await refreshAfterMutation();
       } finally {
         submitting.value = false;
       }
@@ -1019,6 +1109,12 @@ onMounted(() => {
   color: var(--text-2);
   margin: 0;
   line-height: 1.6;
+}
+.form-error {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  color: var(--error);
+  margin: 0;
 }
 .required {
   color: var(--error);

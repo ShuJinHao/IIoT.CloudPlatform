@@ -602,6 +602,10 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
 
     public Result<bool> AssignRoleResult { get; set; } = Result.Success(true);
 
+    public Result<bool> ReplaceAssignableRoleResult { get; set; } = Result.Success(true);
+
+    public List<(Guid UserId, string? RoleName)> ReplacedRoles { get; } = [];
+
     public Task<Result<IdentityAccount>> CreateAsync(
         IdentityAccount account,
         CancellationToken cancellationToken = default)
@@ -681,6 +685,22 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
         }
 
         return Task.FromResult(AssignRoleResult);
+    }
+
+    public Task<Result<bool>> ReplaceAssignableRoleAsync(
+        Guid id,
+        string? roleName,
+        CancellationToken cancellationToken = default)
+    {
+        if (ReplaceAssignableRoleResult.IsSuccess)
+        {
+            ReplacedRoles.Add((id, roleName));
+            RolesByUserId[id] = string.IsNullOrWhiteSpace(roleName)
+                ? []
+                : [roleName];
+        }
+
+        return Task.FromResult(ReplaceAssignableRoleResult);
     }
 
     public Task<IList<string>> GetRolesAsync(Guid id, CancellationToken cancellationToken = default)
@@ -925,6 +945,21 @@ internal sealed class StubDevicePermissionService : IDevicePermissionService
     }
 }
 
+internal sealed class RecordingPermissionProvider : IPermissionProvider
+{
+    public IList<string> Permissions { get; set; } = [];
+
+    public Guid? LastUserId { get; private set; }
+
+    public Task<IList<string>> GetPermissionsAsync(
+        Guid userId,
+        CancellationToken cancellationToken = default)
+    {
+        LastUserId = userId;
+        return Task.FromResult(Permissions);
+    }
+}
+
 internal sealed class StubCurrentUserDeviceAccessService : ICurrentUserDeviceAccessService
 {
     public bool IsAdministrator { get; set; }
@@ -1131,12 +1166,28 @@ internal sealed class RecordingUploadReceiveRegistry(
 internal sealed class StubDeviceDeletionDependencyQueryService : IDeviceDeletionDependencyQueryService
 {
     public DeviceDeletionDependencies Dependencies { get; set; } = new(false, false, false, false);
+    public DeviceDeletionImpact Impact { get; set; } = new(0, 0, 0, 0, 0, 0, 0, 0, 0);
+    public bool CascadeDeleteResult { get; set; } = true;
 
     public Task<DeviceDeletionDependencies> GetDependenciesAsync(
         Guid deviceId,
         CancellationToken cancellationToken = default)
     {
         return Task.FromResult(Dependencies);
+    }
+
+    public Task<DeviceDeletionImpact> GetImpactAsync(
+        Guid deviceId,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(Impact);
+    }
+
+    public Task<DeviceCascadeDeletionResult> DeleteCascadeAsync(
+        Guid deviceId,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(new DeviceCascadeDeletionResult(CascadeDeleteResult, Impact));
     }
 }
 

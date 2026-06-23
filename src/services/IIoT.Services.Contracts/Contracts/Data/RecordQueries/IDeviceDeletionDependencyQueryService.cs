@@ -14,4 +14,39 @@ public interface IDeviceDeletionDependencyQueryService
     Task<DeviceDeletionDependencies> GetDependenciesAsync(
         Guid deviceId,
         CancellationToken cancellationToken = default);
+
+    Task<DeviceDeletionImpact> GetImpactAsync(
+        Guid deviceId,
+        CancellationToken cancellationToken = default);
+
+    Task<DeviceCascadeDeletionResult> DeleteCascadeAsync(
+        Guid deviceId,
+        CancellationToken cancellationToken = default);
 }
+
+public sealed record DeviceDeletionImpact(
+    long Recipes,
+    long Capacities,
+    long DeviceLogs,
+    long PassStations,
+    long ClientVersionSnapshots,
+    long ClientPluginVersions,
+    long UploadReceiveRegistrations,
+    long EmployeeDeviceAccesses,
+    long RefreshTokenSessions)
+{
+    public long TotalAssociatedRows =>
+        Recipes
+        + Capacities
+        + DeviceLogs
+        + PassStations
+        + ClientVersionSnapshots
+        + ClientPluginVersions
+        + UploadReceiveRegistrations
+        + EmployeeDeviceAccesses
+        + RefreshTokenSessions;
+}
+
+public sealed record DeviceCascadeDeletionResult(
+    bool DeviceDeleted,
+    DeviceDeletionImpact Impact);

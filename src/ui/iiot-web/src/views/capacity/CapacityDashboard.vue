@@ -42,7 +42,6 @@
             :options="deviceOptions"
             placeholder="全部设备"
             clearable
-            filterable
             size="small"
             style="width: 220px;"
             @update:value="onFilterChange"

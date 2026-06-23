@@ -31,6 +31,11 @@ public interface IIdentityAccountStore
         string roleName,
         CancellationToken cancellationToken = default);
 
+    Task<Result<bool>> ReplaceAssignableRoleAsync(
+        Guid id,
+        string? roleName,
+        CancellationToken cancellationToken = default);
+
     Task<IList<string>> GetRolesAsync(
         Guid id,
         CancellationToken cancellationToken = default);

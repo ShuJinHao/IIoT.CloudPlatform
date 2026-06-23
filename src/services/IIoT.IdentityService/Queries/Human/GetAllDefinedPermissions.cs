@@ -30,16 +30,20 @@ public class GetAllDefinedPermissionsHandler(
         "Process.Read", "Process.Create", "Process.Update", "Process.Delete",
 
         // 设备管理
-        "Device.Read", "Device.Create", "Device.Update", "Device.Delete",
+        DevicePermissions.Read, DevicePermissions.Create, DevicePermissions.Update,
+        DevicePermissions.Delete, DevicePermissions.CascadeDelete,
 
         // 配方管理
         "Recipe.Read", "Recipe.Create", "Recipe.Update", "Recipe.Delete",
 
         // 角色管理
-        "Role.Define", "Role.Update",
+        "Role.Read", "Role.Define", "Role.Update",
 
         // 客户端发布
+        ClientReleasePermissions.Read,
+        ClientReleasePermissions.GenerateInstaller,
         ClientReleasePermissions.Publish,
+        ClientReleasePermissions.Manage,
 
         // AI 只读接口
         AiReadPermissions.Device, AiReadPermissions.Capacity, AiReadPermissions.DeviceLog, AiReadPermissions.PassStation,

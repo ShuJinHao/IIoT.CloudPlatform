@@ -64,12 +64,12 @@
           <div class="role-card__meta">
             <span class="role-card__meta-label">权限点</span>
             <span class="role-card__meta-value">
-              {{ rolePermissions[role]?.length ?? 0 }} 项
+              {{ rolePermissionSummary(role) }}
             </span>
           </div>
-          <div v-if="rolePermissions[role]" class="role-card__chips">
+          <div v-if="rolePermissionStatus[role] === 'loaded'" class="role-card__chips">
             <UiTag
-              v-for="perm in rolePermissions[role]"
+              v-for="perm in rolePermissions[role] ?? []"
               :key="perm"
               size="small"
               :bordered="false"
@@ -78,12 +78,15 @@
               {{ perm }}
             </UiTag>
             <span
-              v-if="rolePermissions[role].length === 0"
+              v-if="(rolePermissions[role] ?? []).length === 0"
               class="role-card__no-perm"
             >
               暂无权限点
             </span>
           </div>
+          <span v-else-if="rolePermissionStatus[role] === 'failed'" class="role-card__error">
+            权限加载失败，请刷新后重试。
+          </span>
           <span v-else class="role-card__loading">加载权限中...</span>
         </div>
       </CardSurface>
@@ -183,6 +186,7 @@
           <UiButton
             type="primary"
             :loading="submitting"
+            :disabled="!canSubmitPermissions"
             @click="submitPermissions"
           >
             保存权限
@@ -214,8 +218,11 @@ import UiModal from '../../components/ui/UiModal.vue';
 import UiTag from '../../components/ui/UiTag.vue';
 import { notifyWarning } from '../../utils/feedback';
 
+type RolePermissionStatus = 'loading' | 'loaded' | 'failed';
+
 const roles = ref<string[]>([]);
 const rolePermissions = ref<Record<string, string[]>>({});
+const rolePermissionStatus = ref<Record<string, RolePermissionStatus>>({});
 const loading = ref(false);
 const submitting = ref(false);
 
@@ -239,22 +246,38 @@ const fetchRoles = async () => {
   try {
     const list = (await getAllRolesApi()) as unknown as string[];
     roles.value = list;
+    const nextStatus: Record<string, RolePermissionStatus> = {};
+    const nextPermissions: Record<string, string[]> = {};
     for (const role of list) {
+      nextStatus[role] = 'loading';
+      rolePermissionStatus.value = { ...nextStatus };
       try {
         const dto = (await getRolePermissionsApi(role)) as unknown as {
           roleName: string;
           permissions: string[];
         };
-        rolePermissions.value[role] = dto.permissions;
+        nextPermissions[role] = dto.permissions;
+        nextStatus[role] = 'loaded';
       } catch {
-        rolePermissions.value[role] = [];
+        nextStatus[role] = 'failed';
       }
+      rolePermissions.value = { ...nextPermissions };
+      rolePermissionStatus.value = { ...nextStatus };
     }
   } catch {
     roles.value = [];
+    rolePermissions.value = {};
+    rolePermissionStatus.value = {};
   } finally {
     loading.value = false;
   }
+};
+
+const rolePermissionSummary = (role: string) => {
+  const status = rolePermissionStatus.value[role];
+  if (status === 'loaded') return `${rolePermissions.value[role]?.length ?? 0} 项`;
+  if (status === 'failed') return '加载失败';
+  return '加载中';
 };
 
 // === 创建角色 ===
@@ -306,12 +329,20 @@ const submitCreate = async () => {
 const showPermEditor = ref(false);
 const editRoleName = ref('');
 const editPermissions = ref<string[]>([]);
+const canSubmitPermissions = ref(false);
 
 const openPermEditor = async (role: string) => {
+  if (rolePermissionStatus.value[role] !== 'loaded') {
+    notifyWarning('角色权限尚未成功加载，请刷新后重试');
+    return;
+  }
+
   editRoleName.value = role;
-  editPermissions.value = [...(rolePermissions.value[role] || [])];
+  editPermissions.value = [...(rolePermissions.value[role] ?? [])];
+  canSubmitPermissions.value = false;
   showPermEditor.value = true;
   await fetchPermGroups();
+  canSubmitPermissions.value = permissionGroups.value.length > 0;
 };
 
 const toggleEditPerm = (perm: string, checked: boolean) => {
@@ -326,10 +357,16 @@ const toggleEditPerm = (perm: string, checked: boolean) => {
 };
 
 const submitPermissions = async () => {
+  if (!canSubmitPermissions.value) {
+    notifyWarning('权限清单加载失败，不能保存角色权限');
+    return;
+  }
+
   submitting.value = true;
   try {
     await updateRolePermissionsApi(editRoleName.value, editPermissions.value);
     rolePermissions.value[editRoleName.value] = [...editPermissions.value];
+    rolePermissionStatus.value[editRoleName.value] = 'loaded';
     showPermEditor.value = false;
   } catch {
     /* */
@@ -415,6 +452,11 @@ onMounted(() => fetchRoles());
 .role-card__loading {
   font-size: var(--fs-sm);
   color: var(--text-2);
+}
+.role-card__error {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  color: var(--error);
 }
 
 /* 表单 */

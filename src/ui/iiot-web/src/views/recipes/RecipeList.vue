@@ -88,7 +88,6 @@
               v-model:value="createForm.processId"
               :options="processOptions"
               placeholder="请选择工序"
-              filterable
             />
           </div>
         </div>
@@ -98,7 +97,6 @@
             v-model:value="createForm.deviceId"
             :options="deviceOptions"
             placeholder="请选择设备"
-            filterable
           />
         </div>
         <ParamsEditor v-model:params="createParams" />
@@ -295,6 +293,12 @@ const metaData = ref<PagedMetaData>({
   currentPage: 1,
   totalPages: 1,
 });
+const emptyMetaData = (): PagedMetaData => ({
+  totalCount: 0,
+  pageSize: 10,
+  currentPage: 1,
+  totalPages: 1,
+});
 const submitting = ref(false);
 
 const allProcesses = ref<ProcessSelectDto[]>([]);
@@ -370,8 +374,18 @@ const fetchList = async () => {
     recipes.value = response.items;
   } catch {
     recipes.value = [];
+    metaData.value = emptyMetaData();
+    currentPage.value = 1;
   } finally {
     loading.value = false;
+  }
+};
+
+const refreshAfterMutation = async () => {
+  await fetchList();
+  if (recipes.value.length === 0 && currentPage.value > 1) {
+    currentPage.value -= 1;
+    await fetchList();
   }
 };
 
@@ -608,7 +622,7 @@ const submitCreate = async () => {
       parametersJsonb: paramsToJsonb(createParams.value),
     });
     showCreateModal.value = false;
-    fetchList();
+    await fetchList();
   } catch {
     /* */
   } finally {
@@ -657,7 +671,7 @@ const submitUpgrade = async () => {
       parametersJsonb: paramsToJsonb(upgradeParams.value),
     });
     showUpgradeModal.value = false;
-    fetchList();
+    await fetchList();
   } catch {
     /* */
   } finally {
@@ -711,7 +725,7 @@ const handleDelete = (recipe: RecipeListItemDto) => {
       try {
         await deleteRecipeApi(recipe.id);
         confirmDialog.show = false;
-        fetchList();
+        await refreshAfterMutation();
       } catch {
         /* */
       } finally {

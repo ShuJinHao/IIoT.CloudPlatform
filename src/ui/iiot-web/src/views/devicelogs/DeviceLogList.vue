@@ -15,7 +15,6 @@
           :options="deviceOptions"
           placeholder="请先选择设备"
           clearable
-          filterable
           size="small"
           style="width: 320px;"
           @update:value="onDeviceChange"
@@ -264,6 +263,17 @@ const metaData = ref<PagedMetaData>({
   currentPage: 1,
   totalPages: 1,
 });
+const emptyMetaData = (): PagedMetaData => ({
+  totalCount: 0,
+  pageSize: PAGE_SIZE,
+  currentPage: 1,
+  totalPages: 1,
+});
+const resetResults = () => {
+  currentPage.value = 1;
+  records.value = [];
+  metaData.value = emptyMetaData();
+};
 
 const allDevices = ref<DeviceSelectDto[]>([]);
 const deviceLoadError = ref('');
@@ -287,16 +297,14 @@ const resetDateTime = () => {
 
 const switchMode = (mode: QueryMode) => {
   currentMode.value = mode;
-  currentPage.value = 1;
+  resetResults();
   searched.value = false;
-  records.value = [];
   resetDateTime();
 };
 
 const onDeviceChange = () => {
-  currentPage.value = 1;
+  resetResults();
   searched.value = false;
-  records.value = [];
 };
 
 const levelToSeverity = (
@@ -456,6 +464,8 @@ const fetchData = async () => {
     records.value = response.items;
   } catch {
     records.value = [];
+    metaData.value = emptyMetaData();
+    currentPage.value = 1;
   } finally {
     loading.value = false;
   }

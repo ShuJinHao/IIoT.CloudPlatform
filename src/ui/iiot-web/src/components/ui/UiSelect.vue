@@ -28,7 +28,6 @@ const props = withDefaults(defineProps<{
   options?: UiSelectOption[];
   placeholder?: string;
   clearable?: boolean;
-  filterable?: boolean;
   loading?: boolean;
   disabled?: boolean;
   class?: string;

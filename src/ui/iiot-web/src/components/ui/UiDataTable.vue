@@ -16,10 +16,14 @@
         </thead>
         <tbody>
           <tr v-if="loading">
-            <td :colspan="columns.length" class="ui-data-table__state">加载中...</td>
+            <td :colspan="columns.length" class="ui-data-table__state">
+              <slot name="loading">加载中...</slot>
+            </td>
           </tr>
           <tr v-else-if="data.length === 0">
-            <td :colspan="columns.length" class="ui-data-table__state">暂无数据</td>
+            <td :colspan="columns.length" class="ui-data-table__state">
+              <slot name="empty">暂无数据</slot>
+            </td>
           </tr>
           <tr v-for="(row, rowIndex) in data" v-else :key="rowIdentity(row, rowIndex)">
             <td

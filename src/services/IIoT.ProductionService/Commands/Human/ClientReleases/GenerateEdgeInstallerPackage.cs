@@ -10,6 +10,7 @@ using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.Security;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
+using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.CrossCutting.Caching;
 using IIoT.SharedKernel.Messaging;
@@ -19,7 +20,7 @@ using Microsoft.Extensions.Options;
 
 namespace IIoT.ProductionService.Commands.ClientReleases;
 
-[AuthorizeRequirement("Device.Update")]
+[AuthorizeRequirement(ClientReleasePermissions.GenerateInstaller)]
 public sealed record GenerateEdgeInstallerPackageCommand(
     IReadOnlyList<EdgeBindingSelection> Selections,
     string? Channel = null,
@@ -60,11 +61,6 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         GenerateEdgeInstallerPackageCommand request,
         CancellationToken cancellationToken)
     {
-        if (!currentUserDeviceAccessService.IsAdministrator)
-        {
-            return await FailAsync("只有管理员可以生成客户端安装包。", cancellationToken, forbidden: true);
-        }
-
         var channel = NormalizeDefault(request.Channel, "stable");
         var targetRuntime = NormalizeDefault(request.TargetRuntime, "win-x64");
         if (!EdgeInstallerPublicBaseUrl.TryNormalize(request.BaseUrl, out var publicBaseUrl, out var baseUrlError))
@@ -322,6 +318,19 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         CancellationToken cancellationToken)
     {
         var requestedIds = selections.Select(item => item.DeviceId).ToList();
+        var accessScope = await currentUserDeviceAccessService.GetAccessibleDeviceIdsAsync(cancellationToken);
+        if (!accessScope.IsSuccess)
+        {
+            return DeviceLoadResult.Fail(
+                accessScope.Errors?.FirstOrDefault() ?? "生成安装包失败：用户凭证异常。");
+        }
+
+        if (accessScope.Value is { } allowedDeviceIds
+            && requestedIds.Any(deviceId => !allowedDeviceIds.Contains(deviceId)))
+        {
+            return DeviceLoadResult.Fail("生成安装包失败：包含未授权访问的设备。");
+        }
+
         var devices = await deviceRepository.GetListAsync(
             new DevicePagedSpec(0, 0, requestedIds, isPaging: false),
             cancellationToken);

@@ -61,8 +61,12 @@ public sealed class UpsertClientHostReleaseCommandValidator : AbstractValidator<
         RuleFor(x => x.TargetRuntime).NotEmpty().MaximumLength(64);
         RuleFor(x => x.TargetFramework).MaximumLength(64).When(x => x.TargetFramework is not null);
         RuleFor(x => x.DownloadUrl).NotEmpty().MaximumLength(1024);
-        RuleFor(x => x.Sha256).NotEmpty().Length(64);
-        RuleFor(x => x.PackageSize).GreaterThanOrEqualTo(0);
+        RuleFor(x => x.Sha256)
+            .Must(ClientReleaseValidationRules.BeRealSha256)
+            .WithMessage("sha256 必须是真实 64 位十六进制，不能使用全 0 占位值。");
+        RuleFor(x => x.PackageSize)
+            .GreaterThan(0)
+            .WithMessage("包大小必须大于 0。");
         RuleFor(x => x.ReleaseNotes)
             .NotEmpty()
             .WithMessage("发布状态为 Published 时必须填写更新内容。")
@@ -92,8 +96,12 @@ public sealed class UpsertClientPluginReleaseCommandValidator : AbstractValidato
         RuleFor(x => x.TargetRuntime).NotEmpty().MaximumLength(64);
         RuleFor(x => x.TargetFramework).MaximumLength(64).When(x => x.TargetFramework is not null);
         RuleFor(x => x.DownloadUrl).NotEmpty().MaximumLength(1024);
-        RuleFor(x => x.Sha256).NotEmpty().Length(64);
-        RuleFor(x => x.PackageSize).GreaterThanOrEqualTo(0);
+        RuleFor(x => x.Sha256)
+            .Must(ClientReleaseValidationRules.BeRealSha256)
+            .WithMessage("sha256 必须是真实 64 位十六进制，不能使用全 0 占位值。");
+        RuleFor(x => x.PackageSize)
+            .GreaterThan(0)
+            .WithMessage("包大小必须大于 0。");
         RuleFor(x => x.ReleaseNotes)
             .NotEmpty()
             .WithMessage("发布状态为 Published 时必须填写更新内容。")
@@ -496,4 +504,37 @@ file static class UploadValidationRules
         return value >= new DateOnly(2000, 1, 1)
                && value <= today.AddDays(1);
     }
+}
+
+file static class ClientReleaseValidationRules
+{
+    public static bool BeRealSha256(string? value)
+    {
+        var text = value?.Trim();
+        if (string.IsNullOrEmpty(text) || text.Length != 64)
+        {
+            return false;
+        }
+
+        var hasNonZero = false;
+        foreach (var c in text)
+        {
+            if (!IsHex(c))
+            {
+                return false;
+            }
+
+            if (c != '0')
+            {
+                hasNonZero = true;
+            }
+        }
+
+        return hasNonZero;
+    }
+
+    private static bool IsHex(char c) =>
+        c is >= '0' and <= '9'
+        || c is >= 'a' and <= 'f'
+        || c is >= 'A' and <= 'F';
 }

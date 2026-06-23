@@ -90,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { Download } from 'lucide-vue-next';
 import UiButton from '../../components/ui/UiButton.vue';
 import UiCheckbox from '../../components/ui/UiCheckbox.vue';
@@ -144,6 +144,13 @@ const plugins = computed(() => {
   return result;
 });
 
+const validPluginIds = computed(() => new Set(plugins.value.map((plugin) => plugin.moduleId)));
+const activeSelections = computed(() =>
+  plugins.value
+    .map((plugin) => [plugin.moduleId, selections[plugin.moduleId]] as const)
+    .filter((entry): entry is readonly [string, BindingChoice] => Boolean(entry[1])),
+);
+
 const isChecked = (moduleId: string) => moduleId in selections;
 
 // 模板只读：勾选时返回真实（响应式）选择对象，未勾选时返回安全默认值
@@ -180,13 +187,25 @@ const filteredDevices = computed(() => {
 const validationHint = computed(() => {
   if (!props.hostVersion) return '暂无已发布宿主版本';
   if (!baseUrl.value.trim()) return '请填写云端地址';
-  const entries = Object.values(selections);
+  const entries = activeSelections.value.map(([, choice]) => choice);
   if (entries.length === 0) return '请至少勾选一个插件';
   if (entries.some((choice) => !choice.deviceId)) return '有插件未指定设备';
   return '';
 });
 
-const canGenerate = computed(() => Object.keys(selections).length > 0 && !validationHint.value);
+const canGenerate = computed(() => activeSelections.value.length > 0 && !validationHint.value);
+
+watch(validPluginIds, (ids) => {
+  for (const moduleId of Object.keys(selections)) {
+    if (!ids.has(moduleId)) {
+      delete selections[moduleId];
+    }
+  }
+  if (pickerModuleId.value && !ids.has(pickerModuleId.value)) {
+    pickerModuleId.value = '';
+    showPicker.value = false;
+  }
+}, { immediate: true });
 
 const openPicker = (moduleId: string) => {
   pickerModuleId.value = moduleId;
@@ -218,7 +237,9 @@ const generate = async () => {
   if (!canGenerate.value || generating.value) return;
 
   // 生成会为所选设备轮换启动密钥，旧密钥立即失效。强制二次确认，避免误操作打挂在线设备。
-  const deviceList = Object.values(selections)
+  const currentSelections = activeSelections.value;
+  const deviceList = currentSelections
+    .map(([, choice]) => choice)
     .map((choice) => `${choice.deviceName}（${choice.clientCode}）`)
     .filter(Boolean);
   const confirmed = await requestConfirmation({
@@ -241,7 +262,7 @@ const generate = async () => {
       channel: props.channel || 'stable',
       targetRuntime: props.targetRuntime || 'win-x64',
       hostVersion: props.hostVersion || null,
-      selections: Object.entries(selections).map(([moduleId, choice]) => ({
+      selections: currentSelections.map(([moduleId, choice]) => ({
         moduleId,
         deviceId: choice.deviceId,
       })),

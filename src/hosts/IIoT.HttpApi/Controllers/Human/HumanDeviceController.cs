@@ -40,6 +40,14 @@ public class HumanDeviceController : ApiControllerBase
         return ReturnResult(await Sender.Send(new GetDeviceStatusSummaryQuery(), cancellationToken));
     }
 
+    [HttpGet("{id}/deletion-impact")]
+    public async Task<IActionResult> GetDeletionImpact(
+        [FromRoute] Guid id,
+        CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(new GetDeviceDeletionImpactQuery(id), cancellationToken));
+    }
+
     [HttpPost]
     public async Task<IActionResult> Register(
         [FromBody] RegisterDeviceCommand command,

@@ -165,6 +165,12 @@ const metaData = ref<PagedMetaData>({
   currentPage: 1,
   totalPages: 1,
 });
+const emptyMetaData = (): PagedMetaData => ({
+  totalCount: 0,
+  pageSize: 10,
+  currentPage: 1,
+  totalPages: 1,
+});
 const submitting = ref(false);
 
 // === 数据加载 ===
@@ -197,11 +203,27 @@ const fetchList = async () => {
         : [];
     } else if (Array.isArray(raw)) {
       processes.value = raw as ProcessListItemDto[];
+      metaData.value = {
+        totalCount: processes.value.length,
+        pageSize: 10,
+        currentPage: 1,
+        totalPages: 1,
+      };
     }
   } catch {
     processes.value = [];
+    metaData.value = emptyMetaData();
+    currentPage.value = 1;
   } finally {
     loading.value = false;
+  }
+};
+
+const refreshAfterMutation = async () => {
+  await fetchList();
+  if (processes.value.length === 0 && currentPage.value > 1) {
+    currentPage.value -= 1;
+    await fetchList();
   }
 };
 
@@ -310,7 +332,7 @@ const submitForm = async () => {
       await createProcessApi({ ...formData });
     }
     showFormModal.value = false;
-    fetchList();
+    await fetchList();
   } catch {
     /* http 拦截器已弹错误 */
   } finally {
@@ -338,7 +360,7 @@ const handleDelete = (p: ProcessListItemDto) => {
       try {
         await deleteProcessApi(p.id);
         confirmDialog.show = false;
-        fetchList();
+        await refreshAfterMutation();
       } catch {
         /* */
       } finally {

@@ -27,7 +27,7 @@ export const Permissions = {
     Create:     'Device.Create',
     Update:     'Device.Update',
     Delete:     'Device.Delete',
-    Deactivate: 'Device.Deactivate',
+    CascadeDelete: 'Device.CascadeDelete',
   },
 
   // ===== 配方管理 =====
@@ -39,13 +39,17 @@ export const Permissions = {
 
   // ===== 角色权限管理 =====
   Role: {
+    Read: 'Role.Read',
     Define: 'Role.Define',
     Update: 'Role.Update',
   },
 
   // ===== 客户端发布 =====
   ClientRelease: {
+    Read: 'ClientRelease.Read',
+    GenerateInstaller: 'ClientRelease.GenerateInstaller',
     Publish: 'ClientRelease.Publish',
+    Manage: 'ClientRelease.Manage',
   },
 } as const;
 

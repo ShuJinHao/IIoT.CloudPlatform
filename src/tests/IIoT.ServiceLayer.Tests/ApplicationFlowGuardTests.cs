@@ -597,7 +597,14 @@ public sealed class ApplicationFlowGuardTests
         var identityStore = new RecordingIdentityAccountStore();
         var unitOfWork = new RecordingUnitOfWork();
         var refreshTokenService = new StubRefreshTokenService();
-        var handler = new UpdateEmployeeProfileHandler(repository, identityStore, unitOfWork, refreshTokenService);
+        var handler = new UpdateEmployeeProfileHandler(
+            repository,
+            identityStore,
+            unitOfWork,
+            refreshTokenService,
+            new RecordingCacheService(),
+            new TestCurrentUser { Id = Guid.NewGuid().ToString(), IsAuthenticated = true },
+            new RecordingPermissionProvider());
 
         var result = await handler.Handle(
             new UpdateEmployeeProfileCommand(employeeId, " New Name ", false),
@@ -632,7 +639,12 @@ public sealed class ApplicationFlowGuardTests
             identityStore,
             passwordService,
             repository,
-            unitOfWork);
+            unitOfWork,
+            new TestCurrentUser { Id = Guid.NewGuid().ToString(), IsAuthenticated = true },
+            new RecordingPermissionProvider
+            {
+                Permissions = ["Employee.UpdateAccess"]
+            });
 
         var result = await handler.Handle(
             new OnboardEmployeeCommand("E1003", "Operator", "Password123!", "Supervisor"),
@@ -643,6 +655,31 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal(1, unitOfWork.BeginCalls);
         Assert.Equal(0, unitOfWork.CommitCalls);
         Assert.Equal(1, unitOfWork.RollbackCalls);
+    }
+
+    [Fact]
+    public async Task OnboardEmployeeHandler_ShouldRejectRoleAssignmentWithoutUpdateAccess()
+    {
+        var repository = new InMemoryRepository<Employee>();
+        var identityStore = new RecordingIdentityAccountStore();
+        var passwordService = new StubIdentityPasswordService();
+        var unitOfWork = new RecordingUnitOfWork();
+        var handler = new OnboardEmployeeHandler(
+            identityStore,
+            passwordService,
+            repository,
+            unitOfWork,
+            new TestCurrentUser { Id = Guid.NewGuid().ToString(), IsAuthenticated = true },
+            new RecordingPermissionProvider());
+
+        var result = await handler.Handle(
+            new OnboardEmployeeCommand("E1005", "Operator", "Password123!", "Supervisor"),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Null(repository.AddedEntity);
+        Assert.Equal(0, unitOfWork.BeginCalls);
+        Assert.Contains(result.Errors ?? [], error => error.Contains("Employee.UpdateAccess"));
     }
 
     [Fact]
@@ -813,7 +850,7 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
-    public async Task DeleteDeviceHandler_ShouldRaiseDeletedEvent_AndRevokeRefreshTokens()
+    public async Task DeleteDeviceHandler_ShouldCascadeDelete_InvalidateCache_AndWriteAudit()
     {
         var processId = Guid.NewGuid();
         var device = new Device("Device-Delete", "DEV-DELETE001", processId);
@@ -822,9 +859,20 @@ public sealed class ApplicationFlowGuardTests
         {
             SingleOrDefaultResult = device
         };
-        var dependencyQuery = new StubDeviceDeletionDependencyQueryService();
-        var refreshTokenService = new StubRefreshTokenService();
-        var cache = new RecordingCacheService();
+        var dependencyQuery = new StubDeviceDeletionDependencyQueryService
+        {
+            Impact = new DeviceDeletionImpact(
+                Recipes: 2,
+                Capacities: 3,
+                DeviceLogs: 4,
+                PassStations: 5,
+                ClientVersionSnapshots: 1,
+                ClientPluginVersions: 2,
+                UploadReceiveRegistrations: 6,
+                EmployeeDeviceAccesses: 7,
+                RefreshTokenSessions: 8)
+        };
+        var cacheInvalidation = new RecordingDeviceCacheInvalidationService();
         var auditTrail = new RecordingAuditTrailService();
         var handler = new DeleteDeviceHandler(
             new TestCurrentUser
@@ -836,28 +884,23 @@ public sealed class ApplicationFlowGuardTests
             },
             repository,
             dependencyQuery,
-            refreshTokenService,
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
-            cache,
+            cacheInvalidation,
             auditTrail);
 
         var result = await handler.Handle(new DeleteDeviceCommand(device.Id), CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        Assert.Contains(device.DomainEvents, x =>
-            x is DeviceDeletedDomainEvent deleted
-            && deleted.DeviceId == device.Id
-            && deleted.ProcessId == processId
-            && deleted.Code == device.Code);
-        Assert.Contains(refreshTokenService.Revocations, x =>
-            x.ActorType == IIoT.Services.Contracts.Identity.IIoTClaimTypes.EdgeDeviceActor
-            && x.SubjectId == device.Id
-            && x.Reason == "device-deleted");
-        Assert.Contains(CacheKeys.DeviceCode(device.Code), cache.RemovedKeys);
+        Assert.Contains(cacheInvalidation.DeletedDevices, x =>
+            x.DeviceId == device.Id
+            && x.ProcessId == processId
+            && x.DeviceCode == device.Code);
         Assert.Contains(auditTrail.Entries, x =>
             x.OperationType == "Device.Delete"
             && x.TargetIdOrKey == device.Id.ToString()
-            && x.Succeeded);
+            && x.Succeeded
+            && x.Summary.Contains("\"DeviceCascadeDelete\"", StringComparison.Ordinal)
+            && x.Summary.Contains("\"device_logs\":4", StringComparison.Ordinal));
     }
 
     [Fact]

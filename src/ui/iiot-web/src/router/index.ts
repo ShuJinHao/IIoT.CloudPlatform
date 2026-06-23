@@ -83,13 +83,13 @@ const routes: Array<RouteRecordRaw> = [
         path: 'client-releases',
         name: 'ClientReleases',
         component: () => import('../views/clientReleases/ClientReleaseCenter.vue'),
-        meta: { requiresAuth: true, requiredPermission: Permissions.Device.Read, title: '客户端首装生成' }
+        meta: { requiresAuth: true, requiredPermission: Permissions.ClientRelease.Read, title: '客户端首装生成' }
       },
       {
         path: 'client-releases/publish',
         name: 'ClientReleasePublish',
         component: () => import('../views/clientReleases/ClientReleaseCenter.vue'),
-        meta: { requiresAuth: true, requiredPermission: Permissions.Device.Update, title: '客户端发布管理' }
+        meta: { requiresAuth: true, requiredPermission: Permissions.ClientRelease.Manage, title: '客户端发布管理' }
       },
       {
         path: 'roles',

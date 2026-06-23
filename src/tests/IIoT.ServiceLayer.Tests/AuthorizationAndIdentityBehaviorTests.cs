@@ -366,7 +366,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
     }
 
     [Fact]
-    public void GetAllRolesQuery_ShouldRequireRoleDefinePermission()
+    public void GetAllRolesQuery_ShouldRequireRoleReadPermission()
     {
         var attribute = typeof(GetAllRolesQuery)
             .GetCustomAttributes(typeof(AuthorizeRequirementAttribute), inherit: false)
@@ -374,7 +374,29 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             .SingleOrDefault();
 
         Assert.NotNull(attribute);
-        Assert.Equal("Role.Define", attribute!.Permission);
+        Assert.Equal("Role.Read", attribute!.Permission);
+    }
+
+    [Fact]
+    public async Task GetAllDefinedPermissions_ShouldExposeRoleTemplatePermissions()
+    {
+        var handler = new GetAllDefinedPermissionsHandler(
+            new StubRolePolicyService(),
+            new RecordingCacheService());
+
+        var result = await handler.Handle(new GetAllDefinedPermissionsQuery(), CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var permissions = result.Value!
+            .SelectMany(group => group.Permissions)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains(DevicePermissions.CascadeDelete, permissions);
+        Assert.Contains(ClientReleasePermissions.Read, permissions);
+        Assert.Contains(ClientReleasePermissions.GenerateInstaller, permissions);
+        Assert.Contains(ClientReleasePermissions.Publish, permissions);
+        Assert.Contains(ClientReleasePermissions.Manage, permissions);
+        Assert.Contains("Role.Read", permissions);
+        Assert.DoesNotContain("Device.Deactivate", permissions);
     }
 
     [Fact]
@@ -392,6 +414,19 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         Assert.NotNull(permissionAttribute);
         Assert.Equal("Device.Create", permissionAttribute!.Permission);
         Assert.NotNull(adminOnlyAttribute);
+    }
+
+    [Fact]
+    public void DeleteDeviceCommand_ShouldRequireDeleteAndCascadeDeletePermissions()
+    {
+        var permissions = typeof(DeleteDeviceCommand)
+            .GetCustomAttributes(typeof(AuthorizeRequirementAttribute), inherit: false)
+            .Cast<AuthorizeRequirementAttribute>()
+            .Select(attribute => attribute.Permission)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.Contains(DevicePermissions.Delete, permissions);
+        Assert.Contains(DevicePermissions.CascadeDelete, permissions);
     }
 
     [Fact]

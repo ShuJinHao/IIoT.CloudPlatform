@@ -91,7 +91,6 @@
             v-model:value="registerForm.processId"
             :options="processOptions"
             placeholder="请选择工序"
-            filterable
           />
         </div>
         <div class="hint-card">
@@ -196,11 +195,41 @@
       :mask-closable="false"
     >
       <p class="confirm-desc">{{ confirmDialog.desc }}</p>
+      <div v-if="confirmDialog.impact" class="delete-impact">
+        <div class="delete-impact__summary">
+          <div>
+            <span>设备</span>
+            <strong>{{ confirmDialog.impact.deviceName }}</strong>
+          </div>
+          <div>
+            <span>ClientCode</span>
+            <code>{{ confirmDialog.impact.clientCode }}</code>
+          </div>
+          <div>
+            <span>DeviceId</span>
+            <code>{{ confirmDialog.impact.deviceId }}</code>
+          </div>
+        </div>
+        <div class="delete-impact__grid">
+          <div v-for="item in deletionImpactRows" :key="item.label" class="delete-impact__item">
+            <span>{{ item.label }}</span>
+            <strong>{{ item.value }}</strong>
+          </div>
+        </div>
+        <div class="form-field">
+          <label class="form-label">输入设备名称确认删除</label>
+          <UiInput
+            v-model:value="confirmDialog.confirmInput"
+            :placeholder="confirmDialog.requiredText"
+          />
+        </div>
+      </div>
       <template #footer>
         <div class="modal-actions">
           <UiButton @click="confirmDialog.show = false">取消</UiButton>
           <UiButton
             :type="confirmDialog.danger ? 'error' : 'warning'"
+            :disabled="confirmDisabled"
             :loading="submitting"
             @click="confirmDialog.onConfirm()"
           >
@@ -219,6 +248,8 @@ import {
   registerDeviceApi,
   updateDeviceProfileApi,
   deleteDeviceApi,
+  getDeviceDeletionImpactApi,
+  type DeviceDeletionImpactDto,
   type DeviceListItemDto,
   type PagedMetaData,
 } from '../../api/device';
@@ -252,12 +283,19 @@ const metaData = ref<PagedMetaData>({
   currentPage: 1,
   totalPages: 1,
 });
+const emptyMetaData = (): PagedMetaData => ({
+  totalCount: 0,
+  pageSize: 10,
+  currentPage: 1,
+  totalPages: 1,
+});
 const submitting = ref(false);
 const canUpdateDevice = computed(() =>
   authStore.hasPermission(Permissions.Device.Update),
 );
 const canDeleteDevice = computed(() =>
-  authStore.hasPermission(Permissions.Device.Delete),
+  authStore.hasPermission(Permissions.Device.Delete)
+  && authStore.hasPermission(Permissions.Device.CascadeDelete),
 );
 
 const allProcesses = ref<ProcessSelectDto[]>([]);
@@ -307,8 +345,18 @@ const fetchList = async () => {
     metaData.value = response.metaData;
   } catch {
     devices.value = [];
+    metaData.value = emptyMetaData();
+    currentPage.value = 1;
   } finally {
     loading.value = false;
+  }
+};
+
+const refreshAfterMutation = async () => {
+  await fetchList();
+  if (devices.value.length === 0 && currentPage.value > 1) {
+    currentPage.value -= 1;
+    await fetchList();
   }
 };
 
@@ -508,17 +556,54 @@ const confirmDialog = reactive({
   desc: '',
   confirmText: '',
   danger: true,
+  impact: null as DeviceDeletionImpactDto | null,
+  requiredText: '',
+  confirmInput: '',
   onConfirm: () => Promise.resolve(),
 });
 
-const handleDelete = (device: DeviceListItemDto) => {
+const deletionImpactRows = computed(() => {
+  const impact = confirmDialog.impact;
+  if (!impact) return [];
+  return [
+    { label: '配方', value: impact.recipes },
+    { label: '产能记录', value: impact.capacities },
+    { label: '设备日志', value: impact.deviceLogs },
+    { label: '过站数据', value: impact.passStations },
+    { label: '客户端版本快照', value: impact.clientVersionSnapshots },
+    { label: '插件版本快照', value: impact.clientPluginVersions },
+    { label: '上传幂等登记', value: impact.uploadReceiveRegistrations },
+    { label: '人员设备授权', value: impact.employeeDeviceAccesses },
+    { label: '设备 refresh token', value: impact.refreshTokenSessions },
+  ];
+});
+
+const confirmDisabled = computed(() =>
+  !!confirmDialog.requiredText && confirmDialog.confirmInput !== confirmDialog.requiredText,
+);
+
+const handleDelete = async (device: DeviceListItemDto) => {
+  submitting.value = true;
+  let impact: DeviceDeletionImpactDto;
+  try {
+    impact = await getDeviceDeletionImpactApi(device.id);
+  } catch {
+    submitting.value = false;
+    return;
+  }
+  submitting.value = false;
+
   Object.assign(confirmDialog, {
     show: true,
     danger: true,
-    title: '确认删除设备',
-    desc: `设备【${device.deviceName}】删除后，现场保存的 Code 将无法继续寻址。若设备已有配方、产能、日志或过站数据，删除会被拒绝。`,
-    confirmText: '确认删除',
+    title: '确认级联删除设备',
+    desc: '该操作会永久删除设备主数据及下列关联数据，删除后不可恢复。',
+    confirmText: '确认级联删除',
+    impact,
+    requiredText: device.deviceName,
+    confirmInput: '',
     onConfirm: async () => {
+      if (confirmDisabled.value) return;
       submitting.value = true;
       try {
         await deleteDeviceApi(device.id);
@@ -527,7 +612,8 @@ const handleDelete = (device: DeviceListItemDto) => {
           selectedDevice.value = null;
         }
         confirmDialog.show = false;
-        await fetchList();
+        confirmDialog.impact = null;
+        await refreshAfterMutation();
       } catch {
         /* */
       } finally {
@@ -617,6 +703,63 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+}
+
+.delete-impact {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.delete-impact__summary {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--danger-soft);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-sm);
+}
+
+.delete-impact__summary div {
+  min-width: 0;
+}
+
+.delete-impact__summary span,
+.delete-impact__item span {
+  display: block;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+.delete-impact__summary strong,
+.delete-impact__summary code {
+  display: block;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+  color: var(--text-0);
+}
+
+.delete-impact__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.delete-impact__item {
+  min-width: 0;
+  padding: var(--space-2);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.delete-impact__item strong {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--fs-lg);
+  color: var(--danger);
 }
 .form-field {
   display: flex;

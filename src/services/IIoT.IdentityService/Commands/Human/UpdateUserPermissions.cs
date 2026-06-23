@@ -8,7 +8,7 @@ using IIoT.SharedKernel.Result;
 
 namespace IIoT.IdentityService.Commands;
 
-[AuthorizeRequirement("Employee.Update")]
+[AuthorizeRequirement("Employee.UpdateAccess")]
 [DistributedLock("iiot:lock:user-permissions:{UserId}", TimeoutSeconds = 5)]
 public record UpdateUserPermissionsCommand(
     Guid UserId,

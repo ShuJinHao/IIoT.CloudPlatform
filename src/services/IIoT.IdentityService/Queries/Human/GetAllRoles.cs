@@ -5,7 +5,7 @@ using IIoT.SharedKernel.Result;
 
 namespace IIoT.IdentityService.Queries;
 
-[AuthorizeRequirement("Role.Define")]
+[AuthorizeRequirement("Role.Read")]
 public record GetAllRolesQuery() : IHumanQuery<Result<IList<string>>>;
 
 public class GetAllRolesHandler(IRolePolicyService rolePolicyService) : IQueryHandler<GetAllRolesQuery, Result<IList<string>>>

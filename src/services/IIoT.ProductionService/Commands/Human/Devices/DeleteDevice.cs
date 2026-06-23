@@ -1,29 +1,28 @@
+using System.Text.Json;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Specifications.Devices;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Caching;
-using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Attributes;
-using IIoT.Services.CrossCutting.Caching;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
 
 namespace IIoT.ProductionService.Commands.Devices;
 
-[AuthorizeRequirement("Device.Delete")]
+[AuthorizeRequirement(DevicePermissions.Delete)]
+[AuthorizeRequirement(DevicePermissions.CascadeDelete)]
 public record DeleteDeviceCommand(Guid DeviceId) : IHumanCommand<Result<bool>>;
 
 public class DeleteDeviceHandler(
     ICurrentUser currentUser,
     IRepository<Device> deviceRepository,
     IDeviceDeletionDependencyQueryService dependencyQueryService,
-    IRefreshTokenService refreshTokenService,
     ICurrentUserDeviceAccessService currentUserDeviceAccessService,
-    ICacheService cacheService,
+    IDeviceCacheInvalidationService deviceCacheInvalidationService,
     IAuditTrailService auditTrailService)
     : ICommandHandler<DeleteDeviceCommand, Result<bool>>
 {
@@ -49,52 +48,9 @@ public class DeleteDeviceHandler(
                 cancellationToken);
         }
 
-        var dependencies = await dependencyQueryService.GetDependenciesAsync(
+        var deletionResult = await dependencyQueryService.DeleteCascadeAsync(
             request.DeviceId,
             cancellationToken);
-
-        if (dependencies.HasAnyDependency)
-        {
-            var blockedBy = new List<string>();
-            if (dependencies.HasRecipes)
-            {
-                blockedBy.Add("配方数据");
-            }
-            if (dependencies.HasCapacities)
-            {
-                blockedBy.Add("产能记录");
-            }
-            if (dependencies.HasDeviceLogs)
-            {
-                blockedBy.Add("设备日志");
-            }
-            if (dependencies.HasPassStations)
-            {
-                blockedBy.Add("过站数据");
-            }
-
-            return await FailAsync(
-                device.Id.ToString(),
-                $"设备存在历史数据依赖，禁止删除：{string.Join("、", blockedBy)}",
-                cancellationToken);
-        }
-
-        device.MarkDeleted();
-        deviceRepository.Delete(device);
-        var affected = await deviceRepository.SaveChangesAsync(cancellationToken);
-
-        if (affected > 0)
-        {
-            await refreshTokenService.RevokeSubjectTokensAsync(
-                IIoTClaimTypes.EdgeDeviceActor,
-                device.Id,
-                "device-deleted",
-                cancellationToken);
-
-            await cacheService.RemoveAsync(
-                CacheKeys.DeviceCode(device.Code),
-                cancellationToken);
-        }
 
         await auditTrailService.TryWriteAsync(
             new AuditTrailEntry(
@@ -104,12 +60,19 @@ public class DeleteDeviceHandler(
                 "Device",
                 device.Id.ToString(),
                 DateTime.UtcNow,
-                affected > 0,
-                $"删除设备 {device.DeviceName}（{device.Code}）。",
-                affected > 0 ? null : "保存设备删除记录失败。"),
+                deletionResult.DeviceDeleted,
+                BuildDeletionAuditSummary(device, deletionResult.Impact),
+                deletionResult.DeviceDeleted ? null : "设备级联删除未删除设备主数据。"),
             cancellationToken);
 
-        return Result.Success(affected > 0);
+        if (deletionResult.DeviceDeleted)
+        {
+            await deviceCacheInvalidationService.InvalidateAfterDeleteAsync(
+                new DeviceCacheDescriptor(device.Id, device.ProcessId, device.Code),
+                cancellationToken);
+        }
+
+        return Result.Success(deletionResult.DeviceDeleted);
     }
 
     private async Task<Result<bool>> FailAsync(
@@ -138,5 +101,31 @@ public class DeleteDeviceHandler(
         return Guid.TryParse(rawUserId, out var actorUserId)
             ? actorUserId
             : null;
+    }
+
+    private static string BuildDeletionAuditSummary(
+        Device device,
+        DeviceDeletionImpact impact)
+    {
+        return JsonSerializer.Serialize(new
+        {
+            action = "DeviceCascadeDelete",
+            deviceId = device.Id,
+            deviceName = device.DeviceName,
+            clientCode = device.Code,
+            processId = device.ProcessId,
+            deleted = new
+            {
+                recipes = impact.Recipes,
+                hourly_capacity = impact.Capacities,
+                device_logs = impact.DeviceLogs,
+                pass_station_records = impact.PassStations,
+                edge_device_client_version_snapshots = impact.ClientVersionSnapshots,
+                edge_device_client_plugin_versions = impact.ClientPluginVersions,
+                upload_receive_registrations = impact.UploadReceiveRegistrations,
+                employee_device_accesses = impact.EmployeeDeviceAccesses,
+                refresh_token_sessions = impact.RefreshTokenSessions
+            }
+        });
     }
 }

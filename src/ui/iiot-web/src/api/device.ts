@@ -40,6 +40,23 @@ export interface UpdateDeviceProfilePayload {
   deviceName: string;
 }
 
+export interface DeviceDeletionImpactDto {
+  deviceId: string;
+  deviceName: string;
+  clientCode: string;
+  processId: string;
+  recipes: number;
+  capacities: number;
+  deviceLogs: number;
+  passStations: number;
+  clientVersionSnapshots: number;
+  clientPluginVersions: number;
+  uploadReceiveRegistrations: number;
+  employeeDeviceAccesses: number;
+  refreshTokenSessions: number;
+  totalAssociatedRows: number;
+}
+
 export interface PagedList<T> {
   items: T[];
   metaData: PagedMetaData;
@@ -82,4 +99,8 @@ export const updateDeviceProfileApi = (id: string, payload: UpdateDeviceProfileP
 
 export const deleteDeviceApi = (id: string) => {
   return http.delete<boolean>(`${basePath}/${id}`);
+};
+
+export const getDeviceDeletionImpactApi = (id: string) => {
+  return http.get<DeviceDeletionImpactDto>(`${basePath}/${id}/deletion-impact`);
 };

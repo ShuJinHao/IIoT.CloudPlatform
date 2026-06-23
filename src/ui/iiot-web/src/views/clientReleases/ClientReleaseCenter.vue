@@ -10,16 +10,16 @@
           <Boxes :size="15" />
           首装生成
         </UiButton>
-        <UiButton type="primary" size="small" @click="openHostModal">
+        <UiButton v-if="canManageReleases" type="primary" size="small" @click="openHostModal">
           <Plus :size="15" />
           登记宿主
         </UiButton>
-        <UiButton type="info" size="small" secondary @click="openPluginModal">
+        <UiButton v-if="canManageReleases" type="info" size="small" secondary @click="openPluginModal">
           <PackagePlus :size="15" />
           登记插件
         </UiButton>
       </template>
-      <UiButton v-else-if="canManage" type="info" size="small" secondary @click="goPublishManager">
+      <UiButton v-else-if="canManageReleases" type="info" size="small" secondary @click="goPublishManager">
         <Settings2 :size="15" />
         发布管理
       </UiButton>
@@ -30,7 +30,7 @@
         <div class="release-toolbar">
           <div v-if="!isPublishRoute" class="release-tabs">
             <button
-              v-if="canManage"
+              v-if="canGenerateInstaller"
               class="release-tab"
               :class="{ 'is-active': activeView === 'binding' }"
               type="button"
@@ -49,7 +49,6 @@
               版本 catalog
             </button>
             <button
-              v-if="canManage"
               class="release-tab"
               :class="{ 'is-active': activeView === 'inventory' }"
               type="button"
@@ -341,8 +340,13 @@ const showReleaseDetailModal = ref(false);
 const selectedReleaseRow = ref<ReleaseCatalogRow | null>(null);
 const selectedReleaseDetail = ref<ReleaseDetail | null>(null);
 
-const canManage = computed(() => authStore.isAdmin || authStore.hasPermission(Permissions.Device.Update));
-const activeView = ref<ViewMode>(canManage.value ? 'binding' : 'catalog');
+const canGenerateInstaller = computed(() =>
+  authStore.hasPermission(Permissions.ClientRelease.GenerateInstaller),
+);
+const canManageReleases = computed(() =>
+  authStore.hasPermission(Permissions.ClientRelease.Manage),
+);
+const activeView = ref<ViewMode>(canGenerateInstaller.value ? 'binding' : 'catalog');
 const isPublishRoute = computed(() => route.name === 'ClientReleasePublish');
 const pageTitle = computed(() => (isPublishRoute.value ? '客户端发布管理' : '客户端首装生成'));
 const pageSubtitle = computed(() =>
@@ -364,7 +368,6 @@ const statusOptions = [
   { label: 'Archived', value: 'Archived' },
 ];
 
-const defaultSha = '0'.repeat(64);
 const hostForm = reactive<HostReleaseForm>({
   channel: 'stable',
   version: '',
@@ -372,8 +375,8 @@ const hostForm = reactive<HostReleaseForm>({
   targetRuntime: 'win-x64',
   targetFramework: 'net10.0',
   downloadUrl: '',
-  sha256: defaultSha,
-  packageSize: '0',
+  sha256: '',
+  packageSize: '',
   releaseNotes: '',
   status: 'Draft',
   signature: '',
@@ -394,8 +397,8 @@ const pluginForm = reactive<PluginReleaseForm>({
   targetRuntime: 'win-x64',
   targetFramework: 'net10.0',
   downloadUrl: '',
-  sha256: defaultSha,
-  packageSize: '0',
+  sha256: '',
+  packageSize: '',
   releaseNotes: '',
   dependenciesJson: '[]',
   status: 'Draft',
@@ -444,8 +447,8 @@ watch(activeView, () => {
   }
 });
 
-watch(canManage, (value) => {
-  if (!value && activeView.value !== 'catalog') {
+watch(canGenerateInstaller, (value) => {
+  if (!value && activeView.value === 'binding') {
     activeView.value = 'catalog';
   }
 }, { immediate: true });
@@ -453,15 +456,17 @@ watch(canManage, (value) => {
 onMounted(refresh);
 
 const goPublishManager = () => {
+  if (!canManageReleases.value) return;
   router.push({ name: 'ClientReleasePublish' });
 };
 
 const goInstallerCenter = () => {
-  activeView.value = canManage.value ? 'binding' : 'catalog';
+  activeView.value = canGenerateInstaller.value ? 'binding' : 'catalog';
   router.push({ name: 'ClientReleases' });
 };
 
 const openHostModal = () => {
+  if (!canManageReleases.value) return;
   Object.assign(hostForm, {
     channel: channel.value || 'stable',
     version: '',
@@ -469,8 +474,8 @@ const openHostModal = () => {
     targetRuntime: targetRuntime.value || 'win-x64',
     targetFramework: 'net10.0',
     downloadUrl: '',
-    sha256: defaultSha,
-    packageSize: '0',
+    sha256: '',
+    packageSize: '',
     releaseNotes: '',
     status: 'Draft',
     signature: '',
@@ -480,6 +485,7 @@ const openHostModal = () => {
 };
 
 const openPluginModal = () => {
+  if (!canManageReleases.value) return;
   Object.assign(pluginForm, {
     moduleId: '',
     displayName: '',
@@ -494,8 +500,8 @@ const openPluginModal = () => {
     targetRuntime: targetRuntime.value || 'win-x64',
     targetFramework: 'net10.0',
     downloadUrl: '',
-    sha256: defaultSha,
-    packageSize: '0',
+    sha256: '',
+    packageSize: '',
     releaseNotes: '',
     dependenciesJson: '[]',
     status: 'Draft',
@@ -511,14 +517,35 @@ const submitHostRelease = async () => {
     return;
   }
 
+  const packageSize = validateReleaseMetadata({
+    downloadUrl: hostForm.downloadUrl,
+    sha256: hostForm.sha256,
+    packageSize: hostForm.packageSize,
+    status: hostForm.status,
+    releaseNotes: hostForm.releaseNotes,
+  });
+  if (packageSize === null) return;
+
   submitting.value = true;
   try {
     await upsertClientHostReleaseApi({
       ...hostForm,
-      packageSize: Number(hostForm.packageSize) || 0,
+      channel: hostForm.channel.trim(),
+      version: hostForm.version.trim(),
+      hostApiVersion: hostForm.hostApiVersion.trim(),
+      targetRuntime: hostForm.targetRuntime.trim(),
+      targetFramework: normalizeOptional(hostForm.targetFramework),
+      downloadUrl: hostForm.downloadUrl.trim(),
+      sha256: hostForm.sha256.trim(),
+      packageSize,
+      releaseNotes: normalizeOptional(hostForm.releaseNotes),
+      signature: normalizeOptional(hostForm.signature),
+      publisher: normalizeOptional(hostForm.publisher),
     });
     showHostModal.value = false;
     await fetchCatalog();
+  } catch {
+    /* http 层已提示业务错误 */
   } finally {
     submitting.value = false;
   }
@@ -530,16 +557,96 @@ const submitPluginRelease = async () => {
     return;
   }
 
+  const packageSize = validateReleaseMetadata({
+    downloadUrl: pluginForm.downloadUrl,
+    sha256: pluginForm.sha256,
+    packageSize: pluginForm.packageSize,
+    status: pluginForm.status,
+    releaseNotes: pluginForm.releaseNotes,
+  });
+  if (packageSize === null) return;
+
   submitting.value = true;
   try {
     await upsertClientPluginReleaseApi({
       ...pluginForm,
-      packageSize: Number(pluginForm.packageSize) || 0,
+      moduleId: pluginForm.moduleId.trim(),
+      displayName: pluginForm.displayName.trim(),
+      description: normalizeOptional(pluginForm.description),
+      iconKind: normalizeOptional(pluginForm.iconKind),
+      accentColor: normalizeOptional(pluginForm.accentColor),
+      channel: pluginForm.channel.trim(),
+      version: pluginForm.version.trim(),
+      hostApiVersion: pluginForm.hostApiVersion.trim(),
+      minHostVersion: pluginForm.minHostVersion.trim(),
+      maxHostVersion: pluginForm.maxHostVersion.trim(),
+      targetRuntime: pluginForm.targetRuntime.trim(),
+      targetFramework: normalizeOptional(pluginForm.targetFramework),
+      downloadUrl: pluginForm.downloadUrl.trim(),
+      sha256: pluginForm.sha256.trim(),
+      packageSize,
+      releaseNotes: normalizeOptional(pluginForm.releaseNotes),
+      dependenciesJson: normalizeOptional(pluginForm.dependenciesJson),
+      signature: normalizeOptional(pluginForm.signature),
+      publisher: normalizeOptional(pluginForm.publisher),
     });
     showPluginModal.value = false;
     await fetchCatalog();
+  } catch {
+    /* http 层已提示业务错误 */
   } finally {
     submitting.value = false;
+  }
+};
+
+const normalizeOptional = (value?: string | null) => {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : null;
+};
+
+const realSha256Pattern = /^[0-9a-f]{64}$/i;
+const placeholderSha256Pattern = /^0{64}$/;
+
+const validateReleaseMetadata = (value: {
+  downloadUrl: string;
+  sha256: string;
+  packageSize: string;
+  status: string;
+  releaseNotes?: string | null;
+}) => {
+  if (!isValidDownloadUrl(value.downloadUrl)) {
+    notifyWarning('下载地址必须是 http/https 地址，或 /edge-updates/ 下的真实发布路径。');
+    return null;
+  }
+
+  const sha256 = value.sha256.trim();
+  if (!realSha256Pattern.test(sha256) || placeholderSha256Pattern.test(sha256)) {
+    notifyWarning('SHA256 必须是 64 位十六进制真实 hash，不能使用全 0 占位值。');
+    return null;
+  }
+
+  const packageSize = Number(value.packageSize);
+  if (!Number.isInteger(packageSize) || packageSize <= 0) {
+    notifyWarning('包大小必须填写真实正整数，不能为 0。');
+    return null;
+  }
+
+  if (value.status === 'Published' && !value.releaseNotes?.trim()) {
+    notifyWarning('发布状态为 Published 时必须填写更新内容。');
+    return null;
+  }
+
+  return packageSize;
+};
+
+const isValidDownloadUrl = (value: string) => {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('/edge-updates/')) return true;
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
   }
 };
 

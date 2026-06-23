@@ -15,7 +15,6 @@
             :options="processOptions"
             placeholder="请选择工序"
             clearable
-            filterable
             size="small"
             style="width: 280px;"
           />
@@ -94,7 +93,6 @@
                 :options="deviceOptions"
                 placeholder="请选择设备"
                 clearable
-                filterable
                 size="small"
                 style="width: 220px;"
               />
@@ -119,7 +117,6 @@
                 :options="deviceOptions"
                 placeholder="请选择设备"
                 clearable
-                filterable
                 size="small"
                 style="width: 220px;"
               />
@@ -154,7 +151,6 @@
                 :options="deviceOptions"
                 placeholder="请选择设备"
                 clearable
-                filterable
                 size="small"
                 style="width: 220px;"
               />
@@ -338,6 +334,17 @@ const metaData = ref<PagedMetaData>({
   currentPage: 1,
   totalPages: 1,
 });
+const emptyMetaData = (): PagedMetaData => ({
+  totalCount: 0,
+  pageSize: PAGE_SIZE,
+  currentPage: 1,
+  totalPages: 1,
+});
+const resetResults = () => {
+  currentPage.value = 1;
+  records.value = [];
+  metaData.value = emptyMetaData();
+};
 
 const allProcesses = ref<ProcessSelectDto[]>([]);
 const allDevices = ref<DeviceSelectDto[]>([]);
@@ -394,7 +401,7 @@ const activeQueryModes = computed(() => {
 
 watch(currentSchema, (schema) => {
   if (!schema) {
-    records.value = [];
+    resetResults();
     searched.value = false;
     filters.deviceId = null;
     return;
@@ -406,17 +413,15 @@ watch(currentSchema, (schema) => {
 });
 
 watch(currentProcessId, () => {
-  currentPage.value = 1;
+  resetResults();
   searched.value = false;
-  records.value = [];
   filters.deviceId = null;
 });
 
 const switchMode = (mode: PassStationQueryMode) => {
   currentMode.value = mode;
-  currentPage.value = 1;
+  resetResults();
   searched.value = false;
-  records.value = [];
   if (mode === 'time-process' || mode === 'device-time') {
     filters.startTime = defaultStartTime();
     filters.endTime = defaultEndTime();
@@ -514,6 +519,8 @@ const fetchData = async () => {
     records.value = response.items;
   } catch {
     records.value = [];
+    metaData.value = emptyMetaData();
+    currentPage.value = 1;
   } finally {
     loading.value = false;
   }

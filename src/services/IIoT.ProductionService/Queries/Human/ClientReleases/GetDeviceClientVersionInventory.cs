@@ -4,6 +4,7 @@ using IIoT.Core.Production.Specifications.ClientReleases;
 using IIoT.Core.Production.Specifications.Devices;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
@@ -11,7 +12,7 @@ using IIoT.SharedKernel.Result;
 
 namespace IIoT.ProductionService.Queries.ClientReleases;
 
-[AuthorizeRequirement("Device.Read")]
+[AuthorizeRequirement(ClientReleasePermissions.Read)]
 public sealed record GetDeviceClientVersionInventoryQuery(
     string? Channel = null,
     string? TargetRuntime = null,

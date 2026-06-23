@@ -6,6 +6,7 @@
 
 - 当前目标是 single-machine production starter。
 - 生产版本统一使用 `release_tag = sha-*`，`latest` 不能作为生产应用版本。
+- 多 agent 并行部署只按 [上传部署总览](../../docs/上传部署总览.md) 的“多 agent 并行部署”执行；Cloud agent 只负责 Cloud 镜像、Cloud deploy 和 Cloud 验证。
 - 日常部署禁止手动触发 `cloud-image` 的 `workflow_dispatch`。手动触发会绕过路径过滤并构建全部应用镜像，只允许在明确要求全量重建或生产应急恢复时使用。
 - 日常部署必须通过 push/merge 到 `main` 自动触发 `cloud-image`。该 workflow 在内网 self-hosted runner `iiot-linux-prod` 上按变更路径构建并推送受影响的应用镜像到 Harbor；共享代码或构建配置变更才会按规则构建全部应用镜像。
 - `cloud-deploy` 在同一内网 runner 上同步 `deploy/` 模板、写入生产 `.env`，再执行 `deploy/scripts/deploy-release.sh`；传入 `services` 时只拉取并重启指定服务。未传 `services` 等同全量发布，只允许首部署、明确全量发布或应急恢复使用。

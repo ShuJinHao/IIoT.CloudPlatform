@@ -1,10 +1,13 @@
 using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.EntityFrameworkCore;
 using IIoT.EntityFrameworkCore.Identity;
+using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Identity;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using System;
+using System.Security.Claims;
 using System.Threading.Tasks;
 
 namespace IIoT.MigrationWorkApp.SeedData;
@@ -18,13 +21,10 @@ public static class SystemInitData
         IConfiguration configuration,
         CancellationToken cancellationToken = default)
     {
-        // 1. 确保超级管理员角色存在
-        var adminRoleName = IIoT.Services.Contracts.Authorization.SystemRoles.Admin;
-        if (!await roleManager.RoleExistsAsync(adminRoleName))
-        {
-            await roleManager.CreateAsync(new IdentityRole<Guid>(adminRoleName));
-            Console.WriteLine($"✅ 角色 [{adminRoleName}] 创建成功！");
-        }
+        // 1. 确保超级管理员和岗位角色模板存在
+        var adminRoleName = SystemRoles.Admin;
+        await EnsureRoleAsync(roleManager, adminRoleName);
+        await EnsureRolePermissionTemplatesAsync(roleManager);
 
         // 2. 已存在管理员账号时直接跳过，不再要求提供种子凭据
         var existingAdmins = await userManager.GetUsersInRoleAsync(adminRoleName);
@@ -57,6 +57,69 @@ public static class SystemInitData
             seedAdmin,
             resetPassword: false,
             cancellationToken);
+    }
+
+    private static async Task EnsureRolePermissionTemplatesAsync(
+        RoleManager<IdentityRole<Guid>> roleManager)
+    {
+        foreach (var (roleName, permissions) in SystemRolePermissionTemplates.Templates)
+        {
+            var role = await EnsureRoleAsync(roleManager, roleName);
+            var claims = await roleManager.GetClaimsAsync(role);
+            var existingPermissions = claims
+                .Where(claim => claim.Type == IIoTClaimTypes.Permission)
+                .Select(claim => claim.Value)
+                .ToHashSet(StringComparer.Ordinal);
+
+            foreach (var permission in permissions)
+            {
+                if (existingPermissions.Contains(permission))
+                {
+                    continue;
+                }
+
+                var addResult = await roleManager.AddClaimAsync(
+                    role,
+                    new Claim(IIoTClaimTypes.Permission, permission));
+                if (!addResult.Succeeded)
+                {
+                    Console.WriteLine($"❌ 角色 [{roleName}] 权限 [{permission}] 播种失败！");
+                    foreach (var error in addResult.Errors)
+                    {
+                        Console.WriteLine($"   - [{error.Code}]: {error.Description}");
+                    }
+
+                    throw new Exception($"角色 [{roleName}] 权限播种失败。");
+                }
+            }
+        }
+    }
+
+    private static async Task<IdentityRole<Guid>> EnsureRoleAsync(
+        RoleManager<IdentityRole<Guid>> roleManager,
+        string roleName)
+    {
+        var role = await roleManager.FindByNameAsync(roleName);
+        if (role is not null)
+        {
+            return role;
+        }
+
+        role = new IdentityRole<Guid>(roleName);
+        var createResult = await roleManager.CreateAsync(role);
+        if (!createResult.Succeeded)
+        {
+            Console.WriteLine($"❌ 角色 [{roleName}] 创建失败！");
+            foreach (var error in createResult.Errors)
+            {
+                Console.WriteLine($"   - [{error.Code}]: {error.Description}");
+            }
+
+            throw new Exception($"角色 [{roleName}] 创建失败。");
+        }
+
+        Console.WriteLine($"✅ 角色 [{roleName}] 创建成功！");
+        return role;
     }
 
     private static async Task EnsureSeedAdminAccountAsync(

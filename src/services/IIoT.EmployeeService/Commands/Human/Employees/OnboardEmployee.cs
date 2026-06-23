@@ -2,6 +2,8 @@ using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.Identity.Aggregates.IdentityAccounts;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -21,19 +23,27 @@ public class OnboardEmployeeHandler(
     IIdentityAccountStore identityAccountStore,
     IIdentityPasswordService identityPasswordService,
     IRepository<Employee> employeeRepository,
-    IUnitOfWork unitOfWork)
+    IUnitOfWork unitOfWork,
+    ICurrentUser currentUser,
+    IPermissionProvider permissionProvider)
     : ICommandHandler<OnboardEmployeeCommand, Result<Guid>>
 {
     public async Task<Result<Guid>> Handle(
         OnboardEmployeeCommand request,
         CancellationToken cancellationToken)
     {
-        if (!string.IsNullOrWhiteSpace(request.RoleName)
-            && request.RoleName.Equals(
-                IIoT.Services.Contracts.Authorization.SystemRoles.Admin,
-                StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(request.RoleName))
         {
-            return Result.Failure("管理员角色禁止通过该接口创建");
+            var rolePermissionResult = await EnsureCanUpdateAccessAsync(cancellationToken);
+            if (!rolePermissionResult.IsSuccess)
+            {
+                return Result.Failure(rolePermissionResult.Errors?.ToArray() ?? ["角色设置需要 Employee.UpdateAccess 权限"]);
+            }
+
+            if (request.RoleName.Equals(SystemRoles.Admin, StringComparison.OrdinalIgnoreCase))
+            {
+                return Result.Failure("管理员角色禁止通过该接口创建");
+            }
         }
 
         var existingAccount = await identityAccountStore.GetByEmployeeNoAsync(request.EmployeeNo, cancellationToken);
@@ -94,5 +104,23 @@ public class OnboardEmployeeHandler(
             await unitOfWork.RollbackAsync(cancellationToken);
             throw;
         }
+    }
+
+    private async Task<Result> EnsureCanUpdateAccessAsync(CancellationToken cancellationToken)
+    {
+        if (string.Equals(currentUser.Role, SystemRoles.Admin, StringComparison.Ordinal))
+        {
+            return Result.Success();
+        }
+
+        if (!Guid.TryParse(currentUser.Id, out var userId))
+        {
+            return Result.Failure("拒绝访问：用户凭证格式异常");
+        }
+
+        var permissions = await permissionProvider.GetPermissionsAsync(userId, cancellationToken);
+        return permissions.Contains("Employee.UpdateAccess")
+            ? Result.Success()
+            : Result.Failure("角色设置需要 Employee.UpdateAccess 权限");
     }
 }

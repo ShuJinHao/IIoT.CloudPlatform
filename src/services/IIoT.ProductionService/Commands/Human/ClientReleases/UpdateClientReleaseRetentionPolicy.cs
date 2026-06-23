@@ -2,6 +2,7 @@ using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Specifications.ClientReleases;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
@@ -9,8 +10,7 @@ using IIoT.SharedKernel.Result;
 
 namespace IIoT.ProductionService.Commands.ClientReleases;
 
-[AuthorizeRequirement("Device.Update")]
-[AdminOnly]
+[AuthorizeRequirement(ClientReleasePermissions.Manage)]
 public sealed record UpdateClientReleaseRetentionPolicyCommand(int MaxVersionsPerComponent)
     : IHumanCommand<Result<ClientReleaseRetentionPolicyDto>>;
 
