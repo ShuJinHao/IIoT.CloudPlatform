@@ -43,15 +43,22 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
-    public void PublishEdgeReleaseBundleCommand_ShouldRequirePublishPermissionAndAdminOnly()
+    public void PublishEdgeReleaseBundleCommand_ShouldRequirePublishPermissionWithoutAdminOnly()
     {
         var permission = typeof(PublishEdgeReleaseBundleCommand)
             .GetCustomAttributes(typeof(AuthorizeRequirementAttribute), inherit: false)
             .Cast<AuthorizeRequirementAttribute>()
             .Single();
+        var pluginPackagePermission = typeof(PublishEdgePluginPackageCommand)
+            .GetCustomAttributes(typeof(AuthorizeRequirementAttribute), inherit: false)
+            .Cast<AuthorizeRequirementAttribute>()
+            .Single();
 
         Assert.Equal(ClientReleasePermissions.Publish, permission.Permission);
-        Assert.NotEmpty(typeof(PublishEdgeReleaseBundleCommand)
+        Assert.Equal(ClientReleasePermissions.Publish, pluginPackagePermission.Permission);
+        Assert.Empty(typeof(PublishEdgeReleaseBundleCommand)
+            .GetCustomAttributes(typeof(AdminOnlyAttribute), inherit: false));
+        Assert.Empty(typeof(PublishEdgePluginPackageCommand)
             .GetCustomAttributes(typeof(AdminOnlyAttribute), inherit: false));
     }
 

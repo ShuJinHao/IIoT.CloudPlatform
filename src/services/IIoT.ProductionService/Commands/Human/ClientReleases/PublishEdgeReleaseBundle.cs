@@ -20,7 +20,6 @@ using Microsoft.Extensions.Options;
 namespace IIoT.ProductionService.Commands.ClientReleases;
 
 [AuthorizeRequirement(ClientReleasePermissions.Publish)]
-[AdminOnly]
 public sealed record PublishEdgeReleaseBundleCommand(
     Stream BundleStream,
     long? ContentLength,

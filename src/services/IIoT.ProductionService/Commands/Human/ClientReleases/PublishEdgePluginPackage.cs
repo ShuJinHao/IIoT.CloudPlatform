@@ -19,7 +19,6 @@ using Microsoft.Extensions.Options;
 namespace IIoT.ProductionService.Commands.ClientReleases;
 
 [AuthorizeRequirement(ClientReleasePermissions.Publish)]
-[AdminOnly]
 public sealed record PublishEdgePluginPackageCommand(
     Stream PackageStream,
     long? ContentLength,

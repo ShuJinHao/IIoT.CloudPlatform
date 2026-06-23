@@ -106,7 +106,7 @@ pwsh <IIoT.EdgeClient>\scripts\LocalPublishAndDeploy.ps1 `
   -Channel stable `
   -Transport http `
   -CloudApiBaseUrl http://10.98.90.154:81/api/v1 `
-  -CloudToken $env:IIOT_CLOUD_TOKEN `
+  -CloudToken $env:IIOT_CLOUD_RELEASE_TOKEN `
   -ReleaseNotesPath <本次更新说明.md> `
   -UploadRateLimitMbps 100
 ```
@@ -224,7 +224,7 @@ pwsh <IIoT.EdgeClient>\scripts\InvokeEdgeInstallerWindowsAcceptance.ps1 `
 ```powershell
 pwsh .\deploy\scripts\InvokeEdgeInstallerPackageDownload.ps1 `
   -CloudApiBaseUrl http://10.98.90.154:81/api/v1 `
-  -CloudToken <admin-token> `
+  -CloudToken <publish-or-admin-token> `
   -DeviceId <测试设备 id> `
   -ModuleId Homogenization `
   -Channel stable `
