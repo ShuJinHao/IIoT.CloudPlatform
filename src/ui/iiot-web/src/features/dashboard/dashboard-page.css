@@ -1,0 +1,42 @@
+.dashboard-bars {
+  display: grid;
+  grid-template-columns: repeat(10, minmax(24px, 1fr));
+  align-items: end;
+  height: 270px;
+  padding: 18px 4px 0;
+  gap: 11px;
+  background:
+    linear-gradient(to bottom, rgba(17, 24, 39, 0.07) 1px, transparent 1px) 0 20% / 100% 25% repeat-y;
+}
+
+.dashboard-bars__group {
+  display: grid;
+  align-items: end;
+  min-width: 0;
+  height: 100%;
+  grid-template-rows: minmax(0, 1fr) 24px;
+  gap: 9px;
+}
+
+.dashboard-bars__bar {
+  display: block;
+  min-height: 32px;
+  border-radius: 999px 999px 8px 8px;
+}
+
+.dashboard-bars__group small {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: var(--fw-bold);
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 820px) {
+  .dashboard-bars {
+    grid-template-columns: repeat(7, minmax(24px, 1fr));
+    height: 220px;
+  }
+}
