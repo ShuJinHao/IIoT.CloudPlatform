@@ -43,12 +43,14 @@ defineOptions({ inheritAttrs: false });
 const props = withDefaults(defineProps<{
   value?: string | number | null;
   type?: string;
+  size?: 'default' | 'small';
   placeholder?: string;
   disabled?: boolean;
   clearable?: boolean;
   class?: string;
 }>(), {
   type: 'text',
+  size: 'default',
 });
 
 const emit = defineEmits<{
@@ -84,7 +86,7 @@ const baseClasses = computed(() => cn(
 const wrapperClasses = computed(() => cn('relative w-full', props.class));
 const inputClasses = computed(() => cn(
   baseClasses.value,
-  'h-11',
+  props.size === 'small' ? 'h-10' : 'h-11',
   hasPrefix.value ? 'pl-10' : '',
   props.clearable ? 'pr-10' : '',
 ));

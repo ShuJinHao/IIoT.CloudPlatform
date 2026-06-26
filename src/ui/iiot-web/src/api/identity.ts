@@ -1,4 +1,4 @@
-import http from '../utils/http';
+import http from '../core/http/httpClient';
 
 export interface RolePermissionsDto {
   roleName: string;

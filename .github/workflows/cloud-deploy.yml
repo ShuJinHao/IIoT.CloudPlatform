@@ -146,6 +146,10 @@ jobs:
           DEPLOY_GIT_SHA: ${{ github.sha }}
           DEPLOY_TRIGGERED_BY: ${{ github.actor }}
           DEPLOY_TARGET_DIR: ${{ secrets.DEPLOY_TARGET_DIR }}
+          OCI_REGISTRY: ${{ secrets.OCI_REGISTRY }}
+          OCI_NAMESPACE: ${{ secrets.OCI_NAMESPACE }}
+          OCI_REGISTRY_USERNAME: ${{ secrets.OCI_REGISTRY_USERNAME }}
+          OCI_REGISTRY_PASSWORD: ${{ secrets.OCI_REGISTRY_PASSWORD }}
         run: |
           set -euo pipefail
           release_git_sha="${RELEASE_TAG#sha-}"

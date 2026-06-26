@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE' >&2
-Usage: harbor-retention.sh [--dry-run] [--keep N] [--project PROJECT] REPOSITORY...
+Usage: harbor-retention.sh [--dry-run] [--keep N] [--keep-tag sha-HEX] [--project PROJECT] REPOSITORY...
 
 Deletes old Harbor sha-* tags for application image repositories.
 Required env:
@@ -15,6 +15,7 @@ USAGE
 }
 
 KEEP="${HARBOR_KEEP_SHA_TAGS:-3}"
+KEEP_TAG="${HARBOR_KEEP_SHA_TAG:-}"
 PROJECT="${HARBOR_PROJECT:-${OCI_NAMESPACE:-}}"
 DRY_RUN=false
 REPOSITORIES=()
@@ -30,6 +31,13 @@ while [ "$#" -gt 0 ]; do
       ;;
     --keep=*)
       KEEP="${1#--keep=}"
+      ;;
+    --keep-tag)
+      shift
+      KEEP_TAG="${1:-}"
+      ;;
+    --keep-tag=*)
+      KEEP_TAG="${1#--keep-tag=}"
       ;;
     --project)
       shift
@@ -70,6 +78,11 @@ fi
 
 if ! [[ "$KEEP" =~ ^[0-9]+$ ]] || [ "$KEEP" -lt 1 ]; then
   printf 'HARBOR_KEEP_SHA_TAGS must be a positive integer: %s\n' "$KEEP" >&2
+  exit 64
+fi
+
+if [ -n "$KEEP_TAG" ] && ! [[ "$KEEP_TAG" =~ ^sha-[0-9a-f]+$ ]]; then
+  printf 'HARBOR_KEEP_SHA_TAG must match sha-<hex>: %s\n' "$KEEP_TAG" >&2
   exit 64
 fi
 
@@ -115,14 +128,15 @@ PAGE_SIZE=100
 
 collect_delete_candidates() {
   local page_dir="$1"
-  python3 - "$KEEP" "$page_dir" <<'PY'
+  python3 - "$KEEP" "$KEEP_TAG" "$page_dir" <<'PY'
 import json
 import os
 import re
 import sys
 
 keep = int(sys.argv[1])
-page_dir = sys.argv[2]
+keep_tag = sys.argv[2]
+page_dir = sys.argv[3]
 pattern = re.compile(r"^sha-[0-9a-f]+$")
 seen = {}
 
@@ -145,7 +159,12 @@ for name in sorted(os.listdir(page_dir)):
                 seen[tag_name] = candidate
 
 ordered = sorted(seen.values(), key=lambda item: (item[0], item[2]), reverse=True)
-for pushed, digest, tag_name in ordered[keep:]:
+if keep_tag:
+    candidates = [item for item in ordered if item[2] != keep_tag]
+else:
+    candidates = ordered[keep:]
+
+for pushed, digest, tag_name in candidates:
     print(f"{tag_name}\t{digest}\t{pushed}")
 PY
 }
@@ -177,7 +196,11 @@ PY
 
   mapfile -t candidates < <(collect_delete_candidates "$tmp_dir")
   if [ "${#candidates[@]}" -eq 0 ]; then
-    printf 'Harbor retention: %s/%s has no old sha-* tags beyond keep=%s.\n' "$PROJECT" "$repository" "$KEEP"
+    if [ -n "$KEEP_TAG" ]; then
+      printf 'Harbor retention: %s/%s has no sha-* tags outside keep-tag=%s.\n' "$PROJECT" "$repository" "$KEEP_TAG"
+    else
+      printf 'Harbor retention: %s/%s has no old sha-* tags beyond keep=%s.\n' "$PROJECT" "$repository" "$KEEP"
+    fi
     rm -rf "$tmp_dir"
     trap - EXIT
     continue

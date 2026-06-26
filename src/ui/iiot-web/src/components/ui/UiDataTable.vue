@@ -32,7 +32,17 @@
               :style="columnStyle(column)"
               :class="alignClass(column)"
             >
-              <component :is="cellRenderer(column, row, rowIndex)" />
+              <slot
+                v-if="column.slot && $slots[column.slot]"
+                :name="column.slot"
+                v-bind="cellContext(column, row, rowIndex)"
+              />
+              <component
+                v-else-if="column.component"
+                :is="column.component"
+                v-bind="cellComponentProps(column, row, rowIndex)"
+              />
+              <component v-else :is="cellRenderer(column, row, rowIndex)" />
             </td>
           </tr>
         </tbody>
@@ -41,43 +51,84 @@
   </div>
 </template>
 
-<script setup lang="ts">
+<script setup lang="ts" generic="T extends object">
 import { computed, h } from 'vue';
-import type { UiDataTableColumn } from './types';
+import type { UiDataTableCellContext, UiDataTableColumn } from './types';
 
 const props = withDefaults(defineProps<{
-  columns: UiDataTableColumn<any>[];
-  data: unknown[];
+  columns: UiDataTableColumn<T>[];
+  data: T[];
   loading?: boolean;
-  rowKey?: string | ((row: any) => string | number);
+  rowKey?: string | ((row: T) => string | number);
 }>(), {
   data: () => [],
 });
 
 const data = computed(() => props.data ?? []);
 
-function columnStyle(column: UiDataTableColumn) {
+function columnStyle(column: UiDataTableColumn<T>) {
   const style: Record<string, string> = {};
   if (column.width) style.width = typeof column.width === 'number' ? `${column.width}px` : column.width;
   if (column.minWidth) style.minWidth = typeof column.minWidth === 'number' ? `${column.minWidth}px` : column.minWidth;
   return style;
 }
 
-function alignClass(column: UiDataTableColumn) {
+function alignClass(column: UiDataTableColumn<T>) {
   return column.align ? `is-${column.align}` : '';
 }
 
-function rowIdentity(row: any, rowIndex: number) {
+function rowIdentity(row: T, rowIndex: number) {
   if (typeof props.rowKey === 'function') return props.rowKey(row);
-  if (typeof props.rowKey === 'string') return String(row[props.rowKey] ?? rowIndex);
-  return String(row.id ?? rowIndex);
+  if (typeof props.rowKey === 'string') return String(readRowValue(row, props.rowKey) ?? rowIndex);
+  return String(readRowValue(row, 'id') ?? rowIndex);
 }
 
-function cellRenderer(column: UiDataTableColumn, row: any, rowIndex: number) {
+function readRowValue(row: T, key: string) {
+  return (row as Record<string, unknown>)[key];
+}
+
+function cellValue(column: UiDataTableColumn<T>, row: T) {
+  return readRowValue(row, column.key);
+}
+
+function cellContext(
+  column: UiDataTableColumn<T>,
+  row: T,
+  rowIndex: number,
+): UiDataTableCellContext<T> {
+  return {
+    row,
+    rowIndex,
+    value: cellValue(column, row),
+    column,
+  };
+}
+
+function cellComponentProps(
+  column: UiDataTableColumn<T>,
+  row: T,
+  rowIndex: number,
+) {
+  const context = cellContext(column, row, rowIndex);
+  return {
+    ...context,
+    ...(column.componentProps?.(context) ?? {}),
+  };
+}
+
+function cellRenderer(
+  column: UiDataTableColumn<T>,
+  row: T,
+  rowIndex: number,
+) {
   return {
     render() {
       if (column.render) return column.render(row, rowIndex);
-      const value = row[column.key];
+      const value = cellValue(column, row);
+      if (column.formatter) {
+        const formatted = column.formatter(value, row, rowIndex);
+        return h('span', formatted == null ? '-' : String(formatted));
+      }
       return h('span', value == null ? '-' : String(value));
     },
   };

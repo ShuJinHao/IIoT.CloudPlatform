@@ -5,6 +5,7 @@
 - 工作区总规则：`../docs/总规则.md`
 - 云端详细规则：`docs/云端规则.md`
 - 过站扩展规则：`docs/过站工序扩展规则.md`
+- 修改 Cloud 前端前必须先读 `src/ui/iiot-web/AGENTS.md`，遵守 Cloud 前端架构规则。
 
 ## Red Lines
 

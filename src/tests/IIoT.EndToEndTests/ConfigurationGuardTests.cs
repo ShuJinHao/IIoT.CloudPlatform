@@ -576,7 +576,7 @@ public sealed class ConfigurationGuardTests
         readmeSource.Should().Contain("runner 必须使用专用非 root 用户运行");
         readmeSource.Should().Contain("Docker Hub 不作为生产依赖源");
         readmeSource.Should().Contain("Edge 客户端安装素材不进 Harbor");
-        readmeSource.Should().Contain("应用镜像仓库只保留最近 3 个 `sha-*` tag");
+        readmeSource.Should().Contain("应用镜像仓库只保留当前生产 `sha-*` tag");
         readmeSource.Should().Contain("EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers");
         readmeSource.Should().Contain("EdgeInstallerArtifacts__VelopackReleasesBaseUrl=${PUBLIC_BASE_URL}/edge-updates/velopack");
         readmeSource.Should().Contain("[RUNNER.md](./RUNNER.md)");
@@ -587,6 +587,7 @@ public sealed class ConfigurationGuardTests
         readmeSource.Should().Contain("deploy/releases/current-release.env");
         readmeSource.Should().Contain("deploy/cron/iiot-backup.cron.example");
         readmeSource.Should().Contain("deploy/cron/iiot-backup-verify.cron.example");
+        readmeSource.Should().Contain("deploy/cron/iiot-post-release-cleanup.cron.example");
         readmeSource.Should().Contain("daily backup at `02:30`");
         readmeSource.Should().Contain("weekly restore verification at `03:30` every Sunday");
         readmeSource.Should().Contain("`latest` 不能作为生产应用版本");
@@ -1050,6 +1051,7 @@ public sealed class ConfigurationGuardTests
         workflowSource.Should().NotContain("docker/setup-buildx-action");
 
         harborRetentionScript.Should().Contain("HARBOR_KEEP_SHA_TAGS");
+        harborRetentionScript.Should().Contain("HARBOR_KEEP_SHA_TAG");
         harborRetentionScript.Should().Contain("sha-[0-9a-f]");
         harborRetentionScript.Should().Contain("Harbor GC must run");
 
@@ -1263,6 +1265,7 @@ public sealed class ConfigurationGuardTests
     {
         var backupCronSource = File.ReadAllText(FindRepoFile("deploy", "cron", "iiot-backup.cron.example"));
         var verifyCronSource = File.ReadAllText(FindRepoFile("deploy", "cron", "iiot-backup-verify.cron.example"));
+        var cleanupCronSource = File.ReadAllText(FindRepoFile("deploy", "cron", "iiot-post-release-cleanup.cron.example"));
 
         backupCronSource.Should().Contain("30 2 * * *");
         backupCronSource.Should().Contain("./scripts/postgres-backup.sh");
@@ -1271,6 +1274,10 @@ public sealed class ConfigurationGuardTests
         verifyCronSource.Should().Contain("30 3 * * 0");
         verifyCronSource.Should().Contain("./scripts/postgres-verify-backup.sh");
         verifyCronSource.Should().Contain("/srv/iiot-cloud/deploy");
+
+        cleanupCronSource.Should().Contain("30 4 * * 0");
+        cleanupCronSource.Should().Contain("./scripts/post-release-cleanup.sh");
+        cleanupCronSource.Should().Contain("/data/iiot-platform/cloud/deploy");
     }
 
     [Fact]

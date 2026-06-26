@@ -1,6 +1,6 @@
 <template>
   <select
-    v-bind="$attrs"
+    v-bind="selectAttrs"
     :value="value ?? ''"
     :disabled="disabled || loading"
     :class="classes"
@@ -19,13 +19,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, useAttrs } from 'vue';
 import { cn } from '../../lib/utils';
 import type { UiSelectOption } from './types';
+
+defineOptions({ inheritAttrs: false });
 
 const props = withDefaults(defineProps<{
   value?: string | number | boolean | null;
   options?: UiSelectOption[];
+  size?: 'default' | 'small';
   placeholder?: string;
   clearable?: boolean;
   loading?: boolean;
@@ -33,14 +36,22 @@ const props = withDefaults(defineProps<{
   class?: string;
 }>(), {
   options: () => [],
+  size: 'default',
 });
 
 const emit = defineEmits<{
   'update:value': [value: string | number | boolean | null];
 }>();
 
+const attrs = useAttrs();
+const selectAttrs = computed(() => {
+  const { class: _class, ...rest } = attrs;
+  return rest;
+});
+
 const classes = computed(() => cn(
-  'h-11 w-full rounded-[14px] border border-[var(--input)] bg-[#f7fafb] px-4 text-[14px] font-bold text-[#111827]',
+  props.size === 'small' ? 'h-10' : 'h-11',
+  'w-full rounded-[14px] border border-[var(--input)] bg-[#f7fafb] px-4 text-[14px] font-bold text-[#111827]',
   'disabled:cursor-not-allowed disabled:bg-[#eef2f4] disabled:text-[#9aa3af]',
   'focus:border-[#111827] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[rgba(17,24,39,0.08)]',
   'dark:bg-[#202024] dark:text-[#f5f5f4] dark:focus:border-[#f5f5f4]',

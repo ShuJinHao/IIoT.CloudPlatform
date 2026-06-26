@@ -1,4 +1,4 @@
-import http from '../utils/http';
+import http from '../core/http/httpClient';
 
 const basePath = '/public/client-downloads';
 

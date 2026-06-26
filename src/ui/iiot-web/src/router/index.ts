@@ -1,5 +1,15 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import type { RouteRecordRaw } from 'vue-router';
+import { capacityRoutes } from '../features/capacity/routes';
+import { clientReleaseRoutes } from '../features/client-releases/routes';
+import { dashboardRoutes } from '../features/dashboard/routes';
+import { deviceLogRoutes } from '../features/device-logs/routes';
+import { deviceRoutes } from '../features/devices/routes';
+import { employeeRoutes } from '../features/employees/routes';
+import { passStationRoutes } from '../features/pass-station/routes';
+import { processRoutes } from '../features/processes/routes';
+import { recipeRoutes } from '../features/recipes/routes';
+import { roleRoutes } from '../features/roles/routes';
 import { useAuthStore } from '../stores/auth';
 import { Permissions } from '../types/permissions';
 
@@ -21,82 +31,20 @@ const routes: Array<RouteRecordRaw> = [
     component: () => import('../layout/MainLayout.vue'),
     meta: { requiresAuth: true },
     children: [
-      {
-        path: '',
-        name: 'Dashboard',
-        component: () => import('../views/Dashboard.vue'),
-        meta: { requiresAuth: true, title: '系统概览' }
-      },
-      {
-        path: 'employees',
-        name: 'Employees',
-        component: () => import('../views/employees/EmployeeList.vue'),
-        meta: { requiresAuth: true, requiredPermission: Permissions.Employee.Read, title: '员工花名册' }
-      },
-      {
-        path: 'master-data/processes',
-        name: 'MasterDataProcesses',
-        component: () => import('../views/masterData/ProcessList.vue'),
-        meta: { requiresAuth: true, requiredPermission: Permissions.Process.Read, title: '工序管理' }
-      },
+      ...dashboardRoutes,
+      ...employeeRoutes,
+      ...processRoutes,
       {
         path: 'processes',
         redirect: { name: 'MasterDataProcesses' }
       },
-      {
-        path: 'devices',
-        name: 'Devices',
-        component: () => import('../views/devices/DeviceList.vue'),
-        meta: { requiresAuth: true, requiredPermission: Permissions.Device.Read, title: '设备台账' }
-      },
-      {
-        path: 'recipes',
-        name: 'Recipes',
-        component: () => import('../views/recipes/RecipeList.vue'),
-        meta: { requiresAuth: true, requiredPermission: Permissions.Recipe.Read, title: '配方管理' }
-      },
-      {
-        path: 'pass-station',
-        name: 'PassStation',
-        component: () => import('../views/passstation/PassStationList.vue'),
-        meta: { requiresAuth: true, requiredPermission: Permissions.Device.Read, title: '过站追溯' }
-      },
-      {
-        path: 'capacity',
-        name: 'Capacity',
-        component: () => import('../views/capacity/CapacityDashboard.vue'),
-        meta: { requiresAuth: true, requiredPermission: Permissions.Device.Read, title: '产能看板' }
-      },
-      {
-        path: 'capacity/detail',
-        name: 'CapacityDetail',
-        component: () => import('../views/capacity/CapacityDetail.vue'),
-        meta: { requiresAuth: true, requiredPermission: Permissions.Device.Read, title: '产能详情' }
-      },
-      {
-        path: 'device-logs',
-        name: 'DeviceLogs',
-        component: () => import('../views/devicelogs/DeviceLogList.vue'),
-        meta: { requiresAuth: true, requiredPermission: Permissions.Device.Read, title: '设备日志' }
-      },
-      {
-        path: 'client-releases',
-        name: 'ClientReleases',
-        component: () => import('../views/clientReleases/ClientReleaseCenter.vue'),
-        meta: { requiresAuth: true, requiredPermission: Permissions.ClientRelease.Read, title: '客户端首装生成' }
-      },
-      {
-        path: 'client-releases/publish',
-        name: 'ClientReleasePublish',
-        component: () => import('../views/clientReleases/ClientReleaseCenter.vue'),
-        meta: { requiresAuth: true, requiredPermission: Permissions.ClientRelease.Manage, title: '客户端发布管理' }
-      },
-      {
-        path: 'roles',
-        name: 'Roles',
-        component: () => import('../views/roles/RoleList.vue'),
-        meta: { requiresAuth: true, requiredPermission: Permissions.Role.Define, title: '角色与权限' }
-      },
+      ...deviceRoutes,
+      ...recipeRoutes,
+      ...passStationRoutes,
+      ...capacityRoutes,
+      ...deviceLogRoutes,
+      ...clientReleaseRoutes,
+      ...roleRoutes,
       {
         path: 'forbidden',
         name: 'Forbidden',
