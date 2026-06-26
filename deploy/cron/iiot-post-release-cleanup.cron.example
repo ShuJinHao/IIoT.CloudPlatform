@@ -1,0 +1,4 @@
+# Replace /data/iiot-platform/cloud/deploy with the real Cloud deploy directory before installing.
+# Runs a weekly post-release cleanup at 04:30 every Sunday in the server's local time zone.
+# Requires Harbor credentials in the cron environment or in a sourced operator wrapper.
+30 4 * * 0 cd /data/iiot-platform/cloud/deploy && release_tag=$(sed -n 's/^DEPLOY_RELEASE_ID=//p' releases/current-release.env | tail -n 1) && ./scripts/post-release-cleanup.sh --release-tag "$release_tag" >> ./releases/post-release-cleanup.cron.log 2>&1

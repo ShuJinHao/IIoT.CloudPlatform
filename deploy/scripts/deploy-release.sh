@@ -307,11 +307,32 @@ write_release_summary \
   "$DEPLOYED_AT_UTC_VALUE" \
   "$SELECTED_SERVICES" \
   "$DEPLOY_RELEASE_NOTES_VALUE"
+
+cleanup_log=$(mktemp "$DEPLOY_DIR/post-release-cleanup.XXXXXX")
+cleanup_status=0
+if COMPOSE_ENV_FILE="$DEPLOY_DIR/.env" "$SCRIPT_DIR/post-release-cleanup.sh" --release-tag "$DEPLOY_RELEASE_ID" > "$cleanup_log" 2>&1; then
+  cleanup_status=0
+else
+  cleanup_status=$?
+fi
+cat "$cleanup_log"
+{
+  printf '\n'
+  cat "$cleanup_log"
+} >> "$CURRENT_RELEASE_SUMMARY_FILE"
+rm -f "$cleanup_log"
+
 history_summary_file=${history_file%.env}.summary.md
 cp "$CURRENT_RELEASE_SUMMARY_FILE" "$history_summary_file"
 cleanup_temp_release_env
 unset COMPOSE_ENV_FILE
 trap - EXIT HUP INT TERM
+
+if [ "$cleanup_status" -ne 0 ]; then
+  printf 'Release deployed, but post-release cleanup failed: %s\n' "$DEPLOY_RELEASE_ID" >&2
+  printf 'Current release summary: %s\n' "$CURRENT_RELEASE_SUMMARY_FILE" >&2
+  exit "$cleanup_status"
+fi
 
 printf 'Release deployed successfully: %s\n' "$DEPLOY_RELEASE_ID"
 printf 'Current release manifest: %s\n' "$CURRENT_RELEASE_FILE"

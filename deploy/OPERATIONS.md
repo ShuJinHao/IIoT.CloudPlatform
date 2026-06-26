@@ -83,7 +83,7 @@ The standard sequence is:
 4. Trigger `cloud-deploy` manually with the matching `release_tag = sha-*` and copy the built-services value into `services` for an incremental release. Do not leave `services` empty unless this is a first deployment, an explicitly approved full release, or emergency recovery.
 5. `cloud-deploy` runs on the same non-root runner, syncs `deploy/`, writes `DEPLOY_ENV_FILE`, overwrites the server `.env` `SEED_ADMIN_PASSWORD` from the dedicated GitHub secret, logs in to Harbor, and calls `deploy-release.sh`.
 
-Harbor application repositories keep only the newest 3 `sha-*` tags. `cloud-image` calls `deploy/scripts/harbor-retention.sh` after a successful push; the Harbor robot must have tag delete permission. Tag deletion only removes references, so Harbor Garbage Collection must run on a schedule to reclaim disk.
+Harbor application repositories keep only the current production `sha-*` tag. `cloud-image` must delete old application `sha-*` tags after a successful push; the Harbor robot must have tag delete permission. Tag deletion only removes references, so Harbor Garbage Collection must run after tag deletion to reclaim disk.
 
 The runner must not run as root. See `RUNNER.md` for the required `github-runner` user, Docker group, labels, and server reachability checks.
 
@@ -126,7 +126,8 @@ Release flow is fixed:
 7. run `iiot-migration` only when migration is part of the selected service set
 8. start selected application containers
 9. `post-deploy-check.sh`
-10. rotate `current` / `previous`, write `current-release.summary.md`, and append `history`
+10. run post-release cleanup: remove Docker/BuildKit build cache, report and clean Docker-managed images separately from containerd-managed content, remove only local old application images that are not referenced by current containers, delete old Harbor application tags, and run or confirm Harbor GC
+11. rotate `current` / `previous`, write `current-release.summary.md`, and append `history`
 
 `pre-deploy-check.sh` runs the runtime parts of `ops-check.sh` with `REQUIRE_BACKUP=0` because the release sequence creates a fresh PostgreSQL backup in the next step before any container update. Normal operator runs of `./scripts/ops-check.sh` keep the default `REQUIRE_BACKUP=1` and still fail when the latest backup file, checksum, or freshness policy is not valid.
 
@@ -137,6 +138,18 @@ Release success order is fixed:
 3. `./scripts/ops-check.sh` returns `0`
 4. `deploy/releases/current-release.env` points at the new `DEPLOY_RELEASE_ID`
 5. `deploy/releases/current-release.summary.md` records deployed services and git changes
+6. the release summary records before/after disk usage and cleanup results
+
+Disk guardrails are fixed:
+
+- `/data` at 80% usage requires an operator warning and a disk usage summary.
+- `/data` at 85% usage requires cleanup before any routine release continues.
+- `/data` at 90% usage blocks non-emergency releases.
+- Do not run broad destructive cleanup such as `docker system prune -a --volumes`.
+
+Docker and containerd cleanup are separate. Docker prune commands do not cover all containerd snapshots/content; containerd cleanup must first confirm namespace, image ref, snapshot lease, and running container references. If the reference state is unclear, the release summary must report the usage and skip destructive containerd removal.
+
+Fast rollback no longer assumes old Cloud application images remain on the server or in Harbor. Rollback to an older git sha requires rebuilding or re-pulling that target sha and deploying it through the standard release entrypoint.
 
 ## Cloud 管理员登录排查
 
@@ -275,6 +288,7 @@ You can also target a specific history record:
 Rollback rules are fixed:
 
 - It only rolls back the 5 application images.
+- Target images must be available; otherwise rebuild or re-pull the target git sha first.
 - It does not run database downgrade logic.
 - It does not call the database restore flow automatically.
 - It still requires `post-deploy-check.sh` to return `0`.

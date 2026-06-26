@@ -111,7 +111,7 @@ pwsh <IIoT.EdgeClient>\scripts\LocalPublishAndDeploy.ps1 `
   -UploadRateLimitMbps 100
 ```
 
-快发脚本未传 `-Version` 时会通过 Cloud Human catalog 查询 stable 最新版本并自动递增 patch。上传完成后，Cloud 服务端先校验和落盘 bundle，再从 manifest 派生 DB release 行、写入审计、执行最多保留 3 次的策略，并返回本次部署总结。脚本必须打印 version、sourceCommit、releaseNotes、上传耗时、限速、清理结果和 HTTP 验证结果。
+快发脚本未传 `-Version` 时会通过 Cloud Human catalog 查询 stable 最新版本并自动递增 patch。上传完成后，Cloud 服务端先校验和落盘 bundle，再从 manifest 派生 DB release 行、写入审计，按 SemVer 执行最新 3 个 stable 版本保留策略，并返回本次部署总结。脚本必须打印 version、sourceCommit、releaseNotes、上传耗时、限速、清理结果和 HTTP 验证结果。
 
 发布后服务器必须有：
 
