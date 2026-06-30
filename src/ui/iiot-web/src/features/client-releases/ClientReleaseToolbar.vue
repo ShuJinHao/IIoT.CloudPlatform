@@ -12,7 +12,7 @@
         </button>
         <button class="release-tab" :class="{ 'is-active': activeView === 'inventory' }" type="button" @click="$emit('update:activeView', 'inventory')">
           <MonitorCheck :size="16" />
-          设备安装状态
+          设备客户端状态
         </button>
       </div>
       <div v-else class="release-mode-label">

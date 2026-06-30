@@ -106,6 +106,7 @@ export function useDevices() {
       { label: '过站数据', value: impact.passStations },
       { label: '客户端版本快照', value: impact.clientVersionSnapshots },
       { label: '插件版本快照', value: impact.clientPluginVersions },
+      { label: '运行心跳', value: impact.runtimeHeartbeats },
       { label: '上传幂等登记', value: impact.uploadReceiveRegistrations },
       { label: '人员设备授权', value: impact.employeeDeviceAccesses },
       { label: '设备 refresh token', value: impact.refreshTokenSessions },
@@ -244,7 +245,7 @@ export function useDevices() {
       desc: '该操作会永久删除设备主数据及下列关联数据，删除后不可恢复。',
       confirmText: '确认级联删除',
       impact,
-      requiredText: device.deviceName,
+      requiredText: '',
       confirmInput: '',
       onConfirm: async () => {
         if (confirmDisabled.value) return;

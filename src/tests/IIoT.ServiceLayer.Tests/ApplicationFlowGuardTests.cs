@@ -853,6 +853,7 @@ public sealed class ApplicationFlowGuardTests
     public async Task DeleteDeviceHandler_ShouldCascadeDelete_InvalidateCache_AndWriteAudit()
     {
         var processId = Guid.NewGuid();
+        var employeeId = Guid.NewGuid();
         var device = new Device("Device-Delete", "DEV-DELETE001", processId);
         device.ClearDomainEvents();
         var repository = new InMemoryRepository<Device>
@@ -870,7 +871,9 @@ public sealed class ApplicationFlowGuardTests
                 ClientPluginVersions: 2,
                 UploadReceiveRegistrations: 6,
                 EmployeeDeviceAccesses: 7,
-                RefreshTokenSessions: 8)
+                RefreshTokenSessions: 8,
+                RuntimeHeartbeats: 1),
+            AffectedEmployeeIds = [employeeId]
         };
         var cacheInvalidation = new RecordingDeviceCacheInvalidationService();
         var auditTrail = new RecordingAuditTrailService();
@@ -895,6 +898,7 @@ public sealed class ApplicationFlowGuardTests
             x.DeviceId == device.Id
             && x.ProcessId == processId
             && x.DeviceCode == device.Code);
+        Assert.Contains(employeeId, cacheInvalidation.DeleteAffectedEmployeeIds);
         Assert.Contains(auditTrail.Entries, x =>
             x.OperationType == "Device.Delete"
             && x.TargetIdOrKey == device.Id.ToString()

@@ -263,6 +263,32 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
+    public void CloudDocs_ShouldPreserveChangeClosureRules()
+    {
+        var agentsSource = File.ReadAllText(FindRepoFile("AGENTS.md"));
+        var cloudRulesSource = File.ReadAllText(FindRepoFile("docs", "云端规则.md"));
+        var retrospectiveSource = File.ReadAllText(FindRepoFile("docs", "改动复盘与规则沉淀.md"));
+        var combinedDocs = string.Join(
+            Environment.NewLine,
+            agentsSource,
+            cloudRulesSource,
+            retrospectiveSource);
+
+        agentsSource.Should().Contain("docs/改动复盘与规则沉淀.md");
+        cloudRulesSource.Should().Contain("改动收口门禁");
+        cloudRulesSource.Should().Contain("已验收功能默认冻结");
+        cloudRulesSource.Should().Contain("最终回复必须列出复盘文档、规则沉淀位置和验证命令");
+        retrospectiveSource.Should().Contain("项目滚动复盘入口");
+        retrospectiveSource.Should().Contain("改动范围");
+        retrospectiveSource.Should().Contain("规则提炼");
+        retrospectiveSource.Should().Contain("无新增长期规则");
+
+        combinedDocs.Should().Contain("改动复盘");
+        combinedDocs.Should().Contain("规则沉淀");
+        combinedDocs.Should().Contain("验证命令");
+    }
+
+    [Fact]
     public void HttpApiControllers_ShouldOnlyExposeHumanAndEdgeRoutes()
     {
         var controllerDirectory = FindRepoDirectory("src", "hosts", "IIoT.HttpApi", "Controllers");
@@ -535,27 +561,47 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
-    public void StandardDeploymentDocs_ShouldUseSelfHostedRunnerAndNoSshDeployPath()
+    public void StandardDeploymentDocs_ShouldUseLocalBuildPushAndSshDeployPath()
     {
         var readmeSource = File.ReadAllText(FindRepoFile("deploy", "README.md"));
         var runnerSource = File.ReadAllText(FindRepoFile("deploy", "RUNNER.md"));
+        var buildAndPushSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "build-and-push.sh"));
+        var localReleaseSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "local-release.sh"));
         var imageWorkflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-image.yml"));
         var deployWorkflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-deploy.yml"));
 
-        readmeSource.Should().Contain("GitHub 托管 runner 不能访问 `10.98.90.154:80` Harbor");
+        readmeSource.Should().Contain("日常部署使用 `deploy/scripts/local-release.sh --services <services>` 或 `--all`");
+        readmeSource.Should().Contain("`cloud-image` / `cloud-deploy` 只保留灾备手动入口，必须输入确认词");
+        readmeSource.Should().Contain("单个镜像 build/push 默认 15 分钟超时");
+        readmeSource.Should().Contain("本机 `build-and-push.sh` 按服务构建并推送 `sha-<git-sha>` 镜像到 Harbor");
+        readmeSource.Should().Contain("DEPLOY_GIT_SHA=<sha> DEPLOY_TRIGGERED_BY=local ./scripts/deploy-release.sh");
         runnerSource.Should().Contain("/data/github-runner/cloud");
         runnerSource.Should().Contain("github-runner");
+        runnerSource.Should().Contain("self-hosted runner 不再是日常发布链路，只作为灾备 GitHub workflow");
+        buildAndPushSource.Should().Contain("Cloud local image build requires explicit --services or --all.");
+        buildAndPushSource.Should().Contain("BUILD_TIMEOUT_SECONDS=\"${BUILD_TIMEOUT_SECONDS:-900}\"");
+        buildAndPushSource.Should().Contain("HARBOR_TIMEOUT_SECONDS=\"${HARBOR_TIMEOUT_SECONDS:-120}\"");
+        buildAndPushSource.Should().Contain("artifact_dir=\"$REPO_ROOT/artifacts/deploy\"");
+        buildAndPushSource.Should().Contain("cloud-built-services.txt");
+        buildAndPushSource.Should().Contain("IIOT_HTTPAPI_IMAGE");
+        localReleaseSource.Should().Contain("DEPLOY_SSH_TARGET");
+        localReleaseSource.Should().Contain("SSH_TIMEOUT_SECONDS=\"${SSH_TIMEOUT_SECONDS:-2400}\"");
+        localReleaseSource.Should().Contain("HEAD $sha is not present on remote $remote. Push to GitHub before production release.");
+        localReleaseSource.Should().Contain("DEPLOY_GIT_SHA='${TAG#sha-}' DEPLOY_TRIGGERED_BY=local ./scripts/deploy-release.sh");
         imageWorkflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
-        imageWorkflowSource.Should().Contain("harbor-retention.sh");
-        imageWorkflowSource.Should().Contain("HARBOR_KEEP_SHA_TAGS: 3");
+        imageWorkflowSource.Should().Contain("emergency_confirm:");
+        imageWorkflowSource.Should().Contain("EMERGENCY_CLOUD_IMAGE_BUILD");
+        imageWorkflowSource.Should().NotContain("\n  push:");
         deployWorkflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
+        deployWorkflowSource.Should().Contain("emergency_confirm:");
+        deployWorkflowSource.Should().Contain("EMERGENCY_CLOUD_DEPLOY");
+        deployWorkflowSource.Should().Contain("Use deploy/scripts/local-release.sh");
 
-        foreach (var source in new[] { readmeSource, runnerSource, imageWorkflowSource, deployWorkflowSource })
+        foreach (var source in new[] { readmeSource, runnerSource, imageWorkflowSource, deployWorkflowSource, buildAndPushSource, localReleaseSource })
         {
             source.Should().NotContain("appleboy/ssh-action");
             source.Should().NotContain("appleboy/scp-action");
             source.Should().NotContain("DEPLOY_HOST");
-            source.Should().NotContain("DEPLOY_SSH");
             source.Should().NotContain("ghcr.io");
         }
     }
@@ -569,11 +615,12 @@ public sealed class ConfigurationGuardTests
 
         readmeSource.Should().Contain("single-machine production starter");
         readmeSource.Should().Contain("`release_tag = sha-*`");
-        readmeSource.Should().Contain("日常部署禁止手动触发 `cloud-image` 的 `workflow_dispatch`");
-        readmeSource.Should().Contain("日常部署必须通过 push/merge 到 `main` 自动触发 `cloud-image`");
+        readmeSource.Should().Contain("日常部署必须先 push GitHub");
+        readmeSource.Should().Contain("deploy/scripts/local-release.sh --services <services>");
+        readmeSource.Should().Contain("禁止把 `cloud-image` 或 `cloud-deploy` 当成日常部署入口");
         readmeSource.Should().Contain("传入 `services` 时只拉取并重启指定服务");
         readmeSource.Should().Contain("Cloud catalog 会扫描 `/app/edge-updates/installers/stable/{version}/installer-artifact.json`");
-        readmeSource.Should().Contain("runner 必须使用专用非 root 用户运行");
+        readmeSource.Should().Contain("专用非 root 用户");
         readmeSource.Should().Contain("Docker Hub 不作为生产依赖源");
         readmeSource.Should().Contain("Edge 客户端安装素材不进 Harbor");
         readmeSource.Should().Contain("应用镜像仓库只保留当前生产 `sha-*` tag");
@@ -982,8 +1029,11 @@ public sealed class ConfigurationGuardTests
         var workflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-deploy.yml"));
 
         workflowSource.Should().Contain("release_tag:");
-        workflowSource.Should().Contain("Release tag from push-triggered cloud-image (sha-*)");
-        workflowSource.Should().Contain("Copy Deploy services input from cloud-image Step Summary; empty means full release only");
+        workflowSource.Should().Contain("Emergency release tag from local Harbor build or disaster-recovery cloud-image (sha-*)");
+        workflowSource.Should().Contain("Emergency only. Prefer local-release.sh; empty means full release only.");
+        workflowSource.Should().Contain("emergency_confirm:");
+        workflowSource.Should().Contain("EMERGENCY_CLOUD_DEPLOY");
+        workflowSource.Should().Contain("cloud-deploy is no longer the routine production release path. Use deploy/scripts/local-release.sh.");
         workflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
         workflowSource.Should().Contain("if [[ ! \"$release_tag\" =~ ^sha-[0-9a-f]+$ ]]");
         workflowSource.Should().Contain("RELEASE_TAG: ${{ inputs.release_tag }}");
@@ -1027,6 +1077,10 @@ public sealed class ConfigurationGuardTests
 
         workflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
         workflowSource.Should().Contain("Self-hosted runner must not run as root.");
+        workflowSource.Should().Contain("workflow_dispatch:");
+        workflowSource.Should().Contain("emergency_confirm:");
+        workflowSource.Should().Contain("EMERGENCY_CLOUD_IMAGE_BUILD");
+        workflowSource.Should().Contain("cloud-image is no longer a routine production release path. Use local build-and-push + SSH deploy.");
         workflowSource.Should().Contain("docker buildx build");
         workflowSource.Should().Contain("Prune old Harbor image tags");
         workflowSource.Should().Contain("bash deploy/scripts/harbor-retention.sh \"${{ matrix.image }}\"");
@@ -1034,16 +1088,7 @@ public sealed class ConfigurationGuardTests
         workflowSource.Should().Contain("--build-arg \"DOTNET_ASPNET_IMAGE=${{ steps.registry.outputs.registry }}/mirror/dotnet-aspnet:10.0.9\"");
         workflowSource.Should().Contain("--build-arg \"NODE_BASE_IMAGE=${{ steps.registry.outputs.registry }}/mirror/node:22-slim\"");
         workflowSource.Should().Contain("--build-arg \"NGINX_BASE_IMAGE=${{ steps.registry.outputs.registry }}/mirror/nginx:1.27-alpine\"");
-        workflowSource.Should().Contain("      - \"src/hosts/**\"");
-        workflowSource.Should().Contain("      - \"src/core/**\"");
-        workflowSource.Should().Contain("      - \"src/shared/**\"");
-        workflowSource.Should().Contain("      - \"src/services/**\"");
-        workflowSource.Should().Contain("      - \"src/infrastructure/**\"");
-        workflowSource.Should().Contain("      - \"src/ui/iiot-web/**\"");
-        workflowSource.Should().Contain("      - \"deploy/docker-compose.prod.yml\"");
-        workflowSource.Should().Contain("      - \"deploy/nginx/**\"");
-        workflowSource.Should().NotContain("      - \"src/**\"");
-        workflowSource.Should().NotContain("      - \"deploy/**\"");
+        workflowSource.Should().NotContain("\n  push:");
         workflowSource.Should().NotContain("runs-on: ubuntu-latest");
         workflowSource.Should().NotContain("ghcr.io");
         workflowSource.Should().NotContain("docker/build-push-action");

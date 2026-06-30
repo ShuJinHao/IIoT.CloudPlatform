@@ -4,12 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Release tag from push-triggered cloud-image (sha-*)
+        description: Emergency release tag from local Harbor build or disaster-recovery cloud-image (sha-*)
         required: true
         type: string
       services:
-        description: "Copy Deploy services input from cloud-image Step Summary; empty means full release only"
+        description: "Emergency only. Prefer local-release.sh; empty means full release only."
         required: false
+        type: string
+      emergency_confirm:
+        description: "Emergency only. Type EMERGENCY_CLOUD_DEPLOY to run GitHub deploy."
+        required: true
         type: string
 
 permissions:
@@ -51,6 +55,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [ '${{ inputs.emergency_confirm }}' != 'EMERGENCY_CLOUD_DEPLOY' ]; then
+            echo "cloud-deploy is no longer the routine production release path. Use deploy/scripts/local-release.sh." >&2
+            exit 64
+          fi
           release_tag='${{ inputs.release_tag }}'
           if [[ ! "$release_tag" =~ ^sha-[0-9a-f]+$ ]]; then
             echo "release_tag must match sha-<hex>: $release_tag" >&2

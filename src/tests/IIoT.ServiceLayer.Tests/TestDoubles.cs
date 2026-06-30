@@ -733,6 +733,8 @@ internal sealed class RecordingDeviceCacheInvalidationService : IDeviceCacheInva
 
     public List<DeviceCacheDescriptor> DeletedDevices { get; } = [];
 
+    public List<Guid> DeleteAffectedEmployeeIds { get; } = [];
+
     public Task InvalidateListsAfterRegisterAsync(
         Guid processId,
         CancellationToken cancellationToken = default)
@@ -751,9 +753,11 @@ internal sealed class RecordingDeviceCacheInvalidationService : IDeviceCacheInva
 
     public Task InvalidateAfterDeleteAsync(
         DeviceCacheDescriptor device,
+        IReadOnlyCollection<Guid>? affectedEmployeeIds = null,
         CancellationToken cancellationToken = default)
     {
         DeletedDevices.Add(device);
+        DeleteAffectedEmployeeIds.AddRange(affectedEmployeeIds ?? []);
         return Task.CompletedTask;
     }
 }
@@ -1167,6 +1171,7 @@ internal sealed class StubDeviceDeletionDependencyQueryService : IDeviceDeletion
 {
     public DeviceDeletionDependencies Dependencies { get; set; } = new(false, false, false, false);
     public DeviceDeletionImpact Impact { get; set; } = new(0, 0, 0, 0, 0, 0, 0, 0, 0);
+    public IReadOnlyList<Guid> AffectedEmployeeIds { get; set; } = [];
     public bool CascadeDeleteResult { get; set; } = true;
 
     public Task<DeviceDeletionDependencies> GetDependenciesAsync(
@@ -1187,7 +1192,7 @@ internal sealed class StubDeviceDeletionDependencyQueryService : IDeviceDeletion
         Guid deviceId,
         CancellationToken cancellationToken = default)
     {
-        return Task.FromResult(new DeviceCascadeDeletionResult(CascadeDeleteResult, Impact));
+        return Task.FromResult(new DeviceCascadeDeletionResult(CascadeDeleteResult, Impact, AffectedEmployeeIds));
     }
 }
 

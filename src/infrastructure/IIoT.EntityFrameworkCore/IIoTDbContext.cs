@@ -26,6 +26,7 @@ public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)
     public DbSet<ClientPluginRelease> ClientPluginReleases => Set<ClientPluginRelease>();
     public DbSet<ClientReleaseRetentionPolicy> ClientReleaseRetentionPolicies => Set<ClientReleaseRetentionPolicy>();
     public DbSet<DeviceClientVersionSnapshot> DeviceClientVersionSnapshots => Set<DeviceClientVersionSnapshot>();
+    public DbSet<EdgeDeviceRuntimeHeartbeat> EdgeDeviceRuntimeHeartbeats => Set<EdgeDeviceRuntimeHeartbeat>();
     public DbSet<RefreshTokenSession> RefreshTokenSessions => Set<RefreshTokenSession>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<UploadReceiveRegistration> UploadReceiveRegistrations => Set<UploadReceiveRegistration>();

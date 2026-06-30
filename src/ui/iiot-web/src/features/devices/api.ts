@@ -49,6 +49,7 @@ export interface DeviceDeletionImpactDto {
   passStations: number;
   clientVersionSnapshots: number;
   clientPluginVersions: number;
+  runtimeHeartbeats: number;
   uploadReceiveRegistrations: number;
   employeeDeviceAccesses: number;
   refreshTokenSessions: number;

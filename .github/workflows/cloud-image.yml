@@ -2,22 +2,11 @@ name: cloud-image
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "src/hosts/**"
-      - "src/core/**"
-      - "src/shared/**"
-      - "src/services/**"
-      - "src/infrastructure/**"
-      - "src/ui/iiot-web/**"
-      - "deploy/docker-compose.prod.yml"
-      - "deploy/nginx/**"
-      - ".dockerignore"
-      - "Directory.Build.props"
-      - "global.json"
-      - "IIoT.CloudPlatform.slnx"
-      - ".github/workflows/cloud-image.yml"
+    inputs:
+      emergency_confirm:
+        description: "Emergency only. Type EMERGENCY_CLOUD_IMAGE_BUILD to run the old self-hosted image builder."
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -46,6 +35,15 @@ jobs:
             dockerfile: src/hosts/IIoT.AppHost/iiot-web.Dockerfile
 
     steps:
+      - name: Validate emergency confirmation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ '${{ inputs.emergency_confirm }}' != 'EMERGENCY_CLOUD_IMAGE_BUILD' ]; then
+            echo "cloud-image is no longer a routine production release path. Use local build-and-push + SSH deploy." >&2
+            exit 64
+          fi
+
       - name: Checkout
         id: checkout
         uses: actions/checkout@v4

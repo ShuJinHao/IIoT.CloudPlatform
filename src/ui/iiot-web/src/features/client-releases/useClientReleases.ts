@@ -1,6 +1,8 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
+  archiveClientReleaseApi,
+  deleteClientReleaseFilesApi,
   getClientReleaseCatalogApi,
   getDeviceClientVersionInventoryApi,
   upsertClientHostReleaseApi,
@@ -11,7 +13,7 @@ import {
 import { createHistoryColumns, createInventoryColumns, createReleaseCatalogColumns } from './columns';
 import { useAuthStore } from '../../stores/auth';
 import { Permissions } from '../../types/permissions';
-import { notifyWarning } from '../../utils/feedback';
+import { notifySuccess, notifyWarning, requestConfirmation } from '../../utils/feedback';
 import {
   formatDate,
   formatReleaseNotes,
@@ -152,12 +154,16 @@ export function useClientReleases() {
     onHistory: openHistoryModal,
     onDetail: openReleaseDetailModal,
     onOpenUrl: openUrl,
+    onArchive: archiveReleaseVersion,
+    onDeleteFiles: deleteReleaseFiles,
   }));
   const historyColumns = computed(() => createHistoryColumns({
     isPublishRoute: () => isPublishRoute.value,
     selectedRow: () => selectedReleaseRow.value,
     onDetail: openReleaseDetailModal,
     onOpenUrl: openUrl,
+    onArchive: archiveReleaseVersion,
+    onDeleteFiles: deleteReleaseFiles,
   }));
   const inventoryColumns = createInventoryColumns();
 
@@ -361,6 +367,49 @@ export function useClientReleases() {
     window.open(url, '_blank', 'noopener,noreferrer');
   }
 
+  async function archiveReleaseVersion(version: ReleaseVersionEntry, row: ReleaseCatalogRow | null) {
+    if (!canManageReleases.value) return;
+    const confirmed = await requestConfirmation({
+      title: '归档发布版本',
+      message: `确认归档 ${row?.componentName ?? '组件'} ${version.version}？归档后不会作为可安装版本展示。`,
+      confirmText: '确认归档',
+    });
+    if (!confirmed) return;
+
+    submitting.value = true;
+    try {
+      await archiveClientReleaseApi(version.id);
+      notifySuccess('发布版本已归档');
+      await fetchCatalog();
+    } catch {
+      /* feedback handled by http client */
+    } finally {
+      submitting.value = false;
+    }
+  }
+
+  async function deleteReleaseFiles(version: ReleaseVersionEntry, row: ReleaseCatalogRow | null) {
+    if (!canManageReleases.value) return;
+    const confirmed = await requestConfirmation({
+      type: 'error',
+      title: '删除发布文件',
+      message: `确认删除 ${row?.componentName ?? '组件'} ${version.version} 的本机发布文件？如果仍有设备在用，后端会拒绝删除。`,
+      confirmText: '确认删除文件',
+    });
+    if (!confirmed) return;
+
+    submitting.value = true;
+    try {
+      const result = await deleteClientReleaseFilesApi(version.id);
+      notifySuccess(result.warning || '发布文件已删除并归档');
+      await fetchCatalog();
+    } catch {
+      /* feedback handled by http client */
+    } finally {
+      submitting.value = false;
+    }
+  }
+
   watch(activeView, () => {
     if (activeView.value === 'inventory' && inventory.value.length === 0) {
       void fetchInventory();
@@ -411,5 +460,7 @@ export function useClientReleases() {
     openPluginModal,
     submitHostRelease,
     submitPluginRelease,
+    archiveReleaseVersion,
+    deleteReleaseFiles,
   };
 }

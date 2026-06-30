@@ -30,5 +30,7 @@ export function isDeviceDeleteConfirmDisabled(
   requiredText: string,
   confirmInput: string,
 ): boolean {
-  return !!requiredText && confirmInput !== requiredText;
+  void requiredText;
+  void confirmInput;
+  return false;
 }

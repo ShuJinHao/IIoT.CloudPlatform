@@ -17,5 +17,6 @@ public interface IDeviceCacheInvalidationService
 
     Task InvalidateAfterDeleteAsync(
         DeviceCacheDescriptor device,
+        IReadOnlyCollection<Guid>? affectedEmployeeIds = null,
         CancellationToken cancellationToken = default);
 }

@@ -69,6 +69,7 @@ public class DeleteDeviceHandler(
         {
             await deviceCacheInvalidationService.InvalidateAfterDeleteAsync(
                 new DeviceCacheDescriptor(device.Id, device.ProcessId, device.Code),
+                deletionResult.AffectedEmployeeIds,
                 cancellationToken);
         }
 
@@ -122,6 +123,7 @@ public class DeleteDeviceHandler(
                 pass_station_records = impact.PassStations,
                 edge_device_client_version_snapshots = impact.ClientVersionSnapshots,
                 edge_device_client_plugin_versions = impact.ClientPluginVersions,
+                edge_device_runtime_heartbeats = impact.RuntimeHeartbeats,
                 upload_receive_registrations = impact.UploadReceiveRegistrations,
                 employee_device_accesses = impact.EmployeeDeviceAccesses,
                 refresh_token_sessions = impact.RefreshTokenSessions

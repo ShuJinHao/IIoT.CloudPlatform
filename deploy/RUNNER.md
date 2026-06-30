@@ -4,11 +4,13 @@
 
 ## 目标
 
-标准部署链路固定为：
+CloudPlatform 标准生产发布已经改为操作者本机构建、推 Harbor、SSH 触发服务器 `deploy-release.sh`。self-hosted runner 不再是日常发布链路，只作为灾备 GitHub workflow、CI 辅助和历史运维入口使用。
+
+灾备 runner 链路为：
 
 ```text
 git push GitHub
--> GitHub Actions 触发
+-> 操作者手动 workflow_dispatch 并输入灾备确认词
 -> 10.98.90.154 内网 self-hosted runner 执行
 -> cloud-image 构建并 push 到 10.98.90.154:80 Harbor
 -> cloud-deploy 在 ${DEPLOY_TARGET_DIR} 执行 deploy-release.sh
@@ -58,8 +60,7 @@ DEPLOY_ENV_FILE=<完整生产 .env 内容>
 SEED_ADMIN_PASSWORD=<固定 Cloud 管理员密码>
 ```
 
-`DEPLOY_ENV_FILE` 是完整 `.env` 文本，不是文件路径。`OCI_REGISTRY_USERNAME` / `OCI_REGISTRY_PASSWORD` 对应的 Harbor 用户或 robot 需要 push、pull 和删除应用镜像 tag 权限；`cloud-image` 会用它清理旧 `sha-*` tag。
-Cloud 管理员密码不放入 `DEPLOY_ENV_FILE`；`cloud-deploy` 和 `cloud-admin-repair` 使用单独的 `SEED_ADMIN_PASSWORD` secret 写入服务器 `.env`。
+`DEPLOY_ENV_FILE` 是完整 `.env` 文本，不是文件路径。`OCI_REGISTRY_USERNAME` / `OCI_REGISTRY_PASSWORD` 对应的 Harbor 用户或 robot 需要 push、pull 和删除应用镜像 tag 权限。Cloud 管理员密码不放入 `DEPLOY_ENV_FILE`；灾备 `cloud-deploy` 和 `cloud-admin-repair` 使用单独的 `SEED_ADMIN_PASSWORD` secret 写入服务器 `.env`。
 
 ## 验收
 

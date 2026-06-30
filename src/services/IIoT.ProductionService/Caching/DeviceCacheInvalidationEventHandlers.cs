@@ -31,7 +31,7 @@ public sealed class DeviceRenamedCacheInvalidationHandler(
                 notification.DeviceId,
                 notification.ProcessId,
                 notification.Code),
-            cancellationToken);
+            cancellationToken: cancellationToken);
     }
 }
 
@@ -48,6 +48,6 @@ public sealed class DeviceDeletedCacheInvalidationHandler(
                 notification.DeviceId,
                 notification.ProcessId,
                 notification.Code),
-            cancellationToken);
+            cancellationToken: cancellationToken);
     }
 }

@@ -121,8 +121,12 @@ export interface DeviceClientVersionInventoryDto {
   hostUpdateStatus: string;
   hostCompatibilityIssue?: string | null;
   installStatus: string;
+  softwareStatus: string;
   currentVersion: string;
   issue?: string | null;
+  versionIssue?: string | null;
+  cloudIssue?: string | null;
+  lastRuntimeHeartbeatAtUtc?: string | null;
   reportedAtUtc?: string | null;
   receivedAtUtc?: string | null;
   plugins: DeviceClientPluginInventoryDto[];
@@ -141,6 +145,18 @@ export interface DeviceClientPluginInventoryDto {
 export interface ClientReleaseRetentionPolicyDto {
   maxVersionsPerComponent: number;
   updatedAtUtc: string;
+}
+
+export interface ClientReleaseFileDeletionResultDto {
+  releaseId: string;
+  componentKind: string;
+  componentName: string;
+  channel: string;
+  version: string;
+  filesDeleted: boolean;
+  deletedPaths: string[];
+  skippedPaths: string[];
+  warning?: string | null;
 }
 
 export const getClientReleaseCatalogApi = (params: {
@@ -168,6 +184,9 @@ export const updateClientReleaseRetentionPolicyApi = (payload: {
 
 export const archiveClientReleaseApi = (releaseId: string) =>
   http.delete<void>(`${basePath}/${releaseId}`);
+
+export const deleteClientReleaseFilesApi = (releaseId: string) =>
+  http.delete<ClientReleaseFileDeletionResultDto>(`${basePath}/${releaseId}/files`);
 
 export const updateClientReleaseStatusApi = (releaseId: string, status: string) =>
   http.put<void>(`${basePath}/${releaseId}/status`, { status });

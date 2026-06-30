@@ -67,25 +67,25 @@ curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' http:
 
 ## Standard Release
 
-Standard production release is driven by GitHub Actions on the intranet self-hosted runner labeled `iiot-linux-prod`.
+Standard production release is driven from the operator workstation: push GitHub for source traceability, build selected application images locally, push Harbor, then SSH-trigger the server-side release entrypoint.
 
 Routine deployment red lines:
 
-- Do not manually run `cloud-image` via `workflow_dispatch` for routine deployment. Manual `cloud-image` bypasses path narrowing and builds every application image.
-- Use the push-triggered `cloud-image` run, then copy the exact `Deploy services input` from its Step Summary or `cloud-built-service-*` artifact into `cloud-deploy.services`.
-- Leave `cloud-deploy.services` empty only for first deployment, an explicitly approved full release, or emergency recovery.
+- Do not wait for `cloud-image` or `cloud-deploy` for routine deployment. Those workflows are emergency-only and require confirmation inputs.
+- Use `deploy/scripts/local-release.sh --services <services>` or explicit `--all`. Empty services are not a routine deployment input.
+- If a local build, Harbor operation, or SSH deploy exceeds its timeout, stop and diagnose; do not keep watching until a GitHub job or shell command times out.
 
 The standard sequence is:
 
 1. Push or merge to `main`.
 2. `cloud-ci` runs the fast gate by default: restore/build, ServiceLayer tests, ConfigurationGuard tests, web build, and compose config. Full EndToEnd is manual via `workflow_dispatch`.
-3. The push-triggered `cloud-image` run executes on `iiot-linux-prod`, builds only affected application images when path filters can narrow the change, and pushes them to Harbor with `sha-${GITHUB_SHA}`. Shared code or build configuration changes currently build all application images. The workflow uploads `cloud-built-service-*` artifacts and prints the exact `Deploy services input`.
-4. Trigger `cloud-deploy` manually with the matching `release_tag = sha-*` and copy the built-services value into `services` for an incremental release. Do not leave `services` empty unless this is a first deployment, an explicitly approved full release, or emergency recovery.
-5. `cloud-deploy` runs on the same non-root runner, syncs `deploy/`, writes `DEPLOY_ENV_FILE`, overwrites the server `.env` `SEED_ADMIN_PASSWORD` from the dedicated GitHub secret, logs in to Harbor, and calls `deploy-release.sh`.
+3. Run `deploy/scripts/local-release.sh --services <services> --ssh-target <user@host>` from the local repository. The script verifies clean worktree, pushed HEAD, Docker/buildx, Harbor access, and SSH target.
+4. `build-and-push.sh` builds selected images and pushes Harbor tags with `sha-<git-sha>`. It writes `artifacts/deploy/cloud-built-services.txt` and prints the same `Deploy services input`.
+5. `local-release.sh` SSHes to `/data/iiot-platform/cloud/deploy` and calls `DEPLOY_GIT_SHA=<sha> DEPLOY_TRIGGERED_BY=local ./scripts/deploy-release.sh sha-<sha> --services <services>`.
 
-Harbor application repositories keep only the current production `sha-*` tag. `cloud-image` must delete old application `sha-*` tags after a successful push; the Harbor robot must have tag delete permission. Tag deletion only removes references, so Harbor Garbage Collection must run after tag deletion to reclaim disk.
+Harbor application repositories keep only the current production `sha-*` tag. Local image build must not remove the current production tag before deploy health checks pass. Post-release cleanup deletes old application `sha-*` tags and Harbor Garbage Collection reclaims disk.
 
-The runner must not run as root. See `RUNNER.md` for the required `github-runner` user, Docker group, labels, and server reachability checks.
+The self-hosted runner must not run as root if emergency workflows are used. See `RUNNER.md` for the required `github-runner` user, `iiot-linux-prod` label, Docker group, and server reachability checks.
 
 Application images and infrastructure images must already exist in Harbor before deploy. Docker Hub is not a production dependency source; `pre-deploy-check.sh` rejects Docker Hub shorthand infrastructure image values.
 

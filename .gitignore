@@ -1,8 +1,11 @@
 publish/
+artifacts/
+.DS_Store
 **/bin/
 **/obj/
 src/ui/iiot-web/dist/
 src/ui/iiot-web/node_modules/
+src/ui/iiot-web/output/
 aspirate-state.json
 src/hosts/IIoT.AppHost/aspirate-state.json
 deploy/.env

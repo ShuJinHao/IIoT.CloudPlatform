@@ -48,6 +48,7 @@ public sealed class DeviceDeletionDependencyQueryService(IDbConnectionFactory co
         try
         {
             var impact = await GetImpactAsync(connection, transaction, deviceId, cancellationToken);
+            var affectedEmployeeIds = await GetAffectedEmployeeIdsAsync(connection, transaction, deviceId, cancellationToken);
 
             await CountDeletedByReturningAsync(
                 connection,
@@ -66,6 +67,7 @@ public sealed class DeviceDeletionDependencyQueryService(IDbConnectionFactory co
                 cancellationToken);
 
             await DeleteRowsAsync(connection, transaction, "delete from edge_device_client_version_snapshots where device_id = @DeviceId;", deviceId, cancellationToken);
+            await DeleteRowsAsync(connection, transaction, "delete from edge_device_runtime_heartbeats where device_id = @DeviceId;", deviceId, cancellationToken);
             await DeleteRowsAsync(connection, transaction, "delete from upload_receive_registrations where device_id = @DeviceId;", deviceId, cancellationToken);
             await DeleteRowsAsync(connection, transaction, "delete from employee_device_accesses where device_id = @DeviceId;", deviceId, cancellationToken);
             await DeleteRowsAsync(connection, transaction, """delete from refresh_token_sessions where "ActorType" = @ActorType and "SubjectId" = @DeviceId;""", deviceId, cancellationToken);
@@ -82,7 +84,7 @@ public sealed class DeviceDeletionDependencyQueryService(IDbConnectionFactory co
                 cancellationToken);
 
             transaction.Commit();
-            return new DeviceCascadeDeletionResult(deviceRows > 0, impact);
+            return new DeviceCascadeDeletionResult(deviceRows > 0, impact, affectedEmployeeIds);
         }
         catch
         {
@@ -111,6 +113,7 @@ public sealed class DeviceDeletionDependencyQueryService(IDbConnectionFactory co
                         on plugin.device_client_version_snapshot_id = snapshot.id
                     where snapshot.device_id = @DeviceId
                 ) as ClientPluginVersions,
+                (select count(*) from edge_device_runtime_heartbeats where device_id = @DeviceId) as RuntimeHeartbeats,
                 (select count(*) from upload_receive_registrations where device_id = @DeviceId) as UploadReceiveRegistrations,
                 (select count(*) from employee_device_accesses where device_id = @DeviceId) as EmployeeDeviceAccesses,
                 (
@@ -128,6 +131,23 @@ public sealed class DeviceDeletionDependencyQueryService(IDbConnectionFactory co
             cancellationToken: cancellationToken);
 
         return await connection.QuerySingleAsync<DeviceDeletionImpact>(command);
+    }
+
+    private static async Task<IReadOnlyList<Guid>> GetAffectedEmployeeIdsAsync(
+        IDbConnection connection,
+        IDbTransaction transaction,
+        Guid deviceId,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            select distinct employee_id
+            from employee_device_accesses
+            where device_id = @DeviceId;
+            """;
+
+        var command = CreateDeleteCommand(transaction, sql, deviceId, cancellationToken);
+        var ids = await connection.QueryAsync<Guid>(command);
+        return ids.ToList();
     }
 
     private static async Task<long> CountDeletedByReturningAsync(

@@ -76,6 +76,10 @@ public sealed record DeviceClientVersionReportResultDto(
     Guid DeviceId,
     DateTime ReceivedAtUtc);
 
+public sealed record DeviceRuntimeHeartbeatResultDto(
+    Guid DeviceId,
+    DateTime LastHeartbeatAtUtc);
+
 public sealed record DeviceClientVersionInventoryDto(
     Guid DeviceId,
     string DeviceName,
@@ -89,8 +93,12 @@ public sealed record DeviceClientVersionInventoryDto(
     string HostUpdateStatus,
     string? HostCompatibilityIssue,
     string InstallStatus,
+    string SoftwareStatus,
     string CurrentVersion,
     string? Issue,
+    string? VersionIssue,
+    string? CloudIssue,
+    DateTime? LastRuntimeHeartbeatAtUtc,
     DateTime? ReportedAtUtc,
     DateTime? ReceivedAtUtc,
     IReadOnlyList<DeviceClientPluginInventoryDto> Plugins);

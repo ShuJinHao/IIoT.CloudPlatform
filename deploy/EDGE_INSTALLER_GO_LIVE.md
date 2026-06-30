@@ -43,16 +43,16 @@ cd src/ui/iiot-web && npm run build
 
 必须先把当前 Cloud 后端和前端部署到服务器，否则线上没有 `installer-package` 接口，也没有新的 `.exe` 下载按钮。
 
-标准方式是走 CloudPlatform 的 GitHub Actions：
+标准方式是本机构建并 SSH 触发服务器部署：
 
 1. 推送或合并到 `main`。
-2. 等 push 自动触发的 `cloud-image` 在 `iiot-linux-prod` self-hosted runner 上完成；workflow 会按变更路径构建受影响镜像并推送到 `10.98.90.154:80` Harbor。不要手动触发 `cloud-image` 的 `workflow_dispatch` 做日常发布，手动触发会全量构建全部应用镜像。
-3. 人工触发 `cloud-deploy`，输入 `release_tag = sha-<current-commit-or-release>`，并把 `cloud-image` Step Summary 里的 `Deploy services input` 原样填入 `services`。只有首部署、明确全量发布或应急恢复时才允许留空 `services`。
-4. 确认 `post-deploy-check.sh` 和 `ops-check.sh` 通过。
+2. 在本机确认 HEAD 已推送且工作区干净。
+3. 运行 `DEPLOY_SSH_TARGET=root@10.98.90.154 ./deploy/scripts/local-release.sh --services web`；如后端接口也改动，则按实际服务传入 `httpapi,gateway,dataworker,migration,web` 的子集。
+4. 确认服务器 `post-deploy-check.sh`、`ops-check.sh` 和发布后清理摘要通过。
 
-`cloud-image` 会给 Web Dockerfile 传入 `VITE_AICOPILOT_CHALLENGE_URL`，并使用 Harbor mirror 中的 `node:22-slim`、`nginx:1.27-alpine` 基础镜像。服务器不依赖 Docker Hub。
+本机 `build-and-push.sh` 会给 Web Dockerfile 传入 `VITE_AICOPILOT_CHALLENGE_URL`，并使用 Harbor mirror 中的 `node:22-slim`、`nginx:1.27-alpine` 基础镜像。服务器不依赖 Docker Hub。单镜像 build/push 超过 15 分钟必须停止诊断，不得等待灾备 GitHub workflow。
 
-只有 GitHub Actions 不可用时，才走服务器应急手工部署。全量应急恢复命令如下：
+只有本机 SSH 触发器不可用时，才走服务器应急手工部署。全量应急恢复命令如下：
 
 ```sh
 cd /data/iiot-platform/cloud/deploy

@@ -27,6 +27,7 @@ public sealed class DeviceCacheInvalidationService(
 
     public async Task InvalidateAfterDeleteAsync(
         DeviceCacheDescriptor device,
+        IReadOnlyCollection<Guid>? affectedEmployeeIds = null,
         CancellationToken cancellationToken = default)
     {
         await cacheService.RemoveAsync(CacheKeys.AllDevices(), cancellationToken);
@@ -38,5 +39,9 @@ public sealed class DeviceCacheInvalidationService(
         await cacheService.RemoveByPatternAsync(CacheKeys.CapacitySummaryPattern(device.DeviceId), cancellationToken);
         await cacheService.RemoveByPatternAsync(CacheKeys.CapacityRangePattern(device.DeviceId), cancellationToken);
         await cacheService.RemoveByPatternAsync(CacheKeys.CapacityPagedByDevicePattern(device.DeviceId), cancellationToken);
+        foreach (var employeeId in affectedEmployeeIds ?? [])
+        {
+            await cacheService.RemoveAsync(CacheKeys.DeviceAccessesByUser(employeeId), cancellationToken);
+        }
     }
 }

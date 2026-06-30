@@ -2,13 +2,13 @@
   <NiondTableCard>
     <div class="table-heading">
       <div>
-        <h2>设备安装状态</h2>
-        <p>最近一次客户端版本上报与当前 catalog 最新版本的差异</p>
+        <h2>设备客户端状态</h2>
+        <p>运行心跳与版本 catalog 差异分开展示</p>
       </div>
     </div>
     <UiDataTable :columns="columns" :data="inventory" :loading="loading" :row-key="rowKey">
       <template #empty>
-        <EmptyState title="暂无安装状态" description="未找到匹配的设备版本上报数据。" />
+        <EmptyState title="暂无客户端状态" description="未找到匹配的设备运行心跳或版本上报数据。" />
       </template>
     </UiDataTable>
   </NiondTableCard>

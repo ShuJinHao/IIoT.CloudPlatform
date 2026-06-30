@@ -33,7 +33,8 @@ public sealed record DeviceDeletionImpact(
     long ClientPluginVersions,
     long UploadReceiveRegistrations,
     long EmployeeDeviceAccesses,
-    long RefreshTokenSessions)
+    long RefreshTokenSessions,
+    long RuntimeHeartbeats = 0)
 {
     public long TotalAssociatedRows =>
         Recipes
@@ -42,6 +43,7 @@ public sealed record DeviceDeletionImpact(
         + PassStations
         + ClientVersionSnapshots
         + ClientPluginVersions
+        + RuntimeHeartbeats
         + UploadReceiveRegistrations
         + EmployeeDeviceAccesses
         + RefreshTokenSessions;
@@ -49,4 +51,5 @@ public sealed record DeviceDeletionImpact(
 
 public sealed record DeviceCascadeDeletionResult(
     bool DeviceDeleted,
-    DeviceDeletionImpact Impact);
+    DeviceDeletionImpact Impact,
+    IReadOnlyList<Guid>? AffectedEmployeeIds = null);

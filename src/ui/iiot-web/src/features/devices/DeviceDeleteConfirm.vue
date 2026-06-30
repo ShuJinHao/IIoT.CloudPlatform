@@ -22,10 +22,6 @@
           <strong>{{ item.value }}</strong>
         </div>
       </div>
-      <div class="form-field">
-        <label class="form-label">输入设备名称确认删除</label>
-        <UiInput v-model:value="dialog.confirmInput" :placeholder="dialog.requiredText" />
-      </div>
     </div>
     <template #footer>
       <div class="modal-actions">
@@ -40,7 +36,6 @@
 
 <script setup lang="ts">
 import UiButton from '../../components/ui/UiButton.vue';
-import UiInput from '../../components/ui/UiInput.vue';
 import UiModal from '../../components/ui/UiModal.vue';
 import type { DeviceConfirmDialogState, DeviceDeletionImpactRow } from './types';
 

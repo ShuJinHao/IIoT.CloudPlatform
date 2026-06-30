@@ -1,5 +1,5 @@
 import { h } from 'vue';
-import { ExternalLink, History, Info } from 'lucide-vue-next';
+import { Archive, ExternalLink, History, Info, Trash2 } from 'lucide-vue-next';
 import UiButton from '../../components/ui/UiButton.vue';
 import UiTag from '../../components/ui/UiTag.vue';
 import type { UiDataTableColumn } from '../../components/ui/types';
@@ -20,6 +20,8 @@ interface ReleaseCatalogColumnOptions {
   onHistory: (row: ReleaseCatalogRow) => void;
   onDetail: (version: ReleaseVersionEntry, row: ReleaseCatalogRow | null) => void;
   onOpenUrl: (url: string) => void;
+  onArchive: (version: ReleaseVersionEntry, row: ReleaseCatalogRow | null) => void;
+  onDeleteFiles: (version: ReleaseVersionEntry, row: ReleaseCatalogRow | null) => void;
 }
 
 export function createReleaseCatalogColumns(
@@ -91,7 +93,7 @@ export function createReleaseCatalogColumns(
     columns.push({
       title: '操作',
       key: 'actions',
-      width: 110,
+      width: 260,
       align: 'right',
       render: (row) => h('div', { class: 'row-actions' }, [
         h(UiButton, {
@@ -100,6 +102,18 @@ export function createReleaseCatalogColumns(
           type: 'primary',
           onClick: () => options.onOpenUrl(row.currentVersion.downloadUrl),
         }, () => [h(ExternalLink, { size: 13 }), '打开']),
+        h(UiButton, {
+          size: 'tiny',
+          secondary: true,
+          type: 'warning',
+          onClick: () => options.onArchive(row.currentVersion, row),
+        }, () => [h(Archive, { size: 13 }), '归档']),
+        h(UiButton, {
+          size: 'tiny',
+          secondary: true,
+          type: 'error',
+          onClick: () => options.onDeleteFiles(row.currentVersion, row),
+        }, () => [h(Trash2, { size: 13 }), '删文件']),
       ]),
     });
   }
@@ -112,6 +126,8 @@ interface HistoryColumnOptions {
   selectedRow: () => ReleaseCatalogRow | null;
   onDetail: (version: ReleaseVersionEntry, row: ReleaseCatalogRow | null) => void;
   onOpenUrl: (url: string) => void;
+  onArchive: (version: ReleaseVersionEntry, row: ReleaseCatalogRow | null) => void;
+  onDeleteFiles: (version: ReleaseVersionEntry, row: ReleaseCatalogRow | null) => void;
 }
 
 export function createHistoryColumns(
@@ -146,7 +162,7 @@ export function createHistoryColumns(
     columns.push({
       title: '操作',
       key: 'actions',
-      width: 110,
+      width: 260,
       align: 'right',
       render: (row) => h('div', { class: 'row-actions' }, [
         h(UiButton, {
@@ -155,6 +171,18 @@ export function createHistoryColumns(
           type: 'primary',
           onClick: () => options.onOpenUrl(row.downloadUrl),
         }, () => [h(ExternalLink, { size: 13 }), '打开']),
+        h(UiButton, {
+          size: 'tiny',
+          secondary: true,
+          type: 'warning',
+          onClick: () => options.onArchive(row, options.selectedRow()),
+        }, () => [h(Archive, { size: 13 }), '归档']),
+        h(UiButton, {
+          size: 'tiny',
+          secondary: true,
+          type: 'error',
+          onClick: () => options.onDeleteFiles(row, options.selectedRow()),
+        }, () => [h(Trash2, { size: 13 }), '删文件']),
       ]),
     });
   }
@@ -166,7 +194,13 @@ export function createInventoryColumns(): UiDataTableColumn<DeviceClientVersionI
   return [
     { title: '设备名称', key: 'deviceName', minWidth: 190, render: (row) => h('strong', { class: 'device-name' }, row.deviceName) },
     { title: 'IP', key: 'primaryIp', width: 150, render: (row) => h('span', row.primaryIp || '-') },
-    { title: '最近上报时间', key: 'reportedAtUtc', minWidth: 170, render: (row) => h('span', formatDate(row.reportedAtUtc || row.receivedAtUtc)) },
+    {
+      title: '软件状态',
+      key: 'softwareStatus',
+      width: 140,
+      render: (row) => h(UiTag, { type: statusTone(row.softwareStatus), size: 'small', bordered: false }, () => statusText(row.softwareStatus)),
+    },
+    { title: '最后运行心跳', key: 'lastRuntimeHeartbeatAtUtc', minWidth: 170, render: (row) => h('span', formatDate(row.lastRuntimeHeartbeatAtUtc)) },
     {
       title: '安装状态',
       key: 'installStatus',
@@ -174,6 +208,7 @@ export function createInventoryColumns(): UiDataTableColumn<DeviceClientVersionI
       render: (row) => h(UiTag, { type: statusTone(row.installStatus), size: 'small', bordered: false }, () => statusText(row.installStatus)),
     },
     { title: '当前版本', key: 'currentVersion', minWidth: 140, render: (row) => h('strong', { class: 'current-version' }, formatCurrentVersion(row)) },
+    { title: '版本上报时间', key: 'reportedAtUtc', minWidth: 170, render: (row) => h('span', formatDate(row.reportedAtUtc || row.receivedAtUtc)) },
     { title: '问题', key: 'issue', minWidth: 240, render: (row) => h('span', { class: row.issue ? 'issue-text' : '' }, row.issue || '-') },
   ];
 }

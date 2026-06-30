@@ -1,6 +1,6 @@
 # IIoT Cloud Harbor CICD And Private Server Deploy
 
-本目录是 `IIoT.CloudPlatform` 当前生产部署入口。云端部署以 Harbor 镜像仓库、内网 GitHub self-hosted runner 和服务器本地发布脚本为准；GitHub 托管 runner 不能访问 `10.98.90.154:80` Harbor，也不能 SSH 到内网服务器，不作为生产部署执行环境。三项目上传部署统一入口见 [上传部署总览](../../docs/上传部署总览.md)。
+本目录是 `IIoT.CloudPlatform` 当前生产部署入口。云端标准发布以操作者本机构建镜像、推送 Harbor、再通过 SSH 触发服务器本地发布脚本为准；GitHub Actions 只保留 CI 留痕和灾备手动入口，不再作为日常生产镜像构建或部署入口。三项目上传部署统一入口见 [上传部署总览](../../docs/上传部署总览.md)。
 
 ## 部署口径
 
@@ -8,17 +8,19 @@
 - 生产版本统一使用 `release_tag = sha-*`，`latest` 不能作为生产应用版本。
 - 多 agent 并行部署只按 [上传部署总览](../../docs/上传部署总览.md) 的“多 agent 并行部署”执行；Cloud agent 只负责 Cloud 镜像、Cloud deploy 和 Cloud 验证。
 - Cloud 应用镜像不保留历史版本；Harbor 和服务器本机只保留当前生产正在运行的 `sha-*` 应用镜像。
-- 日常部署禁止手动触发 `cloud-image` 的 `workflow_dispatch`。手动触发会绕过路径过滤并构建全部应用镜像，只允许在明确要求全量重建或生产应急恢复时使用。
-- 日常部署必须通过 push/merge 到 `main` 自动触发 `cloud-image`。该 workflow 在内网 self-hosted runner `iiot-linux-prod` 上按变更路径构建并推送受影响的应用镜像到 Harbor；共享代码或构建配置变更才会按规则构建全部应用镜像。
-- `cloud-deploy` 在同一内网 runner 上同步 `deploy/` 模板、写入生产 `.env`，再执行 `deploy/scripts/deploy-release.sh`；传入 `services` 时只拉取并重启指定服务。未传 `services` 等同全量发布，只允许首部署、明确全量发布或应急恢复使用。
-- runner 必须使用专用非 root 用户运行，例如 `github-runner`，不能用 root 跑 Actions 服务。
+- 日常部署必须先 push GitHub，再由本机脚本确认 HEAD 已推送且工作区干净，随后本机构建受影响应用镜像并推送 Harbor。
+- 日常部署使用 `deploy/scripts/local-release.sh --services <services>` 或 `--all`；脚本会调用 `build-and-push.sh`，再通过 SSH 到服务器执行 `deploy/scripts/deploy-release.sh`。
+- 传入 `services` 时只拉取并重启指定服务；首次部署或需要全量时必须显式传 `--all`。
+- `cloud-image` / `cloud-deploy` 只保留灾备手动入口，必须输入确认词；不得在日常生产发布中等待这些 workflow。
+- 单个镜像 build/push 默认 15 分钟超时，Harbor 登录/API 检查默认 2 分钟超时，SSH deploy 默认 40 分钟超时；超时必须停止并按脚本输出诊断 Docker buildx、Harbor tag、服务器 compose/logs 和 release 状态，不得继续 watch 或无限等待。
+- self-hosted runner 仅作为灾备/历史 CI 设施时使用，仍必须是专用非 root 用户，不能用 root 跑 Actions 服务。
 - 当前服务器 Docker Root Dir 固定为 `/data/iiot-platform/runtime/docker`，runner 工作目录固定在 `/data/github-runner/*`，不要把构建缓存和 runner workdir 放回系统盘。
 - Docker Hub 不作为生产依赖源；compose 第三方镜像和 Web Dockerfile 的 Node/Nginx 基础镜像必须先同步到 Harbor mirror。
 - Edge 客户端安装素材不进 Harbor；日常 push main 只跑 smoke，完整 GitHub 打包只在 `workflow_dispatch` 或 `edge-v*` / `v*` tag 时执行；日常宿主快发由操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1 -Transport http`，本机完成编译打包后通过内网受控 HTTP 上传到服务器 `${EDGE_UPDATES_DIR}/installers/stable/{version}` 和 `${EDGE_UPDATES_DIR}/velopack/stable`。生产 `stable` 不允许用 `rsync/scp` 绕过 Cloud DB、审计和保留策略；只改工序插件时运行 `IIoT.EdgeClient/scripts/PublishEdgePluginRelease.ps1`，只上传独立插件 zip。
 - 生产服务器只允许 Edge `stable` 渠道；发布脚本必须拒绝并清理 `ci`、`dev`、`test` 等非 `stable` 渠道目录。
 - Cloud catalog 会扫描 `/app/edge-updates/installers/stable/{version}/installer-artifact.json` 并与数据库 release 记录合并；同 key 数据库记录优先，可用于 Draft/Archived 抑制文件落盘版本。
-- 本地手工 Docker 构建和服务器手工部署只作为应急 fallback，不是标准 Cloud/AI 发布流程。
-- `deploy/scripts/deploy-release.sh` 是标准发布入口，`deploy/scripts/rollback-release.sh` 是应用镜像回滚入口。
+- 本机 Docker 构建和 SSH 触发服务器部署是标准 Cloud 发布流程。
+- `deploy/scripts/deploy-release.sh` 是服务器端唯一发布入口，`deploy/scripts/rollback-release.sh` 是应用镜像回滚入口。
 - self-hosted runner 安装和权限要求见 [RUNNER.md](./RUNNER.md)。
 - 运维、备份、恢复和检查细节见 [OPERATIONS.md](./OPERATIONS.md)。
 - Cloud 下载中心生成 Edge 客户端 `.exe` 的上线顺序见 [EDGE_INSTALLER_GO_LIVE.md](./EDGE_INSTALLER_GO_LIVE.md)。
@@ -78,11 +80,11 @@ Harbor 变量：
 - `OCI_REGISTRY_USERNAME`：Harbor 登录用户名。
 - `OCI_REGISTRY_PASSWORD`：Harbor 登录密码或 robot account token。
 
-GitHub workflow `cloud-image` 和 `cloud-deploy` 是标准生产链路，但必须跑在带 `iiot-linux-prod` label 的内网 self-hosted runner 上。不要把这两个 workflow 改回 `ubuntu-latest`，公网 GitHub runner 访问不了内网 Harbor 和部署目录。
+标准生产镜像由操作者本机 `deploy/scripts/build-and-push.sh` 构建并推送 Harbor。脚本必须显式传入 `--services httpapi,gateway,dataworker,migration,web` 的子集，或显式 `--all`；无参数直接失败，避免误全量。它会输出 `Deploy services input` 和 `artifacts/deploy/cloud-built-services.txt`，后续部署必须使用这个服务清单。
 
-`cloud-image` 会按 push 变更路径判断需要构建的镜像：只改 `src/hosts/IIoT.HttpApi/` 时只构建 `iiot-httpapi`，只改 `src/ui/iiot-web/` 时只构建 `iiot-web`；改 `src/core/`、`src/shared/`、`src/services/`、`src/infrastructure/`、`Directory.Build.props` 或 `global.json` 时构建全部应用镜像。push 触发范围只覆盖宿主、共享代码、Web、compose 和 nginx 配置，文档类变更不会触发镜像构建。构建使用 Harbor registry cache，第二次构建会复用已有 Docker layer。
+`cloud-image` 只保留灾备手动入口，并要求确认词 `EMERGENCY_CLOUD_IMAGE_BUILD`；不得把它当作日常发布路径，也不得等待它超时。灾备 workflow 仍必须跑在带 `iiot-linux-prod` label 的内网 self-hosted runner 上，不能改回 `ubuntu-latest`。
 
-应用镜像仓库只保留当前生产 `sha-*` tag。`cloud-image` 推送成功后必须删除同一应用仓库内其他旧 `sha-*` tag；`main-latest`、`buildcache` 和 `mirror` 基础镜像 tag 不计入应用版本保留。Harbor robot 或用户必须具备删除 tag 权限。删除 tag 后磁盘不会立即下降，Harbor 还必须在删 tag 后执行 Garbage Collection 才会释放 blob。
+应用镜像仓库只保留当前生产 `sha-*` tag。本机构建推送候选 tag 后，不立即删除当前生产 tag；必须等服务器 `deploy-release.sh` 健康检查通过后，由发布后清理删除旧应用 tag 并执行或确认 Harbor GC。`main-latest`、`buildcache` 和 `mirror` 基础镜像 tag 不计入应用版本保留。
 
 Cloud 发布成功且 `post-deploy-check.sh`、`ops-check.sh` 通过后，必须执行发布后清理：
 
@@ -93,9 +95,7 @@ Cloud 发布成功且 `post-deploy-check.sh`、`ops-check.sh` 通过后，必须
 
 禁止清理基础镜像 mirror、Harbor 自身镜像、数据库卷、备份、配置和 secrets。Cloud 快速回滚不再依赖本机旧镜像；需要回滚时重新构建或重新拉取目标 git sha 后部署。
 
-每个真正构建的 matrix job 会上传 `cloud-built-service-<service>` artifact，并在 Step Summary 写出 `Deploy services input`。部署时必须把这个值原样填入 `cloud-deploy.services`，不要人工猜测，也不要在增量发布时留空。例如 Step Summary 写 `Deploy services input: web`，部署就填 `services=web`。
-
-禁止把 `cloud-image` 的手动 `workflow_dispatch` 当成日常部署入口。该入口的行为是全量构建，保留它只是为了首部署、明确全量重建和生产应急恢复；只改前端、只改单个宿主或只改局部后端时不得使用。
+禁止把 `cloud-image` 或 `cloud-deploy` 当成日常部署入口。它们只允许在本机 Docker/SSH 发布路径不可用且操作者明确选择灾备时使用，并必须带确认词。
 
 ## 第三方镜像 mirror
 
@@ -173,20 +173,20 @@ VITE_AICOPILOT_CHALLENGE_URL=http://10.98.90.154:82/api/identity/cloud-oidc/chal
 
 ## 服务器部署目录
 
-服务器部署目录由 GitHub secret `DEPLOY_TARGET_DIR` 和服务器 `.env` 共同确定。当前生产服务器值为：
+服务器部署目录由生产服务器 `.env`、Docker compose label 和本机发布脚本参数共同确定。当前生产服务器值为：
 
 ```text
 /data/iiot-platform/cloud/deploy
 ```
 
-标准流程由 `cloud-deploy` workflow 自动同步：
+标准流程要求服务器部署目录已经包含 `deploy/` 模板和真实 `.env`：
 
 ```text
 deploy/
 deploy/.env
 ```
 
-真实 `.env` 由 GitHub secret `DEPLOY_ENV_FILE` 注入，不提交仓库。Cloud 管理员密码由单独的 GitHub secret `SEED_ADMIN_PASSWORD` 管理，`cloud-deploy` 写服务器 `.env` 时会强制覆盖 `SEED_ADMIN_PASSWORD`。`deploy/.env.example` 只作为模板。应急手工部署时，才需要人工把 `deploy/` 和真实 `.env` 放到 `${DEPLOY_TARGET_DIR}`。
+真实 `.env` 不提交仓库。`deploy/.env.example` 只作为模板；服务器端 `deploy-release.sh` 只读取现有 `.env` 并按 release tag 重写应用镜像 tag，不负责生成真实密钥。GitHub `cloud-deploy` 灾备入口如仍使用 secret 注入，也不得被写成日常标准路径。
 
 生产服务器以容器标签为准确认真实部署目录，不要按旧路径猜：
 
@@ -195,7 +195,7 @@ docker inspect deploy-iiot-httpapi-1 \
   --format 'working={{index .Config.Labels "com.docker.compose.project.working_dir"}} config={{index .Config.Labels "com.docker.compose.project.config_files"}} project={{index .Config.Labels "com.docker.compose.project"}}'
 ```
 
-2026-06-22 现场校准：`jms.hdc-group.cn` / `10.98.90.154` 的 Cloud compose 工作目录为 `/data/iiot-platform/cloud/deploy`，Docker Root Dir 为 `/data/iiot-platform/runtime/docker`，Edge 更新素材目录为 `/data/iiot-platform/edge-client/edge-updates`，Cloud runner 工作目录为 `/data/github-runner/cloud`。如果服务器目录和本文不一致，先用上面的标签命令对齐真实目录，再修改文档。
+2026-06-22 现场校准：`jms.hdc-group.cn` / `10.98.90.154` 的 Cloud compose 工作目录为 `/data/iiot-platform/cloud/deploy`，Docker Root Dir 为 `/data/iiot-platform/runtime/docker`，Edge 更新素材目录为 `/data/iiot-platform/edge-client/edge-updates`。如果服务器目录和本文不一致，先用上面的标签命令对齐真实目录，再修改文档。
 
 首次部署或明确允许清空测试环境时，可以删除旧 stack、旧 compose 容器和旧卷，再按新版 compose 重新启动。例子：
 
@@ -292,11 +292,12 @@ sudo chmod 755 /data/iiot-platform/cloud/deploy/certs
 
 标准路径：
 
-1. 合并或推送到 `main`。
+1. 合并或推送到 `main`，保证 GitHub 有本次源码留痕。
 2. `cloud-ci` 默认只跑快速验证：restore/build、ServiceLayer、ConfigurationGuard、前端 build、compose config；完整 EndToEnd 只在手动 `workflow_dispatch` 勾选时运行。
-3. 等 push 自动触发的 `cloud-image` 在 `iiot-linux-prod` self-hosted runner 上完成。它只构建受影响应用镜像，并推送到 Harbor，tag 为 `sha-${GITHUB_SHA}`；随后按仓库清理旧 `sha-*` tag，只保留当前生产候选 tag；Step Summary 和 `cloud-built-service-*` artifact 会列出下一步应填的 `services`。
-4. 人工触发 `cloud-deploy`，输入 `release_tag = sha-*`，并把上一步 Step Summary 的 `Deploy services input` 原样填入 `services`。只有首部署、明确全量发布或应急恢复时，才允许留空 `services`。
-5. `cloud-deploy` 校验 runner 非 root、同步 `deploy/`、写入 `DEPLOY_ENV_FILE`、用 `SEED_ADMIN_PASSWORD` 覆盖服务器 `.env` 中的管理员密码、登录 Harbor，并执行 `deploy/scripts/deploy-release.sh`。部署完成后会把服务器落盘的 `deploy/releases/current-release.summary.md` 回贴到 GitHub Step Summary。
+3. 本机运行 `deploy/scripts/local-release.sh --services <services> --ssh-target <user@host>`；脚本会校验工作区干净、HEAD 已推送到 GitHub、Docker/buildx/Harbor 可用。
+4. 本机 `build-and-push.sh` 按服务构建并推送 `sha-<git-sha>` 镜像到 Harbor，输出 `Deploy services input` 和 `artifacts/deploy/cloud-built-services.txt`。
+5. 本机脚本通过 SSH 在服务器 `/data/iiot-platform/cloud/deploy` 执行 `DEPLOY_GIT_SHA=<sha> DEPLOY_TRIGGERED_BY=local ./scripts/deploy-release.sh sha-<sha> --services <services>`。
+6. 服务器端 `deploy-release.sh` 执行 pre-check、PostgreSQL backup、镜像 pull、容器启动、健康检查、发布后清理和 release history。
 
 GitHub secrets：
 
@@ -310,7 +311,9 @@ DEPLOY_ENV_FILE=<完整生产 .env 内容>
 SEED_ADMIN_PASSWORD=<固定 Cloud 管理员密码>
 ```
 
-应急手工路径只在 Actions 不可用时使用。
+GitHub `cloud-image` / `cloud-deploy` 只作为灾备路径，且 workflow 已要求确认词。日常发布不得等待它们。
+
+服务器手工路径只在本机 SSH 触发器不可用时使用。
 
 全量应急恢复时，在服务器上执行：
 

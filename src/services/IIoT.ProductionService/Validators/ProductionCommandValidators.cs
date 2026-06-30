@@ -158,6 +158,26 @@ public sealed class GenerateEdgeInstallerPackageCommandValidator : AbstractValid
     }
 }
 
+public sealed class ReportDeviceRuntimeHeartbeatCommandValidator : AbstractValidator<ReportDeviceRuntimeHeartbeatCommand>
+{
+    public ReportDeviceRuntimeHeartbeatCommandValidator()
+    {
+        RuleFor(x => x.DeviceId).NotEmpty();
+        RuleFor(x => x.ClientCode).NotEmpty().MaximumLength(64);
+        RuleFor(x => x.RuntimeInstanceId).NotEmpty().MaximumLength(128);
+        RuleFor(x => x.MachineProfile).MaximumLength(128).When(x => x.MachineProfile is not null);
+        RuleFor(x => x.HostVersion).NotEmpty().MaximumLength(64);
+        RuleFor(x => x.HostApiVersion).NotEmpty().MaximumLength(64);
+        RuleFor(x => x.Status)
+            .NotEmpty()
+            .Must(value => new[] { "Starting", "Running", "Stopping", "Stopped" }
+                .Contains(value?.Trim(), StringComparer.OrdinalIgnoreCase))
+            .WithMessage("运行状态必须是 Starting、Running、Stopping 或 Stopped。");
+        RuleFor(x => x.StartedAtUtc).NotEmpty();
+        RuleFor(x => x.ReportedAtUtc).NotEmpty();
+    }
+}
+
 public sealed class CreateRecipeCommandValidator : AbstractValidator<CreateRecipeCommand>
 {
     private static readonly RecipeParametersJsonbValidator ParametersValidator = new();

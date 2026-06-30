@@ -12,9 +12,9 @@ describe('devices feature guards', () => {
     expect(route!.meta?.requiredPermission).toBe(Permissions.Device.Read);
   });
 
-  it('requires exact device name before cascade delete confirmation is enabled', () => {
-    expect(isDeviceDeleteConfirmDisabled('一号注液机', '')).toBe(true);
-    expect(isDeviceDeleteConfirmDisabled('一号注液机', '一号')).toBe(true);
+  it('does not require retyping device name before cascade delete confirmation', () => {
+    expect(isDeviceDeleteConfirmDisabled('一号注液机', '')).toBe(false);
+    expect(isDeviceDeleteConfirmDisabled('一号注液机', '一号')).toBe(false);
     expect(isDeviceDeleteConfirmDisabled('一号注液机', '一号注液机')).toBe(false);
   });
 });

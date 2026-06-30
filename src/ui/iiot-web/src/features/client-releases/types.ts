@@ -102,11 +102,14 @@ export function statusTone(status: string): TagTone {
   const normalized = status.toLowerCase();
   if (normalized === 'published' || normalized === 'latest') return 'success';
   if (normalized === 'normal') return 'success';
+  if (normalized === 'running') return 'success';
+  if (normalized === 'starting') return 'info';
+  if (normalized === 'stopped' || normalized === 'runtimeheartbeatstale') return 'warning';
   if (normalized === 'updateavailable') return 'warning';
   if (normalized === 'incompatible' || normalized === 'archived') return 'error';
   if (normalized === 'offline') return 'error';
   if (normalized === 'deprecated') return 'warning';
-  if (normalized === 'missingreport' || normalized === 'norelease') return 'default';
+  if (normalized === 'missingreport' || normalized === 'missingruntimeheartbeat' || normalized === 'norelease') return 'default';
   return 'info';
 }
 
@@ -120,6 +123,12 @@ export function statusText(status: string): string {
     UpdateAvailable: '可更新',
     Incompatible: '不兼容',
     MissingReport: '未上报',
+    MissingRuntimeHeartbeat: '无运行心跳',
+    RuntimeHeartbeatStale: '超过24h未运行',
+    Starting: '启动中',
+    Running: '运行中',
+    Stopped: '已停止',
+    Unknown: '未知',
     NoRelease: '无发布',
     Offline: '上报超时',
     Normal: '正常',

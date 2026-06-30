@@ -22,6 +22,7 @@ public sealed class GetDeviceClientVersionInventoryHandler(
     ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IReadRepository<Device> deviceRepository,
     IReadRepository<DeviceClientVersionSnapshot> snapshotRepository,
+    IReadRepository<EdgeDeviceRuntimeHeartbeat> runtimeHeartbeatRepository,
     IReadRepository<ClientHostRelease> hostReleaseRepository,
     IReadRepository<ClientPluginRelease> pluginReleaseRepository)
     : IQueryHandler<GetDeviceClientVersionInventoryQuery, Result<IReadOnlyList<DeviceClientVersionInventoryDto>>>
@@ -51,6 +52,14 @@ public sealed class GetDeviceClientVersionInventoryHandler(
             new DeviceClientVersionSnapshotsByDevicesSpec(devices.Select(device => device.Id).ToList()),
             cancellationToken);
         var snapshotByDevice = snapshots.ToDictionary(snapshot => snapshot.DeviceId);
+        var runtimeHeartbeats = await runtimeHeartbeatRepository.GetListAsync(
+            new EdgeDeviceRuntimeHeartbeatsByDevicesSpec(devices.Select(device => device.Id).ToList()),
+            cancellationToken);
+        var runtimeHeartbeatByDevice = runtimeHeartbeats
+            .GroupBy(heartbeat => heartbeat.DeviceId)
+            .ToDictionary(
+                group => group.Key,
+                group => group.OrderByDescending(heartbeat => heartbeat.LastHeartbeatAtUtc).First());
 
         var channel = string.IsNullOrWhiteSpace(request.Channel) ? "stable" : request.Channel.Trim();
         var hostReleases = await hostReleaseRepository.GetListAsync(
@@ -75,7 +84,12 @@ public sealed class GetDeviceClientVersionInventoryHandler(
 
         var result = devices
             .OrderBy(device => device.DeviceName, StringComparer.OrdinalIgnoreCase)
-            .Select(device => BuildInventory(device, snapshotByDevice.GetValueOrDefault(device.Id), referenceHost, referencePluginsByModule))
+            .Select(device => BuildInventory(
+                device,
+                snapshotByDevice.GetValueOrDefault(device.Id),
+                runtimeHeartbeatByDevice.GetValueOrDefault(device.Id),
+                referenceHost,
+                referencePluginsByModule))
             .ToList();
 
         return Result.Success<IReadOnlyList<DeviceClientVersionInventoryDto>>(result);
@@ -84,6 +98,7 @@ public sealed class GetDeviceClientVersionInventoryHandler(
     private static DeviceClientVersionInventoryDto BuildInventory(
         Device device,
         DeviceClientVersionSnapshot? snapshot,
+        EdgeDeviceRuntimeHeartbeat? runtimeHeartbeat,
         ClientHostRelease? referenceHost,
         IReadOnlyDictionary<string, ClientPluginRelease> referencePluginsByModule)
     {
@@ -93,11 +108,19 @@ public sealed class GetDeviceClientVersionInventoryHandler(
             .OrderBy(plugin => plugin.ModuleId, StringComparer.OrdinalIgnoreCase)
             .Select(plugin => BuildPluginInventory(snapshot, plugin, referencePluginsByModule))
             .ToList();
-        var localIpAddresses = snapshot?.GetLocalIpAddresses() ?? [];
+        var runtimeLocalIpAddresses = runtimeHeartbeat?.GetLocalIpAddresses() ?? [];
+        var snapshotLocalIpAddresses = snapshot?.GetLocalIpAddresses() ?? [];
+        var localIpAddresses = runtimeLocalIpAddresses.Count > 0
+            ? runtimeLocalIpAddresses
+            : snapshotLocalIpAddresses;
         var primaryIp = localIpAddresses.FirstOrDefault()
+            ?? NormalizeOptional(runtimeHeartbeat?.RemoteIpAddress)
             ?? NormalizeOptional(snapshot?.RemoteIpAddress);
         var installStatus = ResolveInstallStatus(snapshot, hostStatus, pluginRows);
-        var issue = ResolveIssue(snapshot, hostStatus, hostIssue, pluginRows);
+        var softwareStatus = ResolveSoftwareStatus(runtimeHeartbeat, out var runtimeIssue);
+        var versionIssue = ResolveVersionIssue(snapshot, hostStatus, hostIssue, pluginRows);
+        var cloudIssue = ResolveCloudIssue();
+        var issue = runtimeIssue ?? versionIssue ?? cloudIssue;
 
         return new DeviceClientVersionInventoryDto(
             device.Id,
@@ -112,8 +135,12 @@ public sealed class GetDeviceClientVersionInventoryHandler(
             hostStatus,
             hostIssue,
             installStatus,
+            softwareStatus,
             BuildCurrentVersion(snapshot, pluginRows),
             issue,
+            versionIssue,
+            cloudIssue,
+            runtimeHeartbeat?.LastHeartbeatAtUtc,
             snapshot?.ReportedAtUtc,
             snapshot?.ReceivedAtUtc,
             pluginRows);
@@ -156,11 +183,6 @@ public sealed class GetDeviceClientVersionInventoryHandler(
             return "MissingReport";
         }
 
-        if (DateTime.UtcNow - snapshot.ReceivedAtUtc.ToUniversalTime() > ReportStaleThreshold)
-        {
-            return "Offline";
-        }
-
         if (hostStatus == "Incompatible" || plugins.Any(plugin => plugin.UpdateStatus == "Incompatible"))
         {
             return "Incompatible";
@@ -179,7 +201,33 @@ public sealed class GetDeviceClientVersionInventoryHandler(
         return "Normal";
     }
 
-    private static string? ResolveIssue(
+    private static string ResolveSoftwareStatus(
+        EdgeDeviceRuntimeHeartbeat? runtimeHeartbeat,
+        out string? issue)
+    {
+        issue = null;
+        if (runtimeHeartbeat is null)
+        {
+            issue = "客户端尚未上报运行心跳。";
+            return "MissingRuntimeHeartbeat";
+        }
+
+        if (DateTime.UtcNow - runtimeHeartbeat.LastHeartbeatAtUtc.ToUniversalTime() > ReportStaleThreshold)
+        {
+            issue = "超过 24 小时未收到运行心跳。";
+            return "RuntimeHeartbeatStale";
+        }
+
+        return runtimeHeartbeat.Status switch
+        {
+            "Starting" => "Starting",
+            "Running" => "Running",
+            "Stopping" or "Stopped" => "Stopped",
+            _ => "Unknown"
+        };
+    }
+
+    private static string? ResolveVersionIssue(
         DeviceClientVersionSnapshot? snapshot,
         string hostStatus,
         string? hostIssue,
@@ -192,7 +240,7 @@ public sealed class GetDeviceClientVersionInventoryHandler(
 
         if (DateTime.UtcNow - snapshot.ReceivedAtUtc.ToUniversalTime() > ReportStaleThreshold)
         {
-            return "超过 24 小时未上报。";
+            return "超过 24 小时未上报版本。";
         }
 
         if (!string.IsNullOrWhiteSpace(hostIssue))
@@ -223,6 +271,11 @@ public sealed class GetDeviceClientVersionInventoryHandler(
             return "部分插件暂无可对比的发布版本。";
         }
 
+        return null;
+    }
+
+    private static string? ResolveCloudIssue()
+    {
         return null;
     }
 

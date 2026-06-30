@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using IIoT.Core.Production.Aggregates.ClientReleases;
+using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.Commands.ClientReleases;
 using IIoT.ProductionService.Commands.ClientVersions;
@@ -16,6 +17,7 @@ using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Repository;
+using IIoT.SharedKernel.Result;
 using IIoT.SharedKernel.Specification;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -631,6 +633,160 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
+    public async Task ReportDeviceRuntimeHeartbeatHandler_ShouldUpsertLatestRuntimeState()
+    {
+        var deviceId = Guid.NewGuid();
+        var repository = new InMemoryRepository<EdgeDeviceRuntimeHeartbeat>();
+        var handler = new ReportDeviceRuntimeHeartbeatHandler(
+            new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-001")),
+            repository);
+
+        var first = await handler.Handle(
+            new ReportDeviceRuntimeHeartbeatCommand(
+                deviceId,
+                "DEV-001",
+                "runtime-a",
+                "LineA",
+                "1.0.20",
+                "1.0.0",
+                "Starting",
+                DateTime.UtcNow.AddMinutes(-1),
+                DateTime.UtcNow),
+            CancellationToken.None);
+        var second = await handler.Handle(
+            new ReportDeviceRuntimeHeartbeatCommand(
+                deviceId,
+                "DEV-001",
+                "runtime-a",
+                "LineA",
+                "1.0.20",
+                "1.0.0",
+                "Running",
+                DateTime.UtcNow.AddMinutes(-1),
+                DateTime.UtcNow,
+                ["10.0.0.8"]),
+            CancellationToken.None);
+
+        Assert.True(first.IsSuccess);
+        Assert.True(second.IsSuccess);
+        var heartbeat = Assert.Single(repository.Items);
+        Assert.Equal("Running", heartbeat.Status);
+        Assert.Equal(["10.0.0.8"], heartbeat.GetLocalIpAddresses());
+    }
+
+    [Fact]
+    public async Task DeviceInventory_ShouldSeparateInstallStatusFromRuntimeHeartbeat()
+    {
+        var processId = Guid.NewGuid();
+        var device = new Device("正极模切", "DEV-001", processId);
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.Items.Add(device);
+        var snapshotRepository = new InMemoryRepository<DeviceClientVersionSnapshot>();
+        snapshotRepository.Items.Add(new DeviceClientVersionSnapshot(
+            device.Id,
+            device.Code,
+            "1.0.0",
+            "1.0.0",
+            "stable",
+            DateTime.UtcNow,
+            []));
+        var runtimeRepository = new InMemoryRepository<EdgeDeviceRuntimeHeartbeat>();
+        var hostRepository = new InMemoryRepository<ClientHostRelease>();
+        hostRepository.Items.Add(new ClientHostRelease(
+            "stable",
+            "1.0.0",
+            "1.0.0",
+            "win-x64",
+            "net10.0",
+            "/edge-updates/installers/stable/1.0.0/installer-artifact.json",
+            new string('a', 64),
+            1024,
+            "host",
+            ClientReleaseStatus.Published,
+            null,
+            "IIoT"));
+
+        var handler = new GetDeviceClientVersionInventoryHandler(
+            new StubCurrentUserDeviceAccessService(),
+            deviceRepository,
+            snapshotRepository,
+            runtimeRepository,
+            hostRepository,
+            new InMemoryRepository<ClientPluginRelease>());
+
+        var result = await handler.Handle(
+            new GetDeviceClientVersionInventoryQuery("stable", "win-x64"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var row = Assert.Single(result.Value!);
+        Assert.Equal("Normal", row.InstallStatus);
+        Assert.Equal("MissingRuntimeHeartbeat", row.SoftwareStatus);
+        Assert.NotEqual("Offline", row.InstallStatus);
+        Assert.Contains("运行心跳", row.Issue, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DeleteClientReleaseFilesHandler_ShouldRejectHostReleaseStillInUse()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-delete-release-root");
+        try
+        {
+            var hostDirectory = Path.Combine(edgeRoot, "installers", "stable", "1.0.0");
+            Directory.CreateDirectory(hostDirectory);
+            File.WriteAllText(Path.Combine(hostDirectory, "installer-artifact.json"), "{}");
+            var hostRelease = new ClientHostRelease(
+                "stable",
+                "1.0.0",
+                "1.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/installers/stable/1.0.0/installer-artifact.json",
+                new string('a', 64),
+                1024,
+                "host",
+                ClientReleaseStatus.Published,
+                null,
+                "IIoT");
+            var hostRepository = new InMemoryRepository<ClientHostRelease>();
+            hostRepository.Items.Add(hostRelease);
+            var deviceId = Guid.NewGuid();
+            var snapshotRepository = new InMemoryRepository<DeviceClientVersionSnapshot>();
+            snapshotRepository.Items.Add(new DeviceClientVersionSnapshot(
+                deviceId,
+                "DEV-001",
+                "1.0.0",
+                "1.0.0",
+                "stable",
+                DateTime.UtcNow,
+                []));
+            var auditTrail = new RecordingAuditTrailService();
+            var handler = new DeleteClientReleaseFilesHandler(
+                Options.Create(new EdgeInstallerArtifactOptions { RootPath = Path.Combine(edgeRoot, "installers") }),
+                hostRepository,
+                new InMemoryRepository<ClientPluginRelease>(),
+                snapshotRepository,
+                new TestCurrentUser(),
+                auditTrail);
+
+            var result = await handler.Handle(
+                new DeleteClientReleaseFilesCommand(hostRelease.Id),
+                CancellationToken.None);
+
+            Assert.False(result.IsSuccess);
+            Assert.Equal(ClientReleaseStatus.Published, hostRelease.Status);
+            Assert.True(Directory.Exists(hostDirectory));
+            Assert.Contains(auditTrail.Entries, entry =>
+                entry.OperationType == "ClientRelease.DeleteFiles"
+                && !entry.Succeeded);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
     public async Task GetPublicClientDownloadsHandler_ShouldExposeOnlyPublishedHostAndPluginCatalog()
     {
         var hostRepository = new InMemoryRepository<ClientHostRelease>();
@@ -1167,6 +1323,26 @@ public sealed class ClientReleaseBehaviorTests
         public Guid? DeviceId => null;
 
         public bool IsAuthenticated => true;
+    }
+
+    private sealed class StubCurrentUserDeviceAccessService : ICurrentUserDeviceAccessService
+    {
+        public bool IsAdministrator => AccessibleDeviceIds is null;
+
+        public IReadOnlyList<Guid>? AccessibleDeviceIds { get; init; }
+
+        public Task<Result<IReadOnlyList<Guid>?>> GetAccessibleDeviceIdsAsync(
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Result.Success(AccessibleDeviceIds));
+        }
+
+        public Task<Result> EnsureCanAccessDeviceAsync(
+            Guid deviceId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Result.Success());
+        }
     }
 
     private sealed class ThrowingRetentionService(string message) : IClientReleaseRetentionService
