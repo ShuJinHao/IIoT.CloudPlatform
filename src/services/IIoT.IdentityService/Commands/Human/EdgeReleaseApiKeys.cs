@@ -19,10 +19,6 @@ public sealed record RevokeEdgeReleaseApiKeyCommand(
     string? Reason = null)
     : IHumanCommand<Result>;
 
-[AuthorizeRequirement(ClientReleasePermissions.Manage)]
-public sealed record GetEdgeReleaseApiKeysQuery()
-    : IHumanQuery<Result<IReadOnlyList<EdgeReleaseApiKeyListItem>>>;
-
 public sealed class CreateEdgeReleaseApiKeyHandler(
     IEdgeReleaseApiKeyService apiKeyService,
     ICurrentUser currentUser,
@@ -133,13 +129,4 @@ public sealed class RevokeEdgeReleaseApiKeyHandler(
 
     private static string JoinErrors(IEnumerable<string>? errors, string fallback)
         => string.Join("; ", errors ?? [fallback]);
-}
-
-public sealed class GetEdgeReleaseApiKeysHandler(IEdgeReleaseApiKeyService apiKeyService)
-    : IQueryHandler<GetEdgeReleaseApiKeysQuery, Result<IReadOnlyList<EdgeReleaseApiKeyListItem>>>
-{
-    public async Task<Result<IReadOnlyList<EdgeReleaseApiKeyListItem>>> Handle(
-        GetEdgeReleaseApiKeysQuery request,
-        CancellationToken cancellationToken)
-        => Result.Success(await apiKeyService.GetListAsync(cancellationToken));
 }

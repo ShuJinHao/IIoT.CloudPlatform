@@ -42,6 +42,7 @@ iiot-migration -> one-shot migration/bootstrap job
 - `${GATEWAY_HTTP_PORT:-80}`：产品入口。
 - `/api/v1/human/*`：人工端 API。
 - `/api/v1/edge/*`：边端上传 API。
+- `/api/v1/machine/*`：机器身份 API；当前用于 Edge Release API key 换短期发布 JWT。
 - `/api/v1/bootstrap/*`：边端 bootstrap API。
 - `/api/v1/public/client-downloads/latest`：公开客户端下载目录 API，只暴露已发布通用宿主下载和插件版本 catalog。
 - `/downloads`：公开客户端下载中心页面，不要求登录。

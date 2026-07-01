@@ -305,6 +305,7 @@ public sealed class ConfigurationGuardTests
                 if (!route.StartsWith("api/v1/human/", StringComparison.Ordinal)
                     && !route.StartsWith("api/v1/edge/", StringComparison.Ordinal)
                     && !route.StartsWith("api/v1/public/", StringComparison.Ordinal)
+                    && !route.StartsWith("api/v1/machine/", StringComparison.Ordinal)
                     && !route.StartsWith("api/v1/ai/read", StringComparison.Ordinal)
                     && !route.StartsWith("api/v1/ai/identity", StringComparison.Ordinal))
                 {
@@ -866,6 +867,7 @@ public sealed class ConfigurationGuardTests
         gatewayAppSettingsSource.Should().Contain("\"Path\": \"/api/v1/human/identity/edge-login\"");
         gatewayAppSettingsSource.Should().Contain("/api/v1/human/{**catch-all}");
         gatewayAppSettingsSource.Should().Contain("/api/v1/public/{**catch-all}");
+        gatewayAppSettingsSource.Should().Contain("/api/v1/machine/{**catch-all}");
         gatewayAppSettingsSource.Should().Contain("/api/v1/edge/{**catch-all}");
         gatewayAppSettingsSource.Should().Contain("/api/v1/ai/read/{**catch-all}");
         gatewayAppSettingsSource.Should().Contain("/internal/healthz");
@@ -879,6 +881,7 @@ public sealed class ConfigurationGuardTests
         gatewayAppSettingsSource.Should().NotContain("legacy-human-edge-login");
         gatewayAppSettingsSource.Should().Contain("internal-health");
         gatewayAppSettingsSource.Should().Contain("\"Set\": \"public\"");
+        gatewayAppSettingsSource.Should().Contain("\"Set\": \"machine\"");
         gatewayRouteCatalogSource.Should().Contain("GatewayRoutes:BlockedAliases");
         gatewayRouteCatalogSource.Should().Contain("ReverseProxy:Routes");
         gatewayRouteCatalogSource.Should().Contain("PathPrefix");
@@ -1357,6 +1360,7 @@ public sealed class ConfigurationGuardTests
         conventionSource.Should().Contain("return \"ai-read\";");
         conventionSource.Should().Contain("return \"bootstrap\";");
         conventionSource.Should().Contain("return \"edge\";");
+        conventionSource.Should().Contain("return \"machine\";");
         conventionSource.Should().Contain("return \"human\";");
     }
 
@@ -1367,6 +1371,7 @@ public sealed class ConfigurationGuardTests
 
         documentSource.Should().Contain("/api/v1/human/*");
         documentSource.Should().Contain("/api/v1/edge/*");
+        documentSource.Should().Contain("/api/v1/machine/*");
         documentSource.Should().Contain("/api/v1/bootstrap/*");
         documentSource.Should().Contain("/api/v1/bootstrap/device-instance");
         documentSource.Should().Contain("/api/v1/bootstrap/edge-login");

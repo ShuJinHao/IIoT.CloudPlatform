@@ -34,6 +34,9 @@ internal sealed class RouteSurfaceApiExplorerConvention : IApplicationModelConve
         if (controllerRoute.StartsWith("api/v1/ai/read/", StringComparison.OrdinalIgnoreCase))
             return "ai-read";
 
+        if (controllerRoute.StartsWith("api/v1/machine/", StringComparison.OrdinalIgnoreCase))
+            return "machine";
+
         if (controllerRoute.StartsWith("api/v1/edge/", StringComparison.OrdinalIgnoreCase))
             return "edge";
 

@@ -1,5 +1,6 @@
 using IIoT.HttpApi.Infrastructure;
 using IIoT.IdentityService.Commands;
+using IIoT.IdentityService.Queries;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
