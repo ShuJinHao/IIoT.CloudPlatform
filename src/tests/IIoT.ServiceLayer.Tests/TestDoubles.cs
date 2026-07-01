@@ -917,6 +917,10 @@ internal sealed class TestCurrentUser : ICurrentUser
 
     public string? Role { get; init; }
 
+    public string? ActorType { get; init; }
+
+    public IReadOnlyCollection<string> Permissions { get; init; } = [];
+
     public Guid? DeviceId { get; init; }
 
     public bool IsAuthenticated { get; init; }
@@ -1213,5 +1217,13 @@ internal sealed class StubJwtTokenGenerator : IJwtTokenGenerator
         Guid processId)
     {
         return new JwtTokenResult($"edge-{deviceId:N}", DateTimeOffset.UtcNow.AddMinutes(60));
+    }
+
+    public JwtTokenResult GenerateEdgeReleasePublisherToken(
+        Guid apiKeyId,
+        string apiKeyName,
+        IEnumerable<string> permissions)
+    {
+        return new JwtTokenResult($"edge-release-{apiKeyId:N}", DateTimeOffset.UtcNow.AddMinutes(60));
     }
 }

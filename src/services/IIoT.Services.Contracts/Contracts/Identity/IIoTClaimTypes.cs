@@ -15,4 +15,6 @@ public static class IIoTClaimTypes
     public const string EdgeDeviceActor = "edge-device";
     public const string HumanActor = "human-user";
     public const string AiServiceActor = "ai-service-account";
+    public const string EdgeReleasePublisherActor = "edge-release-publisher";
+    public const string EdgeReleaseApiKeyId = "edge_release_api_key_id";
 }

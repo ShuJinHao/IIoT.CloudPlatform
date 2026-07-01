@@ -12,6 +12,10 @@ public interface ICurrentUser
 
     string? Role { get; }
 
+    string? ActorType { get; }
+
+    IReadOnlyCollection<string> Permissions { get; }
+
     Guid? DeviceId { get; }
 
     bool IsAuthenticated { get; }

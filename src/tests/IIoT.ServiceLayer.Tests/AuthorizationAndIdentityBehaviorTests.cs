@@ -10,8 +10,10 @@ using IIoT.Services.CrossCutting.Authorization;
 using IIoT.Services.CrossCutting.Behaviors;
 using IIoT.Services.CrossCutting.Caching;
 using IIoT.Services.CrossCutting.Caching.Options;
+using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.CrossCutting.Exceptions;
+using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Result;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
@@ -465,6 +467,109 @@ public sealed class AuthorizationAndIdentityBehaviorTests
     }
 
     [Fact]
+    public async Task AuthorizationBehavior_ShouldAllowEdgeReleasePublisherForPublishPermission()
+    {
+        var nextCalled = false;
+        var permissionProvider = new RecordingPermissionProvider();
+        var behavior = new AuthorizationBehavior<EdgeReleasePublishCommand, Result<bool>>(
+            new TestCurrentUser
+            {
+                Id = "edge-release-api-key:test",
+                UserName = "edge-publisher:test",
+                ActorType = IIoTClaimTypes.EdgeReleasePublisherActor,
+                Permissions = [ClientReleasePermissions.Publish],
+                IsAuthenticated = true
+            },
+            permissionProvider);
+
+        var result = await behavior.Handle(
+            new EdgeReleasePublishCommand(),
+            _ =>
+            {
+                nextCalled = true;
+                return Task.FromResult(Result.Success(true));
+            },
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(nextCalled);
+        Assert.Null(permissionProvider.LastUserId);
+    }
+
+    [Fact]
+    public async Task AuthorizationBehavior_ShouldRejectEdgeReleasePublisherForManagePermission()
+    {
+        var behavior = new AuthorizationBehavior<EdgeReleaseManageCommand, Result<bool>>(
+            new TestCurrentUser
+            {
+                Id = "edge-release-api-key:test",
+                UserName = "edge-publisher:test",
+                ActorType = IIoTClaimTypes.EdgeReleasePublisherActor,
+                Permissions = [ClientReleasePermissions.Publish, ClientReleasePermissions.Manage],
+                IsAuthenticated = true
+            },
+            new RecordingPermissionProvider());
+
+        var exception = await Assert.ThrowsAsync<ForbiddenException>(() =>
+            behavior.Handle(
+                new EdgeReleaseManageCommand(),
+                _ => Task.FromResult(Result.Success(true)),
+                CancellationToken.None));
+
+        Assert.Contains("发布机器凭据只能执行客户端发布读取和上传操作", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AuthorizationBehavior_ShouldRejectEdgeReleasePublisherForUnprotectedHumanRequest()
+    {
+        var behavior = new AuthorizationBehavior<UnprotectedHumanCommand, Result<bool>>(
+            new TestCurrentUser
+            {
+                Id = "edge-release-api-key:test",
+                UserName = "edge-publisher:test",
+                ActorType = IIoTClaimTypes.EdgeReleasePublisherActor,
+                Permissions = [ClientReleasePermissions.Publish],
+                IsAuthenticated = true
+            },
+            new RecordingPermissionProvider());
+
+        var exception = await Assert.ThrowsAsync<ForbiddenException>(() =>
+            behavior.Handle(
+                new UnprotectedHumanCommand(),
+                _ => Task.FromResult(Result.Success(true)),
+                CancellationToken.None));
+
+        Assert.Contains("不能执行未声明权限点", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AuthorizationBehavior_ShouldAllowHumanUserForUnprotectedHumanRequest()
+    {
+        var nextCalled = false;
+        var behavior = new AuthorizationBehavior<UnprotectedHumanCommand, Result<bool>>(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "human-user",
+                ActorType = IIoTClaimTypes.HumanActor,
+                IsAuthenticated = true
+            },
+            new RecordingPermissionProvider());
+
+        var result = await behavior.Handle(
+            new UnprotectedHumanCommand(),
+            _ =>
+            {
+                nextCalled = true;
+                return Task.FromResult(Result.Success(true));
+            },
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(nextCalled);
+    }
+
+    [Fact]
     public async Task DeviceBindingBehavior_ShouldAllowMatchingDeviceId()
     {
         var deviceId = Guid.NewGuid();
@@ -586,4 +691,12 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             return Task.FromResult<IList<string>>([]);
         }
     }
+
+    [AuthorizeRequirement(ClientReleasePermissions.Publish)]
+    private sealed record EdgeReleasePublishCommand() : IHumanCommand<Result<bool>>;
+
+    [AuthorizeRequirement(ClientReleasePermissions.Manage)]
+    private sealed record EdgeReleaseManageCommand() : IHumanCommand<Result<bool>>;
+
+    private sealed record UnprotectedHumanCommand() : IHumanCommand<Result<bool>>;
 }

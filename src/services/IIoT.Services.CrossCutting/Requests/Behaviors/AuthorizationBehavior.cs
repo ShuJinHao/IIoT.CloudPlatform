@@ -17,6 +17,12 @@ public class AuthorizationBehavior<TRequest, TResponse>(
     IPermissionProvider permissionProvider) : IPipelineBehavior<TRequest, TResponse>
     where TRequest : IRequest<TResponse>
 {
+    private static readonly HashSet<string> EdgeReleasePublisherAllowedPermissions =
+    [
+        ClientReleasePermissions.Read,
+        ClientReleasePermissions.Publish
+    ];
+
     public async Task<TResponse> Handle(
         TRequest request,
         RequestHandlerDelegate<TResponse> next,
@@ -28,10 +34,30 @@ public class AuthorizationBehavior<TRequest, TResponse>(
             .Select(a => a.Permission)
             .ToList();
 
-        if (requiredPermissions.Count == 0) return await next(cancellationToken);
+        if (requiredPermissions.Count == 0)
+        {
+            if (string.Equals(user.ActorType, IIoTClaimTypes.EdgeReleasePublisherActor, StringComparison.Ordinal) &&
+                IsHumanRequest(typeof(TRequest)))
+            {
+                throw new ForbiddenException("拒绝访问：发布机器凭据不能执行未声明权限点的人员端请求");
+            }
+
+            return await next(cancellationToken);
+        }
 
         if (!user.IsAuthenticated || string.IsNullOrWhiteSpace(user.Id))
             throw new ForbiddenException("拒绝访问：用户未登录或身份令牌无效");
+
+        if (string.Equals(user.ActorType, IIoTClaimTypes.EdgeReleasePublisherActor, StringComparison.Ordinal))
+        {
+            if (requiredPermissions.Any(permission => !EdgeReleasePublisherAllowedPermissions.Contains(permission)))
+                throw new ForbiddenException("拒绝访问：发布机器凭据只能执行客户端发布读取和上传操作");
+
+            if (!requiredPermissions.All(permission => user.Permissions.Contains(permission)))
+                throw new ForbiddenException("拒绝访问：发布机器凭据缺少执行该操作的必备权限点");
+
+            return await next(cancellationToken);
+        }
 
         if (string.Equals(user.Role, SystemRoles.Admin, StringComparison.Ordinal))
             return await next(cancellationToken);
@@ -46,4 +72,8 @@ public class AuthorizationBehavior<TRequest, TResponse>(
 
         return await next(cancellationToken);
     }
+
+    private static bool IsHumanRequest(Type requestType)
+        => requestType.GetInterfaces()
+            .Any(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IHumanRequest<>));
 }

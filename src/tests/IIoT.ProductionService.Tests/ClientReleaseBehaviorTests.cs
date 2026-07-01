@@ -1320,6 +1320,10 @@ public sealed class ClientReleaseBehaviorTests
 
         public string? Role { get; init; } = "Administrator";
 
+        public string? ActorType { get; init; }
+
+        public IReadOnlyCollection<string> Permissions { get; init; } = [];
+
         public Guid? DeviceId => null;
 
         public bool IsAuthenticated => true;

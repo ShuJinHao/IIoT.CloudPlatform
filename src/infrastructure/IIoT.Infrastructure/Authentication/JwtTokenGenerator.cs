@@ -63,6 +63,31 @@ public class JwtTokenGenerator(IOptions<JwtSettings> jwtOptions) : IJwtTokenGene
         return CreateToken(claims);
     }
 
+    public JwtTokenResult GenerateEdgeReleasePublisherToken(
+        Guid apiKeyId,
+        string apiKeyName,
+        IEnumerable<string> permissions)
+    {
+        var subject = $"edge-release-api-key:{apiKeyId:N}";
+        var claims = new List<Claim>
+        {
+            new(JwtRegisteredClaimNames.Sub, subject),
+            new(JwtRegisteredClaimNames.UniqueName, apiKeyName),
+            new(ClaimTypes.NameIdentifier, subject),
+            new(ClaimTypes.Name, $"edge-publisher:{apiKeyName}"),
+            new(IIoTClaimTypes.ActorType, IIoTClaimTypes.EdgeReleasePublisherActor),
+            new(IIoTClaimTypes.EdgeReleaseApiKeyId, apiKeyId.ToString()),
+            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+        };
+
+        foreach (var permission in permissions.Distinct(StringComparer.Ordinal))
+        {
+            claims.Add(new Claim(IIoTClaimTypes.Permission, permission));
+        }
+
+        return CreateToken(claims);
+    }
+
     private JwtTokenResult CreateToken(IReadOnlyCollection<Claim> claims)
     {
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtSettings.Secret));

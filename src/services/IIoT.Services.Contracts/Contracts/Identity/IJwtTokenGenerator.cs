@@ -16,4 +16,9 @@ public interface IJwtTokenGenerator
         Guid deviceId,
         string clientCode,
         Guid processId);
+
+    JwtTokenResult GenerateEdgeReleasePublisherToken(
+        Guid apiKeyId,
+        string apiKeyName,
+        IEnumerable<string> permissions);
 }
