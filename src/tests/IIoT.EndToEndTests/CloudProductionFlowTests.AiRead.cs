@@ -133,7 +133,7 @@ public sealed partial class CloudProductionFlowTests
                 AiReadPermissions.Device,
                 AiReadPermissions.Capacity,
                 AiReadPermissions.DeviceLog,
-                AiReadPermissions.PassStation
+                AiReadPermissions.ProductionRecord
             ],
             [device.DeviceId]));
 
@@ -155,14 +155,15 @@ public sealed partial class CloudProductionFlowTests
             response => response.Items.Any(x => x.TotalCount == 7 && x.OkCount == 6));
         capacity.Source.Should().Be("capacity.summary");
 
-        var passStations = await EventuallyAsync(
-            async () => await GetFromJsonAsync<AiReadListResponseDto<AiReadPassStationDto>>(
-                $"/api/v1/ai/read/pass-stations/injection?deviceId={device.DeviceId}&startTime={startTime}&endTime={endTime}&barcode={Uri.EscapeDataString(barcode)}"),
+        var productionRecords = await EventuallyAsync(
+            async () => await GetFromJsonAsync<AiReadListResponseDto<AiReadProductionRecordDto>>(
+                $"/api/v1/ai/read/production-records?typeKey=injection&deviceId={device.DeviceId}&startTime={startTime}&endTime={endTime}&barcode={Uri.EscapeDataString(barcode)}"),
             response => response.Items.Any(x => x.Barcode == barcode));
-        var passStation = passStations.Items.Single(x => x.Barcode == barcode);
-        passStations.Source.Should().Be("pass_station_records:injection");
-        passStation.Fields.Should().ContainKey("injectionVolume");
-        passStation.Fields.Should().NotContainKey("notConfigured");
+        var productionRecord = productionRecords.Items.Single(x => x.Barcode == barcode);
+        productionRecords.Source.Should().Be("production_records");
+        productionRecord.TypeKey.Should().Be("injection");
+        productionRecord.Fields.Should().ContainKey("injectionVolume");
+        productionRecord.Fields.Should().NotContainKey("notConfigured");
     }
 
     [Fact]
@@ -226,14 +227,14 @@ public sealed partial class CloudProductionFlowTests
         humanItem.CellResult.Should().Be("NG");
         humanItem.Fields.Should().ContainKey("injectionVolume");
 
-        _fixture.SetAuthToken(CreateAiReadToken([AiReadPermissions.PassStation], [device.DeviceId]));
-        var aiPassStations = await EventuallyAsync(
-            async () => await GetFromJsonAsync<AiReadListResponseDto<AiReadPassStationDto>>(
-                $"/api/v1/ai/read/pass-stations/injection?deviceId={device.DeviceId}&startTime={startTime}&endTime={endTime}&barcode={Uri.EscapeDataString(barcode)}"),
+        _fixture.SetAuthToken(CreateAiReadToken([AiReadPermissions.ProductionRecord], [device.DeviceId]));
+        var aiProductionRecords = await EventuallyAsync(
+            async () => await GetFromJsonAsync<AiReadListResponseDto<AiReadProductionRecordDto>>(
+                $"/api/v1/ai/read/production-records?typeKey=injection&deviceId={device.DeviceId}&startTime={startTime}&endTime={endTime}&barcode={Uri.EscapeDataString(barcode)}"),
             response => response.Items.Count(x => x.Barcode == barcode) == 1);
 
-        var aiItem = aiPassStations.Items.Single(x => x.Barcode == barcode);
-        aiItem.CellResult.Should().Be("NG");
+        var aiItem = aiProductionRecords.Items.Single(x => x.Barcode == barcode);
+        aiItem.Result.Should().Be("NG");
         aiItem.Fields.Should().ContainKey("injectionVolume");
     }
 
@@ -385,14 +386,26 @@ public sealed record AiReadDeviceLogDto(
     DateTime LogTime,
     DateTime ReceivedAt);
 
-public sealed record AiReadPassStationDto(
-    Guid Id,
+public sealed record AiReadProductionFieldSchemaDto(
+    string Key,
+    string Label,
+    string Type,
+    string? Unit,
+    int? Precision,
+    bool Required);
+
+public sealed record AiReadProductionRecordDto(
+    Guid RecordId,
+    string TypeKey,
+    string TypeName,
     Guid DeviceId,
+    string DeviceName,
     string? Barcode,
-    string? CellResult,
-    DateTime? CompletedTime,
+    string? Result,
+    DateTime? CompletedAt,
     DateTime? ReceivedAt,
-    Dictionary<string, JsonElement> Fields);
+    Dictionary<string, JsonElement> Fields,
+    List<AiReadProductionFieldSchemaDto> FieldSchema);
 
 public sealed record AiReadAuditRow(
     bool Succeeded,

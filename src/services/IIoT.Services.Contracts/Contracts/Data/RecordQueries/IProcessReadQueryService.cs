@@ -1,7 +1,18 @@
 namespace IIoT.Services.Contracts.RecordQueries;
 
+public sealed record ProcessReadItem(
+    Guid Id,
+    string ProcessCode,
+    string ProcessName);
+
 public interface IProcessReadQueryService
 {
+    Task<(IReadOnlyList<ProcessReadItem> Items, int TotalCount)> GetPagedAsync(
+        string? keyword,
+        int skip,
+        int take,
+        CancellationToken cancellationToken = default);
+
     Task<bool> ExistsAsync(
         Guid processId,
         CancellationToken cancellationToken = default);

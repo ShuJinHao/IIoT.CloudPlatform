@@ -46,7 +46,8 @@ public class GetAllDefinedPermissionsHandler(
         ClientReleasePermissions.Manage,
 
         // AI 只读接口
-        AiReadPermissions.Device, AiReadPermissions.Capacity, AiReadPermissions.DeviceLog, AiReadPermissions.PassStation,
+        AiReadPermissions.Device, AiReadPermissions.Process, AiReadPermissions.ClientRelease, AiReadPermissions.DeviceClientState,
+        AiReadPermissions.Capacity, AiReadPermissions.DeviceLog, AiReadPermissions.ProductionRecord,
         AiReadPermissions.IdentityStatus,
 
         // ── WPF 边缘端菜单权限 ──────────────────────────────────────

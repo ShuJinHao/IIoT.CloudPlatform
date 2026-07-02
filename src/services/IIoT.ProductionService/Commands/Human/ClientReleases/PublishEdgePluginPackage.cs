@@ -47,7 +47,7 @@ public sealed record EdgePluginPackagePublishResultDto(
 public sealed class PublishEdgePluginPackageHandler(
     IOptions<EdgeInstallerArtifactOptions> artifactOptions,
     IOptions<EdgeReleaseUploadOptions> uploadOptions,
-    IRepository<ClientPluginRelease> pluginRepository,
+    IRepository<ClientReleaseComponent> componentRepository,
     IClientReleaseRetentionService retentionService,
     ICurrentUser currentUser,
     IAuditTrailService auditTrailService)
@@ -119,14 +119,14 @@ public sealed class PublishEdgePluginPackageHandler(
 
             var metadata = loadResult.Metadata!;
             var packagePath = loadResult.PackagePath!;
-            var existing = await pluginRepository.GetSingleOrDefaultAsync(
-                new ClientPluginReleaseByIdentitySpec(
+            var component = await componentRepository.GetSingleOrDefaultAsync(
+                new ClientReleaseComponentByIdentitySpec(
+                    ClientReleaseComponentKind.Plugin,
                     metadata.ModuleId,
                     metadata.Channel,
-                    metadata.Version,
                     metadata.TargetRuntime),
                 cancellationToken);
-            if (existing is not null)
+            if (component?.FindVersion(metadata.Version) is not null)
             {
                 return await FailAsync(
                     $"插件版本已存在，拒绝重复发布: {metadata.ModuleId}/{metadata.Channel}/{metadata.Version}/{metadata.TargetRuntime}。",
@@ -154,18 +154,33 @@ public sealed class PublishEdgePluginPackageHandler(
                 metadata.ModuleId,
                 metadata.Version,
                 metadata.PackageFileName);
-            var release = new ClientPluginRelease(
-                metadata.ModuleId,
-                string.IsNullOrWhiteSpace(metadata.DisplayName) ? metadata.ModuleId : metadata.DisplayName,
-                metadata.Description,
-                metadata.IconKind,
-                metadata.AccentColor,
-                metadata.Channel,
+            var displayName = string.IsNullOrWhiteSpace(metadata.DisplayName) ? metadata.ModuleId : metadata.DisplayName;
+            if (component is null)
+            {
+                component = ClientReleaseComponent.CreatePlugin(
+                    metadata.ModuleId,
+                    displayName,
+                    metadata.Description,
+                    metadata.IconKind,
+                    metadata.AccentColor,
+                    metadata.Channel,
+                    metadata.TargetRuntime);
+                componentRepository.Add(component);
+            }
+            else
+            {
+                component.UpdatePluginMetadata(
+                    displayName,
+                    metadata.Description,
+                    metadata.IconKind,
+                    metadata.AccentColor);
+            }
+
+            component.UpsertPluginVersion(
                 metadata.Version,
                 metadata.HostApiVersion,
                 metadata.MinHostVersion,
                 metadata.MaxHostVersion,
-                metadata.TargetRuntime,
                 metadata.TargetFramework,
                 downloadUrl,
                 metadata.Sha256,
@@ -175,9 +190,15 @@ public sealed class PublishEdgePluginPackageHandler(
                 ClientReleaseStatus.Published,
                 metadata.Signature,
                 string.IsNullOrWhiteSpace(metadata.Publisher) ? "IIoT" : metadata.Publisher,
-                metadata.CreatedAtUtc);
-            pluginRepository.Add(release);
-            await pluginRepository.SaveChangesAsync(cancellationToken);
+                metadata.CreatedAtUtc,
+                ClientReleaseArtifactBuilder.FromPluginDownloadUrl(
+                    downloadUrl,
+                    metadata.Channel,
+                    metadata.ModuleId,
+                    metadata.Version,
+                    metadata.Sha256,
+                    metadata.PackageSize));
+            await componentRepository.SaveChangesAsync(cancellationToken);
             databaseSaved = true;
 
             string? cleanupWarning = null;
@@ -534,21 +555,24 @@ public sealed class PublishEdgePluginPackageHandler(
         string targetRuntime,
         CancellationToken cancellationToken)
     {
-        var pluginReleases = await pluginRepository.GetListAsync(
-            new ClientPluginReleasesByChannelSpec(channel, targetRuntime, onlyPublished: false, includeArchived: true),
+        var components = await componentRepository.GetListAsync(
+            new ClientReleaseComponentsByChannelSpec(channel, targetRuntime, onlyPublished: false, includeArchived: true),
             cancellationToken);
 
-        foreach (var release in pluginReleases.Where(release => release.Status == ClientReleaseStatus.Archived))
+        foreach (var component in components.Where(component => component.ComponentKind == ClientReleaseComponentKind.Plugin))
         {
-            var directory = Path.Combine(
-                edgeRoot,
-                "plugins",
-                release.Channel,
-                EscapeFileSystemSegment(release.ModuleId),
-                release.Version);
-            if (Directory.Exists(directory))
+            foreach (var release in component.Versions.Where(release => release.Status == ClientReleaseStatus.Archived))
             {
-                Directory.Delete(directory, recursive: true);
+                var directory = Path.Combine(
+                    edgeRoot,
+                    "plugins",
+                    component.Channel,
+                    EscapeFileSystemSegment(component.ComponentKey),
+                    release.Version);
+                if (Directory.Exists(directory))
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
             }
         }
     }

@@ -50,8 +50,7 @@ public sealed record EdgeReleaseBundlePublishResultDto(
 public sealed class PublishEdgeReleaseBundleHandler(
     IOptions<EdgeInstallerArtifactOptions> artifactOptions,
     IOptions<EdgeReleaseUploadOptions> uploadOptions,
-    IRepository<ClientHostRelease> hostRepository,
-    IRepository<ClientPluginRelease> pluginRepository,
+    IRepository<ClientReleaseComponent> componentRepository,
     IClientReleaseRetentionService retentionService,
     ICurrentUser currentUser,
     IAuditTrailService auditTrailService)
@@ -164,6 +163,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 manifest,
                 BuildManifestDownloadUrl(channel, version),
                 pluginPackages,
+                velopackTransaction?.Changes ?? [],
                 cancellationToken);
 
             commitPointReached = true;
@@ -682,14 +682,14 @@ public sealed class PublishEdgeReleaseBundleHandler(
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var existing = await pluginRepository.GetSingleOrDefaultAsync(
-                new ClientPluginReleaseByIdentitySpec(
+            var existingComponent = await componentRepository.GetSingleOrDefaultAsync(
+                new ClientReleaseComponentByIdentitySpec(
+                    ClientReleaseComponentKind.Plugin,
                     module.ModuleId,
                     manifest.Channel,
-                    module.Version,
                     manifest.TargetRuntime),
                 cancellationToken);
-            if (existing is not null)
+            if (existingComponent?.FindVersion(module.Version) is not null)
             {
                 continue;
             }
@@ -753,58 +753,61 @@ public sealed class PublishEdgeReleaseBundleHandler(
         EdgeInstallerArtifactManifest manifest,
         string manifestDownloadUrl,
         IReadOnlyDictionary<string, PluginPackagePublishArtifact> pluginPackages,
+        IReadOnlyList<VelopackFileChange> velopackChanges,
         CancellationToken cancellationToken)
     {
-        var host = await hostRepository.GetSingleOrDefaultAsync(
-            new ClientHostReleaseByIdentitySpec(
+        var hostComponent = await componentRepository.GetSingleOrDefaultAsync(
+            new ClientReleaseComponentByIdentitySpec(
+                ClientReleaseComponentKind.Host,
+                ClientReleaseComponent.HostComponentKey,
                 manifest.Channel,
-                manifest.Version,
                 manifest.TargetRuntime),
             cancellationToken);
 
-        if (host is null)
+        if (hostComponent is null)
         {
-            host = new ClientHostRelease(
+            hostComponent = ClientReleaseComponent.CreateHost(
+                manifest.Channel,
+                manifest.TargetRuntime);
+            componentRepository.Add(hostComponent);
+        }
+
+        hostComponent.UpdateHostMetadata();
+        var hostArtifacts = ClientReleaseArtifactBuilder
+            .FromHostDownloadUrl(
+                manifestDownloadUrl,
                 manifest.Channel,
                 manifest.Version,
-                manifest.HostApiVersion,
-                manifest.TargetRuntime,
-                manifest.TargetFramework,
-                manifestDownloadUrl,
-                manifest.InstallerStubSha256!,
-                manifest.InstallerStubSize,
-                manifest.ReleaseNotes,
-                ClientReleaseStatus.Published,
-                null,
-                "IIoT",
-                manifest.GeneratedAtUtc);
-            hostRepository.Add(host);
-        }
-        else
-        {
-            host.UpdateRelease(
-                manifest.HostApiVersion,
-                manifest.TargetFramework,
-                manifestDownloadUrl,
-                manifest.InstallerStubSha256!,
-                manifest.InstallerStubSize,
-                manifest.ReleaseNotes,
-                ClientReleaseStatus.Published,
-                null,
-                "IIoT");
-        }
+                manifest.InstallerStubSha256,
+                manifest.InstallerStubSize)
+            .Concat(velopackChanges.Select(change =>
+                ClientReleaseArtifactBuilder.VelopackFile(manifest.Channel, change.RelativePath)))
+            .ToList();
+        hostComponent.UpsertHostVersion(
+            manifest.Version,
+            manifest.HostApiVersion,
+            manifest.TargetFramework,
+            manifestDownloadUrl,
+            manifest.InstallerStubSha256!,
+            manifest.InstallerStubSize,
+            manifest.ReleaseNotes,
+            ClientReleaseStatus.Published,
+            null,
+            "IIoT",
+            manifest.GeneratedAtUtc,
+            hostArtifacts);
 
         foreach (var module in manifest.Modules)
         {
-            var plugin = await pluginRepository.GetSingleOrDefaultAsync(
-                new ClientPluginReleaseByIdentitySpec(
+            var pluginComponent = await componentRepository.GetSingleOrDefaultAsync(
+                new ClientReleaseComponentByIdentitySpec(
+                    ClientReleaseComponentKind.Plugin,
                     module.ModuleId,
                     manifest.Channel,
-                    module.Version,
                     manifest.TargetRuntime),
                 cancellationToken);
 
-            if (plugin is not null)
+            if (pluginComponent?.FindVersion(module.Version) is not null)
             {
                 continue;
             }
@@ -814,18 +817,32 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 throw new InvalidDataException($"插件 {module.ModuleId} 缺少可安装的独立发布包。");
             }
 
-            plugin = new ClientPluginRelease(
-                module.ModuleId,
-                string.IsNullOrWhiteSpace(module.DisplayName) ? module.ModuleId : module.DisplayName,
-                module.Description,
-                null,
-                null,
-                manifest.Channel,
+            if (pluginComponent is null)
+            {
+                pluginComponent = ClientReleaseComponent.CreatePlugin(
+                    module.ModuleId,
+                    string.IsNullOrWhiteSpace(module.DisplayName) ? module.ModuleId : module.DisplayName,
+                    module.Description,
+                    null,
+                    null,
+                    manifest.Channel,
+                    manifest.TargetRuntime);
+                componentRepository.Add(pluginComponent);
+            }
+            else
+            {
+                pluginComponent.UpdatePluginMetadata(
+                    string.IsNullOrWhiteSpace(module.DisplayName) ? module.ModuleId : module.DisplayName,
+                    module.Description,
+                    null,
+                    null);
+            }
+
+            pluginComponent.UpsertPluginVersion(
                 module.Version,
                 module.HostApiVersion,
                 module.MinHostVersion,
                 module.MaxHostVersion,
-                manifest.TargetRuntime,
                 manifest.TargetFramework,
                 package.DownloadUrl,
                 package.Sha256,
@@ -835,12 +852,18 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 ClientReleaseStatus.Published,
                 null,
                 "IIoT",
-                manifest.GeneratedAtUtc);
-            pluginRepository.Add(plugin);
+                manifest.GeneratedAtUtc,
+                ClientReleaseArtifactBuilder.FromPluginDownloadUrl(
+                    package.DownloadUrl,
+                    manifest.Channel,
+                    module.ModuleId,
+                    module.Version,
+                    package.Sha256,
+                    package.PackageSize));
 
         }
 
-        await hostRepository.SaveChangesAsync(cancellationToken);
+        await componentRepository.SaveChangesAsync(cancellationToken);
     }
 
     private async Task ApplyRetentionAsync(
@@ -868,11 +891,13 @@ public sealed class PublishEdgeReleaseBundleHandler(
         string targetRuntime,
         CancellationToken cancellationToken)
     {
-        var hostReleases = await hostRepository.GetListAsync(
-            new ClientHostReleasesByChannelSpec(channel, targetRuntime, onlyPublished: false, includeArchived: true),
+        var components = await componentRepository.GetListAsync(
+            new ClientReleaseComponentsByChannelSpec(channel, targetRuntime, onlyPublished: false, includeArchived: true),
             cancellationToken);
-        var archivedVersions = hostReleases
-            .Where(release => release.Status == ClientReleaseStatus.Archived)
+        var archivedVersions = components
+            .Where(component => component.ComponentKind == ClientReleaseComponentKind.Host)
+            .SelectMany(component => component.Versions)
+            .Where(version => version.Status == ClientReleaseStatus.Archived)
             .Select(release => release.Version)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -905,21 +930,24 @@ public sealed class PublishEdgeReleaseBundleHandler(
         string targetRuntime,
         CancellationToken cancellationToken)
     {
-        var pluginReleases = await pluginRepository.GetListAsync(
-            new ClientPluginReleasesByChannelSpec(channel, targetRuntime, onlyPublished: false, includeArchived: true),
+        var components = await componentRepository.GetListAsync(
+            new ClientReleaseComponentsByChannelSpec(channel, targetRuntime, onlyPublished: false, includeArchived: true),
             cancellationToken);
 
-        foreach (var release in pluginReleases.Where(release => release.Status == ClientReleaseStatus.Archived))
+        foreach (var component in components.Where(component => component.ComponentKind == ClientReleaseComponentKind.Plugin))
         {
-            var directory = Path.Combine(
-                edgeRoot,
-                "plugins",
-                release.Channel,
-                EscapeFileSystemSegment(release.ModuleId),
-                release.Version);
-            if (Directory.Exists(directory))
+            foreach (var release in component.Versions.Where(release => release.Status == ClientReleaseStatus.Archived))
             {
-                Directory.Delete(directory, recursive: true);
+                var directory = Path.Combine(
+                    edgeRoot,
+                    "plugins",
+                    component.Channel,
+                    EscapeFileSystemSegment(component.ComponentKey),
+                    release.Version);
+                if (Directory.Exists(directory))
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
             }
         }
     }

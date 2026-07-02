@@ -26,7 +26,7 @@ public sealed record UpsertClientHostReleaseCommand(
     string? Publisher) : IHumanCommand<Result<UpsertClientHostReleaseResultDto>>;
 
 public sealed class UpsertClientHostReleaseHandler(
-    IRepository<ClientHostRelease> repository,
+    IRepository<ClientReleaseComponent> repository,
     IClientReleaseRetentionService retentionService)
     : ICommandHandler<UpsertClientHostReleaseCommand, Result<UpsertClientHostReleaseResultDto>>
 {
@@ -39,42 +39,39 @@ public sealed class UpsertClientHostReleaseHandler(
             return Result.Invalid($"发布状态不支持: {request.Status}");
         }
 
-        var spec = new ClientHostReleaseByIdentitySpec(
+        var spec = new ClientReleaseComponentByIdentitySpec(
+            ClientReleaseComponentKind.Host,
+            ClientReleaseComponent.HostComponentKey,
             request.Channel,
-            request.Version,
             request.TargetRuntime);
-        var release = await repository.GetSingleOrDefaultAsync(spec, cancellationToken);
+        var component = await repository.GetSingleOrDefaultAsync(spec, cancellationToken);
 
-        if (release is null)
+        if (component is null)
         {
-            release = new ClientHostRelease(
+            component = ClientReleaseComponent.CreateHost(
+                request.Channel,
+                request.TargetRuntime);
+            repository.Add(component);
+        }
+
+        component.UpdateHostMetadata();
+        var release = component.UpsertHostVersion(
+            request.Version,
+            request.HostApiVersion,
+            request.TargetFramework,
+            request.DownloadUrl,
+            request.Sha256,
+            request.PackageSize,
+            request.ReleaseNotes,
+            status,
+            request.Signature,
+            request.Publisher,
+            artifacts: ClientReleaseArtifactBuilder.FromHostDownloadUrl(
+                request.DownloadUrl,
                 request.Channel,
                 request.Version,
-                request.HostApiVersion,
-                request.TargetRuntime,
-                request.TargetFramework,
-                request.DownloadUrl,
                 request.Sha256,
-                request.PackageSize,
-                request.ReleaseNotes,
-                status,
-                request.Signature,
-                request.Publisher);
-            repository.Add(release);
-        }
-        else
-        {
-            release.UpdateRelease(
-                request.HostApiVersion,
-                request.TargetFramework,
-                request.DownloadUrl,
-                request.Sha256,
-                request.PackageSize,
-                request.ReleaseNotes,
-                status,
-                request.Signature,
-                request.Publisher);
-        }
+                request.PackageSize));
 
         await repository.SaveChangesAsync(cancellationToken);
         await retentionService.ApplyHostPolicyAsync(

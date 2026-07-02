@@ -28,7 +28,8 @@ public sealed record ReportDeviceClientVersionCommand(
 
 public sealed class ReportDeviceClientVersionHandler(
     IDeviceIdentityQueryService deviceIdentityQueryService,
-    IRepository<DeviceClientVersionSnapshot> repository)
+    IRepository<DeviceClientVersionSnapshot> repository,
+    IRepository<DeviceClientState> stateRepository)
     : ICommandHandler<ReportDeviceClientVersionCommand, Result<DeviceClientVersionReportResultDto>>
 {
     public async Task<Result<DeviceClientVersionReportResultDto>> Handle(
@@ -95,7 +96,18 @@ public sealed class ReportDeviceClientVersionHandler(
                 request.RemoteIpAddress);
         }
 
-        await repository.SaveChangesAsync(cancellationToken);
+        var state = await stateRepository.GetSingleOrDefaultAsync(
+            new DeviceClientStateByIdentitySpec(request.DeviceId, clientCode),
+            cancellationToken);
+        if (state is null)
+        {
+            state = new DeviceClientState(request.DeviceId, clientCode);
+            stateRepository.Add(state);
+        }
+
+        state.ApplyVersionReport(snapshot);
+
+        await stateRepository.SaveChangesAsync(cancellationToken);
         return Result.Success(new DeviceClientVersionReportResultDto(
             snapshot.DeviceId,
             snapshot.ReceivedAtUtc));

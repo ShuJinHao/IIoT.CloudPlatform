@@ -5,6 +5,35 @@ namespace IIoT.EntityFrameworkCore.QueryServices;
 
 public sealed class ProcessReadQueryService(IIoTDbContext dbContext) : IProcessReadQueryService
 {
+    public async Task<(IReadOnlyList<ProcessReadItem> Items, int TotalCount)> GetPagedAsync(
+        string? keyword,
+        int skip,
+        int take,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedKeyword = keyword?.Trim();
+        var query = dbContext.MfgProcesses.AsNoTracking();
+        if (!string.IsNullOrWhiteSpace(normalizedKeyword))
+        {
+            query = query.Where(process =>
+                process.ProcessCode.Contains(normalizedKeyword)
+                || process.ProcessName.Contains(normalizedKeyword));
+        }
+
+        var totalCount = await query.CountAsync(cancellationToken);
+        var items = await query
+            .OrderBy(process => process.ProcessCode)
+            .Skip(skip)
+            .Take(take)
+            .Select(process => new ProcessReadItem(
+                process.Id,
+                process.ProcessCode,
+                process.ProcessName))
+            .ToListAsync(cancellationToken);
+
+        return (items, totalCount);
+    }
+
     public Task<bool> ExistsAsync(
         Guid processId,
         CancellationToken cancellationToken = default)

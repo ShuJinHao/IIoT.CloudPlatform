@@ -22,11 +22,13 @@ public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)
     public DbSet<MfgProcess> MfgProcesses => Set<MfgProcess>();
     public DbSet<Device> Devices => Set<Device>();
     public DbSet<Recipe> Recipes => Set<Recipe>();
-    public DbSet<ClientHostRelease> ClientHostReleases => Set<ClientHostRelease>();
-    public DbSet<ClientPluginRelease> ClientPluginReleases => Set<ClientPluginRelease>();
+    public DbSet<ClientReleaseComponent> ClientReleaseComponents => Set<ClientReleaseComponent>();
+    public DbSet<ClientReleaseVersion> ClientReleaseVersions => Set<ClientReleaseVersion>();
+    public DbSet<ClientReleaseArtifact> ClientReleaseArtifacts => Set<ClientReleaseArtifact>();
     public DbSet<ClientReleaseRetentionPolicy> ClientReleaseRetentionPolicies => Set<ClientReleaseRetentionPolicy>();
     public DbSet<DeviceClientVersionSnapshot> DeviceClientVersionSnapshots => Set<DeviceClientVersionSnapshot>();
     public DbSet<EdgeDeviceRuntimeHeartbeat> EdgeDeviceRuntimeHeartbeats => Set<EdgeDeviceRuntimeHeartbeat>();
+    public DbSet<DeviceClientState> DeviceClientStates => Set<DeviceClientState>();
     public DbSet<RefreshTokenSession> RefreshTokenSessions => Set<RefreshTokenSession>();
     public DbSet<EdgeReleaseApiKey> EdgeReleaseApiKeys => Set<EdgeReleaseApiKey>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();

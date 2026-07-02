@@ -13,10 +13,8 @@ public sealed record GetPublicClientDownloadsQuery(
     string? TargetRuntime = null) : IPublicQuery<Result<PublicClientDownloadCatalogDto>>;
 
 public sealed class GetPublicClientDownloadsHandler(
-    IReadRepository<ClientHostRelease> hostReleaseRepository,
-    IReadRepository<ClientPluginRelease> pluginReleaseRepository,
-    IClientReleaseRetentionPolicyReader retentionPolicyReader,
-    IEdgeInstallerArtifactCatalogReader artifactCatalogReader)
+    IReadRepository<ClientReleaseComponent> componentRepository,
+    IClientReleaseRetentionPolicyReader retentionPolicyReader)
     : IQueryHandler<GetPublicClientDownloadsQuery, Result<PublicClientDownloadCatalogDto>>
 {
     public async Task<Result<PublicClientDownloadCatalogDto>> Handle(
@@ -25,29 +23,17 @@ public sealed class GetPublicClientDownloadsHandler(
     {
         var channel = Normalize(request.Channel, "stable");
         var targetRuntime = Normalize(request.TargetRuntime, "win-x64");
-        var databaseHostReleases = await hostReleaseRepository.GetListAsync(
-            new ClientHostReleasesByChannelSpec(channel, targetRuntime, onlyPublished: false, includeArchived: true),
+        var components = await componentRepository.GetListAsync(
+            new ClientReleaseComponentsByChannelSpec(channel, targetRuntime, onlyPublished: true),
             cancellationToken);
-        var databasePluginReleases = await pluginReleaseRepository.GetListAsync(
-            new ClientPluginReleasesByChannelSpec(channel, targetRuntime, onlyPublished: false, includeArchived: true),
-            cancellationToken);
-        var artifactCatalog = await artifactCatalogReader.ReadAsync(channel, targetRuntime, cancellationToken);
-        var hostReleases = ClientReleaseCatalogMerge.MergeHostReleases(
-            databaseHostReleases,
-            artifactCatalog.HostReleases,
-            onlyPublished: true);
-        var pluginReleases = ClientReleaseCatalogMerge.MergePluginReleases(
-            databasePluginReleases,
-            artifactCatalog.PluginReleases,
-            onlyPublished: true);
         var maxVersions = await retentionPolicyReader.GetMaxVersionsPerComponentAsync(cancellationToken);
 
         return Result.Success(new PublicClientDownloadCatalogDto(
             ClientReleaseCatalogSchema.Version,
             channel,
             targetRuntime,
-            ClientReleaseMapping.ToPublicHostComponent(hostReleases, maxVersions),
-            ClientReleaseMapping.ToPublicPluginComponents(pluginReleases, maxVersions),
+            ClientReleaseMapping.ToPublicHostComponent(components, maxVersions),
+            ClientReleaseMapping.ToPublicPluginComponents(components, maxVersions),
             DateTime.UtcNow));
     }
 

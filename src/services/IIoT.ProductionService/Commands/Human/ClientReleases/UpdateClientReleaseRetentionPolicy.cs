@@ -16,8 +16,7 @@ public sealed record UpdateClientReleaseRetentionPolicyCommand(int MaxVersionsPe
 
 public sealed class UpdateClientReleaseRetentionPolicyHandler(
     IRepository<ClientReleaseRetentionPolicy> policyRepository,
-    IReadRepository<ClientHostRelease> hostReleaseRepository,
-    IReadRepository<ClientPluginRelease> pluginReleaseRepository,
+    IReadRepository<ClientReleaseComponent> componentRepository,
     IClientReleaseRetentionService retentionService)
     : ICommandHandler<UpdateClientReleaseRetentionPolicyCommand, Result<ClientReleaseRetentionPolicyDto>>
 {
@@ -54,14 +53,11 @@ public sealed class UpdateClientReleaseRetentionPolicyHandler(
 
     private async Task ApplyPolicyToExistingComponents(CancellationToken cancellationToken)
     {
-        var hostComponents = (await hostReleaseRepository.GetListAsync(
-                new ClientHostReleasesByChannelSpec(null, null, onlyPublished: false),
-                cancellationToken))
-            .Select(release => new { release.Channel, release.TargetRuntime })
-            .Distinct()
-            .ToList();
+        var components = await componentRepository.GetListAsync(
+            new ClientReleaseComponentsByChannelSpec(null, null, onlyPublished: false, includeArchived: true),
+            cancellationToken);
 
-        foreach (var component in hostComponents)
+        foreach (var component in components.Where(component => component.ComponentKind == ClientReleaseComponentKind.Host))
         {
             await retentionService.ApplyHostPolicyAsync(
                 component.Channel,
@@ -69,17 +65,10 @@ public sealed class UpdateClientReleaseRetentionPolicyHandler(
                 cancellationToken);
         }
 
-        var pluginComponents = (await pluginReleaseRepository.GetListAsync(
-                new ClientPluginReleasesByChannelSpec(null, null, onlyPublished: false),
-                cancellationToken))
-            .Select(release => new { release.ModuleId, release.Channel, release.TargetRuntime })
-            .Distinct()
-            .ToList();
-
-        foreach (var component in pluginComponents)
+        foreach (var component in components.Where(component => component.ComponentKind == ClientReleaseComponentKind.Plugin))
         {
             await retentionService.ApplyPluginPolicyAsync(
-                component.ModuleId,
+                component.ComponentKey,
                 component.Channel,
                 component.TargetRuntime,
                 cancellationToken);

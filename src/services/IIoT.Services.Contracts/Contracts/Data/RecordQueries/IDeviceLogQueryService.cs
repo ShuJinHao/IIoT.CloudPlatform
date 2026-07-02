@@ -11,6 +11,7 @@ public interface IDeviceLogQueryService
         string? keyword = null,
         DateTime? startTime = null,
         DateTime? endTime = null,
+        IReadOnlyCollection<string>? normalizedLevels = null,
         CancellationToken cancellationToken = default);
 
     Task<List<DeviceLogListItemDto>> GetRecentLogsAsync(

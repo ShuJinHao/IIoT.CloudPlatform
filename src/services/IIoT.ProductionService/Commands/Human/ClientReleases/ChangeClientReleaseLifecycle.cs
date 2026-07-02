@@ -20,15 +20,13 @@ public sealed record UpdateClientReleaseStatusCommand(
     string Status) : IHumanCommand<Result>;
 
 public sealed class ArchiveClientReleaseHandler(
-    IRepository<ClientHostRelease> hostRepository,
-    IRepository<ClientPluginRelease> pluginRepository)
+    IRepository<ClientReleaseComponent> componentRepository)
     : ICommandHandler<ArchiveClientReleaseCommand, Result>
 {
     public async Task<Result> Handle(ArchiveClientReleaseCommand request, CancellationToken cancellationToken)
     {
         return await ClientReleaseLifecycleCommandHelper.ChangeStatus(
-            hostRepository,
-            pluginRepository,
+            componentRepository,
             request.ReleaseId,
             ClientReleaseStatus.Archived,
             cancellationToken);
@@ -36,8 +34,7 @@ public sealed class ArchiveClientReleaseHandler(
 }
 
 public sealed class UpdateClientReleaseStatusHandler(
-    IRepository<ClientHostRelease> hostRepository,
-    IRepository<ClientPluginRelease> pluginRepository)
+    IRepository<ClientReleaseComponent> componentRepository)
     : ICommandHandler<UpdateClientReleaseStatusCommand, Result>
 {
     public async Task<Result> Handle(UpdateClientReleaseStatusCommand request, CancellationToken cancellationToken)
@@ -48,8 +45,7 @@ public sealed class UpdateClientReleaseStatusHandler(
         }
 
         return await ClientReleaseLifecycleCommandHelper.ChangeStatus(
-            hostRepository,
-            pluginRepository,
+            componentRepository,
             request.ReleaseId,
             status,
             cancellationToken);
@@ -59,29 +55,18 @@ public sealed class UpdateClientReleaseStatusHandler(
 internal static class ClientReleaseLifecycleCommandHelper
 {
     public static async Task<Result> ChangeStatus(
-        IRepository<ClientHostRelease> hostRepository,
-        IRepository<ClientPluginRelease> pluginRepository,
+        IRepository<ClientReleaseComponent> componentRepository,
         Guid releaseId,
         ClientReleaseStatus status,
         CancellationToken cancellationToken)
     {
-        var host = await hostRepository.GetSingleOrDefaultAsync(
-            new ClientHostReleaseByIdSpec(releaseId),
+        var component = await componentRepository.GetSingleOrDefaultAsync(
+            new ClientReleaseComponentByVersionIdSpec(releaseId),
             cancellationToken);
-        if (host is not null)
+        if (component is not null)
         {
-            host.ChangeStatus(status);
-            await hostRepository.SaveChangesAsync(cancellationToken);
-            return Result.Success();
-        }
-
-        var plugin = await pluginRepository.GetSingleOrDefaultAsync(
-            new ClientPluginReleaseByIdSpec(releaseId),
-            cancellationToken);
-        if (plugin is not null)
-        {
-            plugin.ChangeStatus(status);
-            await pluginRepository.SaveChangesAsync(cancellationToken);
+            component.ChangeVersionStatus(releaseId, status);
+            await componentRepository.SaveChangesAsync(cancellationToken);
             return Result.Success();
         }
 

@@ -3,6 +3,7 @@ using System;
 using IIoT.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace IIoT.EntityFrameworkCore.Migrations
 {
     [DbContext(typeof(IIoTDbContext))]
-    partial class IIoTDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260701075702_NormalizeClientReleaseComponents")]
+    partial class NormalizeClientReleaseComponents
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -402,126 +405,6 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .HasDatabaseName("ux_edge_device_client_plugin_versions_module");
 
                     b.ToTable("edge_device_client_plugin_versions", (string)null);
-                });
-
-            modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.DeviceClientState", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<string>("Channel")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("channel");
-
-                    b.Property<string>("ClientCode")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("client_code");
-
-                    b.Property<DateTime>("CreatedAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at_utc");
-
-                    b.Property<Guid>("DeviceId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("device_id");
-
-                    b.Property<string>("HostApiVersion")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("host_api_version");
-
-                    b.Property<string>("HostVersion")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("host_version");
-
-                    b.Property<DateTime?>("LastRuntimeHeartbeatAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("last_runtime_heartbeat_at_utc");
-
-                    b.Property<DateTime?>("LastRuntimeStoppedAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("last_runtime_stopped_at_utc");
-
-                    b.Property<string>("MachineProfile")
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)")
-                        .HasColumnName("machine_profile");
-
-                    b.Property<string>("RuntimeHostApiVersion")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("runtime_host_api_version");
-
-                    b.Property<string>("RuntimeHostVersion")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("runtime_host_version");
-
-                    b.Property<string>("RuntimeInstanceId")
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)")
-                        .HasColumnName("runtime_instance_id");
-
-                    b.Property<string>("RuntimeLocalIpAddressesJson")
-                        .IsRequired()
-                        .HasColumnType("jsonb")
-                        .HasColumnName("runtime_local_ip_addresses_json");
-
-                    b.Property<string>("RuntimeRemoteIpAddress")
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)")
-                        .HasColumnName("runtime_remote_ip_address");
-
-                    b.Property<DateTime?>("RuntimeStartedAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("runtime_started_at_utc");
-
-                    b.Property<string>("RuntimeStatus")
-                        .HasMaxLength(24)
-                        .HasColumnType("character varying(24)")
-                        .HasColumnName("runtime_status");
-
-                    b.Property<DateTime>("UpdatedAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("updated_at_utc");
-
-                    b.Property<string>("VersionLocalIpAddressesJson")
-                        .IsRequired()
-                        .HasColumnType("jsonb")
-                        .HasColumnName("version_local_ip_addresses_json");
-
-                    b.Property<DateTime?>("VersionReceivedAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("version_received_at_utc");
-
-                    b.Property<string>("VersionRemoteIpAddress")
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)")
-                        .HasColumnName("version_remote_ip_address");
-
-                    b.Property<DateTime?>("VersionReportedAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("version_reported_at_utc");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("DeviceId")
-                        .HasDatabaseName("ix_edge_device_client_states_device");
-
-                    b.HasIndex("LastRuntimeHeartbeatAtUtc")
-                        .HasDatabaseName("ix_edge_device_client_states_last_runtime_heartbeat");
-
-                    b.HasIndex("DeviceId", "ClientCode")
-                        .IsUnique()
-                        .HasDatabaseName("ux_edge_device_client_states_device_client");
-
-                    b.ToTable("edge_device_client_states", (string)null);
                 });
 
             modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.DeviceClientVersionSnapshot", b =>
@@ -1529,15 +1412,6 @@ namespace IIoT.EntityFrameworkCore.Migrations
                     b.HasOne("IIoT.Core.Production.Aggregates.ClientReleases.DeviceClientVersionSnapshot", null)
                         .WithMany("InstalledPlugins")
                         .HasForeignKey("DeviceClientVersionSnapshotId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.DeviceClientState", b =>
-                {
-                    b.HasOne("IIoT.Core.Production.Aggregates.Devices.Device", null)
-                        .WithMany()
-                        .HasForeignKey("DeviceId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

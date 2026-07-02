@@ -6,6 +6,7 @@ using IIoT.Dapper.Production.QueryServices.Capacity;
 using IIoT.Dapper.Production.QueryServices.Device;
 using IIoT.Dapper.Production.QueryServices.DeviceLog;
 using IIoT.Dapper.Production.QueryServices.PassStation;
+using IIoT.Dapper.Production.QueryServices.ProductionRecords;
 using IIoT.Dapper.Production.Repositories.Capacities;
 using IIoT.Dapper.Production.Repositories.DeviceLogs;
 using IIoT.Dapper.Production.Repositories.PassStations;
@@ -48,8 +49,8 @@ public static class DependencyInjection
         builder.Services.AddScoped<ICapacityQueryService, CapacityQueryService>();
         builder.Services.AddScoped<IDeviceIdentityQueryService, DeviceIdentityQueryService>();
         builder.Services.AddScoped<IDeviceOperationalStatusQueryService, DeviceOperationalStatusQueryService>();
-        builder.Services.AddScoped<IDeviceDeletionDependencyQueryService, DeviceDeletionDependencyQueryService>();
         builder.Services.AddScoped<IPassStationRecordQueryService, PassStationRecordQueryService>();
+        builder.Services.AddScoped<IAiProductionRecordQueryService, AiProductionRecordQueryService>();
 
         builder.Services.AddScoped<IDeviceLogRecordRepository, DeviceLogRecordRepository>();
         builder.Services.AddScoped<IHourlyCapacityRecordRepository, HourlyCapacityRecordRepository>();

@@ -83,6 +83,7 @@ public static class DependencyInjection
         builder.Services.AddScoped<IProcessReadQueryService, QueryServices.ProcessReadQueryService>();
         builder.Services.AddScoped<IDeviceReadQueryService, QueryServices.DeviceReadQueryService>();
         builder.Services.AddScoped<IRecipeReadQueryService, QueryServices.RecipeReadQueryService>();
+        builder.Services.AddScoped<IDeviceDeletionDependencyQueryService, QueryServices.EfDeviceDeletionDependencyService>();
 
         builder.Services.AddIdentityCore<ApplicationUser>(options =>
         {

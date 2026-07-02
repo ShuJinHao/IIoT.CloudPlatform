@@ -29,6 +29,7 @@ public sealed record DeviceDeletionImpact(
     long Capacities,
     long DeviceLogs,
     long PassStations,
+    long ClientStates,
     long ClientVersionSnapshots,
     long ClientPluginVersions,
     long UploadReceiveRegistrations,
@@ -41,6 +42,7 @@ public sealed record DeviceDeletionImpact(
         + Capacities
         + DeviceLogs
         + PassStations
+        + ClientStates
         + ClientVersionSnapshots
         + ClientPluginVersions
         + RuntimeHeartbeats

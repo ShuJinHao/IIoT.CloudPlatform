@@ -76,6 +76,7 @@ public sealed class ClientReleaseBehaviorTests
             [typeof(UpsertClientHostReleaseCommand)] = ClientReleasePermissions.Manage,
             [typeof(UpsertClientPluginReleaseCommand)] = ClientReleasePermissions.Manage,
             [typeof(ArchiveClientReleaseCommand)] = ClientReleasePermissions.Manage,
+            [typeof(DeleteClientReleasePackageCommand)] = ClientReleasePermissions.Manage,
             [typeof(UpdateClientReleaseStatusCommand)] = ClientReleasePermissions.Manage,
             [typeof(UpdateClientReleaseRetentionPolicyCommand)] = ClientReleasePermissions.Manage
         };
@@ -99,10 +100,9 @@ public sealed class ClientReleaseBehaviorTests
         var bundle = CreateEdgeReleaseBundle("1.2.0");
         try
         {
-            var hostRepository = new InMemoryRepository<ClientHostRelease>();
-            var pluginRepository = new InMemoryRepository<ClientPluginRelease>();
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
             var auditTrail = new RecordingAuditTrailService();
-            var handler = CreatePublishHandler(edgeRoot, hostRepository, pluginRepository, new NoopRetentionService(), auditTrail);
+            var handler = CreatePublishHandler(edgeRoot, componentRepository, new NoopRetentionService(), auditTrail);
 
             var result = await PublishBundleAsync(handler, bundle.ZipPath);
 
@@ -113,8 +113,11 @@ public sealed class ClientReleaseBehaviorTests
             Assert.Null(result.Value.CleanupWarning);
             Assert.True(Directory.Exists(Path.Combine(edgeRoot, "installers", "stable", "1.2.0")));
             Assert.True(File.Exists(Path.Combine(edgeRoot, "velopack", "stable", "releases.stable.json")));
-            Assert.Single(hostRepository.Items);
-            var pluginRelease = Assert.Single(pluginRepository.Items);
+            Assert.Equal(2, componentRepository.Items.Count);
+            var pluginRelease = SingleVersion(SingleComponent(
+                componentRepository,
+                ClientReleaseComponentKind.Plugin,
+                "Homogenization"));
             Assert.StartsWith("/edge-updates/plugins/stable/Homogenization/1.0.0/", pluginRelease.DownloadUrl);
             var pluginPackage = Assert.Single(Directory.GetFiles(
                 Path.Combine(edgeRoot, "plugins", "stable", "Homogenization", "1.0.0"),
@@ -137,12 +140,9 @@ public sealed class ClientReleaseBehaviorTests
         var bundle = CreateEdgeReleaseBundle("1.2.5");
         try
         {
-            var existingPlugin = new ClientPluginRelease(
+            var existingPluginComponent = CreatePluginComponent(
                 "Homogenization",
                 "匀浆",
-                null,
-                null,
-                null,
                 "stable",
                 "1.0.0",
                 "1.0.0",
@@ -154,23 +154,20 @@ public sealed class ClientReleaseBehaviorTests
                 new string('e', 64),
                 123,
                 "existing plugin notes",
-                "[]",
-                ClientReleaseStatus.Published,
-                null,
-                "IIoT");
-            var pluginRepository = new InMemoryRepository<ClientPluginRelease>();
-            pluginRepository.Items.Add(existingPlugin);
+                ClientReleaseStatus.Published);
+            var existingPlugin = SingleVersion(existingPluginComponent);
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(existingPluginComponent);
             var handler = CreatePublishHandler(
                 edgeRoot,
-                new InMemoryRepository<ClientHostRelease>(),
-                pluginRepository,
+                componentRepository,
                 new NoopRetentionService(),
                 new RecordingAuditTrailService());
 
             var result = await PublishBundleAsync(handler, bundle.ZipPath);
 
             Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
-            Assert.Single(pluginRepository.Items);
+            Assert.Equal(2, componentRepository.Items.Count);
             Assert.Equal("/edge-updates/plugins/stable/Homogenization/1.0.0/existing.zip", existingPlugin.DownloadUrl);
             Assert.Equal("existing plugin notes", existingPlugin.ReleaseNotes);
             Assert.False(Directory.Exists(Path.Combine(edgeRoot, "plugins", "stable", "Homogenization", "1.0.0")));
@@ -189,16 +186,19 @@ public sealed class ClientReleaseBehaviorTests
         var wrapper = CreatePluginReleaseWrapper("Homogenization", "1.1.0");
         try
         {
-            var pluginRepository = new InMemoryRepository<ClientPluginRelease>();
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
             var auditTrail = new RecordingAuditTrailService();
-            var handler = CreatePluginPackageHandler(edgeRoot, pluginRepository, new NoopRetentionService(), auditTrail);
+            var handler = CreatePluginPackageHandler(edgeRoot, componentRepository, new NoopRetentionService(), auditTrail);
 
             var result = await PublishPluginPackageAsync(handler, wrapper.ZipPath);
 
             Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
             Assert.NotNull(result.Value);
             Assert.Equal("Homogenization", result.Value!.ModuleId);
-            var release = Assert.Single(pluginRepository.Items);
+            var release = SingleVersion(SingleComponent(
+                componentRepository,
+                ClientReleaseComponentKind.Plugin,
+                "Homogenization"));
             Assert.Equal("1.1.0", release.Version);
             Assert.Equal("独立插件更新", release.ReleaseNotes);
             Assert.StartsWith("/edge-updates/plugins/stable/Homogenization/1.1.0/", release.DownloadUrl);
@@ -220,13 +220,10 @@ public sealed class ClientReleaseBehaviorTests
         var wrapper = CreatePluginReleaseWrapper("Homogenization", "1.1.1");
         try
         {
-            var pluginRepository = new InMemoryRepository<ClientPluginRelease>();
-            pluginRepository.Items.Add(new ClientPluginRelease(
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(CreatePluginComponent(
                 "Homogenization",
                 "匀浆",
-                null,
-                null,
-                null,
                 "stable",
                 "1.1.1",
                 "1.0.0",
@@ -238,13 +235,10 @@ public sealed class ClientReleaseBehaviorTests
                 new string('f', 64),
                 100,
                 "old",
-                "[]",
-                ClientReleaseStatus.Published,
-                null,
-                "IIoT"));
+                ClientReleaseStatus.Published));
             var handler = CreatePluginPackageHandler(
                 edgeRoot,
-                pluginRepository,
+                componentRepository,
                 new NoopRetentionService(),
                 new RecordingAuditTrailService());
 
@@ -252,7 +246,7 @@ public sealed class ClientReleaseBehaviorTests
 
             Assert.False(result.IsSuccess);
             Assert.Contains(result.Errors ?? [], error => error.Contains("插件版本已存在", StringComparison.Ordinal));
-            Assert.Single(pluginRepository.Items);
+            Assert.Single(componentRepository.Items);
             Assert.False(Directory.Exists(Path.Combine(edgeRoot, "plugins", "stable", "Homogenization", "1.1.1")));
         }
         finally
@@ -281,10 +275,10 @@ public sealed class ClientReleaseBehaviorTests
                 """));
         try
         {
-            var pluginRepository = new InMemoryRepository<ClientPluginRelease>();
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
             var handler = CreatePluginPackageHandler(
                 edgeRoot,
-                pluginRepository,
+                componentRepository,
                 new NoopRetentionService(),
                 new RecordingAuditTrailService());
 
@@ -292,7 +286,7 @@ public sealed class ClientReleaseBehaviorTests
 
             Assert.False(result.IsSuccess);
             Assert.Contains(result.Errors ?? [], error => error.Contains("CloudApi:ClientCode", StringComparison.Ordinal));
-            Assert.Empty(pluginRepository.Items);
+            Assert.Empty(componentRepository.Items);
             Assert.False(Directory.Exists(Path.Combine(edgeRoot, "plugins", "stable", "Homogenization", "1.1.2")));
         }
         finally
@@ -313,13 +307,12 @@ public sealed class ClientReleaseBehaviorTests
         File.WriteAllText(Path.Combine(edgeRoot, "velopack", "stable", "old-1.0.0.nupkg"), "old");
         try
         {
-            var hostRepository = new InMemoryRepository<ClientHostRelease>
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>
             {
                 SaveChangesException = new InvalidOperationException("db unavailable")
             };
-            var pluginRepository = new InMemoryRepository<ClientPluginRelease>();
             var auditTrail = new RecordingAuditTrailService();
-            var handler = CreatePublishHandler(edgeRoot, hostRepository, pluginRepository, new NoopRetentionService(), auditTrail);
+            var handler = CreatePublishHandler(edgeRoot, componentRepository, new NoopRetentionService(), auditTrail);
 
             var result = await PublishBundleAsync(handler, bundle.ZipPath);
 
@@ -328,14 +321,6 @@ public sealed class ClientReleaseBehaviorTests
             Assert.Equal("old-manifest", File.ReadAllText(Path.Combine(edgeRoot, "velopack", "stable", "releases.stable.json")));
             Assert.Equal("old-assets", File.ReadAllText(Path.Combine(edgeRoot, "velopack", "stable", "assets.stable.json")));
             Assert.False(File.Exists(Path.Combine(edgeRoot, "velopack", "stable", "IIoT.EdgeClient-1.2.1-full.nupkg")));
-
-            var artifactCatalog = await new EdgeInstallerArtifactCatalogReader(
-                    Options.Create(new EdgeInstallerArtifactOptions
-                    {
-                        RootPath = Path.Combine(edgeRoot, "installers")
-                    }))
-                .ReadAsync("stable", "win-x64");
-            Assert.Empty(artifactCatalog.HostReleases);
             Assert.Contains(auditTrail.Entries, entry => !entry.Succeeded && entry.FailureReason?.Contains("db unavailable", StringComparison.Ordinal) == true);
         }
         finally
@@ -352,13 +337,11 @@ public sealed class ClientReleaseBehaviorTests
         var bundle = CreateEdgeReleaseBundle("1.2.2");
         try
         {
-            var hostRepository = new InMemoryRepository<ClientHostRelease>();
-            var pluginRepository = new InMemoryRepository<ClientPluginRelease>();
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
             var auditTrail = new RecordingAuditTrailService();
             var handler = CreatePublishHandler(
                 edgeRoot,
-                hostRepository,
-                pluginRepository,
+                componentRepository,
                 new ThrowingRetentionService("retention down"),
                 auditTrail);
 
@@ -369,8 +352,7 @@ public sealed class ClientReleaseBehaviorTests
             Assert.False(result.Value!.CleanupSucceeded);
             Assert.Contains("retention down", result.Value.CleanupWarning, StringComparison.Ordinal);
             Assert.True(Directory.Exists(Path.Combine(edgeRoot, "installers", "stable", "1.2.2")));
-            Assert.Single(hostRepository.Items);
-            Assert.Single(pluginRepository.Items);
+            Assert.Equal(2, componentRepository.Items.Count);
         }
         finally
         {
@@ -402,8 +384,8 @@ public sealed class ClientReleaseBehaviorTests
             });
         try
         {
-            var hostRepository = new InMemoryRepository<ClientHostRelease>();
-            hostRepository.Items.Add(new ClientHostRelease(
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(CreateHostComponent(
                 "stable",
                 "1.0.0",
                 "1.0.0",
@@ -413,15 +395,11 @@ public sealed class ClientReleaseBehaviorTests
                 new string('c', 64),
                 1024,
                 "old",
-                ClientReleaseStatus.Archived,
-                null,
-                "IIoT"));
+                ClientReleaseStatus.Archived));
 
-            var pluginRepository = new InMemoryRepository<ClientPluginRelease>();
             var handler = CreatePublishHandler(
                 edgeRoot,
-                hostRepository,
-                pluginRepository,
+                componentRepository,
                 new NoopRetentionService(),
                 new RecordingAuditTrailService());
 
@@ -449,8 +427,7 @@ public sealed class ClientReleaseBehaviorTests
         {
             var handler = CreatePublishHandler(
                 edgeRoot,
-                new InMemoryRepository<ClientHostRelease>(),
-                new InMemoryRepository<ClientPluginRelease>(),
+                new InMemoryRepository<ClientReleaseComponent>(),
                 new NoopRetentionService(),
                 new RecordingAuditTrailService());
 
@@ -483,8 +460,7 @@ public sealed class ClientReleaseBehaviorTests
 
             var handler = CreatePublishHandler(
                 edgeRoot,
-                new InMemoryRepository<ClientHostRelease>(),
-                new InMemoryRepository<ClientPluginRelease>(),
+                new InMemoryRepository<ClientReleaseComponent>(),
                 new NoopRetentionService(),
                 new RecordingAuditTrailService());
 
@@ -503,7 +479,7 @@ public sealed class ClientReleaseBehaviorTests
     [Fact]
     public async Task UpsertClientHostReleaseHandler_ShouldCreateReleaseRecord()
     {
-        var repository = new InMemoryRepository<ClientHostRelease>();
+        var repository = new InMemoryRepository<ClientReleaseComponent>();
         var handler = new UpsertClientHostReleaseHandler(repository, new NoopRetentionService());
 
         var result = await handler.Handle(
@@ -524,9 +500,11 @@ public sealed class ClientReleaseBehaviorTests
 
         Assert.True(result.IsSuccess);
         Assert.NotNull(repository.AddedEntity);
-        Assert.Equal("1.2.0", repository.AddedEntity!.Version);
-        Assert.Equal(ClientReleaseStatus.Published, repository.AddedEntity.Status);
-        Assert.NotNull(repository.AddedEntity.PublishedAtUtc);
+        var version = SingleVersion(repository.AddedEntity!);
+        Assert.Equal("1.2.0", version.Version);
+        Assert.Equal("release notes", version.ReleaseNotes);
+        Assert.Equal(ClientReleaseStatus.Published, version.Status);
+        Assert.NotNull(version.PublishedAtUtc);
     }
 
     [Fact]
@@ -582,9 +560,11 @@ public sealed class ClientReleaseBehaviorTests
     {
         var deviceId = Guid.NewGuid();
         var repository = new InMemoryRepository<DeviceClientVersionSnapshot>();
+        var stateRepository = new InMemoryRepository<DeviceClientState>();
         var handler = new ReportDeviceClientVersionHandler(
             new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-001")),
-            repository);
+            repository,
+            stateRepository);
 
         var result = await handler.Handle(
             new ReportDeviceClientVersionCommand(
@@ -600,6 +580,7 @@ public sealed class ClientReleaseBehaviorTests
 
         Assert.False(result.IsSuccess);
         Assert.Null(repository.AddedEntity);
+        Assert.Empty(stateRepository.Items);
     }
 
     [Fact]
@@ -607,9 +588,11 @@ public sealed class ClientReleaseBehaviorTests
     {
         var deviceId = Guid.NewGuid();
         var repository = new InMemoryRepository<DeviceClientVersionSnapshot>();
+        var stateRepository = new InMemoryRepository<DeviceClientState>();
         var handler = new ReportDeviceClientVersionHandler(
             new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-001")),
-            repository);
+            repository,
+            stateRepository);
 
         var result = await handler.Handle(
             new ReportDeviceClientVersionCommand(
@@ -630,6 +613,11 @@ public sealed class ClientReleaseBehaviorTests
         var plugin = Assert.Single(snapshot.InstalledPlugins);
         Assert.Equal("Homogenization", plugin.ModuleId);
         Assert.True(plugin.Enabled);
+        var state = Assert.Single(stateRepository.Items);
+        Assert.Equal(deviceId, state.DeviceId);
+        Assert.Equal("DEV-001", state.ClientCode);
+        Assert.Equal("1.2.0", state.HostVersion);
+        Assert.NotNull(state.VersionReceivedAtUtc);
     }
 
     [Fact]
@@ -637,9 +625,11 @@ public sealed class ClientReleaseBehaviorTests
     {
         var deviceId = Guid.NewGuid();
         var repository = new InMemoryRepository<EdgeDeviceRuntimeHeartbeat>();
+        var stateRepository = new InMemoryRepository<DeviceClientState>();
         var handler = new ReportDeviceRuntimeHeartbeatHandler(
             new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-001")),
-            repository);
+            repository,
+            stateRepository);
 
         var first = await handler.Handle(
             new ReportDeviceRuntimeHeartbeatCommand(
@@ -672,6 +662,10 @@ public sealed class ClientReleaseBehaviorTests
         var heartbeat = Assert.Single(repository.Items);
         Assert.Equal("Running", heartbeat.Status);
         Assert.Equal(["10.0.0.8"], heartbeat.GetLocalIpAddresses());
+        var state = Assert.Single(stateRepository.Items);
+        Assert.Equal("Running", state.RuntimeStatus);
+        Assert.Equal(["10.0.0.8"], state.GetRuntimeLocalIpAddresses());
+        Assert.NotNull(state.LastRuntimeHeartbeatAtUtc);
     }
 
     [Fact]
@@ -682,17 +676,21 @@ public sealed class ClientReleaseBehaviorTests
         var deviceRepository = new InMemoryRepository<Device>();
         deviceRepository.Items.Add(device);
         var snapshotRepository = new InMemoryRepository<DeviceClientVersionSnapshot>();
-        snapshotRepository.Items.Add(new DeviceClientVersionSnapshot(
+        var snapshot = new DeviceClientVersionSnapshot(
             device.Id,
             device.Code,
             "1.0.0",
             "1.0.0",
             "stable",
             DateTime.UtcNow,
-            []));
-        var runtimeRepository = new InMemoryRepository<EdgeDeviceRuntimeHeartbeat>();
-        var hostRepository = new InMemoryRepository<ClientHostRelease>();
-        hostRepository.Items.Add(new ClientHostRelease(
+            []);
+        snapshotRepository.Items.Add(snapshot);
+        var state = new DeviceClientState(device.Id, device.Code);
+        state.ApplyVersionReport(snapshot);
+        var stateRepository = new InMemoryRepository<DeviceClientState>();
+        stateRepository.Items.Add(state);
+        var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+        componentRepository.Items.Add(CreateHostComponent(
             "stable",
             "1.0.0",
             "1.0.0",
@@ -702,17 +700,14 @@ public sealed class ClientReleaseBehaviorTests
             new string('a', 64),
             1024,
             "host",
-            ClientReleaseStatus.Published,
-            null,
-            "IIoT"));
+            ClientReleaseStatus.Published));
 
         var handler = new GetDeviceClientVersionInventoryHandler(
             new StubCurrentUserDeviceAccessService(),
             deviceRepository,
             snapshotRepository,
-            runtimeRepository,
-            hostRepository,
-            new InMemoryRepository<ClientPluginRelease>());
+            stateRepository,
+            componentRepository);
 
         var result = await handler.Handle(
             new GetDeviceClientVersionInventoryQuery("stable", "win-x64"),
@@ -727,7 +722,7 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
-    public async Task DeleteClientReleaseFilesHandler_ShouldRejectHostReleaseStillInUse()
+    public async Task DeleteClientReleasePackageHandler_ShouldRejectHostReleaseStillInUse()
     {
         var edgeRoot = CreateTempDirectory("iiot-delete-release-root");
         try
@@ -735,7 +730,7 @@ public sealed class ClientReleaseBehaviorTests
             var hostDirectory = Path.Combine(edgeRoot, "installers", "stable", "1.0.0");
             Directory.CreateDirectory(hostDirectory);
             File.WriteAllText(Path.Combine(hostDirectory, "installer-artifact.json"), "{}");
-            var hostRelease = new ClientHostRelease(
+            var component = CreateHostComponent(
                 "stable",
                 "1.0.0",
                 "1.0.0",
@@ -745,11 +740,10 @@ public sealed class ClientReleaseBehaviorTests
                 new string('a', 64),
                 1024,
                 "host",
-                ClientReleaseStatus.Published,
-                null,
-                "IIoT");
-            var hostRepository = new InMemoryRepository<ClientHostRelease>();
-            hostRepository.Items.Add(hostRelease);
+                ClientReleaseStatus.Published);
+            var hostRelease = SingleVersion(component);
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(component);
             var deviceId = Guid.NewGuid();
             var snapshotRepository = new InMemoryRepository<DeviceClientVersionSnapshot>();
             snapshotRepository.Items.Add(new DeviceClientVersionSnapshot(
@@ -761,23 +755,22 @@ public sealed class ClientReleaseBehaviorTests
                 DateTime.UtcNow,
                 []));
             var auditTrail = new RecordingAuditTrailService();
-            var handler = new DeleteClientReleaseFilesHandler(
+            var handler = new DeleteClientReleasePackageHandler(
                 Options.Create(new EdgeInstallerArtifactOptions { RootPath = Path.Combine(edgeRoot, "installers") }),
-                hostRepository,
-                new InMemoryRepository<ClientPluginRelease>(),
+                componentRepository,
                 snapshotRepository,
                 new TestCurrentUser(),
                 auditTrail);
 
             var result = await handler.Handle(
-                new DeleteClientReleaseFilesCommand(hostRelease.Id),
+                new DeleteClientReleasePackageCommand(hostRelease.Id),
                 CancellationToken.None);
 
             Assert.False(result.IsSuccess);
             Assert.Equal(ClientReleaseStatus.Published, hostRelease.Status);
             Assert.True(Directory.Exists(hostDirectory));
             Assert.Contains(auditTrail.Entries, entry =>
-                entry.OperationType == "ClientRelease.DeleteFiles"
+                entry.OperationType == "ClientRelease.DeletePackage"
                 && !entry.Succeeded);
         }
         finally
@@ -789,8 +782,8 @@ public sealed class ClientReleaseBehaviorTests
     [Fact]
     public async Task GetPublicClientDownloadsHandler_ShouldExposeOnlyPublishedHostAndPluginCatalog()
     {
-        var hostRepository = new InMemoryRepository<ClientHostRelease>();
-        hostRepository.Items.Add(new ClientHostRelease(
+        var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+        var hostComponent = CreateHostComponent(
             "stable",
             "99.0.0",
             "1.0.0",
@@ -800,14 +793,10 @@ public sealed class ClientReleaseBehaviorTests
             new string('a', 64),
             1024,
             null,
-            ClientReleaseStatus.Draft,
-            "draft-signature",
-            "IIoT"));
-        hostRepository.Items.Add(new ClientHostRelease(
-            "stable",
+            ClientReleaseStatus.Draft);
+        hostComponent.UpsertHostVersion(
             "1.1.0",
             "1.0.0",
-            "win-x64",
             "net10.0",
             "https://download.example.test/host-1.1.0.zip",
             new string('b', 64),
@@ -815,15 +804,20 @@ public sealed class ClientReleaseBehaviorTests
             "host release",
             ClientReleaseStatus.Published,
             "host-signature",
-            "IIoT"));
+            "IIoT",
+            artifacts:
+            [
+                new ClientReleaseArtifact(
+                    ClientReleaseArtifactKind.ManifestFile,
+                    "installers/stable/1.1.0/installer-artifact.json",
+                    new string('b', 64),
+                    2048)
+            ]);
+        componentRepository.Items.Add(hostComponent);
 
-        var pluginRepository = new InMemoryRepository<ClientPluginRelease>();
-        pluginRepository.Items.Add(new ClientPluginRelease(
+        componentRepository.Items.Add(CreatePluginComponent(
             "Injection",
             "注液",
-            "注液工序插件",
-            "Droplets",
-            "#10b981",
             "stable",
             "2.0.0",
             "1.0.0",
@@ -835,16 +829,10 @@ public sealed class ClientReleaseBehaviorTests
             new string('c', 64),
             4096,
             "plugin release",
-            """[{"moduleId":"Core","version":"1.0.0"}]""",
-            ClientReleaseStatus.Published,
-            "plugin-signature",
-            "IIoT"));
-        pluginRepository.Items.Add(new ClientPluginRelease(
+            ClientReleaseStatus.Published));
+        componentRepository.Items.Add(CreatePluginComponent(
             "Welding",
             "焊接",
-            "焊接工序插件",
-            "Wrench",
-            "#f59e0b",
             "stable",
             "99.0.0",
             "1.0.0",
@@ -856,16 +844,11 @@ public sealed class ClientReleaseBehaviorTests
             new string('d', 64),
             8192,
             null,
-            "[]",
-            ClientReleaseStatus.Draft,
-            "draft-plugin-signature",
-            "IIoT"));
+            ClientReleaseStatus.Draft));
 
         var handler = new GetPublicClientDownloadsHandler(
-            hostRepository,
-            pluginRepository,
-            new FixedRetentionPolicyReader(),
-            new StubArtifactCatalogReader());
+            componentRepository,
+            new FixedRetentionPolicyReader());
 
         var result = await handler.Handle(
             new GetPublicClientDownloadsQuery("stable", "win-x64"),
@@ -894,7 +877,7 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
-    public async Task GetPublicClientDownloadsHandler_ShouldExposeInstallerArtifactsFromDirectory()
+    public async Task GetPublicClientDownloadsHandler_ShouldNotExposeDirectoryArtifactsWithoutReleaseRows()
     {
         var artifactRoot = CreateArtifactRoot(
             "ci",
@@ -905,11 +888,8 @@ public sealed class ClientReleaseBehaviorTests
         try
         {
             var handler = new GetPublicClientDownloadsHandler(
-                new InMemoryRepository<ClientHostRelease>(),
-                new InMemoryRepository<ClientPluginRelease>(),
-                new FixedRetentionPolicyReader(),
-                new EdgeInstallerArtifactCatalogReader(
-                    Microsoft.Extensions.Options.Options.Create(new EdgeInstallerArtifactOptions { RootPath = artifactRoot })));
+                new InMemoryRepository<ClientReleaseComponent>(),
+                new FixedRetentionPolicyReader());
 
             var result = await handler.Handle(
                 new GetPublicClientDownloadsQuery("ci", "win-x64"),
@@ -917,17 +897,8 @@ public sealed class ClientReleaseBehaviorTests
 
             Assert.True(result.IsSuccess);
             Assert.NotNull(result.Value);
-            var hostVersion = Assert.Single(result.Value!.Host.Versions);
-            Assert.Equal("0.0.189-ci", hostVersion.Version);
-            Assert.Equal("win-x64", hostVersion.TargetRuntime);
-            Assert.Equal(new string('a', 64), hostVersion.Sha256);
-
-            var plugin = Assert.Single(result.Value.Plugins);
-            Assert.Equal("Homogenization", plugin.ModuleId);
-            Assert.Equal("匀浆", plugin.DisplayName);
-            var pluginVersion = Assert.Single(plugin.Versions);
-            Assert.Equal("1.0.0", pluginVersion.Version);
-            Assert.True(pluginVersion.PackageSize > 0);
+            Assert.Empty(result.Value!.Host.Versions);
+            Assert.Empty(result.Value.Plugins);
         }
         finally
         {
@@ -946,8 +917,8 @@ public sealed class ClientReleaseBehaviorTests
             "匀浆");
         try
         {
-            var hostRepository = new InMemoryRepository<ClientHostRelease>();
-            hostRepository.Items.Add(new ClientHostRelease(
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(CreateHostComponent(
                 "ci",
                 "0.0.189-ci",
                 "1.0.0",
@@ -957,17 +928,11 @@ public sealed class ClientReleaseBehaviorTests
                 new string('a', 64),
                 4096,
                 null,
-                ClientReleaseStatus.Archived,
-                null,
-                "IIoT"));
+                ClientReleaseStatus.Archived));
 
-            var pluginRepository = new InMemoryRepository<ClientPluginRelease>();
-            pluginRepository.Items.Add(new ClientPluginRelease(
+            componentRepository.Items.Add(CreatePluginComponent(
                 "Homogenization",
                 "匀浆",
-                null,
-                null,
-                null,
                 "ci",
                 "1.0.0",
                 "1.0.0",
@@ -979,17 +944,11 @@ public sealed class ClientReleaseBehaviorTests
                 new string('b', 64),
                 2048,
                 null,
-                "[]",
-                ClientReleaseStatus.Archived,
-                null,
-                "IIoT"));
+                ClientReleaseStatus.Archived));
 
             var handler = new GetPublicClientDownloadsHandler(
-                hostRepository,
-                pluginRepository,
-                new FixedRetentionPolicyReader(),
-                new EdgeInstallerArtifactCatalogReader(
-                    Microsoft.Extensions.Options.Options.Create(new EdgeInstallerArtifactOptions { RootPath = artifactRoot })));
+                componentRepository,
+                new FixedRetentionPolicyReader());
 
             var result = await handler.Handle(
                 new GetPublicClientDownloadsQuery("ci", "win-x64"),
@@ -1006,10 +965,114 @@ public sealed class ClientReleaseBehaviorTests
         }
     }
 
+    private static ClientReleaseComponent CreateHostComponent(
+        string channel,
+        string version,
+        string hostApiVersion,
+        string targetRuntime,
+        string? targetFramework,
+        string downloadUrl,
+        string sha256,
+        long packageSize,
+        string? releaseNotes,
+        ClientReleaseStatus status)
+    {
+        var component = ClientReleaseComponent.CreateHost(channel, targetRuntime);
+        component.UpsertHostVersion(
+            version,
+            hostApiVersion,
+            targetFramework,
+            downloadUrl,
+            sha256,
+            packageSize,
+            releaseNotes,
+            status,
+            null,
+            "IIoT",
+            artifacts:
+            [
+                new ClientReleaseArtifact(
+                    ClientReleaseArtifactKind.InstallerDirectory,
+                    $"installers/{channel}/{version}"),
+                new ClientReleaseArtifact(
+                    ClientReleaseArtifactKind.ManifestFile,
+                    $"installers/{channel}/{version}/installer-artifact.json",
+                    sha256,
+                    packageSize)
+            ]);
+        return component;
+    }
+
+    private static ClientReleaseComponent CreatePluginComponent(
+        string moduleId,
+        string displayName,
+        string channel,
+        string version,
+        string hostApiVersion,
+        string minHostVersion,
+        string maxHostVersion,
+        string targetRuntime,
+        string? targetFramework,
+        string downloadUrl,
+        string sha256,
+        long packageSize,
+        string? releaseNotes,
+        ClientReleaseStatus status)
+    {
+        var component = ClientReleaseComponent.CreatePlugin(
+            moduleId,
+            displayName,
+            null,
+            null,
+            null,
+            channel,
+            targetRuntime);
+        component.UpsertPluginVersion(
+            version,
+            hostApiVersion,
+            minHostVersion,
+            maxHostVersion,
+            targetFramework,
+            downloadUrl,
+            sha256,
+            packageSize,
+            releaseNotes,
+            "[]",
+            status,
+            null,
+            "IIoT",
+            artifacts:
+            [
+                new ClientReleaseArtifact(
+                    ClientReleaseArtifactKind.PluginPackageDirectory,
+                    $"plugins/{channel}/{moduleId}/{version}"),
+                new ClientReleaseArtifact(
+                    ClientReleaseArtifactKind.PackageFile,
+                    $"plugins/{channel}/{moduleId}/{version}/{Path.GetFileName(downloadUrl)}",
+                    sha256,
+                    packageSize)
+            ]);
+        return component;
+    }
+
+    private static ClientReleaseVersion SingleVersion(ClientReleaseComponent component)
+    {
+        return Assert.Single(component.Versions);
+    }
+
+    private static ClientReleaseComponent SingleComponent(
+        InMemoryRepository<ClientReleaseComponent> repository,
+        ClientReleaseComponentKind kind,
+        string key)
+    {
+        return Assert.Single(repository.Items, component =>
+            component.ComponentKind == kind
+            && string.Equals(component.ComponentKey, key, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static PublishEdgeReleaseBundleHandler CreatePublishHandler(
         string edgeRoot,
-        InMemoryRepository<ClientHostRelease> hostRepository,
-        InMemoryRepository<ClientPluginRelease> pluginRepository,
+        InMemoryRepository<ClientReleaseComponent> componentRepository,
         IClientReleaseRetentionService retentionService,
         RecordingAuditTrailService auditTrail)
     {
@@ -1024,8 +1087,7 @@ public sealed class ClientReleaseBehaviorTests
                 MaxBundleBytes = EdgeReleaseUploadOptions.DefaultMaxBundleBytes,
                 StagingDirectoryName = ".staging"
             }),
-            hostRepository,
-            pluginRepository,
+            componentRepository,
             retentionService,
             new TestCurrentUser(),
             auditTrail);
@@ -1033,7 +1095,7 @@ public sealed class ClientReleaseBehaviorTests
 
     private static PublishEdgePluginPackageHandler CreatePluginPackageHandler(
         string edgeRoot,
-        InMemoryRepository<ClientPluginRelease> pluginRepository,
+        InMemoryRepository<ClientReleaseComponent> componentRepository,
         IClientReleaseRetentionService retentionService,
         RecordingAuditTrailService auditTrail)
     {
@@ -1048,7 +1110,7 @@ public sealed class ClientReleaseBehaviorTests
                 MaxBundleBytes = EdgeReleaseUploadOptions.DefaultMaxBundleBytes,
                 StagingDirectoryName = ".staging"
             }),
-            pluginRepository,
+            componentRepository,
             retentionService,
             new TestCurrentUser(),
             auditTrail);
@@ -1425,19 +1487,6 @@ public sealed class ClientReleaseBehaviorTests
         public Task<int> GetMaxVersionsPerComponentAsync(CancellationToken cancellationToken = default)
         {
             return Task.FromResult(5);
-        }
-    }
-
-    private sealed class StubArtifactCatalogReader(
-        EdgeInstallerArtifactCatalogSnapshot? snapshot = null)
-        : IEdgeInstallerArtifactCatalogReader
-    {
-        public Task<EdgeInstallerArtifactCatalogSnapshot> ReadAsync(
-            string channel,
-            string? targetRuntime,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(snapshot ?? EdgeInstallerArtifactCatalogSnapshot.Empty);
         }
     }
 

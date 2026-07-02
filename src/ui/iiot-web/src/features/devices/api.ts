@@ -47,6 +47,7 @@ export interface DeviceDeletionImpactDto {
   capacities: number;
   deviceLogs: number;
   passStations: number;
+  clientStates: number;
   clientVersionSnapshots: number;
   clientPluginVersions: number;
   runtimeHeartbeats: number;

@@ -1,6 +1,8 @@
 using System.Security.Claims;
+using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.ProductionService.AiRead;
+using IIoT.ProductionService.PassStations;
 using IIoT.ProductionService.Queries.AiRead;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.AiRead;
@@ -257,6 +259,353 @@ public sealed class AiReadBehaviorTests
         Assert.Equal(processId, item.ProcessId);
     }
 
+    [Fact]
+    public async Task AiReadProcesses_ShouldReturnProcessCodeAndName()
+    {
+        var processReadService = new StubProcessReadQueryService();
+        processReadService.PagedProcesses.Add(new ProcessReadItem(
+            Guid.NewGuid(),
+            "DieCuttingAnode",
+            "负极模切"));
+        var handler = new GetAiReadProcessesHandler(
+            processReadService,
+            Options.Create(new AiReadOptions()));
+
+        var result = await handler.Handle(
+            new GetAiReadProcessesQuery(),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var item = Assert.Single(result.Value!.Items);
+        Assert.Equal("DieCuttingAnode", item.ProcessCode);
+        Assert.Equal("负极模切", item.ProcessName);
+    }
+
+    [Fact]
+    public async Task AiReadClientReleaseVersions_ShouldReturnPublishedVersionsFromAggregate()
+    {
+        var repository = new InMemoryRepository<ClientReleaseComponent>();
+        var component = ClientReleaseComponent.CreatePlugin(
+            "Homogenization",
+            "匀浆",
+            null,
+            null,
+            null,
+            "stable",
+            "win-x64");
+        component.UpsertPluginVersion(
+            "1.0.0",
+            "1.0.0",
+            "1.0.0",
+            "9.9.9",
+            "net10.0",
+            "/edge-updates/plugins/stable/Homogenization/1.0.0/Homogenization.zip",
+            new string('a', 64),
+            1024,
+            "release notes",
+            "[]",
+            ClientReleaseStatus.Published,
+            null,
+            "IIoT");
+        repository.ListResult.Add(component);
+        var handler = new GetAiReadClientReleaseVersionsHandler(
+            repository,
+            Options.Create(new AiReadOptions()));
+
+        var result = await handler.Handle(
+            new GetAiReadClientReleaseVersionsQuery(Channel: "stable", TargetRuntime: "win-x64"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var item = Assert.Single(result.Value!.Items);
+        Assert.Equal("Plugin", item.ComponentKind);
+        Assert.Equal("Homogenization", item.ComponentKey);
+        Assert.Equal("1.0.0", item.Version);
+        Assert.Equal("release notes", item.ReleaseNotes);
+    }
+
+    [Fact]
+    public async Task AiReadDeviceClientStates_ShouldReturnProjectedState()
+    {
+        var processId = Guid.NewGuid();
+        var device = new Device("State Device", "DEV-STATE-001", processId);
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.ListResult.Add(device);
+        var snapshot = new DeviceClientVersionSnapshot(
+            device.Id,
+            device.Code,
+            "1.0.20",
+            "1.0.0",
+            "stable",
+            DateTime.UtcNow,
+            [],
+            ["10.0.0.8"]);
+        var state = new DeviceClientState(device.Id, device.Code);
+        state.ApplyVersionReport(snapshot);
+        var stateRepository = new InMemoryRepository<DeviceClientState>();
+        stateRepository.ListResult.Add(state);
+        var handler = new GetAiReadDeviceClientStatesHandler(
+            deviceRepository,
+            stateRepository,
+            new TestAiReadScopeAccessor(),
+            Options.Create(new AiReadOptions()));
+
+        var result = await handler.Handle(
+            new GetAiReadDeviceClientStatesQuery(),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var item = Assert.Single(result.Value!.Items);
+        Assert.Equal(device.Id, item.DeviceId);
+        Assert.Equal("DEV-STATE-001", item.ClientCode);
+        Assert.Equal("10.0.0.8", item.PrimaryIp);
+        Assert.Equal("1.0.20", item.HostVersion);
+    }
+
+    [Fact]
+    public async Task AiReadProductionRecords_ShouldReturnCommonColumnsFieldsAndSchema()
+    {
+        var deviceId = Guid.NewGuid();
+        var queryService = new StubAiProductionRecordQueryService
+        {
+            Items =
+            [
+                new AiProductionRecordQueryItem(
+                    Guid.NewGuid(),
+                    "homogenization",
+                    deviceId,
+                    "匀浆1号机",
+                    "BC-001",
+                    "OK",
+                    DateTime.UtcNow.AddMinutes(-5),
+                    DateTime.UtcNow,
+                    new Dictionary<string, object?>
+                    {
+                        ["viscosity"] = 123.45m,
+                        ["solidContent"] = 56.7m,
+                        ["mixerSpeed"] = 300m
+                    })
+            ],
+            TotalCount = 1
+        };
+        var handler = new GetAiReadProductionRecordsHandler(
+            CreatePassStationSchemaProvider(),
+            queryService,
+            new TestAiReadScopeAccessor { DelegatedDeviceIds = [deviceId] },
+            Options.Create(new AiReadOptions()));
+
+        var result = await handler.Handle(
+            new GetAiReadProductionRecordsQuery(
+                TypeKey: "homogenization",
+                DeviceId: deviceId,
+                StartTime: DateTime.UtcNow.AddHours(-1),
+                EndTime: DateTime.UtcNow),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var item = Assert.Single(result.Value!.Items);
+        Assert.Equal("homogenization", item.TypeKey);
+        Assert.Equal("匀浆", item.TypeName);
+        Assert.Equal("BC-001", item.Barcode);
+        Assert.True(item.Fields.ContainsKey("viscosity"));
+        Assert.True(item.Fields.ContainsKey("solidContent"));
+        Assert.False(item.Fields.ContainsKey("mixerSpeed"));
+        Assert.Contains(item.FieldSchema, field => field.Key == "viscosity" && field.Label == "粘度");
+    }
+
+    [Fact]
+    public async Task AiReadProductionRecords_ShouldSupportFieldModeFull()
+    {
+        var deviceId = Guid.NewGuid();
+        var queryService = new StubAiProductionRecordQueryService
+        {
+            Items =
+            [
+                new AiProductionRecordQueryItem(
+                    Guid.NewGuid(),
+                    "homogenization",
+                    deviceId,
+                    "匀浆1号机",
+                    "BC-002",
+                    "OK",
+                    DateTime.UtcNow.AddMinutes(-5),
+                    DateTime.UtcNow,
+                    new Dictionary<string, object?>
+                    {
+                        ["mixerSpeed"] = 300m
+                    })
+            ],
+            TotalCount = 1
+        };
+        var handler = new GetAiReadProductionRecordsHandler(
+            CreatePassStationSchemaProvider(),
+            queryService,
+            new TestAiReadScopeAccessor { DelegatedDeviceIds = [deviceId] },
+            Options.Create(new AiReadOptions()));
+
+        var result = await handler.Handle(
+            new GetAiReadProductionRecordsQuery(
+                TypeKey: "homogenization",
+                DeviceId: deviceId,
+                StartTime: DateTime.UtcNow.AddHours(-1),
+                EndTime: DateTime.UtcNow,
+                FieldMode: "full"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var item = Assert.Single(result.Value!.Items);
+        Assert.True(item.Fields.ContainsKey("mixerSpeed"));
+        Assert.Contains(item.FieldSchema, field => field.Key == "mixerSpeed");
+    }
+
+    [Fact]
+    public async Task AiReadProductionRecords_ShouldRejectGlobalQueryWithoutDeviceOrProcessOrType()
+    {
+        var handler = new GetAiReadProductionRecordsHandler(
+            CreatePassStationSchemaProvider(),
+            new StubAiProductionRecordQueryService(),
+            new TestAiReadScopeAccessor(),
+            Options.Create(new AiReadOptions()));
+
+        var result = await handler.Handle(
+            new GetAiReadProductionRecordsQuery(Preset: "last_24h"),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ResultStatus.Invalid, result.Status);
+    }
+
+    [Fact]
+    public async Task AiReadProductionRecords_ShouldRejectPresetAndExplicitTimeConflict()
+    {
+        var deviceId = Guid.NewGuid();
+        var handler = new GetAiReadProductionRecordsHandler(
+            CreatePassStationSchemaProvider(),
+            new StubAiProductionRecordQueryService(),
+            new TestAiReadScopeAccessor { DelegatedDeviceIds = [deviceId] },
+            Options.Create(new AiReadOptions()));
+
+        var result = await handler.Handle(
+            new GetAiReadProductionRecordsQuery(
+                TypeKey: "homogenization",
+                DeviceId: deviceId,
+                StartTime: DateTime.UtcNow.AddHours(-1),
+                EndTime: DateTime.UtcNow,
+                Preset: "last_24h"),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ResultStatus.Invalid, result.Status);
+    }
+
+    [Fact]
+    public async Task AiReadProductionRecords_ShouldFilterByProcessAndDelegatedScope()
+    {
+        var processId = Guid.NewGuid();
+        var allowedDeviceId = Guid.NewGuid();
+        var queryService = new StubAiProductionRecordQueryService();
+        var handler = new GetAiReadProductionRecordsHandler(
+            CreatePassStationSchemaProvider(),
+            queryService,
+            new TestAiReadScopeAccessor { DelegatedDeviceIds = [allowedDeviceId] },
+            Options.Create(new AiReadOptions()));
+
+        var result = await handler.Handle(
+            new GetAiReadProductionRecordsQuery(
+                ProcessId: processId,
+                Preset: "last_24h"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(processId, queryService.LastRequest!.ProcessId);
+        Assert.Contains(allowedDeviceId, queryService.LastAllowedDeviceIds!);
+    }
+
+    [Fact]
+    public async Task AiReadDeviceLogs_ShouldSupportPresetAndMinLevel()
+    {
+        var deviceId = Guid.NewGuid();
+        var queryService = new StubDeviceLogQueryService();
+        var handler = new GetAiReadDeviceLogsHandler(
+            queryService,
+            new TestAiReadScopeAccessor { DelegatedDeviceIds = [deviceId] },
+            Options.Create(new AiReadOptions()));
+
+        var result = await handler.Handle(
+            new GetAiReadDeviceLogsQuery(deviceId, null, null, Preset: "last_24h", MinLevel: "warn"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(queryService.LastLogsStartTime);
+        Assert.NotNull(queryService.LastLogsEndTime);
+        Assert.Contains("WARN", queryService.LastLogsNormalizedLevels!);
+        Assert.Contains("ERROR", queryService.LastLogsNormalizedLevels!);
+    }
+
+    [Fact]
+    public async Task AiReadDeviceLogs_ShouldRejectLevelAndMinLevelConflict()
+    {
+        var handler = new GetAiReadDeviceLogsHandler(
+            new StubDeviceLogQueryService(),
+            new TestAiReadScopeAccessor(),
+            Options.Create(new AiReadOptions()));
+
+        var result = await handler.Handle(
+            new GetAiReadDeviceLogsQuery(Guid.NewGuid(), null, null, Level: "ERROR", MinLevel: "warn", Preset: "last_24h"),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ResultStatus.Invalid, result.Status);
+    }
+
+    [Fact]
+    public async Task AiReadCapacityHourly_ShouldReturnLast24HoursAcrossDates()
+    {
+        var deviceId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+        var queryService = new StubCapacityQueryService
+        {
+            HourlyRangeResult =
+            [
+                new HourlyCapacityPointDto(
+                    now.AddHours(-23),
+                    DateOnly.FromDateTime(now.AddDays(-1)),
+                    23,
+                    0,
+                    "23:00",
+                    "N",
+                    10,
+                    9,
+                    1),
+                new HourlyCapacityPointDto(
+                    now.AddHours(-1),
+                    DateOnly.FromDateTime(now),
+                    now.AddHours(-1).Hour,
+                    0,
+                    $"{now.AddHours(-1).Hour:00}:00",
+                    "D",
+                    20,
+                    19,
+                    1)
+            ]
+        };
+        var handler = new GetAiReadCapacityHourlyHandler(
+            queryService,
+            new TestAiReadScopeAccessor { DelegatedDeviceIds = [deviceId] },
+            Options.Create(new AiReadOptions()));
+
+        var result = await handler.Handle(
+            new GetAiReadCapacityHourlyQuery(deviceId, Preset: "last_24h"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, result.Value!.Items.Count);
+        Assert.Equal(90m, result.Value.Items[0].OkRate);
+        Assert.Equal(deviceId, queryService.LastHourlyDeviceId);
+        Assert.NotNull(queryService.LastHourlyRangeStart);
+        Assert.NotNull(queryService.LastHourlyRangeEnd);
+    }
+
     private static HttpContextAccessor CreateAccessor(string actorType, IEnumerable<string> permissions)
     {
         var claims = new List<Claim>
@@ -274,6 +623,79 @@ public sealed class AiReadBehaviorTests
                 User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"))
             }
         };
+    }
+
+    private static PassStationSchemaProvider CreatePassStationSchemaProvider()
+    {
+        return new PassStationSchemaProvider(Options.Create(new PassStationTypesOptions
+        {
+            Types =
+            [
+                new PassStationTypeDefinitionDto
+                {
+                    TypeKey = "homogenization",
+                    DisplayName = "匀浆",
+                    Description = "匀浆生产数据",
+                    SupportedModes =
+                    [
+                        PassStationQueryModes.DeviceTime,
+                        PassStationQueryModes.TimeProcess
+                    ],
+                    Fields =
+                    [
+                        new PassStationFieldDefinitionDto
+                        {
+                            Key = "viscosity",
+                            Label = "粘度",
+                            Type = PassStationFieldTypes.Number,
+                            Required = true,
+                            Unit = "mPa·s",
+                            Precision = 2
+                        },
+                        new PassStationFieldDefinitionDto
+                        {
+                            Key = "solidContent",
+                            Label = "固含量",
+                            Type = PassStationFieldTypes.Number,
+                            Required = true,
+                            Unit = "%",
+                            Precision = 2
+                        },
+                        new PassStationFieldDefinitionDto
+                        {
+                            Key = "mixerSpeed",
+                            Label = "转速",
+                            Type = PassStationFieldTypes.Number,
+                            Unit = "rpm",
+                            Precision = 1
+                        }
+                    ],
+                    ListColumns =
+                    [
+                        "barcode",
+                        "cellResult",
+                        "viscosity",
+                        "solidContent",
+                        "completedTime"
+                    ],
+                    DetailSections =
+                    [
+                        new PassStationDetailSectionDto
+                        {
+                            Title = "匀浆数据",
+                            Fields =
+                            [
+                                "barcode",
+                                "viscosity",
+                                "solidContent",
+                                "mixerSpeed",
+                                "completedTime"
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }));
     }
 
     [AuthorizeAiRead(AiReadPermissions.Device)]

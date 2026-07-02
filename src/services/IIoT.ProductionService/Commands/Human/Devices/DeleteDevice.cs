@@ -121,6 +121,7 @@ public class DeleteDeviceHandler(
                 hourly_capacity = impact.Capacities,
                 device_logs = impact.DeviceLogs,
                 pass_station_records = impact.PassStations,
+                edge_device_client_states = impact.ClientStates,
                 edge_device_client_version_snapshots = impact.ClientVersionSnapshots,
                 edge_device_client_plugin_versions = impact.ClientPluginVersions,
                 edge_device_runtime_heartbeats = impact.RuntimeHeartbeats,

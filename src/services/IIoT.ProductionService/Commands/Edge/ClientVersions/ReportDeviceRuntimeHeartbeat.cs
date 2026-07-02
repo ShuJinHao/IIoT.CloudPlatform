@@ -23,7 +23,8 @@ public sealed record ReportDeviceRuntimeHeartbeatCommand(
 
 public sealed class ReportDeviceRuntimeHeartbeatHandler(
     IDeviceIdentityQueryService deviceIdentityQueryService,
-    IRepository<EdgeDeviceRuntimeHeartbeat> repository)
+    IRepository<EdgeDeviceRuntimeHeartbeat> repository,
+    IRepository<DeviceClientState> stateRepository)
     : ICommandHandler<ReportDeviceRuntimeHeartbeatCommand, Result<DeviceRuntimeHeartbeatResultDto>>
 {
     public async Task<Result<DeviceRuntimeHeartbeatResultDto>> Handle(
@@ -77,7 +78,18 @@ public sealed class ReportDeviceRuntimeHeartbeatHandler(
                 request.RemoteIpAddress);
         }
 
-        await repository.SaveChangesAsync(cancellationToken);
+        var state = await stateRepository.GetSingleOrDefaultAsync(
+            new DeviceClientStateByIdentitySpec(request.DeviceId, clientCode),
+            cancellationToken);
+        if (state is null)
+        {
+            state = new DeviceClientState(request.DeviceId, clientCode);
+            stateRepository.Add(state);
+        }
+
+        state.ApplyRuntimeHeartbeat(heartbeat);
+
+        await stateRepository.SaveChangesAsync(cancellationToken);
         return Result.Success(new DeviceRuntimeHeartbeatResultDto(
             heartbeat.DeviceId,
             heartbeat.LastHeartbeatAtUtc));

@@ -13,6 +13,7 @@ public class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : IDe
         string? keyword = null,
         DateTime? startTime = null,
         DateTime? endTime = null,
+        IReadOnlyCollection<string>? normalizedLevels = null,
         CancellationToken cancellationToken = default)
     {
         using var connection = connectionFactory.CreateConnection();
@@ -22,7 +23,12 @@ public class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : IDe
         var parameters = new DynamicParameters();
         parameters.Add("DeviceId", deviceId);
 
-        if (!string.IsNullOrWhiteSpace(level))
+        if (normalizedLevels is { Count: > 0 })
+        {
+            conditions += " AND upper(l.level) = ANY(@Levels)";
+            parameters.Add("Levels", normalizedLevels.ToArray());
+        }
+        else if (!string.IsNullOrWhiteSpace(level))
         {
             conditions += " AND l.level = @Level";
             parameters.Add("Level", level);

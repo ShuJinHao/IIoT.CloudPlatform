@@ -1,4 +1,6 @@
+using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Aggregates.Devices;
+using IIoT.Core.Production.Specifications.ClientReleases;
 using IIoT.Core.Production.Specifications.Devices;
 using IIoT.ProductionService.AiRead;
 using IIoT.Services.Contracts;
@@ -20,6 +22,40 @@ public sealed record AiReadDeviceDto(
     string DeviceName,
     Guid ProcessId);
 
+public sealed record AiReadProcessDto(
+    Guid Id,
+    string ProcessCode,
+    string ProcessName);
+
+public sealed record AiReadClientReleaseVersionDto(
+    Guid Id,
+    string ComponentKind,
+    string ComponentKey,
+    string DisplayName,
+    string Channel,
+    string TargetRuntime,
+    string Version,
+    string Status,
+    string? ReleaseNotes,
+    DateTime CreatedAtUtc,
+    DateTime? PublishedAtUtc,
+    DateTime? DeletedAtUtc);
+
+public sealed record AiReadDeviceClientStateDto(
+    Guid DeviceId,
+    string DeviceName,
+    string ClientCode,
+    string? PrimaryIp,
+    string? Channel,
+    string? HostVersion,
+    string? HostApiVersion,
+    DateTime? VersionReportedAtUtc,
+    DateTime? VersionReceivedAtUtc,
+    string? RuntimeStatus,
+    DateTime? RuntimeStartedAtUtc,
+    DateTime? LastRuntimeHeartbeatAtUtc,
+    DateTime UpdatedAtUtc);
+
 public sealed record AiReadCapacitySummaryDto(
     DateOnly Date,
     int TotalCount,
@@ -37,14 +73,38 @@ public sealed record AiReadDeviceLogDto(
     DateTime LogTime,
     DateTime ReceivedAt);
 
-public sealed record AiReadPassStationDto(
-    Guid Id,
+public sealed record AiReadHourlyCapacityDto(
+    DateTime Time,
+    DateOnly Date,
+    int Hour,
+    int Minute,
+    string TimeLabel,
+    string ShiftCode,
+    int TotalCount,
+    int OkCount,
+    int NgCount,
+    decimal OkRate);
+
+public sealed record AiReadProductionFieldSchemaDto(
+    string Key,
+    string Label,
+    string Type,
+    string? Unit,
+    int? Precision,
+    bool Required);
+
+public sealed record AiReadProductionRecordDto(
+    Guid RecordId,
+    string TypeKey,
+    string TypeName,
     Guid DeviceId,
+    string DeviceName,
     string? Barcode,
-    string? CellResult,
-    DateTime? CompletedTime,
+    string? Result,
+    DateTime? CompletedAt,
     DateTime? ReceivedAt,
-    IReadOnlyDictionary<string, object?> Fields);
+    IReadOnlyDictionary<string, object?> Fields,
+    IReadOnlyList<AiReadProductionFieldSchemaDto> FieldSchema);
 
 [AuthorizeAiRead(AiReadPermissions.Device)]
 public sealed record GetAiReadDevicesQuery(
@@ -89,6 +149,186 @@ public sealed class GetAiReadDevicesHandler(
                 ("delegatedDeviceCount", allowedDeviceIds?.Count.ToString())),
             items.Count,
             totalCount > items.Count));
+    }
+}
+
+[AuthorizeAiRead(AiReadPermissions.Process)]
+public sealed record GetAiReadProcessesQuery(
+    string? Keyword = null,
+    int? MaxRows = null) : IAiReadQuery<Result<AiReadListResponse<AiReadProcessDto>>>;
+
+public sealed class GetAiReadProcessesHandler(
+    IProcessReadQueryService processReadQueryService,
+    IOptions<AiReadOptions> options)
+    : IQueryHandler<GetAiReadProcessesQuery, Result<AiReadListResponse<AiReadProcessDto>>>
+{
+    public async Task<Result<AiReadListResponse<AiReadProcessDto>>> Handle(
+        GetAiReadProcessesQuery request,
+        CancellationToken cancellationToken)
+    {
+        var maxRows = AiReadQueryGuard.NormalizeMaxRows(request.MaxRows, options.Value);
+        var (processes, totalCount) = await processReadQueryService.GetPagedAsync(
+            request.Keyword,
+            0,
+            maxRows,
+            cancellationToken);
+
+        var items = processes
+            .Take(maxRows)
+            .Select(process => new AiReadProcessDto(process.Id, process.ProcessCode, process.ProcessName))
+            .ToList();
+
+        return Result.Success(new AiReadListResponse<AiReadProcessDto>(
+            items,
+            DateTimeOffset.UtcNow,
+            "processes",
+            AiReadQueryGuard.BuildScope(("keyword", request.Keyword)),
+            items.Count,
+            totalCount > items.Count));
+    }
+}
+
+[AuthorizeAiRead(AiReadPermissions.ClientRelease)]
+public sealed record GetAiReadClientReleaseVersionsQuery(
+    string? Channel = null,
+    string? TargetRuntime = null,
+    string? Status = null,
+    bool IncludeArchived = false,
+    int? MaxRows = null) : IAiReadQuery<Result<AiReadListResponse<AiReadClientReleaseVersionDto>>>;
+
+public sealed class GetAiReadClientReleaseVersionsHandler(
+    IReadRepository<ClientReleaseComponent> componentRepository,
+    IOptions<AiReadOptions> options)
+    : IQueryHandler<GetAiReadClientReleaseVersionsQuery, Result<AiReadListResponse<AiReadClientReleaseVersionDto>>>
+{
+    public async Task<Result<AiReadListResponse<AiReadClientReleaseVersionDto>>> Handle(
+        GetAiReadClientReleaseVersionsQuery request,
+        CancellationToken cancellationToken)
+    {
+        var maxRows = AiReadQueryGuard.NormalizeMaxRows(request.MaxRows, options.Value);
+        var components = await componentRepository.GetListAsync(
+            new ClientReleaseComponentsByChannelSpec(
+                string.IsNullOrWhiteSpace(request.Channel) ? null : request.Channel,
+                string.IsNullOrWhiteSpace(request.TargetRuntime) ? null : request.TargetRuntime,
+                onlyPublished: false,
+                includeArchived: request.IncludeArchived),
+            cancellationToken);
+        var status = string.IsNullOrWhiteSpace(request.Status) ? null : request.Status.Trim();
+        var allItems = components
+            .SelectMany(component => component.Versions.Select(version => (Component: component, Version: version)))
+            .Where(item => status is null || string.Equals(item.Version.Status.ToString(), status, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(item => item.Component.ComponentKind.ToString(), StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Component.ComponentKey, StringComparer.OrdinalIgnoreCase)
+            .ThenByDescending(item => item.Version.PublishedAtUtc ?? item.Version.CreatedAtUtc)
+            .Select(item => new AiReadClientReleaseVersionDto(
+                item.Version.Id,
+                item.Component.ComponentKind.ToString(),
+                item.Component.ComponentKey,
+                item.Component.DisplayName,
+                item.Component.Channel,
+                item.Component.TargetRuntime,
+                item.Version.Version,
+                item.Version.Status.ToString(),
+                item.Version.ReleaseNotes,
+                item.Version.CreatedAtUtc,
+                item.Version.PublishedAtUtc,
+                item.Version.DeletedAtUtc))
+            .ToList();
+        var items = allItems.Take(maxRows).ToList();
+
+        return Result.Success(new AiReadListResponse<AiReadClientReleaseVersionDto>(
+            items,
+            DateTimeOffset.UtcNow,
+            "client_release_versions",
+            AiReadQueryGuard.BuildScope(
+                ("channel", request.Channel),
+                ("targetRuntime", request.TargetRuntime),
+                ("status", request.Status),
+                ("includeArchived", request.IncludeArchived.ToString())),
+            items.Count,
+            allItems.Count > items.Count));
+    }
+}
+
+[AuthorizeAiRead(AiReadPermissions.DeviceClientState)]
+public sealed record GetAiReadDeviceClientStatesQuery(
+    Guid? DeviceId = null,
+    string? Keyword = null,
+    int? MaxRows = null) : IAiReadQuery<Result<AiReadListResponse<AiReadDeviceClientStateDto>>>;
+
+public sealed class GetAiReadDeviceClientStatesHandler(
+    IReadRepository<Device> deviceRepository,
+    IReadRepository<DeviceClientState> stateRepository,
+    IAiReadScopeAccessor scopeAccessor,
+    IOptions<AiReadOptions> options)
+    : IQueryHandler<GetAiReadDeviceClientStatesQuery, Result<AiReadListResponse<AiReadDeviceClientStateDto>>>
+{
+    public async Task<Result<AiReadListResponse<AiReadDeviceClientStateDto>>> Handle(
+        GetAiReadDeviceClientStatesQuery request,
+        CancellationToken cancellationToken)
+    {
+        if (request.DeviceId.HasValue)
+        {
+            var validation = AiReadQueryGuard.ValidateDeviceAllowed(
+                request.DeviceId.Value,
+                scopeAccessor.DelegatedDeviceIds);
+            if (validation is not null)
+                return validation;
+        }
+
+        var maxRows = AiReadQueryGuard.NormalizeMaxRows(request.MaxRows, options.Value);
+        List<Guid>? allowedDeviceIds = request.DeviceId.HasValue
+            ? [request.DeviceId.Value]
+            : scopeAccessor.DelegatedDeviceIds?.ToList();
+        var devices = await deviceRepository.GetListAsync(
+            new DevicePagedSpec(0, maxRows, allowedDeviceIds, request.Keyword, isPaging: true),
+            cancellationToken);
+        var deviceById = devices.ToDictionary(device => device.Id);
+        var states = await stateRepository.GetListAsync(
+            new DeviceClientStatesByDevicesSpec(deviceById.Keys.ToList()),
+            cancellationToken);
+        var allItems = states
+            .Where(state => deviceById.ContainsKey(state.DeviceId))
+            .OrderBy(state => deviceById[state.DeviceId].DeviceName, StringComparer.OrdinalIgnoreCase)
+            .Select(state =>
+            {
+                var device = deviceById[state.DeviceId];
+                return new AiReadDeviceClientStateDto(
+                    state.DeviceId,
+                    device.DeviceName,
+                    state.ClientCode,
+                    ResolvePrimaryIp(state),
+                    state.Channel,
+                    state.HostVersion,
+                    state.HostApiVersion,
+                    state.VersionReportedAtUtc,
+                    state.VersionReceivedAtUtc,
+                    state.RuntimeStatus,
+                    state.RuntimeStartedAtUtc,
+                    state.LastRuntimeHeartbeatAtUtc,
+                    state.UpdatedAtUtc);
+            })
+            .ToList();
+        var items = allItems.Take(maxRows).ToList();
+
+        return Result.Success(new AiReadListResponse<AiReadDeviceClientStateDto>(
+            items,
+            DateTimeOffset.UtcNow,
+            "device_client_states",
+            AiReadQueryGuard.BuildScope(
+                ("deviceId", request.DeviceId?.ToString()),
+                ("keyword", request.Keyword),
+                ("delegatedUserId", scopeAccessor.DelegatedUserId?.ToString())),
+            items.Count,
+            allItems.Count > items.Count));
+    }
+
+    private static string? ResolvePrimaryIp(DeviceClientState state)
+    {
+        return state.GetRuntimeLocalIpAddresses().FirstOrDefault()
+            ?? state.GetVersionLocalIpAddresses().FirstOrDefault()
+            ?? state.RuntimeRemoteIpAddress
+            ?? state.VersionRemoteIpAddress;
     }
 }
 
@@ -153,6 +393,76 @@ public sealed class GetAiReadCapacitySummaryHandler(
     }
 }
 
+[AuthorizeAiRead(AiReadPermissions.Capacity)]
+public sealed record GetAiReadCapacityHourlyQuery(
+    Guid DeviceId,
+    DateOnly? Date = null,
+    string? Preset = null,
+    string? PlcName = null,
+    int? MaxRows = null) : IAiReadQuery<Result<AiReadListResponse<AiReadHourlyCapacityDto>>>;
+
+public sealed class GetAiReadCapacityHourlyHandler(
+    ICapacityQueryService capacityQueryService,
+    IAiReadScopeAccessor scopeAccessor,
+    IOptions<AiReadOptions> options)
+    : IQueryHandler<GetAiReadCapacityHourlyQuery, Result<AiReadListResponse<AiReadHourlyCapacityDto>>>
+{
+    public async Task<Result<AiReadListResponse<AiReadHourlyCapacityDto>>> Handle(
+        GetAiReadCapacityHourlyQuery request,
+        CancellationToken cancellationToken)
+    {
+        var deviceValidation = AiReadQueryGuard.ValidateDeviceAllowed(
+            request.DeviceId,
+            scopeAccessor.DelegatedDeviceIds);
+        if (deviceValidation is not null)
+            return deviceValidation;
+
+        var rangeValidation = AiReadQueryGuard.ResolveCapacityHourlyRange(
+            request.Date,
+            request.Preset,
+            out var range);
+        if (rangeValidation is not null)
+            return rangeValidation;
+
+        var maxRows = AiReadQueryGuard.NormalizeMaxRows(request.MaxRows, options.Value);
+        var rows = await capacityQueryService.GetHourlyRangeByDeviceIdAsync(
+            request.DeviceId,
+            range!.StartTime,
+            range.EndTime,
+            request.PlcName,
+            cancellationToken);
+        var items = rows
+            .Take(maxRows)
+            .Select(row => new AiReadHourlyCapacityDto(
+                AiReadQueryGuard.NormalizeUtc(row.Time),
+                row.Date,
+                row.Hour,
+                row.Minute,
+                row.TimeLabel,
+                row.ShiftCode,
+                row.TotalCount,
+                row.OkCount,
+                row.NgCount,
+                row.TotalCount > 0 ? Math.Round(row.OkCount * 100m / row.TotalCount, 2) : 0m))
+            .ToList();
+
+        return Result.Success(new AiReadListResponse<AiReadHourlyCapacityDto>(
+            items,
+            DateTimeOffset.UtcNow,
+            "capacity.hourly",
+            AiReadQueryGuard.BuildScope(
+                ("deviceId", request.DeviceId.ToString()),
+                ("date", request.Date?.ToString("yyyy-MM-dd")),
+                ("preset", range.RangeSource),
+                ("startTime", range.StartTime.ToString("O")),
+                ("endTime", range.EndTime.ToString("O")),
+                ("plcName", request.PlcName),
+                ("delegatedUserId", scopeAccessor.DelegatedUserId?.ToString())),
+            items.Count,
+            rows.Count > items.Count));
+    }
+}
+
 [AuthorizeAiRead(AiReadPermissions.DeviceLog)]
 public sealed record GetAiReadDeviceLogsQuery(
     Guid DeviceId,
@@ -160,6 +470,8 @@ public sealed record GetAiReadDeviceLogsQuery(
     DateTime? EndTime,
     string? Level = null,
     string? Keyword = null,
+    string? Preset = null,
+    string? MinLevel = null,
     int? MaxRows = null) : IAiReadQuery<Result<AiReadListResponse<AiReadDeviceLogDto>>>;
 
 public sealed class GetAiReadDeviceLogsHandler(
@@ -172,25 +484,45 @@ public sealed class GetAiReadDeviceLogsHandler(
         GetAiReadDeviceLogsQuery request,
         CancellationToken cancellationToken)
     {
-        var rangeValidation = AiReadQueryGuard.ValidateDeviceAndTimeRange(
+        if (!string.IsNullOrWhiteSpace(request.Level) && !string.IsNullOrWhiteSpace(request.MinLevel))
+            return Result.Invalid("level 和 minLevel 不能同时传。");
+
+        var rangeValidation = AiReadQueryGuard.ValidateDeviceAllowed(
             request.DeviceId,
-            request.StartTime,
-            request.EndTime,
-            scopeAccessor.DelegatedDeviceIds,
-            options.Value);
+            scopeAccessor.DelegatedDeviceIds);
         if (rangeValidation is not null)
             return rangeValidation;
 
+        var timeRangeValidation = AiReadQueryGuard.ResolveTimeRange(
+            request.StartTime,
+            request.EndTime,
+            request.Preset,
+            options.Value,
+            out var range);
+        if (timeRangeValidation is not null)
+            return timeRangeValidation;
+
+        IReadOnlyCollection<string>? normalizedLevels = null;
+        if (!string.IsNullOrWhiteSpace(request.MinLevel))
+        {
+            if (!DeviceLogSeverityLevels.TryGetLevelsAtOrAbove(
+                    request.MinLevel,
+                    out normalizedLevels,
+                    out _))
+            {
+                return Result.Invalid("minLevel 只支持 info、warn、error。");
+            }
+        }
+
         var maxRows = AiReadQueryGuard.NormalizeMaxRows(request.MaxRows, options.Value);
-        var startTime = AiReadQueryGuard.NormalizeUtc(request.StartTime!.Value);
-        var endTime = AiReadQueryGuard.NormalizeUtc(request.EndTime!.Value);
         var (items, totalCount) = await deviceLogQueryService.GetLogsByConditionAsync(
             new Pagination { PageNumber = 1, PageSize = maxRows },
             request.DeviceId,
             request.Level,
             request.Keyword,
-            startTime,
-            endTime,
+            range!.StartTime,
+            range.EndTime,
+            normalizedLevels,
             cancellationToken);
 
         var resultItems = items
@@ -211,9 +543,11 @@ public sealed class GetAiReadDeviceLogsHandler(
             "device_logs",
             AiReadQueryGuard.BuildScope(
                 ("deviceId", request.DeviceId.ToString()),
-                ("startTime", startTime.ToString("O")),
-                ("endTime", endTime.ToString("O")),
+                ("startTime", range.StartTime.ToString("O")),
+                ("endTime", range.EndTime.ToString("O")),
+                ("preset", range.RangeSource),
                 ("level", request.Level),
+                ("minLevel", request.MinLevel),
                 ("keyword", string.IsNullOrWhiteSpace(request.Keyword) ? null : "present"),
                 ("delegatedUserId", scopeAccessor.DelegatedUserId?.ToString())),
             resultItems.Count,
@@ -221,34 +555,59 @@ public sealed class GetAiReadDeviceLogsHandler(
     }
 }
 
-[AuthorizeAiRead(AiReadPermissions.PassStation)]
-public sealed record GetAiReadPassStationsQuery(
-    string TypeKey,
-    DateTime? StartTime,
-    DateTime? EndTime,
+[AuthorizeAiRead(AiReadPermissions.ProductionRecord)]
+public sealed record GetAiReadProductionRecordsQuery(
+    string? TypeKey = null,
+    Guid? ProcessId = null,
     Guid? DeviceId = null,
     string? Barcode = null,
-    int? MaxRows = null) : IAiReadQuery<Result<AiReadListResponse<AiReadPassStationDto>>>;
+    string? Result = null,
+    DateTime? StartTime = null,
+    DateTime? EndTime = null,
+    string? Preset = null,
+    string? FieldMode = null,
+    int? MaxRows = null) : IAiReadQuery<Result<AiReadListResponse<AiReadProductionRecordDto>>>;
 
-public sealed class GetAiReadPassStationsHandler(
+public sealed class GetAiReadProductionRecordsHandler(
     IPassStationSchemaProvider schemaProvider,
-    IPassStationRecordQueryService passStationRecordQueryService,
+    IAiProductionRecordQueryService productionRecordQueryService,
     IAiReadScopeAccessor scopeAccessor,
     IOptions<AiReadOptions> options)
-    : IQueryHandler<GetAiReadPassStationsQuery, Result<AiReadListResponse<AiReadPassStationDto>>>
+    : IQueryHandler<GetAiReadProductionRecordsQuery, Result<AiReadListResponse<AiReadProductionRecordDto>>>
 {
-    public async Task<Result<AiReadListResponse<AiReadPassStationDto>>> Handle(
-        GetAiReadPassStationsQuery request,
+    public async Task<Result<AiReadListResponse<AiReadProductionRecordDto>>> Handle(
+        GetAiReadProductionRecordsQuery request,
         CancellationToken cancellationToken)
     {
-        var definition = schemaProvider.Find(request.TypeKey);
-        if (definition is null)
-            return Result.NotFound($"过站类型 [{request.TypeKey}] 不存在。");
+        var fieldMode = string.IsNullOrWhiteSpace(request.FieldMode)
+            ? "list"
+            : request.FieldMode.Trim().ToLowerInvariant();
+        if (fieldMode is not ("list" or "full"))
+            return Result.Invalid("fieldMode 只支持 list 或 full。");
 
-        var rangeValidation = AiReadQueryGuard.ValidateTimeRange(
+        PassStationTypeDefinitionDto? requestedDefinition = null;
+        string? normalizedTypeKey = null;
+        if (!string.IsNullOrWhiteSpace(request.TypeKey))
+        {
+            normalizedTypeKey = request.TypeKey.Trim().ToLowerInvariant();
+            requestedDefinition = schemaProvider.Find(normalizedTypeKey);
+            if (requestedDefinition is null)
+                return Result.NotFound($"生产数据类型 [{request.TypeKey}] 不存在。");
+        }
+
+        if (string.IsNullOrWhiteSpace(normalizedTypeKey)
+            && !request.DeviceId.HasValue
+            && !request.ProcessId.HasValue)
+        {
+            return Result.Invalid("跨类型查询 production-records 时必须提供 deviceId 或 processId。");
+        }
+
+        var rangeValidation = AiReadQueryGuard.ResolveTimeRange(
             request.StartTime,
             request.EndTime,
-            options.Value);
+            request.Preset,
+            options.Value,
+            out var range);
         if (rangeValidation is not null)
             return rangeValidation;
 
@@ -262,66 +621,112 @@ public sealed class GetAiReadPassStationsHandler(
         }
 
         var maxRows = AiReadQueryGuard.NormalizeMaxRows(request.MaxRows, options.Value);
-        var startTime = AiReadQueryGuard.NormalizeUtc(request.StartTime!.Value);
-        var endTime = AiReadQueryGuard.NormalizeUtc(request.EndTime!.Value);
-        var queryRequest = new PassStationQueryRequest(
-            definition.TypeKey,
-            PassStationQueryModes.DeviceTime,
+        var queryRequest = new AiProductionRecordQueryRequest(
             new Pagination { PageNumber = 1, PageSize = maxRows },
-            ProcessId: null,
+            range!.StartTime,
+            range.EndTime,
+            TypeKey: requestedDefinition?.TypeKey,
+            ProcessId: request.ProcessId,
             DeviceId: request.DeviceId,
             Barcode: request.Barcode?.Trim(),
-            StartTime: startTime,
-            EndTime: endTime);
+            Result: request.Result?.Trim());
 
-        var (items, totalCount) = await passStationRecordQueryService.GetByConditionAsync(
+        var (items, totalCount) = await productionRecordQueryService.GetAsync(
             queryRequest,
             scopeAccessor.DelegatedDeviceIds,
             cancellationToken);
-        var exposedFieldKeys = definition.ListColumns
-            .Where(column => !AiReadQueryGuard.IsPassStationCommonColumn(column))
-            .ToHashSet(StringComparer.Ordinal);
+        var definitions = schemaProvider.GetAll()
+            .ToDictionary(definition => definition.TypeKey, StringComparer.Ordinal);
 
         var resultItems = items
             .Take(maxRows)
-            .Select(item => new AiReadPassStationDto(
+            .Select(item =>
+            {
+                definitions.TryGetValue(item.TypeKey, out var definition);
+                List<PassStationFieldDefinitionDto> fieldDefinitions = definition is null
+                    ? []
+                    : SelectFieldDefinitions(definition, fieldMode);
+                var exposedFieldKeys = fieldDefinitions
+                    .Select(field => field.Key)
+                    .ToHashSet(StringComparer.Ordinal);
+
+                return new AiReadProductionRecordDto(
                 item.Id,
+                item.TypeKey,
+                definition?.DisplayName ?? item.TypeKey,
                 item.DeviceId,
+                item.DeviceName,
                 item.Barcode,
-                item.CellResult,
+                item.Result,
                 item.CompletedTime.HasValue ? AiReadQueryGuard.NormalizeUtc(item.CompletedTime.Value) : null,
                 item.ReceivedAt.HasValue ? AiReadQueryGuard.NormalizeUtc(item.ReceivedAt.Value) : null,
                 item.Fields
                     .Where(field => exposedFieldKeys.Contains(field.Key))
-                    .ToDictionary(field => field.Key, field => field.Value, StringComparer.Ordinal)))
+                    .ToDictionary(field => field.Key, field => field.Value, StringComparer.Ordinal),
+                fieldDefinitions
+                    .Select(field => new AiReadProductionFieldSchemaDto(
+                        field.Key,
+                        field.Label,
+                        field.Type,
+                        field.Unit,
+                        field.Precision,
+                        field.Required))
+                    .ToList());
+            })
             .ToList();
 
-        return Result.Success(new AiReadListResponse<AiReadPassStationDto>(
+        return Result.Success(new AiReadListResponse<AiReadProductionRecordDto>(
             resultItems,
             DateTimeOffset.UtcNow,
-            $"pass_station_records:{definition.TypeKey}",
+            "production_records",
             AiReadQueryGuard.BuildScope(
-                ("typeKey", definition.TypeKey),
+                ("typeKey", requestedDefinition?.TypeKey),
+                ("processId", request.ProcessId?.ToString()),
                 ("deviceId", request.DeviceId?.ToString()),
                 ("barcode", string.IsNullOrWhiteSpace(request.Barcode) ? null : "present"),
-                ("startTime", startTime.ToString("O")),
-                ("endTime", endTime.ToString("O")),
+                ("result", request.Result),
+                ("fieldMode", fieldMode),
+                ("preset", range.RangeSource),
+                ("startTime", range.StartTime.ToString("O")),
+                ("endTime", range.EndTime.ToString("O")),
                 ("delegatedUserId", scopeAccessor.DelegatedUserId?.ToString()),
                 ("delegatedDeviceCount", scopeAccessor.DelegatedDeviceIds?.Count.ToString())),
             resultItems.Count,
             totalCount > resultItems.Count));
     }
+
+    private static List<PassStationFieldDefinitionDto> SelectFieldDefinitions(
+        PassStationTypeDefinitionDto definition,
+        string fieldMode)
+    {
+        if (fieldMode == "full")
+            return definition.Fields;
+
+        var listFieldKeys = definition.ListColumns
+            .Where(column => !AiReadQueryGuard.IsProductionRecordCommonColumn(column))
+            .ToHashSet(StringComparer.Ordinal);
+        return definition.Fields
+            .Where(field => listFieldKeys.Contains(field.Key))
+            .ToList();
+    }
 }
+
+internal sealed record AiReadResolvedTimeRange(
+    DateTime StartTime,
+    DateTime EndTime,
+    string RangeSource);
 
 internal static class AiReadQueryGuard
 {
-    private static readonly HashSet<string> PassStationCommonColumns = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> ProductionRecordCommonColumns = new(StringComparer.Ordinal)
     {
         "id",
         "deviceId",
         "barcode",
         "cellResult",
+        "result",
         "completedTime",
+        "completedAt",
         "receivedAt"
     };
 
@@ -398,6 +803,87 @@ internal static class AiReadQueryGuard
         return null;
     }
 
+    public static Result? ResolveTimeRange(
+        DateTime? startTime,
+        DateTime? endTime,
+        string? preset,
+        AiReadOptions options,
+        out AiReadResolvedTimeRange? range)
+    {
+        range = null;
+        var hasExplicitTime = startTime.HasValue || endTime.HasValue;
+        var hasPreset = !string.IsNullOrWhiteSpace(preset);
+        if (hasExplicitTime && hasPreset)
+            return Result.Invalid("preset 和 startTime/endTime 不能同时传。");
+
+        if (hasPreset)
+        {
+            var now = DateTime.UtcNow;
+            var normalizedPreset = preset!.Trim().ToLowerInvariant();
+            var (start, end) = normalizedPreset switch
+            {
+                "last_24h" => (now.AddHours(-24), now),
+                "last_7d" => (now.AddDays(-7), now),
+                "today" => (now.Date, now),
+                "yesterday" => (now.Date.AddDays(-1), now.Date.AddTicks(-1)),
+                _ => (DateTime.MinValue, DateTime.MinValue)
+            };
+            if (start == DateTime.MinValue)
+                return Result.Invalid("preset 只支持 last_24h、last_7d、today、yesterday。");
+
+            if ((end - start).TotalDays > options.MaxTimeRangeDays)
+                return Result.Invalid($"AiRead 查询时间跨度不能超过 {options.MaxTimeRangeDays} 天。");
+
+            range = new AiReadResolvedTimeRange(start, end, normalizedPreset);
+            return null;
+        }
+
+        var validation = ValidateTimeRange(startTime, endTime, options);
+        if (validation is not null)
+            return validation;
+
+        range = new AiReadResolvedTimeRange(
+            NormalizeUtc(startTime!.Value),
+            NormalizeUtc(endTime!.Value),
+            "explicit");
+        return null;
+    }
+
+    public static Result? ResolveCapacityHourlyRange(
+        DateOnly? date,
+        string? preset,
+        out AiReadResolvedTimeRange? range)
+    {
+        range = null;
+        var hasPreset = !string.IsNullOrWhiteSpace(preset);
+        if (date.HasValue && hasPreset)
+            return Result.Invalid("date 和 preset 不能同时传。");
+
+        if (date.HasValue)
+        {
+            var start = date.Value.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+            range = new AiReadResolvedTimeRange(start, start.AddDays(1).AddTicks(-1), "date");
+            return null;
+        }
+
+        if (!hasPreset)
+            return Result.Invalid("capacity/hourly 必须提供 date 或 preset。");
+
+        var now = DateTime.UtcNow;
+        var normalizedPreset = preset!.Trim().ToLowerInvariant();
+        range = normalizedPreset switch
+        {
+            "last_24h" => new AiReadResolvedTimeRange(now.AddHours(-24), now, normalizedPreset),
+            "today" => new AiReadResolvedTimeRange(now.Date, now, normalizedPreset),
+            "yesterday" => new AiReadResolvedTimeRange(now.Date.AddDays(-1), now.Date.AddTicks(-1), normalizedPreset),
+            _ => null
+        };
+
+        return range is null
+            ? Result.Invalid("capacity/hourly preset 只支持 last_24h、today、yesterday。")
+            : null;
+    }
+
     public static DateTime NormalizeUtc(DateTime value)
     {
         return value.Kind switch
@@ -426,8 +912,8 @@ internal static class AiReadQueryGuard
         return value[..maxLength];
     }
 
-    public static bool IsPassStationCommonColumn(string column)
+    public static bool IsProductionRecordCommonColumn(string column)
     {
-        return PassStationCommonColumns.Contains(column);
+        return ProductionRecordCommonColumns.Contains(column);
     }
 }

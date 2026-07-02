@@ -67,13 +67,14 @@ public sealed class HumanClientReleaseController : ApiControllerBase
             cancellationToken));
     }
 
-    [HttpDelete("{releaseId:guid}/files")]
-    public async Task<IActionResult> DeleteReleaseFiles(
+    [HttpDelete("{releaseId:guid}/package")]
+    public async Task<IActionResult> DeleteReleasePackage(
         [FromRoute] Guid releaseId,
+        [FromBody] DeleteClientReleasePackageRequest? request,
         CancellationToken cancellationToken)
     {
         return ReturnResult(await Sender.Send(
-            new DeleteClientReleaseFilesCommand(releaseId),
+            new DeleteClientReleasePackageCommand(releaseId, request?.Reason),
             cancellationToken));
     }
 
@@ -181,3 +182,5 @@ public sealed class HumanClientReleaseController : ApiControllerBase
 }
 
 public sealed record UpdateClientReleaseStatusRequest(string Status);
+
+public sealed record DeleteClientReleasePackageRequest(string? Reason);

@@ -45,7 +45,7 @@ public class GetDeviceLogsHandler(
             request.Keyword,
             request.StartTime,
             request.EndTime,
-            cancellationToken);
+            cancellationToken: cancellationToken);
 
         var pagedList = new PagedList<DeviceLogListItemDto>(
             items, totalCount, request.PaginationParams);

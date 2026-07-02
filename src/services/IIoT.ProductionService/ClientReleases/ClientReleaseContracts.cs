@@ -46,7 +46,10 @@ public sealed record ClientHostVersionEntryDto(
     string? Signature,
     string? Publisher,
     DateTime CreatedAtUtc,
-    DateTime? PublishedAtUtc);
+    DateTime? PublishedAtUtc,
+    DateTime? DeletedAtUtc,
+    string? DeletionReason,
+    string? DeletionFailure);
 
 public sealed record ClientPluginVersionEntryDto(
     Guid Id,
@@ -66,7 +69,10 @@ public sealed record ClientPluginVersionEntryDto(
     string? Signature,
     string? Publisher,
     DateTime CreatedAtUtc,
-    DateTime? PublishedAtUtc);
+    DateTime? PublishedAtUtc,
+    DateTime? DeletedAtUtc,
+    string? DeletionReason,
+    string? DeletionFailure);
 
 public sealed record UpsertClientHostReleaseResultDto(Guid Id);
 
@@ -172,81 +178,107 @@ internal static class ClientReleaseMapping
     private static readonly IComparer<string> VersionComparer = Comparer<string>.Create(CompareVersions);
 
     public static ClientHostReleaseComponentDto ToHostComponent(
-        IEnumerable<ClientHostRelease> releases,
-        int? maxVersions = null)
+        IEnumerable<ClientReleaseComponent> components,
+        int? maxVersions = null,
+        bool onlyPublished = false,
+        bool includeArchived = false)
     {
-        var versions = OrderHostVersions(releases, maxVersions)
-            .Select(ToHostVersion)
+        var versions = OrderVersions(
+                components
+                    .Where(component => component.ComponentKind == ClientReleaseComponentKind.Host)
+                    .SelectMany(component => component.Versions
+                        .Where(version => ShouldExposeVersion(version, onlyPublished, includeArchived))
+                        .Select(version => (Component: component, Version: version))),
+                maxVersions)
+            .Select(item => ToHostVersion(item.Component, item.Version))
             .ToList();
 
         return new ClientHostReleaseComponentDto("Host", "Edge Host", versions);
     }
 
     public static IReadOnlyList<ClientPluginReleaseComponentDto> ToPluginComponents(
-        IEnumerable<ClientPluginRelease> releases,
-        int? maxVersions = null)
+        IEnumerable<ClientReleaseComponent> components,
+        int? maxVersions = null,
+        bool onlyPublished = false,
+        bool includeArchived = false)
     {
-        return releases
-            .GroupBy(release => release.ModuleId, StringComparer.OrdinalIgnoreCase)
-            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(group =>
+        return components
+            .Where(component => component.ComponentKind == ClientReleaseComponentKind.Plugin)
+            .OrderBy(component => component.ComponentKey, StringComparer.OrdinalIgnoreCase)
+            .Select(component =>
             {
-                var ordered = OrderPluginVersions(group, maxVersions).ToList();
-                var metadata = ordered.FirstOrDefault() ?? group.First();
+                var ordered = OrderVersions(
+                        component.Versions
+                            .Where(version => ShouldExposeVersion(version, onlyPublished, includeArchived))
+                            .Select(version => (Component: component, Version: version)),
+                        maxVersions)
+                    .ToList();
                 return new ClientPluginReleaseComponentDto(
                     "Plugin",
-                    metadata.ModuleId,
-                    metadata.DisplayName,
-                    metadata.Description,
-                    metadata.IconKind,
-                    metadata.AccentColor,
-                    ordered.Select(ToPluginVersion).ToList());
+                    component.ComponentKey,
+                    component.DisplayName,
+                    component.Description,
+                    component.IconKind,
+                    component.AccentColor,
+                    ordered.Select(item => ToPluginVersion(item.Component, item.Version)).ToList());
             })
             .ToList();
     }
 
     public static PublicClientHostDownloadComponentDto ToPublicHostComponent(
-        IEnumerable<ClientHostRelease> releases,
+        IEnumerable<ClientReleaseComponent> components,
         int? maxVersions = null)
     {
-        var versions = OrderHostVersions(releases, maxVersions)
-            .Select(ToPublicHostVersion)
+        var versions = OrderVersions(
+                components
+                    .Where(component => component.ComponentKind == ClientReleaseComponentKind.Host)
+                    .SelectMany(component => component.Versions
+                        .Where(version => ShouldExposeVersion(version, onlyPublished: true, includeArchived: false))
+                        .Select(version => (Component: component, Version: version))),
+                maxVersions)
+            .Select(item => ToPublicHostVersion(item.Component, item.Version))
             .ToList();
 
         return new PublicClientHostDownloadComponentDto("Host", "Edge Host", versions);
     }
 
     public static IReadOnlyList<PublicClientPluginCatalogComponentDto> ToPublicPluginComponents(
-        IEnumerable<ClientPluginRelease> releases,
+        IEnumerable<ClientReleaseComponent> components,
         int? maxVersions = null)
     {
-        return releases
-            .GroupBy(release => release.ModuleId, StringComparer.OrdinalIgnoreCase)
-            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(group =>
+        return components
+            .Where(component => component.ComponentKind == ClientReleaseComponentKind.Plugin)
+            .OrderBy(component => component.ComponentKey, StringComparer.OrdinalIgnoreCase)
+            .Select(component =>
             {
-                var ordered = OrderPluginVersions(group, maxVersions).ToList();
-                var metadata = ordered.FirstOrDefault() ?? group.First();
+                var ordered = OrderVersions(
+                        component.Versions
+                            .Where(version => ShouldExposeVersion(version, onlyPublished: true, includeArchived: false))
+                            .Select(version => (Component: component, Version: version)),
+                        maxVersions)
+                    .ToList();
                 return new PublicClientPluginCatalogComponentDto(
                     "Plugin",
-                    metadata.ModuleId,
-                    metadata.DisplayName,
-                    metadata.Description,
-                    metadata.IconKind,
-                    metadata.AccentColor,
-                    ordered.Select(ToPublicPluginVersion).ToList());
+                    component.ComponentKey,
+                    component.DisplayName,
+                    component.Description,
+                    component.IconKind,
+                    component.AccentColor,
+                    ordered.Select(item => ToPublicPluginVersion(item.Component, item.Version)).ToList());
             })
             .ToList();
     }
 
-    public static ClientHostVersionEntryDto ToHostVersion(ClientHostRelease release)
+    public static ClientHostVersionEntryDto ToHostVersion(
+        ClientReleaseComponent component,
+        ClientReleaseVersion release)
     {
         return new ClientHostVersionEntryDto(
             release.Id,
-            release.Channel,
+            component.Channel,
             release.Version,
             release.HostApiVersion,
-            release.TargetRuntime,
+            component.TargetRuntime,
             release.TargetFramework,
             release.DownloadUrl,
             release.Sha256,
@@ -256,19 +288,24 @@ internal static class ClientReleaseMapping
             release.Signature,
             release.Publisher,
             release.CreatedAtUtc,
-            release.PublishedAtUtc);
+            release.PublishedAtUtc,
+            release.DeletedAtUtc,
+            release.DeletionReason,
+            release.DeletionFailure);
     }
 
-    public static ClientPluginVersionEntryDto ToPluginVersion(ClientPluginRelease release)
+    public static ClientPluginVersionEntryDto ToPluginVersion(
+        ClientReleaseComponent component,
+        ClientReleaseVersion release)
     {
         return new ClientPluginVersionEntryDto(
             release.Id,
-            release.Channel,
+            component.Channel,
             release.Version,
             release.HostApiVersion,
-            release.MinHostVersion,
-            release.MaxHostVersion,
-            release.TargetRuntime,
+            release.MinHostVersion ?? string.Empty,
+            release.MaxHostVersion ?? string.Empty,
+            component.TargetRuntime,
             release.TargetFramework,
             release.DownloadUrl,
             release.Sha256,
@@ -279,16 +316,21 @@ internal static class ClientReleaseMapping
             release.Signature,
             release.Publisher,
             release.CreatedAtUtc,
-            release.PublishedAtUtc);
+            release.PublishedAtUtc,
+            release.DeletedAtUtc,
+            release.DeletionReason,
+            release.DeletionFailure);
     }
 
-    public static PublicClientHostVersionDto ToPublicHostVersion(ClientHostRelease release)
+    public static PublicClientHostVersionDto ToPublicHostVersion(
+        ClientReleaseComponent component,
+        ClientReleaseVersion release)
     {
         return new PublicClientHostVersionDto(
-            release.Channel,
+            component.Channel,
             release.Version,
             release.HostApiVersion,
-            release.TargetRuntime,
+            component.TargetRuntime,
             release.TargetFramework,
             release.Sha256,
             release.PackageSize,
@@ -298,15 +340,17 @@ internal static class ClientReleaseMapping
             release.PublishedAtUtc);
     }
 
-    public static PublicClientPluginVersionDto ToPublicPluginVersion(ClientPluginRelease release)
+    public static PublicClientPluginVersionDto ToPublicPluginVersion(
+        ClientReleaseComponent component,
+        ClientReleaseVersion release)
     {
         return new PublicClientPluginVersionDto(
-            release.Channel,
+            component.Channel,
             release.Version,
             release.HostApiVersion,
-            release.MinHostVersion,
-            release.MaxHostVersion,
-            release.TargetRuntime,
+            release.MinHostVersion ?? string.Empty,
+            release.MaxHostVersion ?? string.Empty,
+            component.TargetRuntime,
             release.TargetFramework,
             release.PackageSize,
             release.ReleaseNotes,
@@ -333,7 +377,7 @@ internal static class ClientReleaseMapping
     }
 
     public static bool IsCompatibleWithHost(
-        ClientPluginRelease release,
+        ClientReleaseVersion release,
         string hostVersion,
         string hostApiVersion,
         out string? issue)
@@ -344,7 +388,9 @@ internal static class ClientReleaseMapping
             return false;
         }
 
-        if (!IsVersionInRange(hostVersion, release.MinHostVersion, release.MaxHostVersion))
+        if (string.IsNullOrWhiteSpace(release.MinHostVersion)
+            || string.IsNullOrWhiteSpace(release.MaxHostVersion)
+            || !IsVersionInRange(hostVersion, release.MinHostVersion, release.MaxHostVersion))
         {
             issue = $"宿主版本 {hostVersion} 不在插件兼容窗口 [{release.MinHostVersion}, {release.MaxHostVersion}]";
             return false;
@@ -379,24 +425,13 @@ internal static class ClientReleaseMapping
         return string.Compare(left, right, StringComparison.OrdinalIgnoreCase);
     }
 
-    public static IReadOnlyList<ClientHostRelease> OrderHostVersions(
-        IEnumerable<ClientHostRelease> releases,
+    public static IReadOnlyList<(ClientReleaseComponent Component, ClientReleaseVersion Version)> OrderVersions(
+        IEnumerable<(ClientReleaseComponent Component, ClientReleaseVersion Version)> releases,
         int? maxVersions = null)
     {
         var ordered = releases
-            .OrderByDescending(release => release.Version, VersionComparer)
-            .ThenByDescending(release => release.PublishedAtUtc ?? release.CreatedAtUtc);
-
-        return (maxVersions is { } max ? ordered.Take(max) : ordered).ToList();
-    }
-
-    public static IReadOnlyList<ClientPluginRelease> OrderPluginVersions(
-        IEnumerable<ClientPluginRelease> releases,
-        int? maxVersions = null)
-    {
-        var ordered = releases
-            .OrderByDescending(release => release.Version, VersionComparer)
-            .ThenByDescending(release => release.PublishedAtUtc ?? release.CreatedAtUtc);
+            .OrderByDescending(item => item.Version.Version, VersionComparer)
+            .ThenByDescending(item => item.Version.PublishedAtUtc ?? item.Version.CreatedAtUtc);
 
         return (maxVersions is { } max ? ordered.Take(max) : ordered).ToList();
     }
@@ -405,5 +440,20 @@ internal static class ClientReleaseMapping
     {
         return CompareVersions(hostVersion, minHostVersion) >= 0
             && CompareVersions(hostVersion, maxHostVersion) <= 0;
+    }
+
+    private static bool ShouldExposeVersion(
+        ClientReleaseVersion version,
+        bool onlyPublished,
+        bool includeArchived)
+    {
+        var publishedMatch = !onlyPublished
+            || version.Status == ClientReleaseStatus.Published
+            || version.Status == ClientReleaseStatus.Deprecated;
+        var archiveMatch = includeArchived
+            || (version.Status != ClientReleaseStatus.Archived
+                && version.Status != ClientReleaseStatus.Deleted
+                && version.Status != ClientReleaseStatus.DeleteFailed);
+        return publishedMatch && archiveMatch;
     }
 }

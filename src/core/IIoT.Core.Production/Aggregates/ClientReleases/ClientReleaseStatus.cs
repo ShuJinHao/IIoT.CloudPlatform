@@ -8,5 +8,8 @@ public enum ClientReleaseStatus
     Draft,
     Published,
     Deprecated,
-    Archived
+    Archived,
+    DeleteRequested,
+    Deleted,
+    DeleteFailed
 }

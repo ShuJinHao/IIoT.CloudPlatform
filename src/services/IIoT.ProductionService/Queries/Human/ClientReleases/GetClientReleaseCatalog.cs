@@ -18,9 +18,7 @@ public sealed record GetClientReleaseCatalogQuery(
     bool IncludeArchived = false) : IHumanQuery<Result<ClientReleaseCatalogDto>>;
 
 public sealed class GetClientReleaseCatalogHandler(
-    IReadRepository<ClientHostRelease> hostReleaseRepository,
-    IReadRepository<ClientPluginRelease> pluginReleaseRepository,
-    IEdgeInstallerArtifactCatalogReader artifactCatalogReader)
+    IReadRepository<ClientReleaseComponent> componentRepository)
     : IQueryHandler<GetClientReleaseCatalogQuery, Result<ClientReleaseCatalogDto>>
 {
     public async Task<Result<ClientReleaseCatalogDto>> Handle(
@@ -28,38 +26,26 @@ public sealed class GetClientReleaseCatalogHandler(
         CancellationToken cancellationToken)
     {
         var channel = NormalizeChannel(request.Channel);
-        var hostReleases = await hostReleaseRepository.GetListAsync(
-            new ClientHostReleasesByChannelSpec(
+        var components = await componentRepository.GetListAsync(
+            new ClientReleaseComponentsByChannelSpec(
                 channel,
                 request.TargetRuntime,
-                onlyPublished: false,
-                includeArchived: true),
+                request.OnlyPublished,
+                includeArchived: request.IncludeArchived),
             cancellationToken);
-        var pluginReleases = await pluginReleaseRepository.GetListAsync(
-            new ClientPluginReleasesByChannelSpec(
-                channel,
-                request.TargetRuntime,
-                onlyPublished: false,
-                includeArchived: true),
-            cancellationToken);
-        var artifactCatalog = await artifactCatalogReader.ReadAsync(channel, request.TargetRuntime, cancellationToken);
-        hostReleases = ClientReleaseCatalogMerge.MergeHostReleases(
-            hostReleases,
-            artifactCatalog.HostReleases,
-            request.OnlyPublished,
-            request.IncludeArchived).ToList();
-        pluginReleases = ClientReleaseCatalogMerge.MergePluginReleases(
-            pluginReleases,
-            artifactCatalog.PluginReleases,
-            request.OnlyPublished,
-            request.IncludeArchived).ToList();
 
         return Result.Success(new ClientReleaseCatalogDto(
             ClientReleaseCatalogSchema.Version,
             channel,
             NormalizeOptional(request.TargetRuntime),
-            ClientReleaseMapping.ToHostComponent(hostReleases),
-            ClientReleaseMapping.ToPluginComponents(pluginReleases),
+            ClientReleaseMapping.ToHostComponent(
+                components,
+                onlyPublished: request.OnlyPublished,
+                includeArchived: request.IncludeArchived),
+            ClientReleaseMapping.ToPluginComponents(
+                components,
+                onlyPublished: request.OnlyPublished,
+                includeArchived: request.IncludeArchived),
             DateTime.UtcNow));
     }
 

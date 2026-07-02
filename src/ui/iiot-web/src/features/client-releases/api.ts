@@ -43,6 +43,9 @@ export interface ClientHostVersionEntryDto {
   publisher?: string | null;
   createdAtUtc: string;
   publishedAtUtc?: string | null;
+  deletedAtUtc?: string | null;
+  deletionReason?: string | null;
+  deletionFailure?: string | null;
 }
 
 export interface ClientPluginVersionEntryDto {
@@ -64,6 +67,9 @@ export interface ClientPluginVersionEntryDto {
   publisher?: string | null;
   createdAtUtc: string;
   publishedAtUtc?: string | null;
+  deletedAtUtc?: string | null;
+  deletionReason?: string | null;
+  deletionFailure?: string | null;
 }
 
 export interface UpsertClientHostReleasePayload {
@@ -185,8 +191,10 @@ export const updateClientReleaseRetentionPolicyApi = (payload: {
 export const archiveClientReleaseApi = (releaseId: string) =>
   http.delete<void>(`${basePath}/${releaseId}`);
 
-export const deleteClientReleaseFilesApi = (releaseId: string) =>
-  http.delete<ClientReleaseFileDeletionResultDto>(`${basePath}/${releaseId}/files`);
+export const deleteClientReleaseFilesApi = (releaseId: string, reason?: string | null) =>
+  http.delete<ClientReleaseFileDeletionResultDto>(`${basePath}/${releaseId}/package`, {
+    data: { reason: reason ?? null },
+  });
 
 export const updateClientReleaseStatusApi = (releaseId: string, status: string) =>
   http.put<void>(`${basePath}/${releaseId}/status`, { status });

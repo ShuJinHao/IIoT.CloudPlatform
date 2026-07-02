@@ -16,11 +16,9 @@ public sealed record GetEdgeClientReleaseCatalogQuery(
 
 public sealed class GetEdgeClientReleaseCatalogHandler(
     IDeviceIdentityQueryService deviceIdentityQueryService,
-    IReadRepository<ClientHostRelease> hostReleaseRepository,
-    IReadRepository<ClientPluginRelease> pluginReleaseRepository,
+    IReadRepository<ClientReleaseComponent> componentRepository,
     IClientReleaseRetentionPolicyReader retentionPolicyReader,
-    IOptions<EdgeInstallerArtifactOptions> artifactOptions,
-    IEdgeInstallerArtifactCatalogReader artifactCatalogReader)
+    IOptions<EdgeInstallerArtifactOptions> artifactOptions)
     : IQueryHandler<GetEdgeClientReleaseCatalogQuery, Result<ClientReleaseCatalogDto>>
 {
     public async Task<Result<ClientReleaseCatalogDto>> Handle(
@@ -36,29 +34,17 @@ public sealed class GetEdgeClientReleaseCatalogHandler(
         }
 
         var channel = string.IsNullOrWhiteSpace(request.Channel) ? "stable" : request.Channel.Trim();
-        var databaseHostReleases = await hostReleaseRepository.GetListAsync(
-            new ClientHostReleasesByChannelSpec(channel, request.TargetRuntime, onlyPublished: false, includeArchived: true),
+        var components = await componentRepository.GetListAsync(
+            new ClientReleaseComponentsByChannelSpec(channel, request.TargetRuntime, onlyPublished: true),
             cancellationToken);
-        var databasePluginReleases = await pluginReleaseRepository.GetListAsync(
-            new ClientPluginReleasesByChannelSpec(channel, request.TargetRuntime, onlyPublished: false, includeArchived: true),
-            cancellationToken);
-        var artifactCatalog = await artifactCatalogReader.ReadAsync(channel, request.TargetRuntime, cancellationToken);
-        var hostReleases = ClientReleaseCatalogMerge.MergeHostReleases(
-            databaseHostReleases,
-            artifactCatalog.HostReleases,
-            onlyPublished: true);
-        var pluginReleases = ClientReleaseCatalogMerge.MergePluginReleases(
-            databasePluginReleases,
-            artifactCatalog.PluginReleases,
-            onlyPublished: true);
         var maxVersions = await retentionPolicyReader.GetMaxVersionsPerComponentAsync(cancellationToken);
 
         return Result.Success(new ClientReleaseCatalogDto(
             ClientReleaseCatalogSchema.Version,
             channel,
             NormalizeOptional(request.TargetRuntime),
-            ClientReleaseMapping.ToHostComponent(hostReleases, maxVersions),
-            ClientReleaseMapping.ToPluginComponents(pluginReleases, maxVersions),
+            ClientReleaseMapping.ToHostComponent(components, maxVersions, onlyPublished: true),
+            ClientReleaseMapping.ToPluginComponents(components, maxVersions, onlyPublished: true),
             DateTime.UtcNow,
             artifactOptions.Value.BuildVelopackUpdateSource(channel)));
     }

@@ -23,8 +23,7 @@ public interface IClientReleaseRetentionService : IClientReleaseRetentionPolicyR
 
 public sealed class ClientReleaseRetentionService(
     IRepository<ClientReleaseRetentionPolicy> policyRepository,
-    IRepository<ClientHostRelease> hostRepository,
-    IRepository<ClientPluginRelease> pluginRepository,
+    IRepository<ClientReleaseComponent> componentRepository,
     IReadRepository<DeviceClientVersionSnapshot> snapshotRepository,
     IOptions<EdgeReleaseRetentionOptions> options)
     : IClientReleaseRetentionService
@@ -46,11 +45,20 @@ public sealed class ClientReleaseRetentionService(
         CancellationToken cancellationToken = default)
     {
         var maxVersions = await GetMaxVersionsPerComponentAsync(cancellationToken);
-        var releases = await hostRepository.GetListAsync(
-            new ClientHostReleasesForRetentionSpec(channel, targetRuntime),
+        var component = await componentRepository.GetSingleOrDefaultAsync(
+            new ClientReleaseComponentsForRetentionSpec(
+                ClientReleaseComponentKind.Host,
+                ClientReleaseComponent.HostComponentKey,
+                channel,
+                targetRuntime),
             cancellationToken);
+        if (component is null)
+        {
+            return;
+        }
 
-        var ordered = releases
+        var ordered = component.Versions
+            .Where(release => release.Status == ClientReleaseStatus.Published)
             .OrderByDescending(release => release.Version, VersionComparer)
             .ThenByDescending(release => release.PublishedAtUtc ?? release.CreatedAtUtc)
             .ToList();
@@ -66,12 +74,12 @@ public sealed class ClientReleaseRetentionService(
 
         foreach (var release in ordered.Skip(maxVersions))
         {
-            release.ChangeStatus(IsHostInUse(release, snapshots)
+            release.ChangeStatus(IsHostInUse(component, release, snapshots)
                 ? ClientReleaseStatus.Deprecated
                 : ClientReleaseStatus.Archived);
         }
 
-        await hostRepository.SaveChangesAsync(cancellationToken);
+        await componentRepository.SaveChangesAsync(cancellationToken);
     }
 
     public async Task ApplyPluginPolicyAsync(
@@ -81,11 +89,20 @@ public sealed class ClientReleaseRetentionService(
         CancellationToken cancellationToken = default)
     {
         var maxVersions = await GetMaxVersionsPerComponentAsync(cancellationToken);
-        var releases = await pluginRepository.GetListAsync(
-            new ClientPluginReleasesForRetentionSpec(moduleId, channel, targetRuntime),
+        var component = await componentRepository.GetSingleOrDefaultAsync(
+            new ClientReleaseComponentsForRetentionSpec(
+                ClientReleaseComponentKind.Plugin,
+                moduleId,
+                channel,
+                targetRuntime),
             cancellationToken);
+        if (component is null)
+        {
+            return;
+        }
 
-        var ordered = releases
+        var ordered = component.Versions
+            .Where(release => release.Status == ClientReleaseStatus.Published)
             .OrderByDescending(release => release.Version, VersionComparer)
             .ThenByDescending(release => release.PublishedAtUtc ?? release.CreatedAtUtc)
             .ToList();
@@ -101,32 +118,34 @@ public sealed class ClientReleaseRetentionService(
 
         foreach (var release in ordered.Skip(maxVersions))
         {
-            release.ChangeStatus(IsPluginInUse(release, snapshots)
+            release.ChangeStatus(IsPluginInUse(component, release, snapshots)
                 ? ClientReleaseStatus.Deprecated
                 : ClientReleaseStatus.Archived);
         }
 
-        await pluginRepository.SaveChangesAsync(cancellationToken);
+        await componentRepository.SaveChangesAsync(cancellationToken);
     }
 
     private static bool IsHostInUse(
-        ClientHostRelease release,
+        ClientReleaseComponent component,
+        ClientReleaseVersion release,
         IEnumerable<DeviceClientVersionSnapshot> snapshots)
     {
         return snapshots.Any(snapshot =>
-            string.Equals(snapshot.Channel, release.Channel, StringComparison.OrdinalIgnoreCase)
+            string.Equals(snapshot.Channel, component.Channel, StringComparison.OrdinalIgnoreCase)
             && string.Equals(snapshot.HostVersion, release.Version, StringComparison.OrdinalIgnoreCase)
             && string.Equals(snapshot.HostApiVersion, release.HostApiVersion, StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool IsPluginInUse(
-        ClientPluginRelease release,
+        ClientReleaseComponent component,
+        ClientReleaseVersion release,
         IEnumerable<DeviceClientVersionSnapshot> snapshots)
     {
         return snapshots.Any(snapshot =>
-            string.Equals(snapshot.Channel, release.Channel, StringComparison.OrdinalIgnoreCase)
+            string.Equals(snapshot.Channel, component.Channel, StringComparison.OrdinalIgnoreCase)
             && snapshot.InstalledPlugins.Any(plugin =>
-                string.Equals(plugin.ModuleId, release.ModuleId, StringComparison.OrdinalIgnoreCase)
+                string.Equals(plugin.ModuleId, component.ComponentKey, StringComparison.OrdinalIgnoreCase)
                 && string.Equals(plugin.Version, release.Version, StringComparison.OrdinalIgnoreCase)
                 && (string.IsNullOrWhiteSpace(plugin.HostApiVersion)
                     || string.Equals(plugin.HostApiVersion, release.HostApiVersion, StringComparison.OrdinalIgnoreCase))));

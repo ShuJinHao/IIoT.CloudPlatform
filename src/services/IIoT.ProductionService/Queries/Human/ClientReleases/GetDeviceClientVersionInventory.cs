@@ -22,9 +22,8 @@ public sealed class GetDeviceClientVersionInventoryHandler(
     ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IReadRepository<Device> deviceRepository,
     IReadRepository<DeviceClientVersionSnapshot> snapshotRepository,
-    IReadRepository<EdgeDeviceRuntimeHeartbeat> runtimeHeartbeatRepository,
-    IReadRepository<ClientHostRelease> hostReleaseRepository,
-    IReadRepository<ClientPluginRelease> pluginReleaseRepository)
+    IReadRepository<DeviceClientState> stateRepository,
+    IReadRepository<ClientReleaseComponent> componentRepository)
     : IQueryHandler<GetDeviceClientVersionInventoryQuery, Result<IReadOnlyList<DeviceClientVersionInventoryDto>>>
 {
     private static readonly TimeSpan ReportStaleThreshold = TimeSpan.FromHours(24);
@@ -52,34 +51,37 @@ public sealed class GetDeviceClientVersionInventoryHandler(
             new DeviceClientVersionSnapshotsByDevicesSpec(devices.Select(device => device.Id).ToList()),
             cancellationToken);
         var snapshotByDevice = snapshots.ToDictionary(snapshot => snapshot.DeviceId);
-        var runtimeHeartbeats = await runtimeHeartbeatRepository.GetListAsync(
-            new EdgeDeviceRuntimeHeartbeatsByDevicesSpec(devices.Select(device => device.Id).ToList()),
+        var states = await stateRepository.GetListAsync(
+            new DeviceClientStatesByDevicesSpec(devices.Select(device => device.Id).ToList()),
             cancellationToken);
-        var runtimeHeartbeatByDevice = runtimeHeartbeats
-            .GroupBy(heartbeat => heartbeat.DeviceId)
+        var stateByDevice = states
+            .GroupBy(state => state.DeviceId)
             .ToDictionary(
                 group => group.Key,
-                group => group.OrderByDescending(heartbeat => heartbeat.LastHeartbeatAtUtc).First());
+                group => group.OrderByDescending(state => state.UpdatedAtUtc).First());
 
         var channel = string.IsNullOrWhiteSpace(request.Channel) ? "stable" : request.Channel.Trim();
-        var hostReleases = await hostReleaseRepository.GetListAsync(
-            new ClientHostReleasesByChannelSpec(channel, request.TargetRuntime, onlyPublished: true),
+        var components = await componentRepository.GetListAsync(
+            new ClientReleaseComponentsByChannelSpec(channel, request.TargetRuntime, onlyPublished: true),
             cancellationToken);
-        var pluginReleases = await pluginReleaseRepository.GetListAsync(
-            new ClientPluginReleasesByChannelSpec(channel, request.TargetRuntime, onlyPublished: true),
-            cancellationToken);
-        var referenceHost = hostReleases
-            .OrderByDescending(release => release.Version, VersionStringComparer.Instance)
-            .ThenByDescending(release => release.PublishedAtUtc ?? release.CreatedAtUtc)
+        var referenceHost = components
+            .Where(component => component.ComponentKind == ClientReleaseComponentKind.Host)
+            .SelectMany(component => component.Versions
+                .Where(version => version.Status == ClientReleaseStatus.Published)
+                .Select(version => (Component: component, Version: version)))
+            .OrderByDescending(item => item.Version.Version, VersionStringComparer.Instance)
+            .ThenByDescending(item => item.Version.PublishedAtUtc ?? item.Version.CreatedAtUtc)
             .FirstOrDefault();
-        var referencePluginsByModule = pluginReleases
-            .GroupBy(release => release.ModuleId, StringComparer.OrdinalIgnoreCase)
+        var referencePluginsByModule = components
+            .Where(component => component.ComponentKind == ClientReleaseComponentKind.Plugin)
             .ToDictionary(
-                group => group.Key,
-                group => group
-                    .OrderByDescending(release => release.Version, VersionStringComparer.Instance)
-                    .ThenByDescending(release => release.PublishedAtUtc ?? release.CreatedAtUtc)
-                    .First(),
+                component => component.ComponentKey,
+                component => component.Versions
+                    .Where(version => version.Status == ClientReleaseStatus.Published)
+                    .Select(version => (Component: component, Version: version))
+                    .OrderByDescending(item => item.Version.Version, VersionStringComparer.Instance)
+                    .ThenByDescending(item => item.Version.PublishedAtUtc ?? item.Version.CreatedAtUtc)
+                    .FirstOrDefault(),
                 StringComparer.OrdinalIgnoreCase);
 
         var result = devices
@@ -87,7 +89,7 @@ public sealed class GetDeviceClientVersionInventoryHandler(
             .Select(device => BuildInventory(
                 device,
                 snapshotByDevice.GetValueOrDefault(device.Id),
-                runtimeHeartbeatByDevice.GetValueOrDefault(device.Id),
+                stateByDevice.GetValueOrDefault(device.Id),
                 referenceHost,
                 referencePluginsByModule))
             .ToList();
@@ -98,27 +100,28 @@ public sealed class GetDeviceClientVersionInventoryHandler(
     private static DeviceClientVersionInventoryDto BuildInventory(
         Device device,
         DeviceClientVersionSnapshot? snapshot,
-        EdgeDeviceRuntimeHeartbeat? runtimeHeartbeat,
-        ClientHostRelease? referenceHost,
-        IReadOnlyDictionary<string, ClientPluginRelease> referencePluginsByModule)
+        DeviceClientState? state,
+        (ClientReleaseComponent Component, ClientReleaseVersion Version) referenceHost,
+        IReadOnlyDictionary<string, (ClientReleaseComponent Component, ClientReleaseVersion Version)> referencePluginsByModule)
     {
-        var hostStatus = ResolveHostStatus(snapshot, referenceHost, out var hostIssue);
+        var hostStatus = ResolveHostStatus(state, referenceHost, out var hostIssue);
         var installedPlugins = snapshot?.InstalledPlugins ?? [];
         var pluginRows = installedPlugins
             .OrderBy(plugin => plugin.ModuleId, StringComparer.OrdinalIgnoreCase)
             .Select(plugin => BuildPluginInventory(snapshot, plugin, referencePluginsByModule))
             .ToList();
-        var runtimeLocalIpAddresses = runtimeHeartbeat?.GetLocalIpAddresses() ?? [];
-        var snapshotLocalIpAddresses = snapshot?.GetLocalIpAddresses() ?? [];
+        var runtimeLocalIpAddresses = state?.GetRuntimeLocalIpAddresses() ?? [];
+        var snapshotLocalIpAddresses = state?.GetVersionLocalIpAddresses() ?? snapshot?.GetLocalIpAddresses() ?? [];
         var localIpAddresses = runtimeLocalIpAddresses.Count > 0
             ? runtimeLocalIpAddresses
             : snapshotLocalIpAddresses;
         var primaryIp = localIpAddresses.FirstOrDefault()
-            ?? NormalizeOptional(runtimeHeartbeat?.RemoteIpAddress)
+            ?? NormalizeOptional(state?.RuntimeRemoteIpAddress)
+            ?? NormalizeOptional(state?.VersionRemoteIpAddress)
             ?? NormalizeOptional(snapshot?.RemoteIpAddress);
-        var installStatus = ResolveInstallStatus(snapshot, hostStatus, pluginRows);
-        var softwareStatus = ResolveSoftwareStatus(runtimeHeartbeat, out var runtimeIssue);
-        var versionIssue = ResolveVersionIssue(snapshot, hostStatus, hostIssue, pluginRows);
+        var installStatus = ResolveInstallStatus(state, hostStatus, pluginRows);
+        var softwareStatus = ResolveSoftwareStatus(state, out var runtimeIssue);
+        var versionIssue = ResolveVersionIssue(state, hostStatus, hostIssue, pluginRows);
         var cloudIssue = ResolveCloudIssue();
         var issue = runtimeIssue ?? versionIssue ?? cloudIssue;
 
@@ -128,57 +131,57 @@ public sealed class GetDeviceClientVersionInventoryHandler(
             device.Code,
             primaryIp,
             localIpAddresses,
-            snapshot?.RemoteIpAddress,
-            snapshot?.Channel,
-            snapshot?.HostVersion,
-            snapshot?.HostApiVersion,
+            state?.VersionRemoteIpAddress ?? snapshot?.RemoteIpAddress,
+            state?.Channel ?? snapshot?.Channel,
+            state?.HostVersion ?? snapshot?.HostVersion,
+            state?.HostApiVersion ?? snapshot?.HostApiVersion,
             hostStatus,
             hostIssue,
             installStatus,
             softwareStatus,
-            BuildCurrentVersion(snapshot, pluginRows),
+            BuildCurrentVersion(state, snapshot, pluginRows),
             issue,
             versionIssue,
             cloudIssue,
-            runtimeHeartbeat?.LastHeartbeatAtUtc,
-            snapshot?.ReportedAtUtc,
-            snapshot?.ReceivedAtUtc,
+            state?.LastRuntimeHeartbeatAtUtc,
+            state?.VersionReportedAtUtc ?? snapshot?.ReportedAtUtc,
+            state?.VersionReceivedAtUtc ?? snapshot?.ReceivedAtUtc,
             pluginRows);
     }
 
     private static string ResolveHostStatus(
-        DeviceClientVersionSnapshot? snapshot,
-        ClientHostRelease? referenceHost,
+        DeviceClientState? state,
+        (ClientReleaseComponent Component, ClientReleaseVersion Version) referenceHost,
         out string? issue)
     {
         issue = null;
-        if (snapshot is null)
+        if (state?.HostVersion is null || state.HostApiVersion is null)
         {
             return "MissingReport";
         }
 
-        if (referenceHost is null)
+        if (referenceHost.Version is null)
         {
             return "NoRelease";
         }
 
-        if (!string.Equals(snapshot.HostApiVersion, referenceHost.HostApiVersion, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(state.HostApiVersion, referenceHost.Version.HostApiVersion, StringComparison.OrdinalIgnoreCase))
         {
-            issue = $"hostApiVersion 不匹配: 设备 {snapshot.HostApiVersion}, 推荐宿主 {referenceHost.HostApiVersion}";
+            issue = $"hostApiVersion 不匹配: 设备 {state.HostApiVersion}, 推荐宿主 {referenceHost.Version.HostApiVersion}";
             return "Incompatible";
         }
 
-        return ClientReleaseMapping.CompareVersions(snapshot.HostVersion, referenceHost.Version) < 0
+        return ClientReleaseMapping.CompareVersions(state.HostVersion, referenceHost.Version.Version) < 0
             ? "UpdateAvailable"
             : "Latest";
     }
 
     private static string ResolveInstallStatus(
-        DeviceClientVersionSnapshot? snapshot,
+        DeviceClientState? state,
         string hostStatus,
         IReadOnlyList<DeviceClientPluginInventoryDto> plugins)
     {
-        if (snapshot is null)
+        if (state?.VersionReceivedAtUtc is null)
         {
             return "MissingReport";
         }
@@ -202,23 +205,23 @@ public sealed class GetDeviceClientVersionInventoryHandler(
     }
 
     private static string ResolveSoftwareStatus(
-        EdgeDeviceRuntimeHeartbeat? runtimeHeartbeat,
+        DeviceClientState? state,
         out string? issue)
     {
         issue = null;
-        if (runtimeHeartbeat is null)
+        if (state?.LastRuntimeHeartbeatAtUtc is null)
         {
             issue = "客户端尚未上报运行心跳。";
             return "MissingRuntimeHeartbeat";
         }
 
-        if (DateTime.UtcNow - runtimeHeartbeat.LastHeartbeatAtUtc.ToUniversalTime() > ReportStaleThreshold)
+        if (DateTime.UtcNow - state.LastRuntimeHeartbeatAtUtc.Value.ToUniversalTime() > ReportStaleThreshold)
         {
             issue = "超过 24 小时未收到运行心跳。";
             return "RuntimeHeartbeatStale";
         }
 
-        return runtimeHeartbeat.Status switch
+        return state.RuntimeStatus switch
         {
             "Starting" => "Starting",
             "Running" => "Running",
@@ -228,17 +231,17 @@ public sealed class GetDeviceClientVersionInventoryHandler(
     }
 
     private static string? ResolveVersionIssue(
-        DeviceClientVersionSnapshot? snapshot,
+        DeviceClientState? state,
         string hostStatus,
         string? hostIssue,
         IReadOnlyList<DeviceClientPluginInventoryDto> plugins)
     {
-        if (snapshot is null)
+        if (state?.VersionReceivedAtUtc is null)
         {
             return "客户端尚未上报安装状态。";
         }
 
-        if (DateTime.UtcNow - snapshot.ReceivedAtUtc.ToUniversalTime() > ReportStaleThreshold)
+        if (DateTime.UtcNow - state.VersionReceivedAtUtc.Value.ToUniversalTime() > ReportStaleThreshold)
         {
             return "超过 24 小时未上报版本。";
         }
@@ -280,25 +283,28 @@ public sealed class GetDeviceClientVersionInventoryHandler(
     }
 
     private static string BuildCurrentVersion(
+        DeviceClientState? state,
         DeviceClientVersionSnapshot? snapshot,
         IReadOnlyList<DeviceClientPluginInventoryDto> plugins)
     {
-        if (snapshot is null)
+        var hostVersion = state?.HostVersion ?? snapshot?.HostVersion;
+        if (hostVersion is null)
         {
             return "-";
         }
 
         return plugins.Count == 0
-            ? $"宿主 {snapshot.HostVersion}"
-            : $"宿主 {snapshot.HostVersion} / 插件 {plugins.Count} 个";
+            ? $"宿主 {hostVersion}"
+            : $"宿主 {hostVersion} / 插件 {plugins.Count} 个";
     }
 
     private static DeviceClientPluginInventoryDto BuildPluginInventory(
         DeviceClientVersionSnapshot? snapshot,
         DeviceClientPluginVersion plugin,
-        IReadOnlyDictionary<string, ClientPluginRelease> referencePluginsByModule)
+        IReadOnlyDictionary<string, (ClientReleaseComponent Component, ClientReleaseVersion Version)> referencePluginsByModule)
     {
-        if (!referencePluginsByModule.TryGetValue(plugin.ModuleId, out var referenceRelease))
+        if (!referencePluginsByModule.TryGetValue(plugin.ModuleId, out var referenceRelease)
+            || referenceRelease.Version is null)
         {
             return new DeviceClientPluginInventoryDto(
                 plugin.ModuleId,
@@ -313,19 +319,19 @@ public sealed class GetDeviceClientVersionInventoryHandler(
         string? compatibilityIssue = null;
         var compatible = snapshot is not null
             && ClientReleaseMapping.IsCompatibleWithHost(
-                referenceRelease,
+                referenceRelease.Version,
                 snapshot.HostVersion,
                 snapshot.HostApiVersion,
                 out compatibilityIssue);
         var updateStatus = compatible
-            ? ClientReleaseMapping.CompareVersions(plugin.Version, referenceRelease.Version) < 0
+            ? ClientReleaseMapping.CompareVersions(plugin.Version, referenceRelease.Version.Version) < 0
                 ? "UpdateAvailable"
                 : "Latest"
             : "Incompatible";
 
         return new DeviceClientPluginInventoryDto(
             plugin.ModuleId,
-            plugin.DisplayName ?? referenceRelease.DisplayName,
+            plugin.DisplayName ?? referenceRelease.Component.DisplayName,
             plugin.Version,
             plugin.HostApiVersion,
             plugin.Enabled,

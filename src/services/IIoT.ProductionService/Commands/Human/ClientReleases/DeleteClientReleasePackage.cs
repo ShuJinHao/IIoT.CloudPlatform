@@ -15,7 +15,7 @@ using Microsoft.Extensions.Options;
 namespace IIoT.ProductionService.Commands.ClientReleases;
 
 [AuthorizeRequirement(ClientReleasePermissions.Manage)]
-public sealed record DeleteClientReleaseFilesCommand(Guid ReleaseId)
+public sealed record DeleteClientReleasePackageCommand(Guid ReleaseId, string? Reason = null)
     : IHumanCommand<Result<ClientReleaseFileDeletionResultDto>>;
 
 public sealed record ClientReleaseFileDeletionResultDto(
@@ -29,40 +29,41 @@ public sealed record ClientReleaseFileDeletionResultDto(
     IReadOnlyList<string> SkippedPaths,
     string? Warning);
 
-public sealed class DeleteClientReleaseFilesHandler(
+public sealed class DeleteClientReleasePackageHandler(
     IOptions<EdgeInstallerArtifactOptions> artifactOptions,
-    IRepository<ClientHostRelease> hostRepository,
-    IRepository<ClientPluginRelease> pluginRepository,
+    IRepository<ClientReleaseComponent> componentRepository,
     IReadRepository<DeviceClientVersionSnapshot> snapshotRepository,
     ICurrentUser currentUser,
     IAuditTrailService auditTrailService)
-    : ICommandHandler<DeleteClientReleaseFilesCommand, Result<ClientReleaseFileDeletionResultDto>>
+    : ICommandHandler<DeleteClientReleasePackageCommand, Result<ClientReleaseFileDeletionResultDto>>
 {
     public async Task<Result<ClientReleaseFileDeletionResultDto>> Handle(
-        DeleteClientReleaseFilesCommand request,
+        DeleteClientReleasePackageCommand request,
         CancellationToken cancellationToken)
     {
-        var host = await hostRepository.GetSingleOrDefaultAsync(
-            new ClientHostReleaseByIdSpec(request.ReleaseId),
+        var component = await componentRepository.GetSingleOrDefaultAsync(
+            new ClientReleaseComponentByVersionIdSpec(request.ReleaseId),
             cancellationToken);
-        if (host is not null)
+        if (component is null)
         {
-            return await DeleteHostFilesAsync(host, cancellationToken);
+            return Result.NotFound("发布版本不存在。");
         }
 
-        var plugin = await pluginRepository.GetSingleOrDefaultAsync(
-            new ClientPluginReleaseByIdSpec(request.ReleaseId),
-            cancellationToken);
-        if (plugin is not null)
+        var version = component.FindVersion(request.ReleaseId);
+        if (version is null)
         {
-            return await DeletePluginFilesAsync(plugin, cancellationToken);
+            return Result.NotFound("发布版本不存在。");
         }
 
-        return Result.NotFound("发布版本不存在。");
+        return component.ComponentKind == ClientReleaseComponentKind.Host
+            ? await DeleteHostFilesAsync(component, version, request.Reason, cancellationToken)
+            : await DeletePluginFilesAsync(component, version, request.Reason, cancellationToken);
     }
 
     private async Task<Result<ClientReleaseFileDeletionResultDto>> DeleteHostFilesAsync(
-        ClientHostRelease release,
+        ClientReleaseComponent component,
+        ClientReleaseVersion release,
+        string? reason,
         CancellationToken cancellationToken)
     {
         var snapshots = await snapshotRepository.GetListAsync(
@@ -72,75 +73,86 @@ public sealed class DeleteClientReleaseFilesHandler(
             string.Equals(snapshot.HostVersion, release.Version, StringComparison.OrdinalIgnoreCase));
         if (inUse)
         {
-            const string reason = "已有设备当前宿主版本等于目标版本，禁止物理删除发布文件。";
+            const string inUseReason = "已有设备当前宿主版本等于目标版本，禁止物理删除发布文件。";
             await WriteAuditAsync(
                 release.Id,
                 "Host",
                 "Edge Host",
-                release.Channel,
+                component.Channel,
                 release.Version,
                 succeeded: false,
                 [],
                 [],
-                reason,
+                inUseReason,
                 cancellationToken);
-            return Result.Invalid(reason);
+            return Result.Invalid(inUseReason);
         }
 
         var edgeRoot = ResolveEdgeUpdatesRoot();
-        var plan = ClientReleaseFileDeletionPlan.ForHost(edgeRoot, release);
+        var plan = ClientReleaseFileDeletionPlan.ForRelease(edgeRoot, component, release);
         return await ExecuteDeletionAsync(
+            component,
             release,
             "Host",
             "Edge Host",
             plan,
-            () => hostRepository.SaveChangesAsync(cancellationToken),
+            deleteReason => component.MarkVersionDeleted(release.Id, reason ?? deleteReason),
+            failure => component.MarkVersionDeleteFailed(release.Id, failure),
+            () => componentRepository.SaveChangesAsync(cancellationToken),
             cancellationToken);
     }
 
     private async Task<Result<ClientReleaseFileDeletionResultDto>> DeletePluginFilesAsync(
-        ClientPluginRelease release,
+        ClientReleaseComponent component,
+        ClientReleaseVersion release,
+        string? reason,
         CancellationToken cancellationToken)
     {
         var snapshots = await snapshotRepository.GetListAsync(
             new DeviceClientVersionSnapshotsByDevicesSpec(),
             cancellationToken);
         var inUse = snapshots.Any(snapshot => snapshot.InstalledPlugins.Any(plugin =>
-            string.Equals(plugin.ModuleId, release.ModuleId, StringComparison.OrdinalIgnoreCase)
+            string.Equals(plugin.ModuleId, component.ComponentKey, StringComparison.OrdinalIgnoreCase)
             && string.Equals(plugin.Version, release.Version, StringComparison.OrdinalIgnoreCase)));
         if (inUse)
         {
-            const string reason = "已有设备当前插件版本等于目标版本，禁止物理删除发布文件。";
+            const string inUseReason = "已有设备当前插件版本等于目标版本，禁止物理删除发布文件。";
             await WriteAuditAsync(
                 release.Id,
                 "Plugin",
-                release.ModuleId,
-                release.Channel,
+                component.ComponentKey,
+                component.Channel,
                 release.Version,
                 succeeded: false,
                 [],
                 [],
-                reason,
+                inUseReason,
                 cancellationToken);
-            return Result.Invalid(reason);
+            return Result.Invalid(inUseReason);
         }
 
         var edgeRoot = ResolveEdgeUpdatesRoot();
-        var plan = ClientReleaseFileDeletionPlan.ForPlugin(edgeRoot, release);
+        var plan = ClientReleaseFileDeletionPlan.ForRelease(edgeRoot, component, release);
         return await ExecuteDeletionAsync(
+            component,
             release,
             "Plugin",
-            release.ModuleId,
+            component.ComponentKey,
             plan,
-            () => pluginRepository.SaveChangesAsync(cancellationToken),
+            deleteReason => component.MarkVersionDeleted(release.Id, reason ?? deleteReason),
+            failure => component.MarkVersionDeleteFailed(release.Id, failure),
+            () => componentRepository.SaveChangesAsync(cancellationToken),
             cancellationToken);
     }
 
     private async Task<Result<ClientReleaseFileDeletionResultDto>> ExecuteDeletionAsync(
-        ClientHostRelease release,
+        ClientReleaseComponent component,
+        ClientReleaseVersion release,
         string componentKind,
         string componentName,
         ClientReleaseFileDeletionPlan plan,
+        Action<string?> markDeleted,
+        Action<string> markDeleteFailed,
         Func<Task> saveStatusAsync,
         CancellationToken cancellationToken)
     {
@@ -148,29 +160,10 @@ public sealed class DeleteClientReleaseFilesHandler(
             release.Id,
             componentKind,
             componentName,
-            release.Channel,
+            component.Channel,
             release.Version,
-            () => release.ChangeStatus(ClientReleaseStatus.Archived),
-            plan,
-            saveStatusAsync,
-            cancellationToken);
-    }
-
-    private async Task<Result<ClientReleaseFileDeletionResultDto>> ExecuteDeletionAsync(
-        ClientPluginRelease release,
-        string componentKind,
-        string componentName,
-        ClientReleaseFileDeletionPlan plan,
-        Func<Task> saveStatusAsync,
-        CancellationToken cancellationToken)
-    {
-        return await ExecuteDeletionCoreAsync(
-            release.Id,
-            componentKind,
-            componentName,
-            release.Channel,
-            release.Version,
-            () => release.ChangeStatus(ClientReleaseStatus.Archived),
+            markDeleted,
+            markDeleteFailed,
             plan,
             saveStatusAsync,
             cancellationToken);
@@ -182,26 +175,38 @@ public sealed class DeleteClientReleaseFilesHandler(
         string componentName,
         string channel,
         string version,
-        Action archiveRelease,
+        Action<string?> markDeleted,
+        Action<string> markDeleteFailed,
         ClientReleaseFileDeletionPlan plan,
         Func<Task> saveStatusAsync,
         CancellationToken cancellationToken)
     {
         if (plan.Targets.Count == 0)
         {
-            const string reason = "发布文件不在本机 /edge-updates 受控目录下，无法执行物理删除。";
+            const string reason = "发布文件未找到或不在受控发布目录下，已移出可分发 catalog，历史更新内容保留。";
+            markDeleted(reason);
+            await saveStatusAsync();
             await WriteAuditAsync(
                 releaseId,
                 componentKind,
                 componentName,
                 channel,
                 version,
-                succeeded: false,
+                succeeded: true,
                 [],
                 plan.SkippedPaths,
                 reason,
                 cancellationToken);
-            return Result.Invalid(reason);
+            return Result.Success(new ClientReleaseFileDeletionResultDto(
+                releaseId,
+                componentKind,
+                componentName,
+                channel,
+                version,
+                false,
+                [],
+                plan.SkippedPaths,
+                reason));
         }
 
         var deletedPaths = new List<string>();
@@ -215,7 +220,7 @@ public sealed class DeleteClientReleaseFilesHandler(
                 target.Delete();
             }
 
-            archiveRelease();
+            markDeleted("管理员删除发布包。");
             await saveStatusAsync();
 
             var warning = plan.SkippedPaths.Count == 0
@@ -246,6 +251,8 @@ public sealed class DeleteClientReleaseFilesHandler(
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
+            markDeleteFailed(ex.Message);
+            await saveStatusAsync();
             await WriteAuditAsync(
                 releaseId,
                 componentKind,
@@ -257,7 +264,7 @@ public sealed class DeleteClientReleaseFilesHandler(
                 plan.SkippedPaths,
                 ex.Message,
                 cancellationToken);
-            return Result.Invalid($"删除发布文件失败: {ex.Message}");
+            return Result.Invalid($"删除发布包失败: {ex.Message}");
         }
     }
 
@@ -287,7 +294,7 @@ public sealed class DeleteClientReleaseFilesHandler(
     {
         var summary = JsonSerializer.Serialize(new
         {
-            action = "ClientRelease.DeleteFiles",
+            action = "ClientRelease.DeletePackage",
             componentKind,
             componentName,
             channel,
@@ -300,7 +307,7 @@ public sealed class DeleteClientReleaseFilesHandler(
             new AuditTrailEntry(
                 ParseActorUserId(currentUser.Id),
                 currentUser.UserName,
-                "ClientRelease.DeleteFiles",
+                "ClientRelease.DeletePackage",
                 "ClientRelease",
                 releaseId.ToString(),
                 DateTime.UtcNow,
@@ -328,62 +335,59 @@ internal sealed class ClientReleaseFileDeletionPlan
 
     public IReadOnlyList<string> SkippedPaths { get; }
 
-    public static ClientReleaseFileDeletionPlan ForHost(string edgeRoot, ClientHostRelease release)
+    public static ClientReleaseFileDeletionPlan ForRelease(
+        string edgeRoot,
+        ClientReleaseComponent component,
+        ClientReleaseVersion release)
     {
         var targets = new List<ClientReleaseFileDeletionTarget>();
         var skipped = new List<string>();
-        TryAddDirectory(targets, skipped, edgeRoot, Path.Combine(edgeRoot, "installers", release.Channel, release.Version));
-        AddVelopackTargets(targets, skipped, edgeRoot, release.Channel, release.Version);
+        foreach (var artifact in release.Artifacts)
+        {
+            var fullPath = Path.Combine(edgeRoot, artifact.RelativePath);
+            switch (artifact.ArtifactKind)
+            {
+                case ClientReleaseArtifactKind.InstallerDirectory:
+                case ClientReleaseArtifactKind.PluginPackageDirectory:
+                    TryAddDirectory(targets, skipped, edgeRoot, fullPath);
+                    break;
+                case ClientReleaseArtifactKind.ManifestFile:
+                case ClientReleaseArtifactKind.PackageFile:
+                    TryAddFile(targets, skipped, edgeRoot, fullPath);
+                    break;
+                case ClientReleaseArtifactKind.VelopackFile:
+                    TryAddVelopackFile(targets, skipped, edgeRoot, component.Channel, fullPath);
+                    break;
+                default:
+                    skipped.Add(artifact.RelativePath);
+                    break;
+            }
+        }
+
         return new ClientReleaseFileDeletionPlan(targets, skipped);
     }
 
-    public static ClientReleaseFileDeletionPlan ForPlugin(string edgeRoot, ClientPluginRelease release)
-    {
-        var targets = new List<ClientReleaseFileDeletionTarget>();
-        var skipped = new List<string>();
-        TryAddDirectory(
-            targets,
-            skipped,
-            edgeRoot,
-            Path.Combine(edgeRoot, "plugins", release.Channel, EscapeFileSystemSegment(release.ModuleId), release.Version));
-        return new ClientReleaseFileDeletionPlan(targets, skipped);
-    }
-
-    private static void AddVelopackTargets(
+    private static void TryAddVelopackFile(
         ICollection<ClientReleaseFileDeletionTarget> targets,
         ICollection<string> skipped,
         string edgeRoot,
         string channel,
-        string version)
+        string path)
     {
         var velopackRoot = Path.Combine(edgeRoot, "velopack", channel);
-        if (!Directory.Exists(velopackRoot))
+        var name = Path.GetFileName(path);
+        if (!Directory.Exists(velopackRoot) || !File.Exists(path))
         {
             return;
         }
 
-        foreach (var file in Directory.EnumerateFiles(velopackRoot, "*", SearchOption.TopDirectoryOnly))
+        if (IsVelopackChannelManifest(name) || VelopackManifestsReferenceFile(velopackRoot, name))
         {
-            var name = Path.GetFileName(file);
-            if (IsVelopackChannelManifest(name))
-            {
-                skipped.Add(ToRelative(edgeRoot, file));
-                continue;
-            }
-
-            if (!FileNameContainsVersion(name, version))
-            {
-                continue;
-            }
-
-            if (VelopackManifestsReferenceFile(velopackRoot, name))
-            {
-                skipped.Add(ToRelative(edgeRoot, file));
-                continue;
-            }
-
-            TryAddFile(targets, skipped, edgeRoot, file);
+            skipped.Add(ToRelative(edgeRoot, path));
+            return;
         }
+
+        TryAddFile(targets, skipped, edgeRoot, path);
     }
 
     private static void TryAddDirectory(
@@ -433,24 +437,6 @@ internal sealed class ClientReleaseFileDeletionPlan
         return false;
     }
 
-    private static bool FileNameContainsVersion(string fileName, string version)
-    {
-        var pattern = $@"(^|[._-]){System.Text.RegularExpressions.Regex.Escape(version)}([._-]|$)";
-        return System.Text.RegularExpressions.Regex.IsMatch(
-            fileName,
-            pattern,
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-    }
-
-    private static string EscapeFileSystemSegment(string value)
-    {
-        var invalid = Path.GetInvalidFileNameChars();
-        var chars = value.Trim()
-            .Select(ch => invalid.Contains(ch) ? '_' : ch)
-            .ToArray();
-        return new string(chars);
-    }
-
     private static string ToRelative(string edgeRoot, string path)
         => Path.GetRelativePath(edgeRoot, path).Replace('\\', '/');
 }
@@ -488,7 +474,7 @@ internal sealed class ClientReleaseFileDeletionTarget
         var target = Path.GetFullPath(PathToDelete);
         if (!target.StartsWith(root, StringComparison.Ordinal))
         {
-            throw new InvalidOperationException("发布文件路径越过 /edge-updates 受控目录。");
+            throw new InvalidOperationException("发布文件路径越过受控发布目录。");
         }
 
         if (target.Contains("..", StringComparison.Ordinal))

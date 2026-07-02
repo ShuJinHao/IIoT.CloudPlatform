@@ -232,8 +232,7 @@ public sealed class ApplicationFlowGuardTests
 
         var handler = CreateInstallerPackageHandler(
             deviceRepository,
-            new InMemoryRepository<ClientHostRelease>(),
-            new InMemoryRepository<ClientPluginRelease>(),
+            new InMemoryRepository<ClientReleaseComponent>(),
             Path.Combine(Path.GetTempPath(), $"iiot-baseurl-guard-{Guid.NewGuid():N}"),
             new RecordingCacheService(),
             new RecordingAuditTrailService());
@@ -261,18 +260,15 @@ public sealed class ApplicationFlowGuardTests
         var oldHash = device.BootstrapSecretHash;
         var deviceRepository = new InMemoryRepository<Device>();
         deviceRepository.Add(device);
-        var hostRepository = new InMemoryRepository<ClientHostRelease>
-        {
-            SingleOrDefaultResult = CreatePublishedHostRelease()
-        };
+        var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+        componentRepository.ListResult.Add(CreatePublishedHostComponent());
 
         var artifactRoot = Path.Combine(Path.GetTempPath(), $"iiot-missing-installer-{Guid.NewGuid():N}");
         try
         {
             var handler = CreateInstallerPackageHandler(
                 deviceRepository,
-                hostRepository,
-                new InMemoryRepository<ClientPluginRelease>(),
+                componentRepository,
                 artifactRoot,
                 new RecordingCacheService(),
                 new RecordingAuditTrailService());
@@ -309,14 +305,7 @@ public sealed class ApplicationFlowGuardTests
         var oldHash = device.BootstrapSecretHash;
         var deviceRepository = new InMemoryRepository<Device>();
         deviceRepository.Add(device);
-        var hostRepository = new InMemoryRepository<ClientHostRelease>
-        {
-            SingleOrDefaultResult = CreatePublishedHostRelease()
-        };
-        var pluginRepository = new InMemoryRepository<ClientPluginRelease>
-        {
-            SingleOrDefaultResult = CreatePublishedPluginRelease()
-        };
+        var componentRepository = CreatePublishedReleaseComponentRepository();
         var artifactRoot = CreateInstallerArtifactFixture(
             "stable",
             "1.2.0",
@@ -326,8 +315,7 @@ public sealed class ApplicationFlowGuardTests
         {
             var handler = CreateInstallerPackageHandler(
                 deviceRepository,
-                hostRepository,
-                pluginRepository,
+                componentRepository,
                 artifactRoot,
                 new RecordingCacheService(),
                 new RecordingAuditTrailService());
@@ -364,14 +352,7 @@ public sealed class ApplicationFlowGuardTests
         var oldHash = device.BootstrapSecretHash;
         var deviceRepository = new InMemoryRepository<Device>();
         deviceRepository.Add(device);
-        var hostRepository = new InMemoryRepository<ClientHostRelease>
-        {
-            SingleOrDefaultResult = CreatePublishedHostRelease()
-        };
-        var pluginRepository = new InMemoryRepository<ClientPluginRelease>
-        {
-            SingleOrDefaultResult = CreatePublishedPluginRelease()
-        };
+        var componentRepository = CreatePublishedReleaseComponentRepository();
         var artifactRoot = CreateInstallerArtifactFixture(
             "stable",
             "1.2.0",
@@ -381,8 +362,7 @@ public sealed class ApplicationFlowGuardTests
         {
             var handler = CreateInstallerPackageHandler(
                 deviceRepository,
-                hostRepository,
-                pluginRepository,
+                componentRepository,
                 artifactRoot,
                 new RecordingCacheService(),
                 new RecordingAuditTrailService());
@@ -427,14 +407,7 @@ public sealed class ApplicationFlowGuardTests
         var device = new Device("匀浆线1#", "DEV-AAAAAAAAAA", Guid.NewGuid());
         var deviceRepository = new InMemoryRepository<Device>();
         deviceRepository.Add(device);
-        var hostRepository = new InMemoryRepository<ClientHostRelease>
-        {
-            SingleOrDefaultResult = CreatePublishedHostRelease(targetRuntime)
-        };
-        var pluginRepository = new InMemoryRepository<ClientPluginRelease>
-        {
-            SingleOrDefaultResult = CreatePublishedPluginRelease(targetRuntime)
-        };
+        var componentRepository = CreatePublishedReleaseComponentRepository(targetRuntime);
         var cache = new RecordingCacheService();
         var auditTrail = new RecordingAuditTrailService();
         var artifactRoot = CreateInstallerArtifactFixture("stable", "1.2.0", targetRuntime);
@@ -443,8 +416,7 @@ public sealed class ApplicationFlowGuardTests
         {
             var handler = CreateInstallerPackageHandler(
                 deviceRepository,
-                hostRepository,
-                pluginRepository,
+                componentRepository,
                 artifactRoot,
                 cache,
                 auditTrail);
@@ -867,6 +839,7 @@ public sealed class ApplicationFlowGuardTests
                 Capacities: 3,
                 DeviceLogs: 4,
                 PassStations: 5,
+                ClientStates: 1,
                 ClientVersionSnapshots: 1,
                 ClientPluginVersions: 2,
                 UploadReceiveRegistrations: 6,
@@ -2328,8 +2301,7 @@ public sealed class ApplicationFlowGuardTests
 
     private static GenerateEdgeInstallerPackageHandler CreateInstallerPackageHandler(
         InMemoryRepository<Device> deviceRepository,
-        InMemoryRepository<ClientHostRelease> hostRepository,
-        InMemoryRepository<ClientPluginRelease> pluginRepository,
+        InMemoryRepository<ClientReleaseComponent> componentRepository,
         string artifactRoot,
         RecordingCacheService cache,
         RecordingAuditTrailService auditTrail)
@@ -2344,22 +2316,27 @@ public sealed class ApplicationFlowGuardTests
             },
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
             deviceRepository,
-            hostRepository,
-            pluginRepository,
+            componentRepository,
             cache,
             auditTrail,
-            new EdgeInstallerArtifactCatalogReader(
-                Options.Create(new EdgeInstallerArtifactOptions { RootPath = artifactRoot })),
             Options.Create(new EdgeInstallerArtifactOptions { RootPath = artifactRoot }));
     }
 
-    private static ClientHostRelease CreatePublishedHostRelease(string targetRuntime = "win-x64")
+    private static InMemoryRepository<ClientReleaseComponent> CreatePublishedReleaseComponentRepository(
+        string targetRuntime = "win-x64")
     {
-        return new ClientHostRelease(
-            "stable",
+        var repository = new InMemoryRepository<ClientReleaseComponent>();
+        repository.ListResult.Add(CreatePublishedHostComponent(targetRuntime));
+        repository.ListResult.Add(CreatePublishedPluginComponent(targetRuntime));
+        return repository;
+    }
+
+    private static ClientReleaseComponent CreatePublishedHostComponent(string targetRuntime = "win-x64")
+    {
+        var component = ClientReleaseComponent.CreateHost("stable", targetRuntime);
+        component.UpsertHostVersion(
             "1.2.0",
             "1.0.0",
-            targetRuntime,
             "net10.0",
             "/edge-updates/installers/stable/1.2.0/installer-artifact.json",
             new string('a', 64),
@@ -2367,23 +2344,36 @@ public sealed class ApplicationFlowGuardTests
             null,
             ClientReleaseStatus.Published,
             null,
-            "IIoT");
+            "IIoT",
+            artifacts:
+            [
+                new ClientReleaseArtifact(
+                    ClientReleaseArtifactKind.InstallerDirectory,
+                    "installers/stable/1.2.0"),
+                new ClientReleaseArtifact(
+                    ClientReleaseArtifactKind.ManifestFile,
+                    "installers/stable/1.2.0/installer-artifact.json",
+                    new string('a', 64),
+                    1024)
+            ]);
+        return component;
     }
 
-    private static ClientPluginRelease CreatePublishedPluginRelease(string targetRuntime = "win-x64")
+    private static ClientReleaseComponent CreatePublishedPluginComponent(string targetRuntime = "win-x64")
     {
-        return new ClientPluginRelease(
+        var component = ClientReleaseComponent.CreatePlugin(
             "Homogenization",
             "匀浆",
             "匀浆工序",
             null,
             null,
             "stable",
+            targetRuntime);
+        component.UpsertPluginVersion(
             "2.3.4",
             "1.0.0",
             "1.0.0",
             "9.9.9",
-            targetRuntime,
             "net10.0",
             "/edge-updates/installers/stable/1.2.0/installer-artifact.json#moduleId=Homogenization",
             new string('b', 64),
@@ -2392,7 +2382,19 @@ public sealed class ApplicationFlowGuardTests
             "[]",
             ClientReleaseStatus.Published,
             null,
-            "IIoT");
+            "IIoT",
+            artifacts:
+            [
+                new ClientReleaseArtifact(
+                    ClientReleaseArtifactKind.PluginPackageDirectory,
+                    "plugins/stable/Homogenization/2.3.4"),
+                new ClientReleaseArtifact(
+                    ClientReleaseArtifactKind.PackageFile,
+                    "plugins/stable/Homogenization/2.3.4/Homogenization.zip",
+                    new string('b', 64),
+                    512)
+            ]);
+        return component;
     }
 
     private static string CreateInstallerArtifactFixture(

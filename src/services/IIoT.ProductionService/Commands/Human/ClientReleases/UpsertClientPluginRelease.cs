@@ -34,7 +34,7 @@ public sealed record UpsertClientPluginReleaseCommand(
     string? Publisher) : IHumanCommand<Result<UpsertClientPluginReleaseResultDto>>;
 
 public sealed class UpsertClientPluginReleaseHandler(
-    IRepository<ClientPluginRelease> repository,
+    IRepository<ClientReleaseComponent> repository,
     IClientReleaseRetentionService retentionService)
     : ICommandHandler<UpsertClientPluginReleaseCommand, Result<UpsertClientPluginReleaseResultDto>>
 {
@@ -50,58 +50,52 @@ public sealed class UpsertClientPluginReleaseHandler(
         var dependenciesJson = string.IsNullOrWhiteSpace(request.DependenciesJson)
             ? "[]"
             : request.DependenciesJson.Trim();
-        var spec = new ClientPluginReleaseByIdentitySpec(
+        var spec = new ClientReleaseComponentByIdentitySpec(
+            ClientReleaseComponentKind.Plugin,
             request.ModuleId,
             request.Channel,
-            request.Version,
             request.TargetRuntime);
-        var release = await repository.GetSingleOrDefaultAsync(spec, cancellationToken);
+        var component = await repository.GetSingleOrDefaultAsync(spec, cancellationToken);
 
-        if (release is null)
+        if (component is null)
         {
-            release = new ClientPluginRelease(
+            component = ClientReleaseComponent.CreatePlugin(
                 request.ModuleId,
                 request.DisplayName,
                 request.Description,
                 request.IconKind,
                 request.AccentColor,
                 request.Channel,
+                request.TargetRuntime);
+            repository.Add(component);
+        }
+
+        component.UpdatePluginMetadata(
+            request.DisplayName,
+            request.Description,
+            request.IconKind,
+            request.AccentColor);
+        var release = component.UpsertPluginVersion(
+            request.Version,
+            request.HostApiVersion,
+            request.MinHostVersion,
+            request.MaxHostVersion,
+            request.TargetFramework,
+            request.DownloadUrl,
+            request.Sha256,
+            request.PackageSize,
+            request.ReleaseNotes,
+            dependenciesJson,
+            status,
+            request.Signature,
+            request.Publisher,
+            artifacts: ClientReleaseArtifactBuilder.FromPluginDownloadUrl(
+                request.DownloadUrl,
+                request.Channel,
+                request.ModuleId,
                 request.Version,
-                request.HostApiVersion,
-                request.MinHostVersion,
-                request.MaxHostVersion,
-                request.TargetRuntime,
-                request.TargetFramework,
-                request.DownloadUrl,
                 request.Sha256,
-                request.PackageSize,
-                request.ReleaseNotes,
-                dependenciesJson,
-                status,
-                request.Signature,
-                request.Publisher);
-            repository.Add(release);
-        }
-        else
-        {
-            release.UpdateRelease(
-                request.DisplayName,
-                request.Description,
-                request.IconKind,
-                request.AccentColor,
-                request.HostApiVersion,
-                request.MinHostVersion,
-                request.MaxHostVersion,
-                request.TargetFramework,
-                request.DownloadUrl,
-                request.Sha256,
-                request.PackageSize,
-                request.ReleaseNotes,
-                dependenciesJson,
-                status,
-                request.Signature,
-                request.Publisher);
-        }
+                request.PackageSize));
 
         await repository.SaveChangesAsync(cancellationToken);
         await retentionService.ApplyPluginPolicyAsync(

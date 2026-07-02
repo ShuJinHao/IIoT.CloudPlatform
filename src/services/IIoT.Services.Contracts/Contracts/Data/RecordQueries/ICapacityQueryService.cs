@@ -10,6 +10,13 @@ public interface ICapacityQueryService
         string? plcName = null,
         CancellationToken cancellationToken = default);
 
+    Task<List<HourlyCapacityPointDto>> GetHourlyRangeByDeviceIdAsync(
+        Guid deviceId,
+        DateTime startTime,
+        DateTime endTime,
+        string? plcName = null,
+        CancellationToken cancellationToken = default);
+
     Task<List<HourlyCapacityAggregateDto>> GetHourlyAggregateAsync(
         DateOnly date,
         Guid? processId = null,
@@ -38,6 +45,17 @@ public interface ICapacityQueryService
 }
 
 public record HourlyCapacityDto(
+    int Hour,
+    int Minute,
+    string TimeLabel,
+    string ShiftCode,
+    int TotalCount,
+    int OkCount,
+    int NgCount);
+
+public record HourlyCapacityPointDto(
+    DateTime Time,
+    DateOnly Date,
     int Hour,
     int Minute,
     string TimeLabel,

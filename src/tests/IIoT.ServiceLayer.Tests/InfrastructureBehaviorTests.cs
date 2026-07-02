@@ -65,6 +65,59 @@ public sealed class InfrastructureBehaviorTests
     }
 
     [Fact]
+    public void DeviceCascadeDeletion_ShouldStayOnEfCoreWritePath()
+    {
+        var efDependencyInjection = File.ReadAllText(FindRepoFile(
+            "src",
+            "infrastructure",
+            "IIoT.EntityFrameworkCore",
+            "DependencyInjection.cs"));
+        Assert.Contains(
+            "AddScoped<IDeviceDeletionDependencyQueryService, QueryServices.EfDeviceDeletionDependencyService>",
+            efDependencyInjection,
+            StringComparison.Ordinal);
+
+        var dapperRoot = Path.GetDirectoryName(FindRepoFile(
+            "src",
+            "infrastructure",
+            "IIoT.Dapper",
+            "DependencyInjection.cs"))!;
+        var dapperSources = Directory
+            .EnumerateFiles(dapperRoot, "*.cs", SearchOption.AllDirectories)
+            .Select(File.ReadAllText)
+            .ToList();
+
+        Assert.DoesNotContain(dapperSources, source =>
+            source.Contains("IDeviceDeletionDependencyQueryService", StringComparison.Ordinal)
+            || source.Contains("DeleteCascadeAsync", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AiReadProductionRecords_ShouldReplaceAiPassStationRoute()
+    {
+        var controllerSource = File.ReadAllText(FindRepoFile(
+            "src",
+            "hosts",
+            "IIoT.HttpApi",
+            "Controllers",
+            "AiRead",
+            "AiReadController.cs"));
+        var querySource = File.ReadAllText(FindRepoFile(
+            "src",
+            "services",
+            "IIoT.ProductionService",
+            "Queries",
+            "AiRead",
+            "AiReadQueries.cs"));
+
+        Assert.Contains("HttpGet(\"production-records\")", controllerSource, StringComparison.Ordinal);
+        Assert.Contains("AiReadPermissions.ProductionRecord", querySource, StringComparison.Ordinal);
+        Assert.DoesNotContain("pass-stations/{typeKey}", controllerSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("AiReadPermissions.PassStation", querySource, StringComparison.Ordinal);
+        Assert.DoesNotContain("payload_jsonb", querySource, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task EdgeReleaseApiKeyService_ShouldStoreHashOnlyAndValidateActiveKey()
     {
         using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());

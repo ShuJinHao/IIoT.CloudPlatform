@@ -49,6 +49,8 @@ export const statusOptions = [
   { label: 'Published', value: 'Published' },
   { label: 'Deprecated', value: 'Deprecated' },
   { label: 'Archived', value: 'Archived' },
+  { label: 'Deleted', value: 'Deleted' },
+  { label: 'DeleteFailed', value: 'DeleteFailed' },
 ];
 
 const realSha256Pattern = /^[0-9a-f]{64}$/i;
@@ -106,7 +108,7 @@ export function statusTone(status: string): TagTone {
   if (normalized === 'starting') return 'info';
   if (normalized === 'stopped' || normalized === 'runtimeheartbeatstale') return 'warning';
   if (normalized === 'updateavailable') return 'warning';
-  if (normalized === 'incompatible' || normalized === 'archived') return 'error';
+  if (normalized === 'incompatible' || normalized === 'archived' || normalized === 'deleted' || normalized === 'deletefailed') return 'error';
   if (normalized === 'offline') return 'error';
   if (normalized === 'deprecated') return 'warning';
   if (normalized === 'missingreport' || normalized === 'missingruntimeheartbeat' || normalized === 'norelease') return 'default';
@@ -119,6 +121,9 @@ export function statusText(status: string): string {
     Published: '已发布',
     Deprecated: '已弃用',
     Archived: '已归档',
+    DeleteRequested: '删除中',
+    Deleted: '已删除',
+    DeleteFailed: '删除失败',
     Latest: '已最新',
     UpdateAvailable: '可更新',
     Incompatible: '不兼容',

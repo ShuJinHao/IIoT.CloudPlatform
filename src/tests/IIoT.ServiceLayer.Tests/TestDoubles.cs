@@ -76,7 +76,7 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
         CancellationToken cancellationToken = default)
     {
         LastGetSingleOrDefaultSpecification = specification;
-        return Task.FromResult(SingleOrDefaultResult);
+        return Task.FromResult(SingleOrDefaultResult ?? ApplySpecification(specification).SingleOrDefault());
     }
 
     public Task<int> CountAsync(
@@ -245,11 +245,33 @@ internal sealed class StubProcessReadQueryService : IProcessReadQueryService
 
     public bool CodeExists { get; set; }
 
+    public List<ProcessReadItem> PagedProcesses { get; } = [];
+
     public IReadOnlyList<Guid> DeviceIds { get; set; } = [];
 
     public bool HasDevices { get; set; }
 
     public bool HasRecipes { get; set; }
+
+    public Task<(IReadOnlyList<ProcessReadItem> Items, int TotalCount)> GetPagedAsync(
+        string? keyword,
+        int skip,
+        int take,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedKeyword = keyword?.Trim();
+        var query = string.IsNullOrWhiteSpace(normalizedKeyword)
+            ? PagedProcesses
+            : PagedProcesses
+                .Where(process =>
+                    process.ProcessCode.Contains(normalizedKeyword, StringComparison.OrdinalIgnoreCase)
+                    || process.ProcessName.Contains(normalizedKeyword, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+        return Task.FromResult((
+            (IReadOnlyList<ProcessReadItem>)query.Skip(skip).Take(take).ToList(),
+            query.Count));
+    }
 
     public Task<bool> ExistsAsync(Guid processId, CancellationToken cancellationToken = default)
     {
@@ -326,6 +348,8 @@ internal sealed class StubCapacityQueryService : ICapacityQueryService
 {
     public List<HourlyCapacityDto> HourlyResult { get; set; } = [];
 
+    public List<HourlyCapacityPointDto> HourlyRangeResult { get; set; } = [];
+
     public List<HourlyCapacityAggregateDto> HourlyAggregateResult { get; set; } = [];
 
     public List<DailyRangeSummaryDto> SummaryRangeResult { get; set; } = [];
@@ -335,6 +359,12 @@ internal sealed class StubCapacityQueryService : ICapacityQueryService
     public int DailyPagedTotalCount { get; set; }
 
     public int HourlyCalls { get; private set; }
+
+    public Guid? LastHourlyDeviceId { get; private set; }
+
+    public DateTime? LastHourlyRangeStart { get; private set; }
+
+    public DateTime? LastHourlyRangeEnd { get; private set; }
 
     public int HourlyAggregateCalls { get; private set; }
 
@@ -359,7 +389,38 @@ internal sealed class StubCapacityQueryService : ICapacityQueryService
         CancellationToken cancellationToken = default)
     {
         HourlyCalls++;
+        LastHourlyDeviceId = deviceId;
         return Task.FromResult(HourlyResult);
+    }
+
+    public Task<List<HourlyCapacityPointDto>> GetHourlyRangeByDeviceIdAsync(
+        Guid deviceId,
+        DateTime startTime,
+        DateTime endTime,
+        string? plcName = null,
+        CancellationToken cancellationToken = default)
+    {
+        HourlyCalls++;
+        LastHourlyDeviceId = deviceId;
+        LastHourlyRangeStart = startTime;
+        LastHourlyRangeEnd = endTime;
+        if (HourlyRangeResult.Count > 0)
+        {
+            return Task.FromResult(HourlyRangeResult);
+        }
+
+        return Task.FromResult(HourlyResult
+            .Select(item => new HourlyCapacityPointDto(
+                startTime.Date.AddHours(item.Hour).AddMinutes(item.Minute),
+                DateOnly.FromDateTime(startTime),
+                item.Hour,
+                item.Minute,
+                item.TimeLabel,
+                item.ShiftCode,
+                item.TotalCount,
+                item.OkCount,
+                item.NgCount))
+            .ToList());
     }
 
     public Task<List<HourlyCapacityAggregateDto>> GetHourlyAggregateAsync(
@@ -425,6 +486,8 @@ internal sealed class StubDeviceLogQueryService : IDeviceLogQueryService
 
     public string? LastLogsLevel { get; private set; }
 
+    public IReadOnlyCollection<string>? LastLogsNormalizedLevels { get; private set; }
+
     public string? LastLogsKeyword { get; private set; }
 
     public DateTime? LastLogsStartTime { get; private set; }
@@ -454,12 +517,14 @@ internal sealed class StubDeviceLogQueryService : IDeviceLogQueryService
         string? keyword = null,
         DateTime? startTime = null,
         DateTime? endTime = null,
+        IReadOnlyCollection<string>? normalizedLevels = null,
         CancellationToken cancellationToken = default)
     {
         LogsByConditionCalls++;
         LastLogsPagination = pagination;
         LastLogsDeviceId = deviceId;
         LastLogsLevel = level;
+        LastLogsNormalizedLevels = normalizedLevels;
         LastLogsKeyword = keyword;
         LastLogsStartTime = startTime;
         LastLogsEndTime = endTime;
@@ -492,6 +557,27 @@ internal sealed class StubDeviceLogQueryService : IDeviceLogQueryService
         LastAlertProcessId = processId;
         LastAlertDeviceIds = deviceIds;
         return Task.FromResult(RecentAlertCount);
+    }
+}
+
+internal sealed class StubAiProductionRecordQueryService : IAiProductionRecordQueryService
+{
+    public List<AiProductionRecordQueryItem> Items { get; set; } = [];
+
+    public int TotalCount { get; set; }
+
+    public AiProductionRecordQueryRequest? LastRequest { get; private set; }
+
+    public IReadOnlyCollection<Guid>? LastAllowedDeviceIds { get; private set; }
+
+    public Task<(List<AiProductionRecordQueryItem> Items, int TotalCount)> GetAsync(
+        AiProductionRecordQueryRequest request,
+        IReadOnlyCollection<Guid>? allowedDeviceIds,
+        CancellationToken cancellationToken = default)
+    {
+        LastRequest = request;
+        LastAllowedDeviceIds = allowedDeviceIds;
+        return Task.FromResult((Items, TotalCount));
     }
 }
 
@@ -1174,7 +1260,7 @@ internal sealed class RecordingUploadReceiveRegistry(
 internal sealed class StubDeviceDeletionDependencyQueryService : IDeviceDeletionDependencyQueryService
 {
     public DeviceDeletionDependencies Dependencies { get; set; } = new(false, false, false, false);
-    public DeviceDeletionImpact Impact { get; set; } = new(0, 0, 0, 0, 0, 0, 0, 0, 0);
+    public DeviceDeletionImpact Impact { get; set; } = new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     public IReadOnlyList<Guid> AffectedEmployeeIds { get; set; } = [];
     public bool CascadeDeleteResult { get; set; } = true;
 

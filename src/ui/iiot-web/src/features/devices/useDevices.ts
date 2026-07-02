@@ -104,6 +104,7 @@ export function useDevices() {
       { label: '产能记录', value: impact.capacities },
       { label: '设备日志', value: impact.deviceLogs },
       { label: '过站数据', value: impact.passStations },
+      { label: '客户端状态投影', value: impact.clientStates },
       { label: '客户端版本快照', value: impact.clientVersionSnapshots },
       { label: '插件版本快照', value: impact.clientPluginVersions },
       { label: '运行心跳', value: impact.runtimeHeartbeats },

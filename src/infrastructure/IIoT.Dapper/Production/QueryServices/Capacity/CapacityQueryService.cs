@@ -47,6 +47,65 @@ public class CapacityQueryService(IDbConnectionFactory connectionFactory) : ICap
         return rows.ToList();
     }
 
+    public async Task<List<HourlyCapacityPointDto>> GetHourlyRangeByDeviceIdAsync(
+        Guid deviceId,
+        DateTime startTime,
+        DateTime endTime,
+        string? plcName = null,
+        CancellationToken cancellationToken = default)
+    {
+        using var connection = connectionFactory.CreateConnection();
+
+        const string sql = """
+            SELECT
+                q.bucket_time AS Time,
+                q.date        AS Date,
+                q.hour        AS Hour,
+                q.minute      AS Minute,
+                q.time_label  AS TimeLabel,
+                q.shift_code  AS ShiftCode,
+                q.total_count AS TotalCount,
+                q.ok_count    AS OkCount,
+                q.ng_count    AS NgCount
+            FROM (
+                SELECT
+                    h.date,
+                    h.hour,
+                    h.minute,
+                    h.time_label,
+                    h.shift_code,
+                    h.total_count,
+                    h.ok_count,
+                    h.ng_count,
+                    (h.date::timestamp + make_interval(hours => h.hour, mins => h.minute)) AS bucket_time
+                FROM hourly_capacity h
+                WHERE h.device_id = @DeviceId
+                  AND h.date >= @StartDate
+                  AND h.date <= @EndDate
+                  AND (@PlcName IS NULL OR h.plc_name = @PlcName)
+            ) q
+            WHERE q.bucket_time >= @StartTime
+              AND q.bucket_time <= @EndTime
+            ORDER BY q.bucket_time ASC
+            """;
+
+        var cmd = new CommandDefinition(
+            sql,
+            new
+            {
+                DeviceId = deviceId,
+                StartDate = DateOnly.FromDateTime(startTime),
+                EndDate = DateOnly.FromDateTime(endTime),
+                StartTime = startTime,
+                EndTime = endTime,
+                PlcName = plcName
+            },
+            cancellationToken: cancellationToken);
+
+        var rows = await connection.QueryAsync<HourlyCapacityPointDto>(cmd);
+        return rows.ToList();
+    }
+
     public async Task<List<HourlyCapacityAggregateDto>> GetHourlyAggregateAsync(
         DateOnly date,
         Guid? processId = null,
