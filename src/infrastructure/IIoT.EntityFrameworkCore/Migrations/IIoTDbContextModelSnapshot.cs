@@ -724,6 +724,237 @@ namespace IIoT.EntityFrameworkCore.Migrations
                     b.ToTable("devices", (string)null);
                 });
 
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.EdgeHosts.EdgeHost", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ClientCode")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("client_code");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid>("DeviceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("device_id");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("enabled");
+
+                    b.Property<string>("HostName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("host_name");
+
+                    b.Property<string>("Remark")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("remark");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ClientCode")
+                        .IsUnique()
+                        .HasDatabaseName("ux_edge_hosts_client_code");
+
+                    b.HasIndex("DeviceId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_edge_hosts_device_id");
+
+                    b.ToTable("edge_hosts", (string)null);
+                });
+
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.EdgeHosts.EdgeHostPlcBinding", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Address")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("address");
+
+                    b.Property<Guid?>("BusinessDeviceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("business_device_id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<int>("DisplayOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("display_order");
+
+                    b.Property<Guid>("EdgeHostId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("edge_host_id");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("enabled");
+
+                    b.Property<string>("PlcCode")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("plc_code");
+
+                    b.Property<string>("PlcName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("plc_name");
+
+                    b.Property<Guid?>("ProcessId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("process_id");
+
+                    b.Property<string>("Protocol")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("protocol");
+
+                    b.Property<string>("Remark")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("remark");
+
+                    b.Property<string>("StationCode")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("station_code");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessDeviceId")
+                        .HasDatabaseName("ix_edge_host_plc_bindings_business_device_id");
+
+                    b.HasIndex("ProcessId")
+                        .HasDatabaseName("ix_edge_host_plc_bindings_process_id");
+
+                    b.HasIndex("EdgeHostId", "PlcCode")
+                        .IsUnique()
+                        .HasDatabaseName("ux_edge_host_plc_bindings_host_plc");
+
+                    b.ToTable("edge_host_plc_bindings", (string)null);
+                });
+
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.EdgeHosts.EdgeHostPlcRuntimeState", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Address")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("address");
+
+                    b.Property<string>("ClientCode")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("client_code");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid>("DeviceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("device_id");
+
+                    b.Property<Guid>("EdgeHostId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("edge_host_id");
+
+                    b.Property<bool>("IsConnected")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_connected");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)")
+                        .HasColumnName("last_error");
+
+                    b.Property<DateTime>("LastSeenAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_seen_at_utc");
+
+                    b.Property<Guid?>("PlcBindingId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("plc_binding_id");
+
+                    b.Property<string>("PlcCode")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("plc_code");
+
+                    b.Property<string>("Protocol")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("protocol");
+
+                    b.Property<string>("ReportedPlcName")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("reported_plc_name");
+
+                    b.Property<string>("RuntimeStatus")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("runtime_status");
+
+                    b.Property<string>("StationCode")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("station_code");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EdgeHostId")
+                        .HasDatabaseName("ix_edge_host_plc_runtime_states_edge_host_id");
+
+                    b.HasIndex("LastSeenAtUtc")
+                        .HasDatabaseName("ix_edge_host_plc_runtime_states_last_seen");
+
+                    b.HasIndex("PlcBindingId")
+                        .HasDatabaseName("ix_edge_host_plc_runtime_states_plc_binding_id");
+
+                    b.HasIndex("DeviceId", "ClientCode", "PlcCode")
+                        .IsUnique()
+                        .HasDatabaseName("ux_edge_host_plc_runtime_states_device_client_plc");
+
+                    b.ToTable("edge_host_plc_runtime_states", (string)null);
+                });
+
             modelBuilder.Entity("IIoT.Core.Production.Aggregates.Recipes.Recipe", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1560,6 +1791,54 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.EdgeHosts.EdgeHost", b =>
+                {
+                    b.HasOne("IIoT.Core.Production.Aggregates.Devices.Device", null)
+                        .WithMany()
+                        .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.EdgeHosts.EdgeHostPlcBinding", b =>
+                {
+                    b.HasOne("IIoT.Core.Production.Aggregates.Devices.Device", null)
+                        .WithMany()
+                        .HasForeignKey("BusinessDeviceId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("IIoT.Core.Production.Aggregates.EdgeHosts.EdgeHost", null)
+                        .WithMany("PlcBindings")
+                        .HasForeignKey("EdgeHostId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("IIoT.Core.MasterData.Aggregates.MfgProcesses.MfgProcess", null)
+                        .WithMany()
+                        .HasForeignKey("ProcessId")
+                        .OnDelete(DeleteBehavior.SetNull);
+                });
+
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.EdgeHosts.EdgeHostPlcRuntimeState", b =>
+                {
+                    b.HasOne("IIoT.Core.Production.Aggregates.Devices.Device", null)
+                        .WithMany()
+                        .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("IIoT.Core.Production.Aggregates.EdgeHosts.EdgeHost", null)
+                        .WithMany()
+                        .HasForeignKey("EdgeHostId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("IIoT.Core.Production.Aggregates.EdgeHosts.EdgeHostPlcBinding", null)
+                        .WithMany()
+                        .HasForeignKey("PlcBindingId")
+                        .OnDelete(DeleteBehavior.SetNull);
+                });
+
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<System.Guid>", b =>
                 {
                     b.HasOne("Microsoft.AspNetCore.Identity.IdentityRole<System.Guid>", null)
@@ -1653,6 +1932,11 @@ namespace IIoT.EntityFrameworkCore.Migrations
             modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.DeviceClientVersionSnapshot", b =>
                 {
                     b.Navigation("InstalledPlugins");
+                });
+
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.EdgeHosts.EdgeHost", b =>
+                {
+                    b.Navigation("PlcBindings");
                 });
 
             modelBuilder.Entity("OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreApplication<System.Guid>", b =>

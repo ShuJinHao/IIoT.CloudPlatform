@@ -2,6 +2,7 @@
 using IIoT.Core.MasterData.Aggregates.MfgProcesses;
 using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Aggregates.Devices;
+using IIoT.Core.Production.Aggregates.EdgeHosts;
 using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.EntityFrameworkCore.Auditing;
 using IIoT.EntityFrameworkCore.Identity;
@@ -21,10 +22,10 @@ public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)
     public DbSet<Employee> Employees => Set<Employee>();
     public DbSet<MfgProcess> MfgProcesses => Set<MfgProcess>();
     public DbSet<Device> Devices => Set<Device>();
+    public DbSet<EdgeHost> EdgeHosts => Set<EdgeHost>();
+    public DbSet<EdgeHostPlcRuntimeState> EdgeHostPlcRuntimeStates => Set<EdgeHostPlcRuntimeState>();
     public DbSet<Recipe> Recipes => Set<Recipe>();
     public DbSet<ClientReleaseComponent> ClientReleaseComponents => Set<ClientReleaseComponent>();
-    public DbSet<ClientReleaseVersion> ClientReleaseVersions => Set<ClientReleaseVersion>();
-    public DbSet<ClientReleaseArtifact> ClientReleaseArtifacts => Set<ClientReleaseArtifact>();
     public DbSet<ClientReleaseRetentionPolicy> ClientReleaseRetentionPolicies => Set<ClientReleaseRetentionPolicy>();
     public DbSet<DeviceClientVersionSnapshot> DeviceClientVersionSnapshots => Set<DeviceClientVersionSnapshot>();
     public DbSet<EdgeDeviceRuntimeHeartbeat> EdgeDeviceRuntimeHeartbeats => Set<EdgeDeviceRuntimeHeartbeat>();

@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Aggregates.Devices;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.Commands.ClientReleases;
 using IIoT.ProductionService.Commands.ClientVersions;
@@ -559,12 +560,10 @@ public sealed class ClientReleaseBehaviorTests
     public async Task ReportDeviceClientVersionHandler_ShouldRejectMismatchedClientCode()
     {
         var deviceId = Guid.NewGuid();
-        var repository = new InMemoryRepository<DeviceClientVersionSnapshot>();
-        var stateRepository = new InMemoryRepository<DeviceClientState>();
+        var clientStateStore = new InMemoryDeviceClientStateStore();
         var handler = new ReportDeviceClientVersionHandler(
             new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-001")),
-            repository,
-            stateRepository);
+            clientStateStore);
 
         var result = await handler.Handle(
             new ReportDeviceClientVersionCommand(
@@ -579,20 +578,18 @@ public sealed class ClientReleaseBehaviorTests
             CancellationToken.None);
 
         Assert.False(result.IsSuccess);
-        Assert.Null(repository.AddedEntity);
-        Assert.Empty(stateRepository.Items);
+        Assert.Empty(clientStateStore.VersionSnapshots);
+        Assert.Empty(clientStateStore.States);
     }
 
     [Fact]
     public async Task ReportDeviceClientVersionHandler_ShouldStoreLatestPluginSnapshot()
     {
         var deviceId = Guid.NewGuid();
-        var repository = new InMemoryRepository<DeviceClientVersionSnapshot>();
-        var stateRepository = new InMemoryRepository<DeviceClientState>();
+        var clientStateStore = new InMemoryDeviceClientStateStore();
         var handler = new ReportDeviceClientVersionHandler(
             new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-001")),
-            repository,
-            stateRepository);
+            clientStateStore);
 
         var result = await handler.Handle(
             new ReportDeviceClientVersionCommand(
@@ -607,13 +604,13 @@ public sealed class ClientReleaseBehaviorTests
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        var snapshot = Assert.IsType<DeviceClientVersionSnapshot>(repository.AddedEntity);
+        var snapshot = Assert.Single(clientStateStore.VersionSnapshots);
         Assert.Equal(deviceId, snapshot.DeviceId);
         Assert.Equal("DEV-001", snapshot.ClientCode);
         var plugin = Assert.Single(snapshot.InstalledPlugins);
         Assert.Equal("Homogenization", plugin.ModuleId);
         Assert.True(plugin.Enabled);
-        var state = Assert.Single(stateRepository.Items);
+        var state = Assert.Single(clientStateStore.States);
         Assert.Equal(deviceId, state.DeviceId);
         Assert.Equal("DEV-001", state.ClientCode);
         Assert.Equal("1.2.0", state.HostVersion);
@@ -624,12 +621,10 @@ public sealed class ClientReleaseBehaviorTests
     public async Task ReportDeviceRuntimeHeartbeatHandler_ShouldUpsertLatestRuntimeState()
     {
         var deviceId = Guid.NewGuid();
-        var repository = new InMemoryRepository<EdgeDeviceRuntimeHeartbeat>();
-        var stateRepository = new InMemoryRepository<DeviceClientState>();
+        var clientStateStore = new InMemoryDeviceClientStateStore();
         var handler = new ReportDeviceRuntimeHeartbeatHandler(
             new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-001")),
-            repository,
-            stateRepository);
+            clientStateStore);
 
         var first = await handler.Handle(
             new ReportDeviceRuntimeHeartbeatCommand(
@@ -659,10 +654,10 @@ public sealed class ClientReleaseBehaviorTests
 
         Assert.True(first.IsSuccess);
         Assert.True(second.IsSuccess);
-        var heartbeat = Assert.Single(repository.Items);
+        var heartbeat = Assert.Single(clientStateStore.RuntimeHeartbeats);
         Assert.Equal("Running", heartbeat.Status);
         Assert.Equal(["10.0.0.8"], heartbeat.GetLocalIpAddresses());
-        var state = Assert.Single(stateRepository.Items);
+        var state = Assert.Single(clientStateStore.States);
         Assert.Equal("Running", state.RuntimeStatus);
         Assert.Equal(["10.0.0.8"], state.GetRuntimeLocalIpAddresses());
         Assert.NotNull(state.LastRuntimeHeartbeatAtUtc);
@@ -675,7 +670,7 @@ public sealed class ClientReleaseBehaviorTests
         var device = new Device("正极模切", "DEV-001", processId);
         var deviceRepository = new InMemoryRepository<Device>();
         deviceRepository.Items.Add(device);
-        var snapshotRepository = new InMemoryRepository<DeviceClientVersionSnapshot>();
+        var clientStateStore = new InMemoryDeviceClientStateStore();
         var snapshot = new DeviceClientVersionSnapshot(
             device.Id,
             device.Code,
@@ -684,11 +679,10 @@ public sealed class ClientReleaseBehaviorTests
             "stable",
             DateTime.UtcNow,
             []);
-        snapshotRepository.Items.Add(snapshot);
+        clientStateStore.VersionSnapshots.Add(snapshot);
         var state = new DeviceClientState(device.Id, device.Code);
         state.ApplyVersionReport(snapshot);
-        var stateRepository = new InMemoryRepository<DeviceClientState>();
-        stateRepository.Items.Add(state);
+        clientStateStore.States.Add(state);
         var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
         componentRepository.Items.Add(CreateHostComponent(
             "stable",
@@ -705,8 +699,7 @@ public sealed class ClientReleaseBehaviorTests
         var handler = new GetDeviceClientVersionInventoryHandler(
             new StubCurrentUserDeviceAccessService(),
             deviceRepository,
-            snapshotRepository,
-            stateRepository,
+            clientStateStore,
             componentRepository);
 
         var result = await handler.Handle(
@@ -745,8 +738,8 @@ public sealed class ClientReleaseBehaviorTests
             var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
             componentRepository.Items.Add(component);
             var deviceId = Guid.NewGuid();
-            var snapshotRepository = new InMemoryRepository<DeviceClientVersionSnapshot>();
-            snapshotRepository.Items.Add(new DeviceClientVersionSnapshot(
+            var clientStateStore = new InMemoryDeviceClientStateStore();
+            clientStateStore.VersionSnapshots.Add(new DeviceClientVersionSnapshot(
                 deviceId,
                 "DEV-001",
                 "1.0.0",
@@ -758,7 +751,7 @@ public sealed class ClientReleaseBehaviorTests
             var handler = new DeleteClientReleasePackageHandler(
                 Options.Create(new EdgeInstallerArtifactOptions { RootPath = Path.Combine(edgeRoot, "installers") }),
                 componentRepository,
-                snapshotRepository,
+                clientStateStore,
                 new TestCurrentUser(),
                 auditTrail);
 
@@ -1487,6 +1480,84 @@ public sealed class ClientReleaseBehaviorTests
         public Task<int> GetMaxVersionsPerComponentAsync(CancellationToken cancellationToken = default)
         {
             return Task.FromResult(5);
+        }
+    }
+
+    private sealed class InMemoryDeviceClientStateStore : IDeviceClientStateStore
+    {
+        public List<DeviceClientVersionSnapshot> VersionSnapshots { get; } = [];
+
+        public List<EdgeDeviceRuntimeHeartbeat> RuntimeHeartbeats { get; } = [];
+
+        public List<DeviceClientState> States { get; } = [];
+
+        public Task<DeviceClientVersionSnapshot?> GetVersionSnapshotByDeviceAsync(
+            Guid deviceId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(VersionSnapshots.SingleOrDefault(snapshot => snapshot.DeviceId == deviceId));
+        }
+
+        public Task<IReadOnlyList<DeviceClientVersionSnapshot>> GetVersionSnapshotsByDevicesAsync(
+            IReadOnlyCollection<Guid>? deviceIds = null,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<DeviceClientVersionSnapshot>>(
+                VersionSnapshots
+                    .Where(snapshot => deviceIds == null || deviceIds.Contains(snapshot.DeviceId))
+                    .OrderBy(snapshot => snapshot.ClientCode)
+                    .ToList());
+        }
+
+        public Task<EdgeDeviceRuntimeHeartbeat?> GetRuntimeHeartbeatByIdentityAsync(
+            Guid deviceId,
+            string clientCode,
+            CancellationToken cancellationToken = default)
+        {
+            var normalizedClientCode = clientCode.Trim().ToUpperInvariant();
+            return Task.FromResult(RuntimeHeartbeats.SingleOrDefault(heartbeat =>
+                heartbeat.DeviceId == deviceId && heartbeat.ClientCode == normalizedClientCode));
+        }
+
+        public Task<DeviceClientState?> GetStateByIdentityAsync(
+            Guid deviceId,
+            string clientCode,
+            CancellationToken cancellationToken = default)
+        {
+            var normalizedClientCode = clientCode.Trim().ToUpperInvariant();
+            return Task.FromResult(States.SingleOrDefault(state =>
+                state.DeviceId == deviceId && state.ClientCode == normalizedClientCode));
+        }
+
+        public Task<IReadOnlyList<DeviceClientState>> GetStatesByDevicesAsync(
+            IReadOnlyCollection<Guid>? deviceIds = null,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<DeviceClientState>>(
+                States
+                    .Where(state => deviceIds == null || deviceIds.Contains(state.DeviceId))
+                    .OrderBy(state => state.ClientCode)
+                    .ToList());
+        }
+
+        public void AddVersionSnapshot(DeviceClientVersionSnapshot snapshot)
+        {
+            VersionSnapshots.Add(snapshot);
+        }
+
+        public void AddRuntimeHeartbeat(EdgeDeviceRuntimeHeartbeat heartbeat)
+        {
+            RuntimeHeartbeats.Add(heartbeat);
+        }
+
+        public void AddState(DeviceClientState state)
+        {
+            States.Add(state);
+        }
+
+        public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(1);
         }
     }
 

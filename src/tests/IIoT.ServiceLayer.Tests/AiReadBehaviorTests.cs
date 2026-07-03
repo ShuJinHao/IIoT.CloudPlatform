@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Aggregates.Devices;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.ProductionService.AiRead;
 using IIoT.ProductionService.PassStations;
 using IIoT.ProductionService.Queries.AiRead;
@@ -342,11 +343,11 @@ public sealed class AiReadBehaviorTests
             ["10.0.0.8"]);
         var state = new DeviceClientState(device.Id, device.Code);
         state.ApplyVersionReport(snapshot);
-        var stateRepository = new InMemoryRepository<DeviceClientState>();
-        stateRepository.ListResult.Add(state);
+        var clientStateStore = new InMemoryDeviceClientStateStore();
+        clientStateStore.States.Add(state);
         var handler = new GetAiReadDeviceClientStatesHandler(
             deviceRepository,
-            stateRepository,
+            clientStateStore,
             new TestAiReadScopeAccessor(),
             Options.Create(new AiReadOptions()));
 
@@ -696,6 +697,84 @@ public sealed class AiReadBehaviorTests
                 }
             ]
         }));
+    }
+
+    private sealed class InMemoryDeviceClientStateStore : IDeviceClientStateStore
+    {
+        public List<DeviceClientVersionSnapshot> VersionSnapshots { get; } = [];
+
+        public List<EdgeDeviceRuntimeHeartbeat> RuntimeHeartbeats { get; } = [];
+
+        public List<DeviceClientState> States { get; } = [];
+
+        public Task<DeviceClientVersionSnapshot?> GetVersionSnapshotByDeviceAsync(
+            Guid deviceId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(VersionSnapshots.SingleOrDefault(snapshot => snapshot.DeviceId == deviceId));
+        }
+
+        public Task<IReadOnlyList<DeviceClientVersionSnapshot>> GetVersionSnapshotsByDevicesAsync(
+            IReadOnlyCollection<Guid>? deviceIds = null,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<DeviceClientVersionSnapshot>>(
+                VersionSnapshots
+                    .Where(snapshot => deviceIds == null || deviceIds.Contains(snapshot.DeviceId))
+                    .OrderBy(snapshot => snapshot.ClientCode)
+                    .ToList());
+        }
+
+        public Task<EdgeDeviceRuntimeHeartbeat?> GetRuntimeHeartbeatByIdentityAsync(
+            Guid deviceId,
+            string clientCode,
+            CancellationToken cancellationToken = default)
+        {
+            var normalizedClientCode = clientCode.Trim().ToUpperInvariant();
+            return Task.FromResult(RuntimeHeartbeats.SingleOrDefault(heartbeat =>
+                heartbeat.DeviceId == deviceId && heartbeat.ClientCode == normalizedClientCode));
+        }
+
+        public Task<DeviceClientState?> GetStateByIdentityAsync(
+            Guid deviceId,
+            string clientCode,
+            CancellationToken cancellationToken = default)
+        {
+            var normalizedClientCode = clientCode.Trim().ToUpperInvariant();
+            return Task.FromResult(States.SingleOrDefault(state =>
+                state.DeviceId == deviceId && state.ClientCode == normalizedClientCode));
+        }
+
+        public Task<IReadOnlyList<DeviceClientState>> GetStatesByDevicesAsync(
+            IReadOnlyCollection<Guid>? deviceIds = null,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<DeviceClientState>>(
+                States
+                    .Where(state => deviceIds == null || deviceIds.Contains(state.DeviceId))
+                    .OrderBy(state => state.ClientCode)
+                    .ToList());
+        }
+
+        public void AddVersionSnapshot(DeviceClientVersionSnapshot snapshot)
+        {
+            VersionSnapshots.Add(snapshot);
+        }
+
+        public void AddRuntimeHeartbeat(EdgeDeviceRuntimeHeartbeat heartbeat)
+        {
+            RuntimeHeartbeats.Add(heartbeat);
+        }
+
+        public void AddState(DeviceClientState state)
+        {
+            States.Add(state);
+        }
+
+        public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(1);
+        }
     }
 
     [AuthorizeAiRead(AiReadPermissions.Device)]

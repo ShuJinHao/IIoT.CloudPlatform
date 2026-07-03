@@ -11,4 +11,5 @@ public static class HttpApiRateLimitPolicies
     public const string CapacityUpload = "capacity-upload";
     public const string DeviceLogUpload = "device-log-upload";
     public const string PassStationUpload = "pass-station-upload";
+    public const string EdgeHostPlcStateUpload = "edge-host-plc-state-upload";
 }

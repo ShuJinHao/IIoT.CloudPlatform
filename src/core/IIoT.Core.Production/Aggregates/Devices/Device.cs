@@ -7,7 +7,7 @@ namespace IIoT.Core.Production.Aggregates.Devices;
 /// <summary>
 /// 云端管理的设备档案聚合根。
 /// </summary>
-public class Device : BaseEntity<Guid>
+public class Device : BaseEntity<Guid>, IAggregateRoot<Guid>
 {
     protected Device()
     {

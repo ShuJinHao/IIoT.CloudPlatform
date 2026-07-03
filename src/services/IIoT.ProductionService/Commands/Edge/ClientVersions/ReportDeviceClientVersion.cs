@@ -1,9 +1,8 @@
 using IIoT.Core.Production.Aggregates.ClientReleases;
-using IIoT.Core.Production.Specifications.ClientReleases;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.Services.Contracts;
 using IIoT.SharedKernel.Messaging;
-using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
 
 namespace IIoT.ProductionService.Commands.ClientVersions;
@@ -28,8 +27,7 @@ public sealed record ReportDeviceClientVersionCommand(
 
 public sealed class ReportDeviceClientVersionHandler(
     IDeviceIdentityQueryService deviceIdentityQueryService,
-    IRepository<DeviceClientVersionSnapshot> repository,
-    IRepository<DeviceClientState> stateRepository)
+    IDeviceClientStateStore clientStateStore)
     : ICommandHandler<ReportDeviceClientVersionCommand, Result<DeviceClientVersionReportResultDto>>
 {
     public async Task<Result<DeviceClientVersionReportResultDto>> Handle(
@@ -67,8 +65,7 @@ public sealed class ReportDeviceClientVersionHandler(
             })
             .ToList();
 
-        var spec = new DeviceClientVersionSnapshotByDeviceSpec(request.DeviceId);
-        var snapshot = await repository.GetSingleOrDefaultAsync(spec, cancellationToken);
+        var snapshot = await clientStateStore.GetVersionSnapshotByDeviceAsync(request.DeviceId, cancellationToken);
         if (snapshot is null)
         {
             snapshot = new DeviceClientVersionSnapshot(
@@ -81,7 +78,7 @@ public sealed class ReportDeviceClientVersionHandler(
                 pluginVersions,
                 request.LocalIpAddresses,
                 request.RemoteIpAddress);
-            repository.Add(snapshot);
+            clientStateStore.AddVersionSnapshot(snapshot);
         }
         else
         {
@@ -96,18 +93,16 @@ public sealed class ReportDeviceClientVersionHandler(
                 request.RemoteIpAddress);
         }
 
-        var state = await stateRepository.GetSingleOrDefaultAsync(
-            new DeviceClientStateByIdentitySpec(request.DeviceId, clientCode),
-            cancellationToken);
+        var state = await clientStateStore.GetStateByIdentityAsync(request.DeviceId, clientCode, cancellationToken);
         if (state is null)
         {
             state = new DeviceClientState(request.DeviceId, clientCode);
-            stateRepository.Add(state);
+            clientStateStore.AddState(state);
         }
 
         state.ApplyVersionReport(snapshot);
 
-        await stateRepository.SaveChangesAsync(cancellationToken);
+        await clientStateStore.SaveChangesAsync(cancellationToken);
         return Result.Success(new DeviceClientVersionReportResultDto(
             snapshot.DeviceId,
             snapshot.ReceivedAtUtc));

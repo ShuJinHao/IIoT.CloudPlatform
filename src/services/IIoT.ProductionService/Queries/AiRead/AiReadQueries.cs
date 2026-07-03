@@ -1,5 +1,6 @@
 using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Aggregates.Devices;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Core.Production.Specifications.ClientReleases;
 using IIoT.Core.Production.Specifications.Devices;
 using IIoT.ProductionService.AiRead;
@@ -258,7 +259,7 @@ public sealed record GetAiReadDeviceClientStatesQuery(
 
 public sealed class GetAiReadDeviceClientStatesHandler(
     IReadRepository<Device> deviceRepository,
-    IReadRepository<DeviceClientState> stateRepository,
+    IDeviceClientStateStore clientStateStore,
     IAiReadScopeAccessor scopeAccessor,
     IOptions<AiReadOptions> options)
     : IQueryHandler<GetAiReadDeviceClientStatesQuery, Result<AiReadListResponse<AiReadDeviceClientStateDto>>>
@@ -284,9 +285,7 @@ public sealed class GetAiReadDeviceClientStatesHandler(
             new DevicePagedSpec(0, maxRows, allowedDeviceIds, request.Keyword, isPaging: true),
             cancellationToken);
         var deviceById = devices.ToDictionary(device => device.Id);
-        var states = await stateRepository.GetListAsync(
-            new DeviceClientStatesByDevicesSpec(deviceById.Keys.ToList()),
-            cancellationToken);
+        var states = await clientStateStore.GetStatesByDevicesAsync(deviceById.Keys.ToList(), cancellationToken);
         var allItems = states
             .Where(state => deviceById.ContainsKey(state.DeviceId))
             .OrderBy(state => deviceById[state.DeviceId].DeviceName, StringComparer.OrdinalIgnoreCase)

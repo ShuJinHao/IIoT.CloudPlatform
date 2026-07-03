@@ -1,3 +1,7 @@
+using IIoT.Core.Production.Contracts.ClientReleases;
+using IIoT.Core.Production.Contracts.EdgeHosts;
+using IIoT.EntityFrameworkCore.ClientReleases;
+using IIoT.EntityFrameworkCore.EdgeHosts;
 using IIoT.EntityFrameworkCore.Identity;
 using IIoT.EntityFrameworkCore.Outbox;
 using IIoT.EntityFrameworkCore.Persistence;
@@ -84,6 +88,8 @@ public static class DependencyInjection
         builder.Services.AddScoped<IDeviceReadQueryService, QueryServices.DeviceReadQueryService>();
         builder.Services.AddScoped<IRecipeReadQueryService, QueryServices.RecipeReadQueryService>();
         builder.Services.AddScoped<IDeviceDeletionDependencyQueryService, QueryServices.EfDeviceDeletionDependencyService>();
+        builder.Services.AddScoped<IDeviceClientStateStore, EfDeviceClientStateStore>();
+        builder.Services.AddScoped<IEdgeHostPlcRuntimeStateStore, EfEdgeHostPlcRuntimeStateStore>();
 
         builder.Services.AddIdentityCore<ApplicationUser>(options =>
         {

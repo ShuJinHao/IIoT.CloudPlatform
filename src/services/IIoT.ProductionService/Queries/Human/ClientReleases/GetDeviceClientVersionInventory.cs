@@ -1,5 +1,6 @@
 using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Aggregates.Devices;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Core.Production.Specifications.ClientReleases;
 using IIoT.Core.Production.Specifications.Devices;
 using IIoT.ProductionService.ClientReleases;
@@ -21,8 +22,7 @@ public sealed record GetDeviceClientVersionInventoryQuery(
 public sealed class GetDeviceClientVersionInventoryHandler(
     ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IReadRepository<Device> deviceRepository,
-    IReadRepository<DeviceClientVersionSnapshot> snapshotRepository,
-    IReadRepository<DeviceClientState> stateRepository,
+    IDeviceClientStateStore clientStateStore,
     IReadRepository<ClientReleaseComponent> componentRepository)
     : IQueryHandler<GetDeviceClientVersionInventoryQuery, Result<IReadOnlyList<DeviceClientVersionInventoryDto>>>
 {
@@ -47,13 +47,10 @@ public sealed class GetDeviceClientVersionInventoryHandler(
         var devices = await deviceRepository.GetListAsync(
             new DevicePagedSpec(0, 0, allowedDeviceIds, request.Keyword, isPaging: false),
             cancellationToken);
-        var snapshots = await snapshotRepository.GetListAsync(
-            new DeviceClientVersionSnapshotsByDevicesSpec(devices.Select(device => device.Id).ToList()),
-            cancellationToken);
+        var deviceIds = devices.Select(device => device.Id).ToList();
+        var snapshots = await clientStateStore.GetVersionSnapshotsByDevicesAsync(deviceIds, cancellationToken);
         var snapshotByDevice = snapshots.ToDictionary(snapshot => snapshot.DeviceId);
-        var states = await stateRepository.GetListAsync(
-            new DeviceClientStatesByDevicesSpec(devices.Select(device => device.Id).ToList()),
-            cancellationToken);
+        var states = await clientStateStore.GetStatesByDevicesAsync(deviceIds, cancellationToken);
         var stateByDevice = states
             .GroupBy(state => state.DeviceId)
             .ToDictionary(

@@ -5,7 +5,7 @@ namespace IIoT.Core.MasterData.Aggregates.MfgProcesses;
 /// <summary>
 /// 聚合根:制造工序(权限挂载的核心锚点)
 /// </summary>
-public class MfgProcess : BaseEntity<Guid>
+public class MfgProcess : BaseEntity<Guid>, IAggregateRoot<Guid>
 {
     /// <summary>
     /// 仅供 EF Core 物化使用,业务代码不要调用。

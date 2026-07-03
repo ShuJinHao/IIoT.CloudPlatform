@@ -2,7 +2,7 @@ using IIoT.SharedKernel.Domain;
 
 namespace IIoT.Core.Identity.Aggregates.IdentityAccounts;
 
-public class IdentityAccount : BaseEntity<Guid>
+public class IdentityAccount : BaseEntity<Guid>, IAggregateRoot<Guid>
 {
     protected IdentityAccount() { }
 

@@ -267,6 +267,10 @@ public static class DependencyInjection
                 RateLimitPartition.GetTokenBucketLimiter(
                     RateLimitPartitionKeyResolver.ResolveEdgeUploadPartitionKey(context),
                     _ => rateLimiting.PassStationUpload.ToRateLimiterOptions()));
+            options.AddPolicy(HttpApiRateLimitPolicies.EdgeHostPlcStateUpload, context =>
+                RateLimitPartition.GetTokenBucketLimiter(
+                    RateLimitPartitionKeyResolver.ResolveEdgeUploadPartitionKey(context),
+                    _ => rateLimiting.EdgeHostPlcStateUpload.ToRateLimiterOptions()));
         });
 
         builder.Services.AddCors(options =>

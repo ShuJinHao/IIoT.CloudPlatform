@@ -9,7 +9,7 @@ namespace IIoT.Core.Employees.Aggregates.Employees;
 /// 聚合根:员工/操作员
 /// 包含机台级管辖权(精细颗粒)。
 /// </summary>
-public class Employee : BaseEntity<Guid>
+public class Employee : BaseEntity<Guid>, IAggregateRoot<Guid>
 {
     private readonly List<EmployeeDeviceAccess> _deviceAccesses = [];
 

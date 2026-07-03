@@ -4,7 +4,7 @@ namespace IIoT.SharedKernel.Domain;
 
 public interface IDomainEvent : INotification;
 
-public abstract class BaseEntity<TId> : IEntity<TId>, IAggregateRoot<TId>
+public abstract class BaseEntity<TId> : IEntity<TId>
 {
     public TId Id { get; protected init; } = default!;
 

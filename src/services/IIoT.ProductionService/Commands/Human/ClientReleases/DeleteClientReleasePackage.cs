@@ -1,5 +1,6 @@
 using System.Text.Json;
 using IIoT.Core.Production.Aggregates.ClientReleases;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Core.Production.Specifications.ClientReleases;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.Services.Contracts;
@@ -32,7 +33,7 @@ public sealed record ClientReleaseFileDeletionResultDto(
 public sealed class DeleteClientReleasePackageHandler(
     IOptions<EdgeInstallerArtifactOptions> artifactOptions,
     IRepository<ClientReleaseComponent> componentRepository,
-    IReadRepository<DeviceClientVersionSnapshot> snapshotRepository,
+    IDeviceClientStateStore clientStateStore,
     ICurrentUser currentUser,
     IAuditTrailService auditTrailService)
     : ICommandHandler<DeleteClientReleasePackageCommand, Result<ClientReleaseFileDeletionResultDto>>
@@ -66,9 +67,7 @@ public sealed class DeleteClientReleasePackageHandler(
         string? reason,
         CancellationToken cancellationToken)
     {
-        var snapshots = await snapshotRepository.GetListAsync(
-            new DeviceClientVersionSnapshotsByDevicesSpec(),
-            cancellationToken);
+        var snapshots = await clientStateStore.GetVersionSnapshotsByDevicesAsync(cancellationToken: cancellationToken);
         var inUse = snapshots.Any(snapshot =>
             string.Equals(snapshot.HostVersion, release.Version, StringComparison.OrdinalIgnoreCase));
         if (inUse)
@@ -108,9 +107,7 @@ public sealed class DeleteClientReleasePackageHandler(
         string? reason,
         CancellationToken cancellationToken)
     {
-        var snapshots = await snapshotRepository.GetListAsync(
-            new DeviceClientVersionSnapshotsByDevicesSpec(),
-            cancellationToken);
+        var snapshots = await clientStateStore.GetVersionSnapshotsByDevicesAsync(cancellationToken: cancellationToken);
         var inUse = snapshots.Any(snapshot => snapshot.InstalledPlugins.Any(plugin =>
             string.Equals(plugin.ModuleId, component.ComponentKey, StringComparison.OrdinalIgnoreCase)
             && string.Equals(plugin.Version, release.Version, StringComparison.OrdinalIgnoreCase)));

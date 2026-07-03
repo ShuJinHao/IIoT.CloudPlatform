@@ -5,7 +5,7 @@ namespace IIoT.Core.Production.Aggregates.ClientReleases;
 /// <summary>
 /// Edge 客户端发布组件聚合根。宿主和工序插件统一由该聚合承载版本、发布素材和生命周期。
 /// </summary>
-public sealed class ClientReleaseComponent : BaseEntity<Guid>
+public sealed class ClientReleaseComponent : BaseEntity<Guid>, IAggregateRoot<Guid>
 {
     public const string HostComponentKey = "EdgeHost";
 

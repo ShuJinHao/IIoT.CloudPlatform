@@ -1,4 +1,5 @@
 using IIoT.Core.Production.Aggregates.ClientReleases;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Core.Production.Specifications.ClientReleases;
 using IIoT.SharedKernel.Repository;
 using Microsoft.Extensions.Options;
@@ -24,7 +25,7 @@ public interface IClientReleaseRetentionService : IClientReleaseRetentionPolicyR
 public sealed class ClientReleaseRetentionService(
     IRepository<ClientReleaseRetentionPolicy> policyRepository,
     IRepository<ClientReleaseComponent> componentRepository,
-    IReadRepository<DeviceClientVersionSnapshot> snapshotRepository,
+    IDeviceClientStateStore clientStateStore,
     IOptions<EdgeReleaseRetentionOptions> options)
     : IClientReleaseRetentionService
 {
@@ -68,9 +69,7 @@ public sealed class ClientReleaseRetentionService(
             return;
         }
 
-        var snapshots = await snapshotRepository.GetListAsync(
-            new DeviceClientVersionSnapshotsByDevicesSpec(),
-            cancellationToken);
+        var snapshots = await clientStateStore.GetVersionSnapshotsByDevicesAsync(cancellationToken: cancellationToken);
 
         foreach (var release in ordered.Skip(maxVersions))
         {
@@ -112,9 +111,7 @@ public sealed class ClientReleaseRetentionService(
             return;
         }
 
-        var snapshots = await snapshotRepository.GetListAsync(
-            new DeviceClientVersionSnapshotsByDevicesSpec(),
-            cancellationToken);
+        var snapshots = await clientStateStore.GetVersionSnapshotsByDevicesAsync(cancellationToken: cancellationToken);
 
         foreach (var release in ordered.Skip(maxVersions))
         {

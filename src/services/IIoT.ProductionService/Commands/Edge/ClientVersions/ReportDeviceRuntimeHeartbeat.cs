@@ -1,9 +1,8 @@
 using IIoT.Core.Production.Aggregates.ClientReleases;
-using IIoT.Core.Production.Specifications.ClientReleases;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.Services.Contracts;
 using IIoT.SharedKernel.Messaging;
-using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
 
 namespace IIoT.ProductionService.Commands.ClientVersions;
@@ -23,8 +22,7 @@ public sealed record ReportDeviceRuntimeHeartbeatCommand(
 
 public sealed class ReportDeviceRuntimeHeartbeatHandler(
     IDeviceIdentityQueryService deviceIdentityQueryService,
-    IRepository<EdgeDeviceRuntimeHeartbeat> repository,
-    IRepository<DeviceClientState> stateRepository)
+    IDeviceClientStateStore clientStateStore)
     : ICommandHandler<ReportDeviceRuntimeHeartbeatCommand, Result<DeviceRuntimeHeartbeatResultDto>>
 {
     public async Task<Result<DeviceRuntimeHeartbeatResultDto>> Handle(
@@ -45,8 +43,9 @@ public sealed class ReportDeviceRuntimeHeartbeatHandler(
             return Result.Failure("运行心跳上报失败: ClientCode 与 DeviceId 不匹配");
         }
 
-        var heartbeat = await repository.GetSingleOrDefaultAsync(
-            new EdgeDeviceRuntimeHeartbeatByIdentitySpec(request.DeviceId, clientCode),
+        var heartbeat = await clientStateStore.GetRuntimeHeartbeatByIdentityAsync(
+            request.DeviceId,
+            clientCode,
             cancellationToken);
         if (heartbeat is null)
         {
@@ -62,7 +61,7 @@ public sealed class ReportDeviceRuntimeHeartbeatHandler(
                 request.ReportedAtUtc,
                 request.LocalIpAddresses,
                 request.RemoteIpAddress);
-            repository.Add(heartbeat);
+            clientStateStore.AddRuntimeHeartbeat(heartbeat);
         }
         else
         {
@@ -78,18 +77,16 @@ public sealed class ReportDeviceRuntimeHeartbeatHandler(
                 request.RemoteIpAddress);
         }
 
-        var state = await stateRepository.GetSingleOrDefaultAsync(
-            new DeviceClientStateByIdentitySpec(request.DeviceId, clientCode),
-            cancellationToken);
+        var state = await clientStateStore.GetStateByIdentityAsync(request.DeviceId, clientCode, cancellationToken);
         if (state is null)
         {
             state = new DeviceClientState(request.DeviceId, clientCode);
-            stateRepository.Add(state);
+            clientStateStore.AddState(state);
         }
 
         state.ApplyRuntimeHeartbeat(heartbeat);
 
-        await stateRepository.SaveChangesAsync(cancellationToken);
+        await clientStateStore.SaveChangesAsync(cancellationToken);
         return Result.Success(new DeviceRuntimeHeartbeatResultDto(
             heartbeat.DeviceId,
             heartbeat.LastHeartbeatAtUtc));

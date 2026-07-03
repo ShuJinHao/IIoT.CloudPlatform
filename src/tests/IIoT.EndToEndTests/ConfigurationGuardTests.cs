@@ -93,6 +93,66 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
+    public void EdgeHostSeedOptions_Load_ShouldDefaultDisabledWithoutWritingBusinessData()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+
+        var options = EdgeHostSeedOptions.Load(configuration);
+
+        options.Enabled.Should().BeFalse();
+        options.Hosts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void EdgeHostSeedOptions_Load_ShouldValidateEnabledHostsAndDuplicatePlcs()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["EdgeHostSeeds:Enabled"] = "true",
+                ["EdgeHostSeeds:Hosts:0:ClientCode"] = "edge-host-001",
+                ["EdgeHostSeeds:Hosts:0:HostName"] = "模切上位机",
+                ["EdgeHostSeeds:Hosts:0:PlcBindings:0:PlcCode"] = "plc-cut-01",
+                ["EdgeHostSeeds:Hosts:0:PlcBindings:0:PlcName"] = "模切 PLC 01",
+                ["EdgeHostSeeds:Hosts:0:PlcBindings:1:PlcCode"] = "PLC-CUT-01",
+                ["EdgeHostSeeds:Hosts:0:PlcBindings:1:PlcName"] = "模切 PLC 01 重复"
+            })
+            .Build();
+
+        var act = () => EdgeHostSeedOptions.Load(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*重复 PLC*");
+    }
+
+    [Fact]
+    public void EdgeHostSeedOptions_Load_ShouldUseManualOverrideSafeDefaults()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["EdgeHostSeeds:Enabled"] = "true",
+                ["EdgeHostSeeds:Hosts:0:ClientCode"] = "edge-host-002",
+                ["EdgeHostSeeds:Hosts:0:HostName"] = "模切上位机",
+                ["EdgeHostSeeds:Hosts:0:PlcBindings:0:PlcCode"] = "plc-cut-02",
+                ["EdgeHostSeeds:Hosts:0:PlcBindings:0:PlcName"] = "模切 PLC 02"
+            })
+            .Build();
+
+        var options = EdgeHostSeedOptions.Load(configuration);
+
+        var host = options.Hosts.Single();
+        host.Enabled.Should().BeTrue();
+        host.UpdateExisting.Should().BeFalse();
+        host.AddMissingBindingsToExistingHost.Should().BeFalse();
+        host.UpdateExistingBindings.Should().BeFalse();
+        host.PlcBindings.Single().Enabled.Should().BeTrue();
+        host.PlcBindings.Single().UpdateExisting.Should().BeFalse();
+    }
+
+    [Fact]
     public void AppHost_ShouldWireSeedAdminParametersIntoMigrationProject()
     {
         var appHostSource = File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.AppHost", "AppHost.cs"));
@@ -217,6 +277,23 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
+    public void MigrationWorkApp_EdgeHostSeeds_ShouldBeExplicitAndDefaultDisabled()
+    {
+        var optionsSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.MigrationWorkApp", "SeedData", "EdgeHostSeedOptions.cs"));
+        var orchestratorSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.MigrationWorkApp", "DatabaseInitializationOrchestrator.cs"));
+        var appSettingsSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.MigrationWorkApp", "appsettings.json"));
+
+        optionsSource.Should().Contain("SectionName = \"EdgeHostSeeds\"");
+        optionsSource.Should().Contain("AddMissingBindingsToExistingHost");
+        optionsSource.Should().Contain("UpdateExistingBindings");
+        orchestratorSource.Should().Contain("SeedEdgeHostDataAsync");
+        appSettingsSource.Should().NotContain("EdgeHostSeeds");
+    }
+
+    [Fact]
     public void EdgeBootstrapController_ShouldRequireClientCodeAndBootstrapSecret()
     {
         var controllerSource = File.ReadAllText(
@@ -315,6 +392,48 @@ public sealed class ConfigurationGuardTests
         }
 
         invalidRoutes.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void HumanEdgeHostController_ShouldExposeOnlyHumanManagementRoutes()
+    {
+        var source = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Human", "HumanEdgeHostController.cs"));
+
+        source.Should().Contain("[Route(\"api/v1/human/edge-hosts\")]");
+        source.Should().Contain("[HttpGet]");
+        source.Should().Contain("[HttpGet(\"{id:guid}\")]");
+        source.Should().Contain("[HttpGet(\"{id:guid}/plc-runtime-states\")]");
+        source.Should().Contain("[HttpGet(\"{id:guid}/plc-capacity-summary\")]");
+        source.Should().Contain("[HttpPost]");
+        source.Should().Contain("[HttpPut(\"{id:guid}\")]");
+        source.Should().Contain("[HttpPost(\"{id:guid}/enable\")]");
+        source.Should().Contain("[HttpPost(\"{id:guid}/disable\")]");
+        source.Should().Contain("[HttpDelete(\"{id:guid}\")]");
+        source.Should().Contain("[HttpPost(\"{id:guid}/plc-bindings\")]");
+        source.Should().Contain("[HttpPut(\"{id:guid}/plc-bindings/{bindingId:guid}\")]");
+        source.Should().Contain("[HttpPost(\"{id:guid}/plc-bindings/{bindingId:guid}/enable\")]");
+        source.Should().Contain("[HttpPost(\"{id:guid}/plc-bindings/{bindingId:guid}/disable\")]");
+        source.Should().Contain("[HttpDelete(\"{id:guid}/plc-bindings/{bindingId:guid}\")]");
+        source.Should().Contain("HttpApiRateLimitPolicies.GeneralApi");
+        source.Should().NotContain("api/v1/edge/");
+        source.Should().NotContain("api/v1/ai/");
+        source.Should().NotContain("api/v1/public/");
+    }
+
+    [Fact]
+    public void EdgeHostPlcRuntimeStateController_ShouldExposeOnlyEdgeReportRoute()
+    {
+        var source = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Edge", "EdgeHostPlcRuntimeStateController.cs"));
+
+        source.Should().Contain("[Route(\"api/v1/edge/edge-hosts/plc-runtime-states\")]");
+        source.Should().Contain("HttpApiPolicies.RequireEdgeDeviceToken");
+        source.Should().Contain("[HttpPost]");
+        source.Should().Contain("HttpApiRateLimitPolicies.EdgeHostPlcStateUpload");
+        source.Should().NotContain("api/v1/human/");
+        source.Should().NotContain("api/v1/ai/");
+        source.Should().NotContain("api/v1/public/");
     }
 
     [Fact]

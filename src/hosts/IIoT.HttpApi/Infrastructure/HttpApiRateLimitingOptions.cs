@@ -15,6 +15,7 @@ public sealed class HttpApiRateLimitingOptions
     public TokenBucketPolicyOptions CapacityUpload { get; set; } = new();
     public TokenBucketPolicyOptions DeviceLogUpload { get; set; } = new();
     public TokenBucketPolicyOptions PassStationUpload { get; set; } = new();
+    public TokenBucketPolicyOptions EdgeHostPlcStateUpload { get; set; } = new();
 
     public void Validate()
     {
@@ -27,6 +28,7 @@ public sealed class HttpApiRateLimitingOptions
         CapacityUpload.Validate($"{SectionName}:CapacityUpload");
         DeviceLogUpload.Validate($"{SectionName}:DeviceLogUpload");
         PassStationUpload.Validate($"{SectionName}:PassStationUpload");
+        EdgeHostPlcStateUpload.Validate($"{SectionName}:EdgeHostPlcStateUpload");
     }
 }
 

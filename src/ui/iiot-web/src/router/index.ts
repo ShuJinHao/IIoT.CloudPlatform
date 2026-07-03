@@ -5,6 +5,7 @@ import { clientReleaseRoutes } from '../features/client-releases/routes';
 import { dashboardRoutes } from '../features/dashboard/routes';
 import { deviceLogRoutes } from '../features/device-logs/routes';
 import { deviceRoutes } from '../features/devices/routes';
+import { edgeHostRoutes } from '../features/edge-hosts/routes';
 import { employeeRoutes } from '../features/employees/routes';
 import { passStationRoutes } from '../features/pass-station/routes';
 import { processRoutes } from '../features/processes/routes';
@@ -39,6 +40,7 @@ const routes: Array<RouteRecordRaw> = [
         redirect: { name: 'MasterDataProcesses' }
       },
       ...deviceRoutes,
+      ...edgeHostRoutes,
       ...recipeRoutes,
       ...passStationRoutes,
       ...capacityRoutes,

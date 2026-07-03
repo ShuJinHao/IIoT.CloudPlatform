@@ -22,6 +22,7 @@ public sealed class RateLimitingConfigurationGuardTests
         configuration.GetValue<int>("RateLimiting:CapacityUpload:TokenLimit").Should().Be(120);
         configuration.GetValue<int>("RateLimiting:DeviceLogUpload:TokenLimit").Should().Be(120);
         configuration.GetValue<int>("RateLimiting:PassStationUpload:TokenLimit").Should().Be(600);
+        configuration.GetValue<int>("RateLimiting:EdgeHostPlcStateUpload:TokenLimit").Should().Be(120);
     }
 
     [Fact]
@@ -35,6 +36,8 @@ public sealed class RateLimitingConfigurationGuardTests
             FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Edge", "EdgeDeviceLogController.cs"));
         var passStationSource = File.ReadAllText(
             FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Edge", "EdgePassStationController.cs"));
+        var edgeHostPlcStateSource = File.ReadAllText(
+            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Edge", "EdgeHostPlcRuntimeStateController.cs"));
         var bootstrapSource = File.ReadAllText(
             FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Edge", "EdgeBootstrapController.cs"));
         var aiReadSource = File.ReadAllText(
@@ -44,6 +47,7 @@ public sealed class RateLimitingConfigurationGuardTests
             FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Human", "HumanCapacityController.cs"),
             FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Human", "HumanDeviceController.cs"),
             FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Human", "HumanDeviceLogController.cs"),
+            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Human", "HumanEdgeHostController.cs"),
             FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Human", "HumanEmployeeController.cs"),
             FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Human", "HumanPassStationController.cs"),
             FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Human", "HumanRecipeController.cs"),
@@ -60,6 +64,7 @@ public sealed class RateLimitingConfigurationGuardTests
         capacitySource.Should().Contain("HttpApiRateLimitPolicies.CapacityUpload");
         deviceLogSource.Should().Contain("HttpApiRateLimitPolicies.DeviceLogUpload");
         passStationSource.Should().Contain("HttpApiRateLimitPolicies.PassStationUpload");
+        edgeHostPlcStateSource.Should().Contain("HttpApiRateLimitPolicies.EdgeHostPlcStateUpload");
 
         foreach (var controller in humanControllers)
         {
@@ -83,7 +88,8 @@ public sealed class RateLimitingConfigurationGuardTests
         deployNginx.Should().NotContain("location = /api/v1/human/identity/edge-login");
         deployNginx.Should().NotContain("location /api/v1/edge/bootstrap/");
         deployNginx.Should().Contain("limit_req zone=refresh_limit burst=30 nodelay;");
-        deployNginx.Should().Contain("location ~ ^/api/v1/edge/(capacity/hourly|device-logs|pass-stations|process-records)");
+        deployNginx.Should().Contain(
+            "location ~ ^/api/v1/edge/(capacity/hourly|device-logs|pass-stations|process-records|edge-hosts/plc-runtime-states)");
         deployNginx.Should().Contain("limit_req zone=edge_upload_limit burst=2000 nodelay;");
     }
 
