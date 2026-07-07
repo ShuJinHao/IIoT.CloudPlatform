@@ -84,7 +84,7 @@ public sealed class ApplicationFlowGuardTests
             {
                 Id = Guid.NewGuid().ToString(),
                 UserName = "admin-001",
-                Role = SystemRoles.Admin,
+                Roles = [SystemRoles.Admin],
                 IsAuthenticated = true
             },
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
@@ -129,7 +129,7 @@ public sealed class ApplicationFlowGuardTests
             {
                 Id = Guid.NewGuid().ToString(),
                 UserName = "operator-001",
-                Role = "Operator",
+                Roles = ["Operator"],
                 IsAuthenticated = true
             },
             new StubCurrentUserDeviceAccessService(),
@@ -165,7 +165,7 @@ public sealed class ApplicationFlowGuardTests
             {
                 Id = Guid.NewGuid().ToString(),
                 UserName = "admin-001",
-                Role = SystemRoles.Admin,
+                Roles = [SystemRoles.Admin],
                 IsAuthenticated = true
             },
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
@@ -197,7 +197,7 @@ public sealed class ApplicationFlowGuardTests
             {
                 Id = Guid.NewGuid().ToString(),
                 UserName = "admin-001",
-                Role = SystemRoles.Admin,
+                Roles = [SystemRoles.Admin],
                 IsAuthenticated = true
             },
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
@@ -845,7 +845,10 @@ public sealed class ApplicationFlowGuardTests
                 UploadReceiveRegistrations: 6,
                 EmployeeDeviceAccesses: 7,
                 RefreshTokenSessions: 8,
-                RuntimeHeartbeats: 1),
+                RuntimeHeartbeats: 1,
+                EdgeHosts: 1,
+                EdgeHostPlcBindings: 2,
+                EdgeHostPlcRuntimeStates: 3),
             AffectedEmployeeIds = [employeeId]
         };
         var cacheInvalidation = new RecordingDeviceCacheInvalidationService();
@@ -854,7 +857,7 @@ public sealed class ApplicationFlowGuardTests
             new TestCurrentUser
             {
                 Id = Guid.NewGuid().ToString(),
-                Role = SystemRoles.Admin,
+                Roles = [SystemRoles.Admin],
                 UserName = "admin",
                 IsAuthenticated = true
             },
@@ -877,7 +880,9 @@ public sealed class ApplicationFlowGuardTests
             && x.TargetIdOrKey == device.Id.ToString()
             && x.Succeeded
             && x.Summary.Contains("\"DeviceCascadeDelete\"", StringComparison.Ordinal)
-            && x.Summary.Contains("\"device_logs\":4", StringComparison.Ordinal));
+            && x.Summary.Contains("\"device_logs\":4", StringComparison.Ordinal)
+            && x.Summary.Contains("\"edge_hosts\":1", StringComparison.Ordinal)
+            && x.Summary.Contains("\"edge_host_plc_runtime_states\":3", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -2231,14 +2236,11 @@ public sealed class ApplicationFlowGuardTests
         {
             SingleOrDefaultResult = device
         };
-        var cache = new RecordingCacheService();
         var refreshTokenService = new StubRefreshTokenService();
         var handler = new GetDeviceByInstanceHandler(
             repository,
-            cache,
             new StubJwtTokenGenerator(),
-            refreshTokenService,
-            Options.Create(new BootstrapAuthOptions()));
+            refreshTokenService);
 
         var result = await handler.Handle(
             new GetDeviceByInstanceQuery($"  {device.Code.ToLowerInvariant()}  ", bootstrapSecret),
@@ -2248,7 +2250,6 @@ public sealed class ApplicationFlowGuardTests
         var session = Assert.IsType<BootstrapDeviceSessionResult>(result.Value);
         Assert.Equal(device.Id, session.DeviceIdentity.Id);
         Assert.StartsWith("refresh-", session.RefreshToken);
-        Assert.Null(cache.LastSetKey);
         Assert.Contains(refreshTokenService.Issues, x =>
             x.ActorType == IIoT.Services.Contracts.Identity.IIoTClaimTypes.EdgeDeviceActor
             && x.SubjectId == device.Id);
@@ -2259,7 +2260,7 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
-    public async Task GetDeviceByInstanceHandler_ShouldRequireBootstrapSecret_WhenEnabled()
+    public async Task GetDeviceByInstanceHandler_ShouldAlwaysRequireBootstrapSecret()
     {
         var bootstrapSecret = BootstrapSecretGenerator.Generate();
         var device = new Device("Device-Bootstrap", "DEV-SECRET01", Guid.NewGuid());
@@ -2270,10 +2271,8 @@ public sealed class ApplicationFlowGuardTests
         };
         var handler = new GetDeviceByInstanceHandler(
             repository,
-            new RecordingCacheService(),
             new StubJwtTokenGenerator(),
-            new StubRefreshTokenService(),
-            Options.Create(new BootstrapAuthOptions { RequireSecret = true }));
+            new StubRefreshTokenService());
 
         var missingSecret = await handler.Handle(
             new GetDeviceByInstanceQuery(device.Code),
@@ -2311,7 +2310,7 @@ public sealed class ApplicationFlowGuardTests
             {
                 Id = Guid.NewGuid().ToString(),
                 UserName = "admin-001",
-                Role = SystemRoles.Admin,
+                Roles = [SystemRoles.Admin],
                 IsAuthenticated = true
             },
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },

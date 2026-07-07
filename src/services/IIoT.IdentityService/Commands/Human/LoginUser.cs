@@ -17,6 +17,8 @@ public class LoginUserHandler(
     IRefreshTokenService refreshTokenService)
     : ICommandHandler<LoginUserCommand, Result<HumanIdentitySessionResult>>
 {
+    private const string InvalidLoginMessage = "账号不存在或密码错误";
+
     public async Task<Result<HumanIdentitySessionResult>> Handle(
         LoginUserCommand request,
         CancellationToken cancellationToken)
@@ -27,12 +29,12 @@ public class LoginUserHandler(
 
         if (account is null)
         {
-            return Result.Failure("工号不存在或密码错误");
+            return Result.Failure(InvalidLoginMessage);
         }
 
         if (!account.IsEnabled)
         {
-            return Result.Failure("账号已停用，请联系管理员");
+            return Result.Failure(InvalidLoginMessage);
         }
 
         var checkResult = await identityPasswordService.CheckPasswordAsync(
@@ -42,7 +44,7 @@ public class LoginUserHandler(
 
         if (!checkResult.IsSuccess || !checkResult.Value)
         {
-            return Result.Failure("工号不存在或密码错误");
+            return Result.Failure(InvalidLoginMessage);
         }
 
         var roles = await identityAccountStore.GetRolesAsync(account.Id, cancellationToken);

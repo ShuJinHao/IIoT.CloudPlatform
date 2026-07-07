@@ -1373,7 +1373,7 @@ public sealed class ClientReleaseBehaviorTests
 
         public string? UserName { get; init; } = "tester";
 
-        public string? Role { get; init; } = "Administrator";
+        public IReadOnlyCollection<string> Roles { get; init; } = ["Administrator"];
 
         public string? ActorType { get; init; }
 

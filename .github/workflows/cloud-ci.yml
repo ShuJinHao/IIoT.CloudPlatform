@@ -62,6 +62,27 @@ jobs:
       - name: Run configuration guard tests
         run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --filter ConfigurationGuardTests
 
+      - name: Validate deploy script syntax
+        run: |
+          sh -n deploy/scripts/release-common.sh
+          sh -n deploy/scripts/pre-deploy-check.sh
+          sh -n deploy/scripts/post-deploy-check.sh
+          sh -n deploy/scripts/ops-check.sh
+          sh -n deploy/scripts/check-container-nonroot-readiness.sh
+          sh -n deploy/scripts/deploy-release.sh
+          sh -n deploy/scripts/ensure-oidc-signing-cert.sh
+          sh -n deploy/scripts/mirror-third-party-images.sh
+          sh -n deploy/scripts/postgres-backup.sh
+          sh -n deploy/scripts/postgres-restore.sh
+          sh -n deploy/scripts/postgres-verify-backup.sh
+          sh -n deploy/scripts/rollback-release.sh
+          sh -n deploy/scripts/verify-edge-installer-catalog.sh
+          bash -n deploy/scripts/build-and-push.sh
+          bash -n deploy/scripts/harbor-retention.sh
+          bash -n deploy/scripts/local-release.sh
+          bash -n deploy/scripts/post-release-cleanup.sh
+          pwsh -NoProfile -Command '$tokens = $null; $errors = $null; $null = [System.Management.Automation.Language.Parser]::ParseFile("deploy/scripts/InvokeEdgeInstallerPackageDownload.ps1", [ref]$tokens, [ref]$errors); if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }'
+
       - name: Run end-to-end tests
         if: github.event_name == 'workflow_dispatch' && inputs.include_end_to_end == true
         timeout-minutes: 15

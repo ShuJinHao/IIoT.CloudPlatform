@@ -127,7 +127,10 @@ public class DeleteDeviceHandler(
                 edge_device_runtime_heartbeats = impact.RuntimeHeartbeats,
                 upload_receive_registrations = impact.UploadReceiveRegistrations,
                 employee_device_accesses = impact.EmployeeDeviceAccesses,
-                refresh_token_sessions = impact.RefreshTokenSessions
+                refresh_token_sessions = impact.RefreshTokenSessions,
+                edge_hosts = impact.EdgeHosts,
+                edge_host_plc_bindings = impact.EdgeHostPlcBindings,
+                edge_host_plc_runtime_states = impact.EdgeHostPlcRuntimeStates
             }
         });
     }

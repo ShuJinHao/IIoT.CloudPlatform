@@ -15,8 +15,11 @@ SSH_TIMEOUT_SECONDS="${SSH_TIMEOUT_SECONDS:-2400}"
 usage() {
   cat <<'EOF'
 Usage:
-  deploy/scripts/local-release.sh --services httpapi,web --ssh-target root@10.98.90.154
-  deploy/scripts/local-release.sh --all --ssh-target root@10.98.90.154
+  REGISTRY=<harbor-registry> deploy/scripts/local-release.sh --services httpapi,gateway,dataworker,migration --ssh-target deploy@<cloud-host>
+  REGISTRY=<harbor-registry> VITE_AICOPILOT_CHALLENGE_URL=http://<aicopilot-browser-reachable-host>:82/api/identity/cloud-oidc/challenge \
+    deploy/scripts/local-release.sh --services web --ssh-target deploy@<cloud-host>
+  REGISTRY=<harbor-registry> VITE_AICOPILOT_CHALLENGE_URL=http://<aicopilot-browser-reachable-host>:82/api/identity/cloud-oidc/challenge \
+    deploy/scripts/local-release.sh --all --ssh-target deploy@<cloud-host>
 
 Builds selected Cloud images locally, pushes Harbor tags, then SSH-triggers
 the server-side deploy/scripts/deploy-release.sh entrypoint.
@@ -77,6 +80,16 @@ fi
 if [ -z "$SSH_TARGET" ]; then
   fail "Cloud local release requires DEPLOY_SSH_TARGET or --ssh-target."
 fi
+case "$SSH_TARGET" in
+  *.example*|*internal.example*)
+    fail "SSH target still uses the documentation example domain: $SSH_TARGET"
+    ;;
+  root@*)
+    if [ "${ALLOW_ROOT_SSH_DEPLOY:-}" != "emergency" ]; then
+      fail "Cloud local release refuses root SSH by default. Use a dedicated deploy user, or set ALLOW_ROOT_SSH_DEPLOY=emergency for an approved break-glass path."
+    fi
+    ;;
+esac
 
 run_with_timeout() {
   local seconds="$1"

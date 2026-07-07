@@ -31,6 +31,9 @@ public sealed record DeviceDeletionImpactDto(
     long UploadReceiveRegistrations,
     long EmployeeDeviceAccesses,
     long RefreshTokenSessions,
+    long EdgeHosts,
+    long EdgeHostPlcBindings,
+    long EdgeHostPlcRuntimeStates,
     long TotalAssociatedRows);
 
 public sealed class GetDeviceDeletionImpactHandler(
@@ -77,6 +80,9 @@ public sealed class GetDeviceDeletionImpactHandler(
             impact.UploadReceiveRegistrations,
             impact.EmployeeDeviceAccesses,
             impact.RefreshTokenSessions,
+            impact.EdgeHosts,
+            impact.EdgeHostPlcBindings,
+            impact.EdgeHostPlcRuntimeStates,
             impact.TotalAssociatedRows));
     }
 }

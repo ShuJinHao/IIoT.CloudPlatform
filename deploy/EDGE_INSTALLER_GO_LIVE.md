@@ -47,7 +47,7 @@ cd src/ui/iiot-web && npm run build
 
 1. 推送或合并到 `main`。
 2. 在本机确认 HEAD 已推送且工作区干净。
-3. 运行 `DEPLOY_SSH_TARGET=root@10.98.90.154 ./deploy/scripts/local-release.sh --services web`；如后端接口也改动，则按实际服务传入 `httpapi,gateway,dataworker,migration,web` 的子集。
+3. 运行 `REGISTRY=<harbor-registry> VITE_AICOPILOT_CHALLENGE_URL=http://<aicopilot-browser-reachable-host>:82/api/identity/cloud-oidc/challenge DEPLOY_SSH_TARGET=deploy@<cloud-host> ./deploy/scripts/local-release.sh --services web`；如后端接口也改动，则按实际服务传入 `httpapi,gateway,dataworker,migration,web` 的子集。
 4. 确认服务器 `post-deploy-check.sh`、`ops-check.sh` 和发布后清理摘要通过。
 
 本机 `build-and-push.sh` 会给 Web Dockerfile 传入 `VITE_AICOPILOT_CHALLENGE_URL`，并使用 Harbor mirror 中的 `node:22-slim`、`nginx:1.27-alpine` 基础镜像。服务器不依赖 Docker Hub。单镜像 build/push 超过 15 分钟必须停止诊断，不得等待灾备 GitHub workflow。
@@ -69,7 +69,6 @@ DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh 
 部署前确认 `.env` 里保持密钥模式：
 
 ```text
-BOOTSTRAP_AUTH_REQUIRE_SECRET=true
 EDGE_UPDATES_DIR=/data/iiot-platform/edge-client/edge-updates
 ```
 
@@ -105,7 +104,7 @@ workflow_dispatch
 pwsh <IIoT.EdgeClient>\scripts\LocalPublishAndDeploy.ps1 `
   -Channel stable `
   -Transport http `
-  -CloudApiBaseUrl http://10.98.90.154:81/api/v1 `
+  -CloudApiBaseUrl http://<cloud-host>:81/api/v1 `
   -CloudToken $env:IIOT_CLOUD_RELEASE_TOKEN `
   -ReleaseNotesPath <本次更新说明.md> `
   -UploadRateLimitMbps 100
@@ -139,7 +138,7 @@ find /data/iiot-platform/edge-client/edge-updates/installers/stable/1.2.0 -maxde
 
 ```sh
 cd deploy
-BASE_URL=http://10.98.90.154:81 \
+BASE_URL=http://<cloud-host>:81 \
 CHANNEL=stable \
 TARGET_RUNTIME=win-x64 \
 EXPECTED_VERSION=1.2.0 \
@@ -180,7 +179,7 @@ curl -sS -I http://127.0.0.1:81/edge-updates/installers/stable/1.2.0/installer-a
 
 在 Windows 机器执行：
 
-1. 登录 `http://10.98.90.154:81`。
+1. 登录 `http://<cloud-host>:81`。
 2. 进入“客户端下载中心 -> 首装下载”。
 3. 勾选插件，选择测试设备唯一码。
 4. 点击“下载安装包”。
@@ -223,7 +222,7 @@ pwsh <IIoT.EdgeClient>\scripts\InvokeEdgeInstallerWindowsAcceptance.ps1 `
 
 ```powershell
 pwsh .\deploy\scripts\InvokeEdgeInstallerPackageDownload.ps1 `
-  -CloudApiBaseUrl http://10.98.90.154:81/api/v1 `
+  -CloudApiBaseUrl http://<cloud-host>:81/api/v1 `
   -CloudToken <publish-or-admin-token> `
   -DeviceId <测试设备 id> `
   -ModuleId Homogenization `
@@ -242,4 +241,4 @@ pwsh .\deploy\scripts\InvokeEdgeInstallerPackageDownload.ps1 `
 - 接口 404：线上 HttpApi 没有 `installer-package`。
 - “安装素材不存在”：素材未上传到挂载目录，或 `EdgeInstallerArtifacts__RootPath` 不一致。
 - “服务器内部错误”且日志含 `System.OutOfMemoryException`：线上仍是旧版 `installer-package`，还在内存里重打旧 `layout.zip` 后 `ToArray()`。必须部署目录组合版本，并重新上传目录型素材；Cloud 只读取宿主/插件目录，把绑定 JSON 注入本次下载 payload，不写回共享素材目录。
-- bootstrap 失败：检查 `BOOTSTRAP_AUTH_REQUIRE_SECRET=true`、设备是否被重新生成安装包、Windows 使用的是否是最新 `.exe`。
+- bootstrap 失败：检查客户端是否携带 `X-IIoT-Bootstrap-Secret`、设备是否被重新生成安装包、Windows 使用的是否是最新 `.exe`。

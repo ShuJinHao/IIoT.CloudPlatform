@@ -34,8 +34,33 @@ public sealed class IdentityPasswordService(UserManager<ApplicationUser> userMan
             return Result.Success(false);
         }
 
+        if (!await userManager.GetLockoutEnabledAsync(user))
+        {
+            var lockoutEnableResult = await userManager.SetLockoutEnabledAsync(user, true);
+            if (!lockoutEnableResult.Succeeded)
+            {
+                return Result.Failure(lockoutEnableResult.Errors.Select(e => e.Description).ToArray());
+            }
+        }
+
+        if (await userManager.IsLockedOutAsync(user))
+        {
+            return Result.Success(false);
+        }
+
         var isValid = await userManager.CheckPasswordAsync(user, password);
-        return Result.Success(isValid);
+        if (!isValid)
+        {
+            var failedResult = await userManager.AccessFailedAsync(user);
+            return failedResult.Succeeded
+                ? Result.Success(false)
+                : Result.Failure(failedResult.Errors.Select(e => e.Description).ToArray());
+        }
+
+        var resetResult = await userManager.ResetAccessFailedCountAsync(user);
+        return resetResult.Succeeded
+            ? Result.Success(true)
+            : Result.Failure(resetResult.Errors.Select(e => e.Description).ToArray());
     }
 
     public async Task<Result> ChangePasswordAsync(

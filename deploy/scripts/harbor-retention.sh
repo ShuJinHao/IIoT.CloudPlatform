@@ -75,6 +75,10 @@ if [ -z "$RAW_URL" ] || [ -z "$PROJECT" ] || [ -z "$USERNAME" ] || [ -z "$PASSWO
   usage
   exit 64
 fi
+if [[ "$PROJECT" == "." || "$PROJECT" == ".." || "$PROJECT" == *.example* || "$PROJECT" == *internal.example* || ! "$PROJECT" =~ ^[a-z0-9._-]+$ ]]; then
+  printf 'HARBOR_PROJECT/OCI_NAMESPACE must be a single Harbor project segment using lowercase letters, digits, dot, underscore, or hyphen: %s\n' "$PROJECT" >&2
+  exit 64
+fi
 
 if ! [[ "$KEEP" =~ ^[0-9]+$ ]] || [ "$KEEP" -lt 1 ]; then
   printf 'HARBOR_KEEP_SHA_TAGS must be a positive integer: %s\n' "$KEEP" >&2

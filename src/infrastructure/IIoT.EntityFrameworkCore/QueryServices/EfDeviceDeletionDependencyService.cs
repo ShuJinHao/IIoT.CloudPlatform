@@ -1,7 +1,4 @@
 using IIoT.Core.Employees.Aggregates.Employees;
-using IIoT.Core.Production.Aggregates.ClientReleases;
-using IIoT.EntityFrameworkCore.Identity;
-using IIoT.EntityFrameworkCore.Uploads;
 using IIoT.Services.Contracts.Identity;
 using Microsoft.EntityFrameworkCore;
 
@@ -14,49 +11,67 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
         Guid deviceId,
         CancellationToken cancellationToken = default)
     {
-        var recipes = await dbContext.Recipes.AnyAsync(recipe => recipe.DeviceId == deviceId, cancellationToken);
-        var capacities = await CountTableAsync("hourly_capacity", deviceId, cancellationToken) > 0;
-        var logs = await CountTableAsync("device_logs", deviceId, cancellationToken) > 0;
-        var passStations = await CountTableAsync("pass_station_records", deviceId, cancellationToken) > 0;
-        return new DeviceDeletionDependencies(recipes, capacities, logs, passStations);
+        var impact = await GetImpactAsync(deviceId, cancellationToken);
+        return new DeviceDeletionDependencies(
+            impact.Recipes > 0,
+            impact.Capacities > 0,
+            impact.DeviceLogs > 0,
+            impact.PassStations > 0);
     }
 
     public async Task<DeviceDeletionImpact> GetImpactAsync(
         Guid deviceId,
         CancellationToken cancellationToken = default)
     {
-        var recipes = await dbContext.Recipes.LongCountAsync(recipe => recipe.DeviceId == deviceId, cancellationToken);
-        var capacities = await CountTableAsync("hourly_capacity", deviceId, cancellationToken);
-        var deviceLogs = await CountTableAsync("device_logs", deviceId, cancellationToken);
-        var passStations = await CountTableAsync("pass_station_records", deviceId, cancellationToken);
-        var clientStates = await dbContext.DeviceClientStates.LongCountAsync(state => state.DeviceId == deviceId, cancellationToken);
-        var clientVersionSnapshots = await dbContext.DeviceClientVersionSnapshots.LongCountAsync(snapshot => snapshot.DeviceId == deviceId, cancellationToken);
-        var clientPluginVersions = await dbContext.Set<DeviceClientPluginVersion>()
-            .LongCountAsync(
-                plugin => dbContext.DeviceClientVersionSnapshots
-                    .Where(snapshot => snapshot.DeviceId == deviceId)
-                    .Select(snapshot => snapshot.Id)
-                    .Contains(plugin.DeviceClientVersionSnapshotId),
-                cancellationToken);
-        var runtimeHeartbeats = await dbContext.EdgeDeviceRuntimeHeartbeats.LongCountAsync(heartbeat => heartbeat.DeviceId == deviceId, cancellationToken);
-        var uploadReceiveRegistrations = await dbContext.UploadReceiveRegistrations.LongCountAsync(registration => registration.DeviceId == deviceId, cancellationToken);
-        var employeeDeviceAccesses = await dbContext.Set<EmployeeDeviceAccess>().LongCountAsync(access => access.DeviceId == deviceId, cancellationToken);
-        var refreshTokenSessions = await dbContext.RefreshTokenSessions.LongCountAsync(
-            session => session.ActorType == IIoTClaimTypes.EdgeDeviceActor && session.SubjectId == deviceId,
-            cancellationToken);
+        var impact = await dbContext.Database.SqlQuery<DeviceDeletionImpactRow>($"""
+            select
+                (select count(*)::bigint from recipes where device_id = {deviceId}) as "Recipes",
+                (select count(*)::bigint from hourly_capacity where device_id = {deviceId}) as "Capacities",
+                (select count(*)::bigint from device_logs where device_id = {deviceId}) as "DeviceLogs",
+                (select count(*)::bigint from pass_station_records where device_id = {deviceId}) as "PassStations",
+                (select count(*)::bigint from edge_device_client_states where device_id = {deviceId}) as "ClientStates",
+                (select count(*)::bigint from edge_device_client_version_snapshots where device_id = {deviceId}) as "ClientVersionSnapshots",
+                (
+                    select count(*)::bigint
+                    from edge_device_client_plugin_versions plugin
+                    where plugin.device_client_version_snapshot_id in (
+                        select snapshot.id
+                        from edge_device_client_version_snapshots snapshot
+                        where snapshot.device_id = {deviceId}
+                    )
+                ) as "ClientPluginVersions",
+                (select count(*)::bigint from edge_device_runtime_heartbeats where device_id = {deviceId}) as "RuntimeHeartbeats",
+                (select count(*)::bigint from upload_receive_registrations where device_id = {deviceId}) as "UploadReceiveRegistrations",
+                (select count(*)::bigint from employee_device_accesses where device_id = {deviceId}) as "EmployeeDeviceAccesses",
+                (
+                    select count(*)::bigint
+                    from refresh_token_sessions
+                    where "ActorType" = {IIoTClaimTypes.EdgeDeviceActor} and "SubjectId" = {deviceId}
+                ) as "RefreshTokenSessions",
+                (select count(*)::bigint from edge_hosts where device_id = {deviceId}) as "EdgeHosts",
+                (
+                    select count(*)::bigint
+                    from edge_host_plc_bindings binding
+                    where binding.edge_host_id in (
+                        select host.id
+                        from edge_hosts host
+                        where host.device_id = {deviceId}
+                    )
+                ) as "EdgeHostPlcBindings",
+                (
+                    select count(*)::bigint
+                    from edge_host_plc_runtime_states state
+                    where state.device_id = {deviceId}
+                       or state.edge_host_id in (
+                           select host.id
+                           from edge_hosts host
+                           where host.device_id = {deviceId}
+                       )
+                ) as "EdgeHostPlcRuntimeStates"
+            """)
+            .SingleAsync(cancellationToken);
 
-        return new DeviceDeletionImpact(
-            recipes,
-            capacities,
-            deviceLogs,
-            passStations,
-            clientStates,
-            clientVersionSnapshots,
-            clientPluginVersions,
-            uploadReceiveRegistrations,
-            employeeDeviceAccesses,
-            refreshTokenSessions,
-            runtimeHeartbeats);
+        return impact.ToContract();
     }
 
     public async Task<DeviceCascadeDeletionResult> DeleteCascadeAsync(
@@ -73,43 +88,7 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
                 .Distinct()
                 .ToListAsync(cancellationToken);
 
-            await dbContext.Set<DeviceClientPluginVersion>()
-                .Where(plugin => dbContext.DeviceClientVersionSnapshots
-                    .Where(snapshot => snapshot.DeviceId == deviceId)
-                    .Select(snapshot => snapshot.Id)
-                    .Contains(plugin.DeviceClientVersionSnapshotId))
-                .ExecuteDeleteAsync(cancellationToken);
-            await dbContext.DeviceClientStates
-                .Where(state => state.DeviceId == deviceId)
-                .ExecuteDeleteAsync(cancellationToken);
-            await dbContext.DeviceClientVersionSnapshots
-                .Where(snapshot => snapshot.DeviceId == deviceId)
-                .ExecuteDeleteAsync(cancellationToken);
-            await dbContext.EdgeDeviceRuntimeHeartbeats
-                .Where(heartbeat => heartbeat.DeviceId == deviceId)
-                .ExecuteDeleteAsync(cancellationToken);
-            await dbContext.UploadReceiveRegistrations
-                .Where(registration => registration.DeviceId == deviceId)
-                .ExecuteDeleteAsync(cancellationToken);
-            await dbContext.Set<EmployeeDeviceAccess>()
-                .Where(access => access.DeviceId == deviceId)
-                .ExecuteDeleteAsync(cancellationToken);
-            await dbContext.RefreshTokenSessions
-                .Where(session => session.ActorType == IIoTClaimTypes.EdgeDeviceActor && session.SubjectId == deviceId)
-                .ExecuteDeleteAsync(cancellationToken);
-
-            await dbContext.Database.ExecuteSqlInterpolatedAsync(
-                $"delete from pass_station_records where device_id = {deviceId}",
-                cancellationToken);
-            await dbContext.Database.ExecuteSqlInterpolatedAsync(
-                $"delete from device_logs where device_id = {deviceId}",
-                cancellationToken);
-            await dbContext.Database.ExecuteSqlInterpolatedAsync(
-                $"delete from hourly_capacity where device_id = {deviceId}",
-                cancellationToken);
-            await dbContext.Recipes
-                .Where(recipe => recipe.DeviceId == deviceId)
-                .ExecuteDeleteAsync(cancellationToken);
+            await DeleteAssociatedRowsAsync(deviceId, cancellationToken);
 
             var device = await dbContext.Devices.SingleOrDefaultAsync(device => device.Id == deviceId, cancellationToken);
             if (device is not null)
@@ -129,23 +108,115 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
         }
     }
 
-    private async Task<long> CountTableAsync(
-        string tableName,
+    private async Task DeleteAssociatedRowsAsync(
         Guid deviceId,
         CancellationToken cancellationToken)
     {
-        return tableName switch
+        await dbContext.Database.ExecuteSqlInterpolatedAsync($"""
+            delete from edge_host_plc_runtime_states
+            where device_id = {deviceId}
+               or edge_host_id in (
+                   select id
+                   from edge_hosts
+                   where device_id = {deviceId}
+               );
+
+            delete from edge_host_plc_bindings
+            where edge_host_id in (
+                select id
+                from edge_hosts
+                where device_id = {deviceId}
+            );
+
+            delete from edge_hosts
+            where device_id = {deviceId};
+
+            delete from edge_device_client_plugin_versions
+            where device_client_version_snapshot_id in (
+                select id
+                from edge_device_client_version_snapshots
+                where device_id = {deviceId}
+            );
+
+            delete from edge_device_client_states
+            where device_id = {deviceId};
+
+            delete from edge_device_client_version_snapshots
+            where device_id = {deviceId};
+
+            delete from edge_device_runtime_heartbeats
+            where device_id = {deviceId};
+
+            delete from upload_receive_registrations
+            where device_id = {deviceId};
+
+            delete from employee_device_accesses
+            where device_id = {deviceId};
+
+            delete from refresh_token_sessions
+            where "ActorType" = {IIoTClaimTypes.EdgeDeviceActor} and "SubjectId" = {deviceId};
+
+            delete from pass_station_records
+            where device_id = {deviceId};
+
+            delete from device_logs
+            where device_id = {deviceId};
+
+            delete from hourly_capacity
+            where device_id = {deviceId};
+
+            delete from recipes
+            where device_id = {deviceId};
+            """, cancellationToken);
+    }
+
+    public sealed class DeviceDeletionImpactRow
+    {
+        public long Recipes { get; set; }
+
+        public long Capacities { get; set; }
+
+        public long DeviceLogs { get; set; }
+
+        public long PassStations { get; set; }
+
+        public long ClientStates { get; set; }
+
+        public long ClientVersionSnapshots { get; set; }
+
+        public long ClientPluginVersions { get; set; }
+
+        public long RuntimeHeartbeats { get; set; }
+
+        public long UploadReceiveRegistrations { get; set; }
+
+        public long EmployeeDeviceAccesses { get; set; }
+
+        public long RefreshTokenSessions { get; set; }
+
+        public long EdgeHosts { get; set; }
+
+        public long EdgeHostPlcBindings { get; set; }
+
+        public long EdgeHostPlcRuntimeStates { get; set; }
+
+        public DeviceDeletionImpact ToContract()
         {
-            "hourly_capacity" => await dbContext.Database
-                .SqlQuery<long>($"select count(*)::bigint as \"Value\" from hourly_capacity where device_id = {deviceId}")
-                .SingleAsync(cancellationToken),
-            "device_logs" => await dbContext.Database
-                .SqlQuery<long>($"select count(*)::bigint as \"Value\" from device_logs where device_id = {deviceId}")
-                .SingleAsync(cancellationToken),
-            "pass_station_records" => await dbContext.Database
-                .SqlQuery<long>($"select count(*)::bigint as \"Value\" from pass_station_records where device_id = {deviceId}")
-                .SingleAsync(cancellationToken),
-            _ => throw new ArgumentOutOfRangeException(nameof(tableName), tableName, "不支持的设备级联统计表。")
-        };
+            return new DeviceDeletionImpact(
+                Recipes,
+                Capacities,
+                DeviceLogs,
+                PassStations,
+                ClientStates,
+                ClientVersionSnapshots,
+                ClientPluginVersions,
+                UploadReceiveRegistrations,
+                EmployeeDeviceAccesses,
+                RefreshTokenSessions,
+                RuntimeHeartbeats,
+                EdgeHosts,
+                EdgeHostPlcBindings,
+                EdgeHostPlcRuntimeStates);
+        }
     }
 }

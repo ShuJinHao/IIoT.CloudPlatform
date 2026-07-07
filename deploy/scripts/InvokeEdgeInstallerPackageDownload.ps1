@@ -1,5 +1,6 @@
 param(
-    [string]$CloudApiBaseUrl = 'http://10.98.90.154:81/api/v1',
+    [Parameter(Mandatory = $true)]
+    [string]$CloudApiBaseUrl,
 
     [Parameter(Mandatory = $true)]
     [string]$CloudToken,
@@ -37,7 +38,7 @@ function Normalize-PublicBaseUrl {
     param([Parameter(Mandatory = $true)][string]$Value)
 
     if ([string]::IsNullOrWhiteSpace($Value)) {
-        throw 'BaseUrl is required. It must be the public Gateway origin, for example http://10.98.90.154:81.'
+        throw 'BaseUrl is required. It must be the public Gateway origin, for example http://<cloud-host>:81.'
     }
 
     $uri = [System.Uri]$Value.Trim()

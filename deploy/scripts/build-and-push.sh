@@ -5,9 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$DEPLOY_DIR/.." && pwd)"
 
-REGISTRY="${REGISTRY:-10.98.90.154:80}"
+REGISTRY="${REGISTRY:-}"
 HARBOR_PROJECT="${HARBOR_PROJECT:-iiot}"
-IMAGE_PREFIX="${REGISTRY}/${HARBOR_PROJECT}"
 TAG="${TAG:-sha-$(git -C "$REPO_ROOT" rev-parse HEAD)}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 BUILD_TIMEOUT_SECONDS="${BUILD_TIMEOUT_SECONDS:-900}"
@@ -16,17 +15,14 @@ DRY_RUN=false
 REQUESTED_SERVICES=""
 REQUESTED_ALL=false
 
-DOTNET_SDK_IMAGE="${DOTNET_SDK_IMAGE:-${REGISTRY}/mirror/dotnet-sdk:10.0.301}"
-DOTNET_ASPNET_IMAGE="${DOTNET_ASPNET_IMAGE:-${REGISTRY}/mirror/dotnet-aspnet:10.0.9}"
-NODE_BASE_IMAGE="${NODE_BASE_IMAGE:-${REGISTRY}/mirror/node:22-slim}"
-NGINX_BASE_IMAGE="${NGINX_BASE_IMAGE:-${REGISTRY}/mirror/nginx:1.27-alpine}"
-VITE_AICOPILOT_CHALLENGE_URL="${VITE_AICOPILOT_CHALLENGE_URL:-http://10.98.90.154:82/api/identity/cloud-oidc/challenge}"
-
 usage() {
   cat <<'EOF'
 Usage:
-  deploy/scripts/build-and-push.sh --services httpapi,gateway,dataworker,migration,web [--dry-run]
-  deploy/scripts/build-and-push.sh --all [--dry-run]
+  REGISTRY=<harbor-registry> deploy/scripts/build-and-push.sh --services httpapi,gateway,dataworker,migration [--dry-run]
+  REGISTRY=<harbor-registry> VITE_AICOPILOT_CHALLENGE_URL=http://<aicopilot-browser-reachable-host>:82/api/identity/cloud-oidc/challenge \
+    deploy/scripts/build-and-push.sh --services web [--dry-run]
+  REGISTRY=<harbor-registry> VITE_AICOPILOT_CHALLENGE_URL=http://<aicopilot-browser-reachable-host>:82/api/identity/cloud-oidc/challenge \
+    deploy/scripts/build-and-push.sh --all [--dry-run]
 
 Builds selected Cloud application images locally and pushes them to Harbor.
 Production use must pass either --services or --all explicitly.
@@ -70,6 +66,31 @@ fi
 if [ "$REQUESTED_ALL" != true ] && [ -z "$REQUESTED_SERVICES" ]; then
   fail "Cloud local image build requires explicit --services or --all."
 fi
+if [ -z "$REGISTRY" ]; then
+  fail "REGISTRY is required. Pass the intranet Harbor registry explicitly, for example REGISTRY=<harbor-registry>."
+fi
+case "$REGISTRY" in
+  *.example*|*internal.example*)
+    fail "REGISTRY still uses the documentation example domain: $REGISTRY"
+    ;;
+esac
+case "$REGISTRY" in
+  *.*|*:*|localhost)
+    ;;
+  *)
+    fail "REGISTRY must include an explicit Harbor registry host, for example harbor.local:5000 or 10.0.0.1:5000: $REGISTRY"
+    ;;
+esac
+if [[ "$HARBOR_PROJECT" == "." || "$HARBOR_PROJECT" == ".." || "$HARBOR_PROJECT" == *.example* || "$HARBOR_PROJECT" == *internal.example* || ! "$HARBOR_PROJECT" =~ ^[a-z0-9._-]+$ ]]; then
+  fail "HARBOR_PROJECT must be a single Harbor project segment using lowercase letters, digits, dot, underscore, or hyphen: $HARBOR_PROJECT"
+fi
+
+IMAGE_PREFIX="${REGISTRY}/${HARBOR_PROJECT}"
+DOTNET_SDK_IMAGE="${DOTNET_SDK_IMAGE:-${REGISTRY}/mirror/dotnet-sdk:10.0.301}"
+DOTNET_ASPNET_IMAGE="${DOTNET_ASPNET_IMAGE:-${REGISTRY}/mirror/dotnet-aspnet:10.0.9}"
+NODE_BASE_IMAGE="${NODE_BASE_IMAGE:-${REGISTRY}/mirror/node:22-slim}"
+NGINX_BASE_IMAGE="${NGINX_BASE_IMAGE:-${REGISTRY}/mirror/nginx:1.27-alpine}"
+VITE_AICOPILOT_CHALLENGE_URL="${VITE_AICOPILOT_CHALLENGE_URL:-}"
 
 normalize_services() {
   local services_input="${1:-}"
@@ -298,6 +319,19 @@ emit_outputs() {
 
 SELECTED_SERVICES="$(normalize_services "$REQUESTED_SERVICES")"
 SELECTED_SERVICES_CSV="$(service_csv "$SELECTED_SERVICES")"
+
+case " $SELECTED_SERVICES " in
+  *" web "*)
+    if [ -z "$VITE_AICOPILOT_CHALLENGE_URL" ]; then
+      fail "VITE_AICOPILOT_CHALLENGE_URL is required for web image builds. Pass the browser-reachable AICopilot challenge URL explicitly, for example VITE_AICOPILOT_CHALLENGE_URL=http://<aicopilot-browser-reachable-host>:82/api/identity/cloud-oidc/challenge."
+    fi
+    case "$VITE_AICOPILOT_CHALLENGE_URL" in
+      *.example*|*internal.example*)
+        fail "VITE_AICOPILOT_CHALLENGE_URL still uses the documentation example domain."
+        ;;
+    esac
+    ;;
+esac
 
 validate_local_tools
 

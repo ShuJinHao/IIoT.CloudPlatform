@@ -584,7 +584,7 @@ public sealed class EdgeHostBehaviorTests
 
         public string? UserName { get; } = "E0001";
 
-        public string? Role { get; } = "DeviceAdmin";
+        public IReadOnlyCollection<string> Roles { get; } = ["DeviceAdmin"];
 
         public string? ActorType { get; } = "Human";
 

@@ -23,6 +23,8 @@ public class EdgeOperatorLoginHandler(
     IEmployeeLookupService employeeLookupService)
     : ICommandHandler<EdgeOperatorLoginCommand, Result<HumanIdentitySessionResult>>
 {
+    private const string InvalidLoginMessage = "账号不存在或密码错误";
+
     public async Task<Result<HumanIdentitySessionResult>> Handle(
         EdgeOperatorLoginCommand request,
         CancellationToken cancellationToken)
@@ -33,12 +35,12 @@ public class EdgeOperatorLoginHandler(
 
         if (account is null)
         {
-            return Result.Failure("账号不存在或密码错误");
+            return Result.Failure(InvalidLoginMessage);
         }
 
         if (!account.IsEnabled)
         {
-            return Result.Failure("账号已冻结，请联系管理员");
+            return Result.Failure(InvalidLoginMessage);
         }
 
         var checkResult = await identityPasswordService.CheckPasswordAsync(
@@ -48,7 +50,7 @@ public class EdgeOperatorLoginHandler(
 
         if (!checkResult.IsSuccess || !checkResult.Value)
         {
-            return Result.Failure("账号不存在或密码错误");
+            return Result.Failure(InvalidLoginMessage);
         }
 
         var roles = await identityAccountStore.GetRolesAsync(account.Id, cancellationToken);

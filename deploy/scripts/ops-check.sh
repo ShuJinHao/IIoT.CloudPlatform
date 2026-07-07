@@ -16,6 +16,7 @@ BACKUP_MAX_AGE_HOURS=${BACKUP_MAX_AGE_HOURS:-24}
 BACKUP_VERIFY_MAX_AGE_DAYS=${BACKUP_VERIFY_MAX_AGE_DAYS:-7}
 REQUIRE_BACKUP=${REQUIRE_BACKUP:-1}
 REQUIRE_BACKUP_VERIFY=${REQUIRE_BACKUP_VERIFY:-0}
+REQUIRE_DATAWORKER_HEALTHCHECK=${REQUIRE_DATAWORKER_HEALTHCHECK:-1}
 
 require_running_service() {
   service_name=$1
@@ -72,6 +73,18 @@ for service_name in postgres redis-cache rabbitmq seq iiot-httpapi iiot-gateway 
 do
   require_running_service "$service_name"
 done
+case "$REQUIRE_DATAWORKER_HEALTHCHECK" in
+  1|true|TRUE|yes|YES)
+    require_healthy_service "iiot-dataworker"
+    ;;
+  0|false|FALSE|no|NO)
+    printf 'dataworker_healthcheck=skipped require_dataworker_healthcheck=%s\n' "$REQUIRE_DATAWORKER_HEALTHCHECK"
+    ;;
+  *)
+    printf 'REQUIRE_DATAWORKER_HEALTHCHECK must be true or false: %s\n' "$REQUIRE_DATAWORKER_HEALTHCHECK" >&2
+    exit 64
+    ;;
+esac
 
 health_status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 10 "${PUBLIC_BASE_URL}/internal/healthz" || true)
 if [ "$health_status" != "200" ]; then

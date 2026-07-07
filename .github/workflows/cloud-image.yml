@@ -14,6 +14,7 @@ permissions:
 jobs:
   build-push:
     runs-on: [self-hosted, iiot-linux-prod]
+    environment: production
     strategy:
       fail-fast: false
       matrix:
@@ -153,6 +154,24 @@ jobs:
             echo "OCI_REGISTRY and OCI_NAMESPACE are required for the intranet self-hosted runner flow." >&2
             exit 64
           fi
+          case "$registry" in
+            *.example*|*internal.example*)
+              echo "OCI_REGISTRY still uses the documentation example domain: $registry" >&2
+              exit 64
+              ;;
+          esac
+          case "$registry" in
+            *.*|*:*|localhost)
+              ;;
+            *)
+              echo "OCI_REGISTRY must include an explicit Harbor registry host, for example harbor.local:5000 or 10.0.0.1:5000: $registry" >&2
+              exit 64
+              ;;
+          esac
+          if [[ "$namespace" == "." || "$namespace" == ".." || "$namespace" == *.example* || "$namespace" == *internal.example* || ! "$namespace" =~ ^[a-z0-9._-]+$ ]]; then
+            echo "OCI_NAMESPACE must be a single Harbor project/namespace segment using lowercase letters, digits, dot, underscore, or hyphen: $namespace" >&2
+            exit 64
+          fi
           if [ -z "${OCI_REGISTRY_USERNAME:-}" ] || [ -z "${OCI_REGISTRY_PASSWORD:-}" ]; then
             echo "OCI_REGISTRY_USERNAME and OCI_REGISTRY_PASSWORD are required for Harbor push." >&2
             exit 64
@@ -194,7 +213,17 @@ jobs:
           image="${{ steps.registry.outputs.image }}"
           release_tag="${{ steps.registry.outputs.release_tag }}"
           cache_ref="$image:buildcache"
-          challenge_url="${VITE_AICOPILOT_CHALLENGE_URL:-http://10.98.90.154:82/api/identity/cloud-oidc/challenge}"
+          if [ -z "${VITE_AICOPILOT_CHALLENGE_URL:-}" ]; then
+            echo "VITE_AICOPILOT_CHALLENGE_URL is required for the emergency self-hosted image flow." >&2
+            exit 64
+          fi
+          challenge_url="$VITE_AICOPILOT_CHALLENGE_URL"
+          case "$challenge_url" in
+            *.example*|*internal.example*)
+              echo "VITE_AICOPILOT_CHALLENGE_URL still uses the documentation example domain." >&2
+              exit 64
+              ;;
+          esac
           tags=(--tag "$image:$release_tag")
           if [ "${{ github.ref }}" = "refs/heads/main" ]; then
             tags+=(--tag "$image:main-latest")

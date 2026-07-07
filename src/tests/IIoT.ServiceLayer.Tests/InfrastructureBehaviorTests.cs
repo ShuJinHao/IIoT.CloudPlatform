@@ -15,6 +15,7 @@ using IIoT.EntityFrameworkCore.Outbox;
 using IIoT.EntityFrameworkCore.Repository;
 using IIoT.EntityFrameworkCore.Uploads;
 using IIoT.EventBus;
+using IIoT.Infrastructure.Authentication;
 using IIoT.IdentityService.Commands;
 using IIoT.Infrastructure.Logging;
 using IIoT.Services.CrossCutting.Behaviors;
@@ -75,10 +76,24 @@ public sealed class InfrastructureBehaviorTests
             "infrastructure",
             "IIoT.EntityFrameworkCore",
             "DependencyInjection.cs"));
+        var efDeletionService = File.ReadAllText(FindRepoFile(
+            "src",
+            "infrastructure",
+            "IIoT.EntityFrameworkCore",
+            "QueryServices",
+            "EfDeviceDeletionDependencyService.cs"));
         Assert.Contains(
             "AddScoped<IDeviceDeletionDependencyQueryService, QueryServices.EfDeviceDeletionDependencyService>",
             efDependencyInjection,
             StringComparison.Ordinal);
+        Assert.Contains("SqlQuery<DeviceDeletionImpactRow>", efDeletionService, StringComparison.Ordinal);
+        Assert.Contains("delete from edge_host_plc_runtime_states", efDeletionService, StringComparison.Ordinal);
+        Assert.Contains("edge_host_plc_bindings", efDeletionService, StringComparison.Ordinal);
+        Assert.Contains("edge_hosts", efDeletionService, StringComparison.Ordinal);
+        Assert.Contains("\"ActorType\"", efDeletionService, StringComparison.Ordinal);
+        Assert.Contains("\"SubjectId\"", efDeletionService, StringComparison.Ordinal);
+        Assert.DoesNotContain("CountTableAsync", efDeletionService, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExecuteDeleteAsync", efDeletionService, StringComparison.Ordinal);
 
         var dapperRoot = Path.GetDirectoryName(FindRepoFile(
             "src",
@@ -891,6 +906,8 @@ public sealed class InfrastructureBehaviorTests
             "SerilogExtensions.cs"));
 
         Assert.Contains(".Destructure.With<SensitiveDataDestructuringPolicy>()", source, StringComparison.Ordinal);
+        Assert.Contains("TryEnsureWritableDirectory(logDirectory)", source, StringComparison.Ordinal);
+        Assert.Contains("IIoT file logging disabled because log directory is not writable", source, StringComparison.Ordinal);
         Assert.Contains("fileSizeLimitBytes: SingleLogFileSizeLimitBytes", source, StringComparison.Ordinal);
         Assert.Contains("rollOnFileSizeLimit: true", source, StringComparison.Ordinal);
     }
@@ -990,6 +1007,36 @@ public sealed class InfrastructureBehaviorTests
         };
 
         Assert.Throws<InvalidOperationException>(() => options.Validate());
+    }
+
+    [Fact]
+    public void JwtSettings_ShouldRejectConfiguredSecretShorterThanRuntimeMinimum()
+    {
+        var options = new JwtSettings
+        {
+            Secret = "short-jwt-secret",
+            ExpiryMinutes = 60,
+            Issuer = "IIoT.CloudPlatform",
+            Audience = "IIoT.EdgeClient"
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => options.Validate());
+
+        Assert.Contains("JwtSettings:Secret must be at least 32 characters", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void JwtSettings_ShouldAllowDevelopmentSecretResolverToHandleMissingSecret()
+    {
+        var options = new JwtSettings
+        {
+            Secret = string.Empty,
+            ExpiryMinutes = 60,
+            Issuer = "IIoT.CloudPlatform",
+            Audience = "IIoT.EdgeClient"
+        };
+
+        options.Validate();
     }
 
     [Fact]

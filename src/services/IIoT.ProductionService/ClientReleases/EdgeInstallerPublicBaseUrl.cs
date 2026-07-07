@@ -3,7 +3,7 @@ namespace IIoT.ProductionService.ClientReleases;
 internal static class EdgeInstallerPublicBaseUrl
 {
     public const string ValidationMessage =
-        "云端地址必须填写为 Gateway 公开访问 origin，例如 http://10.98.90.154:81。不要包含 /api/v1、路径、查询或片段。";
+        "云端地址必须填写为 Gateway 公开访问 origin，例如 http://cloud-host:81。不要包含 /api/v1、路径、查询或片段。";
 
     public static bool TryNormalize(string? value, out string normalized, out string error)
     {

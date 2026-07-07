@@ -33,8 +33,11 @@ public static class SerilogExtensions
             .Enrich.FromLogContext()
             .Enrich.WithProperty("ServiceName", serviceName)
             .WriteTo.Console(outputTemplate:
-                "[{Timestamp:HH:mm:ss} {Level:u3}] [{ServiceName}] {Message:lj}{NewLine}{Exception}")
-            .WriteTo.File(
+                "[{Timestamp:HH:mm:ss} {Level:u3}] [{ServiceName}] {Message:lj}{NewLine}{Exception}");
+
+        if (TryEnsureWritableDirectory(logDirectory))
+        {
+            loggerConfiguration.WriteTo.File(
                 path: Path.Combine(logDirectory, $"iiot-{serviceName}-.log"),
                 rollingInterval: RollingInterval.Day,
                 retainedFileCountLimit: RollingFileRetentionCount,
@@ -43,6 +46,7 @@ public static class SerilogExtensions
                 outputTemplate:
                     "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] [{ServiceName}] [{SourceContext}] {Message:lj}{NewLine}{Exception}",
                 shared: true);
+        }
 
         if (seqOptions.Enabled)
         {
@@ -54,5 +58,29 @@ public static class SerilogExtensions
         Log.Logger = loggerConfiguration.CreateLogger();
 
         builder.Services.AddSerilog();
+    }
+
+    private static bool TryEnsureWritableDirectory(string directory)
+    {
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var probePath = Path.Combine(directory, $".iiot-log-write-probe-{Guid.NewGuid():N}.tmp");
+            using (File.Open(probePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+            }
+
+            File.Delete(probePath);
+            return true;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException
+                                   or IOException
+                                   or DirectoryNotFoundException
+                                   or NotSupportedException)
+        {
+            Console.Error.WriteLine(
+                $"IIoT file logging disabled because log directory is not writable: {directory}. {ex.GetType().Name}: {ex.Message}");
+            return false;
+        }
     }
 }

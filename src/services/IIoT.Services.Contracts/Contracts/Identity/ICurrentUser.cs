@@ -10,7 +10,7 @@ public interface ICurrentUser
 
     string? UserName { get; }
 
-    string? Role { get; }
+    IReadOnlyCollection<string> Roles { get; }
 
     string? ActorType { get; }
 

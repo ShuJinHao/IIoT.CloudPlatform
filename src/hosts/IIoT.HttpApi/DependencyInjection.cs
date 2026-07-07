@@ -114,9 +114,6 @@ public static class DependencyInjection
         _ = builder.AddValidatedOptions<RefreshTokenOptions>(
             RefreshTokenOptions.SectionName,
             static options => options.Validate());
-        _ = builder.AddValidatedOptions<BootstrapAuthOptions>(
-            BootstrapAuthOptions.SectionName,
-            static options => options.Validate());
         ApplyIntranetHttpOidcEnvironmentOverride(builder.Configuration);
         var oidcProviderOptions = builder.AddValidatedOptions<OidcProviderOptions>(
             OidcProviderOptions.SectionName,

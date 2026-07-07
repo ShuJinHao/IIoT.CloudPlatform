@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using Aspire.Hosting;
@@ -30,6 +31,8 @@ public sealed class IIoTAppFixture : IAsyncDisposable
 
     private const string TestNoProxyValue =
         "localhost,127.0.0.1,::1,host.docker.internal,0.0.0.0,*.local,169.254.0.0/16";
+    private static readonly TimeSpan StartupTimeout = TimeSpan.FromMinutes(3);
+    private static readonly TimeSpan HealthProbeInterval = TimeSpan.FromMilliseconds(500);
 
     private DistributedApplication? _app;
     private HttpClient? _httpClient;
@@ -41,36 +44,50 @@ public sealed class IIoTAppFixture : IAsyncDisposable
 
     public async Task StartAsync()
     {
+        using var startupTimeout = new CancellationTokenSource(StartupTimeout);
+
         try
         {
             ConfigureAspireProxyEnvironment();
             ConfigureSeedAdminEnvironment();
 
-            var builder = await DistributedApplicationTestingBuilder.CreateAsync<Projects.IIoT_AppHost>();
+            var builder = await DistributedApplicationTestingBuilder.CreateAsync<Projects.IIoT_AppHost>()
+                .WaitAsync(startupTimeout.Token);
             builder.Services.AddLogging(logging =>
             {
                 logging.ClearProviders();
                 logging.AddConsole();
             });
 
-            _app = await builder.BuildAsync();
-            await _app.StartAsync();
+            _app = await builder.BuildAsync().WaitAsync(startupTimeout.Token);
+            await _app.StartAsync().WaitAsync(startupTimeout.Token);
 
-            await _app.ResourceNotifications.WaitForResourceHealthyAsync("postgres");
-            await _app.ResourceNotifications.WaitForResourceHealthyAsync(ConnectionResourceNames.EventBus);
-            await _app.ResourceNotifications.WaitForResourceHealthyAsync("iiot-httpapi");
-            await _app.ResourceNotifications.WaitForResourceHealthyAsync("iiot-gateway");
+            await _app.ResourceNotifications.WaitForResourceHealthyAsync("postgres")
+                .WaitAsync(startupTimeout.Token);
+            await _app.ResourceNotifications.WaitForResourceHealthyAsync(ConnectionResourceNames.EventBus)
+                .WaitAsync(startupTimeout.Token);
+            await _app.ResourceNotifications.WaitForResourceHealthyAsync("iiot-httpapi")
+                .WaitAsync(startupTimeout.Token);
+            await _app.ResourceNotifications.WaitForResourceHealthyAsync("iiot-gateway")
+                .WaitAsync(startupTimeout.Token);
             await _app.ResourceNotifications.WaitForResourceAsync(
                 "iiot-dataworker",
-                KnownResourceStates.Running);
+                KnownResourceStates.Running).WaitAsync(startupTimeout.Token);
 
             _httpClient = _app.CreateHttpClient("iiot-gateway");
+            await WaitForGatewayHealthzAsync(_httpClient, startupTimeout.Token);
         }
         catch (DistributedApplicationException ex)
             when (ex.Message.Contains("docker", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
                 "Docker 不可用，无法启动 Aspire 端到端测试环境。",
+                ex);
+        }
+        catch (OperationCanceledException ex) when (startupTimeout.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Aspire 端到端测试环境在 {StartupTimeout.TotalSeconds:N0} 秒内未就绪，请检查 Docker、Postgres、RabbitMQ、iiot-httpapi、iiot-gateway 和 iiot-dataworker 资源状态。",
                 ex);
         }
     }
@@ -149,5 +166,30 @@ public sealed class IIoTAppFixture : IAsyncDisposable
         }
 
         Environment.SetEnvironmentVariable(name, value);
+    }
+
+    private static async Task WaitForGatewayHealthzAsync(
+        HttpClient httpClient,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                using var response = await httpClient.GetAsync("/internal/healthz", cancellationToken);
+                if (response.StatusCode == HttpStatusCode.OK)
+                {
+                    return;
+                }
+            }
+            catch (HttpRequestException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Gateway can accept connections before downstream health checks are ready.
+            }
+
+            await Task.Delay(HealthProbeInterval, cancellationToken);
+        }
     }
 }

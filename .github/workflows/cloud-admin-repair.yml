@@ -99,6 +99,20 @@ jobs:
               exit 64
             fi
           done
+          case "$OCI_REGISTRY" in
+            *.example*|*internal.example*)
+              echo "OCI_REGISTRY still uses the documentation example domain: $OCI_REGISTRY" >&2
+              exit 64
+              ;;
+          esac
+          case "$OCI_REGISTRY" in
+            *.*|*:*|localhost)
+              ;;
+            *)
+              echo "OCI_REGISTRY must include an explicit Harbor registry host, for example harbor.local:5000 or 10.0.0.1:5000: $OCI_REGISTRY" >&2
+              exit 64
+              ;;
+          esac
           command -v docker >/dev/null
           command -v curl >/dev/null
           docker compose version >/dev/null
@@ -131,6 +145,7 @@ jobs:
           fi
           umask 077
           printf '%s\n' "$DEPLOY_ENV_FILE" > "$DEPLOY_TARGET_DIR/.env"
+          chmod 600 "$DEPLOY_TARGET_DIR/.env"
           DEPLOY_DIR="$DEPLOY_TARGET_DIR"
           . "$DEPLOY_TARGET_DIR/scripts/release-common.sh"
           replace_env_value "$DEPLOY_TARGET_DIR/.env" SEED_ADMIN_PASSWORD "$SEED_ADMIN_PASSWORD"
@@ -164,6 +179,7 @@ jobs:
           require_env_value PUBLIC_BASE_URL
 
           temp_env="$(mktemp "$DEPLOY_TARGET_DIR/.admin-repair-env.XXXXXX")"
+          chmod 600 "$temp_env"
           cleanup() {
             rm -f "$temp_env"
           }

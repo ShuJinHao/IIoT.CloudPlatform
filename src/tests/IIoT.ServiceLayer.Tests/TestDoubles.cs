@@ -1001,7 +1001,7 @@ internal sealed class TestCurrentUser : ICurrentUser
 
     public string? UserName { get; init; }
 
-    public string? Role { get; init; }
+    public IReadOnlyCollection<string> Roles { get; init; } = [];
 
     public string? ActorType { get; init; }
 

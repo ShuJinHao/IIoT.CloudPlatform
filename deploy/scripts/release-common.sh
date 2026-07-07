@@ -138,6 +138,51 @@ require_infra_image_values() {
   done
 }
 
+ensure_image_values_not_template() {
+  for key in $APP_IMAGE_KEYS $INFRA_IMAGE_KEYS
+  do
+    eval "image_ref=\${$key:-}"
+    require_env_value "$key"
+
+    case "$image_ref" in
+      *.example*|*internal.example*)
+        printf 'Image value still uses a documentation example registry: %s=%s\n' "$key" "$image_ref" >&2
+        exit 64
+        ;;
+    esac
+  done
+}
+
+ensure_app_images_have_explicit_registry() {
+  for key in $APP_IMAGE_KEYS
+  do
+    eval "image_ref=\${$key:-}"
+    require_env_value "$key"
+    image_registry=${image_ref%%/*}
+
+    case "$image_ref" in
+      docker.io/*|registry-1.docker.io/*)
+        printf 'Application image must be pushed to Harbor, not pulled from Docker Hub: %s=%s\n' "$key" "$image_ref" >&2
+        exit 64
+        ;;
+    esac
+
+    if [ "$image_registry" = "$image_ref" ]; then
+      printf 'Application image must include an explicit Harbor registry: %s=%s\n' "$key" "$image_ref" >&2
+      exit 64
+    fi
+
+    case "$image_registry" in
+      *.*|*:*|localhost)
+        ;;
+      *)
+        printf 'Application image must include an explicit Harbor registry: %s=%s\n' "$key" "$image_ref" >&2
+        exit 64
+        ;;
+    esac
+  done
+}
+
 require_changed_secret_value() {
   key=$1
   eval "value=\${$key:-}"
@@ -154,16 +199,306 @@ require_changed_secret_value() {
   done
 }
 
+require_min_secret_length() {
+  key=$1
+  min_length=$2
+  eval "value=\${$key:-}"
+
+  require_env_value "$key"
+
+  value_length=${#value}
+  if [ "$value_length" -lt "$min_length" ]; then
+    printf 'Required secret is too short: %s must be at least %s characters\n' "$key" "$min_length" >&2
+    exit 64
+  fi
+}
+
+require_positive_integer_at_most() {
+  key=$1
+  max_value=$2
+  eval "value=\${$key:-}"
+
+  require_env_value "$key"
+
+  case "$value" in
+    ''|*[!0-9]*)
+      printf 'Deployment numeric value must be a positive integer: %s=%s\n' "$key" "$value" >&2
+      exit 64
+      ;;
+  esac
+
+  if [ "$value" -le 0 ]; then
+    printf 'Deployment numeric value must be greater than 0: %s=%s\n' "$key" "$value" >&2
+    exit 64
+  fi
+
+  if [ "$value" -gt "$max_value" ]; then
+    printf 'Deployment numeric value exceeds the allowed maximum: %s=%s max=%s\n' \
+      "$key" \
+      "$value" \
+      "$max_value" >&2
+    exit 64
+  fi
+}
+
+require_template_value_replaced() {
+  key=$1
+  eval "value=\${$key:-}"
+
+  require_env_value "$key"
+
+  case "$value" in
+    __REPLACE_*__|change-me-*|*.example*|*internal.example*)
+      printf 'Required deployment value still uses a template marker: %s\n' "$key" >&2
+      exit 64
+      ;;
+  esac
+}
+
+lower_value() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+ensure_deploy_operator_not_root() {
+  if [ "$(id -u)" = "0" ] && [ "${ALLOW_ROOT_DEPLOY_PREFLIGHT:-}" != "emergency" ]; then
+    printf 'Pre-deploy checks refuse root execution by default. Use a dedicated deploy user, or set ALLOW_ROOT_DEPLOY_PREFLIGHT=emergency for an approved break-glass path.\n' >&2
+    exit 64
+  fi
+}
+
+ensure_bootstrap_secret_not_disabled() {
+  for key in BOOTSTRAP_AUTH_REQUIRE_SECRET BootstrapAuth__RequireSecret
+  do
+    eval "value=\${$key:-}"
+    if [ -z "$value" ]; then
+      continue
+    fi
+
+    case "$(lower_value "$value")" in
+      false|0|no)
+        printf 'Bootstrap secret cannot be disabled in deployment env: %s=%s\n' "$key" "$value" >&2
+        exit 64
+        ;;
+    esac
+  done
+}
+
+url_host() {
+  value=$1
+  value=${value#*://}
+  value=${value%%/*}
+  value=${value%%\?*}
+  value=${value##*@}
+
+  case "$value" in
+    \[*\]*)
+      host=${value#\[}
+      host=${host%%\]*}
+      ;;
+    *)
+      host=${value%%:*}
+      ;;
+  esac
+
+  printf '%s\n' "$host"
+}
+
+is_loopback_or_rfc1918_ipv4_host() {
+  host=$1
+
+  case "$host" in
+    localhost|127.*|::1)
+      return 0
+      ;;
+  esac
+
+  case "$host" in
+    ''|*[!0-9.]*)
+      return 1
+      ;;
+  esac
+
+  old_ifs=$IFS
+  IFS=.
+  set -- $host
+  IFS=$old_ifs
+
+  if [ "$#" -ne 4 ]; then
+    return 1
+  fi
+
+  for octet in "$@"
+  do
+    case "$octet" in
+      ''|*[!0-9]*)
+        return 1
+        ;;
+    esac
+
+    if [ "$octet" -gt 255 ]; then
+      return 1
+    fi
+  done
+
+  first=$1
+  second=$2
+  if [ "$first" -eq 10 ]; then
+    return 0
+  fi
+  if [ "$first" -eq 192 ] && [ "$second" -eq 168 ]; then
+    return 0
+  fi
+  if [ "$first" -eq 172 ] && [ "$second" -ge 16 ] && [ "$second" -le 31 ]; then
+    return 0
+  fi
+
+  return 1
+}
+
+ensure_oidc_http_uri_boundary() {
+  key=$1
+  eval "value=\${$key:-}"
+  require_env_value "$key"
+
+  case "$value" in
+    https://*)
+      return
+      ;;
+    http://*)
+      host=$(url_host "$value")
+      if is_loopback_or_rfc1918_ipv4_host "$host"; then
+        return
+      fi
+
+      printf 'HTTP OIDC value must use loopback or RFC1918 IPv4 host when ALLOW_INTRANET_HTTP_OIDC=true: %s=%s\n' "$key" "$value" >&2
+      exit 64
+      ;;
+    *)
+      printf 'OIDC value must be an absolute http/https URI: %s=%s\n' "$key" "$value" >&2
+      exit 64
+      ;;
+  esac
+}
+
+ensure_oidc_http_boundary() {
+  allow_oidc_http=$(lower_value "${ALLOW_INTRANET_HTTP_OIDC:-false}")
+
+  case "$allow_oidc_http" in
+    true)
+      ensure_oidc_http_uri_boundary OIDC_PROVIDER_ISSUER
+      ensure_oidc_http_uri_boundary AICOPILOT_OIDC_REDIRECT_URI
+      ensure_oidc_http_uri_boundary AICOPILOT_OIDC_POST_LOGOUT_REDIRECT_URI
+      ;;
+    false|'')
+      for key in OIDC_PROVIDER_ISSUER AICOPILOT_OIDC_REDIRECT_URI AICOPILOT_OIDC_POST_LOGOUT_REDIRECT_URI
+      do
+        eval "value=\${$key:-}"
+        require_env_value "$key"
+        case "$value" in
+          http://*)
+            printf 'HTTP OIDC value requires ALLOW_INTRANET_HTTP_OIDC=true and loopback/RFC1918 IPv4 host: %s=%s\n' "$key" "$value" >&2
+            exit 64
+            ;;
+        esac
+      done
+      ;;
+    *)
+      printf 'ALLOW_INTRANET_HTTP_OIDC must be true or false: %s\n' "$ALLOW_INTRANET_HTTP_OIDC" >&2
+      exit 64
+      ;;
+  esac
+}
+
+ensure_deploy_disk_headroom() {
+  disk_path=${PRE_DEPLOY_DISK_PATH:-$DEPLOY_DIR}
+  warn_percent=${PRE_DEPLOY_DISK_WARN_PERCENT:-80}
+  block_percent=${PRE_DEPLOY_DISK_BLOCK_PERCENT:-85}
+  disk_usage_percent=$(df -P "$disk_path" | awk 'NR == 2 { gsub("%", "", $5); print $5 }')
+
+  if [ -z "$disk_usage_percent" ]; then
+    printf 'Could not determine disk usage for pre-deploy path: %s\n' "$disk_path" >&2
+    exit 65
+  fi
+
+  printf 'preflight_disk_usage_percent=%s warn_threshold=%s block_threshold=%s path=%s\n' \
+    "$disk_usage_percent" \
+    "$warn_percent" \
+    "$block_percent" \
+    "$disk_path"
+
+  if [ "$disk_usage_percent" -ge "$block_percent" ]; then
+    printf 'Disk usage is at or above the routine release block threshold: %s%% >= %s%%\n' "$disk_usage_percent" "$block_percent" >&2
+    exit 65
+  fi
+
+  if [ "$disk_usage_percent" -ge "$warn_percent" ]; then
+    printf 'warning: disk usage is at or above the operator warning threshold: %s%% >= %s%%\n' "$disk_usage_percent" "$warn_percent" >&2
+  fi
+}
+
+print_http_only_preflight_summary() {
+  runtime_controls=${1:-runtime-check-not-declared}
+  printf 'preflight_transport_baseline=http-only controlled-intranet no-tls no-hsts no-https-redirection\n'
+  printf 'preflight_compensation_controls=secrets-checked templates-checked bootstrap-secret-required oidc-http-boundary-checked image-registry-checked docker-hub-blocked compose-checked disk-checked %s\n' "$runtime_controls"
+}
+
 ensure_required_secret_values_changed() {
   require_changed_secret_value \
+    PG_PASSWORD \
+    __REPLACE_POSTGRES_PASSWORD__ \
+    change-me-postgres-password \
+    postgres \
+    123456
+  require_min_secret_length PG_PASSWORD 12
+
+  require_changed_secret_value \
+    RABBITMQ_DEFAULT_PASS \
+    __REPLACE_RABBITMQ_PASSWORD__ \
+    change-me-rabbitmq-password \
+    guest \
+    123456
+  require_min_secret_length RABBITMQ_DEFAULT_PASS 12
+
+  require_changed_secret_value \
     JWTSETTINGS__SECRET \
+    __REPLACE_JWT_SECRET__ \
     change-me-jwt-secret \
     iiot-cloud-jwt-secret-2026-04-22
+  require_min_secret_length JWTSETTINGS__SECRET 32
+
+  require_changed_secret_value \
+    SEQ_ADMIN_PASSWORD \
+    __REPLACE_SEQ_PASSWORD__ \
+    change-me-seq-password \
+    123456
+  require_min_secret_length SEQ_ADMIN_PASSWORD 12
 
   require_changed_secret_value \
     SEED_ADMIN_PASSWORD \
+    __REPLACE_ADMIN_PASSWORD__ \
     change-me-admin-password \
     Ljh123456!
+  require_min_secret_length SEED_ADMIN_PASSWORD 12
+}
+
+ensure_required_public_values_changed() {
+  require_template_value_replaced PUBLIC_BASE_URL
+  require_template_value_replaced CORS_ALLOWED_ORIGIN_0
+  require_template_value_replaced OIDC_PROVIDER_ISSUER
+  require_template_value_replaced AICOPILOT_OIDC_REDIRECT_URI
+  require_template_value_replaced AICOPILOT_OIDC_POST_LOGOUT_REDIRECT_URI
+  require_template_value_replaced VITE_AICOPILOT_CHALLENGE_URL
+}
+
+ensure_rate_limit_values_bounded() {
+  max_edge_upload_rate_per_minute=12000
+
+  require_positive_integer_at_most RATE_LIMIT_CAPACITY_UPLOAD_TOKEN_LIMIT "$max_edge_upload_rate_per_minute"
+  require_positive_integer_at_most RATE_LIMIT_CAPACITY_UPLOAD_TOKENS_PER_PERIOD "$max_edge_upload_rate_per_minute"
+  require_positive_integer_at_most RATE_LIMIT_DEVICE_LOG_UPLOAD_TOKEN_LIMIT "$max_edge_upload_rate_per_minute"
+  require_positive_integer_at_most RATE_LIMIT_DEVICE_LOG_UPLOAD_TOKENS_PER_PERIOD "$max_edge_upload_rate_per_minute"
+  require_positive_integer_at_most RATE_LIMIT_PASS_STATION_UPLOAD_TOKEN_LIMIT "$max_edge_upload_rate_per_minute"
+  require_positive_integer_at_most RATE_LIMIT_PASS_STATION_UPLOAD_TOKENS_PER_PERIOD "$max_edge_upload_rate_per_minute"
 }
 
 ensure_infra_images_not_docker_hub() {
@@ -298,6 +633,49 @@ require_running_service() {
     compose ps >&2
     exit 1
   fi
+}
+
+require_healthy_service() {
+  service_name=$1
+  max_attempts=${2:-12}
+  attempt=1
+
+  container_id=$(compose ps -q "$service_name" 2>/dev/null | head -n 1 || true)
+  if [ -z "$container_id" ]; then
+    printf 'Required service container was not found: %s\n' "$service_name" >&2
+    compose ps >&2
+    exit 1
+  fi
+
+  while [ "$attempt" -le "$max_attempts" ]
+  do
+    health_status=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id" 2>/dev/null || true)
+
+    case "$health_status" in
+      healthy)
+        printf 'Service health check passed: %s -> healthy\n' "$service_name"
+        return 0
+        ;;
+      none)
+        printf 'Service does not define a Docker health check: %s\n' "$service_name" >&2
+        exit 1
+        ;;
+      starting|unhealthy)
+        printf 'Service health attempt %s/%s: %s -> %s\n' "$attempt" "$max_attempts" "$service_name" "$health_status" >&2
+        sleep 5
+        ;;
+      *)
+        printf 'Service health check status is unavailable: %s -> %s\n' "$service_name" "${health_status:-unknown}" >&2
+        sleep 5
+        ;;
+    esac
+
+    attempt=$((attempt + 1))
+  done
+
+  printf 'Service did not become healthy after %s attempts: %s\n' "$max_attempts" "$service_name" >&2
+  docker inspect --format '{{json .State.Health}}' "$container_id" >&2 || true
+  exit 1
 }
 
 replace_env_value() {

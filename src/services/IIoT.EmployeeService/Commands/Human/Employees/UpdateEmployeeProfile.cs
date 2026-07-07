@@ -134,7 +134,7 @@ public class UpdateEmployeeProfileHandler(
 
     private async Task<Result> EnsureCanUpdateAccessAsync(CancellationToken cancellationToken)
     {
-        if (string.Equals(currentUser.Role, SystemRoles.Admin, StringComparison.Ordinal))
+        if (currentUser.Roles.Contains(SystemRoles.Admin, StringComparer.Ordinal))
         {
             return Result.Success();
         }

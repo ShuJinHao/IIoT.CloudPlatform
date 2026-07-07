@@ -7,7 +7,7 @@ public sealed class CurrentUser : ICurrentUser
 {
     public string? Id { get; }
     public string? UserName { get; }
-    public string? Role { get; }
+    public IReadOnlyCollection<string> Roles { get; } = [];
     public string? ActorType { get; }
     public IReadOnlyCollection<string> Permissions { get; } = [];
     public Guid? DeviceId { get; }
@@ -23,7 +23,11 @@ public sealed class CurrentUser : ICurrentUser
 
         Id = user.FindFirstValue(ClaimTypes.NameIdentifier);
         UserName = user.FindFirstValue(ClaimTypes.Name);
-        Role = user.FindFirstValue(ClaimTypes.Role);
+        Roles = user.FindAll(ClaimTypes.Role)
+            .Select(claim => claim.Value)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
         ActorType = user.FindFirstValue(IIoTClaimTypes.ActorType);
         Permissions = user.FindAll(IIoTClaimTypes.Permission)
             .Select(claim => claim.Value)

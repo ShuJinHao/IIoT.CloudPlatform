@@ -35,6 +35,9 @@ internal static class TestServiceProviders
             {
                 options.Password.RequireNonAlphanumeric = false;
                 options.Password.RequiredLength = 8;
+                options.Lockout.AllowedForNewUsers = true;
+                options.Lockout.MaxFailedAccessAttempts = 5;
+                options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
             })
             .AddRoles<IdentityRole<Guid>>()
             .AddEntityFrameworkStores<IIoTDbContext>();

@@ -89,6 +89,9 @@ public sealed class CloudOidcProviderBehaviorTests
     [InlineData("http://cloud.example.com", "http://10.98.90.154:82/api/identity/cloud-oidc/callback", "http://10.98.90.154:82/login")]
     [InlineData("http://10.98.90.154:81", "http://ai.example.com/api/identity/cloud-oidc/callback", "http://10.98.90.154:82/login")]
     [InlineData("http://10.98.90.154:81", "http://10.98.90.154:82/api/identity/cloud-oidc/callback", "http://ai.example.com/login")]
+    [InlineData("http://8.8.8.8:81", "http://10.98.90.154:82/api/identity/cloud-oidc/callback", "http://10.98.90.154:82/login")]
+    [InlineData("http://10.98.90.154:81", "http://1.1.1.1:82/api/identity/cloud-oidc/callback", "http://10.98.90.154:82/login")]
+    [InlineData("http://10.98.90.154:81", "http://10.98.90.154:82/api/identity/cloud-oidc/callback", "http://203.0.113.10:82/login")]
     public void OidcProviderOptions_Validate_ShouldRejectPublicHttpEvenWhenIntranetHttpOidcIsEnabled(
         string issuer,
         string redirectUri,

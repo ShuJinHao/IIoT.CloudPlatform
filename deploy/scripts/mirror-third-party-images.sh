@@ -1,8 +1,37 @@
 #!/bin/sh
 set -eu
 
-MIRROR_REGISTRY=${MIRROR_REGISTRY:-10.98.90.154:80}
+MIRROR_REGISTRY=${MIRROR_REGISTRY:-}
 MIRROR_NAMESPACE=${MIRROR_NAMESPACE:-mirror}
+
+fail() {
+  printf '%s\n' "$*" >&2
+  exit 64
+}
+
+if [ -z "$MIRROR_REGISTRY" ]; then
+  fail "MIRROR_REGISTRY is required. Pass the intranet Harbor registry explicitly, for example MIRROR_REGISTRY=<harbor-registry>."
+fi
+case "$MIRROR_REGISTRY" in
+  *.example*|*internal.example*)
+    fail "MIRROR_REGISTRY still uses the documentation example domain: $MIRROR_REGISTRY"
+    ;;
+esac
+case "$MIRROR_REGISTRY" in
+  *.*|*:*|localhost)
+    ;;
+  *)
+    fail "MIRROR_REGISTRY must include an explicit Harbor registry host, for example harbor.local:5000 or 10.0.0.1:5000: $MIRROR_REGISTRY"
+    ;;
+esac
+case "$MIRROR_NAMESPACE" in
+  .|..|*.example*|*internal.example*)
+    fail "MIRROR_NAMESPACE must be a single Harbor project/namespace segment using lowercase letters, digits, dot, underscore, or hyphen: $MIRROR_NAMESPACE"
+    ;;
+esac
+if ! printf '%s' "$MIRROR_NAMESPACE" | grep -Eq '^[a-z0-9._-]+$'; then
+  fail "MIRROR_NAMESPACE must be a single Harbor project/namespace segment using lowercase letters, digits, dot, underscore, or hyphen: $MIRROR_NAMESPACE"
+fi
 
 mirror_image() {
   source_image=$1

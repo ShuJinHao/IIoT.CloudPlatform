@@ -63,7 +63,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             new TestCurrentUser
             {
                 Id = Guid.NewGuid().ToString(),
-                Role = SystemRoles.Admin,
+                Roles = [SystemRoles.Admin],
                 IsAuthenticated = true
             },
             permissionService);
@@ -88,7 +88,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             new TestCurrentUser
             {
                 Id = userId.ToString(),
-                Role = "Operator",
+                Roles = ["Operator"],
                 IsAuthenticated = true
             },
             permissionService);
@@ -109,7 +109,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             new TestCurrentUser
             {
                 Id = "not-a-guid",
-                Role = "Operator",
+                Roles = ["Operator"],
                 IsAuthenticated = true
             },
             permissionService);
@@ -130,7 +130,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             new TestCurrentUser
             {
                 Id = Guid.NewGuid().ToString(),
-                Role = "Operator",
+                Roles = ["Operator"],
                 IsAuthenticated = true
             },
             new StubDevicePermissionService
@@ -189,6 +189,96 @@ public sealed class AuthorizationAndIdentityBehaviorTests
     }
 
     [Fact]
+    public async Task IdentityPasswordService_ShouldLockUserAfterConsecutivePasswordFailures()
+    {
+        using var provider = TestServiceProviders.CreateIdentityServiceProvider();
+        using var scope = provider.CreateScope();
+
+        var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        var user = await CreateIdentityUserAsync(userManager, "Password123");
+        var disableLockout = await userManager.SetLockoutEnabledAsync(user, false);
+        Assert.True(disableLockout.Succeeded, string.Join("; ", disableLockout.Errors.Select(e => e.Description)));
+        var passwordService = new IdentityPasswordService(userManager);
+
+        for (var i = 0; i < 5; i++)
+        {
+            var check = await passwordService.CheckPasswordAsync(user.Id, "WrongPassword123");
+
+            Assert.True(check.IsSuccess);
+            Assert.False(check.Value);
+        }
+
+        var lockedUser = await userManager.FindByIdAsync(user.Id.ToString())
+                         ?? throw new InvalidOperationException("User was not created.");
+        Assert.True(await userManager.GetLockoutEnabledAsync(lockedUser));
+        Assert.True(await userManager.IsLockedOutAsync(lockedUser));
+
+        var lockedCheck = await passwordService.CheckPasswordAsync(user.Id, "Password123");
+
+        Assert.True(lockedCheck.IsSuccess);
+        Assert.False(lockedCheck.Value);
+    }
+
+    [Fact]
+    public async Task IdentityPasswordService_ShouldResetFailedCountAfterSuccessfulPasswordCheck()
+    {
+        using var provider = TestServiceProviders.CreateIdentityServiceProvider();
+        using var scope = provider.CreateScope();
+
+        var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        var user = await CreateIdentityUserAsync(userManager, "Password123");
+        var passwordService = new IdentityPasswordService(userManager);
+
+        var failedCheck = await passwordService.CheckPasswordAsync(user.Id, "WrongPassword123");
+        Assert.True(failedCheck.IsSuccess);
+        Assert.False(failedCheck.Value);
+
+        var failedUser = await userManager.FindByIdAsync(user.Id.ToString())
+                         ?? throw new InvalidOperationException("User was not created.");
+        Assert.Equal(1, await userManager.GetAccessFailedCountAsync(failedUser));
+
+        var successfulCheck = await passwordService.CheckPasswordAsync(user.Id, "Password123");
+        Assert.True(successfulCheck.IsSuccess);
+        Assert.True(successfulCheck.Value);
+
+        var resetUser = await userManager.FindByIdAsync(user.Id.ToString())
+                        ?? throw new InvalidOperationException("User was not created.");
+        Assert.Equal(0, await userManager.GetAccessFailedCountAsync(resetUser));
+        Assert.False(await userManager.IsLockedOutAsync(resetUser));
+    }
+
+    [Fact]
+    public async Task IdentityPasswordService_ResetPassword_ShouldNotUnlockLockedUser()
+    {
+        using var provider = TestServiceProviders.CreateIdentityServiceProvider();
+        using var scope = provider.CreateScope();
+
+        var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        var user = await CreateIdentityUserAsync(userManager, "Password123");
+        var passwordService = new IdentityPasswordService(userManager);
+
+        for (var i = 0; i < 5; i++)
+        {
+            var check = await passwordService.CheckPasswordAsync(user.Id, "WrongPassword123");
+
+            Assert.True(check.IsSuccess);
+            Assert.False(check.Value);
+        }
+
+        var lockedUser = await userManager.FindByIdAsync(user.Id.ToString())
+                         ?? throw new InvalidOperationException("User was not created.");
+        Assert.True(await userManager.IsLockedOutAsync(lockedUser));
+
+        var resetPassword = await passwordService.ResetPasswordAsync(user.Id, "NewPassword123");
+
+        Assert.True(resetPassword.IsSuccess);
+
+        var resetUser = await userManager.FindByIdAsync(user.Id.ToString())
+                        ?? throw new InvalidOperationException("User was not created.");
+        Assert.True(await userManager.IsLockedOutAsync(resetUser));
+    }
+
+    [Fact]
     public async Task DefineRolePolicyHandler_ShouldDeleteRoleWhenPermissionAssignmentFails()
     {
         var rolePolicyService = new StubRolePolicyService
@@ -204,7 +294,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             {
                 Id = Guid.NewGuid().ToString(),
                 UserName = "admin-001",
-                Role = SystemRoles.Admin,
+                Roles = [SystemRoles.Admin],
                 IsAuthenticated = true
             },
             auditTrail);
@@ -238,7 +328,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             {
                 Id = Guid.NewGuid().ToString(),
                 UserName = "admin-001",
-                Role = SystemRoles.Admin,
+                Roles = [SystemRoles.Admin],
                 IsAuthenticated = true
             },
             auditTrail);
@@ -268,7 +358,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             {
                 Id = Guid.NewGuid().ToString(),
                 UserName = "admin-001",
-                Role = SystemRoles.Admin,
+                Roles = [SystemRoles.Admin],
                 IsAuthenticated = true
             },
             auditTrail);
@@ -301,7 +391,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             {
                 Id = Guid.NewGuid().ToString(),
                 UserName = "admin-001",
-                Role = SystemRoles.Admin,
+                Roles = [SystemRoles.Admin],
                 IsAuthenticated = true
             },
             auditTrail);
@@ -329,7 +419,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             new TestCurrentUser
             {
                 Id = currentUserId.ToString(),
-                Role = "Operator",
+                Roles = ["Operator"],
                 UserName = "operator-001",
                 IsAuthenticated = true
             });
@@ -354,7 +444,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             new TestCurrentUser
             {
                 Id = currentUserId.ToString(),
-                Role = "Operator",
+                Roles = ["Operator"],
                 UserName = "operator-001",
                 IsAuthenticated = true
             });
@@ -554,6 +644,65 @@ public sealed class AuthorizationAndIdentityBehaviorTests
     }
 
     [Fact]
+    public async Task AuthorizationBehavior_ShouldAllowAdminWhenAdminRoleIsNotFirst()
+    {
+        var nextCalled = false;
+        var permissionProvider = new RecordingPermissionProvider();
+        var behavior = new AuthorizationBehavior<EdgeReleaseManageCommand, Result<bool>>(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "multi-role-admin",
+                Roles = [SystemRoles.ProductionViewer, SystemRoles.Admin],
+                ActorType = IIoTClaimTypes.HumanActor,
+                IsAuthenticated = true
+            },
+            permissionProvider);
+
+        var result = await behavior.Handle(
+            new EdgeReleaseManageCommand(),
+            _ =>
+            {
+                nextCalled = true;
+                return Task.FromResult(Result.Success(true));
+            },
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(nextCalled);
+        Assert.Null(permissionProvider.LastUserId);
+    }
+
+    [Fact]
+    public async Task AuthorizationBehavior_ShouldNotTreatNonAdminMultiRoleAsAdmin()
+    {
+        var permissionProvider = new RecordingPermissionProvider
+        {
+            Permissions = []
+        };
+        var userId = Guid.NewGuid();
+        var behavior = new AuthorizationBehavior<EdgeReleaseManageCommand, Result<bool>>(
+            new TestCurrentUser
+            {
+                Id = userId.ToString(),
+                UserName = "multi-role-user",
+                Roles = [SystemRoles.ProductionViewer, SystemRoles.DeviceAdmin],
+                ActorType = IIoTClaimTypes.HumanActor,
+                IsAuthenticated = true
+            },
+            permissionProvider);
+
+        var exception = await Assert.ThrowsAsync<ForbiddenException>(() =>
+            behavior.Handle(
+                new EdgeReleaseManageCommand(),
+                _ => Task.FromResult(Result.Success(true)),
+                CancellationToken.None));
+
+        Assert.Contains("缺少执行该操作", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(userId, permissionProvider.LastUserId);
+    }
+
+    [Fact]
     public async Task AuthorizationBehavior_ShouldAllowHumanUserForUnprotectedHumanRequest()
     {
         var nextCalled = false;
@@ -589,7 +738,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             {
                 Id = Guid.NewGuid().ToString(),
                 UserName = "edge-operator",
-                Role = SystemRoles.Admin,
+                Roles = [SystemRoles.Admin],
                 DeviceId = deviceId,
                 IsAuthenticated = true
             });
@@ -610,7 +759,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             {
                 Id = Guid.NewGuid().ToString(),
                 UserName = "edge-operator",
-                Role = SystemRoles.Admin,
+                Roles = [SystemRoles.Admin],
                 DeviceId = Guid.NewGuid(),
                 IsAuthenticated = true
             });
@@ -710,4 +859,20 @@ public sealed class AuthorizationAndIdentityBehaviorTests
     private sealed record EdgeReleaseManageCommand() : IHumanCommand<Result<bool>>;
 
     private sealed record UnprotectedHumanCommand() : IHumanCommand<Result<bool>>;
+
+    private static async Task<ApplicationUser> CreateIdentityUserAsync(
+        UserManager<ApplicationUser> userManager,
+        string password)
+    {
+        var user = new ApplicationUser
+        {
+            Id = Guid.NewGuid(),
+            UserName = $"identity-{Guid.NewGuid():N}",
+            IsEnabled = true
+        };
+
+        var createUser = await userManager.CreateAsync(user, password);
+        Assert.True(createUser.Succeeded, string.Join("; ", createUser.Errors.Select(e => e.Description)));
+        return user;
+    }
 }

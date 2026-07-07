@@ -1,17 +1,15 @@
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Specifications.Devices;
 using IIoT.ProductionService.Security;
-using IIoT.Services.CrossCutting.Caching;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
-using Microsoft.Extensions.Options;
 
 namespace IIoT.ProductionService.Queries.Devices;
 
-sealed record CachedDeviceBootstrapIdentity(
+sealed record DeviceBootstrapIdentity(
     Guid Id,
     string DeviceName,
     string ClientCode,
@@ -38,10 +36,8 @@ public record GetDeviceByInstanceQuery(
 
 public class GetDeviceByInstanceHandler(
     IReadRepository<Device> deviceRepository,
-    ICacheService cacheService,
     IJwtTokenGenerator jwtTokenGenerator,
-    IRefreshTokenService refreshTokenService,
-    IOptions<BootstrapAuthOptions> bootstrapAuthOptions
+    IRefreshTokenService refreshTokenService
 ) : IQueryHandler<GetDeviceByInstanceQuery, Result<BootstrapDeviceSessionResult>>
 {
     public async Task<Result<BootstrapDeviceSessionResult>> Handle(
@@ -54,43 +50,6 @@ public class GetDeviceByInstanceHandler(
             return Result.Failure("设备寻址失败：设备寻址码不能为空。");
         }
 
-        if (bootstrapAuthOptions.Value.RequireSecret)
-        {
-            return await HandleWithSecretAsync(
-                code,
-                request.BootstrapSecret,
-                cancellationToken);
-        }
-
-        var cacheKey = CacheKeys.DeviceCode(code);
-        var identity = await cacheService.GetAsync<CachedDeviceBootstrapIdentity>(cacheKey, cancellationToken);
-        if (identity is null)
-        {
-            var spec = new DeviceByCodeSpec(code);
-            var device = await deviceRepository.GetSingleOrDefaultAsync(spec, cancellationToken);
-
-            if (device is null)
-            {
-                return Result.Failure($"设备寻址失败：未找到寻址码为 [{code}] 的设备。");
-            }
-
-            identity = new CachedDeviceBootstrapIdentity(
-                device.Id,
-                device.DeviceName,
-                code,
-                device.ProcessId);
-
-            await cacheService.SetAsync(cacheKey, identity, TimeSpan.FromHours(2), cancellationToken);
-        }
-
-        return await IssueSessionAsync(identity, cancellationToken);
-    }
-
-    private async Task<Result<BootstrapDeviceSessionResult>> HandleWithSecretAsync(
-        string code,
-        string? bootstrapSecret,
-        CancellationToken cancellationToken)
-    {
         var spec = new DeviceByCodeSpec(code);
         var device = await deviceRepository.GetSingleOrDefaultAsync(spec, cancellationToken);
 
@@ -99,13 +58,13 @@ public class GetDeviceByInstanceHandler(
             return Result.Failure($"设备寻址失败：未找到寻址码为 [{code}] 的设备。");
         }
 
-        if (!BootstrapSecretHasher.Verify(bootstrapSecret, device.BootstrapSecretHash))
+        if (!BootstrapSecretHasher.Verify(request.BootstrapSecret, device.BootstrapSecretHash))
         {
             return Result.Unauthorized("设备启动认证失败：启动密钥无效。");
         }
 
         return await IssueSessionAsync(
-            new CachedDeviceBootstrapIdentity(
+            new DeviceBootstrapIdentity(
                 device.Id,
                 device.DeviceName,
                 device.Code,
@@ -114,7 +73,7 @@ public class GetDeviceByInstanceHandler(
     }
 
     private async Task<Result<BootstrapDeviceSessionResult>> IssueSessionAsync(
-        CachedDeviceBootstrapIdentity identity,
+        DeviceBootstrapIdentity identity,
         CancellationToken cancellationToken)
     {
         var accessToken = jwtTokenGenerator.GenerateEdgeDeviceToken(

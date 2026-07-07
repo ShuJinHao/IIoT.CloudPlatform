@@ -7,7 +7,7 @@
     </div>
     <div class="binding-field">
       <label>云端地址（必填）</label>
-      <UiInput v-model:value="baseUrl" size="small" placeholder="例如 http://10.98.90.154:81" />
+      <UiInput v-model:value="baseUrl" size="small" placeholder="例如 http://cloud-host:81" />
     </div>
     <div v-if="plugins.length" class="plugin-list">
       <div v-for="plugin in plugins" :key="plugin.moduleId" class="plugin-item" :class="{ 'is-checked': isChecked(plugin.moduleId) }">

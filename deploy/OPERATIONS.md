@@ -62,7 +62,9 @@ Access policy:
 Example:
 
 ```sh
-curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' http://127.0.0.1:80/internal/healthz
+gateway_http_port=$(sed -n 's/^GATEWAY_HTTP_PORT=//p' .env | tail -n 1)
+gateway_http_port=${gateway_http_port:-80}
+curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' "http://127.0.0.1:${gateway_http_port}/internal/healthz"
 ```
 
 ## Standard Release
@@ -78,9 +80,9 @@ Routine deployment red lines:
 The standard sequence is:
 
 1. Push or merge to `main`.
-2. `cloud-ci` runs the fast gate by default: restore/build, ServiceLayer tests, ConfigurationGuard tests, web build, and compose config. Full EndToEnd is manual via `workflow_dispatch`.
+2. `cloud-ci` runs the fast gate by default: restore/build, ServiceLayer tests, ConfigurationGuard tests, deploy script syntax checks, web build, and compose config. Full EndToEnd is manual via `workflow_dispatch`.
 3. Run `deploy/scripts/local-release.sh --services <services> --ssh-target <user@host>` from the local repository. The script verifies clean worktree, pushed HEAD, Docker/buildx, Harbor access, and SSH target.
-4. `build-and-push.sh` builds selected images and pushes Harbor tags with `sha-<git-sha>`. It writes `artifacts/deploy/cloud-built-services.txt` and prints the same `Deploy services input`.
+4. `build-and-push.sh` builds selected images and pushes Harbor tags with `sha-<git-sha>`. It writes `artifacts/deploy/cloud-built-services.txt` and prints the same `Deploy services input`. If the selected services include `web` or use `--all`, pass `VITE_AICOPILOT_CHALLENGE_URL=http://<aicopilot-browser-reachable-host>:82/api/identity/cloud-oidc/challenge`; backend-only builds do not require it.
 5. `local-release.sh` SSHes to `/data/iiot-platform/cloud/deploy` and calls `DEPLOY_GIT_SHA=<sha> DEPLOY_TRIGGERED_BY=local ./scripts/deploy-release.sh sha-<sha> --services <services>`.
 
 Harbor application repositories keep only the current production `sha-*` tag. Local image build must not remove the current production tag before deploy health checks pass. Post-release cleanup deletes old application `sha-*` tags and Harbor Garbage Collection reclaims disk.
@@ -124,12 +126,16 @@ Release flow is fixed:
 5. `docker compose pull` selected application services from Harbor
 6. keep infrastructure available
 7. run `iiot-migration` only when migration is part of the selected service set
-8. start selected application containers
+8. start selected application containers, and start or restart `nginx-gateway` when the selected release affects browser traffic
 9. `post-deploy-check.sh`
 10. run post-release cleanup: remove Docker/BuildKit build cache, report and clean Docker-managed images separately from containerd-managed content, remove only local old application images that are not referenced by current containers, delete old Harbor application tags, and run or confirm Harbor GC
 11. rotate `current` / `previous`, write `current-release.summary.md`, and append `history`
 
-`pre-deploy-check.sh` runs the runtime parts of `ops-check.sh` with `REQUIRE_BACKUP=0` because the release sequence creates a fresh PostgreSQL backup in the next step before any container update. Normal operator runs of `./scripts/ops-check.sh` keep the default `REQUIRE_BACKUP=1` and still fail when the latest backup file, checksum, or freshness policy is not valid.
+`pre-deploy-check.sh` runs the runtime parts of `ops-check.sh` with `REQUIRE_BACKUP=0` because the release sequence creates a fresh PostgreSQL backup in the next step before any container update. It also uses `REQUIRE_DATAWORKER_HEALTHCHECK=${PRE_DEPLOY_REQUIRE_DATAWORKER_HEALTHCHECK:-0}` for the pre-update current-release check so an older running DataWorker image without the new Docker healthcheck cannot block upgrading to the fixed image. Normal operator runs of `./scripts/ops-check.sh` keep the defaults `REQUIRE_BACKUP=1` and `REQUIRE_DATAWORKER_HEALTHCHECK=1`, and still fail when the latest backup file, checksum, freshness policy, DataWorker Docker healthcheck definition, or DataWorker health status is not valid.
+
+`pre-deploy-check.sh` is also the HTTP-only compensation-control gate. It fails fast when runtime secrets still use template values or are too short, old bootstrap secret disabling variables are present, OIDC HTTP values are not loopback/RFC1918 IPv4, Edge upload rate-limit variables are invalid or exceed 12000/minute, application or infrastructure image values still point at documentation example registries, application images do not include an explicit Harbor registry, infrastructure images point at Docker Hub, the deploy command runs as root without an explicit break-glass flag, compose config is invalid, the OIDC signing certificate directory is not writable, or disk usage is at/above the routine release block threshold. Its summary must continue to print `preflight_transport_baseline=http-only` and `preflight_compensation_controls=...` so operators can see that HTTP is intentional and compensated rather than accidentally insecure. When `current-release.env` exists, the summary includes `healthz-http-local ops-check-runtime`; on a clean first deployment, it must instead include `runtime-check-skipped-no-current-release` because there is no previous runtime to probe.
+
+The local build, third-party image mirror, local SSH release, and Edge installer catalog verification scripts also reject `.example` / `internal.example` documentation domains. Replace every example registry, SSH target, AICopilot challenge URL, and catalog base URL with the real intranet values before running them.
 
 Release success order is fixed:
 
@@ -139,6 +145,29 @@ Release success order is fixed:
 4. `deploy/releases/current-release.env` points at the new `DEPLOY_RELEASE_ID`
 5. `deploy/releases/current-release.summary.md` records deployed services and git changes
 6. the release summary records before/after disk usage and cleanup results
+
+When closing the non-root container acceptance gate or validating an Edge installer/plugin release, first upload the real Edge installer bundle and plugin package through the approved Cloud release APIs, then run `POST_DEPLOY_VERIFY_EDGE_INSTALLER_CATALOG=1 ./scripts/post-deploy-check.sh`. Set `POST_DEPLOY_EDGE_EXPECTED_VERSION` to the uploaded host version and set `POST_DEPLOY_EDGE_EXPECTED_PLUGIN_MODULE_ID` plus `POST_DEPLOY_EDGE_EXPECTED_PLUGIN_VERSION` to the uploaded plugin module/version when plugin upload is part of the acceptance evidence. The gate verifies public catalog, installer artifact, installer stub, Velopack `RELEASES`, channel manifests, one referenced `.nupkg`, and the expected plugin module/version when those variables are provided. The default post-deploy smoke verifies `/`, `/internal/healthz`, OIDC discovery, JWKS, the DataWorker Docker healthcheck, and `ops-check.sh`, then prints skip lines for the OIDC token gate and Edge catalog gate so a Cloud-only deployment is not blocked by absent production credentials or an absent Edge release.
+
+OIDC token issuance can be checked only with a real authorization-code flow. To include it in post-deploy acceptance, first complete Cloud OIDC login/challenge from the real AICopilot client, capture the real one-time authorization code and matching PKCE verifier, then pass them through temporary 0600 files:
+
+```bash
+umask 077
+authorization_code_file=$(mktemp)
+code_verifier_file=$(mktemp)
+read -rsp 'OIDC authorization code: ' oidc_code; printf '\n'
+read -rsp 'OIDC PKCE verifier: ' oidc_verifier; printf '\n'
+printf '%s' "$oidc_code" > "$authorization_code_file"
+printf '%s' "$oidc_verifier" > "$code_verifier_file"
+unset oidc_code oidc_verifier
+POST_DEPLOY_VERIFY_OIDC_TOKEN=1 \
+POST_DEPLOY_OIDC_REDIRECT_URI=http://<aicopilot-private-ip>:82/api/identity/cloud-oidc/callback \
+POST_DEPLOY_OIDC_AUTHORIZATION_CODE_FILE="$authorization_code_file" \
+POST_DEPLOY_OIDC_CODE_VERIFIER_FILE="$code_verifier_file" \
+./scripts/post-deploy-check.sh
+rm -f "$authorization_code_file" "$code_verifier_file"
+```
+
+`POST_DEPLOY_OIDC_CLIENT_ID` defaults to `aicopilot`. The script posts `grant_type=authorization_code` to `/connect/token` and validates that the response contains a bearer `access_token`. It never fabricates user credentials, password grant, client credentials grant, or token values. The code/verifier files must be readable regular files, non-empty, and private to the current user; group/other permissions are rejected. The code/verifier must not be copied into logs, docs, shell history, process environment, or curl process arguments.
 
 Disk guardrails are fixed:
 
@@ -221,9 +250,11 @@ Publishing order:
 Validation examples:
 
 ```sh
-curl -I http://127.0.0.1:80/edge-updates/velopack/stable/RELEASES
-curl -I http://127.0.0.1:80/edge-updates/velopack/stable/<package-name>.nupkg
-curl -I http://127.0.0.1:80/edge-updates/
+gateway_http_port=$(sed -n 's/^GATEWAY_HTTP_PORT=//p' .env | tail -n 1)
+gateway_http_port=${gateway_http_port:-80}
+curl -I "http://127.0.0.1:${gateway_http_port}/edge-updates/velopack/stable/RELEASES"
+curl -I "http://127.0.0.1:${gateway_http_port}/edge-updates/velopack/stable/<package-name>.nupkg"
+curl -I "http://127.0.0.1:${gateway_http_port}/edge-updates/"
 ```
 
 Expected results:
