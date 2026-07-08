@@ -100,15 +100,22 @@ prepare_post_deploy_secret_file() {
   fi
 }
 
-verify_oidc_token_exchange() {
-  case "${POST_DEPLOY_VERIFY_OIDC_TOKEN:-0}" in
+post_deploy_enabled() {
+  case "${1:-0}" in
     1|true|TRUE|yes|YES)
-      ;;
-    *)
-      printf 'post_deploy_oidc_token=skipped set POST_DEPLOY_VERIFY_OIDC_TOKEN=1 with a real authorization code and PKCE verifier to verify token issuance\n'
       return 0
       ;;
+    *)
+      return 1
+      ;;
   esac
+}
+
+verify_oidc_token_exchange() {
+  if ! post_deploy_enabled "${POST_DEPLOY_VERIFY_OIDC_TOKEN:-0}"; then
+    printf 'post_deploy_oidc_token=skipped set POST_DEPLOY_VERIFY_OIDC_TOKEN=1 with a real authorization code and PKCE verifier to verify token issuance\n'
+    return 0
+  fi
 
   command -v python3 >/dev/null 2>&1 || {
     printf 'python3 is required when POST_DEPLOY_VERIFY_OIDC_TOKEN=1.\n' >&2
@@ -191,6 +198,31 @@ PY
   printf 'post_deploy_oidc_token=verified client_id=%s\n' "$client_id"
 }
 
+verify_edge_installer_catalog() {
+  if post_deploy_enabled "${POST_DEPLOY_VERIFY_EDGE_INSTALLER_CATALOG:-0}"; then
+    edge_channel=${POST_DEPLOY_EDGE_CHANNEL:-stable}
+    edge_target_runtime=${POST_DEPLOY_EDGE_TARGET_RUNTIME:-win-x64}
+    BASE_URL="$public_base_url" \
+      CHANNEL="$edge_channel" \
+      TARGET_RUNTIME="$edge_target_runtime" \
+      EXPECTED_VERSION="${POST_DEPLOY_EDGE_EXPECTED_VERSION:-}" \
+      EXPECTED_PLUGIN_MODULE_ID="${POST_DEPLOY_EDGE_EXPECTED_PLUGIN_MODULE_ID:-}" \
+      EXPECTED_PLUGIN_VERSION="${POST_DEPLOY_EDGE_EXPECTED_PLUGIN_VERSION:-}" \
+      "$SCRIPT_DIR/verify-edge-installer-catalog.sh"
+    printf 'post_deploy_edge_installer_catalog=verified channel=%s target_runtime=%s\n' \
+      "$edge_channel" \
+      "$edge_target_runtime"
+    return 0
+  fi
+
+  if post_deploy_enabled "${POST_DEPLOY_REQUIRE_EDGE_INSTALLER_CATALOG:-0}"; then
+    printf 'post_deploy_edge_installer_catalog=skipped required=1; Edge catalog verification is required for this deployment and cannot be skipped.\n' >&2
+    exit 1
+  fi
+
+  printf 'post_deploy_edge_installer_catalog=skipped set POST_DEPLOY_VERIFY_EDGE_INSTALLER_CATALOG=1 to verify public catalog and static downloads\n'
+}
+
 require_docker_compose
 load_dotenv
 
@@ -206,21 +238,7 @@ probe_status "${public_base_url}/internal/healthz" "200"
 probe_status "${public_base_url}/.well-known/openid-configuration" "200"
 probe_status "${public_base_url}/.well-known/jwks" "200"
 verify_oidc_token_exchange
-
-case "${POST_DEPLOY_VERIFY_EDGE_INSTALLER_CATALOG:-0}" in
-  1|true|TRUE|yes|YES)
-    BASE_URL="$public_base_url" \
-      CHANNEL="${POST_DEPLOY_EDGE_CHANNEL:-stable}" \
-      TARGET_RUNTIME="${POST_DEPLOY_EDGE_TARGET_RUNTIME:-win-x64}" \
-      EXPECTED_VERSION="${POST_DEPLOY_EDGE_EXPECTED_VERSION:-}" \
-      EXPECTED_PLUGIN_MODULE_ID="${POST_DEPLOY_EDGE_EXPECTED_PLUGIN_MODULE_ID:-}" \
-      EXPECTED_PLUGIN_VERSION="${POST_DEPLOY_EDGE_EXPECTED_PLUGIN_VERSION:-}" \
-      "$SCRIPT_DIR/verify-edge-installer-catalog.sh"
-    ;;
-  *)
-    printf 'post_deploy_edge_installer_catalog=skipped set POST_DEPLOY_VERIFY_EDGE_INSTALLER_CATALOG=1 to verify public catalog and static downloads\n'
-    ;;
-esac
+verify_edge_installer_catalog
 
 "$SCRIPT_DIR/ops-check.sh"
 

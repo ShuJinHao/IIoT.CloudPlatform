@@ -159,10 +159,23 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 pluginPackageRollbackTargets,
                 cancellationToken);
 
+            var publishedDirectories = new List<string>
+            {
+                installerTarget,
+                velopackTarget
+            };
+            publishedDirectories.AddRange(pluginPackages.Values.Select(package => Path.GetDirectoryName(package.PackagePath)!));
+            var publishedFiles = BuildRequiredPublishedHostFiles(installerTarget, velopackTarget, manifest)
+                .Concat(pluginPackages.Values.Select(package => package.PackagePath))
+                .ToList();
             EdgeReleasePublishedFilePermissions.EnsureGatewayReadable(
                 edgeRoot,
-                [installerTarget, velopackTarget, .. pluginPackages.Values.Select(package => Path.GetDirectoryName(package.PackagePath)!)],
-                pluginPackages.Values.Select(package => package.PackagePath));
+                publishedDirectories,
+                publishedFiles);
+            EdgeReleasePublishedFilePermissions.AssertPublishedPathsReady(
+                edgeRoot,
+                publishedDirectories,
+                publishedFiles);
 
             await UpsertDatabaseRowsAsync(
                 manifest,
@@ -1183,6 +1196,39 @@ public sealed class PublishEdgeReleaseBundleHandler(
         };
         urls.AddRange(pluginPackages.Select(package => package.DownloadUrl));
         return urls;
+    }
+
+    private static IReadOnlyList<string> BuildRequiredPublishedHostFiles(
+        string installerTarget,
+        string velopackTarget,
+        EdgeInstallerArtifactManifest manifest)
+    {
+        var files = new List<string>
+        {
+            Path.Combine(installerTarget, "installer-artifact.json"),
+            Path.Combine(installerTarget, manifest.InstallerStubFile),
+            Path.Combine(velopackTarget, "RELEASES")
+        };
+        files.AddRange(RequiredVelopackManifestNames.Select(name => Path.Combine(velopackTarget, name)));
+
+        var currentVersionNupkg = Directory
+            .EnumerateFiles(velopackTarget, "*.nupkg", SearchOption.TopDirectoryOnly)
+            .Where(file => FileNameContainsVersion(Path.GetFileName(file), manifest.Version))
+            .OrderBy(file => Path.GetFileName(file), StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(file =>
+            {
+                var fileName = Path.GetFileName(file);
+                return !string.IsNullOrWhiteSpace(fileName)
+                    && VelopackManifestsReferenceFile(velopackTarget, fileName);
+            });
+        if (currentVersionNupkg is null)
+        {
+            throw new InvalidDataException(
+                $"Edge 发布版本 {manifest.Channel}/{manifest.Version} 缺少被 Velopack manifests 引用的 .nupkg，拒绝置为 Published。");
+        }
+
+        files.Add(currentVersionNupkg);
+        return files;
     }
 
     private static IReadOnlyList<string> BuildComponentSummary(EdgeInstallerArtifactManifest manifest)

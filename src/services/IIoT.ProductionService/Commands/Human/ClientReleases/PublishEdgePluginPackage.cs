@@ -153,6 +153,10 @@ public sealed class PublishEdgePluginPackageHandler(
                 edgeRoot,
                 [packageTargetDirectory],
                 [targetPackagePath]);
+            EdgeReleasePublishedFilePermissions.AssertPublishedPathsReady(
+                edgeRoot,
+                [packageTargetDirectory],
+                [targetPackagePath]);
             var downloadUrl = BuildPluginDownloadUrl(
                 metadata.Channel,
                 metadata.ModuleId,

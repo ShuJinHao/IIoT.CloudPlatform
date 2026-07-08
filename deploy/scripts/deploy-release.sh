@@ -213,6 +213,17 @@ ensure_nginx_gateway_if_needed() {
   esac
 }
 
+requires_edge_installer_catalog_verification() {
+  case " $RUNTIME_SELECTED_SERVICES " in
+    *" iiot-httpapi "*|*" iiot-gateway "*|*" iiot-web "*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 SELECTED_SERVICES=$(normalize_services "$REQUESTED_SERVICES")
 SELECTED_IMAGE_KEYS=""
 RUNTIME_SELECTED_SERVICES=""
@@ -292,7 +303,17 @@ if [ -n "$RUNTIME_SELECTED_SERVICES" ]; then
   fi
 fi
 ensure_nginx_gateway_if_needed
-COMPOSE_ENV_FILE="$TEMP_RELEASE_ENV_FILE" "$SCRIPT_DIR/post-deploy-check.sh"
+post_deploy_verify_edge_installer_catalog=${POST_DEPLOY_VERIFY_EDGE_INSTALLER_CATALOG:-0}
+post_deploy_require_edge_installer_catalog=${POST_DEPLOY_REQUIRE_EDGE_INSTALLER_CATALOG:-0}
+if requires_edge_installer_catalog_verification; then
+  printf 'Edge installer catalog verification is required for selected Cloud download services: %s\n' "$RUNTIME_SELECTED_SERVICES"
+  post_deploy_verify_edge_installer_catalog=1
+  post_deploy_require_edge_installer_catalog=1
+fi
+COMPOSE_ENV_FILE="$TEMP_RELEASE_ENV_FILE" \
+  POST_DEPLOY_VERIFY_EDGE_INSTALLER_CATALOG="$post_deploy_verify_edge_installer_catalog" \
+  POST_DEPLOY_REQUIRE_EDGE_INSTALLER_CATALOG="$post_deploy_require_edge_installer_catalog" \
+  "$SCRIPT_DIR/post-deploy-check.sh"
 
 cp "$TEMP_RELEASE_ENV_FILE" "$DEPLOY_DIR/.env"
 

@@ -320,6 +320,47 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
+    public async Task PublishEdgeReleaseBundleHandler_ShouldRejectPublishedHost_WhenCurrentVersionNupkgIsMissingFromVelopackManifests()
+    {
+        const string version = "1.2.6";
+        var edgeRoot = CreateTempDirectory("iiot-edge-upload-root");
+        var bundle = CreateEdgeReleaseBundle(
+            version,
+            mutateVelopackRoot: velopackRoot =>
+            {
+                File.Delete(Path.Combine(velopackRoot, $"IIoT.EdgeClient-{version}-full.nupkg"));
+                WriteFile(Path.Combine(velopackRoot, "IIoT.EdgeClient-9.9.9-full.nupkg"), "wrong nupkg");
+                WriteFile(Path.Combine(velopackRoot, "RELEASES-stable"), "hash IIoT.EdgeClient-9.9.9-full.nupkg 1024");
+                WriteFile(Path.Combine(velopackRoot, "releases.stable.json"), """{"packages":["IIoT.EdgeClient-9.9.9-full.nupkg"]}""");
+                WriteFile(Path.Combine(velopackRoot, "assets.stable.json"), """{"assets":["IIoT.EdgeClient-9.9.9-full.nupkg"]}""");
+            });
+        try
+        {
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            var auditTrail = new RecordingAuditTrailService();
+            var handler = CreatePublishHandler(edgeRoot, componentRepository, new NoopRetentionService(), auditTrail);
+
+            var result = await PublishBundleAsync(handler, bundle.ZipPath);
+
+            Assert.False(result.IsSuccess);
+            Assert.Contains(
+                result.Errors ?? [],
+                error => error.Contains("缺少被 Velopack manifests 引用的 .nupkg", StringComparison.Ordinal));
+            Assert.Empty(componentRepository.Items);
+            Assert.False(Directory.Exists(Path.Combine(edgeRoot, "installers", "stable", version)));
+            Assert.Contains(
+                auditTrail.Entries,
+                entry => !entry.Succeeded
+                         && entry.FailureReason?.Contains("拒绝置为 Published", StringComparison.Ordinal) == true);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            bundle.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task PublishEdgePluginPackageHandler_ShouldPublishIndependentPluginZip()
     {
         var edgeRoot = CreateTempDirectory("iiot-edge-plugin-upload-root");

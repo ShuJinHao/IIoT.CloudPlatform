@@ -2167,6 +2167,13 @@ public sealed class ConfigurationGuardTests
         deployReleaseSource.Should().Contain("Starting nginx-gateway because the selected release affects browser traffic");
         deployReleaseSource.Should().Contain("compose up -d nginx-gateway");
         deployReleaseSource.Should().Contain("compose run -T --rm iiot-migration");
+        deployReleaseSource.Should().Contain("requires_edge_installer_catalog_verification");
+        deployReleaseSource.Should().Contain("*\" iiot-httpapi \"*|*\" iiot-gateway \"*|*\" iiot-web \"*)");
+        deployReleaseSource.Should().Contain("Edge installer catalog verification is required for selected Cloud download services");
+        deployReleaseSource.Should().Contain("post_deploy_verify_edge_installer_catalog=1");
+        deployReleaseSource.Should().Contain("post_deploy_require_edge_installer_catalog=1");
+        deployReleaseSource.Should().Contain("POST_DEPLOY_VERIFY_EDGE_INSTALLER_CATALOG=\"$post_deploy_verify_edge_installer_catalog\"");
+        deployReleaseSource.Should().Contain("POST_DEPLOY_REQUIRE_EDGE_INSTALLER_CATALOG=\"$post_deploy_require_edge_installer_catalog\"");
         deployReleaseSource.Should().Contain("\"$SCRIPT_DIR/post-deploy-check.sh\"");
         deployReleaseSource.Should().Contain("cp \"$CURRENT_RELEASE_FILE\" \"$PREVIOUS_RELEASE_FILE\"");
         deployReleaseSource.Should().Contain("record_release_history");
@@ -2199,7 +2206,9 @@ public sealed class ConfigurationGuardTests
         postDeploySource.Should().NotContain("--data-urlencode \"code=$authorization_code\"");
         postDeploySource.Should().NotContain("--data-urlencode \"code_verifier=$code_verifier\"");
         postDeploySource.Should().Contain("post_deploy_oidc_token=verified");
+        postDeploySource.Should().Contain("post_deploy_enabled");
         postDeploySource.Should().Contain("POST_DEPLOY_VERIFY_EDGE_INSTALLER_CATALOG");
+        postDeploySource.Should().Contain("POST_DEPLOY_REQUIRE_EDGE_INSTALLER_CATALOG");
         postDeploySource.Should().Contain("BASE_URL=\"$public_base_url\"");
         postDeploySource.Should().Contain("POST_DEPLOY_EDGE_CHANNEL");
         postDeploySource.Should().Contain("POST_DEPLOY_EDGE_TARGET_RUNTIME");
@@ -2207,6 +2216,9 @@ public sealed class ConfigurationGuardTests
         postDeploySource.Should().Contain("POST_DEPLOY_EDGE_EXPECTED_PLUGIN_MODULE_ID");
         postDeploySource.Should().Contain("POST_DEPLOY_EDGE_EXPECTED_PLUGIN_VERSION");
         postDeploySource.Should().Contain("\"$SCRIPT_DIR/verify-edge-installer-catalog.sh\"");
+        postDeploySource.Should().Contain("post_deploy_edge_installer_catalog=verified");
+        postDeploySource.Should().Contain("post_deploy_edge_installer_catalog=skipped required=1");
+        postDeploySource.Should().Contain("Edge catalog verification is required for this deployment and cannot be skipped");
         postDeploySource.Should().Contain("\"$SCRIPT_DIR/ops-check.sh\"");
 
         rollbackSource.Should().Contain("resolve_release_file_path");
