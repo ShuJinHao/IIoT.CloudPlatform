@@ -11,7 +11,9 @@ public sealed class ClientReleaseComponentConfiguration : IEntityTypeConfigurati
         builder.ToTable("edge_client_release_components");
 
         builder.HasKey(component => component.Id);
-        builder.Property(component => component.Id).HasColumnName("id");
+        builder.Property(component => component.Id)
+            .ValueGeneratedNever()
+            .HasColumnName("id");
 
         builder.Property(component => component.ComponentKind)
             .IsRequired()
@@ -94,7 +96,9 @@ public sealed class ClientReleaseVersionConfiguration : IEntityTypeConfiguration
         builder.ToTable("edge_client_release_versions");
 
         builder.HasKey(version => version.Id);
-        builder.Property(version => version.Id).HasColumnName("id");
+        builder.Property(version => version.Id)
+            .ValueGeneratedNever()
+            .HasColumnName("id");
 
         builder.Property(version => version.ClientReleaseComponentId)
             .IsRequired()
@@ -201,7 +205,9 @@ public sealed class ClientReleaseArtifactConfiguration : IEntityTypeConfiguratio
         builder.ToTable("edge_client_release_artifacts");
 
         builder.HasKey(artifact => artifact.Id);
-        builder.Property(artifact => artifact.Id).HasColumnName("id");
+        builder.Property(artifact => artifact.Id)
+            .ValueGeneratedNever()
+            .HasColumnName("id");
 
         builder.Property(artifact => artifact.ClientReleaseVersionId)
             .IsRequired()
