@@ -46,6 +46,136 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
+    public async Task ClientReleaseComponent_ShouldNotTouchHostComponent_WhenAppendingNewVersion()
+    {
+        var component = CreateHostComponent(
+            "stable",
+            "1.0.0",
+            "1",
+            "win-x64",
+            "net10.0",
+            "/edge-updates/installers/stable/1.0.0/installer-artifact.json",
+            new string('a', 64),
+            100,
+            "initial",
+            ClientReleaseStatus.Published);
+        var updatedAt = component.UpdatedAtUtc;
+
+        await Task.Delay(20);
+        component.UpdateHostMetadata();
+        component.UpsertHostVersion(
+            "1.0.1",
+            "1",
+            "net10.0",
+            "/edge-updates/installers/stable/1.0.1/installer-artifact.json",
+            new string('b', 64),
+            101,
+            "second",
+            ClientReleaseStatus.Published,
+            null,
+            "IIoT");
+
+        Assert.Equal(updatedAt, component.UpdatedAtUtc);
+        Assert.NotNull(component.FindVersion("1.0.1"));
+    }
+
+    [Fact]
+    public async Task ClientReleaseComponent_ShouldTouchHostComponent_WhenUpdatingExistingVersion()
+    {
+        var component = CreateHostComponent(
+            "stable",
+            "1.0.0",
+            "1",
+            "win-x64",
+            "net10.0",
+            "/edge-updates/installers/stable/1.0.0/installer-artifact.json",
+            new string('a', 64),
+            100,
+            "initial",
+            ClientReleaseStatus.Published);
+        var updatedAt = component.UpdatedAtUtc;
+
+        await Task.Delay(20);
+        component.UpsertHostVersion(
+            "1.0.0",
+            "1",
+            "net10.0",
+            "/edge-updates/installers/stable/1.0.0/installer-artifact.json",
+            new string('b', 64),
+            101,
+            "updated",
+            ClientReleaseStatus.Published,
+            null,
+            "IIoT");
+
+        Assert.True(component.UpdatedAtUtc > updatedAt);
+    }
+
+    [Fact]
+    public async Task ClientReleaseComponent_ShouldTouchPluginComponentOnlyForMetadataOrExistingVersionChanges()
+    {
+        var component = CreatePluginComponent(
+            "Homogenization",
+            "匀浆",
+            "stable",
+            "1.0.0",
+            "1",
+            "1.0.0",
+            "99.0.0",
+            "win-x64",
+            "net10.0",
+            "/edge-updates/plugins/stable/Homogenization/1.0.0/plugin.zip",
+            new string('a', 64),
+            100,
+            "initial",
+            ClientReleaseStatus.Published);
+        var updatedAt = component.UpdatedAtUtc;
+
+        await Task.Delay(20);
+        component.UpdatePluginMetadata("匀浆", null, null, null);
+        component.UpsertPluginVersion(
+            "1.0.1",
+            "1",
+            "1.0.0",
+            "99.0.0",
+            "net10.0",
+            "/edge-updates/plugins/stable/Homogenization/1.0.1/plugin.zip",
+            new string('b', 64),
+            101,
+            "second",
+            "[]",
+            ClientReleaseStatus.Published,
+            null,
+            "IIoT");
+
+        Assert.Equal(updatedAt, component.UpdatedAtUtc);
+
+        await Task.Delay(20);
+        component.UpdatePluginMetadata("匀浆插件", null, null, null);
+        var metadataUpdatedAt = component.UpdatedAtUtc;
+
+        Assert.True(metadataUpdatedAt > updatedAt);
+
+        await Task.Delay(20);
+        component.UpsertPluginVersion(
+            "1.0.1",
+            "1",
+            "1.0.0",
+            "99.0.0",
+            "net10.0",
+            "/edge-updates/plugins/stable/Homogenization/1.0.1/plugin-v2.zip",
+            new string('c', 64),
+            102,
+            "updated",
+            "[]",
+            ClientReleaseStatus.Published,
+            null,
+            "IIoT");
+
+        Assert.True(component.UpdatedAtUtc > metadataUpdatedAt);
+    }
+
+    [Fact]
     public void PublishEdgeReleaseBundleCommand_ShouldRequirePublishPermissionWithoutAdminOnly()
     {
         var permission = typeof(PublishEdgeReleaseBundleCommand)

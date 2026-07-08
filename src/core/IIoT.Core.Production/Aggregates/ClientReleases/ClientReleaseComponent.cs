@@ -99,6 +99,14 @@ public sealed class ClientReleaseComponent : BaseEntity<Guid>, IAggregateRoot<Gu
     public void UpdateHostMetadata()
     {
         EnsureKind(ClientReleaseComponentKind.Host);
+        if (DisplayName == "Edge Host" &&
+            Description is null &&
+            IconKind is null &&
+            AccentColor is null)
+        {
+            return;
+        }
+
         DisplayName = "Edge Host";
         Description = null;
         IconKind = null;
@@ -113,10 +121,22 @@ public sealed class ClientReleaseComponent : BaseEntity<Guid>, IAggregateRoot<Gu
         string? accentColor)
     {
         EnsureKind(ClientReleaseComponentKind.Plugin);
-        DisplayName = NormalizeRequired(displayName, nameof(displayName));
-        Description = NormalizeOptional(description);
-        IconKind = NormalizeOptional(iconKind);
-        AccentColor = NormalizeOptional(accentColor);
+        var normalizedDisplayName = NormalizeRequired(displayName, nameof(displayName));
+        var normalizedDescription = NormalizeOptional(description);
+        var normalizedIconKind = NormalizeOptional(iconKind);
+        var normalizedAccentColor = NormalizeOptional(accentColor);
+        if (DisplayName == normalizedDisplayName &&
+            Description == normalizedDescription &&
+            IconKind == normalizedIconKind &&
+            AccentColor == normalizedAccentColor)
+        {
+            return;
+        }
+
+        DisplayName = normalizedDisplayName;
+        Description = normalizedDescription;
+        IconKind = normalizedIconKind;
+        AccentColor = normalizedAccentColor;
         Touch();
     }
 
@@ -153,21 +173,20 @@ public sealed class ClientReleaseComponent : BaseEntity<Guid>, IAggregateRoot<Gu
                 publishedAtUtc,
                 artifacts);
             _versions.Add(release);
+            return release;
         }
-        else
-        {
-            release.UpdateHost(
-                hostApiVersion,
-                targetFramework,
-                downloadUrl,
-                sha256,
-                packageSize,
-                releaseNotes,
-                status,
-                signature,
-                publisher,
-                artifacts);
-        }
+
+        release.UpdateHost(
+            hostApiVersion,
+            targetFramework,
+            downloadUrl,
+            sha256,
+            packageSize,
+            releaseNotes,
+            status,
+            signature,
+            publisher,
+            artifacts);
 
         Touch();
         return release;
@@ -212,24 +231,23 @@ public sealed class ClientReleaseComponent : BaseEntity<Guid>, IAggregateRoot<Gu
                 publishedAtUtc,
                 artifacts);
             _versions.Add(release);
+            return release;
         }
-        else
-        {
-            release.UpdatePlugin(
-                hostApiVersion,
-                minHostVersion,
-                maxHostVersion,
-                targetFramework,
-                downloadUrl,
-                sha256,
-                packageSize,
-                releaseNotes,
-                dependenciesJson,
-                status,
-                signature,
-                publisher,
-                artifacts);
-        }
+
+        release.UpdatePlugin(
+            hostApiVersion,
+            minHostVersion,
+            maxHostVersion,
+            targetFramework,
+            downloadUrl,
+            sha256,
+            packageSize,
+            releaseNotes,
+            dependenciesJson,
+            status,
+            signature,
+            publisher,
+            artifacts);
 
         Touch();
         return release;
