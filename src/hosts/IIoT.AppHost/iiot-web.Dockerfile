@@ -17,8 +17,8 @@ COPY src/hosts/IIoT.AppHost/iiot-web.nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 
 RUN sed -i \
-        -e 's#pid /var/run/nginx.pid;#pid /tmp/nginx.pid;#' \
-        -e 's#pid /run/nginx.pid;#pid /tmp/nginx.pid;#' \
+        -e 's#^pid[[:space:]][[:space:]]*/var/run/nginx.pid;#pid /tmp/nginx.pid;#' \
+        -e 's#^pid[[:space:]][[:space:]]*/run/nginx.pid;#pid /tmp/nginx.pid;#' \
         /etc/nginx/nginx.conf \
     && sed -i '/^http {/a\    client_body_temp_path /tmp/nginx/client_temp;\n    proxy_temp_path /tmp/nginx/proxy_temp;\n    fastcgi_temp_path /tmp/nginx/fastcgi_temp;\n    uwsgi_temp_path /tmp/nginx/uwsgi_temp;\n    scgi_temp_path /tmp/nginx/scgi_temp;' /etc/nginx/nginx.conf \
     && mkdir -p /tmp/nginx/client_temp /tmp/nginx/proxy_temp /tmp/nginx/fastcgi_temp /tmp/nginx/uwsgi_temp /tmp/nginx/scgi_temp \
