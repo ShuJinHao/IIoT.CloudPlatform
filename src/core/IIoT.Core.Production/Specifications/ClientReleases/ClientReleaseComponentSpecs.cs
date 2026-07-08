@@ -26,6 +26,26 @@ public sealed class ClientReleaseComponentByIdentitySpec : Specification<ClientR
     }
 }
 
+public sealed class ClientReleaseComponentRootByIdentitySpec : Specification<ClientReleaseComponent>
+{
+    public ClientReleaseComponentRootByIdentitySpec(
+        ClientReleaseComponentKind componentKind,
+        string componentKey,
+        string channel,
+        string targetRuntime)
+    {
+        var normalizedComponentKey = componentKey.Trim();
+        var normalizedChannel = channel.Trim();
+        var normalizedTargetRuntime = targetRuntime.Trim();
+
+        FilterCondition = component =>
+            component.ComponentKind == componentKind
+            && component.ComponentKey == normalizedComponentKey
+            && component.Channel == normalizedChannel
+            && component.TargetRuntime == normalizedTargetRuntime;
+    }
+}
+
 public sealed class ClientReleaseComponentByVersionIdSpec : Specification<ClientReleaseComponent>
 {
     public ClientReleaseComponentByVersionIdSpec(Guid versionId)

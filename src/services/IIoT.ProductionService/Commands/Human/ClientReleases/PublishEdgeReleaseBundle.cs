@@ -682,14 +682,13 @@ public sealed class PublishEdgeReleaseBundleHandler(
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var existingComponent = await componentRepository.GetSingleOrDefaultAsync(
-                new ClientReleaseComponentByIdentitySpec(
-                    ClientReleaseComponentKind.Plugin,
-                    module.ModuleId,
-                    manifest.Channel,
-                    manifest.TargetRuntime),
-                cancellationToken);
-            if (existingComponent?.FindVersion(module.Version) is not null)
+            if (await ReleaseVersionExistsAsync(
+                ClientReleaseComponentKind.Plugin,
+                module.ModuleId,
+                manifest.Channel,
+                manifest.TargetRuntime,
+                module.Version,
+                cancellationToken))
             {
                 continue;
             }
@@ -756,8 +755,19 @@ public sealed class PublishEdgeReleaseBundleHandler(
         IReadOnlyList<VelopackFileChange> velopackChanges,
         CancellationToken cancellationToken)
     {
+        if (await ReleaseVersionExistsAsync(
+            ClientReleaseComponentKind.Host,
+            ClientReleaseComponent.HostComponentKey,
+            manifest.Channel,
+            manifest.TargetRuntime,
+            manifest.Version,
+            cancellationToken))
+        {
+            throw new InvalidDataException($"Edge 发布版本已存在，默认不覆盖: {manifest.Channel}/{manifest.Version}。");
+        }
+
         var hostComponent = await componentRepository.GetSingleOrDefaultAsync(
-            new ClientReleaseComponentByIdentitySpec(
+            new ClientReleaseComponentRootByIdentitySpec(
                 ClientReleaseComponentKind.Host,
                 ClientReleaseComponent.HostComponentKey,
                 manifest.Channel,
@@ -799,15 +809,13 @@ public sealed class PublishEdgeReleaseBundleHandler(
 
         foreach (var module in manifest.Modules)
         {
-            var pluginComponent = await componentRepository.GetSingleOrDefaultAsync(
-                new ClientReleaseComponentByIdentitySpec(
-                    ClientReleaseComponentKind.Plugin,
-                    module.ModuleId,
-                    manifest.Channel,
-                    manifest.TargetRuntime),
-                cancellationToken);
-
-            if (pluginComponent?.FindVersion(module.Version) is not null)
+            if (await ReleaseVersionExistsAsync(
+                ClientReleaseComponentKind.Plugin,
+                module.ModuleId,
+                manifest.Channel,
+                manifest.TargetRuntime,
+                module.Version,
+                cancellationToken))
             {
                 continue;
             }
@@ -816,6 +824,14 @@ public sealed class PublishEdgeReleaseBundleHandler(
             {
                 throw new InvalidDataException($"插件 {module.ModuleId} 缺少可安装的独立发布包。");
             }
+
+            var pluginComponent = await componentRepository.GetSingleOrDefaultAsync(
+                new ClientReleaseComponentRootByIdentitySpec(
+                    ClientReleaseComponentKind.Plugin,
+                    module.ModuleId,
+                    manifest.Channel,
+                    manifest.TargetRuntime),
+                cancellationToken);
 
             if (pluginComponent is null)
             {
@@ -864,6 +880,28 @@ public sealed class PublishEdgeReleaseBundleHandler(
         }
 
         await componentRepository.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task<bool> ReleaseVersionExistsAsync(
+        ClientReleaseComponentKind componentKind,
+        string componentKey,
+        string channel,
+        string targetRuntime,
+        string version,
+        CancellationToken cancellationToken)
+    {
+        var normalizedComponentKey = componentKey.Trim();
+        var normalizedChannel = channel.Trim();
+        var normalizedTargetRuntime = targetRuntime.Trim();
+        var normalizedVersion = version.Trim();
+        return await componentRepository.AnyAsync(
+            component =>
+                component.ComponentKind == componentKind
+                && component.ComponentKey == normalizedComponentKey
+                && component.Channel == normalizedChannel
+                && component.TargetRuntime == normalizedTargetRuntime
+                && component.Versions.Any(release => release.Version == normalizedVersion),
+            cancellationToken);
     }
 
     private async Task ApplyRetentionAsync(
