@@ -879,7 +879,40 @@ public sealed class PublishEdgeReleaseBundleHandler(
 
         }
 
-        await componentRepository.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await componentRepository.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception ex) when (IsEfConcurrencyException(ex))
+        {
+            throw new InvalidOperationException(
+                $"Edge release rows save hit EF concurrency on entries: {FormatConcurrencyEntries(ex)}",
+                ex);
+        }
+    }
+
+    private static bool IsEfConcurrencyException(Exception exception)
+        => exception.GetType().FullName == "Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException";
+
+    private static string FormatConcurrencyEntries(Exception exception)
+    {
+        var entriesValue = exception.GetType().GetProperty("Entries")?.GetValue(exception) as System.Collections.IEnumerable;
+        if (entriesValue is null)
+        {
+            return "none";
+        }
+
+        var entries = entriesValue
+            .Cast<object>()
+            .Select(entry =>
+            {
+                var entity = entry.GetType().GetProperty("Entity")?.GetValue(entry);
+                var state = entry.GetType().GetProperty("State")?.GetValue(entry);
+                return $"{entity?.GetType().Name ?? "unknown"}:{state ?? "unknown"}";
+            })
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        return entries.Length == 0 ? "none" : string.Join(", ", entries);
     }
 
     private async Task<bool> ReleaseVersionExistsAsync(
