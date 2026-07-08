@@ -6,7 +6,7 @@ WORKDIR /src
 
 COPY . .
 RUN dotnet restore "src/hosts/IIoT.HttpApi/IIoT.HttpApi.csproj"
-RUN dotnet publish "src/hosts/IIoT.HttpApi/IIoT.HttpApi.csproj" -c Release -o /app/publish /p:UseAppHost=false
+RUN dotnet publish "src/hosts/IIoT.HttpApi/IIoT.HttpApi.csproj" -c Release -o /app/publish /p:UseAppHost=false --no-restore
 
 FROM ${DOTNET_ASPNET_IMAGE} AS final
 WORKDIR /app
