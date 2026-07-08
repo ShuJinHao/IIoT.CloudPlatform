@@ -244,6 +244,13 @@ public sealed class ClientReleaseBehaviorTests
             Assert.Null(result.Value.CleanupWarning);
             Assert.True(Directory.Exists(Path.Combine(edgeRoot, "installers", "stable", "1.2.0")));
             Assert.True(File.Exists(Path.Combine(edgeRoot, "velopack", "stable", "releases.stable.json")));
+            Assert.True(File.Exists(Path.Combine(edgeRoot, "velopack", "stable", "RELEASES")));
+            AssertGatewayReadableDirectory(edgeRoot);
+            AssertGatewayReadableDirectory(Path.Combine(edgeRoot, "installers", "stable", "1.2.0"));
+            AssertGatewayReadableFile(Path.Combine(edgeRoot, "installers", "stable", "1.2.0", "installer-artifact.json"));
+            AssertGatewayReadableDirectory(Path.Combine(edgeRoot, "velopack", "stable"));
+            AssertGatewayReadableFile(Path.Combine(edgeRoot, "velopack", "stable", "RELEASES"));
+            AssertGatewayReadableFile(Path.Combine(edgeRoot, "velopack", "stable", "releases.stable.json"));
             Assert.Equal(2, componentRepository.Items.Count);
             var pluginRelease = SingleVersion(SingleComponent(
                 componentRepository,
@@ -253,6 +260,8 @@ public sealed class ClientReleaseBehaviorTests
             var pluginPackage = Assert.Single(Directory.GetFiles(
                 Path.Combine(edgeRoot, "plugins", "stable", "Homogenization", "1.0.0"),
                 "*.zip"));
+            AssertGatewayReadableDirectory(Path.GetDirectoryName(pluginPackage)!);
+            AssertGatewayReadableFile(pluginPackage);
             Assert.Equal(HashFile(pluginPackage), pluginRelease.Sha256);
             Assert.Equal(new FileInfo(pluginPackage).Length, pluginRelease.PackageSize);
             Assert.Contains(auditTrail.Entries, entry => entry.Succeeded && entry.OperationType == "ClientRelease.Publish");
@@ -334,6 +343,9 @@ public sealed class ClientReleaseBehaviorTests
             Assert.Equal("独立插件更新", release.ReleaseNotes);
             Assert.StartsWith("/edge-updates/plugins/stable/Homogenization/1.1.0/", release.DownloadUrl);
             var package = Assert.Single(Directory.GetFiles(Path.Combine(edgeRoot, "plugins", "stable", "Homogenization", "1.1.0"), "*.zip"));
+            AssertGatewayReadableDirectory(edgeRoot);
+            AssertGatewayReadableDirectory(Path.GetDirectoryName(package)!);
+            AssertGatewayReadableFile(package);
             Assert.Equal(HashFile(package), release.Sha256);
             Assert.Contains(auditTrail.Entries, entry => entry.Succeeded && entry.OperationType == "ClientRelease.PublishPlugin");
         }
@@ -1299,6 +1311,7 @@ public sealed class ClientReleaseBehaviorTests
         WriteFile(Path.Combine(installerRoot, "velopack", "IIoT.Edge.Setup.exe"), $"velopack setup {version}");
 
         WriteFile(Path.Combine(velopackRoot, $"IIoT.EdgeClient-{version}-full.nupkg"), $"nupkg {version}");
+        WriteFile(Path.Combine(velopackRoot, "RELEASES-stable"), $"hash IIoT.EdgeClient-{version}-full.nupkg 1024");
         WriteFile(Path.Combine(velopackRoot, "releases.stable.json"), $$"""{"packages":["IIoT.EdgeClient-{{version}}-full.nupkg"]}""");
         WriteFile(Path.Combine(velopackRoot, "assets.stable.json"), $$"""{"assets":["IIoT.EdgeClient-{{version}}-full.nupkg"]}""");
 
@@ -1460,6 +1473,31 @@ public sealed class ClientReleaseBehaviorTests
     private static long GetDirectorySize(string directory)
         => Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
             .Sum(file => new FileInfo(file).Length);
+
+    private static void AssertGatewayReadableDirectory(string path)
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+        {
+            return;
+        }
+
+        var mode = File.GetUnixFileMode(path);
+        Assert.True((mode & UnixFileMode.OtherRead) != 0, $"{path} must be readable by nginx gateway user.");
+        Assert.True((mode & UnixFileMode.OtherExecute) != 0, $"{path} must be traversable by nginx gateway user.");
+        Assert.False((mode & UnixFileMode.OtherWrite) != 0, $"{path} must not be world-writable.");
+    }
+
+    private static void AssertGatewayReadableFile(string path)
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+        {
+            return;
+        }
+
+        var mode = File.GetUnixFileMode(path);
+        Assert.True((mode & UnixFileMode.OtherRead) != 0, $"{path} must be readable by nginx gateway user.");
+        Assert.False((mode & UnixFileMode.OtherWrite) != 0, $"{path} must not be world-writable.");
+    }
 
     private static void TryDeleteDirectory(string path)
     {

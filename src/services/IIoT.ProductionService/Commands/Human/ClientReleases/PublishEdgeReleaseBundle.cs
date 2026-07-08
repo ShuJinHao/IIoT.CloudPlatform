@@ -159,6 +159,11 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 pluginPackageRollbackTargets,
                 cancellationToken);
 
+            EdgeReleasePublishedFilePermissions.EnsureGatewayReadable(
+                edgeRoot,
+                [installerTarget, velopackTarget, .. pluginPackages.Values.Select(package => Path.GetDirectoryName(package.PackagePath)!)],
+                pluginPackages.Values.Select(package => package.PackagePath));
+
             await UpsertDatabaseRowsAsync(
                 manifest,
                 BuildManifestDownloadUrl(channel, version),
@@ -573,6 +578,12 @@ public sealed class PublishEdgeReleaseBundleHandler(
             }
         }
 
+        if (!File.Exists(Path.Combine(velopackRoot, "RELEASES"))
+            && !Directory.EnumerateFiles(velopackRoot, "RELEASES-*", SearchOption.TopDirectoryOnly).Any())
+        {
+            return "Edge 发布包缺少 Velopack RELEASES 清单。";
+        }
+
         if (!Directory.EnumerateFiles(velopackRoot, "*.nupkg", SearchOption.TopDirectoryOnly).Any())
         {
             return "Edge 发布包缺少 Velopack .nupkg。";
@@ -663,7 +674,43 @@ public sealed class PublishEdgeReleaseBundleHandler(
             File.Copy(file.Path, targetPath, overwrite: true);
         }
 
+        EnsureStandardVelopackReleasesFile(sourceRoot, targetRoot, backupRoot, changes);
+
         return new VelopackFilePublishTransaction(targetRoot, changes);
+    }
+
+    private static void EnsureStandardVelopackReleasesFile(
+        string sourceRoot,
+        string targetRoot,
+        string backupRoot,
+        ICollection<VelopackFileChange> changes)
+    {
+        if (File.Exists(Path.Combine(sourceRoot, "RELEASES")))
+        {
+            return;
+        }
+
+        var channelReleasesSource = Directory
+            .EnumerateFiles(sourceRoot, "RELEASES-*", SearchOption.TopDirectoryOnly)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+        if (channelReleasesSource is null)
+        {
+            return;
+        }
+
+        var targetPath = Path.Combine(targetRoot, "RELEASES");
+        Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+        string? backupPath = null;
+        if (File.Exists(targetPath))
+        {
+            backupPath = Path.Combine(backupRoot, "RELEASES");
+            Directory.CreateDirectory(Path.GetDirectoryName(backupPath)!);
+            File.Copy(targetPath, backupPath, overwrite: false);
+        }
+
+        changes.Add(new VelopackFileChange("RELEASES", targetPath, backupPath));
+        File.Copy(channelReleasesSource, targetPath, overwrite: true);
     }
 
     private async Task<IReadOnlyDictionary<string, PluginPackagePublishArtifact>> PublishMissingPluginPackagesAsync(
@@ -1130,6 +1177,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
         {
             $"/edge-updates/installers/{channel}/{version}/installer-artifact.json",
             $"/edge-updates/installers/{channel}/{version}/IIoT.Edge.Setup.exe",
+            $"/edge-updates/velopack/{channel}/RELEASES",
             $"/edge-updates/velopack/{channel}/releases.{channel}.json",
             $"/edge-updates/velopack/{channel}/assets.{channel}.json"
         };
@@ -1268,7 +1316,8 @@ public sealed class PublishEdgeReleaseBundleHandler(
     private static bool IsVelopackChannelManifest(string relativePath)
         => relativePath.Equals("releases.stable.json", StringComparison.OrdinalIgnoreCase)
             || relativePath.Equals("assets.stable.json", StringComparison.OrdinalIgnoreCase)
-            || relativePath.Equals("RELEASES", StringComparison.OrdinalIgnoreCase);
+            || relativePath.Equals("RELEASES", StringComparison.OrdinalIgnoreCase)
+            || relativePath.StartsWith("RELEASES-", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsSha256(string? value)
         => !string.IsNullOrWhiteSpace(value) && Sha256Pattern.IsMatch(value);
