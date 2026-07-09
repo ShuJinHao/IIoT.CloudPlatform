@@ -5,7 +5,7 @@ public sealed class EdgeReleaseUploadOptions
     public const string SectionName = "EdgeReleaseUpload";
     public const long DefaultMaxBundleBytes = 2L * 1024 * 1024 * 1024;
 
-    public int MaxUploadMbps { get; set; } = 100;
+    public int MaxUploadMbps { get; set; } = 1000;
 
     public long MaxBundleBytes { get; set; } = DefaultMaxBundleBytes;
 

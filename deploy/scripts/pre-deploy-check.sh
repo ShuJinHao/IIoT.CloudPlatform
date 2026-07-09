@@ -31,6 +31,7 @@ ensure_infra_images_not_docker_hub
 resolve_release_images "$RELEASE_TAG"
 ensure_target_images_not_latest
 compose config -q
+"$SCRIPT_DIR/check-release-state-access.sh"
 "$SCRIPT_DIR/ensure-oidc-signing-cert.sh"
 sh "$SCRIPT_DIR/check-container-nonroot-readiness.sh"
 ensure_deploy_disk_headroom

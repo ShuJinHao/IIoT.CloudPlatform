@@ -1,6 +1,13 @@
 # IIoT Cloud Harbor CICD And Private Server Deploy
 
-本目录是 `IIoT.CloudPlatform` 当前生产部署入口。云端标准发布以操作者本机构建镜像、推送 Harbor、再通过 SSH 触发服务器本地发布脚本为准；GitHub Actions 只保留 CI 留痕和灾备手动入口，不再作为日常生产镜像构建或部署入口。三项目上传部署统一入口见 [上传部署总览](../../docs/上传部署总览.md)。
+本目录是 `IIoT.CloudPlatform` 当前生产部署实现目录。云端标准发布以操作者本机构建镜像、推送 Harbor、再通过 SSH 触发服务器本地发布脚本为准；GitHub Actions 只保留 CI 留痕和灾备手动入口，不再作为日常生产镜像构建或部署入口。三项目上传部署统一人类入口见 [上传部署总览](../../docs/上传部署总览.md)，统一可执行入口见工作区根 `deploy/Invoke-WorkspaceDeploy.ps1`。
+
+工作区标准入口示例：
+
+```powershell
+pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services web -DryRun
+pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services httpapi,gateway,dataworker,migration,web -ValidateOnly
+```
 
 ## 部署口径
 
@@ -8,8 +15,8 @@
 - 生产版本统一使用 `release_tag = sha-*`，`latest` 不能作为生产应用版本。
 - 多 agent 并行部署只按 [上传部署总览](../../docs/上传部署总览.md) 的“多 agent 并行部署”执行；Cloud agent 只负责 Cloud 镜像、Cloud deploy 和 Cloud 验证。
 - Cloud 应用镜像不保留历史版本；Harbor 和服务器本机只保留当前生产正在运行的 `sha-*` 应用镜像。
-- 日常部署必须先 push GitHub，再由本机脚本确认 HEAD 已推送且工作区干净，随后本机构建受影响应用镜像并推送 Harbor。
-- 日常部署使用 `deploy/scripts/local-release.sh --services <services>` 或 `--all`；脚本会调用 `build-and-push.sh`，再通过 SSH 到服务器执行 `deploy/scripts/deploy-release.sh`。
+- 日常部署必须先 push GitHub，再由工作区标准入口确认标准参数、本机脚本或服务器门禁，随后本机构建受影响应用镜像并推送 Harbor。
+- 工作区外部标准入口是 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud ...`；本目录的 `deploy/scripts/local-release.sh` 与 `build-and-push.sh` 继续作为 Cloud 被调度实现脚本。
 - 传入 `services` 时只拉取并重启指定服务；首次部署或需要全量时必须显式传 `--all`。
 - `cloud-image` / `cloud-deploy` 只保留灾备手动入口，必须输入确认词；不得在日常生产发布中等待这些 workflow。
 - 单个镜像 build/push 默认 15 分钟超时，Harbor 登录/API 检查默认 2 分钟超时，SSH deploy 默认 40 分钟超时；超时必须停止并按脚本输出诊断 Docker buildx、Harbor tag、服务器 compose/logs 和 release 状态，不得继续 watch 或无限等待。
@@ -24,6 +31,13 @@
 - self-hosted runner 安装和权限要求见 [RUNNER.md](./RUNNER.md)。
 - 运维、备份、恢复和检查细节见 [OPERATIONS.md](./OPERATIONS.md)。
 - Cloud 下载中心生成 Edge 客户端 `.exe` 的上线顺序见 [EDGE_INSTALLER_GO_LIVE.md](./EDGE_INSTALLER_GO_LIVE.md)。
+
+当前部署文档按双层口径维护：
+
+- 长期模板/规则：描述标准 Harbor/SSH/non-root 发布链路、红线、应急条件和恢复动作，不写真实密码或真实 token。
+- 当前生产现场口径：当前 Cloud 部署目录是 `/data/iiot-platform/cloud/deploy`，标准部署用户是 `github-runner`，Docker Root Dir 是 `/data/iiot-platform/runtime/docker`，Edge 发布上传默认值是 `1000 Mbps`。
+- 当前与 `AICopilot` 共用同一台生产宿主机，但部署根独立：AICopilot 当前根目录是 `/srv/enterprise-ai/deploy`。两条日常 SSH 发布链路都走 `github-runner` 非 root 路径；这轮 root-owned 漂移已确认发生在 Cloud 根，不是整机通用故障。
+- `certs/` 与 `releases/current-release*`、`staged-release*`、`previous-release*` 都必须对标准 non-root 部署用户可读可写；root 应急路径一旦写入这些状态，关闭任务前必须恢复 owner/mode 并重新验证标准 non-root preflight。
 
 ## 运行拓扑
 
@@ -130,7 +144,7 @@ Edge 客户端产物不属于 Cloud Docker 镜像，也不进入 Harbor。当前
 
 - `push main`：只跑 smoke 编译和测试，不发布安装包。
 - `workflow_dispatch` 或 `edge-v*` / `v*` tag：由 GitHub hosted `windows-latest` 构建 runtime、installer artifact 和 Velopack releases，再由内网 `iiot-linux-prod` runner 把 GitHub Actions artifacts 发布到 `${EDGE_UPDATES_DIR}`，渠道固定为 `stable`。
-- 日常宿主快发：操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1 -Transport http`，本机编译、Velopack 打包、生成 installer artifact 后，通过 Cloud Human API 上传 release bundle。上传默认限速 `100 Mbps`、单并发、服务端审计，渠道固定为 `stable`。这是本机运维快发路径，不是 GitHub CI/CD job。生产 `stable` 不允许用 `rsync/scp`。
+- 日常宿主快发：操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1 -Transport http`，本机编译、Velopack 打包、生成 installer artifact 后，通过 Cloud Human API 上传 release bundle。Cloud 服务端默认限速 `1000 Mbps`、单并发、服务端审计，渠道固定为 `stable`。这是本机运维快发路径，不是 GitHub CI/CD job。生产 `stable` 不允许用 `rsync/scp`。
 - 日常插件快发：只改工序插件时运行 `IIoT.EdgeClient/scripts/PublishEdgePluginRelease.ps1`，Cloud 通过 `POST /api/v1/human/client-releases/plugin-packages` 收独立插件 zip，落盘到 `${EDGE_UPDATES_DIR}/plugins/stable/<ModuleId>/<version>/` 并写插件 release。
 - Edge 更新内容必须显式填写。本机快发传 `-ReleaseNotes` 或 `-ReleaseNotesPath`；正式 `workflow_dispatch` 填 `release_notes`；tag 发布必须使用带正文的 annotated tag。Cloud Human 发布接口和 host/plugin release upsert 会拒绝 `Published` 空更新内容。
 
@@ -292,8 +306,21 @@ OIDC 签名证书是 Cloud 本地 token 签名证书，不是公网 HTTPS 证书
 
 ```sh
 sudo mkdir -p /data/iiot-platform/cloud/deploy/certs
-sudo chown -R deploy:deploy /data/iiot-platform/cloud/deploy/certs
+sudo chown -R github-runner:github-runner /data/iiot-platform/cloud/deploy/certs
 sudo chmod 755 /data/iiot-platform/cloud/deploy/certs
+```
+
+同一轮标准 non-root 发布还要求 release state 保持可访问。`pre-deploy-check.sh` 现在会先校验：
+
+- `deploy/releases/`、`deploy/releases/history/` 目录对标准部署用户可读、可写、可遍历。
+- 已存在的 `current-release.env`、`previous-release.env`、`staged-release.env`、`current-release.summary.md` 对标准部署用户可读可写。
+
+如果之前走过 root 应急路径，必须先恢复 owner/mode，例如：
+
+```sh
+sudo chown -R github-runner:github-runner /data/iiot-platform/cloud/deploy/releases
+sudo find /data/iiot-platform/cloud/deploy/releases -type d -exec chmod 755 {} +
+sudo find /data/iiot-platform/cloud/deploy/releases -type f -exec chmod 600 {} +
 ```
 
 ## 标准发布步骤
@@ -302,7 +329,7 @@ sudo chmod 755 /data/iiot-platform/cloud/deploy/certs
 
 1. 合并或推送到 `main`，保证 GitHub 有本次源码留痕。
 2. `cloud-ci` 默认只跑快速验证：restore/build、ServiceLayer、ConfigurationGuard、部署脚本语法检查、前端 build、compose config；完整 EndToEnd 只在手动 `workflow_dispatch` 勾选时运行。
-3. 本机运行 `deploy/scripts/local-release.sh --services <services> --ssh-target <user@host>`；脚本会校验工作区干净、HEAD 已推送到 GitHub、Docker/buildx/Harbor 可用。服务包含 `web` 或使用 `--all` 时，必须同时传入 `VITE_AICOPILOT_CHALLENGE_URL=http://<aicopilot-browser-reachable-host>:82/api/identity/cloud-oidc/challenge`。
+3. 在工作区根运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services <services>`；顶层入口会调度 `deploy/scripts/local-release.sh`，并校验工作区干净、HEAD 已推送到 GitHub、Docker/buildx/Harbor 可用。服务包含 `web` 或使用 `-All` 时，会从 `deploy/profiles/current-production.json` 读取当前 challenge URL。
 4. 本机 `build-and-push.sh` 按服务构建并推送 `sha-<git-sha>` 镜像到 Harbor，输出 `Deploy services input` 和 `artifacts/deploy/cloud-built-services.txt`。
 5. 本机脚本通过 SSH 在服务器 `/data/iiot-platform/cloud/deploy` 执行 `DEPLOY_GIT_SHA=<sha> DEPLOY_TRIGGERED_BY=local ./scripts/deploy-release.sh sha-<sha> --services <services>`。
 6. 服务器端 `deploy-release.sh` 执行 pre-check、PostgreSQL backup、镜像 pull、容器启动、健康检查、发布后清理和 release history。
@@ -340,7 +367,7 @@ DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh 
 
 发布脚本会：
 
-1. 执行 `pre-deploy-check.sh`。
+1. 执行 `pre-deploy-check.sh`，它会同时校验 `.env`、镜像、`certs/` 和 `releases/*` 的 non-root 可访问性。
 2. 执行 `postgres-backup.sh`。
 3. 根据 release tag 重写应用镜像坐标；全量发布重写五个应用镜像，按需发布必须已有 `current-release.env`，并基于当前 release 保留未选服务镜像。
 4. `docker compose pull` 从 Harbor 拉取应用镜像。
@@ -351,7 +378,7 @@ DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh 
 9. 执行发布后磁盘清理：清 BuildKit cache、分开清理 Docker/containerd 旧应用镜像、删 Harbor 旧应用 tag 后执行或确认 GC。
 10. 写入 `deploy/releases/current-release.env`、`previous-release.env`、`staged-release.env`、`current-release.summary.md` 和 `history/`。
 
-`pre-deploy-check.sh` 会复用 `ops-check.sh` 检查运行状态、Outbox、队列和 Timescale 状态，但发布前不把旧备份状态作为强 gate；发布流程下一步会立即执行 `postgres-backup.sh`，备份失败会在任何容器更新前中止。pre-deploy 检查的是更新前的当前运行版本，默认使用 `REQUIRE_DATAWORKER_HEALTHCHECK=0`，避免旧 DataWorker 镜像缺少新 healthcheck 时阻断升级到修复版本。干净首部署没有 `current-release.env` 时不存在旧运行态可检查，preflight 摘要必须打印 `runtime-check-skipped-no-current-release`，不能写成 healthz/ops-check 已通过；已有当前版本时才打印 `healthz-http-local ops-check-runtime`。日常手工巡检直接执行 `./scripts/ops-check.sh` 时仍默认要求最新备份文件、checksum、新鲜度和 DataWorker Docker healthcheck 有效。
+`pre-deploy-check.sh` 会复用 `ops-check.sh` 检查运行状态、Outbox、队列和 Timescale 状态，但发布前不把旧备份状态作为强 gate；发布流程下一步会立即执行 `postgres-backup.sh`，备份失败会在任何容器更新前中止。pre-deploy 检查的是更新前的当前运行版本，默认使用 `REQUIRE_DATAWORKER_HEALTHCHECK=0`，避免旧 DataWorker 镜像缺少新 healthcheck 时阻断升级到修复版本。它也会在 OIDC 证书检查之前先验证 `releases/*` 状态文件是否仍对标准 non-root 部署用户可读可写，防止 root 应急路径留下的 owner/mode 漂移到真正发布阶段才爆炸。干净首部署没有 `current-release.env` 时不存在旧运行态可检查，preflight 摘要必须打印 `runtime-check-skipped-no-current-release`，不能写成 healthz/ops-check 已通过；已有当前版本时才打印 `healthz-http-local ops-check-runtime`。日常手工巡检直接执行 `./scripts/ops-check.sh` 时仍默认要求最新备份文件、checksum、新鲜度和 DataWorker Docker healthcheck 有效。
 
 成功条件：
 

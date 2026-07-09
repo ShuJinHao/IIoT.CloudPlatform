@@ -40,7 +40,7 @@ public sealed class ClientReleaseBehaviorTests
     {
         var options = new EdgeReleaseUploadOptions();
 
-        Assert.Equal(100, options.MaxUploadMbps);
+        Assert.Equal(1000, options.MaxUploadMbps);
         Assert.Equal(EdgeReleaseUploadOptions.DefaultMaxBundleBytes, options.MaxBundleBytes);
         Assert.Equal(".staging", options.StagingDirectoryName);
     }

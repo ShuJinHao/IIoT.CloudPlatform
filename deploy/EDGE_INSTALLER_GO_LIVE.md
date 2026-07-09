@@ -47,7 +47,7 @@ cd src/ui/iiot-web && npm run build
 
 1. 推送或合并到 `main`。
 2. 在本机确认 HEAD 已推送且工作区干净。
-3. 运行 `REGISTRY=<harbor-registry> VITE_AICOPILOT_CHALLENGE_URL=http://<aicopilot-browser-reachable-host>:82/api/identity/cloud-oidc/challenge DEPLOY_SSH_TARGET=deploy@<cloud-host> ./deploy/scripts/local-release.sh --services web`；如后端接口也改动，则按实际服务传入 `httpapi,gateway,dataworker,migration,web` 的子集。
+3. 运行 `REGISTRY=<harbor-registry> VITE_AICOPILOT_CHALLENGE_URL=http://<aicopilot-browser-reachable-host>:82/api/identity/cloud-oidc/challenge DEPLOY_SSH_TARGET=github-runner@<shared-host> ./deploy/scripts/local-release.sh --services web`；如后端接口也改动，则按实际服务传入 `httpapi,gateway,dataworker,migration,web` 的子集。
 4. 确认服务器 `post-deploy-check.sh`、`ops-check.sh` 和发布后清理摘要通过。
 
 本机 `build-and-push.sh` 会给 Web Dockerfile 传入 `VITE_AICOPILOT_CHALLENGE_URL`，并使用 Harbor mirror 中的 `node:22-slim`、`nginx:1.27-alpine` 基础镜像。服务器不依赖 Docker Hub。单镜像 build/push 超过 15 分钟必须停止诊断，不得等待灾备 GitHub workflow。
@@ -107,7 +107,7 @@ pwsh <IIoT.EdgeClient>\scripts\LocalPublishAndDeploy.ps1 `
   -CloudApiBaseUrl http://<cloud-host>:81/api/v1 `
   -CloudToken $env:IIOT_CLOUD_RELEASE_TOKEN `
   -ReleaseNotesPath <本次更新说明.md> `
-  -UploadRateLimitMbps 100
+  -UploadRateLimitMbps 1000
 ```
 
 快发脚本未传 `-Version` 时会通过 Cloud Human catalog 查询 stable 最新版本并自动递增 patch。上传完成后，Cloud 服务端先校验和落盘 bundle，再从 manifest 派生 DB release 行、写入审计，按 SemVer 执行最新 3 个 stable 版本保留策略，并返回本次部署总结。脚本必须打印 version、sourceCommit、releaseNotes、上传耗时、限速、清理结果和 HTTP 验证结果。

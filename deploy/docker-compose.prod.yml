@@ -122,7 +122,7 @@ services:
       EdgeInstallerArtifacts__RootPath: /app/edge-updates/installers
       EdgeInstallerArtifacts__VelopackReleasesBaseUrl: ${PUBLIC_BASE_URL}/edge-updates/velopack
       EdgeRelease__MaxVersionsPerComponent: ${EDGE_RELEASE_MAX_VERSIONS_PER_COMPONENT:-3}
-      EdgeReleaseUpload__MaxUploadMbps: ${EDGE_RELEASE_UPLOAD_MAX_MBPS:-100}
+      EdgeReleaseUpload__MaxUploadMbps: ${EDGE_RELEASE_UPLOAD_MAX_MBPS:-1000}
       EdgeReleaseUpload__MaxBundleBytes: ${EDGE_RELEASE_UPLOAD_MAX_BUNDLE_BYTES:-2147483648}
       Infrastructure__Postgres__EnableRetry: ${POSTGRES_ENABLE_RETRY:-true}
       Infrastructure__EventBus__ConcurrentMessageLimit: ${EVENTBUS_CONCURRENT_MESSAGE_LIMIT:-16}

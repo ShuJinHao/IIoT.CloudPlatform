@@ -45,6 +45,7 @@ sudo chown -R github-runner:github-runner /data/github-runner/cloud /data/iiot-p
 
 如果 `${DEPLOY_TARGET_DIR}` 已有生产数据，调整权限前先确认现有 owner 和 backup 策略，不要删除 `.env`、`backups/`、`certs/`、`releases/`。当前生产服务器 `DEPLOY_TARGET_DIR=/data/iiot-platform/cloud/deploy`。
 `certs/` 必须允许 `github-runner` 写入；首次部署时 `pre-deploy-check.sh` 会生成持久化的 Cloud OIDC PFX。
+`releases/` 和 `releases/history/` 也必须允许 `github-runner` 读写；已有 `current-release.env`、`previous-release.env`、`staged-release.env` 和 `current-release.summary.md` 一旦被 root 应急路径写成 root-owned，下一轮标准 non-root 发布会被 preflight 直接拦下。
 
 ## GitHub Secrets
 

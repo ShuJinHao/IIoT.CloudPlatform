@@ -1988,7 +1988,7 @@ public sealed class ConfigurationGuardTests
         localReleaseSource.Should().Contain("refuses root SSH by default");
         localReleaseSource.Should().Contain("ALLOW_ROOT_SSH_DEPLOY=emergency");
         localReleaseSource.Should().Contain("SSH target still uses the documentation example domain");
-        localReleaseSource.Should().Contain("deploy@<cloud-host>");
+        localReleaseSource.Should().Contain("github-runner@<shared-host>");
         localReleaseSource.Should().NotContain("deploy@cloud.internal.example");
         localReleaseSource.Should().NotContain("--ssh-target root@10.98.90.154");
         buildAndPushSource.Should().Contain("REGISTRY is required");

@@ -41,6 +41,12 @@ Each release record keeps only:
 
 It does not duplicate database passwords or other runtime secrets.
 
+Routine non-root contract:
+
+- `deploy/releases/` and `deploy/releases/history/` must stay readable, writable, and searchable by the standard deploy user.
+- Existing `current-release.env`, `previous-release.env`, `staged-release.env`, and `current-release.summary.md` must stay readable and writable by the standard deploy user.
+- If a root emergency path touched release-state files, restore owner/mode before the next routine deploy.
+
 ## Internal Health Probe
 
 Production readiness for this batch is:
@@ -69,7 +75,7 @@ curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' "http
 
 ## Standard Release
 
-Standard production release is driven from the operator workstation: push GitHub for source traceability, build selected application images locally, push Harbor, then SSH-trigger the server-side release entrypoint.
+Standard production release is driven from the operator workstation: push GitHub for source traceability, run the workspace entrypoint `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud ...`, build selected application images locally, push Harbor, then SSH-trigger the server-side release entrypoint.
 
 Routine deployment red lines:
 
@@ -81,7 +87,7 @@ The standard sequence is:
 
 1. Push or merge to `main`.
 2. `cloud-ci` runs the fast gate by default: restore/build, ServiceLayer tests, ConfigurationGuard tests, deploy script syntax checks, web build, and compose config. Full EndToEnd is manual via `workflow_dispatch`.
-3. Run `deploy/scripts/local-release.sh --services <services> --ssh-target <user@host>` from the local repository. The script verifies clean worktree, pushed HEAD, Docker/buildx, Harbor access, and SSH target.
+3. Run `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services <services>` from the workspace root for the standard path. It delegates to `deploy/scripts/local-release.sh`, which verifies clean worktree, pushed HEAD, Docker/buildx, Harbor access, and SSH target.
 4. `build-and-push.sh` builds selected images and pushes Harbor tags with `sha-<git-sha>`. It writes `artifacts/deploy/cloud-built-services.txt` and prints the same `Deploy services input`. If the selected services include `web` or use `--all`, pass `VITE_AICOPILOT_CHALLENGE_URL=http://<aicopilot-browser-reachable-host>:82/api/identity/cloud-oidc/challenge`; backend-only builds do not require it.
 5. `local-release.sh` SSHes to `/data/iiot-platform/cloud/deploy` and calls `DEPLOY_GIT_SHA=<sha> DEPLOY_TRIGGERED_BY=local ./scripts/deploy-release.sh sha-<sha> --services <services>`.
 
@@ -133,7 +139,7 @@ Release flow is fixed:
 
 `pre-deploy-check.sh` runs the runtime parts of `ops-check.sh` with `REQUIRE_BACKUP=0` because the release sequence creates a fresh PostgreSQL backup in the next step before any container update. It also uses `REQUIRE_DATAWORKER_HEALTHCHECK=${PRE_DEPLOY_REQUIRE_DATAWORKER_HEALTHCHECK:-0}` for the pre-update current-release check so an older running DataWorker image without the new Docker healthcheck cannot block upgrading to the fixed image. Normal operator runs of `./scripts/ops-check.sh` keep the defaults `REQUIRE_BACKUP=1` and `REQUIRE_DATAWORKER_HEALTHCHECK=1`, and still fail when the latest backup file, checksum, freshness policy, DataWorker Docker healthcheck definition, or DataWorker health status is not valid.
 
-`pre-deploy-check.sh` is also the HTTP-only compensation-control gate. It fails fast when runtime secrets still use template values or are too short, old bootstrap secret disabling variables are present, OIDC HTTP values are not loopback/RFC1918 IPv4, Edge upload rate-limit variables are invalid or exceed 12000/minute, application or infrastructure image values still point at documentation example registries, application images do not include an explicit Harbor registry, infrastructure images point at Docker Hub, the deploy command runs as root without an explicit break-glass flag, compose config is invalid, the OIDC signing certificate directory is not writable, or disk usage is at/above the routine release block threshold. Its summary must continue to print `preflight_transport_baseline=http-only` and `preflight_compensation_controls=...` so operators can see that HTTP is intentional and compensated rather than accidentally insecure. When `current-release.env` exists, the summary includes `healthz-http-local ops-check-runtime`; on a clean first deployment, it must instead include `runtime-check-skipped-no-current-release` because there is no previous runtime to probe.
+`pre-deploy-check.sh` is also the HTTP-only compensation-control gate. It fails fast when runtime secrets still use template values or are too short, old bootstrap secret disabling variables are present, OIDC HTTP values are not loopback/RFC1918 IPv4, Edge upload rate-limit variables are invalid or exceed 12000/minute, application or infrastructure image values still point at documentation example registries, application images do not include an explicit Harbor registry, infrastructure images point at Docker Hub, the deploy command runs as root without an explicit break-glass flag, compose config is invalid, the release-state files under `deploy/releases/` are not writable by the standard non-root deploy user, the OIDC signing certificate directory is not writable, or disk usage is at/above the routine release block threshold. Its summary must continue to print `preflight_transport_baseline=http-only` and `preflight_compensation_controls=...` so operators can see that HTTP is intentional and compensated rather than accidentally insecure. When `current-release.env` exists, the summary includes `healthz-http-local ops-check-runtime`; on a clean first deployment, it must instead include `runtime-check-skipped-no-current-release` because there is no previous runtime to probe.
 
 The local build, third-party image mirror, local SSH release, and Edge installer catalog verification scripts also reject `.example` / `internal.example` documentation domains. Replace every example registry, SSH target, AICopilot challenge URL, and catalog base URL with the real intranet values before running them.
 

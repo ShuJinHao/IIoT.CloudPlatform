@@ -15,11 +15,11 @@ SSH_TIMEOUT_SECONDS="${SSH_TIMEOUT_SECONDS:-2400}"
 usage() {
   cat <<'EOF'
 Usage:
-  REGISTRY=<harbor-registry> deploy/scripts/local-release.sh --services httpapi,gateway,dataworker,migration --ssh-target deploy@<cloud-host>
+  REGISTRY=<harbor-registry> deploy/scripts/local-release.sh --services httpapi,gateway,dataworker,migration --ssh-target github-runner@<shared-host>
   REGISTRY=<harbor-registry> VITE_AICOPILOT_CHALLENGE_URL=http://<aicopilot-browser-reachable-host>:82/api/identity/cloud-oidc/challenge \
-    deploy/scripts/local-release.sh --services web --ssh-target deploy@<cloud-host>
+    deploy/scripts/local-release.sh --services web --ssh-target github-runner@<shared-host>
   REGISTRY=<harbor-registry> VITE_AICOPILOT_CHALLENGE_URL=http://<aicopilot-browser-reachable-host>:82/api/identity/cloud-oidc/challenge \
-    deploy/scripts/local-release.sh --all --ssh-target deploy@<cloud-host>
+    deploy/scripts/local-release.sh --all --ssh-target github-runner@<shared-host>
 
 Builds selected Cloud images locally, pushes Harbor tags, then SSH-triggers
 the server-side deploy/scripts/deploy-release.sh entrypoint.
