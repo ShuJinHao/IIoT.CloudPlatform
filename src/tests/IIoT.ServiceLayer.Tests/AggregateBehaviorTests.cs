@@ -4,7 +4,6 @@ using IIoT.Core.MasterData.Aggregates.MfgProcesses;
 using IIoT.Core.MasterData.Aggregates.MfgProcesses.Events;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.Devices.Events;
-using IIoT.Core.Production.Aggregates.EdgeHosts;
 using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.Core.Production.Aggregates.Recipes.Events;
 using Xunit;
@@ -86,53 +85,6 @@ public sealed class AggregateBehaviorTests
         Assert.Equal("DEV-0001", device.Code);
         Assert.Contains(device.DomainEvents, e => e is DeviceRenamedDomainEvent);
         Assert.Contains(device.DomainEvents, e => e is DeviceDeletedDomainEvent);
-    }
-
-    [Fact]
-    public void EdgeHost_ShouldMaintainDynamicPlcBindingsInsideAggregate()
-    {
-        var processId = Guid.NewGuid();
-        var businessDeviceId = Guid.NewGuid();
-        var edgeHost = new EdgeHost(Guid.NewGuid(), " edge-host-01 ", " Cutting Host ", " main host ");
-
-        var binding = edgeHost.AddPlcBinding(
-            " plc-01 ",
-            " Die Cut PLC ",
-            processId,
-            businessDeviceId,
-            " ST-01 ",
-            " S7 ",
-            " 192.168.1.10 ",
-            10,
-            " first plc ");
-
-        Assert.Equal("EDGE-HOST-01", edgeHost.ClientCode);
-        Assert.Equal("Cutting Host", edgeHost.HostName);
-        Assert.Equal("main host", edgeHost.Remark);
-        Assert.Equal("PLC-01", binding.PlcCode);
-        Assert.Equal("Die Cut PLC", binding.PlcName);
-        Assert.Equal(processId, binding.ProcessId);
-        Assert.Equal(businessDeviceId, binding.BusinessDeviceId);
-        Assert.Equal("ST-01", binding.StationCode);
-        Assert.Equal("S7", binding.Protocol);
-        Assert.Equal("192.168.1.10", binding.Address);
-        Assert.True(binding.Enabled);
-        Assert.Single(edgeHost.PlcBindings);
-
-        Assert.Throws<InvalidOperationException>(() => edgeHost.AddPlcBinding("PLC-01", "Duplicate"));
-
-        edgeHost.UpdatePlcBinding(binding.Id, "Die Cut PLC A", displayOrder: 20);
-        edgeHost.DisablePlcBinding(binding.Id);
-
-        Assert.Equal("Die Cut PLC A", binding.PlcName);
-        Assert.Equal(20, binding.DisplayOrder);
-        Assert.False(binding.Enabled);
-
-        edgeHost.EnablePlcBinding(binding.Id);
-        edgeHost.RemovePlcBinding(binding.Id);
-
-        Assert.True(binding.Enabled);
-        Assert.Empty(edgeHost.PlcBindings);
     }
 
     [Fact]

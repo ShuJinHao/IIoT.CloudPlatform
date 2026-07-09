@@ -1,10 +1,12 @@
+using IIoT.Core.Production.Aggregates.ClientReleases;
+using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.EdgeHosts;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Core.Production.Contracts.EdgeHosts;
-using IIoT.Core.Production.Specifications.EdgeHosts;
+using IIoT.Core.Production.Specifications.Devices;
 using IIoT.ProductionService.EdgeHosts;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
-using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Paging;
@@ -19,163 +21,156 @@ public sealed record GetEdgeHostPagedListQuery(
     string? Keyword = null) : IHumanQuery<Result<PagedList<EdgeHostListItemDto>>>;
 
 [AuthorizeRequirement(EdgeHostPermissions.Read)]
-public sealed record GetEdgeHostDetailQuery(Guid EdgeHostId) : IHumanQuery<Result<EdgeHostDto>>;
+public sealed record GetEdgeHostDetailQuery(Guid DeviceId) : IHumanQuery<Result<EdgeHostDto>>;
 
 [AuthorizeRequirement(EdgeHostPermissions.Read)]
-public sealed record GetEdgeHostPlcRuntimeStatesQuery(Guid EdgeHostId)
+public sealed record GetEdgeHostPlcRuntimeStatesQuery(Guid DeviceId)
     : IHumanQuery<Result<IReadOnlyList<EdgeHostPlcRuntimeStateDto>>>;
 
-[AuthorizeRequirement(EdgeHostPermissions.Read)]
-[AuthorizeRequirement(DevicePermissions.Read)]
-public sealed record GetEdgeHostPlcCapacitySummaryQuery(
-    Guid EdgeHostId,
-    DateOnly Date) : IHumanQuery<Result<IReadOnlyList<EdgeHostPlcCapacitySummaryDto>>>;
-
 public sealed class GetEdgeHostPagedListHandler(
-    IReadRepository<EdgeHost> edgeHostRepository)
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
+    IEdgeHostOverviewQueryService overviewQueryService,
+    IDeviceClientStateStore clientStateStore,
+    IEdgeHostPlcRuntimeStateStore runtimeStateStore)
     : IQueryHandler<GetEdgeHostPagedListQuery, Result<PagedList<EdgeHostListItemDto>>>
 {
     public async Task<Result<PagedList<EdgeHostListItemDto>>> Handle(
         GetEdgeHostPagedListQuery request,
         CancellationToken cancellationToken)
     {
-        var skip = (request.PaginationParams.PageNumber - 1) * request.PaginationParams.PageSize;
-        var take = request.PaginationParams.PageSize;
-
-        var totalCount = await edgeHostRepository.CountAsync(
-            new EdgeHostPagedSpec(0, 0, request.Keyword, isPaging: false),
-            cancellationToken);
-
-        List<EdgeHost> list = [];
-        if (totalCount > 0)
-        {
-            list = await edgeHostRepository.GetListAsync(
-                new EdgeHostPagedSpec(skip, take, request.Keyword, isPaging: true),
-                cancellationToken);
-        }
-
-        var items = list.Select(EdgeHostMapping.ToListItemDto).ToList();
-        return Result.Success(new PagedList<EdgeHostListItemDto>(items, totalCount, request.PaginationParams));
-    }
-}
-
-public sealed class GetEdgeHostDetailHandler(
-    IReadRepository<EdgeHost> edgeHostRepository)
-    : IQueryHandler<GetEdgeHostDetailQuery, Result<EdgeHostDto>>
-{
-    public async Task<Result<EdgeHostDto>> Handle(
-        GetEdgeHostDetailQuery request,
-        CancellationToken cancellationToken)
-    {
-        var host = await edgeHostRepository.GetSingleOrDefaultAsync(
-            new EdgeHostByIdSpec(request.EdgeHostId),
-            cancellationToken);
-
-        return host is null
-            ? Result.NotFound("上位机不存在。")
-            : Result.Success(EdgeHostMapping.ToDto(host));
-    }
-}
-
-public sealed class GetEdgeHostPlcCapacitySummaryHandler(
-    IReadRepository<EdgeHost> edgeHostRepository,
-    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
-    ICapacityQueryService capacityQueryService)
-    : IQueryHandler<GetEdgeHostPlcCapacitySummaryQuery, Result<IReadOnlyList<EdgeHostPlcCapacitySummaryDto>>>
-{
-    private const string StatusReady = "Ready";
-    private const string StatusNoBusinessDevice = "NoBusinessDevice";
-    private const string StatusBindingDisabled = "BindingDisabled";
-    private const string StatusNoDeviceAccess = "NoDeviceAccess";
-    private const string StatusNoCapacityData = "NoCapacityData";
-
-    public async Task<Result<IReadOnlyList<EdgeHostPlcCapacitySummaryDto>>> Handle(
-        GetEdgeHostPlcCapacitySummaryQuery request,
-        CancellationToken cancellationToken)
-    {
-        var host = await edgeHostRepository.GetSingleOrDefaultAsync(
-            new EdgeHostByIdSpec(request.EdgeHostId),
-            cancellationToken);
-        if (host is null)
-        {
-            return Result.NotFound("上位机不存在。");
-        }
-
         var scope = await currentUserDeviceAccessService.GetAccessibleDeviceIdsAsync(cancellationToken);
         if (!scope.IsSuccess)
         {
             return Result.Failure(scope.Errors?.ToArray() ?? ["用户凭证异常"]);
         }
 
-        var items = new List<EdgeHostPlcCapacitySummaryDto>();
-        foreach (var binding in host.PlcBindings
-                     .OrderBy(binding => binding.DisplayOrder)
-                     .ThenBy(binding => binding.PlcCode, StringComparer.OrdinalIgnoreCase))
+        var allowedDeviceIds = scope.Value?.ToList();
+        if (allowedDeviceIds is { Count: 0 })
         {
-            items.Add(await BuildCapacitySummaryAsync(binding, request.Date, scope.Value, cancellationToken));
+            return Result.Success(new PagedList<EdgeHostListItemDto>([], 0, request.PaginationParams));
         }
 
-        return Result.Success((IReadOnlyList<EdgeHostPlcCapacitySummaryDto>)items);
+        var skip = (request.PaginationParams.PageNumber - 1) * request.PaginationParams.PageSize;
+        var page = await overviewQueryService.SearchAccessibleDevicesAsync(
+            allowedDeviceIds,
+            request.Keyword,
+            skip,
+            request.PaginationParams.PageSize,
+            cancellationToken);
+        var deviceIds = page.Devices.Select(device => device.DeviceId).ToList();
+        var statesByDevice = await GetClientStatesByDeviceAsync(deviceIds, cancellationToken);
+        var plcStatesByDevice = await GetPlcStatesByDeviceAsync(deviceIds, cancellationToken);
+
+        var pageItems = page.Devices
+            .Select(device => EdgeHostMapping.ToListItemDto(
+                device.DeviceId,
+                device.DeviceName,
+                device.ClientCode,
+                statesByDevice.GetValueOrDefault(device.DeviceId),
+                plcStatesByDevice.GetValueOrDefault(device.DeviceId) ?? []))
+            .ToList();
+
+        return Result.Success(new PagedList<EdgeHostListItemDto>(
+            pageItems,
+            page.TotalCount,
+            request.PaginationParams));
     }
 
-    private async Task<EdgeHostPlcCapacitySummaryDto> BuildCapacitySummaryAsync(
-        EdgeHostPlcBinding binding,
-        DateOnly date,
-        IReadOnlyList<Guid>? allowedDeviceIds,
+    private async Task<IReadOnlyDictionary<Guid, DeviceClientState>> GetClientStatesByDeviceAsync(
+        IReadOnlyCollection<Guid> deviceIds,
         CancellationToken cancellationToken)
     {
-        if (!binding.Enabled)
-        {
-            return ToDto(binding, date, canReadCapacity: false, StatusBindingDisabled, summary: null);
-        }
-
-        if (!binding.BusinessDeviceId.HasValue)
-        {
-            return ToDto(binding, date, canReadCapacity: false, StatusNoBusinessDevice, summary: null);
-        }
-
-        if (allowedDeviceIds is not null && !allowedDeviceIds.Contains(binding.BusinessDeviceId.Value))
-        {
-            return ToDto(binding, date, canReadCapacity: false, StatusNoDeviceAccess, summary: null);
-        }
-
-        var summary = await capacityQueryService.GetSummaryByDeviceIdAsync(
-            binding.BusinessDeviceId.Value,
-            date,
-            binding.PlcName,
-            cancellationToken);
-
-        return ToDto(
-            binding,
-            date,
-            canReadCapacity: true,
-            summary is null ? StatusNoCapacityData : StatusReady,
-            summary);
+        var states = await clientStateStore.GetStatesByDevicesAsync(deviceIds, cancellationToken);
+        return states
+            .GroupBy(state => state.DeviceId)
+            .ToDictionary(
+                group => group.Key,
+                group => group.OrderByDescending(state => state.UpdatedAtUtc).First());
     }
 
-    private static EdgeHostPlcCapacitySummaryDto ToDto(
-        EdgeHostPlcBinding binding,
-        DateOnly date,
-        bool canReadCapacity,
-        string capacityStatus,
-        DailySummaryDto? summary)
+    private async Task<IReadOnlyDictionary<Guid, IReadOnlyList<EdgeHostPlcRuntimeState>>> GetPlcStatesByDeviceAsync(
+        IReadOnlyCollection<Guid> deviceIds,
+        CancellationToken cancellationToken)
     {
-        return new EdgeHostPlcCapacitySummaryDto(
-            binding.Id,
-            binding.PlcCode,
-            binding.PlcName,
-            binding.Enabled,
-            binding.ProcessId,
-            binding.BusinessDeviceId,
-            date,
-            canReadCapacity,
-            capacityStatus,
-            summary);
+        var states = await runtimeStateStore.GetByDevicesAsync(deviceIds, cancellationToken);
+        return states
+            .GroupBy(state => state.DeviceId)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<EdgeHostPlcRuntimeState>)group
+                    .OrderByDescending(state => state.LastSeenAtUtc)
+                    .ThenBy(state => state.PlcCode, StringComparer.OrdinalIgnoreCase)
+                    .ToList());
+    }
+
+}
+
+public sealed class GetEdgeHostDetailHandler(
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
+    IReadRepository<Device> deviceRepository,
+    IDeviceClientStateStore clientStateStore,
+    IEdgeHostPlcRuntimeStateStore runtimeStateStore)
+    : IQueryHandler<GetEdgeHostDetailQuery, Result<EdgeHostDto>>
+{
+    public async Task<Result<EdgeHostDto>> Handle(
+        GetEdgeHostDetailQuery request,
+        CancellationToken cancellationToken)
+    {
+        var resolved = await ResolveDeviceAsync(
+            request.DeviceId,
+            currentUserDeviceAccessService,
+            deviceRepository,
+            cancellationToken);
+        if (!resolved.IsSuccess)
+        {
+            return Result.From(resolved);
+        }
+
+        var device = resolved.Value!;
+        var clientState = await clientStateStore.GetStateByIdentityAsync(
+            device.Id,
+            device.Code,
+            cancellationToken);
+        var plcStates = await runtimeStateStore.GetByIdentityAsync(
+            device.Id,
+            device.Code,
+            cancellationToken);
+
+        return Result.Success(EdgeHostMapping.ToDetailDto(device, clientState, plcStates));
+    }
+
+    internal static async Task<Result<Device>> ResolveDeviceAsync(
+        Guid deviceId,
+        ICurrentUserDeviceAccessService currentUserDeviceAccessService,
+        IReadRepository<Device> deviceRepository,
+        CancellationToken cancellationToken)
+    {
+        if (deviceId == Guid.Empty)
+        {
+            return Result.Invalid("设备不能为空。");
+        }
+
+        var device = await deviceRepository.GetSingleOrDefaultAsync(
+            new DeviceByIdSpec(deviceId),
+            cancellationToken);
+        if (device is null)
+        {
+            return Result.NotFound("设备不存在。");
+        }
+
+        var access = await currentUserDeviceAccessService.EnsureCanAccessDeviceAsync(device.Id, cancellationToken);
+        if (!access.IsSuccess)
+        {
+            return Result.Failure(access.Errors?.ToArray() ?? ["越权: 未授权访问该设备"]);
+        }
+
+        return Result.Success(device);
     }
 }
 
 public sealed class GetEdgeHostPlcRuntimeStatesHandler(
-    IReadRepository<EdgeHost> edgeHostRepository,
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
+    IReadRepository<Device> deviceRepository,
     IEdgeHostPlcRuntimeStateStore runtimeStateStore)
     : IQueryHandler<GetEdgeHostPlcRuntimeStatesQuery, Result<IReadOnlyList<EdgeHostPlcRuntimeStateDto>>>
 {
@@ -183,34 +178,25 @@ public sealed class GetEdgeHostPlcRuntimeStatesHandler(
         GetEdgeHostPlcRuntimeStatesQuery request,
         CancellationToken cancellationToken)
     {
-        var host = await edgeHostRepository.GetSingleOrDefaultAsync(
-            new EdgeHostByIdSpec(request.EdgeHostId),
+        var resolved = await GetEdgeHostDetailHandler.ResolveDeviceAsync(
+            request.DeviceId,
+            currentUserDeviceAccessService,
+            deviceRepository,
             cancellationToken);
-        if (host is null)
+        if (!resolved.IsSuccess)
         {
-            return Result.NotFound("上位机不存在。");
+            return Result.From(resolved);
         }
 
-        var bindingsById = host.PlcBindings.ToDictionary(binding => binding.Id);
-        var bindingsByPlcCode = host.PlcBindings.ToDictionary(
-            binding => binding.PlcCode,
-            StringComparer.OrdinalIgnoreCase);
-
-        var states = await runtimeStateStore.GetByEdgeHostAsync(host.Id, cancellationToken);
+        var device = resolved.Value!;
+        var states = await runtimeStateStore.GetByIdentityAsync(
+            device.Id,
+            device.Code,
+            cancellationToken);
         var items = states
-            .Select(state =>
-            {
-                EdgeHostPlcBinding? binding = null;
-                if (state.PlcBindingId.HasValue)
-                {
-                    bindingsById.TryGetValue(state.PlcBindingId.Value, out binding);
-                }
-
-                binding ??= bindingsByPlcCode.GetValueOrDefault(state.PlcCode);
-                return EdgeHostMapping.ToRuntimeStateDto(state, binding);
-            })
-            .OrderByDescending(item => item.LastSeenAtUtc)
-            .ThenBy(item => item.PlcCode, StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(state => state.LastSeenAtUtc)
+            .ThenBy(state => state.PlcCode, StringComparer.OrdinalIgnoreCase)
+            .Select(EdgeHostMapping.ToRuntimeStateDto)
             .ToList();
 
         return Result.Success((IReadOnlyList<EdgeHostPlcRuntimeStateDto>)items);

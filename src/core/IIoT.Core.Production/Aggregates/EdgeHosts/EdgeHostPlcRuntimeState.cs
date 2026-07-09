@@ -4,8 +4,8 @@ using IIoT.SharedKernel.Domain;
 namespace IIoT.Core.Production.Aggregates.EdgeHosts;
 
 /// <summary>
-/// PLC runtime status projection reported by an edge host.
-/// This is a state projection, not an aggregate root and not the binding configuration source.
+/// PLC runtime status projection reported by an edge client.
+/// This is a state projection, not an aggregate root and not a Cloud-side configuration source.
 /// </summary>
 public sealed class EdgeHostPlcRuntimeState : BaseEntity<Guid>
 {
@@ -23,23 +23,16 @@ public sealed class EdgeHostPlcRuntimeState : BaseEntity<Guid>
     }
 
     public EdgeHostPlcRuntimeState(
-        Guid edgeHostId,
         Guid deviceId,
         string clientCode,
         string plcCode)
     {
-        if (edgeHostId == Guid.Empty)
-        {
-            throw new ArgumentException("EdgeHostId 不能为空。", nameof(edgeHostId));
-        }
-
         if (deviceId == Guid.Empty)
         {
             throw new ArgumentException("DeviceId 不能为空。", nameof(deviceId));
         }
 
         Id = Guid.NewGuid();
-        EdgeHostId = edgeHostId;
         DeviceId = deviceId;
         ClientCode = NormalizeClientCode(clientCode);
         PlcCode = NormalizePlcCode(plcCode);
@@ -48,13 +41,9 @@ public sealed class EdgeHostPlcRuntimeState : BaseEntity<Guid>
         UpdatedAtUtc = CreatedAtUtc;
     }
 
-    public Guid EdgeHostId { get; private set; }
-
     public Guid DeviceId { get; private set; }
 
     public string ClientCode { get; private set; } = null!;
-
-    public Guid? PlcBindingId { get; private set; }
 
     public string PlcCode { get; private set; } = null!;
 
@@ -79,8 +68,6 @@ public sealed class EdgeHostPlcRuntimeState : BaseEntity<Guid>
     public DateTime UpdatedAtUtc { get; private set; }
 
     public void ReplaceReport(
-        Guid edgeHostId,
-        Guid? plcBindingId,
         string? reportedPlcName,
         bool isConnected,
         string? runtimeStatus,
@@ -90,26 +77,16 @@ public sealed class EdgeHostPlcRuntimeState : BaseEntity<Guid>
         string? address = null,
         string? lastError = null)
     {
-        if (edgeHostId == Guid.Empty)
-        {
-            throw new ArgumentException("EdgeHostId 不能为空。", nameof(edgeHostId));
-        }
+        var normalizedLastError = NormalizeOptional(lastError, LastErrorMaxLength);
 
-        if (plcBindingId == Guid.Empty)
-        {
-            throw new ArgumentException("PlcBindingId 不能为空。", nameof(plcBindingId));
-        }
-
-        EdgeHostId = edgeHostId;
-        PlcBindingId = plcBindingId;
         ReportedPlcName = NormalizeOptional(reportedPlcName, PlcNameMaxLength);
         IsConnected = isConnected;
-        RuntimeStatus = NormalizeRuntimeStatus(runtimeStatus, isConnected);
+        RuntimeStatus = NormalizeRuntimeStatus(runtimeStatus, isConnected, normalizedLastError);
         LastSeenAtUtc = NormalizeUtc(observedAtUtc);
         StationCode = NormalizeOptional(stationCode, StationCodeMaxLength);
         Protocol = NormalizeOptional(protocol, ProtocolMaxLength);
         Address = NormalizeOptional(address, AddressMaxLength);
-        LastError = NormalizeOptional(lastError, LastErrorMaxLength);
+        LastError = normalizedLastError;
         UpdatedAtUtc = DateTime.UtcNow;
     }
 
@@ -136,10 +113,15 @@ public sealed class EdgeHostPlcRuntimeState : BaseEntity<Guid>
         return normalized;
     }
 
-    private static string NormalizeRuntimeStatus(string? runtimeStatus, bool isConnected)
+    private static string NormalizeRuntimeStatus(string? runtimeStatus, bool isConnected, string? lastError)
     {
         if (string.IsNullOrWhiteSpace(runtimeStatus))
         {
+            if (!isConnected && !string.IsNullOrWhiteSpace(lastError))
+            {
+                return EdgeHostPlcRuntimeStatus.Faulted;
+            }
+
             return isConnected
                 ? EdgeHostPlcRuntimeStatus.Connected
                 : EdgeHostPlcRuntimeStatus.Disconnected;

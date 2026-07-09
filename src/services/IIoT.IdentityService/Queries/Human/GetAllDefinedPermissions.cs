@@ -33,9 +33,8 @@ public class GetAllDefinedPermissionsHandler(
         DevicePermissions.Read, DevicePermissions.Create, DevicePermissions.Update,
         DevicePermissions.Delete, DevicePermissions.CascadeDelete,
 
-        // 上位机和 PLC 绑定
+        // 上位机 PLC 状态
         EdgeHostPermissions.Read,
-        EdgeHostPermissions.Manage,
 
         // 配方管理
         "Recipe.Read", "Recipe.Create", "Recipe.Update", "Recipe.Delete",

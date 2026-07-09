@@ -12,8 +12,7 @@ public static class SystemRolePermissionTemplates
                 DevicePermissions.Update,
                 DevicePermissions.Delete,
                 DevicePermissions.CascadeDelete,
-                EdgeHostPermissions.Read,
-                EdgeHostPermissions.Manage
+                EdgeHostPermissions.Read
             ],
             [SystemRoles.ClientInstallerOperator] =
             [

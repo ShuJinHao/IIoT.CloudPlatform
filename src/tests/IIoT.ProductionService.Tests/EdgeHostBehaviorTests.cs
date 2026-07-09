@@ -1,14 +1,14 @@
 using System.Linq.Expressions;
+using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.EdgeHosts;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Core.Production.Contracts.EdgeHosts;
-using IIoT.ProductionService.EdgeHosts;
 using IIoT.ProductionService.Commands.EdgeHosts;
+using IIoT.ProductionService.EdgeHosts;
 using IIoT.ProductionService.Queries.EdgeHosts;
 using IIoT.Services.Contracts;
-using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
-using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.SharedKernel.Domain;
@@ -23,45 +23,25 @@ namespace IIoT.ProductionService.Tests;
 public sealed class EdgeHostBehaviorTests
 {
     [Fact]
-    public void HumanEdgeHostRequests_ShouldUseDedicatedPermissionsWithoutAdminOnly()
+    public void HumanEdgeHostRequests_ShouldBeReadOnly()
     {
-        var expectedPermissions = new Dictionary<Type, string>
+        var requestTypes = new[]
         {
-            [typeof(GetEdgeHostPagedListQuery)] = EdgeHostPermissions.Read,
-            [typeof(GetEdgeHostDetailQuery)] = EdgeHostPermissions.Read,
-            [typeof(GetEdgeHostPlcRuntimeStatesQuery)] = EdgeHostPermissions.Read,
-            [typeof(CreateEdgeHostCommand)] = EdgeHostPermissions.Manage,
-            [typeof(UpdateEdgeHostCommand)] = EdgeHostPermissions.Manage,
-            [typeof(EnableEdgeHostCommand)] = EdgeHostPermissions.Manage,
-            [typeof(DisableEdgeHostCommand)] = EdgeHostPermissions.Manage,
-            [typeof(DeleteEdgeHostCommand)] = EdgeHostPermissions.Manage,
-            [typeof(AddEdgeHostPlcBindingCommand)] = EdgeHostPermissions.Manage,
-            [typeof(UpdateEdgeHostPlcBindingCommand)] = EdgeHostPermissions.Manage,
-            [typeof(EnableEdgeHostPlcBindingCommand)] = EdgeHostPermissions.Manage,
-            [typeof(DisableEdgeHostPlcBindingCommand)] = EdgeHostPermissions.Manage,
-            [typeof(RemoveEdgeHostPlcBindingCommand)] = EdgeHostPermissions.Manage
+            typeof(GetEdgeHostPagedListQuery),
+            typeof(GetEdgeHostDetailQuery),
+            typeof(GetEdgeHostPlcRuntimeStatesQuery)
         };
 
-        foreach (var (requestType, expectedPermission) in expectedPermissions)
+        foreach (var requestType in requestTypes)
         {
             var permission = requestType
                 .GetCustomAttributes(typeof(AuthorizeRequirementAttribute), inherit: false)
                 .Cast<AuthorizeRequirementAttribute>()
                 .Single();
 
-            Assert.Equal(expectedPermission, permission.Permission);
+            Assert.Equal(EdgeHostPermissions.Read, permission.Permission);
             Assert.Empty(requestType.GetCustomAttributes(typeof(AdminOnlyAttribute), inherit: false));
         }
-
-        var capacityPermissions = typeof(GetEdgeHostPlcCapacitySummaryQuery)
-            .GetCustomAttributes(typeof(AuthorizeRequirementAttribute), inherit: false)
-            .Cast<AuthorizeRequirementAttribute>()
-            .Select(attribute => attribute.Permission)
-            .ToHashSet(StringComparer.Ordinal);
-        Assert.Contains(EdgeHostPermissions.Read, capacityPermissions);
-        Assert.Contains(DevicePermissions.Read, capacityPermissions);
-        Assert.Empty(typeof(GetEdgeHostPlcCapacitySummaryQuery)
-            .GetCustomAttributes(typeof(AdminOnlyAttribute), inherit: false));
     }
 
     [Fact]
@@ -76,174 +56,12 @@ public sealed class EdgeHostBehaviorTests
     }
 
     [Fact]
-    public async Task CreateEdgeHostHandler_ShouldCreateHostWhenDeviceAndClientCodeMatch()
-    {
-        var device = new Device("上位机设备", "DEV-EDGEHOST01", Guid.NewGuid());
-        var edgeHostRepository = new InMemoryRepository<EdgeHost>();
-        var deviceRepository = new InMemoryRepository<Device>();
-        deviceRepository.ListResult.Add(device);
-        var audit = new RecordingAuditTrailService();
-        var handler = new CreateEdgeHostHandler(
-            edgeHostRepository,
-            deviceRepository,
-            new StubCurrentUser(),
-            audit);
-
-        var result = await handler.Handle(
-            new CreateEdgeHostCommand(device.Id, " dev-edgehost01 ", " 模切上位机 ", "现场 A 线"),
-            CancellationToken.None);
-
-        Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
-        Assert.NotNull(edgeHostRepository.AddedEntity);
-        Assert.Equal(device.Id, edgeHostRepository.AddedEntity!.DeviceId);
-        Assert.Equal(device.Code, edgeHostRepository.AddedEntity.ClientCode);
-        Assert.Equal("模切上位机", edgeHostRepository.AddedEntity.HostName);
-        Assert.Contains(audit.Entries, entry =>
-            entry.OperationType == "EdgeHost.Create"
-            && entry.TargetType == "EdgeHost"
-            && entry.Succeeded);
-    }
-
-    [Fact]
-    public async Task CreateEdgeHostHandler_ShouldRejectClientCodeThatDoesNotMatchDeviceCode()
-    {
-        var device = new Device("上位机设备", "DEV-EDGEHOST02", Guid.NewGuid());
-        var edgeHostRepository = new InMemoryRepository<EdgeHost>();
-        var deviceRepository = new InMemoryRepository<Device>();
-        deviceRepository.ListResult.Add(device);
-        var audit = new RecordingAuditTrailService();
-        var handler = new CreateEdgeHostHandler(
-            edgeHostRepository,
-            deviceRepository,
-            new StubCurrentUser(),
-            audit);
-
-        var result = await handler.Handle(
-            new CreateEdgeHostCommand(device.Id, "DEV-OTHER", "模切上位机"),
-            CancellationToken.None);
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal(ResultStatus.Invalid, result.Status);
-        Assert.Null(edgeHostRepository.AddedEntity);
-        Assert.Contains(audit.Entries, entry =>
-            entry.OperationType == "EdgeHost.Create"
-            && !entry.Succeeded
-            && entry.FailureReason == "ClientCode 与绑定设备的寻址码不一致。");
-    }
-
-    [Fact]
-    public async Task AddEdgeHostPlcBindingHandler_ShouldValidateRelationsAndUpdateAggregate()
-    {
-        var host = new EdgeHost(Guid.NewGuid(), "DEV-EDGEHOST03", "模切上位机");
-        var processId = Guid.NewGuid();
-        var businessDeviceId = Guid.NewGuid();
-        var repository = new InMemoryRepository<EdgeHost> { SingleOrDefaultResult = host };
-        var audit = new RecordingAuditTrailService();
-        var handler = new AddEdgeHostPlcBindingHandler(
-            repository,
-            new StubDeviceReadQueryService { Exists = true, ExistsInProcess = true },
-            new StubProcessReadQueryService { Exists = true },
-            new StubCurrentUser(),
-            audit);
-
-        var result = await handler.Handle(
-            new AddEdgeHostPlcBindingCommand(
-                host.Id,
-                " plc-cut-01 ",
-                " 模切 PLC 01 ",
-                processId,
-                businessDeviceId,
-                StationCode: "S01",
-                Protocol: "ModbusTcp",
-                Address: "192.168.1.10:502",
-                DisplayOrder: 10,
-                Remark: "主 PLC"),
-            CancellationToken.None);
-
-        Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
-        var binding = Assert.Single(host.PlcBindings);
-        Assert.Equal("PLC-CUT-01", binding.PlcCode);
-        Assert.Equal("模切 PLC 01", binding.PlcName);
-        Assert.Equal(processId, binding.ProcessId);
-        Assert.Equal(businessDeviceId, binding.BusinessDeviceId);
-        Assert.Contains(host, repository.UpdatedEntities);
-        Assert.Contains(audit.Entries, entry =>
-            entry.OperationType == "EdgeHost.PlcBinding.Add"
-            && entry.TargetType == "EdgeHost"
-            && entry.Succeeded);
-    }
-
-    [Fact]
-    public async Task AddEdgeHostPlcBindingHandler_ShouldRejectBusinessDeviceOutsideProcess()
-    {
-        var host = new EdgeHost(Guid.NewGuid(), "DEV-EDGEHOST04", "模切上位机");
-        var repository = new InMemoryRepository<EdgeHost> { SingleOrDefaultResult = host };
-        var audit = new RecordingAuditTrailService();
-        var handler = new AddEdgeHostPlcBindingHandler(
-            repository,
-            new StubDeviceReadQueryService { Exists = true, ExistsInProcess = false },
-            new StubProcessReadQueryService { Exists = true },
-            new StubCurrentUser(),
-            audit);
-
-        var result = await handler.Handle(
-            new AddEdgeHostPlcBindingCommand(
-                host.Id,
-                "PLC-CUT-02",
-                "模切 PLC 02",
-                Guid.NewGuid(),
-                Guid.NewGuid()),
-            CancellationToken.None);
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal(ResultStatus.Invalid, result.Status);
-        Assert.Empty(host.PlcBindings);
-        Assert.Empty(repository.UpdatedEntities);
-        Assert.Contains(audit.Entries, entry =>
-            entry.OperationType == "EdgeHost.PlcBinding.Add"
-            && !entry.Succeeded
-            && entry.FailureReason == "PLC 绑定业务设备不属于指定工序。");
-    }
-
-    [Fact]
-    public async Task AddEdgeHostPlcBindingHandler_ShouldRejectDuplicatePlcCodeInAggregate()
-    {
-        var host = new EdgeHost(Guid.NewGuid(), "DEV-EDGEHOST05", "模切上位机");
-        host.AddPlcBinding("PLC-CUT-03", "模切 PLC 03");
-        var repository = new InMemoryRepository<EdgeHost> { SingleOrDefaultResult = host };
-        var audit = new RecordingAuditTrailService();
-        var handler = new AddEdgeHostPlcBindingHandler(
-            repository,
-            new StubDeviceReadQueryService(),
-            new StubProcessReadQueryService(),
-            new StubCurrentUser(),
-            audit);
-
-        var result = await handler.Handle(
-            new AddEdgeHostPlcBindingCommand(host.Id, "plc-cut-03", "重复 PLC"),
-            CancellationToken.None);
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal(ResultStatus.Invalid, result.Status);
-        Assert.Single(host.PlcBindings);
-        Assert.Empty(repository.UpdatedEntities);
-        Assert.Contains(audit.Entries, entry =>
-            entry.OperationType == "EdgeHost.PlcBinding.Add"
-            && !entry.Succeeded
-            && entry.FailureReason == "PLC 编码已绑定到该上位机。");
-    }
-
-    [Fact]
-    public async Task ReportEdgeHostPlcRuntimeStatesHandler_ShouldUpsertConfiguredAndUnconfiguredStates()
+    public async Task ReportEdgeHostPlcRuntimeStatesHandler_ShouldUpsertClientReportedStatesWithoutEdgeHost()
     {
         var deviceId = Guid.NewGuid();
-        var host = new EdgeHost(deviceId, "DEV-PLCSTATE01", "模切上位机");
-        var binding = host.AddPlcBinding("PLC-CUT-01", "模切 PLC 01");
-        var repository = new InMemoryRepository<EdgeHost> { SingleOrDefaultResult = host };
         var store = new StubEdgeHostPlcRuntimeStateStore();
         var handler = new ReportEdgeHostPlcRuntimeStatesHandler(
             new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-PLCSTATE01")),
-            repository,
             store);
         var reportedAtUtc = new DateTime(2026, 7, 3, 9, 0, 0, DateTimeKind.Utc);
 
@@ -272,22 +90,20 @@ public sealed class EdgeHostBehaviorTests
             CancellationToken.None);
 
         Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
-        Assert.Equal(2, result.Value!.ReceivedCount);
-        Assert.Equal(1, result.Value.ConfiguredCount);
-        Assert.Equal(1, result.Value.UnconfiguredCount);
+        Assert.Equal(deviceId, result.Value!.DeviceId);
+        Assert.Equal("DEV-PLCSTATE01", result.Value.ClientCode);
+        Assert.Equal(2, result.Value.ReceivedCount);
         Assert.True(store.SaveChangesCalled);
 
-        var configured = Assert.Single(store.States, state => state.PlcCode == "PLC-CUT-01");
-        Assert.Equal(binding.Id, configured.PlcBindingId);
-        Assert.True(configured.IsConnected);
-        Assert.Equal(EdgeHostPlcRuntimeStatus.Connected, configured.RuntimeStatus);
-        Assert.Equal("ModbusTcp", configured.Protocol);
+        var connected = Assert.Single(store.States, state => state.PlcCode == "PLC-CUT-01");
+        Assert.True(connected.IsConnected);
+        Assert.Equal(EdgeHostPlcRuntimeStatus.Connected, connected.RuntimeStatus);
+        Assert.Equal("ModbusTcp", connected.Protocol);
 
-        var unconfigured = Assert.Single(store.States, state => state.PlcCode == "PLC-NEW-01");
-        Assert.Null(unconfigured.PlcBindingId);
-        Assert.False(unconfigured.IsConnected);
-        Assert.Equal(EdgeHostPlcRuntimeStatus.Faulted, unconfigured.RuntimeStatus);
-        Assert.Equal("连接超时", unconfigured.LastError);
+        var faulted = Assert.Single(store.States, state => state.PlcCode == "PLC-NEW-01");
+        Assert.False(faulted.IsConnected);
+        Assert.Equal(EdgeHostPlcRuntimeStatus.Faulted, faulted.RuntimeStatus);
+        Assert.Equal("连接超时", faulted.LastError);
     }
 
     [Fact]
@@ -297,7 +113,6 @@ public sealed class EdgeHostBehaviorTests
         var store = new StubEdgeHostPlcRuntimeStateStore();
         var handler = new ReportEdgeHostPlcRuntimeStatesHandler(
             new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-PLCSTATE02")),
-            new InMemoryRepository<EdgeHost>(),
             store);
 
         var result = await handler.Handle(
@@ -318,11 +133,9 @@ public sealed class EdgeHostBehaviorTests
     public async Task ReportEdgeHostPlcRuntimeStatesHandler_ShouldRejectDuplicatePlcCodesInOneReport()
     {
         var deviceId = Guid.NewGuid();
-        var host = new EdgeHost(deviceId, "DEV-PLCSTATE03", "模切上位机");
         var store = new StubEdgeHostPlcRuntimeStateStore();
         var handler = new ReportEdgeHostPlcRuntimeStatesHandler(
             new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-PLCSTATE03")),
-            new InMemoryRepository<EdgeHost> { SingleOrDefaultResult = host },
             store);
 
         var result = await handler.Handle(
@@ -344,146 +157,142 @@ public sealed class EdgeHostBehaviorTests
     }
 
     [Fact]
-    public async Task GetEdgeHostPlcRuntimeStatesHandler_ShouldMergeRuntimeStatesWithBindingConfiguration()
+    public async Task GetEdgeHostPagedListHandler_ShouldUseAccessibleDevicesAsHostList()
     {
-        var deviceId = Guid.NewGuid();
         var processId = Guid.NewGuid();
-        var businessDeviceId = Guid.NewGuid();
-        var host = new EdgeHost(deviceId, "DEV-PLCSTATE04", "模切上位机");
-        var binding = host.AddPlcBinding(
-            "PLC-CUT-01",
-            "模切 PLC 01",
-            processId,
-            businessDeviceId,
-            stationCode: "S01",
-            protocol: "ModbusTcp",
-            address: "192.168.1.10:502");
-        var configuredState = new EdgeHostPlcRuntimeState(host.Id, deviceId, "DEV-PLCSTATE04", "PLC-CUT-01");
-        configuredState.ReplaceReport(host.Id, binding.Id, "现场 PLC 01", true, "Connected", DateTime.UtcNow);
-        var unconfiguredState = new EdgeHostPlcRuntimeState(host.Id, deviceId, "DEV-PLCSTATE04", "PLC-NEW-01");
-        unconfiguredState.ReplaceReport(host.Id, null, "临时 PLC", false, "Disconnected", DateTime.UtcNow.AddSeconds(-1));
-        var handler = new GetEdgeHostPlcRuntimeStatesHandler(
-            new InMemoryRepository<EdgeHost> { SingleOrDefaultResult = host },
-            new StubEdgeHostPlcRuntimeStateStore
-            {
-                States = { configuredState, unconfiguredState }
-            });
-
-        var result = await handler.Handle(new GetEdgeHostPlcRuntimeStatesQuery(host.Id), CancellationToken.None);
-
-        Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
-        Assert.Equal(2, result.Value!.Count);
-
-        var configured = Assert.Single(result.Value, item => item.PlcCode == "PLC-CUT-01");
-        Assert.True(configured.IsConfigured);
-        Assert.True(configured.ConfigEnabled);
-        Assert.Equal(binding.Id, configured.PlcBindingId);
-        Assert.Equal(processId, configured.ProcessId);
-        Assert.Equal(businessDeviceId, configured.BusinessDeviceId);
-        Assert.Equal("S01", configured.ConfiguredStationCode);
-
-        var unconfigured = Assert.Single(result.Value, item => item.PlcCode == "PLC-NEW-01");
-        Assert.False(unconfigured.IsConfigured);
-        Assert.Null(unconfigured.PlcBindingId);
-        Assert.Null(unconfigured.ConfigEnabled);
-    }
-
-    [Fact]
-    public async Task GetEdgeHostPlcCapacitySummaryHandler_ShouldReadCapacityOnlyForMappedAccessibleEnabledBindings()
-    {
-        var host = new EdgeHost(Guid.NewGuid(), "DEV-CAPACITY01", "模切上位机");
-        var processId = Guid.NewGuid();
-        var allowedDeviceId = Guid.NewGuid();
-        var deniedDeviceId = Guid.NewGuid();
-        var readyBinding = host.AddPlcBinding(
-            "PLC-CUT-01",
-            "模切 PLC 01",
-            processId,
-            allowedDeviceId,
-            displayOrder: 10);
-        host.AddPlcBinding("PLC-CUT-02", "未映射 PLC", displayOrder: 20);
-        var disabledBinding = host.AddPlcBinding(
-            "PLC-CUT-03",
-            "禁用 PLC",
-            processId,
-            allowedDeviceId,
-            displayOrder: 30,
-            enabled: false);
-        var deniedBinding = host.AddPlcBinding(
-            "PLC-CUT-04",
-            "无权 PLC",
-            processId,
-            deniedDeviceId,
-            displayOrder: 40);
-        var summary = new DailySummaryDto(
-            TotalCount: 120,
-            OkCount: 118,
-            NgCount: 2,
-            DayShiftTotal: 70,
-            DayShiftOk: 69,
-            DayShiftNg: 1,
-            NightShiftTotal: 50,
-            NightShiftOk: 49,
-            NightShiftNg: 1);
-        var capacityQuery = new StubCapacityQueryService { Summary = summary };
-        var handler = new GetEdgeHostPlcCapacitySummaryHandler(
-            new InMemoryRepository<EdgeHost> { SingleOrDefaultResult = host },
-            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [allowedDeviceId] },
-            capacityQuery);
+        var device = new Device("开发测试模切设备", "DEV-HOST01", processId);
+        var deniedDevice = new Device("无权设备", "DEV-HOST02", processId);
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.ListResult.AddRange([device, deniedDevice]);
+        var clientStateStore = new StubDeviceClientStateStore();
+        var clientState = new DeviceClientState(device.Id, device.Code);
+        clientState.ApplyRuntimeHeartbeat(new EdgeDeviceRuntimeHeartbeat(
+            device.Id,
+            device.Code,
+            "runtime-01",
+            "cutting",
+            "1.0.25",
+            "host-api-1",
+            "Running",
+            DateTime.UtcNow.AddHours(-1),
+            DateTime.UtcNow,
+            ["10.0.0.10"]));
+        clientStateStore.States.Add(clientState);
+        var runtimeStore = new StubEdgeHostPlcRuntimeStateStore();
+        var plcState = new EdgeHostPlcRuntimeState(device.Id, device.Code, "PLC-CUT-01");
+        plcState.ReplaceReport("现场 PLC", true, "Connected", DateTime.UtcNow, protocol: "ModbusTcp");
+        runtimeStore.States.Add(plcState);
+        var overviewQueryService = new StubEdgeHostOverviewQueryService();
+        overviewQueryService.Devices.AddRange([
+            new EdgeHostOverviewDeviceRow(device.Id, device.DeviceName, device.Code),
+            new EdgeHostOverviewDeviceRow(deniedDevice.Id, deniedDevice.DeviceName, deniedDevice.Code)
+        ]);
+        overviewQueryService.PlcStates.Add(plcState);
+        var handler = new GetEdgeHostPagedListHandler(
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [device.Id] },
+            overviewQueryService,
+            clientStateStore,
+            runtimeStore);
 
         var result = await handler.Handle(
-            new GetEdgeHostPlcCapacitySummaryQuery(host.Id, new DateOnly(2026, 7, 3)),
+            new GetEdgeHostPagedListQuery(new Pagination { PageNumber = 1, PageSize = 10 }, "PLC-CUT"),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
-        Assert.Equal(4, result.Value!.Count);
+        var item = Assert.Single(result.Value!);
+        Assert.Equal(device.Id, item.Id);
+        Assert.Equal(device.Code, item.ClientCode);
+        Assert.Equal("开发测试模切设备", item.HostName);
+        Assert.Equal("Running", item.SoftwareStatus);
+        Assert.Equal(1, item.PlcCount);
+        Assert.Equal(1, item.ConnectedPlcCount);
+        Assert.Equal("PLC-CUT", overviewQueryService.LastKeyword);
+        Assert.Equal([device.Id], clientStateStore.LastRequestedDeviceIds);
+        Assert.Equal([device.Id], runtimeStore.LastRequestedDeviceIds);
+    }
 
-        var ready = Assert.Single(result.Value, item => item.PlcBindingId == readyBinding.Id);
-        Assert.True(ready.CanReadCapacity);
-        Assert.Equal("Ready", ready.CapacityStatus);
-        Assert.Equal(summary, ready.Summary);
-        Assert.Equal(processId, ready.ProcessId);
-        Assert.Equal(allowedDeviceId, ready.BusinessDeviceId);
+    [Fact]
+    public async Task GetEdgeHostPagedListHandler_ShouldLoadClientAndPlcStatesForCurrentPageOnly()
+    {
+        var processId = Guid.NewGuid();
+        var firstDevice = new Device("A 设备", "DEV-PAGE01", processId);
+        var secondDevice = new Device("B 设备", "DEV-PAGE02", processId);
+        var overviewQueryService = new StubEdgeHostOverviewQueryService();
+        overviewQueryService.Devices.AddRange([
+            new EdgeHostOverviewDeviceRow(firstDevice.Id, firstDevice.DeviceName, firstDevice.Code),
+            new EdgeHostOverviewDeviceRow(secondDevice.Id, secondDevice.DeviceName, secondDevice.Code)
+        ]);
+        var clientStateStore = new StubDeviceClientStateStore();
+        clientStateStore.States.Add(new DeviceClientState(firstDevice.Id, firstDevice.Code));
+        clientStateStore.States.Add(new DeviceClientState(secondDevice.Id, secondDevice.Code));
+        var runtimeStore = new StubEdgeHostPlcRuntimeStateStore();
+        runtimeStore.States.Add(new EdgeHostPlcRuntimeState(firstDevice.Id, firstDevice.Code, "PLC-A"));
+        runtimeStore.States.Add(new EdgeHostPlcRuntimeState(secondDevice.Id, secondDevice.Code, "PLC-B"));
+        var handler = new GetEdgeHostPagedListHandler(
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [firstDevice.Id, secondDevice.Id] },
+            overviewQueryService,
+            clientStateStore,
+            runtimeStore);
 
-        var noBusinessDevice = Assert.Single(result.Value, item => item.PlcCode == "PLC-CUT-02");
-        Assert.False(noBusinessDevice.CanReadCapacity);
-        Assert.Equal("NoBusinessDevice", noBusinessDevice.CapacityStatus);
-        Assert.Null(noBusinessDevice.Summary);
+        var result = await handler.Handle(
+            new GetEdgeHostPagedListQuery(new Pagination { PageNumber = 2, PageSize = 1 }),
+            CancellationToken.None);
 
-        var disabled = Assert.Single(result.Value, item => item.PlcBindingId == disabledBinding.Id);
-        Assert.False(disabled.CanReadCapacity);
-        Assert.Equal("BindingDisabled", disabled.CapacityStatus);
+        Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
+        var item = Assert.Single(result.Value!);
+        Assert.Equal(secondDevice.Id, item.DeviceId);
+        Assert.Equal(2, result.Value!.MetaData.TotalCount);
+        Assert.Equal([secondDevice.Id], clientStateStore.LastRequestedDeviceIds);
+        Assert.Equal([secondDevice.Id], runtimeStore.LastRequestedDeviceIds);
+    }
 
-        var denied = Assert.Single(result.Value, item => item.PlcBindingId == deniedBinding.Id);
-        Assert.False(denied.CanReadCapacity);
-        Assert.Equal("NoDeviceAccess", denied.CapacityStatus);
+    [Fact]
+    public void EdgeHostPlcRuntimeState_ShouldInferFaultedWhenDisconnectedReportHasLastError()
+    {
+        var state = new EdgeHostPlcRuntimeState(Guid.NewGuid(), "DEV-PLCSTATE04", "PLC-CUT-01");
 
-        var call = Assert.Single(capacityQuery.SummaryCalls);
-        Assert.Equal(allowedDeviceId, call.DeviceId);
-        Assert.Equal("模切 PLC 01", call.PlcName);
+        state.ReplaceReport(
+            "现场 PLC",
+            isConnected: false,
+            runtimeStatus: null,
+            observedAtUtc: DateTime.UtcNow,
+            lastError: "连接超时");
+
+        Assert.False(state.IsConnected);
+        Assert.Equal(EdgeHostPlcRuntimeStatus.Faulted, state.RuntimeStatus);
+        Assert.Equal("连接超时", state.LastError);
+    }
+
+    [Fact]
+    public async Task GetEdgeHostPlcRuntimeStatesHandler_ShouldRejectInaccessibleDevice()
+    {
+        var device = new Device("无权设备", "DEV-DENIED", Guid.NewGuid());
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.ListResult.Add(device);
+        var handler = new GetEdgeHostPlcRuntimeStatesHandler(
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [] },
+            deviceRepository,
+            new StubEdgeHostPlcRuntimeStateStore());
+
+        var result = await handler.Handle(new GetEdgeHostPlcRuntimeStatesQuery(device.Id), CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains(result.Errors ?? [], error => error.Contains("无权", StringComparison.Ordinal));
     }
 
     private sealed class InMemoryRepository<T> : IRepository<T>
         where T : class, IEntity, IAggregateRoot
     {
-        public T? SingleOrDefaultResult { get; init; }
-
         public List<T> ListResult { get; } = [];
-
-        public T? AddedEntity { get; private set; }
-
-        public List<T> UpdatedEntities { get; } = [];
 
         public T Add(T entity)
         {
-            AddedEntity = entity;
             ListResult.Add(entity);
             return entity;
         }
 
         public void Update(T entity)
         {
-            UpdatedEntities.Add(entity);
             if (!ListResult.Contains(entity))
             {
                 ListResult.Add(entity);
@@ -511,7 +320,7 @@ public sealed class EdgeHostBehaviorTests
             ISpecification<T>? specification = null,
             CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(SingleOrDefaultResult ?? ApplySpecification(specification).SingleOrDefault());
+            return Task.FromResult(ApplySpecification(specification).SingleOrDefault());
         }
 
         public Task<int> CountAsync(
@@ -565,117 +374,6 @@ public sealed class EdgeHostBehaviorTests
         }
     }
 
-    private sealed class RecordingAuditTrailService : IAuditTrailService
-    {
-        public List<AuditTrailEntry> Entries { get; } = [];
-
-        public Task TryWriteAsync(
-            AuditTrailEntry entry,
-            CancellationToken cancellationToken = default)
-        {
-            Entries.Add(entry);
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class StubCurrentUser : ICurrentUser
-    {
-        public string? Id { get; } = Guid.NewGuid().ToString();
-
-        public string? UserName { get; } = "E0001";
-
-        public IReadOnlyCollection<string> Roles { get; } = ["DeviceAdmin"];
-
-        public string? ActorType { get; } = "Human";
-
-        public IReadOnlyCollection<string> Permissions { get; } =
-            [EdgeHostPermissions.Read, EdgeHostPermissions.Manage];
-
-        public Guid? DeviceId { get; } = null;
-
-        public bool IsAuthenticated { get; } = true;
-    }
-
-    private sealed class StubDeviceReadQueryService : IDeviceReadQueryService
-    {
-        public bool Exists { get; init; } = true;
-
-        public bool ExistsInProcess { get; init; } = true;
-
-        public Task<bool> ExistsAsync(Guid deviceId, CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(Exists);
-        }
-
-        public Task<bool> ExistsInProcessAsync(
-            Guid deviceId,
-            Guid processId,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(ExistsInProcess);
-        }
-
-        public Task<bool> CodeExistsAsync(
-            string code,
-            Guid? excludingDeviceId = null,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(false);
-        }
-
-        public Task<bool> NameExistsAsync(
-            string name,
-            Guid? excludingDeviceId = null,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(false);
-        }
-    }
-
-    private sealed class StubProcessReadQueryService : IProcessReadQueryService
-    {
-        public bool Exists { get; init; } = true;
-
-        public Task<(IReadOnlyList<ProcessReadItem> Items, int TotalCount)> GetPagedAsync(
-            string? keyword,
-            int skip,
-            int take,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(((IReadOnlyList<ProcessReadItem>)[], 0));
-        }
-
-        public Task<bool> ExistsAsync(Guid processId, CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(Exists);
-        }
-
-        public Task<bool> CodeExistsAsync(
-            string processCode,
-            Guid? excludingProcessId = null,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(false);
-        }
-
-        public Task<IReadOnlyList<Guid>> GetDeviceIdsAsync(
-            Guid processId,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult((IReadOnlyList<Guid>)[]);
-        }
-
-        public Task<bool> HasDevicesAsync(Guid processId, CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(false);
-        }
-
-        public Task<bool> HasRecipesAsync(Guid processId, CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(false);
-        }
-    }
-
     private sealed class StubDeviceIdentityQueryService(DeviceIdentitySnapshot? snapshot) : IDeviceIdentityQueryService
     {
         public Task<DeviceIdentitySnapshot?> GetByDeviceIdAsync(
@@ -691,11 +389,80 @@ public sealed class EdgeHostBehaviorTests
         }
     }
 
+    private sealed class StubDeviceClientStateStore : IDeviceClientStateStore
+    {
+        public List<DeviceClientState> States { get; } = [];
+
+        public IReadOnlyList<Guid>? LastRequestedDeviceIds { get; private set; }
+
+        public Task<DeviceClientVersionSnapshot?> GetVersionSnapshotByDeviceAsync(
+            Guid deviceId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<DeviceClientVersionSnapshot?>(null);
+        }
+
+        public Task<IReadOnlyList<DeviceClientVersionSnapshot>> GetVersionSnapshotsByDevicesAsync(
+            IReadOnlyCollection<Guid>? deviceIds = null,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult((IReadOnlyList<DeviceClientVersionSnapshot>)[]);
+        }
+
+        public Task<EdgeDeviceRuntimeHeartbeat?> GetRuntimeHeartbeatByIdentityAsync(
+            Guid deviceId,
+            string clientCode,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<EdgeDeviceRuntimeHeartbeat?>(null);
+        }
+
+        public Task<DeviceClientState?> GetStateByIdentityAsync(
+            Guid deviceId,
+            string clientCode,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(States.SingleOrDefault(state =>
+                state.DeviceId == deviceId
+                && string.Equals(state.ClientCode, clientCode.Trim().ToUpperInvariant(), StringComparison.OrdinalIgnoreCase)));
+        }
+
+        public Task<IReadOnlyList<DeviceClientState>> GetStatesByDevicesAsync(
+            IReadOnlyCollection<Guid>? deviceIds = null,
+            CancellationToken cancellationToken = default)
+        {
+            LastRequestedDeviceIds = deviceIds?.ToList();
+            return Task.FromResult((IReadOnlyList<DeviceClientState>)States
+                .Where(state => deviceIds == null || deviceIds.Contains(state.DeviceId))
+                .ToList());
+        }
+
+        public void AddVersionSnapshot(DeviceClientVersionSnapshot snapshot)
+        {
+        }
+
+        public void AddRuntimeHeartbeat(EdgeDeviceRuntimeHeartbeat heartbeat)
+        {
+        }
+
+        public void AddState(DeviceClientState state)
+        {
+            States.Add(state);
+        }
+
+        public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(1);
+        }
+    }
+
     private sealed class StubEdgeHostPlcRuntimeStateStore : IEdgeHostPlcRuntimeStateStore
     {
         public List<EdgeHostPlcRuntimeState> States { get; } = [];
 
         public bool SaveChangesCalled { get; private set; }
+
+        public IReadOnlyList<Guid>? LastRequestedDeviceIds { get; private set; }
 
         public Task<IReadOnlyList<EdgeHostPlcRuntimeState>> GetByIdentityAsync(
             Guid deviceId,
@@ -708,12 +475,13 @@ public sealed class EdgeHostBehaviorTests
                 .ToList());
         }
 
-        public Task<IReadOnlyList<EdgeHostPlcRuntimeState>> GetByEdgeHostAsync(
-            Guid edgeHostId,
+        public Task<IReadOnlyList<EdgeHostPlcRuntimeState>> GetByDevicesAsync(
+            IReadOnlyCollection<Guid>? deviceIds = null,
             CancellationToken cancellationToken = default)
         {
+            LastRequestedDeviceIds = deviceIds?.ToList();
             return Task.FromResult((IReadOnlyList<EdgeHostPlcRuntimeState>)States
-                .Where(state => state.EdgeHostId == edgeHostId)
+                .Where(state => deviceIds == null || deviceIds.Contains(state.DeviceId))
                 .ToList());
         }
 
@@ -754,68 +522,46 @@ public sealed class EdgeHostBehaviorTests
         }
     }
 
-    private sealed class StubCapacityQueryService : ICapacityQueryService
+    private sealed class StubEdgeHostOverviewQueryService : IEdgeHostOverviewQueryService
     {
-        public DailySummaryDto? Summary { get; init; }
+        public List<EdgeHostOverviewDeviceRow> Devices { get; } = [];
 
-        public List<(Guid DeviceId, DateOnly Date, string? PlcName)> SummaryCalls { get; } = [];
+        public List<EdgeHostPlcRuntimeState> PlcStates { get; } = [];
 
-        public Task<List<HourlyCapacityDto>> GetHourlyByDeviceIdAsync(
-            Guid deviceId,
-            DateOnly date,
-            string? plcName = null,
+        public string? LastKeyword { get; private set; }
+
+        public Task<EdgeHostOverviewPage> SearchAccessibleDevicesAsync(
+            IReadOnlyCollection<Guid>? allowedDeviceIds,
+            string? keyword,
+            int skip,
+            int take,
             CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(new List<HourlyCapacityDto>());
+            LastKeyword = keyword;
+            var normalized = keyword?.Trim();
+            var matches = Devices
+                .Where(device => allowedDeviceIds == null || allowedDeviceIds.Contains(device.DeviceId))
+                .Where(device => string.IsNullOrWhiteSpace(normalized)
+                    || Contains(device.DeviceName, normalized)
+                    || Contains(device.ClientCode, normalized)
+                    || PlcStates.Any(state =>
+                        state.DeviceId == device.DeviceId
+                        && (Contains(state.PlcCode, normalized)
+                            || Contains(state.ReportedPlcName, normalized)
+                            || Contains(state.Protocol, normalized)
+                            || Contains(state.Address, normalized))))
+                .OrderBy(device => device.DeviceName, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(device => device.ClientCode, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var page = matches.Skip(skip).Take(take).ToList();
+
+            return Task.FromResult(new EdgeHostOverviewPage(page, matches.Count));
         }
 
-        public Task<List<HourlyCapacityPointDto>> GetHourlyRangeByDeviceIdAsync(
-            Guid deviceId,
-            DateTime startTime,
-            DateTime endTime,
-            string? plcName = null,
-            CancellationToken cancellationToken = default)
+        private static bool Contains(string? value, string? keyword)
         {
-            return Task.FromResult(new List<HourlyCapacityPointDto>());
-        }
-
-        public Task<List<HourlyCapacityAggregateDto>> GetHourlyAggregateAsync(
-            DateOnly date,
-            Guid? processId = null,
-            IReadOnlyCollection<Guid>? deviceIds = null,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(new List<HourlyCapacityAggregateDto>());
-        }
-
-        public Task<DailySummaryDto?> GetSummaryByDeviceIdAsync(
-            Guid deviceId,
-            DateOnly date,
-            string? plcName = null,
-            CancellationToken cancellationToken = default)
-        {
-            SummaryCalls.Add((deviceId, date, plcName));
-            return Task.FromResult(Summary);
-        }
-
-        public Task<List<DailyRangeSummaryDto>> GetSummaryRangeAsync(
-            Guid deviceId,
-            DateOnly startDate,
-            DateOnly endDate,
-            string? plcName = null,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(new List<DailyRangeSummaryDto>());
-        }
-
-        public Task<(List<DailyCapacityPagedItemDto> Items, int TotalCount)> GetDailyPagedAsync(
-            Pagination pagination,
-            DateOnly? date = null,
-            Guid? deviceId = null,
-            IReadOnlyCollection<Guid>? deviceIds = null,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult((new List<DailyCapacityPagedItemDto>(), 0));
+            return !string.IsNullOrWhiteSpace(keyword)
+                && value?.Contains(keyword, StringComparison.OrdinalIgnoreCase) == true;
         }
     }
 }

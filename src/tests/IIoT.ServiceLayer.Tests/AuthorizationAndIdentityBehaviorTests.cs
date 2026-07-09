@@ -488,7 +488,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         Assert.Contains(ClientReleasePermissions.Publish, permissions);
         Assert.Contains(ClientReleasePermissions.Manage, permissions);
         Assert.Contains(EdgeHostPermissions.Read, permissions);
-        Assert.Contains(EdgeHostPermissions.Manage, permissions);
+        Assert.DoesNotContain("EdgeHost.Manage", permissions);
         Assert.Contains("Role.Read", permissions);
         Assert.DoesNotContain("Device.Deactivate", permissions);
     }
@@ -499,7 +499,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         var permissions = SystemRolePermissionTemplates.Templates[SystemRoles.ProductionViewer];
 
         Assert.Contains(EdgeHostPermissions.Read, permissions);
-        Assert.DoesNotContain(EdgeHostPermissions.Manage, permissions);
+        Assert.DoesNotContain("EdgeHost.Manage", permissions);
     }
 
     [Fact]

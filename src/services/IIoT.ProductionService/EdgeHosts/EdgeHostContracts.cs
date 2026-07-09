@@ -1,7 +1,6 @@
+using IIoT.Core.Production.Aggregates.ClientReleases;
+using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.EdgeHosts;
-using IIoT.Services.Contracts.Auditing;
-using IIoT.Services.Contracts.Identity;
-using IIoT.Services.Contracts.RecordQueries;
 
 namespace IIoT.ProductionService.EdgeHosts;
 
@@ -10,54 +9,40 @@ public sealed record EdgeHostListItemDto(
     Guid DeviceId,
     string ClientCode,
     string HostName,
-    bool Enabled,
-    int PlcBindingCount,
-    int EnabledPlcBindingCount,
-    string? Remark,
-    DateTime CreatedAtUtc,
-    DateTime UpdatedAtUtc);
+    string? PrimaryIpAddress,
+    IReadOnlyList<string> LocalIpAddresses,
+    string SoftwareStatus,
+    string? CurrentVersion,
+    DateTime? LastRuntimeHeartbeatAtUtc,
+    int PlcCount,
+    int ConnectedPlcCount,
+    int FaultedPlcCount,
+    DateTime? LastPlcSeenAtUtc,
+    string? Issue);
 
 public sealed record EdgeHostDto(
     Guid Id,
     Guid DeviceId,
     string ClientCode,
     string HostName,
-    bool Enabled,
-    string? Remark,
-    DateTime CreatedAtUtc,
-    DateTime UpdatedAtUtc,
-    IReadOnlyList<EdgeHostPlcBindingDto> PlcBindings);
-
-public sealed record EdgeHostPlcBindingDto(
-    Guid Id,
-    string PlcCode,
-    string PlcName,
-    Guid? ProcessId,
-    Guid? BusinessDeviceId,
-    string? StationCode,
-    string? Protocol,
-    string? Address,
-    bool Enabled,
-    int DisplayOrder,
-    string? Remark,
-    DateTime CreatedAtUtc,
-    DateTime UpdatedAtUtc);
+    string? PrimaryIpAddress,
+    IReadOnlyList<string> LocalIpAddresses,
+    string SoftwareStatus,
+    string? CurrentVersion,
+    DateTime? LastRuntimeHeartbeatAtUtc,
+    int PlcCount,
+    int ConnectedPlcCount,
+    int FaultedPlcCount,
+    DateTime? LastPlcSeenAtUtc,
+    string? Issue,
+    IReadOnlyList<EdgeHostPlcRuntimeStateDto> PlcStates);
 
 public sealed record EdgeHostPlcRuntimeStateDto(
     Guid Id,
-    Guid EdgeHostId,
     Guid DeviceId,
     string ClientCode,
-    Guid? PlcBindingId,
     string PlcCode,
     string? ReportedPlcName,
-    bool IsConfigured,
-    bool? ConfigEnabled,
-    Guid? ProcessId,
-    Guid? BusinessDeviceId,
-    string? ConfiguredStationCode,
-    string? ConfiguredProtocol,
-    string? ConfiguredAddress,
     string? RuntimeStationCode,
     string? RuntimeProtocol,
     string? RuntimeAddress,
@@ -67,99 +52,88 @@ public sealed record EdgeHostPlcRuntimeStateDto(
     DateTime LastSeenAtUtc,
     DateTime UpdatedAtUtc);
 
-public sealed record EdgeHostPlcCapacitySummaryDto(
-    Guid PlcBindingId,
-    string PlcCode,
-    string PlcName,
-    bool BindingEnabled,
-    Guid? ProcessId,
-    Guid? BusinessDeviceId,
-    DateOnly Date,
-    bool CanReadCapacity,
-    string CapacityStatus,
-    DailySummaryDto? Summary);
-
 public sealed record EdgeHostPlcRuntimeStateReportResultDto(
     Guid DeviceId,
     string ClientCode,
-    Guid EdgeHostId,
     int ReceivedCount,
-    int ConfiguredCount,
-    int UnconfiguredCount,
     DateTime ReceivedAtUtc);
 
 public static class EdgeHostMapping
 {
-    public static EdgeHostListItemDto ToListItemDto(EdgeHost host)
+    private static readonly TimeSpan RuntimeHeartbeatStaleThreshold = TimeSpan.FromHours(24);
+
+    public static EdgeHostListItemDto ToListItemDto(
+        Device device,
+        DeviceClientState? clientState,
+        IReadOnlyList<EdgeHostPlcRuntimeState> plcStates)
+        => ToListItemDto(device.Id, device.DeviceName, device.Code, clientState, plcStates);
+
+    public static EdgeHostListItemDto ToListItemDto(
+        Guid deviceId,
+        string hostName,
+        string clientCode,
+        DeviceClientState? clientState,
+        IReadOnlyList<EdgeHostPlcRuntimeState> plcStates)
     {
+        var softwareStatus = ResolveSoftwareStatus(clientState, out var softwareIssue);
+        var lastPlcSeenAtUtc = plcStates.Count == 0
+            ? (DateTime?)null
+            : plcStates.Max(state => state.LastSeenAtUtc);
+        var issue = ResolveIssue(softwareIssue, plcStates);
+
         return new EdgeHostListItemDto(
-            host.Id,
-            host.DeviceId,
-            host.ClientCode,
-            host.HostName,
-            host.Enabled,
-            host.PlcBindings.Count,
-            host.PlcBindings.Count(binding => binding.Enabled),
-            host.Remark,
-            host.CreatedAtUtc,
-            host.UpdatedAtUtc);
+            deviceId,
+            deviceId,
+            clientCode,
+            hostName,
+            ResolvePrimaryIp(clientState),
+            ResolveLocalIpAddresses(clientState),
+            softwareStatus,
+            BuildCurrentVersion(clientState),
+            clientState?.LastRuntimeHeartbeatAtUtc,
+            plcStates.Count,
+            plcStates.Count(state => state.RuntimeStatus == EdgeHostPlcRuntimeStatus.Connected),
+            plcStates.Count(state => state.RuntimeStatus == EdgeHostPlcRuntimeStatus.Faulted),
+            lastPlcSeenAtUtc,
+            issue);
     }
 
-    public static EdgeHostDto ToDto(EdgeHost host)
+    public static EdgeHostDto ToDetailDto(
+        Device device,
+        DeviceClientState? clientState,
+        IReadOnlyList<EdgeHostPlcRuntimeState> plcStates)
     {
+        var listItem = ToListItemDto(device, clientState, plcStates);
         return new EdgeHostDto(
-            host.Id,
-            host.DeviceId,
-            host.ClientCode,
-            host.HostName,
-            host.Enabled,
-            host.Remark,
-            host.CreatedAtUtc,
-            host.UpdatedAtUtc,
-            host.PlcBindings
-                .OrderBy(binding => binding.DisplayOrder)
-                .ThenBy(binding => binding.PlcCode, StringComparer.OrdinalIgnoreCase)
-                .Select(ToDto)
+            listItem.Id,
+            listItem.DeviceId,
+            listItem.ClientCode,
+            listItem.HostName,
+            listItem.PrimaryIpAddress,
+            listItem.LocalIpAddresses,
+            listItem.SoftwareStatus,
+            listItem.CurrentVersion,
+            listItem.LastRuntimeHeartbeatAtUtc,
+            listItem.PlcCount,
+            listItem.ConnectedPlcCount,
+            listItem.FaultedPlcCount,
+            listItem.LastPlcSeenAtUtc,
+            listItem.Issue,
+            plcStates
+                .OrderByDescending(state => state.LastSeenAtUtc)
+                .ThenBy(state => state.PlcCode, StringComparer.OrdinalIgnoreCase)
+                .Select(ToRuntimeStateDto)
                 .ToList());
     }
 
-    private static EdgeHostPlcBindingDto ToDto(EdgeHostPlcBinding binding)
-    {
-        return new EdgeHostPlcBindingDto(
-            binding.Id,
-            binding.PlcCode,
-            binding.PlcName,
-            binding.ProcessId,
-            binding.BusinessDeviceId,
-            binding.StationCode,
-            binding.Protocol,
-            binding.Address,
-            binding.Enabled,
-            binding.DisplayOrder,
-            binding.Remark,
-            binding.CreatedAtUtc,
-            binding.UpdatedAtUtc);
-    }
-
-    public static EdgeHostPlcRuntimeStateDto ToRuntimeStateDto(
-        EdgeHostPlcRuntimeState state,
-        EdgeHostPlcBinding? binding)
+    public static EdgeHostPlcRuntimeStateDto ToRuntimeStateDto(EdgeHostPlcRuntimeState state)
     {
         return new EdgeHostPlcRuntimeStateDto(
             state.Id,
-            state.EdgeHostId,
             state.DeviceId,
             state.ClientCode,
-            binding?.Id,
             state.PlcCode,
             state.ReportedPlcName,
-            binding is not null,
-            binding?.Enabled,
-            binding?.ProcessId,
-            binding?.BusinessDeviceId,
-            binding?.StationCode,
-            binding?.Protocol,
-            binding?.Address,
             state.StationCode,
             state.Protocol,
             state.Address,
@@ -169,46 +143,83 @@ public static class EdgeHostMapping
             state.LastSeenAtUtc,
             state.UpdatedAtUtc);
     }
-}
 
-internal static class EdgeHostAudit
-{
-    public const string TargetType = "EdgeHost";
-    public const string Create = "EdgeHost.Create";
-    public const string Update = "EdgeHost.Update";
-    public const string Enable = "EdgeHost.Enable";
-    public const string Disable = "EdgeHost.Disable";
-    public const string Delete = "EdgeHost.Delete";
-    public const string PlcBindingAdd = "EdgeHost.PlcBinding.Add";
-    public const string PlcBindingUpdate = "EdgeHost.PlcBinding.Update";
-    public const string PlcBindingEnable = "EdgeHost.PlcBinding.Enable";
-    public const string PlcBindingDisable = "EdgeHost.PlcBinding.Disable";
-    public const string PlcBindingRemove = "EdgeHost.PlcBinding.Remove";
-
-    public static AuditTrailEntry Entry(
-        ICurrentUser currentUser,
-        string operationType,
-        string targetIdOrKey,
-        bool succeeded,
-        string summary,
-        string? failureReason = null)
+    private static string ResolveSoftwareStatus(DeviceClientState? state, out string? issue)
     {
-        return new AuditTrailEntry(
-            ParseActorUserId(currentUser.Id),
-            currentUser.UserName,
-            operationType,
-            TargetType,
-            targetIdOrKey,
-            DateTime.UtcNow,
-            succeeded,
-            summary,
-            failureReason);
+        issue = null;
+        if (state?.LastRuntimeHeartbeatAtUtc is null)
+        {
+            issue = "客户端尚未上报运行心跳。";
+            return "MissingRuntimeHeartbeat";
+        }
+
+        if (DateTime.UtcNow - state.LastRuntimeHeartbeatAtUtc.Value.ToUniversalTime() > RuntimeHeartbeatStaleThreshold)
+        {
+            issue = "超过 24 小时未收到运行心跳。";
+            return "RuntimeHeartbeatStale";
+        }
+
+        return state.RuntimeStatus switch
+        {
+            "Starting" => "Starting",
+            "Running" => "Running",
+            "Stopping" or "Stopped" => "Stopped",
+            _ => "Unknown"
+        };
     }
 
-    private static Guid? ParseActorUserId(string? rawUserId)
+    private static string? ResolveIssue(
+        string? softwareIssue,
+        IReadOnlyList<EdgeHostPlcRuntimeState> plcStates)
     {
-        return Guid.TryParse(rawUserId, out var actorUserId)
-            ? actorUserId
-            : null;
+        if (!string.IsNullOrWhiteSpace(softwareIssue))
+        {
+            return softwareIssue;
+        }
+
+        if (plcStates.Count == 0)
+        {
+            return "客户端尚未上报 PLC 清单。";
+        }
+
+        var faulted = plcStates.FirstOrDefault(state => state.RuntimeStatus == EdgeHostPlcRuntimeStatus.Faulted);
+        return faulted is null
+            ? null
+            : $"PLC {faulted.PlcCode} 状态异常。";
+    }
+
+    private static string? BuildCurrentVersion(DeviceClientState? state)
+    {
+        var hostVersion = state?.RuntimeHostVersion ?? state?.HostVersion;
+        return string.IsNullOrWhiteSpace(hostVersion)
+            ? null
+            : $"宿主 {hostVersion}";
+    }
+
+    private static string? ResolvePrimaryIp(DeviceClientState? state)
+    {
+        var runtimeIps = state?.GetRuntimeLocalIpAddresses() ?? [];
+        var versionIps = state?.GetVersionLocalIpAddresses() ?? [];
+        return runtimeIps.FirstOrDefault()
+            ?? NormalizeOptional(state?.RuntimeRemoteIpAddress)
+            ?? versionIps.FirstOrDefault()
+            ?? NormalizeOptional(state?.VersionRemoteIpAddress);
+    }
+
+    private static IReadOnlyList<string> ResolveLocalIpAddresses(DeviceClientState? state)
+    {
+        var runtimeIps = state?.GetRuntimeLocalIpAddresses() ?? [];
+        if (runtimeIps.Count > 0)
+        {
+            return runtimeIps;
+        }
+
+        return state?.GetVersionLocalIpAddresses() ?? [];
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 }

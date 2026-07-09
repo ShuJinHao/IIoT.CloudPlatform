@@ -30,10 +30,9 @@ export const Permissions = {
     CascadeDelete: 'Device.CascadeDelete',
   },
 
-  // ===== 上位机与 PLC 绑定 =====
+  // ===== 上位机 PLC 状态 =====
   EdgeHost: {
     Read: 'EdgeHost.Read',
-    Manage: 'EdgeHost.Manage',
   },
 
   // ===== 配方管理 =====

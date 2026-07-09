@@ -9,7 +9,7 @@ export const edgeHostRoutes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       requiredPermission: Permissions.EdgeHost.Read,
-      title: '上位机 PLC 绑定',
+      title: '上位机 PLC 状态',
     },
   },
 ];

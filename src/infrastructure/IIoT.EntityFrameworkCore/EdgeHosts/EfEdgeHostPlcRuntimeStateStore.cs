@@ -18,12 +18,17 @@ public sealed class EfEdgeHostPlcRuntimeStateStore(IIoTDbContext dbContext) : IE
             .ToListAsync(cancellationToken);
     }
 
-    public async Task<IReadOnlyList<EdgeHostPlcRuntimeState>> GetByEdgeHostAsync(
-        Guid edgeHostId,
+    public async Task<IReadOnlyList<EdgeHostPlcRuntimeState>> GetByDevicesAsync(
+        IReadOnlyCollection<Guid>? deviceIds = null,
         CancellationToken cancellationToken = default)
     {
+        if (deviceIds is { Count: 0 })
+        {
+            return [];
+        }
+
         return await dbContext.EdgeHostPlcRuntimeStates
-            .Where(state => state.EdgeHostId == edgeHostId)
+            .Where(state => deviceIds == null || deviceIds.Contains(state.DeviceId))
             .OrderByDescending(state => state.LastSeenAtUtc)
             .ThenBy(state => state.PlcCode)
             .ToListAsync(cancellationToken);

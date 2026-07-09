@@ -13,8 +13,8 @@ public interface IEdgeHostPlcRuntimeStateStore
         string clientCode,
         CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<EdgeHostPlcRuntimeState>> GetByEdgeHostAsync(
-        Guid edgeHostId,
+    Task<IReadOnlyList<EdgeHostPlcRuntimeState>> GetByDevicesAsync(
+        IReadOnlyCollection<Guid>? deviceIds = null,
         CancellationToken cancellationToken = default);
 
     void Add(EdgeHostPlcRuntimeState state);

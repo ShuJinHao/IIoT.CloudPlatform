@@ -88,8 +88,8 @@ public sealed class InfrastructureBehaviorTests
             StringComparison.Ordinal);
         Assert.Contains("SqlQuery<DeviceDeletionImpactRow>", efDeletionService, StringComparison.Ordinal);
         Assert.Contains("delete from edge_host_plc_runtime_states", efDeletionService, StringComparison.Ordinal);
-        Assert.Contains("edge_host_plc_bindings", efDeletionService, StringComparison.Ordinal);
-        Assert.Contains("edge_hosts", efDeletionService, StringComparison.Ordinal);
+        Assert.DoesNotContain("edge_host_plc_bindings", efDeletionService, StringComparison.Ordinal);
+        Assert.DoesNotContain("edge_hosts", efDeletionService, StringComparison.Ordinal);
         Assert.Contains("\"ActorType\"", efDeletionService, StringComparison.Ordinal);
         Assert.Contains("\"SubjectId\"", efDeletionService, StringComparison.Ordinal);
         Assert.DoesNotContain("CountTableAsync", efDeletionService, StringComparison.Ordinal);
@@ -304,7 +304,6 @@ public sealed class InfrastructureBehaviorTests
             typeof(Employee),
             typeof(MfgProcess),
             typeof(Device),
-            typeof(EdgeHost),
             typeof(Recipe),
             typeof(ClientReleaseComponent),
             typeof(ClientReleaseRetentionPolicy)
@@ -318,7 +317,6 @@ public sealed class InfrastructureBehaviorTests
         Type[] childEntities =
         [
             typeof(EmployeeDeviceAccess),
-            typeof(EdgeHostPlcBinding),
             typeof(ClientReleaseVersion),
             typeof(ClientReleaseArtifact),
             typeof(DeviceClientPluginVersion),
@@ -343,9 +341,9 @@ public sealed class InfrastructureBehaviorTests
     }
 
     [Fact]
-    public void DbContext_ShouldExposeEdgeHostRootButNotPlcBindingChildSet()
+    public void DbContext_ShouldExposeOnlyEdgeHostRuntimeStateProjection()
     {
-        Assert.NotNull(typeof(IIoTDbContext).GetProperty(nameof(IIoTDbContext.EdgeHosts)));
+        Assert.Null(typeof(IIoTDbContext).GetProperty("EdgeHosts"));
         Assert.NotNull(typeof(IIoTDbContext).GetProperty(nameof(IIoTDbContext.EdgeHostPlcRuntimeStates)));
         Assert.Null(typeof(IIoTDbContext).GetProperty("EdgeHostPlcBindings"));
     }

@@ -142,7 +142,7 @@ const messages = {
       devices: { title: '设备台账', subtitle: '管理云端导入的设备档案、工序归属与现场使用的设备 Code' },
       processes: { title: '工序管理', subtitle: '维护产线工序定义、编码和设备配方归属关系' },
       recipes: { title: '配方管理', subtitle: '维护设备配方、版本和工艺参数' },
-      edgeHosts: { title: '上位机 PLC 绑定', subtitle: '维护上位机和 PLC 绑定配置' },
+      edgeHosts: { title: '上位机 PLC 状态', subtitle: '查看客户端上报的 PLC 清单和运行状态' },
       passStation: { title: '过站追踪', subtitle: '按工序、设备和时间追踪过站记录' },
       capacity: { title: '产能看板', subtitle: '查看设备产量、合格率和班次产出' },
       capacityDetail: { title: '产能详情', subtitle: '按时间维度分析设备产能趋势' },

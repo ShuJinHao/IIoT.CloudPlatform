@@ -846,8 +846,6 @@ public sealed class ApplicationFlowGuardTests
                 EmployeeDeviceAccesses: 7,
                 RefreshTokenSessions: 8,
                 RuntimeHeartbeats: 1,
-                EdgeHosts: 1,
-                EdgeHostPlcBindings: 2,
                 EdgeHostPlcRuntimeStates: 3),
             AffectedEmployeeIds = [employeeId]
         };
@@ -881,7 +879,7 @@ public sealed class ApplicationFlowGuardTests
             && x.Succeeded
             && x.Summary.Contains("\"DeviceCascadeDelete\"", StringComparison.Ordinal)
             && x.Summary.Contains("\"device_logs\":4", StringComparison.Ordinal)
-            && x.Summary.Contains("\"edge_hosts\":1", StringComparison.Ordinal)
+            && !x.Summary.Contains("\"edge_hosts\"", StringComparison.Ordinal)
             && x.Summary.Contains("\"edge_host_plc_runtime_states\":3", StringComparison.Ordinal));
     }
 

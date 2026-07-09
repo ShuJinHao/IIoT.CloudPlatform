@@ -48,25 +48,10 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
                     from refresh_token_sessions
                     where "ActorType" = {IIoTClaimTypes.EdgeDeviceActor} and "SubjectId" = {deviceId}
                 ) as "RefreshTokenSessions",
-                (select count(*)::bigint from edge_hosts where device_id = {deviceId}) as "EdgeHosts",
-                (
-                    select count(*)::bigint
-                    from edge_host_plc_bindings binding
-                    where binding.edge_host_id in (
-                        select host.id
-                        from edge_hosts host
-                        where host.device_id = {deviceId}
-                    )
-                ) as "EdgeHostPlcBindings",
                 (
                     select count(*)::bigint
                     from edge_host_plc_runtime_states state
                     where state.device_id = {deviceId}
-                       or state.edge_host_id in (
-                           select host.id
-                           from edge_hosts host
-                           where host.device_id = {deviceId}
-                       )
                 ) as "EdgeHostPlcRuntimeStates"
             """)
             .SingleAsync(cancellationToken);
@@ -114,21 +99,6 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
     {
         await dbContext.Database.ExecuteSqlInterpolatedAsync($"""
             delete from edge_host_plc_runtime_states
-            where device_id = {deviceId}
-               or edge_host_id in (
-                   select id
-                   from edge_hosts
-                   where device_id = {deviceId}
-               );
-
-            delete from edge_host_plc_bindings
-            where edge_host_id in (
-                select id
-                from edge_hosts
-                where device_id = {deviceId}
-            );
-
-            delete from edge_hosts
             where device_id = {deviceId};
 
             delete from edge_device_client_plugin_versions
@@ -194,10 +164,6 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
 
         public long RefreshTokenSessions { get; set; }
 
-        public long EdgeHosts { get; set; }
-
-        public long EdgeHostPlcBindings { get; set; }
-
         public long EdgeHostPlcRuntimeStates { get; set; }
 
         public DeviceDeletionImpact ToContract()
@@ -214,8 +180,6 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
                 EmployeeDeviceAccesses,
                 RefreshTokenSessions,
                 RuntimeHeartbeats,
-                EdgeHosts,
-                EdgeHostPlcBindings,
                 EdgeHostPlcRuntimeStates);
         }
     }

@@ -2,42 +2,50 @@ import { h } from 'vue';
 import UiButton from '../../components/ui/UiButton.vue';
 import UiTag from '../../components/ui/UiTag.vue';
 import type { UiDataTableColumn } from '../../components/ui/types';
-import type {
-  EdgeHostListItemDto,
-  EdgeHostPlcBindingDto,
-  EdgeHostPlcCapacitySummaryDto,
-  EdgeHostPlcRuntimeStateDto,
-} from './api';
-import { formatDateTime, shortId } from './types';
+import type { EdgeHostListItemDto, EdgeHostPlcRuntimeStateDto } from './api';
+import { formatDateTime, formatIpAddresses } from './types';
 
 interface EdgeHostColumnOptions {
-  canManage: () => boolean;
-  deviceLabel: (deviceId: string) => string;
-  onConfigurePlc: (host: EdgeHostListItemDto) => void;
-  onEdit: (host: EdgeHostListItemDto) => void;
-  onToggle: (host: EdgeHostListItemDto) => void;
-  onDelete: (host: EdgeHostListItemDto) => void;
-}
-
-interface PlcBindingColumnOptions {
-  canManage: () => boolean;
-  processLabel: (processId?: string | null) => string;
-  deviceLabel: (deviceId?: string | null) => string;
-  onEdit: (binding: EdgeHostPlcBindingDto) => void;
-  onToggle: (binding: EdgeHostPlcBindingDto) => void;
-  onRemove: (binding: EdgeHostPlcBindingDto) => void;
-}
-
-interface PlcRuntimeStateColumnOptions {
-  processLabel: (processId?: string | null) => string;
-  deviceLabel: (deviceId?: string | null) => string;
-}
-
-interface PlcCapacitySummaryColumnOptions {
-  deviceLabel: (deviceId?: string | null) => string;
+  onOpenPlcState: (host: EdgeHostListItemDto) => void;
 }
 
 type TagTone = 'default' | 'info' | 'success' | 'warning' | 'error';
+
+function softwareStatusTone(status?: string | null): TagTone {
+  switch ((status ?? '').toLowerCase()) {
+    case 'running':
+      return 'success';
+    case 'starting':
+      return 'info';
+    case 'stopping':
+    case 'stopped':
+    case 'runtimeheartbeatstale':
+      return 'warning';
+    case 'missingruntimeheartbeat':
+      return 'default';
+    default:
+      return 'info';
+  }
+}
+
+function softwareStatusText(status?: string | null): string {
+  switch ((status ?? '').toLowerCase()) {
+    case 'running':
+      return '运行中';
+    case 'starting':
+      return '启动中';
+    case 'stopping':
+      return '停止中';
+    case 'stopped':
+      return '已停止';
+    case 'runtimeheartbeatstale':
+      return '心跳超时';
+    case 'missingruntimeheartbeat':
+      return '无运行心跳';
+    default:
+      return status || '未知';
+  }
+}
 
 function runtimeStatusTone(status?: string | null): TagTone {
   switch ((status ?? '').toLowerCase()) {
@@ -69,48 +77,6 @@ function runtimeStatusText(status?: string | null): string {
   }
 }
 
-function capacityStatusTone(status?: string | null): TagTone {
-  switch ((status ?? '').toLowerCase()) {
-    case 'ready':
-      return 'success';
-    case 'nocapacitydata':
-      return 'info';
-    case 'nobusinessdevice':
-    case 'bindingdisabled':
-    case 'nodeviceaccess':
-      return 'warning';
-    default:
-      return 'default';
-  }
-}
-
-function capacityStatusText(status?: string | null): string {
-  switch ((status ?? '').toLowerCase()) {
-    case 'ready':
-      return '有产能';
-    case 'nocapacitydata':
-      return '无产能';
-    case 'nobusinessdevice':
-      return '未关联设备';
-    case 'bindingdisabled':
-      return '绑定禁用';
-    case 'nodeviceaccess':
-      return '无设备权限';
-    default:
-      return status || '未知';
-  }
-}
-
-function formatCount(value?: number | null): string {
-  return typeof value === 'number' ? value.toLocaleString('zh-CN') : '-';
-}
-
-function formatRate(row: EdgeHostPlcCapacitySummaryDto): string {
-  const total = row.summary?.totalCount ?? 0;
-  if (!row.summary || total <= 0) return '-';
-  return `${((row.summary.okCount / total) * 100).toFixed(1)}%`;
-}
-
 export function createEdgeHostColumns(
   options: EdgeHostColumnOptions,
 ): UiDataTableColumn<EdgeHostListItemDto>[] {
@@ -118,85 +84,94 @@ export function createEdgeHostColumns(
     {
       title: '上位机',
       key: 'hostName',
-      minWidth: 180,
+      minWidth: 190,
       render(row) {
         return h('div', { class: 'cell-stack' }, [
           h('span', { class: 'cell-name' }, row.hostName),
-          h('span', { class: 'cell-muted' }, row.remark || '未填写备注'),
+          h('code', { class: 'cell-code' }, row.clientCode),
         ]);
       },
     },
     {
-      title: 'ClientCode',
-      key: 'clientCode',
-      minWidth: 190,
+      title: 'IP',
+      key: 'primaryIpAddress',
+      minWidth: 150,
       render(row) {
-        return h('code', { class: 'cell-code' }, row.clientCode);
+        return h('span', { class: 'cell-muted' }, formatIpAddresses(row.primaryIpAddress, row.localIpAddresses));
       },
     },
     {
-      title: '绑定设备',
-      key: 'deviceId',
-      minWidth: 200,
-      render(row) {
-        return h('span', { class: 'cell-chip' }, options.deviceLabel(row.deviceId));
-      },
-    },
-    {
-      title: '配置状态',
-      key: 'enabled',
-      width: 110,
+      title: '客户端状态',
+      key: 'softwareStatus',
+      width: 130,
       render(row) {
         return h(
           UiTag,
-          { size: 'small', bordered: false, type: row.enabled ? 'success' : 'warning' },
-          { default: () => (row.enabled ? '已启用' : '已禁用') },
+          { size: 'small', bordered: false, type: softwareStatusTone(row.softwareStatus) },
+          { default: () => softwareStatusText(row.softwareStatus) },
         );
       },
     },
     {
-      title: 'PLC 绑定',
-      key: 'plcBindingCount',
-      width: 130,
+      title: '当前版本',
+      key: 'currentVersion',
+      minWidth: 150,
       render(row) {
-        return h('span', { class: 'cell-count' }, `${row.enabledPlcBindingCount}/${row.plcBindingCount}`);
+        return h('span', { class: 'cell-muted' }, row.currentVersion || '-');
       },
     },
     {
-      title: '更新时间',
-      key: 'updatedAtUtc',
+      title: '最后运行心跳',
+      key: 'lastRuntimeHeartbeatAtUtc',
       minWidth: 170,
       render(row) {
-        return h('span', { class: 'cell-muted' }, formatDateTime(row.updatedAtUtc));
+        return h('span', { class: 'cell-muted' }, formatDateTime(row.lastRuntimeHeartbeatAtUtc));
+      },
+    },
+    {
+      title: 'PLC 状态',
+      key: 'plcCount',
+      width: 150,
+      render(row) {
+        const text = row.plcCount > 0
+          ? `${row.connectedPlcCount}/${row.plcCount} 已连接`
+          : '未上报';
+        return h('span', { class: row.faultedPlcCount > 0 ? 'cell-error' : 'cell-count' }, text);
+      },
+    },
+    {
+      title: 'PLC 上报时间',
+      key: 'lastPlcSeenAtUtc',
+      minWidth: 170,
+      render(row) {
+        return h('span', { class: 'cell-muted' }, formatDateTime(row.lastPlcSeenAtUtc));
+      },
+    },
+    {
+      title: '问题',
+      key: 'issue',
+      minWidth: 210,
+      render(row) {
+        return h('span', { class: row.issue ? 'cell-error' : 'cell-muted' }, row.issue || '-');
       },
     },
     {
       title: '操作',
       key: 'actions',
-      width: 280,
+      width: 120,
       align: 'right',
       render(row) {
-        const actions = [
-          h(UiButton, { size: 'tiny', type: 'primary', secondary: true, onClick: () => options.onConfigurePlc(row) }, { default: () => 'PLC 绑定' }),
-        ];
-
-        if (options.canManage()) {
-          actions.push(
-            h(UiButton, { size: 'tiny', type: 'info', secondary: true, onClick: () => options.onEdit(row) }, { default: () => '编辑' }),
-            h(UiButton, { size: 'tiny', type: row.enabled ? 'warning' : 'success', secondary: true, onClick: () => options.onToggle(row) }, { default: () => (row.enabled ? '禁用' : '启用') }),
-            h(UiButton, { size: 'tiny', type: 'error', secondary: true, onClick: () => options.onDelete(row) }, { default: () => '删除' }),
-          );
-        }
-
-        return h('div', { class: 'row-actions' }, actions);
+        return h(
+          UiButton,
+          { size: 'tiny', type: 'primary', secondary: true, onClick: () => options.onOpenPlcState(row) },
+          { default: () => 'PLC 状态' },
+        );
       },
     },
   ];
 }
 
-export function createPlcCapacitySummaryColumns(
-  options: PlcCapacitySummaryColumnOptions,
-): UiDataTableColumn<EdgeHostPlcCapacitySummaryDto>[] {
+export function createPlcRuntimeStateColumns(): UiDataTableColumn<EdgeHostPlcRuntimeStateDto>[] {
   return [
     {
       title: 'PLC',
@@ -205,82 +180,8 @@ export function createPlcCapacitySummaryColumns(
       render(row) {
         return h('div', { class: 'cell-stack' }, [
           h('code', { class: 'cell-code' }, row.plcCode),
-          h('span', { class: 'cell-name' }, row.plcName),
+          h('span', { class: 'cell-name' }, row.reportedPlcName || '客户端未上报名称'),
         ]);
-      },
-    },
-    {
-      title: '产能状态',
-      key: 'capacityStatus',
-      width: 130,
-      render(row) {
-        return h(
-          UiTag,
-          { size: 'small', bordered: false, type: capacityStatusTone(row.capacityStatus) },
-          { default: () => capacityStatusText(row.capacityStatus) },
-        );
-      },
-    },
-    {
-      title: '业务设备',
-      key: 'businessDeviceId',
-      minWidth: 210,
-      render(row) {
-        return h('span', { class: 'cell-chip' }, options.deviceLabel(row.businessDeviceId));
-      },
-    },
-    {
-      title: '总数',
-      key: 'totalCount',
-      width: 110,
-      render(row) {
-        return h('span', { class: 'cell-count' }, formatCount(row.summary?.totalCount));
-      },
-    },
-    {
-      title: 'OK / NG',
-      key: 'okNg',
-      width: 130,
-      render(row) {
-        return h('span', { class: 'cell-muted' }, `${formatCount(row.summary?.okCount)} / ${formatCount(row.summary?.ngCount)}`);
-      },
-    },
-    {
-      title: '良率',
-      key: 'okRate',
-      width: 90,
-      render(row) {
-        return h('span', { class: 'cell-count' }, formatRate(row));
-      },
-    },
-  ];
-}
-
-export function createPlcRuntimeStateColumns(
-  options: PlcRuntimeStateColumnOptions,
-): UiDataTableColumn<EdgeHostPlcRuntimeStateDto>[] {
-  return [
-    {
-      title: 'PLC',
-      key: 'plcCode',
-      minWidth: 220,
-      render(row) {
-        return h('div', { class: 'cell-stack' }, [
-          h('code', { class: 'cell-code' }, row.plcCode),
-          h('span', { class: 'cell-name' }, row.reportedPlcName || '未上报名称'),
-        ]);
-      },
-    },
-    {
-      title: '绑定状态',
-      key: 'isConfigured',
-      width: 120,
-      render(row) {
-        return h(
-          UiTag,
-          { size: 'small', bordered: false, type: row.isConfigured ? 'success' : 'warning' },
-          { default: () => (row.isConfigured ? '已配置' : '未配置') },
-        );
       },
     },
     {
@@ -296,31 +197,9 @@ export function createPlcRuntimeStateColumns(
       },
     },
     {
-      title: '工序 / 业务设备',
-      key: 'processId',
-      minWidth: 220,
-      render(row) {
-        return h('div', { class: 'cell-stack' }, [
-          h('span', { class: 'cell-chip' }, options.processLabel(row.processId)),
-          h('span', { class: 'cell-muted' }, options.deviceLabel(row.businessDeviceId)),
-        ]);
-      },
-    },
-    {
-      title: '配置地址',
-      key: 'configuredAddress',
-      minWidth: 200,
-      render(row) {
-        return h('div', { class: 'cell-stack' }, [
-          h('span', { class: 'cell-muted' }, row.configuredProtocol || '-'),
-          h('span', { class: 'cell-mono' }, row.configuredAddress || '-'),
-        ]);
-      },
-    },
-    {
-      title: '上报地址',
+      title: '协议/地址',
       key: 'runtimeAddress',
-      minWidth: 200,
+      minWidth: 220,
       render(row) {
         return h('div', { class: 'cell-stack' }, [
           h('span', { class: 'cell-muted' }, row.runtimeProtocol || '-'),
@@ -329,9 +208,17 @@ export function createPlcRuntimeStateColumns(
       },
     },
     {
+      title: '工位',
+      key: 'runtimeStationCode',
+      width: 120,
+      render(row) {
+        return h('span', { class: 'cell-muted' }, row.runtimeStationCode || '-');
+      },
+    },
+    {
       title: '最后错误',
       key: 'lastError',
-      minWidth: 180,
+      minWidth: 220,
       render(row) {
         return h('span', { class: row.lastError ? 'cell-error' : 'cell-muted' }, row.lastError || '-');
       },
@@ -342,104 +229,6 @@ export function createPlcRuntimeStateColumns(
       minWidth: 170,
       render(row) {
         return h('span', { class: 'cell-muted' }, formatDateTime(row.lastSeenAtUtc));
-      },
-    },
-  ];
-}
-
-export function createPlcBindingColumns(
-  options: PlcBindingColumnOptions,
-): UiDataTableColumn<EdgeHostPlcBindingDto>[] {
-  return [
-    {
-      title: 'PLC',
-      key: 'plcCode',
-      minWidth: 210,
-      render(row) {
-        return h('div', { class: 'cell-stack' }, [
-          h('code', { class: 'cell-code' }, row.plcCode),
-          h('span', { class: 'cell-name' }, row.plcName),
-        ]);
-      },
-    },
-    {
-      title: '配置状态',
-      key: 'enabled',
-      width: 110,
-      render(row) {
-        return h(
-          UiTag,
-          { size: 'small', bordered: false, type: row.enabled ? 'success' : 'warning' },
-          { default: () => (row.enabled ? '已启用' : '已禁用') },
-        );
-      },
-    },
-    {
-      title: '工序',
-      key: 'processId',
-      minWidth: 180,
-      render(row) {
-        return h('span', { class: 'cell-chip' }, options.processLabel(row.processId));
-      },
-    },
-    {
-      title: '业务设备',
-      key: 'businessDeviceId',
-      minWidth: 190,
-      render(row) {
-        return h('span', { class: 'cell-chip' }, options.deviceLabel(row.businessDeviceId));
-      },
-    },
-    {
-      title: '协议/地址',
-      key: 'address',
-      minWidth: 180,
-      render(row) {
-        return h('div', { class: 'cell-stack' }, [
-          h('span', { class: 'cell-muted' }, row.protocol || '-'),
-          h('span', { class: 'cell-mono' }, row.address || '-'),
-        ]);
-      },
-    },
-    {
-      title: '工位',
-      key: 'stationCode',
-      width: 110,
-      render(row) {
-        return h('span', { class: 'cell-muted' }, row.stationCode || '-');
-      },
-    },
-    {
-      title: '排序',
-      key: 'displayOrder',
-      width: 80,
-      render(row) {
-        return h('span', { class: 'cell-count' }, String(row.displayOrder));
-      },
-    },
-    {
-      title: '更新时间',
-      key: 'updatedAtUtc',
-      minWidth: 160,
-      render(row) {
-        return h('span', { class: 'cell-muted' }, formatDateTime(row.updatedAtUtc));
-      },
-    },
-    {
-      title: '操作',
-      key: 'actions',
-      width: 210,
-      align: 'right',
-      render(row) {
-        if (!options.canManage()) {
-          return h('span', { class: 'cell-muted' }, shortId(row.id));
-        }
-
-        return h('div', { class: 'row-actions' }, [
-          h(UiButton, { size: 'tiny', type: 'info', secondary: true, onClick: () => options.onEdit(row) }, { default: () => '编辑' }),
-          h(UiButton, { size: 'tiny', type: row.enabled ? 'warning' : 'success', secondary: true, onClick: () => options.onToggle(row) }, { default: () => (row.enabled ? '禁用' : '启用') }),
-          h(UiButton, { size: 'tiny', type: 'error', secondary: true, onClick: () => options.onRemove(row) }, { default: () => '删除' }),
-        ]);
       },
     },
   ];

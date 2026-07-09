@@ -36,8 +36,6 @@ public sealed record DeviceDeletionImpact(
     long EmployeeDeviceAccesses,
     long RefreshTokenSessions,
     long RuntimeHeartbeats = 0,
-    long EdgeHosts = 0,
-    long EdgeHostPlcBindings = 0,
     long EdgeHostPlcRuntimeStates = 0)
 {
     public long TotalAssociatedRows =>
@@ -52,8 +50,6 @@ public sealed record DeviceDeletionImpact(
         + UploadReceiveRegistrations
         + EmployeeDeviceAccesses
         + RefreshTokenSessions
-        + EdgeHosts
-        + EdgeHostPlcBindings
         + EdgeHostPlcRuntimeStates;
 }
 

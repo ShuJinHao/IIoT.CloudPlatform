@@ -22,7 +22,6 @@ public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)
     public DbSet<Employee> Employees => Set<Employee>();
     public DbSet<MfgProcess> MfgProcesses => Set<MfgProcess>();
     public DbSet<Device> Devices => Set<Device>();
-    public DbSet<EdgeHost> EdgeHosts => Set<EdgeHost>();
     public DbSet<EdgeHostPlcRuntimeState> EdgeHostPlcRuntimeStates => Set<EdgeHostPlcRuntimeState>();
     public DbSet<Recipe> Recipes => Set<Recipe>();
     public DbSet<ClientReleaseComponent> ClientReleaseComponents => Set<ClientReleaseComponent>();

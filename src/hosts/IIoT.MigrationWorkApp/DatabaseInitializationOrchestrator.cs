@@ -83,7 +83,6 @@ public sealed class DatabaseInitializationOrchestrator(
         await EnsureRecordSchemaCompatibilityAsync(cancellationToken);
         await InitializeTimescaleDbAsync(cancellationToken);
         await SeedSystemDataAsync(cancellationToken);
-        await SeedEdgeHostDataAsync(cancellationToken);
         await SeedOidcClientsAsync(cancellationToken);
     }
 
@@ -289,16 +288,6 @@ public sealed class DatabaseInitializationOrchestrator(
             configuration,
             cancellationToken);
         logger.LogInformation("系统初始化数据播种完成。");
-    }
-
-    private async Task SeedEdgeHostDataAsync(CancellationToken cancellationToken)
-    {
-        logger.LogInformation("开始检查 EdgeHost/PLC 初始化配置。");
-        await EdgeHostSeedData.SeedAsync(
-            dbContext,
-            configuration,
-            cancellationToken);
-        logger.LogInformation("EdgeHost/PLC 初始化配置检查完成。");
     }
 
     private async Task SeedOidcClientsAsync(CancellationToken cancellationToken)

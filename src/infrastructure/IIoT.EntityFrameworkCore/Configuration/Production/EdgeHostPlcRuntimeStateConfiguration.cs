@@ -14,10 +14,6 @@ public sealed class EdgeHostPlcRuntimeStateConfiguration : IEntityTypeConfigurat
         builder.HasKey(state => state.Id);
         builder.Property(state => state.Id).HasColumnName("id");
 
-        builder.Property(state => state.EdgeHostId)
-            .IsRequired()
-            .HasColumnName("edge_host_id");
-
         builder.Property(state => state.DeviceId)
             .IsRequired()
             .HasColumnName("device_id");
@@ -26,9 +22,6 @@ public sealed class EdgeHostPlcRuntimeStateConfiguration : IEntityTypeConfigurat
             .IsRequired()
             .HasMaxLength(EdgeHostPlcRuntimeState.ClientCodeMaxLength)
             .HasColumnName("client_code");
-
-        builder.Property(state => state.PlcBindingId)
-            .HasColumnName("plc_binding_id");
 
         builder.Property(state => state.PlcCode)
             .IsRequired()
@@ -80,28 +73,12 @@ public sealed class EdgeHostPlcRuntimeStateConfiguration : IEntityTypeConfigurat
             .IsUnique()
             .HasDatabaseName("ux_edge_host_plc_runtime_states_device_client_plc");
 
-        builder.HasIndex(state => state.EdgeHostId)
-            .HasDatabaseName("ix_edge_host_plc_runtime_states_edge_host_id");
-
-        builder.HasIndex(state => state.PlcBindingId)
-            .HasDatabaseName("ix_edge_host_plc_runtime_states_plc_binding_id");
-
         builder.HasIndex(state => state.LastSeenAtUtc)
             .HasDatabaseName("ix_edge_host_plc_runtime_states_last_seen");
-
-        builder.HasOne<EdgeHost>()
-            .WithMany()
-            .HasForeignKey(state => state.EdgeHostId)
-            .OnDelete(DeleteBehavior.Cascade);
 
         builder.HasOne<Device>()
             .WithMany()
             .HasForeignKey(state => state.DeviceId)
             .OnDelete(DeleteBehavior.Cascade);
-
-        builder.HasOne<EdgeHostPlcBinding>()
-            .WithMany()
-            .HasForeignKey(state => state.PlcBindingId)
-            .OnDelete(DeleteBehavior.SetNull);
     }
 }

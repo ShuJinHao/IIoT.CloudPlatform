@@ -1,11 +1,9 @@
 using IIoT.Core.Production.Aggregates.EdgeHosts;
 using IIoT.Core.Production.Contracts.EdgeHosts;
-using IIoT.Core.Production.Specifications.EdgeHosts;
 using IIoT.ProductionService.EdgeHosts;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.SharedKernel.Messaging;
-using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
 
 namespace IIoT.ProductionService.Commands.EdgeHosts;
@@ -30,7 +28,6 @@ public sealed record ReportEdgeHostPlcRuntimeStatesCommand(
 
 public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
     IDeviceIdentityQueryService deviceIdentityQueryService,
-    IReadRepository<EdgeHost> edgeHostRepository,
     IEdgeHostPlcRuntimeStateStore runtimeStateStore)
     : ICommandHandler<ReportEdgeHostPlcRuntimeStatesCommand, Result<EdgeHostPlcRuntimeStateReportResultDto>>
 {
@@ -58,42 +55,23 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
             return Result.Failure("PLC 状态上报失败: ClientCode 与 DeviceId 不匹配");
         }
 
-        var host = await edgeHostRepository.GetSingleOrDefaultAsync(
-            new EdgeHostByDeviceIdentitySpec(request.DeviceId, clientCode),
-            cancellationToken);
-        if (host is null)
-        {
-            return Result.NotFound("PLC 状态上报失败: 上位机配置不存在。");
-        }
-
         var normalizedReports = NormalizeReports(request, out var invalidMessage);
         if (invalidMessage is not null)
         {
             return Result.Invalid(invalidMessage);
         }
 
-        var bindingsByPlcCode = host.PlcBindings.ToDictionary(
-            binding => binding.PlcCode,
-            StringComparer.OrdinalIgnoreCase);
         var statesByPlcCode = (await runtimeStateStore.GetByIdentityAsync(
                 request.DeviceId,
                 clientCode,
                 cancellationToken))
             .ToDictionary(state => state.PlcCode, StringComparer.OrdinalIgnoreCase);
 
-        var configuredCount = 0;
         foreach (var report in normalizedReports)
         {
-            bindingsByPlcCode.TryGetValue(report.PlcCode, out var binding);
-            if (binding is not null)
-            {
-                configuredCount++;
-            }
-
             if (!statesByPlcCode.TryGetValue(report.PlcCode, out var state))
             {
                 state = new EdgeHostPlcRuntimeState(
-                    host.Id,
                     request.DeviceId,
                     clientCode,
                     report.PlcCode);
@@ -102,8 +80,6 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
             }
 
             state.ReplaceReport(
-                host.Id,
-                binding?.Id,
                 report.ReportedPlcName,
                 report.IsConnected,
                 report.RuntimeStatus,
@@ -118,10 +94,7 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
         return Result.Success(new EdgeHostPlcRuntimeStateReportResultDto(
             request.DeviceId,
             clientCode,
-            host.Id,
             normalizedReports.Count,
-            configuredCount,
-            normalizedReports.Count - configuredCount,
             NormalizeUtc(request.ReportedAtUtc)));
     }
 
