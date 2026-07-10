@@ -251,10 +251,11 @@ run_with_timeout() {
   ) &
   timer_pid=$!
 
-  set +e
-  wait "$cmd_pid"
-  exit_code=$?
-  set -e
+  if wait "$cmd_pid"; then
+    exit_code=0
+  else
+    exit_code=$?
+  fi
   kill "$timer_pid" 2>/dev/null || true
   wait "$timer_pid" 2>/dev/null || true
 
@@ -331,8 +332,7 @@ build_and_push_service() {
   image="$IMAGE_PREFIX/$image_name:$TAG"
 
   printf 'Building Cloud image: service=%s image=%s\n' "$service" "$image"
-  set +e
-  run_with_timeout "$BUILD_TIMEOUT_SECONDS" "build/push $service" \
+  if run_with_timeout "$BUILD_TIMEOUT_SECONDS" "build/push $service" \
     docker buildx build \
       --platform "$PLATFORM" \
       --push \
@@ -343,9 +343,11 @@ build_and_push_service() {
       --build-arg "NODE_BASE_IMAGE=$NODE_BASE_IMAGE" \
       --build-arg "NGINX_BASE_IMAGE=$NGINX_BASE_IMAGE" \
       --tag "$image" \
-      "$REPO_ROOT"
-  local build_status=$?
-  set -e
+      "$REPO_ROOT"; then
+    local build_status=0
+  else
+    local build_status=$?
+  fi
   if [ "$build_status" -ne 0 ]; then
     if [ "$build_status" -eq 124 ]; then
       printf 'Cloud image build timed out after %s seconds: service=%s\n' "$BUILD_TIMEOUT_SECONDS" "$service" >&2

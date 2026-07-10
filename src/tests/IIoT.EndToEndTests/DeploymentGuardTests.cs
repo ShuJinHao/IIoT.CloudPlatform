@@ -123,6 +123,7 @@ public sealed class DeploymentGuardTests
             source.Should().NotContain("kill -TERM \"$cmd_pid\"");
             source.Should().NotContain("kill -KILL \"$cmd_pid\"");
             source.Should().NotContain("sleep 5");
+            source.Should().NotContain("set +e\n  wait \"$cmd_pid\"");
         }
 
         var localRelease = File.ReadAllText(FindRepoFile("deploy", "scripts", "local-release.sh"));

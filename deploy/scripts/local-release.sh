@@ -206,10 +206,11 @@ run_with_timeout() {
   ) &
   timer_pid=$!
 
-  set +e
-  wait "$cmd_pid"
-  exit_code=$?
-  set -e
+  if wait "$cmd_pid"; then
+    exit_code=0
+  else
+    exit_code=$?
+  fi
   kill "$timer_pid" 2>/dev/null || true
   wait "$timer_pid" 2>/dev/null || true
 
@@ -653,11 +654,12 @@ for argument in "${SSH_OPTIONS[@]}" "$SSH_TARGET" "$REMOTE_COMMAND"; do
 done
 printf '\n'
 
-set +e
-run_with_timeout "$SSH_TIMEOUT_SECONDS" "ssh Cloud deploy-release" \
-  ssh "${SSH_OPTIONS[@]}" "$SSH_TARGET" "$REMOTE_COMMAND"
-deploy_status=$?
-set -e
+if run_with_timeout "$SSH_TIMEOUT_SECONDS" "ssh Cloud deploy-release" \
+  ssh "${SSH_OPTIONS[@]}" "$SSH_TARGET" "$REMOTE_COMMAND"; then
+  deploy_status=0
+else
+  deploy_status=$?
+fi
 if [ "$deploy_status" -ne 0 ]; then
   if [ "$deploy_status" -eq 124 ]; then
     printf 'Cloud SSH deploy timed out after %s seconds.\n' "$SSH_TIMEOUT_SECONDS" >&2
