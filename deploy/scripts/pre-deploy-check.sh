@@ -18,6 +18,35 @@ if [ ! -f ./.env ]; then
 fi
 
 load_dotenv
+
+DEPLOY_RELEASE_LOCK_FILE=$(resolve_managed_lock_file \
+  "${DEPLOY_RELEASE_LOCK_FILE:-$CLOUD_RELEASE_LOCK_FILE_DEFAULT}" \
+  "$DEPLOY_DIR/.cloud-release.lock")
+POST_RELEASE_CLEANUP_LOCK_FILE=$(resolve_managed_lock_file \
+  "${POST_RELEASE_CLEANUP_LOCK_FILE:-$POST_RELEASE_CLEANUP_LOCK_FILE_DEFAULT}" \
+  "$DEPLOY_DIR/.post-release-cleanup.lock")
+export DEPLOY_RELEASE_LOCK_FILE POST_RELEASE_CLEANUP_LOCK_FILE
+
+SUPPORT_MANIFEST="$DEPLOY_DIR/.cloud-support-manifest.sha256"
+if [ ! -r "$SUPPORT_MANIFEST" ]; then
+  printf 'Cloud deploy support manifest is missing or unreadable: %s\n' "$SUPPORT_MANIFEST" >&2
+  printf 'Run the standard workspace deploy entry so allowlisted support files are staged, synchronized and verified before release.\n' >&2
+  exit 66
+fi
+command -v sha256sum >/dev/null 2>&1 || {
+  printf 'Required command not found for Cloud support verification: sha256sum\n' >&2
+  exit 69
+}
+(cd "$DEPLOY_DIR" && sha256sum -c "$SUPPORT_MANIFEST")
+printf 'preflight_support_manifest=verified path=%s\n' "$SUPPORT_MANIFEST"
+
+ensure_managed_lock_available \
+  "$DEPLOY_RELEASE_LOCK_FILE" \
+  "${DEPLOY_RELEASE_LOCK_OWNER_PID:-}"
+ensure_managed_lock_available "$POST_RELEASE_CLEANUP_LOCK_FILE"
+printf 'preflight_release_lock=available-or-owned path=%s\n' "$DEPLOY_RELEASE_LOCK_FILE"
+printf 'preflight_cleanup_lock=available path=%s\n' "$POST_RELEASE_CLEANUP_LOCK_FILE"
+
 ensure_required_secret_values_changed
 ensure_required_public_values_changed
 ensure_bootstrap_secret_not_disabled

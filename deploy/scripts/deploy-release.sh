@@ -247,7 +247,33 @@ cleanup_temp_release_env() {
   fi
 }
 
+DEPLOY_RELEASE_LOCK_FILE=$(resolve_managed_lock_file \
+  "${DEPLOY_RELEASE_LOCK_FILE:-$CLOUD_RELEASE_LOCK_FILE_DEFAULT}" \
+  "$DEPLOY_DIR/.cloud-release.lock")
+DEPLOY_RELEASE_LOCK_ACQUIRED=0
+
+cleanup_deploy_process() {
+  cleanup_temp_release_env
+  if [ "$DEPLOY_RELEASE_LOCK_ACQUIRED" -eq 1 ]; then
+    release_managed_lock "$DEPLOY_RELEASE_LOCK_FILE" || true
+    DEPLOY_RELEASE_LOCK_ACQUIRED=0
+  fi
+}
+
+acquire_managed_lock \
+  "$DEPLOY_RELEASE_LOCK_FILE" \
+  cloud-release \
+  "$RELEASE_TAG" \
+  preflight \
+  "$0"
+DEPLOY_RELEASE_LOCK_ACQUIRED=1
+export DEPLOY_RELEASE_LOCK_FILE
+DEPLOY_RELEASE_LOCK_OWNER_PID=$$
+export DEPLOY_RELEASE_LOCK_OWNER_PID
+trap cleanup_deploy_process EXIT HUP INT TERM
+
 "$SCRIPT_DIR/pre-deploy-check.sh" "$RELEASE_TAG"
+update_managed_lock_phase "$DEPLOY_RELEASE_LOCK_FILE" backup
 "$SCRIPT_DIR/postgres-backup.sh"
 
 PRE_DEPLOY_BACKUP_FILE=$(read_state_path "$BACKUP_STATE_FILE" || true)
@@ -284,13 +310,13 @@ write_release_manifest \
   "$PRE_DEPLOY_BACKUP_FILE"
 
 TEMP_RELEASE_ENV_FILE=$(mktemp "$DEPLOY_DIR/.release-env.XXXXXX")
-trap cleanup_temp_release_env EXIT HUP INT TERM
 cp "$DEPLOY_DIR/.env" "$TEMP_RELEASE_ENV_FILE"
 apply_app_images_to_dotenv "$TEMP_RELEASE_ENV_FILE"
 export COMPOSE_ENV_FILE="$TEMP_RELEASE_ENV_FILE"
 load_dotenv
 
 compose pull $SELECTED_SERVICES
+update_managed_lock_phase "$DEPLOY_RELEASE_LOCK_FILE" rollout
 compose up -d postgres redis-cache rabbitmq seq >/dev/null
 if [ "$RUN_MIGRATION" = "true" ]; then
   compose run -T --rm iiot-migration
@@ -303,6 +329,7 @@ if [ -n "$RUNTIME_SELECTED_SERVICES" ]; then
   fi
 fi
 ensure_nginx_gateway_if_needed
+update_managed_lock_phase "$DEPLOY_RELEASE_LOCK_FILE" post-deploy-health
 post_deploy_verify_edge_installer_catalog=${POST_DEPLOY_VERIFY_EDGE_INSTALLER_CATALOG:-0}
 post_deploy_require_edge_installer_catalog=${POST_DEPLOY_REQUIRE_EDGE_INSTALLER_CATALOG:-0}
 if requires_edge_installer_catalog_verification; then
@@ -333,30 +360,44 @@ write_release_summary \
   "$DEPLOY_RELEASE_NOTES_VALUE"
 
 cleanup_log=$(mktemp "$DEPLOY_DIR/post-release-cleanup.XXXXXX")
-cleanup_status=0
-if COMPOSE_ENV_FILE="$DEPLOY_DIR/.env" "$SCRIPT_DIR/post-release-cleanup.sh" --release-tag "$DEPLOY_RELEASE_ID" > "$cleanup_log" 2>&1; then
-  cleanup_status=0
-else
-  cleanup_status=$?
-fi
-cat "$cleanup_log"
+cleanup_status_file=$(mktemp "$DEPLOY_DIR/post-release-cleanup-status.XXXXXX")
+update_managed_lock_phase "$DEPLOY_RELEASE_LOCK_FILE" cleanup
+printf 'Post-release cleanup started; output is streamed live.\n'
+(
+  set +e
+  COMPOSE_ENV_FILE="$DEPLOY_DIR/.env" \
+    "$SCRIPT_DIR/post-release-cleanup.sh" --release-tag "$DEPLOY_RELEASE_ID" 2>&1
+  printf '%s\n' "$?" > "$cleanup_status_file"
+  exit 0
+) | tee "$cleanup_log"
+cleanup_status=$(sed -n '1p' "$cleanup_status_file")
+case "$cleanup_status" in
+  ''|*[!0-9]*)
+    cleanup_status=1
+    ;;
+esac
 {
   printf '\n'
   cat "$cleanup_log"
 } >> "$CURRENT_RELEASE_SUMMARY_FILE"
-rm -f "$cleanup_log"
+rm -f "$cleanup_log" "$cleanup_status_file"
 
 history_summary_file=${history_file%.env}.summary.md
 cp "$CURRENT_RELEASE_SUMMARY_FILE" "$history_summary_file"
 cleanup_temp_release_env
 unset COMPOSE_ENV_FILE
-trap - EXIT HUP INT TERM
+update_managed_lock_phase "$DEPLOY_RELEASE_LOCK_FILE" finalize
 
 if [ "$cleanup_status" -ne 0 ]; then
-  printf 'Release deployed, but post-release cleanup failed: %s\n' "$DEPLOY_RELEASE_ID" >&2
+  printf 'Release runtime rollout is healthy, but post-release cleanup failed: %s\n' "$DEPLOY_RELEASE_ID" >&2
+  printf 'Do not rerun the full deployment blindly; inspect current release, containers and cleanup lock first.\n' >&2
   printf 'Current release summary: %s\n' "$CURRENT_RELEASE_SUMMARY_FILE" >&2
   exit "$cleanup_status"
 fi
+
+release_managed_lock "$DEPLOY_RELEASE_LOCK_FILE"
+DEPLOY_RELEASE_LOCK_ACQUIRED=0
+trap - EXIT HUP INT TERM
 
 printf 'Release deployed successfully: %s\n' "$DEPLOY_RELEASE_ID"
 printf 'Current release manifest: %s\n' "$CURRENT_RELEASE_FILE"

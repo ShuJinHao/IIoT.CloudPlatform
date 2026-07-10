@@ -69,6 +69,7 @@ jobs:
           sh -n deploy/scripts/post-deploy-check.sh
           sh -n deploy/scripts/ops-check.sh
           sh -n deploy/scripts/check-container-nonroot-readiness.sh
+          sh -n deploy/scripts/check-release-state-access.sh
           sh -n deploy/scripts/deploy-release.sh
           sh -n deploy/scripts/ensure-oidc-signing-cert.sh
           sh -n deploy/scripts/mirror-third-party-images.sh

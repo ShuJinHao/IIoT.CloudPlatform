@@ -1207,7 +1207,7 @@ public sealed class ConfigurationGuardTests
         var imageWorkflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-image.yml"));
         var deployWorkflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-deploy.yml"));
 
-        readmeSource.Should().Contain("日常部署使用 `deploy/scripts/local-release.sh --services <services>` 或 `--all`");
+        readmeSource.Should().Contain("工作区外部标准入口是 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud ...`");
         readmeSource.Should().Contain("`cloud-image` / `cloud-deploy` 只保留灾备手动入口，必须输入确认词");
         readmeSource.Should().Contain("单个镜像 build/push 默认 15 分钟超时");
         readmeSource.Should().Contain("本机 `build-and-push.sh` 按服务构建并推送 `sha-<git-sha>` 镜像到 Harbor");
@@ -1257,7 +1257,7 @@ public sealed class ConfigurationGuardTests
         readmeSource.Should().Contain("single-machine production starter");
         readmeSource.Should().Contain("`release_tag = sha-*`");
         readmeSource.Should().Contain("日常部署必须先 push GitHub");
-        readmeSource.Should().Contain("deploy/scripts/local-release.sh --services <services>");
+        readmeSource.Should().Contain("pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud");
         readmeSource.Should().Contain("禁止把 `cloud-image` 或 `cloud-deploy` 当成日常部署入口");
         readmeSource.Should().Contain("传入 `services` 时只拉取并重启指定服务");
         readmeSource.Should().Contain("Cloud catalog 会扫描 `/app/edge-updates/installers/stable/{version}/installer-artifact.json`");

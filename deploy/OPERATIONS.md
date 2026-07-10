@@ -82,14 +82,17 @@ Routine deployment red lines:
 - Do not wait for `cloud-image` or `cloud-deploy` for routine deployment. Those workflows are emergency-only and require confirmation inputs.
 - Use `deploy/scripts/local-release.sh --services <services>` or explicit `--all`. Empty services are not a routine deployment input.
 - If a local build, Harbor operation, or SSH deploy exceeds its timeout, stop and diagnose; do not keep watching until a GitHub job or shell command times out.
+- Do not invoke the project-local script directly to work around an AI permission prompt. The workspace entrypoint streams child output and emits a 30-second heartbeat during silent phases.
+- Before retrying an interrupted or failed release, inspect the remote current release, container images, managed release/cleanup locks, and cleanup summary. A running target SHA must not be blindly redeployed.
 
 The standard sequence is:
 
 1. Push or merge to `main`.
 2. `cloud-ci` runs the fast gate by default: restore/build, ServiceLayer tests, ConfigurationGuard tests, deploy script syntax checks, web build, and compose config. Full EndToEnd is manual via `workflow_dispatch`.
 3. Run `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services <services>` from the workspace root for the standard path. It delegates to `deploy/scripts/local-release.sh`, which verifies clean worktree, pushed HEAD, Docker/buildx, Harbor access, and SSH target.
-4. `build-and-push.sh` builds selected images and pushes Harbor tags with `sha-<git-sha>`. It writes `artifacts/deploy/cloud-built-services.txt` and prints the same `Deploy services input`. If the selected services include `web` or use `--all`, pass `VITE_AICOPILOT_CHALLENGE_URL=http://<aicopilot-browser-reachable-host>:82/api/identity/cloud-oidc/challenge`; backend-only builds do not require it.
-5. `local-release.sh` SSHes to `/data/iiot-platform/cloud/deploy` and calls `DEPLOY_GIT_SHA=<sha> DEPLOY_TRIGGERED_BY=local ./scripts/deploy-release.sh sha-<sha> --services <services>`.
+4. `local-release.sh` first checks remote support-directory access and release/cleanup locks, then packages only the allowlisted `docker-compose.prod.yml`, `nginx/nginx.conf`, and server scripts. It explicitly excludes `.env`, `certs/`, `releases/`, and `backups/`; the remote staging area must pass SHA-256, shell syntax, and compose validation before atomic install and persistent-manifest verification.
+5. After support and lock validation succeeds, `build-and-push.sh` builds selected images and pushes Harbor tags with `sha-<git-sha>`. It writes `artifacts/deploy/cloud-built-services.txt` and prints the same `Deploy services input`. If the selected services include `web` or use `--all`, pass `VITE_AICOPILOT_CHALLENGE_URL=http://<aicopilot-browser-reachable-host>:82/api/identity/cloud-oidc/challenge`; backend-only builds do not require it.
+6. `local-release.sh` uses BatchMode SSH to `/data/iiot-platform/cloud/deploy` and calls `DEPLOY_GIT_SHA=<sha> DEPLOY_TRIGGERED_BY=local ./scripts/deploy-release.sh sha-<sha> --services <services>`.
 
 Harbor application repositories keep only the current production `sha-*` tag. Local image build must not remove the current production tag before deploy health checks pass. Post-release cleanup deletes old application `sha-*` tags and Harbor Garbage Collection reclaims disk.
 
@@ -125,7 +128,7 @@ Release rules are fixed:
 
 Release flow is fixed:
 
-1. `pre-deploy-check.sh`
+1. acquire the managed Cloud release lock, then run `pre-deploy-check.sh`; live/initializing release or cleanup locks fail immediately, while only proven stale locks are removed
 2. `postgres-backup.sh`
 3. write `staged-release.env`
 4. rewrite the selected application image coordinates in `.env` (`--services` empty means all five; incremental keeps unselected images from `current-release.env`)
@@ -134,8 +137,11 @@ Release flow is fixed:
 7. run `iiot-migration` only when migration is part of the selected service set
 8. start selected application containers, and start or restart `nginx-gateway` when the selected release affects browser traffic
 9. `post-deploy-check.sh`
-10. run post-release cleanup: remove Docker/BuildKit build cache, report and clean Docker-managed images separately from containerd-managed content, remove only local old application images that are not referenced by current containers, delete old Harbor application tags, and run or confirm Harbor GC
-11. rotate `current` / `previous`, write `current-release.summary.md`, and append `history`
+10. promote the healthy runtime to `current`, rotate `previous`, and write the base current/history state
+11. stream post-release cleanup live: remove Docker/BuildKit build cache, report and clean Docker-managed images separately from containerd-managed content, remove only local old application images that are not referenced by current containers, delete old Harbor application tags, and run or confirm Harbor GC
+12. append cleanup results to `current-release.summary.md` and the matching history summary, then release the managed Cloud release lock
+
+If runtime promotion succeeds but cleanup fails, the command exits non-zero and the summary explicitly records a healthy runtime with failed cleanup. This is a partial-success state: inspect current release, containers and locks, then recover cleanup; do not repeat the full release merely because the wrapper returned non-zero.
 
 `pre-deploy-check.sh` runs the runtime parts of `ops-check.sh` with `REQUIRE_BACKUP=0` because the release sequence creates a fresh PostgreSQL backup in the next step before any container update. It also uses `REQUIRE_DATAWORKER_HEALTHCHECK=${PRE_DEPLOY_REQUIRE_DATAWORKER_HEALTHCHECK:-0}` for the pre-update current-release check so an older running DataWorker image without the new Docker healthcheck cannot block upgrading to the fixed image. Normal operator runs of `./scripts/ops-check.sh` keep the defaults `REQUIRE_BACKUP=1` and `REQUIRE_DATAWORKER_HEALTHCHECK=1`, and still fail when the latest backup file, checksum, freshness policy, DataWorker Docker healthcheck definition, or DataWorker health status is not valid.
 

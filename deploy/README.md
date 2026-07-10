@@ -15,11 +15,13 @@ pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services httpapi,gateway
 - 生产版本统一使用 `release_tag = sha-*`，`latest` 不能作为生产应用版本。
 - 多 agent 并行部署只按 [上传部署总览](../../docs/上传部署总览.md) 的“多 agent 并行部署”执行；Cloud agent 只负责 Cloud 镜像、Cloud deploy 和 Cloud 验证。
 - Cloud 应用镜像不保留历史版本；Harbor 和服务器本机只保留当前生产正在运行的 `sha-*` 应用镜像。
-- 日常部署必须先 push GitHub，再由工作区标准入口确认标准参数、本机脚本或服务器门禁，随后本机构建受影响应用镜像并推送 Harbor。
+- 日常部署必须先 push GitHub，再由工作区标准入口确认标准参数、本机脚本或服务器门禁，随后本机构建受影响应用镜像并推送 Harbor；同一提交里的 `docker-compose.prod.yml`、`nginx/nginx.conf` 和服务器 scripts 必须经白名单、staging、语法/compose 校验及 SHA-256 前后校验后同步到远端。
 - 工作区外部标准入口是 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud ...`；本目录的 `deploy/scripts/local-release.sh` 与 `build-and-push.sh` 继续作为 Cloud 被调度实现脚本。
 - 传入 `services` 时只拉取并重启指定服务；首次部署或需要全量时必须显式传 `--all`。
 - `cloud-image` / `cloud-deploy` 只保留灾备手动入口，必须输入确认词；不得在日常生产发布中等待这些 workflow。
 - 单个镜像 build/push 默认 15 分钟超时，Harbor 登录/API 检查默认 2 分钟超时，SSH deploy 默认 40 分钟超时；超时必须停止并按脚本输出诊断 Docker buildx、Harbor tag、服务器 compose/logs 和 release 状态，不得继续 watch 或无限等待。
+- 工作区入口必须实时转发 build/push/SSH/cleanup 输出，并在 30 秒静默期打印 heartbeat。不得以 PowerShell CPU 为 0 或外层日志暂空判断“未执行”，也不得因此绕开统一入口直接调用 `local-release.sh`。
+- Cloud release 和 post-release cleanup 都使用带 PID、进程启动标识、release 与 phase 的 managed lock；活锁或初始化中的锁立即失败，只有能证明进程已失效的 stale lock 才自动认领并移除，不再静默等待 15 分钟。
 - self-hosted runner 仅作为灾备/历史 CI 设施时使用，仍必须是专用非 root 用户，不能用 root 跑 Actions 服务。
 - 当前服务器 Docker Root Dir 固定为 `/data/iiot-platform/runtime/docker`，runner 工作目录固定在 `/data/github-runner/*`，不要把构建缓存和 runner workdir 放回系统盘。
 - Docker Hub 不作为生产依赖源；compose 第三方镜像和 Web Dockerfile 的 Node/Nginx 基础镜像必须先同步到 Harbor mirror。
@@ -330,9 +332,10 @@ sudo find /data/iiot-platform/cloud/deploy/releases -type f -exec chmod 600 {} +
 1. 合并或推送到 `main`，保证 GitHub 有本次源码留痕。
 2. `cloud-ci` 默认只跑快速验证：restore/build、ServiceLayer、ConfigurationGuard、部署脚本语法检查、前端 build、compose config；完整 EndToEnd 只在手动 `workflow_dispatch` 勾选时运行。
 3. 在工作区根运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services <services>`；顶层入口会调度 `deploy/scripts/local-release.sh`，并校验工作区干净、HEAD 已推送到 GitHub、Docker/buildx/Harbor 可用。服务包含 `web` 或使用 `-All` 时，会从 `deploy/profiles/current-production.json` 读取当前 challenge URL。
-4. 本机 `build-and-push.sh` 按服务构建并推送 `sha-<git-sha>` 镜像到 Harbor，输出 `Deploy services input` 和 `artifacts/deploy/cloud-built-services.txt`。
-5. 本机脚本通过 SSH 在服务器 `/data/iiot-platform/cloud/deploy` 执行 `DEPLOY_GIT_SHA=<sha> DEPLOY_TRIGGERED_BY=local ./scripts/deploy-release.sh sha-<sha> --services <services>`。
-6. 服务器端 `deploy-release.sh` 执行 pre-check、PostgreSQL backup、镜像 pull、容器启动、健康检查、发布后清理和 release history。
+4. `local-release.sh` 先确认远端 support 目录可写且没有活跃 release/cleanup 锁，再只打包白名单 support files；文件先进入远端 staging，SHA-256、shell 语法和 compose config 全部通过后逐文件原子替换并持久化 manifest。`.env`、`certs/`、`releases/`、`backups/` 明确排除。
+5. support 和锁门禁通过后，本机 `build-and-push.sh` 才按服务构建并推送 `sha-<git-sha>` 镜像到 Harbor，输出 `Deploy services input` 和 `artifacts/deploy/cloud-built-services.txt`。
+6. 本机脚本通过 BatchMode SSH 在服务器 `/data/iiot-platform/cloud/deploy` 执行 `DEPLOY_GIT_SHA=<sha> DEPLOY_TRIGGERED_BY=local ./scripts/deploy-release.sh sha-<sha> --services <services>`。
+7. 服务器端 `deploy-release.sh` 持有全局 Cloud release lock，执行 pre-check、PostgreSQL backup、镜像 pull、容器启动、健康检查、发布后清理和 release history；cleanup 输出必须实时回传。
 
 GitHub secrets：
 
@@ -367,7 +370,7 @@ DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh 
 
 发布脚本会：
 
-1. 执行 `pre-deploy-check.sh`，它会同时校验 `.env`、镜像、`certs/` 和 `releases/*` 的 non-root 可访问性。
+1. 获取 Cloud release lock，并执行 `pre-deploy-check.sh`；它会同时校验 release/cleanup 锁、`.env`、镜像、`certs/` 和 `releases/*` 的 non-root 可访问性。活锁 fail-fast，已证明 stale 的锁才自动清理。
 2. 执行 `postgres-backup.sh`。
 3. 根据 release tag 重写应用镜像坐标；全量发布重写五个应用镜像，按需发布必须已有 `current-release.env`，并基于当前 release 保留未选服务镜像。
 4. `docker compose pull` 从 Harbor 拉取应用镜像。
@@ -375,8 +378,10 @@ DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh 
 6. 运行 `iiot-migration`。
 7. 启动应用容器；当本次发布影响浏览器流量时，启动或重启 `nginx-gateway`。
 8. 执行 `post-deploy-check.sh` 和运维检查。
-9. 执行发布后磁盘清理：清 BuildKit cache、分开清理 Docker/containerd 旧应用镜像、删 Harbor 旧应用 tag 后执行或确认 GC。
-10. 写入 `deploy/releases/current-release.env`、`previous-release.env`、`staged-release.env`、`current-release.summary.md` 和 `history/`。
+9. 在运行态健康通过后晋升 `current-release.env` 并写入基础 summary/history 状态。
+10. 实时执行发布后磁盘清理：清 BuildKit cache、分开清理 Docker/containerd 旧应用镜像、删 Harbor 旧应用 tag 后执行或确认 GC，并把完整结果追加到 current/history summary。
+
+若第 9 步已完成而 cleanup 失败，脚本会明确报告“runtime rollout healthy / cleanup failed”并返回非零；这属于运行版本已上线但发布收口失败。重试前必须先查 current release、容器镜像、release/cleanup 锁和 summary，不得盲目整轮重发同一 SHA。
 
 `pre-deploy-check.sh` 会复用 `ops-check.sh` 检查运行状态、Outbox、队列和 Timescale 状态，但发布前不把旧备份状态作为强 gate；发布流程下一步会立即执行 `postgres-backup.sh`，备份失败会在任何容器更新前中止。pre-deploy 检查的是更新前的当前运行版本，默认使用 `REQUIRE_DATAWORKER_HEALTHCHECK=0`，避免旧 DataWorker 镜像缺少新 healthcheck 时阻断升级到修复版本。它也会在 OIDC 证书检查之前先验证 `releases/*` 状态文件是否仍对标准 non-root 部署用户可读可写，防止 root 应急路径留下的 owner/mode 漂移到真正发布阶段才爆炸。干净首部署没有 `current-release.env` 时不存在旧运行态可检查，preflight 摘要必须打印 `runtime-check-skipped-no-current-release`，不能写成 healthz/ops-check 已通过；已有当前版本时才打印 `healthz-http-local ops-check-runtime`。日常手工巡检直接执行 `./scripts/ops-check.sh` 时仍默认要求最新备份文件、checksum、新鲜度和 DataWorker Docker healthcheck 有效。
 
@@ -394,6 +399,7 @@ DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh 
 - `deploy/releases/current-release.env` 指向当前 release。
 - `deploy/releases/current-release.summary.md` 包含本次部署的服务列表和 git 更新摘要。
 - 发布总结包含清理前后磁盘摘要，且 `/data` 未超过部署阈值。
+- 工作区 `latest-summary.md` 的 mode 必须是 `deploy` 且所有 step 成功；dry-run 或 validate-only 摘要不能作为真实发布证据。
 
 干净首部署时 `latest-successful-verify.txt` 可能尚不存在，`ops-check.sh` 会打印 warning 但默认不阻断部署；每周恢复验证 cron 正常跑过后该字段会更新。若要把恢复验证缺失或过期作为强制失败，手工执行时设置 `REQUIRE_BACKUP_VERIFY=1 ./scripts/ops-check.sh`。
 

@@ -34,6 +34,23 @@ fail() {
   exit 64
 }
 
+print_shell_argument() {
+  local value="$1"
+  local escaped
+  case "$value" in
+    '')
+      printf "''"
+      ;;
+    *[!A-Za-z0-9_./:=,@+-]*)
+      escaped=${value//\'/\'\\\'\'}
+      printf "'%s'" "$escaped"
+      ;;
+    *)
+      printf '%s' "$value"
+      ;;
+  esac
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --services)
@@ -178,7 +195,10 @@ run_with_timeout() {
 
   if [ "$DRY_RUN" = true ]; then
     printf '[dry-run] %s:' "$label"
-    printf ' %q' "$@"
+    for argument in "$@"; do
+      printf ' '
+      print_shell_argument "$argument"
+    done
     printf '\n'
     return 0
   fi

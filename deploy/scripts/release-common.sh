@@ -29,6 +29,311 @@ PREVIOUS_RELEASE_FILE="$RELEASES_DIR/previous-release.env"
 STAGED_RELEASE_FILE="$RELEASES_DIR/staged-release.env"
 CURRENT_RELEASE_SUMMARY_FILE="$RELEASES_DIR/current-release.summary.md"
 BACKUP_STATE_FILE="$DEPLOY_DIR/backups/postgres/latest-successful-backup.txt"
+CLOUD_RELEASE_LOCK_FILE_DEFAULT="/data/iiot-platform/.locks/cloud-release.lock"
+POST_RELEASE_CLEANUP_LOCK_FILE_DEFAULT="/data/iiot-platform/.locks/deploy-cleanup.lock"
+
+resolve_managed_lock_file() {
+  preferred_lock_file=$1
+  fallback_lock_file=$2
+  preferred_lock_parent=$(dirname "$preferred_lock_file")
+
+  if { [ -d "$preferred_lock_parent" ] || mkdir -p "$preferred_lock_parent" 2>/dev/null; } \
+    && [ -w "$preferred_lock_parent" ] \
+    && [ -x "$preferred_lock_parent" ]; then
+    printf '%s\n' "$preferred_lock_file"
+    return
+  fi
+
+  fallback_lock_parent=$(dirname "$fallback_lock_file")
+  if ! { [ -d "$fallback_lock_parent" ] || mkdir -p "$fallback_lock_parent" 2>/dev/null; } \
+    || [ ! -w "$fallback_lock_parent" ] \
+    || [ ! -x "$fallback_lock_parent" ]; then
+    printf 'Neither managed lock parent is writable: preferred=%s fallback=%s\n' \
+      "$preferred_lock_parent" \
+      "$fallback_lock_parent" >&2
+    return 73
+  fi
+
+  printf 'Managed lock parent is not writable; using deploy-local fallback: %s\n' "$fallback_lock_file" >&2
+  printf '%s\n' "$fallback_lock_file"
+}
+
+managed_lock_read_field() {
+  managed_lock_field_dir=$1
+  managed_lock_field_name=$2
+  if [ -r "$managed_lock_field_dir/$managed_lock_field_name" ]; then
+    sed -n '1p' "$managed_lock_field_dir/$managed_lock_field_name"
+  fi
+}
+
+managed_lock_process_start() {
+  managed_lock_process_pid=${1:-}
+  case "$managed_lock_process_pid" in
+    ''|*[!0-9]*)
+      return 1
+      ;;
+  esac
+
+  if [ -r "/proc/$managed_lock_process_pid/stat" ]; then
+    awk '{print $22}' "/proc/$managed_lock_process_pid/stat"
+    return
+  fi
+
+  return 1
+}
+
+managed_lock_process_is_alive() {
+  managed_lock_process_pid=${1:-}
+  case "$managed_lock_process_pid" in
+    ''|*[!0-9]*)
+      return 1
+      ;;
+  esac
+
+  kill -0 "$managed_lock_process_pid" 2>/dev/null || [ -d "/proc/$managed_lock_process_pid" ]
+}
+
+managed_lock_mtime_epoch() {
+  managed_lock_mtime_path=$1
+  if stat -c '%Y' "$managed_lock_mtime_path" >/dev/null 2>&1; then
+    stat -c '%Y' "$managed_lock_mtime_path"
+    return
+  fi
+
+  stat -f '%m' "$managed_lock_mtime_path" 2>/dev/null
+}
+
+managed_lock_inode() {
+  managed_lock_inode_path=$1
+  if stat -c '%i' "$managed_lock_inode_path" >/dev/null 2>&1; then
+    stat -c '%i' "$managed_lock_inode_path"
+    return
+  fi
+
+  stat -f '%i' "$managed_lock_inode_path" 2>/dev/null
+}
+
+managed_lock_status_for_dir() {
+  managed_lock_status_dir=$1
+  if [ ! -d "$managed_lock_status_dir" ]; then
+    printf '%s\n' absent
+    return
+  fi
+
+  managed_lock_status_pid=$(managed_lock_read_field "$managed_lock_status_dir" pid)
+  case "$managed_lock_status_pid" in
+    ''|*[!0-9]*)
+      managed_lock_status_now=$(date +%s)
+      managed_lock_status_mtime=$(managed_lock_mtime_epoch "$managed_lock_status_dir" || true)
+      managed_lock_status_grace=${MANAGED_LOCK_INITIALIZATION_GRACE_SECONDS:-30}
+      case "$managed_lock_status_grace" in
+        ''|*[!0-9]*)
+          managed_lock_status_grace=30
+          ;;
+      esac
+
+      if [ -n "$managed_lock_status_mtime" ] \
+        && [ $((managed_lock_status_now - managed_lock_status_mtime)) -ge "$managed_lock_status_grace" ]; then
+        printf '%s\n' stale
+      else
+        printf '%s\n' initializing
+      fi
+      return
+      ;;
+  esac
+
+  if ! managed_lock_process_is_alive "$managed_lock_status_pid"; then
+    printf '%s\n' stale
+    return
+  fi
+
+  managed_lock_status_recorded_start=$(managed_lock_read_field "$managed_lock_status_dir" process-start)
+  managed_lock_status_actual_start=$(managed_lock_process_start "$managed_lock_status_pid" || true)
+  if [ -n "$managed_lock_status_recorded_start" ] \
+    && [ -n "$managed_lock_status_actual_start" ] \
+    && [ "$managed_lock_status_recorded_start" != "$managed_lock_status_actual_start" ]; then
+    printf '%s\n' stale
+    return
+  fi
+
+  printf '%s\n' live
+}
+
+describe_managed_lock() {
+  managed_lock_describe_file=$1
+  managed_lock_describe_dir="${managed_lock_describe_file}.d"
+  managed_lock_describe_pid=$(managed_lock_read_field "$managed_lock_describe_dir" pid)
+  managed_lock_describe_release=$(managed_lock_read_field "$managed_lock_describe_dir" release)
+  managed_lock_describe_phase=$(managed_lock_read_field "$managed_lock_describe_dir" phase)
+  managed_lock_describe_created=$(managed_lock_read_field "$managed_lock_describe_dir" created-at)
+  managed_lock_describe_script=$(managed_lock_read_field "$managed_lock_describe_dir" script)
+  printf 'path=%s pid=%s release=%s phase=%s created_at=%s script=%s\n' \
+    "$managed_lock_describe_dir" \
+    "${managed_lock_describe_pid:-unknown}" \
+    "${managed_lock_describe_release:-unknown}" \
+    "${managed_lock_describe_phase:-unknown}" \
+    "${managed_lock_describe_created:-unknown}" \
+    "${managed_lock_describe_script:-unknown}"
+}
+
+remove_stale_managed_lock() {
+  managed_lock_remove_file=$1
+  managed_lock_remove_dir="${managed_lock_remove_file}.d"
+  managed_lock_remove_status=$(managed_lock_status_for_dir "$managed_lock_remove_dir")
+  if [ "$managed_lock_remove_status" != "stale" ]; then
+    printf 'Refusing to remove a managed lock that is not stale: status=%s %s\n' \
+      "$managed_lock_remove_status" \
+      "$(describe_managed_lock "$managed_lock_remove_file")" >&2
+    return 75
+  fi
+
+  managed_lock_remove_inode=$(managed_lock_inode "$managed_lock_remove_dir" || true)
+  managed_lock_remove_claim="${managed_lock_remove_dir}.stale-claim-$$-$(date +%s)"
+  if ! mv "$managed_lock_remove_dir" "$managed_lock_remove_claim" 2>/dev/null; then
+    printf 'Managed lock changed while claiming stale state; retry after inspecting: %s\n' "$managed_lock_remove_dir" >&2
+    return 75
+  fi
+
+  managed_lock_claim_inode=$(managed_lock_inode "$managed_lock_remove_claim" || true)
+  managed_lock_claim_status=$(managed_lock_status_for_dir "$managed_lock_remove_claim")
+  if { [ -n "$managed_lock_remove_inode" ] \
+      && [ -n "$managed_lock_claim_inode" ] \
+      && [ "$managed_lock_remove_inode" != "$managed_lock_claim_inode" ]; } \
+    || [ "$managed_lock_claim_status" != "stale" ]; then
+    if [ ! -e "$managed_lock_remove_dir" ]; then
+      mv "$managed_lock_remove_claim" "$managed_lock_remove_dir" 2>/dev/null || true
+    fi
+    printf 'Managed lock changed during stale verification; it was not removed: %s\n' "$managed_lock_remove_dir" >&2
+    return 75
+  fi
+
+  rm -rf "$managed_lock_remove_claim"
+  printf 'Removed stale managed lock: %s\n' "$managed_lock_remove_dir"
+}
+
+ensure_managed_lock_available() {
+  managed_lock_available_file=$1
+  managed_lock_allowed_owner_pid=${2:-}
+  managed_lock_available_dir="${managed_lock_available_file}.d"
+  managed_lock_available_status=$(managed_lock_status_for_dir "$managed_lock_available_dir")
+
+  case "$managed_lock_available_status" in
+    absent)
+      return
+      ;;
+    live)
+      managed_lock_available_owner_pid=$(managed_lock_read_field "$managed_lock_available_dir" pid)
+      if [ -n "$managed_lock_allowed_owner_pid" ] \
+        && [ "$managed_lock_available_owner_pid" = "$managed_lock_allowed_owner_pid" ]; then
+        return
+      fi
+      printf 'Managed lock is active; fail-fast without waiting: %s\n' \
+        "$(describe_managed_lock "$managed_lock_available_file")" >&2
+      return 75
+      ;;
+    initializing)
+      printf 'Managed lock is being initialized; fail-fast without waiting: %s\n' \
+        "$(describe_managed_lock "$managed_lock_available_file")" >&2
+      return 75
+      ;;
+    stale)
+      remove_stale_managed_lock "$managed_lock_available_file"
+      if [ -d "$managed_lock_available_dir" ]; then
+        printf 'A managed lock was acquired while stale state was removed: %s\n' \
+          "$(describe_managed_lock "$managed_lock_available_file")" >&2
+        return 75
+      fi
+      return
+      ;;
+    *)
+      printf 'Unknown managed lock state: %s path=%s\n' \
+        "$managed_lock_available_status" \
+        "$managed_lock_available_dir" >&2
+      return 75
+      ;;
+  esac
+}
+
+acquire_managed_lock() {
+  managed_lock_acquire_file=$1
+  managed_lock_acquire_purpose=$2
+  managed_lock_acquire_release=$3
+  managed_lock_acquire_phase=$4
+  managed_lock_acquire_script=$5
+  managed_lock_acquire_dir="${managed_lock_acquire_file}.d"
+
+  ensure_managed_lock_available "$managed_lock_acquire_file" || return $?
+  if ! mkdir "$managed_lock_acquire_dir" 2>/dev/null; then
+    printf 'Managed lock was acquired concurrently; fail-fast without waiting: %s\n' \
+      "$(describe_managed_lock "$managed_lock_acquire_file")" >&2
+    return 75
+  fi
+
+  umask 077
+  managed_lock_acquire_process_start=$(managed_lock_process_start "$$" || true)
+  if ! {
+    printf '%s\n' "$$" > "$managed_lock_acquire_dir/pid"
+    if [ -n "$managed_lock_acquire_process_start" ]; then
+      printf '%s\n' "$managed_lock_acquire_process_start" > "$managed_lock_acquire_dir/process-start"
+    fi
+    printf '%s\n' "$managed_lock_acquire_purpose" > "$managed_lock_acquire_dir/purpose"
+    printf '%s\n' "$managed_lock_acquire_release" > "$managed_lock_acquire_dir/release"
+    printf '%s\n' "$managed_lock_acquire_phase" > "$managed_lock_acquire_dir/phase"
+    printf '%s\n' "$managed_lock_acquire_script" > "$managed_lock_acquire_dir/script"
+    date -u +'%Y-%m-%dT%H:%M:%SZ' > "$managed_lock_acquire_dir/created-at"
+  }; then
+    rm -rf "$managed_lock_acquire_dir"
+    printf 'Could not write managed lock metadata: %s\n' "$managed_lock_acquire_dir" >&2
+    return 73
+  fi
+
+  printf 'Managed lock acquired: %s\n' "$(describe_managed_lock "$managed_lock_acquire_file")"
+}
+
+update_managed_lock_phase() {
+  managed_lock_update_file=$1
+  managed_lock_update_phase=$2
+  managed_lock_update_dir="${managed_lock_update_file}.d"
+  managed_lock_update_owner=$(managed_lock_read_field "$managed_lock_update_dir" pid)
+  if [ "$managed_lock_update_owner" != "$$" ]; then
+    printf 'Refusing to update a managed lock owned by another process: %s\n' \
+      "$(describe_managed_lock "$managed_lock_update_file")" >&2
+    return 75
+  fi
+
+  printf '%s\n' "$managed_lock_update_phase" > "$managed_lock_update_dir/phase"
+  printf 'Managed lock phase: release=%s phase=%s\n' \
+    "$(managed_lock_read_field "$managed_lock_update_dir" release)" \
+    "$managed_lock_update_phase"
+}
+
+release_managed_lock() {
+  managed_lock_release_file=$1
+  managed_lock_release_dir="${managed_lock_release_file}.d"
+  if [ ! -d "$managed_lock_release_dir" ]; then
+    return
+  fi
+
+  managed_lock_release_owner=$(managed_lock_read_field "$managed_lock_release_dir" pid)
+  if [ "$managed_lock_release_owner" != "$$" ]; then
+    printf 'Managed lock belongs to another process and will not be released: %s\n' \
+      "$(describe_managed_lock "$managed_lock_release_file")" >&2
+    return 75
+  fi
+
+  managed_lock_release_recorded_start=$(managed_lock_read_field "$managed_lock_release_dir" process-start)
+  managed_lock_release_actual_start=$(managed_lock_process_start "$$" || true)
+  if [ -n "$managed_lock_release_recorded_start" ] \
+    && [ -n "$managed_lock_release_actual_start" ] \
+    && [ "$managed_lock_release_recorded_start" != "$managed_lock_release_actual_start" ]; then
+    printf 'Managed lock process identity changed and will not be released: %s\n' \
+      "$(describe_managed_lock "$managed_lock_release_file")" >&2
+    return 75
+  fi
+
+  rm -rf "$managed_lock_release_dir"
+  printf 'Managed lock released: %s\n' "$managed_lock_release_dir"
+}
 
 compose_env_file_path() {
   env_file=${COMPOSE_ENV_FILE:-$DEPLOY_DIR/.env}

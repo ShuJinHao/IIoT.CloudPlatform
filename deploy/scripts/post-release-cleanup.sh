@@ -8,7 +8,7 @@ DEPLOY_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 RELEASE_TAG=""
 DATA_PATH="${POST_RELEASE_DATA_PATH:-/data}"
-LOCK_FILE="${POST_RELEASE_CLEANUP_LOCK_FILE:-/data/iiot-platform/.locks/deploy-cleanup.lock}"
+LOCK_FILE="${POST_RELEASE_CLEANUP_LOCK_FILE:-$POST_RELEASE_CLEANUP_LOCK_FILE_DEFAULT}"
 CONTAINERD_ROOT="${POST_RELEASE_CONTAINERD_ROOT:-/data/iiot-platform/runtime/containerd}"
 HARBOR_GC_ENABLED="${POST_RELEASE_HARBOR_GC_ENABLED:-1}"
 HARBOR_GC_REQUIRED="${POST_RELEASE_HARBOR_GC_REQUIRED:-1}"
@@ -66,8 +66,14 @@ fi
 require_command docker
 load_dotenv
 
+release_lock_file=$(resolve_managed_lock_file \
+  "${DEPLOY_RELEASE_LOCK_FILE:-$CLOUD_RELEASE_LOCK_FILE_DEFAULT}" \
+  "$DEPLOY_DIR/.cloud-release.lock")
+ensure_managed_lock_available \
+  "$release_lock_file" \
+  "${DEPLOY_RELEASE_LOCK_OWNER_PID:-}"
+
 cleanup_failed=0
-lock_dir=""
 declare -a current_refs=()
 declare -a app_repositories=()
 declare -a harbor_entries=()
@@ -151,34 +157,18 @@ collect_current_images() {
 }
 
 acquire_lock() {
-  local lock_parent
-  lock_parent="$(dirname "$LOCK_FILE")"
-  if ! mkdir -p "$lock_parent" 2>/dev/null; then
-    LOCK_FILE="$DEPLOY_DIR/.post-release-cleanup.lock"
-    lock_parent="$(dirname "$LOCK_FILE")"
-    mkdir -p "$lock_parent"
-    printf -- '- Cleanup lock parent was not writable; using deploy-local lock: `%s`\n' "$LOCK_FILE"
-  fi
-
-  lock_dir="${LOCK_FILE}.d"
-  local attempts=0
-  while ! mkdir "$lock_dir" 2>/dev/null; do
-    attempts=$((attempts + 1))
-    if [ "$attempts" -ge "${POST_RELEASE_CLEANUP_LOCK_ATTEMPTS:-180}" ]; then
-      printf 'Could not acquire cleanup lock: %s\n' "$lock_dir" >&2
-      exit 75
-    fi
-    sleep 5
-  done
-
-  printf '%s\n' "$$" > "$lock_dir/pid"
+  LOCK_FILE="$(resolve_managed_lock_file "$LOCK_FILE" "$DEPLOY_DIR/.post-release-cleanup.lock")"
+  acquire_managed_lock \
+    "$LOCK_FILE" \
+    post-release-cleanup \
+    "${RELEASE_TAG:-unknown}" \
+    cleanup \
+    "$0"
   trap release_lock EXIT HUP INT TERM
 }
 
 release_lock() {
-  if [ -n "$lock_dir" ] && [ -d "$lock_dir" ]; then
-    rm -rf "$lock_dir"
-  fi
+  release_managed_lock "$LOCK_FILE"
 }
 
 disk_percent() {
