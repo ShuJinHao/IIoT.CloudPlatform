@@ -149,10 +149,10 @@ collect_current_images() {
       harbor_repository="${path_without_registry#*/}"
     fi
 
-    append_unique "$repository:$tag" "${current_refs[@]}" && current_refs+=("$repository:$tag")
-    append_unique "$repository" "${app_repositories[@]}" && app_repositories+=("$repository")
+    append_unique "$repository:$tag" "${current_refs[@]-}" && current_refs+=("$repository:$tag")
+    append_unique "$repository" "${app_repositories[@]-}" && app_repositories+=("$repository")
     entry="$registry|$project|$harbor_repository|$tag"
-    append_unique "$entry" "${harbor_entries[@]}" && harbor_entries+=("$entry")
+    append_unique "$entry" "${harbor_entries[@]-}" && harbor_entries+=("$entry")
   done
 }
 
