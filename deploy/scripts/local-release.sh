@@ -722,7 +722,6 @@ if [ "$DRY_RUN" = true ]; then
   BUILD_ARGS+=(--dry-run)
 fi
 
-require_pushed_clean_head
 check_remote_support_file_access
 check_remote_release_locks
 sync_remote_deploy_files
