@@ -157,6 +157,56 @@ public sealed class EdgeHostBehaviorTests
     }
 
     [Fact]
+    public async Task ReportEdgeHostPlcRuntimeStatesHandler_ShouldRemoveStatesMissingFromFullSnapshot()
+    {
+        var deviceId = Guid.NewGuid();
+        var store = new StubEdgeHostPlcRuntimeStateStore();
+        store.States.Add(new EdgeHostPlcRuntimeState(deviceId, "DEV-PLCSTATE05", "PLC-KEEP"));
+        store.States.Add(new EdgeHostPlcRuntimeState(deviceId, "DEV-PLCSTATE05", "PLC-REMOVED"));
+        var handler = new ReportEdgeHostPlcRuntimeStatesHandler(
+            new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-PLCSTATE05")),
+            store);
+
+        var result = await handler.Handle(
+            new ReportEdgeHostPlcRuntimeStatesCommand(
+                deviceId,
+                "DEV-PLCSTATE05",
+                DateTime.UtcNow,
+                [new EdgeHostPlcRuntimeStateReportItem("PLC-KEEP", "保留 PLC", true, "Connected")]),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
+        var state = Assert.Single(store.States);
+        Assert.Equal("PLC-KEEP", state.PlcCode);
+        Assert.Equal("保留 PLC", state.ReportedPlcName);
+        Assert.True(store.SaveChangesCalled);
+    }
+
+    [Fact]
+    public async Task ReportEdgeHostPlcRuntimeStatesHandler_ShouldClearStatesForEmptyFullSnapshot()
+    {
+        var deviceId = Guid.NewGuid();
+        var store = new StubEdgeHostPlcRuntimeStateStore();
+        store.States.Add(new EdgeHostPlcRuntimeState(deviceId, "DEV-PLCSTATE06", "PLC-REMOVED"));
+        var handler = new ReportEdgeHostPlcRuntimeStatesHandler(
+            new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-PLCSTATE06")),
+            store);
+
+        var result = await handler.Handle(
+            new ReportEdgeHostPlcRuntimeStatesCommand(
+                deviceId,
+                "DEV-PLCSTATE06",
+                DateTime.UtcNow,
+                []),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
+        Assert.Equal(0, result.Value!.ReceivedCount);
+        Assert.Empty(store.States);
+        Assert.True(store.SaveChangesCalled);
+    }
+
+    [Fact]
     public async Task GetEdgeHostPagedListHandler_ShouldUseAccessibleDevicesAsHostList()
     {
         var processId = Guid.NewGuid();
@@ -488,6 +538,11 @@ public sealed class EdgeHostBehaviorTests
         public void Add(EdgeHostPlcRuntimeState state)
         {
             States.Add(state);
+        }
+
+        public void Delete(EdgeHostPlcRuntimeState state)
+        {
+            States.Remove(state);
         }
 
         public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)

@@ -61,11 +61,15 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
             return Result.Invalid(invalidMessage);
         }
 
-        var statesByPlcCode = (await runtimeStateStore.GetByIdentityAsync(
+        var existingStates = await runtimeStateStore.GetByIdentityAsync(
                 request.DeviceId,
                 clientCode,
-                cancellationToken))
+                cancellationToken);
+        var statesByPlcCode = existingStates
             .ToDictionary(state => state.PlcCode, StringComparer.OrdinalIgnoreCase);
+        var reportedPlcCodes = normalizedReports
+            .Select(static report => report.PlcCode)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         foreach (var report in normalizedReports)
         {
@@ -88,6 +92,11 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
                 report.Protocol,
                 report.Address,
                 report.LastError);
+        }
+
+        foreach (var missingState in existingStates.Where(state => !reportedPlcCodes.Contains(state.PlcCode)))
+        {
+            runtimeStateStore.Delete(missingState);
         }
 
         await runtimeStateStore.SaveChangesAsync(cancellationToken);

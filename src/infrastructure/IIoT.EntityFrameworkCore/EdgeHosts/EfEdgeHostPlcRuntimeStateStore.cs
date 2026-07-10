@@ -39,6 +39,11 @@ public sealed class EfEdgeHostPlcRuntimeStateStore(IIoTDbContext dbContext) : IE
         dbContext.EdgeHostPlcRuntimeStates.Add(state);
     }
 
+    public void Delete(EdgeHostPlcRuntimeState state)
+    {
+        dbContext.EdgeHostPlcRuntimeStates.Remove(state);
+    }
+
     public async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
         return await dbContext.SaveChangesAsync(cancellationToken);

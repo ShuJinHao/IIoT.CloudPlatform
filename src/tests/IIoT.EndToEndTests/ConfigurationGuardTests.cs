@@ -421,6 +421,7 @@ public sealed class ConfigurationGuardTests
         commandSource.Should().Contain("GetByDeviceIdAsync");
         commandSource.Should().NotContain("EdgeHostByDeviceIdentitySpec");
         commandSource.Should().Contain("runtimeStateStore.Add(state)");
+        commandSource.Should().Contain("runtimeStateStore.Delete(missingState)");
         commandSource.Should().NotContain("PlcBindingId");
         commandSource.Should().NotContain("binding?.Id");
         querySource.Should().Contain("public sealed record GetEdgeHostPlcRuntimeStatesQuery");
@@ -433,6 +434,9 @@ public sealed class ConfigurationGuardTests
         aiReadSource.Should().NotContain("plc-runtime-states");
         contractSource.Should().Contain("POST /api/v1/edge/edge-hosts/plc-runtime-states");
         contractSource.Should().Contain("GET /api/v1/human/edge-hosts/{deviceId}/plc-runtime-states");
+        contractSource.Should().Contain("完整 PLC 配置快照");
+        contractSource.Should().Contain("合法空列表");
+        contractSource.Should().Contain("改名不变的 PLC 稳定身份");
         contractSource.Should().Contain("AI Read");
         contractSource.Should().Contain("不得写 PLC runtime state");
     }

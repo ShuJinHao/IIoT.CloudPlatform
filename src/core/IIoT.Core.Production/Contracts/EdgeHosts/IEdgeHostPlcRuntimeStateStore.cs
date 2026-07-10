@@ -19,5 +19,7 @@ public interface IEdgeHostPlcRuntimeStateStore
 
     void Add(EdgeHostPlcRuntimeState state);
 
+    void Delete(EdgeHostPlcRuntimeState state);
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }
