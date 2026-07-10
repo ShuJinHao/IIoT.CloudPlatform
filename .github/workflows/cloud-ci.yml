@@ -62,6 +62,9 @@ jobs:
       - name: Run configuration guard tests
         run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --filter ConfigurationGuardTests
 
+      - name: Run deployment guard tests
+        run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --filter DeploymentGuardTests
+
       - name: Validate deploy script syntax
         run: |
           sh -n deploy/scripts/release-common.sh

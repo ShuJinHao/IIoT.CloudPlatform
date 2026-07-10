@@ -260,6 +260,15 @@ cleanup_deploy_process() {
   fi
 }
 
+handle_deploy_signal() {
+  signal_name=$1
+  signal_exit_code=$2
+  trap - EXIT HUP INT TERM
+  printf 'Cloud release interrupted by signal %s; releasing the deployment lock and exiting.\n' "$signal_name" >&2
+  cleanup_deploy_process
+  exit "$signal_exit_code"
+}
+
 acquire_managed_lock \
   "$DEPLOY_RELEASE_LOCK_FILE" \
   cloud-release \
@@ -270,7 +279,10 @@ DEPLOY_RELEASE_LOCK_ACQUIRED=1
 export DEPLOY_RELEASE_LOCK_FILE
 DEPLOY_RELEASE_LOCK_OWNER_PID=$$
 export DEPLOY_RELEASE_LOCK_OWNER_PID
-trap cleanup_deploy_process EXIT HUP INT TERM
+trap cleanup_deploy_process EXIT
+trap 'handle_deploy_signal HUP 129' HUP
+trap 'handle_deploy_signal INT 130' INT
+trap 'handle_deploy_signal TERM 143' TERM
 
 "$SCRIPT_DIR/pre-deploy-check.sh" "$RELEASE_TAG"
 update_managed_lock_phase "$DEPLOY_RELEASE_LOCK_FILE" backup

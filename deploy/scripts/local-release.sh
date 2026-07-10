@@ -39,6 +39,7 @@ SUPPORT_FILES=(
 SUPPORT_MANIFEST_NAME=.cloud-support-manifest.sha256
 SUPPORT_ALLOWLIST_NAME=.cloud-support-allowlist.txt
 SUPPORT_INSTALLER_NAME=.install-cloud-support.sh
+SYNCED_SUPPORT_MANIFEST_DIGEST=""
 
 usage() {
   cat <<'EOF'
@@ -499,6 +500,7 @@ sync_remote_deploy_files() {
   local remote_dir_quoted
   local remote_command
   local sync_status
+  local support_manifest_digest
 
   if [ "$DRY_RUN" = true ]; then
     printf '[dry-run] Cloud deploy support whitelist:\n'
@@ -514,19 +516,54 @@ sync_remote_deploy_files() {
 
   package_dir="$(mktemp -d)"
   create_support_package "$package_dir"
+  support_manifest_digest="$(sha256_file "$package_dir/$SUPPORT_MANIFEST_NAME")"
   remote_dir_quoted="$(printf '%q' "$REMOTE_DEPLOY_DIR")"
   remote_command="set -eu
 deploy_dir=$remote_dir_quoted
 staging_parent=\"\$deploy_dir/.support-staging\"
 mkdir -p \"\$staging_parent\"
 staging_dir=\$(mktemp -d \"\$staging_parent/cloud-support.XXXXXX\")
+release_lock_file=
+release_lock_acquired=0
 cleanup_support_staging() {
+  if [ \"\$release_lock_acquired\" -eq 1 ]; then
+    release_managed_lock \"\$release_lock_file\" || true
+    release_lock_acquired=0
+  fi
   rm -rf \"\$staging_dir\"
   rmdir \"\$staging_parent\" 2>/dev/null || true
 }
-trap cleanup_support_staging EXIT HUP INT TERM
+handle_support_sync_signal() {
+  signal_name=\$1
+  signal_exit_code=\$2
+  trap - EXIT HUP INT TERM
+  printf 'Cloud support synchronization interrupted by signal %s; releasing the deployment lock and exiting.\\n' \"\$signal_name\" >&2
+  cleanup_support_staging
+  exit \"\$signal_exit_code\"
+}
+trap cleanup_support_staging EXIT
+trap 'handle_support_sync_signal HUP 129' HUP
+trap 'handle_support_sync_signal INT 130' INT
+trap 'handle_support_sync_signal TERM 143' TERM
 tar --no-same-owner -xf - -C \"\$staging_dir\"
-sh \"\$staging_dir/$SUPPORT_INSTALLER_NAME\" \"\$deploy_dir\" \"\$staging_dir\""
+DEPLOY_DIR=\$deploy_dir
+export DEPLOY_DIR
+. \"\$staging_dir/scripts/release-common.sh\"
+release_lock_file=\$(resolve_managed_lock_file \
+  \"\${DEPLOY_RELEASE_LOCK_FILE:-\$CLOUD_RELEASE_LOCK_FILE_DEFAULT}\" \
+  \"\$deploy_dir/.cloud-release.lock\")
+acquire_managed_lock \
+  \"\$release_lock_file\" \
+  cloud-support-sync \
+  support-${TAG#sha-} \
+  support-sync \
+  local-release.sh
+release_lock_acquired=1
+sh \"\$staging_dir/$SUPPORT_INSTALLER_NAME\" \"\$deploy_dir\" \"\$staging_dir\"
+release_managed_lock \"\$release_lock_file\"
+release_lock_acquired=0
+trap - EXIT HUP INT TERM
+cleanup_support_staging"
 
   if COPYFILE_DISABLE=1 run_with_timeout "$SYNC_TIMEOUT_SECONDS" "sync and validate Cloud deploy support files" \
     bash -c '
@@ -548,6 +585,9 @@ sh \"\$staging_dir/$SUPPORT_INSTALLER_NAME\" \"\$deploy_dir\" \"\$staging_dir\""
     print_deploy_diagnostics
     exit "$sync_status"
   fi
+
+  SYNCED_SUPPORT_MANIFEST_DIGEST="$support_manifest_digest"
+  printf 'Cloud deploy support manifest digest bound to this release: %s\n' "$SYNCED_SUPPORT_MANIFEST_DIGEST"
 }
 
 require_pushed_clean_head() {
@@ -596,7 +636,8 @@ fi
 DEPLOY_SERVICES="$(tr -d '\r\n' < "$SERVICES_FILE")"
 [ -n "$DEPLOY_SERVICES" ] || fail "Built services file is empty: $SERVICES_FILE"
 
-REMOTE_COMMAND="cd '$REMOTE_DEPLOY_DIR' && DEPLOY_GIT_SHA='${TAG#sha-}' DEPLOY_TRIGGERED_BY=local ./scripts/deploy-release.sh '$TAG' --services '$DEPLOY_SERVICES'"
+EXPECTED_SUPPORT_MANIFEST_DIGEST="${SYNCED_SUPPORT_MANIFEST_DIGEST:-computed-after-support-sync}"
+REMOTE_COMMAND="cd '$REMOTE_DEPLOY_DIR' && DEPLOY_GIT_SHA='${TAG#sha-}' DEPLOY_TRIGGERED_BY=local EXPECTED_CLOUD_SUPPORT_MANIFEST_SHA256='$EXPECTED_SUPPORT_MANIFEST_DIGEST' ./scripts/deploy-release.sh '$TAG' --services '$DEPLOY_SERVICES'"
 
 printf '\nCloud local deploy command:\n'
 printf 'ssh'

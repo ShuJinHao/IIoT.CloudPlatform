@@ -164,11 +164,23 @@ acquire_lock() {
     "${RELEASE_TAG:-unknown}" \
     cleanup \
     "$0"
-  trap release_lock EXIT HUP INT TERM
+  trap release_lock EXIT
+  trap 'handle_cleanup_signal HUP 129' HUP
+  trap 'handle_cleanup_signal INT 130' INT
+  trap 'handle_cleanup_signal TERM 143' TERM
 }
 
 release_lock() {
   release_managed_lock "$LOCK_FILE"
+}
+
+handle_cleanup_signal() {
+  local signal_name="$1"
+  local signal_exit_code="$2"
+  trap - EXIT HUP INT TERM
+  printf 'Post-release cleanup interrupted by signal %s; releasing the cleanup lock and exiting.\n' "$signal_name" >&2
+  release_lock || true
+  exit "$signal_exit_code"
 }
 
 disk_percent() {

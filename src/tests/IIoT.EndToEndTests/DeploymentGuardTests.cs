@@ -23,6 +23,10 @@ public sealed class DeploymentGuardTests
         source.Should().Contain("docker compose");
         source.Should().Contain("protected remote paths remain untouched: .env certs/ releases/ backups/");
         source.Should().Contain("BatchMode=yes");
+        source.Should().Contain("cloud-support-sync");
+        source.Should().Contain("acquire_managed_lock");
+        source.Should().Contain("EXPECTED_CLOUD_SUPPORT_MANIFEST_SHA256");
+        source.Should().Contain("Cloud deploy support manifest digest bound to this release");
         source.Should().NotContain("SUPPORT_FILES=(\n  .env");
         source.Should().NotContain("SUPPORT_FILES=(\n  certs");
         source.Should().NotContain("SUPPORT_FILES=(\n  releases");
@@ -51,7 +55,11 @@ public sealed class DeploymentGuardTests
         preflight.Should().Contain("preflight_support_manifest=verified");
         release.Should().Contain("acquire_managed_lock");
         release.Should().Contain("DEPLOY_RELEASE_LOCK_OWNER_PID");
+        release.Should().Contain("handle_deploy_signal TERM 143");
+        release.Should().NotContain("trap cleanup_deploy_process EXIT HUP INT TERM");
         cleanup.Should().Contain("ensure_managed_lock_available");
+        cleanup.Should().Contain("handle_cleanup_signal TERM 143");
+        cleanup.Should().NotContain("trap release_lock EXIT HUP INT TERM");
         cleanup.Should().NotContain("POST_RELEASE_CLEANUP_LOCK_ATTEMPTS:-180");
         cleanup.Should().NotContain("sleep 5");
     }
@@ -93,6 +101,32 @@ public sealed class DeploymentGuardTests
         var source = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-ci.yml"));
 
         source.Should().Contain("sh -n deploy/scripts/check-release-state-access.sh");
+        source.Should().Contain("--filter DeploymentGuardTests");
+    }
+
+    [Fact]
+    public void CloudTimeoutWatchdogs_ShouldStopTheirSleepersAndPreserveFailureCodes()
+    {
+        foreach (var relativePath in new[]
+                 {
+                     new[] { "deploy", "scripts", "local-release.sh" },
+                     new[] { "deploy", "scripts", "build-and-push.sh" }
+                 })
+        {
+            var source = File.ReadAllText(FindRepoFile(relativePath));
+
+            source.Should().Contain("stop_watchdog");
+            source.Should().Contain("wait \"$sleep_pid\"");
+            source.Should().Contain("signal_process_tree TERM");
+            source.Should().Contain("signal_process_tree KILL");
+            source.Should().NotContain("kill -TERM \"$cmd_pid\"");
+            source.Should().NotContain("kill -KILL \"$cmd_pid\"");
+        }
+
+        var localRelease = File.ReadAllText(FindRepoFile("deploy", "scripts", "local-release.sh"));
+        var buildAndPush = File.ReadAllText(FindRepoFile("deploy", "scripts", "build-and-push.sh"));
+        localRelease.Should().Contain("exit \"$deploy_status\"");
+        buildAndPush.Should().Contain("exit \"$build_status\"");
     }
 
     private static string FindRepoFile(params string[] relativeSegments)
