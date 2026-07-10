@@ -56,7 +56,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ '${{ inputs.emergency_confirm }}' != 'EMERGENCY_CLOUD_DEPLOY' ]; then
-            echo "cloud-deploy is emergency-only. Use deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud from the workspace root." >&2
+            echo "cloud-deploy is emergency-only. Use deploy/Deploy.ps1 -Target Cloud -Deploy from the workspace root for routine application releases." >&2
             exit 64
           fi
           release_tag='${{ inputs.release_tag }}'

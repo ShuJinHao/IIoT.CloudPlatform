@@ -28,9 +28,12 @@ CURRENT_RELEASE_FILE="$RELEASES_DIR/current-release.env"
 PREVIOUS_RELEASE_FILE="$RELEASES_DIR/previous-release.env"
 STAGED_RELEASE_FILE="$RELEASES_DIR/staged-release.env"
 CURRENT_RELEASE_SUMMARY_FILE="$RELEASES_DIR/current-release.summary.md"
+RELEASE_IMAGE_ENV_FILE="$RELEASES_DIR/current-images.env"
+STAGED_RELEASE_IMAGE_ENV_FILE="$RELEASES_DIR/staged-images.env"
 BACKUP_STATE_FILE="$DEPLOY_DIR/backups/postgres/latest-successful-backup.txt"
 CLOUD_RELEASE_LOCK_FILE_DEFAULT="/data/iiot-platform/.locks/cloud-release.lock"
 POST_RELEASE_CLEANUP_LOCK_FILE_DEFAULT="/data/iiot-platform/.locks/deploy-cleanup.lock"
+CLOUD_CONFIG_LOCK_FILE_DEFAULT="/data/iiot-platform/.locks/cloud-config.lock"
 
 resolve_managed_lock_file() {
   preferred_lock_file=$1
@@ -126,11 +129,11 @@ managed_lock_status_for_dir() {
       managed_lock_status_now=$(date +%s)
       managed_lock_status_mtime=$(managed_lock_mtime_epoch "$managed_lock_status_dir" || true)
       managed_lock_status_grace=${MANAGED_LOCK_INITIALIZATION_GRACE_SECONDS:-30}
-      case "$managed_lock_status_grace" in
-        ''|*[!0-9]*)
-          managed_lock_status_grace=30
-          ;;
-      esac
+      require_decimal_range MANAGED_LOCK_INITIALIZATION_GRACE_SECONDS "$managed_lock_status_grace" 1 300 || return $?
+      require_decimal_range managed_lock_status_now "$managed_lock_status_now" 0 9999999999 || return $?
+      if [ -n "$managed_lock_status_mtime" ]; then
+        require_decimal_range managed_lock_status_mtime "$managed_lock_status_mtime" 0 9999999999 || return $?
+      fi
 
       if [ -n "$managed_lock_status_mtime" ] \
         && [ $((managed_lock_status_now - managed_lock_status_mtime)) -ge "$managed_lock_status_grace" ]; then
@@ -254,6 +257,23 @@ ensure_managed_lock_available() {
   esac
 }
 
+require_managed_lock_absent_readonly() {
+  readonly_lock_file=$1
+  readonly_lock_dir="${readonly_lock_file}.d"
+  readonly_lock_status=$(managed_lock_status_for_dir "$readonly_lock_dir")
+  case "$readonly_lock_status" in
+    absent)
+      return 0
+      ;;
+    live|initializing|stale|*)
+      printf 'Managed lock precheck is read-only and found non-absent state: status=%s %s\n' \
+        "$readonly_lock_status" \
+        "$(describe_managed_lock "$readonly_lock_file")" >&2
+      return 75
+      ;;
+  esac
+}
+
 acquire_managed_lock() {
   managed_lock_acquire_file=$1
   managed_lock_acquire_purpose=$2
@@ -290,18 +310,59 @@ acquire_managed_lock() {
   printf 'Managed lock acquired: %s\n' "$(describe_managed_lock "$managed_lock_acquire_file")"
 }
 
+acquire_strict_managed_lock() {
+  strict_lock_file=$1
+  strict_lock_purpose=$2
+  strict_lock_release=$3
+  strict_lock_phase=$4
+  strict_lock_script=$5
+  strict_lock_dir="${strict_lock_file}.d"
+  if [ -d "$strict_lock_dir" ]; then
+    printf 'Strict managed lock already exists and is never auto-removed: %s\n' \
+      "$(describe_managed_lock "$strict_lock_file")" >&2
+    return 75
+  fi
+  if ! mkdir "$strict_lock_dir" 2>/dev/null; then
+    printf 'Strict managed lock was acquired concurrently: %s\n' "$strict_lock_dir" >&2
+    return 75
+  fi
+  umask 077
+  strict_lock_process_start=$(managed_lock_process_start "$$" || true)
+  if ! {
+    printf '%s\n' "$$" >"$strict_lock_dir/pid"
+    [ -z "$strict_lock_process_start" ] || printf '%s\n' "$strict_lock_process_start" >"$strict_lock_dir/process-start"
+    printf '%s\n' "$strict_lock_purpose" >"$strict_lock_dir/purpose"
+    printf '%s\n' "$strict_lock_release" >"$strict_lock_dir/release"
+    printf '%s\n' "$strict_lock_phase" >"$strict_lock_dir/phase"
+    printf '%s\n' "$strict_lock_script" >"$strict_lock_dir/script"
+    date -u +'%Y-%m-%dT%H:%M:%SZ' >"$strict_lock_dir/created-at"
+  }; then
+    rm -rf "$strict_lock_dir"
+    return 73
+  fi
+  printf 'Strict managed lock acquired: %s\n' "$(describe_managed_lock "$strict_lock_file")"
+}
+
 update_managed_lock_phase() {
   managed_lock_update_file=$1
   managed_lock_update_phase=$2
   managed_lock_update_dir="${managed_lock_update_file}.d"
   managed_lock_update_owner=$(managed_lock_read_field "$managed_lock_update_dir" pid)
-  if [ "$managed_lock_update_owner" != "$$" ]; then
+  managed_lock_expected_owner=${DEPLOY_RELEASE_LOCK_OWNER_PID:-$$}
+  case "$managed_lock_expected_owner" in
+    ''|*[!0-9]*)
+      printf 'Refusing to update a managed lock with an invalid delegated owner PID: %s\n' \
+        "$managed_lock_expected_owner" >&2
+      return 75
+      ;;
+  esac
+  if [ "$managed_lock_update_owner" != "$managed_lock_expected_owner" ]; then
     printf 'Refusing to update a managed lock owned by another process: %s\n' \
       "$(describe_managed_lock "$managed_lock_update_file")" >&2
     return 75
   fi
 
-  printf '%s\n' "$managed_lock_update_phase" > "$managed_lock_update_dir/phase"
+  printf '%s\n' "$managed_lock_update_phase" | atomic_write_file "$managed_lock_update_dir/phase" 600
   printf 'Managed lock phase: release=%s phase=%s\n' \
     "$(managed_lock_read_field "$managed_lock_update_dir" release)" \
     "$managed_lock_update_phase"
@@ -358,9 +419,11 @@ require_deploy_env_file() {
 load_dotenv() {
   env_file=${1:-$(compose_env_file_path)}
   require_deploy_env_file "$env_file"
+  env_line_number=0
 
   while IFS= read -r env_line || [ -n "$env_line" ]
   do
+    env_line_number=$((env_line_number + 1))
     env_line=$(printf '%s' "$env_line" | tr -d '\r')
 
     case "$env_line" in
@@ -368,18 +431,158 @@ load_dotenv() {
         continue
         ;;
       *=*)
-        export "$env_line"
+        env_key=${env_line%%=*}
+        env_value=${env_line#*=}
+        case "$env_key" in
+          ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*)
+            printf 'Dotenv parse error: file=%s line=%s category=invalid-key\n' \
+              "$env_file" "$env_line_number" >&2
+            exit 64
+            ;;
+        esac
+        case "$env_key" in
+          BASH_ENV|ENV|PATH|IFS|CDPATH|SHELLOPTS|BASHOPTS|PS4|GLOBIGNORE|HOME|PWD|OLDPWD|TMPDIR|DOCKER_CONFIG|COMPOSE_*|DEPLOY_*|WORKSPACE_*|IIOT_WORKSPACE_*|CLOUD_DEPLOY_*|POST_RELEASE_CLEANUP_LOCK_FILE|CLOUD_RELEASE_LOCK_FILE_DEFAULT|POST_RELEASE_CLEANUP_LOCK_FILE_DEFAULT|CLOUD_CONFIG_LOCK_FILE_DEFAULT)
+            printf 'Dotenv parse error: file=%s line=%s category=forbidden-control-key\n' \
+              "$env_file" "$env_line_number" >&2
+            exit 64
+            ;;
+        esac
+        export "$env_key=$env_value"
         ;;
       *)
-        printf 'Invalid env line in %s: %s\n' "$env_file" "$env_line" >&2
+        printf 'Dotenv parse error: file=%s line=%s category=malformed-entry\n' \
+          "$env_file" "$env_line_number" >&2
         exit 64
         ;;
     esac
   done < "$env_file"
 }
 
+sha256_file() {
+  sha256_path=$1
+  [ -f "$sha256_path" ] && [ -r "$sha256_path" ] && [ ! -L "$sha256_path" ] || return 66
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$sha256_path" | awk '{print $1}'
+    return
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$sha256_path" | awk '{print $1}'
+    return
+  fi
+  printf 'sha256sum or shasum is required for atomic state verification.\n' >&2
+  return 69
+}
+
+require_decimal_range() {
+  decimal_name=$1
+  decimal_value=$2
+  decimal_minimum=$3
+  decimal_maximum=$4
+  case "$decimal_value" in
+    ''|*[!0-9]*)
+      printf '%s must be decimal digits in range %s..%s.\n' "$decimal_name" "$decimal_minimum" "$decimal_maximum" >&2
+      return 64
+      ;;
+  esac
+  if ! awk -v value="$decimal_value" -v minimum="$decimal_minimum" -v maximum="$decimal_maximum" \
+    'BEGIN { exit !(value >= minimum && value <= maximum) }'; then
+    printf '%s must be in range %s..%s.\n' "$decimal_name" "$decimal_minimum" "$decimal_maximum" >&2
+    return 64
+  fi
+}
+
+atomic_write_file() (
+  atomic_target=$1
+  atomic_mode=${2:-600}
+  atomic_dir=$(dirname "$atomic_target")
+  atomic_base=$(basename "$atomic_target")
+  mkdir -p "$atomic_dir"
+  atomic_temp=$(mktemp "$atomic_dir/.${atomic_base}.tmp.XXXXXX") || return 73
+  atomic_stream_pid=""
+  exec 9<&0
+  trap 'kill "${atomic_stream_pid:-}" 2>/dev/null || true; wait "${atomic_stream_pid:-}" 2>/dev/null || true; exec 9<&-; rm -f "${atomic_temp:-}"; exit 129' HUP
+  trap 'kill "${atomic_stream_pid:-}" 2>/dev/null || true; wait "${atomic_stream_pid:-}" 2>/dev/null || true; exec 9<&-; rm -f "${atomic_temp:-}"; exit 130' INT
+  trap 'kill "${atomic_stream_pid:-}" 2>/dev/null || true; wait "${atomic_stream_pid:-}" 2>/dev/null || true; exec 9<&-; rm -f "${atomic_temp:-}"; exit 143' TERM
+  cat <&9 >"$atomic_temp" &
+  atomic_stream_pid=$!
+  if ! wait "$atomic_stream_pid"; then
+    exec 9<&-
+    rm -f "$atomic_temp"
+    return 73
+  fi
+  atomic_stream_pid=""
+  exec 9<&-
+  if ! chmod "$atomic_mode" "$atomic_temp" || ! mv -f "$atomic_temp" "$atomic_target"; then
+    rm -f "$atomic_temp"
+    return 73
+  fi
+  trap - HUP INT TERM
+)
+
+atomic_copy_file() (
+  atomic_source=$1
+  atomic_target=$2
+  atomic_mode=${3:-600}
+  [ -f "$atomic_source" ] && [ ! -L "$atomic_source" ] || return 66
+  atomic_dir=$(dirname "$atomic_target")
+  atomic_base=$(basename "$atomic_target")
+  mkdir -p "$atomic_dir"
+  atomic_temp=$(mktemp "$atomic_dir/.${atomic_base}.tmp.XXXXXX") || return 73
+  trap 'rm -f "${atomic_temp:-}"; exit 129' HUP
+  trap 'rm -f "${atomic_temp:-}"; exit 130' INT
+  trap 'rm -f "${atomic_temp:-}"; exit 143' TERM
+  if ! cp "$atomic_source" "$atomic_temp" \
+    || ! chmod "$atomic_mode" "$atomic_temp" \
+    || ! mv -f "$atomic_temp" "$atomic_target"; then
+    rm -f "$atomic_temp"
+    return 73
+  fi
+  trap - HUP INT TERM
+)
+
+atomic_append_file() (
+  atomic_target=$1
+  atomic_mode=${2:-600}
+  atomic_dir=$(dirname "$atomic_target")
+  atomic_base=$(basename "$atomic_target")
+  mkdir -p "$atomic_dir"
+  atomic_temp=$(mktemp "$atomic_dir/.${atomic_base}.tmp.XXXXXX") || return 73
+  atomic_stream_pid=""
+  trap 'kill "${atomic_stream_pid:-}" 2>/dev/null || true; wait "${atomic_stream_pid:-}" 2>/dev/null || true; rm -f "${atomic_temp:-}"; exit 129' HUP
+  trap 'kill "${atomic_stream_pid:-}" 2>/dev/null || true; wait "${atomic_stream_pid:-}" 2>/dev/null || true; rm -f "${atomic_temp:-}"; exit 130' INT
+  trap 'kill "${atomic_stream_pid:-}" 2>/dev/null || true; wait "${atomic_stream_pid:-}" 2>/dev/null || true; rm -f "${atomic_temp:-}"; exit 143' TERM
+  if [ -f "$atomic_target" ]; then
+    cp "$atomic_target" "$atomic_temp" || { rm -f "$atomic_temp"; return 73; }
+  fi
+  exec 9<&0
+  cat <&9 >>"$atomic_temp" &
+  atomic_stream_pid=$!
+  if ! wait "$atomic_stream_pid"; then
+    exec 9<&-
+    rm -f "$atomic_temp"
+    return 73
+  fi
+  atomic_stream_pid=""
+  exec 9<&-
+  if ! chmod "$atomic_mode" "$atomic_temp" \
+    || ! mv -f "$atomic_temp" "$atomic_target"; then
+    rm -f "$atomic_temp"
+    return 73
+  fi
+  trap - HUP INT TERM
+)
+
 compose() {
-  docker compose --env-file "$(compose_env_file_path)" -f "$DEPLOY_DIR/docker-compose.prod.yml" "$@"
+  compose_base_env=$(compose_env_file_path)
+  if [ -n "${COMPOSE_ENV_FILE:-}" ] || [ ! -f "$RELEASE_IMAGE_ENV_FILE" ]; then
+    docker compose --env-file "$compose_base_env" -f "$DEPLOY_DIR/docker-compose.prod.yml" "$@"
+  else
+    docker compose \
+      --env-file "$compose_base_env" \
+      --env-file "$RELEASE_IMAGE_ENV_FILE" \
+      -f "$DEPLOY_DIR/docker-compose.prod.yml" \
+      "$@"
+  fi
 }
 
 prepare_release_directories() {
@@ -525,25 +728,7 @@ require_positive_integer_at_most() {
 
   require_env_value "$key"
 
-  case "$value" in
-    ''|*[!0-9]*)
-      printf 'Deployment numeric value must be a positive integer: %s=%s\n' "$key" "$value" >&2
-      exit 64
-      ;;
-  esac
-
-  if [ "$value" -le 0 ]; then
-    printf 'Deployment numeric value must be greater than 0: %s=%s\n' "$key" "$value" >&2
-    exit 64
-  fi
-
-  if [ "$value" -gt "$max_value" ]; then
-    printf 'Deployment numeric value exceeds the allowed maximum: %s=%s max=%s\n' \
-      "$key" \
-      "$value" \
-      "$max_value" >&2
-    exit 64
-  fi
+  require_decimal_range "$key" "$value" 1 "$max_value" || exit $?
 }
 
 require_template_value_replaced() {
@@ -640,7 +825,7 @@ is_loopback_or_rfc1918_ipv4_host() {
         ;;
     esac
 
-    if [ "$octet" -gt 255 ]; then
+    if ! awk -v value="$octet" 'BEGIN { exit !(value >= 0 && value <= 255) }'; then
       return 1
     fi
   done
@@ -723,6 +908,13 @@ ensure_deploy_disk_headroom() {
   if [ -z "$disk_usage_percent" ]; then
     printf 'Could not determine disk usage for pre-deploy path: %s\n' "$disk_path" >&2
     exit 65
+  fi
+  require_decimal_range PRE_DEPLOY_DISK_WARN_PERCENT "$warn_percent" 1 99 || exit $?
+  require_decimal_range PRE_DEPLOY_DISK_BLOCK_PERCENT "$block_percent" 2 100 || exit $?
+  require_decimal_range preflight_disk_usage_percent "$disk_usage_percent" 0 100 || exit $?
+  if [ "$warn_percent" -ge "$block_percent" ]; then
+    printf 'PRE_DEPLOY_DISK_WARN_PERCENT must be lower than PRE_DEPLOY_DISK_BLOCK_PERCENT.\n' >&2
+    exit 64
   fi
 
   printf 'preflight_disk_usage_percent=%s warn_threshold=%s block_threshold=%s path=%s\n' \
@@ -908,6 +1100,7 @@ probe_status() {
   url=$1
   expected_codes=$2
   max_attempts=${3:-12}
+  require_decimal_range probe_max_attempts "$max_attempts" 1 120 || exit $?
   attempt=1
 
   while [ "$attempt" -le "$max_attempts" ]
@@ -943,6 +1136,7 @@ require_running_service() {
 require_healthy_service() {
   service_name=$1
   max_attempts=${2:-12}
+  require_decimal_range health_max_attempts "$max_attempts" 1 120 || exit $?
   attempt=1
 
   container_id=$(compose ps -q "$service_name" 2>/dev/null | head -n 1 || true)
@@ -987,7 +1181,9 @@ replace_env_value() {
   file_path=$1
   key=$2
   value=$3
-  tmp_file=$(mktemp "$DEPLOY_DIR/.env.XXXXXX")
+  file_dir=$(dirname "$file_path")
+  file_base=$(basename "$file_path")
+  tmp_file=$(mktemp "$file_dir/.${file_base}.tmp.XXXXXX")
 
   awk -v key="$key" -v value="$value" '
     BEGIN { updated = 0 }
@@ -1003,7 +1199,8 @@ replace_env_value() {
       }
     }' "$file_path" > "$tmp_file"
 
-  mv "$tmp_file" "$file_path"
+  chmod 600 "$tmp_file"
+  mv -f "$tmp_file" "$file_path"
 }
 
 apply_app_images_to_dotenv() {
@@ -1038,6 +1235,96 @@ apply_app_images_to_dotenv_for_keys() {
   done
 }
 
+canonical_cloud_config_sha256() {
+  canonical_config_file=$1
+  [ -f "$canonical_config_file" ] \
+    && [ -r "$canonical_config_file" ] \
+    && [ ! -L "$canonical_config_file" ] \
+    || {
+      printf 'Cloud configuration digest source is missing, unreadable or unsafe: %s\n' "$canonical_config_file" >&2
+      return 66
+    }
+  command -v sha256sum >/dev/null 2>&1 || {
+    printf 'sha256sum is required for the Cloud configuration digest.\n' >&2
+    return 69
+  }
+
+  # Values, including secrets, remain inside this pipeline. Only the final
+  # digest is emitted; no canonicalized configuration or intermediate file is
+  # written to stdout or disk.
+  LC_ALL=C awk '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+    function excluded(key) {
+      if (key == "IIOT_HTTPAPI_IMAGE" || key == "IIOT_GATEWAY_IMAGE" ||
+          key == "IIOT_DATAWORKER_IMAGE" || key == "IIOT_MIGRATION_IMAGE" ||
+          key == "IIOT_WEB_IMAGE") return 1
+      if (key ~ /^IIOT_WORKSPACE_DEPLOY_/) return 1
+      if (key ~ /^CLOUD_DEPLOY_(INVOCATION_ID|EXPECTED_SHA|PLAN_DIGEST|RELEASE_TAG|SERVICES)$/) return 1
+      if (key ~ /^DEPLOY_(RELEASE_ID|GIT_SHA|TRIGGERED_BY|RELEASE_NOTES|INVOCATION_ID|EXPECTED_SHA|PLAN_DIGEST|SUPPORT_MANIFEST_SHA256|IMAGE_MANIFEST_SHA256|IMAGE_CONTENT_SHA256|SERVICES|PHASE|CLEANUP_STATUS|DEPLOYED_AT_UTC)$/) return 1
+      return 0
+    }
+    {
+      raw=$0
+      sub(/\r$/, "", raw)
+      probe=raw
+      sub(/^[[:space:]]+/, "", probe)
+      if (probe == "" || probe ~ /^#/) next
+      line=raw
+      sub(/^[[:space:]]*export[[:space:]]+/, "", line)
+      separator=index(line, "=")
+      if (separator == 0) {
+        values["__RAW_LINE_" NR]=raw
+        next
+      }
+      key=trim(substr(line, 1, separator - 1))
+      if (key == "" || excluded(key)) next
+      values[key]=substr(line, separator + 1)
+    }
+    END {
+      for (key in values) print key "=" values[key]
+    }
+  ' "$canonical_config_file" \
+    | LC_ALL=C sort \
+    | sha256sum \
+    | awk '{print $1}'
+}
+
+write_release_image_env() {
+  release_image_output=$1
+  umask 077
+  for release_image_key in $APP_IMAGE_KEYS
+  do
+    eval "release_image_value=\${$release_image_key:-}"
+    if [ -z "$release_image_value" ]; then
+      printf 'Release-owned image value is missing: %s\n' "$release_image_key" >&2
+      return 64
+    fi
+  done
+  {
+    for release_image_key in $APP_IMAGE_KEYS
+    do
+      eval "release_image_value=\${$release_image_key:-}"
+      printf '%s=%s\n' "$release_image_key" "$release_image_value"
+    done
+  } | atomic_write_file "$release_image_output" 600
+}
+
+release_image_env_matches_manifest() {
+  release_image_file=$1
+  release_manifest_file=$2
+  [ -f "$release_image_file" ] && [ ! -L "$release_image_file" ] || return 1
+  [ -f "$release_manifest_file" ] && [ ! -L "$release_manifest_file" ] || return 1
+  for release_image_key in $APP_IMAGE_KEYS
+  do
+    [ "$(read_manifest_value "$release_image_file" "$release_image_key")" = \
+      "$(read_manifest_value "$release_manifest_file" "$release_image_key")" ] || return 1
+  done
+}
+
 write_release_manifest() {
   output_path=$1
   release_id=$2
@@ -1052,6 +1339,7 @@ write_release_manifest() {
   deploy_image_manifest_sha256=${11:-}
   deploy_services=${12:-}
   deploy_image_content_sha256=${13:-}
+  deploy_config_sha256=${14:-}
 
   umask 077
   {
@@ -1067,6 +1355,7 @@ write_release_manifest() {
       printf 'DEPLOY_SUPPORT_MANIFEST_SHA256=%s\n' "$deploy_support_manifest_sha256"
       printf 'DEPLOY_IMAGE_MANIFEST_SHA256=%s\n' "$deploy_image_manifest_sha256"
       printf 'DEPLOY_IMAGE_CONTENT_SHA256=%s\n' "$deploy_image_content_sha256"
+      printf 'DEPLOY_CONFIG_SHA256=%s\n' "$deploy_config_sha256"
       printf 'DEPLOY_SERVICES=%s\n' "$deploy_services"
       printf 'DEPLOY_CLEANUP_STATUS=pending\n'
       printf 'DEPLOY_PHASE=staged\n'
@@ -1077,7 +1366,7 @@ write_release_manifest() {
       eval "value=\${$key:-}"
       printf '%s=%s\n' "$key" "$value"
     done
-  } > "$output_path"
+  } | atomic_write_file "$output_path" 600
 }
 
 safe_release_file_name() {
@@ -1090,7 +1379,7 @@ record_release_history() {
   history_timestamp=$(date -u +"%Y%m%dT%H%M%SZ")
   safe_release_id=$(safe_release_file_name "$release_id")
   history_file="$RELEASE_HISTORY_DIR/$history_timestamp-$safe_release_id.env"
-  cp "$source_file" "$history_file"
+  atomic_copy_file "$source_file" "$history_file" 600
   printf '%s\n' "$history_file"
 }
 
@@ -1128,7 +1417,7 @@ write_release_summary() {
     else
       printf -- '- No git summary available.\n'
     fi
-  } > "$output_path"
+  } | atomic_write_file "$output_path" 600
 }
 
 read_manifest_value() {

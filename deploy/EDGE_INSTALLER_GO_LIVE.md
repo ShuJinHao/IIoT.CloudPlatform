@@ -45,16 +45,16 @@ cd src/ui/iiot-web && npm run build
 
 必须先把当前 Cloud 后端和前端部署到服务器，否则线上没有 `installer-package` 接口，也没有新的 `.exe` 下载按钮。
 
-标准方式由工作区唯一入口调度本机构建、Harbor 和 SSH 部署：
+标准方式由工作区日常入口调度远端 tip 隔离构建、Harbor 和一次 SSH 部署：
 
 1. 推送或合并到 `main`。
-2. 在本机确认 HEAD 已推送且工作区干净。
-3. 从工作区根运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services web`；如后端接口也改动，则按实际服务传入 `httpapi,gateway,dataworker,migration,web` 的子集。顶层入口从当前生产 profile 读取标准 Harbor、SSH 和 challenge 参数，再调度 Cloud 项目实现脚本。
-4. 确认服务器 `post-deploy-check.sh`、`ops-check.sh` 和发布后清理摘要通过。
+2. 确认目标改动已推送到 `origin/main`；本机工作区可以继续修改。
+3. 从工作区根运行 `pwsh ./deploy/Deploy.ps1 -Target Cloud -Services web -Deploy`；如后端接口也改动，则按实际服务传入 `httpapi,gateway,dataworker,migration,web` 的子集。入口从生产 profile 读取 Harbor、SSH 和 challenge 参数。
+4. 确认 Runner `routine-current.env`、HTTP health 和对应服务运行态通过；post-deploy 深度巡检与 cleanup 摘要作为独立维护证据。
 
 本机 `build-and-push.sh` 会给 Web Dockerfile 传入 `VITE_AICOPILOT_CHALLENGE_URL`，并使用 Harbor mirror 中的 `node:22-slim`、`nginx:1.27-alpine` 基础镜像。服务器不依赖 Docker Hub。单镜像 build/push 超过 15 分钟必须停止诊断，不得等待灾备 GitHub workflow。
 
-本机 SSH 触发器不可用时，不得改走服务器手工 `deploy-release.sh`。该脚本已强制要求根入口 invocation/plan、run-bound image manifest、OCI digest 与预获取事务锁；必须恢复操作端/SSH 后从 `Invoke-WorkspaceDeploy.ps1` 重新预检或恢复。
+本机 SSH 触发器不可用时，不得改走服务器手工脚本。必须恢复操作端/SSH 后用 `Deploy.ps1 -ResumeInvocation <id>` 重发已有不可变请求。
 
 部署前确认 `.env` 里保持密钥模式：
 

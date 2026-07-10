@@ -67,7 +67,6 @@ SQL
 drop_temp_database_strict
 trap - EXIT INT TERM
 mkdir -p "$BACKUP_DIR"
-printf '%s\n' "$DUMP_FILE" > "$VERIFY_STATE_FILE"
-touch "$VERIFY_STATE_FILE"
+printf '%s\n' "$DUMP_FILE" | atomic_write_file "$VERIFY_STATE_FILE" 600
 
 printf 'PostgreSQL backup verify completed: %s\n' "$DUMP_FILE"

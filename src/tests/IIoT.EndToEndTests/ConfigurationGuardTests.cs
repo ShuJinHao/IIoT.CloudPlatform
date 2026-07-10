@@ -1312,21 +1312,23 @@ public sealed class ConfigurationGuardTests
         var imageWorkflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-image.yml"));
         var deployWorkflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-deploy.yml"));
 
-        readmeSource.Should().Contain("工作区外部标准入口是 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud ...`");
+        readmeSource.Should().Contain("工作区外部日常入口是 `pwsh ./deploy/Deploy.ps1 -Target Cloud ...`");
         readmeSource.Should().Contain("`cloud-image` / `cloud-deploy` 只保留灾备手动入口，必须输入确认词");
         readmeSource.Should().Contain("单个镜像 build/push 默认 15 分钟超时");
-        readmeSource.Should().Contain("support 和锁门禁通过后，本机 `build-and-push.sh` 才按服务构建并推送 `sha-<git-sha>` 镜像到 Harbor");
-        readmeSource.Should().Contain("DEPLOY_GIT_SHA=<sha> DEPLOY_TRIGGERED_BY=local ./scripts/deploy-release.sh");
-        operationsSource.Should().Contain("pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services <services>");
-        operationsSource.Should().Contain("project-local `local-release.sh` is a delegated implementation");
+        readmeSource.Should().Contain("日常 `Deploy.ps1` 不安装任何远端 support files");
+        readmeSource.Should().Contain("服务器端 `deploy-release.sh` 不再是日常或手工入口");
+        operationsSource.Should().Contain("pwsh ./deploy/Deploy.ps1 -Target Cloud -Services <services> -Deploy");
+        operationsSource.Should().Contain("project-local `local-release.sh` is a legacy maintenance implementation");
         edgeGoLiveSource.Should().Contain("pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target EdgeHost");
         edgeGoLiveSource.Should().Contain("pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target EdgePlugin");
         runnerSource.Should().Contain("/data/github-runner/cloud");
         runnerSource.Should().Contain("github-runner");
-        runnerSource.Should().Contain("self-hosted runner 不再是日常发布链路，只作为灾备 GitHub workflow");
+        runnerSource.Should().Contain("self-hosted runner 仅用于 CI 辅助和历史运维");
+        runnerSource.Should().Contain("旧 `cloud-deploy` workflow 不产生新契约及 run-bound image manifest");
         runnerSource.Should().Contain("GitHub OIDC + Vault");
         runnerSource.Should().Contain("production environment protection");
         buildAndPushSource.Should().Contain("Cloud local image build requires explicit --services or --all.");
+        buildAndPushSource.Should().Contain("IIOT_ROUTINE_BUILD_PROTOCOL=1");
         buildAndPushSource.Should().Contain("REGISTRY must include an explicit Harbor registry host");
         buildAndPushSource.Should().Contain("HARBOR_PROJECT must be a single Harbor project segment");
         buildAndPushSource.Should().Contain("BUILD_TIMEOUT_SECONDS=\"${BUILD_TIMEOUT_SECONDS:-900}\"");
@@ -1336,8 +1338,9 @@ public sealed class ConfigurationGuardTests
         buildAndPushSource.Should().Contain("IIOT_HTTPAPI_IMAGE");
         localReleaseSource.Should().Contain("DEPLOY_SSH_TARGET");
         localReleaseSource.Should().Contain("SSH_TIMEOUT_SECONDS=\"${SSH_TIMEOUT_SECONDS:-2400}\"");
-        localReleaseSource.Should().Contain("HEAD $sha is not present on remote $remote. Push to GitHub before production release.");
-        localReleaseSource.Should().Contain("DEPLOY_GIT_SHA='${TAG#sha-}' DEPLOY_TRIGGERED_BY=local ./scripts/deploy-release.sh");
+        localReleaseSource.Should().Contain("Cloud expected SHA is no longer the freshly fetched $remote/$branch tip");
+        localReleaseSource.Should().Contain("scripts/workspace-release-transaction.sh");
+        localReleaseSource.Should().Contain("exec bash \\\"\\$transaction_script\\\"");
         imageWorkflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
         imageWorkflowSource.Should().Contain("emergency_confirm:");
         imageWorkflowSource.Should().Contain("EMERGENCY_CLOUD_IMAGE_BUILD");
@@ -1345,7 +1348,7 @@ public sealed class ConfigurationGuardTests
         deployWorkflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
         deployWorkflowSource.Should().Contain("emergency_confirm:");
         deployWorkflowSource.Should().Contain("EMERGENCY_CLOUD_DEPLOY");
-        deployWorkflowSource.Should().Contain("Use deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud from the workspace root");
+        deployWorkflowSource.Should().Contain("Use deploy/Deploy.ps1 -Target Cloud -Deploy from the workspace root");
 
         foreach (var source in new[] { readmeSource, runnerSource, imageWorkflowSource, deployWorkflowSource, buildAndPushSource, localReleaseSource })
         {
@@ -1366,7 +1369,7 @@ public sealed class ConfigurationGuardTests
         readmeSource.Should().Contain("single-machine production starter");
         readmeSource.Should().Contain("`release_tag = sha-*`");
         readmeSource.Should().Contain("日常部署必须先 push GitHub");
-        readmeSource.Should().Contain("pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud");
+        readmeSource.Should().Contain("pwsh ./deploy/Deploy.ps1 -Target Cloud");
         readmeSource.Should().Contain("禁止把 `cloud-image` 或 `cloud-deploy` 当成日常部署入口");
         readmeSource.Should().Contain("传入 `services` 时只拉取并重启指定服务");
         readmeSource.Should().Contain("版本集合只来自 Cloud release 记录");
@@ -1840,7 +1843,7 @@ public sealed class ConfigurationGuardTests
         workflowSource.Should().Contain("Emergency only. Use the workspace deploy entrypoint for routine releases; empty means full emergency release only.");
         workflowSource.Should().Contain("emergency_confirm:");
         workflowSource.Should().Contain("EMERGENCY_CLOUD_DEPLOY");
-        workflowSource.Should().Contain("cloud-deploy is emergency-only. Use deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud from the workspace root.");
+        workflowSource.Should().Contain("cloud-deploy is emergency-only. Use deploy/Deploy.ps1 -Target Cloud -Deploy from the workspace root for routine application releases.");
         workflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
         workflowSource.Should().Contain("if [[ ! \"$release_tag\" =~ ^sha-[0-9a-f]+$ ]]");
         workflowSource.Should().Contain("RELEASE_TAG: ${{ inputs.release_tag }}");
@@ -1991,6 +1994,7 @@ public sealed class ConfigurationGuardTests
         var deployReleaseSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "deploy-release.sh"));
         var postDeploySource = File.ReadAllText(FindRepoFile("deploy", "scripts", "post-deploy-check.sh"));
         var rollbackSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "rollback-release.sh"));
+        var configUpdateSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "update-deploy-env.sh"));
 
         backupSource.Should().Contain("pg_dump -h 127.0.0.1 -Fc -U postgres -d iiot-db");
         backupSource.Should().Contain("backups/postgres");
@@ -2062,7 +2066,18 @@ public sealed class ConfigurationGuardTests
         releaseCommonSource.Should().Contain("require_positive_integer_at_most");
         releaseCommonSource.Should().Contain("max_edge_upload_rate_per_minute=12000");
         releaseCommonSource.Should().Contain("RATE_LIMIT_PASS_STATION_UPLOAD_TOKEN_LIMIT");
-        releaseCommonSource.Should().Contain("Deployment numeric value exceeds the allowed maximum");
+        releaseCommonSource.Should().Contain("require_decimal_range");
+        releaseCommonSource.Should().Contain("must be decimal digits in range");
+        releaseCommonSource.Should().Contain("category=forbidden-control-key");
+        releaseCommonSource.Should().Contain("category=invalid-key");
+        releaseCommonSource.Should().Contain("category=malformed-entry");
+        releaseCommonSource.Should().Contain("atomic_write_file() (");
+        releaseCommonSource.Should().Contain("atomic_copy_file() (");
+        releaseCommonSource.Should().NotContain("atomic_compare_exchange_file");
+        releaseCommonSource.Should().Contain("atomic_append_file() (");
+        releaseCommonSource.Should().Contain("acquire_strict_managed_lock() {");
+        releaseCommonSource.Should().Contain("RELEASE_IMAGE_ENV_FILE=\"$RELEASES_DIR/current-images.env\"");
+        releaseCommonSource.Should().Contain("--env-file \"$RELEASE_IMAGE_ENV_FILE\"");
         releaseCommonSource.Should().Contain("ensure_app_images_have_explicit_registry");
         releaseCommonSource.Should().Contain("Application image must be pushed to Harbor");
         releaseCommonSource.Should().Contain("Application image must include an explicit Harbor registry");
@@ -2227,7 +2242,14 @@ public sealed class ConfigurationGuardTests
         deployReleaseSource.Should().Contain("POST_DEPLOY_VERIFY_EDGE_INSTALLER_CATALOG=\"$post_deploy_verify_edge_installer_catalog\"");
         deployReleaseSource.Should().Contain("POST_DEPLOY_REQUIRE_EDGE_INSTALLER_CATALOG=\"$post_deploy_require_edge_installer_catalog\"");
         deployReleaseSource.Should().Contain("\"$SCRIPT_DIR/post-deploy-check.sh\"");
-        deployReleaseSource.Should().Contain("cp \"$CURRENT_RELEASE_FILE\" \"$PREVIOUS_RELEASE_FILE\"");
+        deployReleaseSource.Should().Contain("atomic_copy_file \"$CURRENT_RELEASE_FILE\" \"$PREVIOUS_RELEASE_FILE\"");
+        deployReleaseSource.Should().Contain("atomic_copy_file \"$STAGED_RELEASE_FILE\" \"$CURRENT_RELEASE_FILE\"");
+        deployReleaseSource.Should().Contain("DEPLOY_ORIGINAL_ENV_SHA256");
+        deployReleaseSource.Should().Contain("acquire_strict_managed_lock");
+        deployReleaseSource.Should().Contain("write_release_image_env \"$STAGED_RELEASE_IMAGE_ENV_FILE\"");
+        deployReleaseSource.Should().Contain("atomic_copy_file \"$STAGED_RELEASE_IMAGE_ENV_FILE\" \"$RELEASE_IMAGE_ENV_FILE\"");
+        deployReleaseSource.Should().NotContain("atomic_copy_file \"$TEMP_RELEASE_ENV_FILE\" \"$DEPLOY_DIR/.env\"");
+        deployReleaseSource.Should().Contain("DEPLOY_TRANSACTION_MARKER_PATH");
         deployReleaseSource.Should().Contain("record_release_history");
 
         postDeploySource.Should().Contain("for service_name in nginx-gateway iiot-gateway iiot-httpapi iiot-dataworker iiot-web");
@@ -2277,11 +2299,22 @@ public sealed class ConfigurationGuardTests
         rollbackSource.Should().Contain("load_release_images_from_manifest");
         rollbackSource.Should().Contain("compose pull iiot-httpapi iiot-gateway iiot-dataworker iiot-web");
         rollbackSource.Should().Contain("\"$SCRIPT_DIR/post-deploy-check.sh\"");
-        rollbackSource.Should().Contain("cp \"$CURRENT_RELEASE_FILE\" \"$PREVIOUS_RELEASE_FILE\"");
+        rollbackSource.Should().Contain("acquire_managed_lock");
+        rollbackSource.Should().Contain("acquire_strict_managed_lock");
+        rollbackSource.Should().Contain("release_managed_lock");
+        rollbackSource.Should().Contain("atomic_copy_file \"$CURRENT_RELEASE_FILE\" \"$PREVIOUS_RELEASE_FILE\"");
+        rollbackSource.Should().Contain("atomic_copy_file \"$STAGED_RELEASE_IMAGE_ENV_FILE\" \"$RELEASE_IMAGE_ENV_FILE\"");
+        rollbackSource.Should().Contain("atomic_copy_file \"$STAGED_RELEASE_FILE\" \"$CURRENT_RELEASE_FILE\"");
+        rollbackSource.Should().Contain("DEPLOY_ORIGINAL_ENV_SHA256");
+        rollbackSource.Should().Contain("operator changes were preserved");
+        rollbackSource.Should().NotContain("atomic_copy_file \"$TEMP_RELEASE_ENV_FILE\" \"$DEPLOY_DIR/.env\"");
         rollbackSource.Should().Contain("write_release_manifest");
         rollbackSource.Should().Contain("record_release_history");
         rollbackSource.Should().NotContain("iiot-migration");
         rollbackSource.Should().NotContain("postgres-restore.sh");
+        configUpdateSource.Should().Contain("acquire_strict_managed_lock");
+        configUpdateSource.Should().Contain("EXPECTED_SHA256");
+        configUpdateSource.Should().Contain("atomic_copy_file \"$CANDIDATE_ENV\" \"$DEPLOY_DIR/.env\"");
     }
 
     [Fact]
@@ -2309,6 +2342,7 @@ public sealed class ConfigurationGuardTests
             "postgres-verify-backup.sh",
             "pre-deploy-check.sh",
             "rollback-release.sh",
+            "update-deploy-env.sh",
             "verify-edge-installer-catalog.sh"
         };
 

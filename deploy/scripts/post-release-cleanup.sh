@@ -65,6 +65,9 @@ fi
 
 require_command docker
 load_dotenv
+if [ -f "$RELEASE_IMAGE_ENV_FILE" ]; then
+  load_dotenv "$RELEASE_IMAGE_ENV_FILE"
+fi
 
 release_lock_file=$(resolve_managed_lock_file \
   "${DEPLOY_RELEASE_LOCK_FILE:-$CLOUD_RELEASE_LOCK_FILE_DEFAULT}" \
@@ -223,6 +226,7 @@ check_initial_disk_guard() {
   if [ -z "$percent" ]; then
     return
   fi
+  require_decimal_range cleanup_disk_percent "$percent" 0 100 || return $?
 
   if [ "$percent" -ge 90 ]; then
     printf -- '- Disk guard before cleanup: `/data` is `%s%%`; only cleanup/emergency work should continue.\n' "$percent"
@@ -241,6 +245,7 @@ check_final_disk_guard() {
   if [ -z "$percent" ]; then
     return
   fi
+  require_decimal_range cleanup_disk_percent "$percent" 0 100 || return $?
 
   if [ "$percent" -ge 85 ]; then
     printf 'Disk remains above cleanup threshold after post-release cleanup: %s%%\n' "$percent" >&2

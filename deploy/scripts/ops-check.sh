@@ -17,6 +17,8 @@ BACKUP_VERIFY_MAX_AGE_DAYS=${BACKUP_VERIFY_MAX_AGE_DAYS:-7}
 REQUIRE_BACKUP=${REQUIRE_BACKUP:-1}
 REQUIRE_BACKUP_VERIFY=${REQUIRE_BACKUP_VERIFY:-0}
 REQUIRE_DATAWORKER_HEALTHCHECK=${REQUIRE_DATAWORKER_HEALTHCHECK:-1}
+require_decimal_range BACKUP_MAX_AGE_HOURS "$BACKUP_MAX_AGE_HOURS" 0 1000000 || exit $?
+require_decimal_range BACKUP_VERIFY_MAX_AGE_DAYS "$BACKUP_VERIFY_MAX_AGE_DAYS" 0 36500 || exit $?
 
 require_running_service() {
   service_name=$1
@@ -100,6 +102,7 @@ TIMESCALE_INFO_AVAILABLE=$(psql_scalar "select case when to_regclass('timescaled
 RECORD_TABLE_STATS=$(psql_scalar "select c.relname || ' table_total=' || pg_size_pretty(pg_total_relation_size(c.oid)) || ' indexes=' || pg_size_pretty(pg_indexes_size(c.oid)) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind in ('r','p') and c.relname in ('device_logs','hourly_capacity','pass_station_records') order by c.relname;")
 QUEUE_SNAPSHOT=$(compose exec -T rabbitmq rabbitmqctl list_queues -q name messages)
 NOW_EPOCH=$(date +%s)
+require_decimal_range NOW_EPOCH "$NOW_EPOCH" 0 9999999999 || exit $?
 
 HAS_RISK=0
 if [ "$OUTBOX_BACKLOG" != "0" ]; then
@@ -122,6 +125,7 @@ LATEST_BACKUP_AGE_HOURS="missing"
 if latest_backup_path=$(read_state_path "$BACKUP_STATE_FILE"); then
   LATEST_BACKUP_FILE="$latest_backup_path"
   backup_marker_epoch=$(stat -c %Y "$BACKUP_STATE_FILE")
+  require_decimal_range backup_marker_epoch "$backup_marker_epoch" 0 9999999999 || exit $?
   LATEST_BACKUP_AGE_HOURS=$(((NOW_EPOCH - backup_marker_epoch) / 3600))
   if [ ! -f "$latest_backup_path" ] || [ ! -f "$latest_backup_path.sha256" ]; then
     printf 'warning: latest backup file or checksum is missing: %s\n' "$latest_backup_path" >&2
@@ -145,6 +149,7 @@ fi
 LATEST_BACKUP_VERIFIED_AGE_DAYS="missing"
 if latest_verified_path=$(read_state_path "$VERIFY_STATE_FILE"); then
   verify_marker_epoch=$(stat -c %Y "$VERIFY_STATE_FILE")
+  require_decimal_range verify_marker_epoch "$verify_marker_epoch" 0 9999999999 || exit $?
   LATEST_BACKUP_VERIFIED_AGE_DAYS=$(((NOW_EPOCH - verify_marker_epoch) / 86400))
   if [ ! -f "$latest_verified_path" ] || [ ! -f "$latest_verified_path.sha256" ]; then
     printf 'warning: latest verified backup file or checksum is missing: %s\n' "$latest_verified_path" >&2

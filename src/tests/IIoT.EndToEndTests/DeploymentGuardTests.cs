@@ -11,6 +11,7 @@ public sealed class DeploymentGuardTests
     public void CloudLocalRelease_ShouldSyncOnlyVersionedSupportFilesAndVerifyRemoteHashes()
     {
         var source = File.ReadAllText(FindRepoFile("deploy", "scripts", "local-release.sh"));
+        var transaction = File.ReadAllText(FindRepoFile("deploy", "scripts", "workspace-release-transaction.sh"));
 
         source.Should().Contain("SUPPORT_FILES=(");
         source.Should().Contain("docker-compose.prod.yml");
@@ -19,38 +20,39 @@ public sealed class DeploymentGuardTests
         source.Should().Contain(".cloud-support-manifest.sha256");
         source.Should().Contain("Cloud deploy support manifest installed");
         source.Should().Contain("check_remote_release_locks");
+        source.Should().Contain("readonly_lock_precheck");
+        source.Should().Contain("check_remote_support_file_access\ncheck_remote_release_locks");
         source.Should().Contain("Inspect the lock owner before support sync or image build");
         source.Should().Contain("sha256sum -c");
         source.Should().Contain(".support-staging");
         source.Should().Contain("docker compose");
         source.Should().Contain("protected remote paths remain untouched: .env certs/ releases/ backups/");
         source.Should().Contain("BatchMode=yes");
-        source.Should().Contain("cloud-support-sync");
-        source.Should().Contain("acquire_managed_lock");
-        var stagedCommonIndex = source.IndexOf(
-            ". \\\"\\$staging_dir/scripts/release-common.sh\\\"",
-            StringComparison.Ordinal);
-        var stagedDotEnvIndex = source.IndexOf(
-            "load_dotenv \\\"\\$deploy_dir/.env\\\"",
-            stagedCommonIndex,
-            StringComparison.Ordinal);
-        var stagedLockResolutionIndex = source.IndexOf(
-            "release_lock_file=\\$(resolve_managed_lock_file",
-            stagedCommonIndex,
-            StringComparison.Ordinal);
-        stagedCommonIndex.Should().BeGreaterThanOrEqualTo(0);
-        stagedDotEnvIndex.Should().BeGreaterThan(stagedCommonIndex);
-        stagedLockResolutionIndex.Should().BeGreaterThan(stagedDotEnvIndex);
+        source.Should().Contain("scripts/workspace-release-transaction.sh");
+        source.Should().Contain("exec bash \\\"\\$transaction_script\\\"");
+        transaction.Should().Contain("acquire_managed_lock");
+        transaction.Should().Contain("DEPLOY_RELEASE_LOCK_PARENT_OWNED=1");
+        transaction.Should().Contain("bash \"$DEPLOY_RELEASE_SCRIPT\"");
+        transaction.Should().Contain("write_transaction_marker support-install-started");
+        transaction.Should().Contain("write_transaction_marker support-installed");
+        transaction.Should().Contain("DEPLOY_TRANSACTION_MARKER=\"$TRANSACTION_MARKER\"");
+        transaction.Should().Contain("env -i");
+        transaction.Should().Contain("start_isolated_child installer");
+        transaction.Should().Contain("start_isolated_child release");
+        transaction.Should().Contain("terminate_child_group()");
+        transaction.Should().Contain("kill -KILL -- \"-$group_pid\"");
+        transaction.Should().Contain("process group termination is unconfirmed; restore and lock release are prohibited");
+        transaction.Should().Contain("release_managed_lock \"$RELEASE_LOCK_FILE\"");
         source.Should().Contain("EXPECTED_CLOUD_SUPPORT_MANIFEST_SHA256");
         source.Should().Contain("Cloud deploy support manifest digest bound to this release");
         source.Should().NotContain("SUPPORT_FILES=(\n  .env");
         source.Should().NotContain("SUPPORT_FILES=(\n  certs");
         source.Should().NotContain("SUPPORT_FILES=(\n  releases");
         source.Should().NotContain("SUPPORT_FILES=(\n  backups");
-        source.LastIndexOf("sync_remote_deploy_files", StringComparison.Ordinal)
+        source.LastIndexOf("\"$SCRIPT_DIR/build-and-push.sh\"", StringComparison.Ordinal)
             .Should().BeLessThan(
-                source.LastIndexOf("\"$SCRIPT_DIR/build-and-push.sh\"", StringComparison.Ordinal),
-                "support and lock validation must fail before an expensive image build");
+                source.LastIndexOf("stage_support_and_deploy", StringComparison.Ordinal),
+                "a failed image build must not install or mutate remote support files");
     }
 
     [Fact]
@@ -59,18 +61,54 @@ public sealed class DeploymentGuardTests
         var common = File.ReadAllText(FindRepoFile("deploy", "scripts", "release-common.sh"));
         var preflight = File.ReadAllText(FindRepoFile("deploy", "scripts", "pre-deploy-check.sh"));
         var release = File.ReadAllText(FindRepoFile("deploy", "scripts", "deploy-release.sh"));
+        var transaction = File.ReadAllText(FindRepoFile("deploy", "scripts", "workspace-release-transaction.sh"));
         var cleanup = File.ReadAllText(FindRepoFile("deploy", "scripts", "post-release-cleanup.sh"));
+        var configUpdate = File.ReadAllText(FindRepoFile("deploy", "scripts", "update-deploy-env.sh"));
 
         common.Should().Contain("managed_lock_status_for_dir");
         common.Should().Contain("process-start");
         common.Should().Contain("remove_stale_managed_lock");
         common.Should().Contain("fail-fast without waiting");
         common.Should().Contain("Managed lock acquired");
+        common.Should().Contain("acquire_strict_managed_lock() {");
+        common.Should().Contain("Strict managed lock already exists and is never auto-removed");
+        common.Should().Contain("RELEASE_IMAGE_ENV_FILE=\"$RELEASES_DIR/current-images.env\"");
+        common.Should().Contain("--env-file \"$RELEASE_IMAGE_ENV_FILE\"");
         preflight.Should().Contain("preflight_release_lock=available-or-owned");
         preflight.Should().Contain("preflight_cleanup_lock=available");
         preflight.Should().Contain("preflight_support_manifest=verified");
-        release.Should().Contain("acquire_managed_lock");
+        transaction.Should().Contain("acquire_managed_lock");
+        transaction.Should().Contain("DEPLOY_RELEASE_LOCK_PARENT_OWNED=1");
+        transaction.Should().Contain("DEPLOY_RELEASE_LOCK_OWNER_PID=\"$$\"");
+        transaction.Should().Contain("scan_durable_transaction_state");
+        transaction.Should().Contain("handle_parent_signal()");
+        transaction.Should().Contain("kill -\"$signal_name\" -- \"-$CHILD_PID\"");
+        transaction.Should().Contain("terminate_child_group \"$CHILD_PID\" \"$CHILD_ROLE\"");
+        transaction.Should().Contain("[ -n \"$CHILD_PID\" ] && process_group_alive \"$CHILD_PID\"");
+        transaction.Should().NotContain("[ -n \"$CHILD_PID\" ] && kill -0 \"$CHILD_PID\"");
+        transaction.Should().Contain("blocked-child-rollout-unproven");
+        transaction.Should().Contain("transaction_promotion_proven");
+        transaction.Should().Contain("cleanup_proven_promoted_transaction");
+        transaction.Should().Contain("Promotion proof is authoritative: cleanup must never invoke restore-support");
+        transaction.Should().Contain("DEPLOY_ORPHAN_MARKER_PATH");
+        common.Should().Contain("category=forbidden-control-key");
+        common.Should().Contain("category=invalid-key");
+        common.Should().Contain("category=malformed-entry");
+        common.Should().NotContain("Invalid dotenv key at line");
+        common.Should().NotContain("Malformed dotenv entry at line");
+        common.Should().Contain("atomic_write_file() (");
+        common.Should().Contain("atomic_copy_file() (");
+        common.Should().NotContain("atomic_compare_exchange_file");
+        common.Should().Contain("require_decimal_range()");
         release.Should().Contain("DEPLOY_RELEASE_LOCK_OWNER_PID");
+        release.Should().Contain("DEPLOY_TRANSACTION_MARKER_PATH");
+        release.Should().Contain("DEPLOY_ORIGINAL_ENV_SHA256");
+        release.Should().Contain("acquire_strict_managed_lock");
+        release.Should().Contain("DEPLOY_CONFIG_LOCK_TEST_HOOK");
+        release.Should().Contain("write_release_image_env \"$STAGED_RELEASE_IMAGE_ENV_FILE\"");
+        release.Should().Contain("atomic_copy_file \"$STAGED_RELEASE_IMAGE_ENV_FILE\" \"$RELEASE_IMAGE_ENV_FILE\"");
+        release.Should().NotContain("atomic_copy_file \"$TEMP_RELEASE_ENV_FILE\" \"$DEPLOY_DIR/.env\"");
+        release.Should().Contain("$DEPLOY_ORIGINAL_ENV_SHA256");
         release.Should().Contain("handle_deploy_signal TERM 143");
         release.Should().NotContain("trap cleanup_deploy_process EXIT HUP INT TERM");
         cleanup.Should().Contain("ensure_managed_lock_available");
@@ -78,6 +116,9 @@ public sealed class DeploymentGuardTests
         cleanup.Should().NotContain("trap release_lock EXIT HUP INT TERM");
         cleanup.Should().NotContain("POST_RELEASE_CLEANUP_LOCK_ATTEMPTS:-180");
         cleanup.Should().NotContain("sleep 5");
+        configUpdate.Should().Contain("acquire_strict_managed_lock");
+        configUpdate.Should().Contain("EXPECTED_SHA256");
+        configUpdate.Should().Contain("atomic_copy_file \"$CANDIDATE_ENV\" \"$DEPLOY_DIR/.env\"");
     }
 
     [Fact]
@@ -144,7 +185,7 @@ public sealed class DeploymentGuardTests
 
         var localRelease = File.ReadAllText(FindRepoFile("deploy", "scripts", "local-release.sh"));
         var buildAndPush = File.ReadAllText(FindRepoFile("deploy", "scripts", "build-and-push.sh"));
-        localRelease.Should().Contain("exit \"$deploy_status\"");
+        localRelease.Should().Contain("exit \"$remote_status\"");
         buildAndPush.Should().Contain("exit \"$build_status\"");
     }
 
@@ -201,7 +242,7 @@ public sealed class DeploymentGuardTests
     }
 
     [Fact]
-    public async Task CloudReleaseLockPrecheck_ShouldLoadCustomLockPathFromRemoteDotEnv()
+    public async Task CloudReleaseLockPrecheck_ShouldIgnoreDotEnvControlPathsAndUseTrustedDefaults()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -225,7 +266,9 @@ public sealed class DeploymentGuardTests
             await File.WriteAllTextAsync(
                 Path.Combine(remoteDeployDir, ".env"),
                 $"DEPLOY_RELEASE_LOCK_FILE={customLockFile}{Environment.NewLine}" +
-                $"POST_RELEASE_CLEANUP_LOCK_FILE={cleanupLockFile}{Environment.NewLine}");
+                $"POST_RELEASE_CLEANUP_LOCK_FILE={cleanupLockFile}{Environment.NewLine}" +
+                $"PATH={testRoot.FullName}/attacker-bin{Environment.NewLine}" +
+                $"BASH_ENV={testRoot.FullName}/attacker.sh{Environment.NewLine}");
 
             var result = await RunLocalReleaseFunctionHarnessAsync(
                 """
@@ -238,8 +281,11 @@ public sealed class DeploymentGuardTests
                     ["REMOTE_DEPLOY_DIR"] = remoteDeployDir
                 });
 
-            result.ExitCode.Should().Be(75, result.CombinedOutput);
-            result.StandardError.Should().Contain(customLockFile + ".d");
+            result.ExitCode.Should().Be(0, result.CombinedOutput);
+            result.CombinedOutput.Should().NotContain(customLockFile);
+            result.CombinedOutput.Should().NotContain(cleanupLockFile);
+            Directory.Exists(activeLockDirectory.FullName).Should().BeTrue(
+                "a dotenv control path must not redirect lock inspection or mutate the victim lock");
         }
         finally
         {

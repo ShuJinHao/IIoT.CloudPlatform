@@ -1,17 +1,33 @@
 #!/bin/sh
 set -eu
 
+if [ -n "${DEPLOY_RELEASE_HANDOFF_MARKER:-}" ]; then
+  [ -n "${DEPLOY_SUPPORT_STAGING_DIR:-}" ] \
+    && [ "$DEPLOY_RELEASE_HANDOFF_MARKER" = "$DEPLOY_SUPPORT_STAGING_DIR/.deploy-release-started" ] \
+    || {
+      printf 'Cloud deploy-release handoff marker escaped the invocation staging directory.\n' >&2
+      exit 64
+    }
+  printf 'started\n' >"$DEPLOY_RELEASE_HANDOFF_MARKER"
+fi
+
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 DEPLOY_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 
 . "$SCRIPT_DIR/release-common.sh"
 
+DEPLOY_CONFIG_LOCK_FILE=$(resolve_managed_lock_file \
+  "$CLOUD_CONFIG_LOCK_FILE_DEFAULT" \
+  "$DEPLOY_DIR/.cloud-config.lock")
+DEPLOY_CONFIG_LOCK_ACQUIRED=0
+
 lock_is_owned_by_workspace_invocation() {
   ownership_lock_file=${DEPLOY_RELEASE_LOCK_FILE:-}
   ownership_invocation=${WORKSPACE_INVOCATION_ID:-${IIOT_WORKSPACE_DEPLOY_INVOCATION_ID:-}}
   ownership_plan=${WORKSPACE_PLAN_DIGEST:-${IIOT_WORKSPACE_DEPLOY_PLAN_DIGEST:-}}
+  ownership_pid=${DEPLOY_RELEASE_LOCK_OWNER_PID:-$$}
   [ -n "$ownership_lock_file" ] \
-    && [ "$(managed_lock_read_field "${ownership_lock_file}.d" pid)" = "$$" ] \
+    && [ "$(managed_lock_read_field "${ownership_lock_file}.d" pid)" = "$ownership_pid" ] \
     && [ "$(managed_lock_read_field "${ownership_lock_file}.d" invocation-id)" = "$ownership_invocation" ] \
     && [ "$(managed_lock_read_field "${ownership_lock_file}.d" plan-digest)" = "$ownership_plan" ]
 }
@@ -32,8 +48,8 @@ write_deploy_blocked_evidence() {
     printf 'DEPLOY_SUPPORT_RESTORE_STATUS=%s\n' "$blocked_restore_status"
     printf 'DEPLOY_SUPPORT_BACKUP_DIR=%s\n' "${DEPLOY_SUPPORT_BACKUP_DIR:-missing}"
     printf 'RECORDED_AT_UTC=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  } > "$blocked_file"
-  cp "$blocked_file" "$blocked_history"
+  } | atomic_write_file "$blocked_file" 600
+  atomic_copy_file "$blocked_file" "$blocked_history" 600
   printf 'Cloud durable blocked evidence: %s\n' "$blocked_file" >&2
 }
 
@@ -52,12 +68,20 @@ cleanup_early_release_contract() {
       rm -rf "$DEPLOY_SUPPORT_BACKUP_DIR"
     else
       write_deploy_blocked_evidence blocked-early-support-restore "$early_status" failed
-      lock_is_owned_by_workspace_invocation && printf '%s\n' blocked-early-support-restore > "${DEPLOY_RELEASE_LOCK_FILE}.d/phase"
+      lock_is_owned_by_workspace_invocation \
+        && printf '%s\n' blocked-early-support-restore | atomic_write_file "${DEPLOY_RELEASE_LOCK_FILE}.d/phase" 600
       exit 86
     fi
   fi
-  if [ "${DEPLOY_RELEASE_LOCK_PREACQUIRED:-0}" = 1 ] && lock_is_owned_by_workspace_invocation; then
+  if [ "${DEPLOY_RELEASE_LOCK_PREACQUIRED:-0}" = 1 ] \
+    && [ "${DEPLOY_RELEASE_LOCK_PARENT_OWNED:-0}" != 1 ] \
+    && lock_is_owned_by_workspace_invocation; then
     release_managed_lock "$DEPLOY_RELEASE_LOCK_FILE" 2>/dev/null || true
+  fi
+  if [ "$DEPLOY_CONFIG_LOCK_ACQUIRED" -eq 1 ] \
+    && [ "$(managed_lock_read_field "${DEPLOY_CONFIG_LOCK_FILE}.d" pid)" = "$$" ]; then
+    release_managed_lock "$DEPLOY_CONFIG_LOCK_FILE" 2>/dev/null || true
+    DEPLOY_CONFIG_LOCK_ACQUIRED=0
   fi
   if [ -n "${DEPLOY_SUPPORT_STAGING_DIR:-}" ]; then
     rm -rf "$DEPLOY_SUPPORT_STAGING_DIR"
@@ -106,6 +130,7 @@ DEPLOY_IMAGE_MANIFEST_PATH=${DEPLOY_IMAGE_MANIFEST:-}
 DEPLOY_IMAGE_MANIFEST_DIGEST=${DEPLOY_IMAGE_MANIFEST_SHA256:-}
 DEPLOY_IMAGE_CONTENT_DIGEST=${DEPLOY_IMAGE_CONTENT_SHA256:-}
 DEPLOY_SUPPORT_BACKUP_DIR=${DEPLOY_SUPPORT_BACKUP_DIR:-}
+DEPLOY_TRANSACTION_MARKER_PATH=${DEPLOY_TRANSACTION_MARKER:-}
 
 fail_contract() {
   printf 'Cloud release contract rejected: %s\n' "$*" >&2
@@ -153,11 +178,35 @@ esac
   || fail_contract "support backup directory is missing or is a symlink"
 [ "$(readlink -f "$DEPLOY_SUPPORT_BACKUP_DIR")" = "$DEPLOY_SUPPORT_BACKUP_DIR" ] \
   || fail_contract "support backup directory is not canonical"
+[ "$DEPLOY_TRANSACTION_MARKER_PATH" = "$DEPLOY_DIR/releases/transactions/$WORKSPACE_INVOCATION_ID.env" ] \
+  || fail_contract "durable transaction marker is not bound to this invocation"
+[ -f "$DEPLOY_TRANSACTION_MARKER_PATH" ] && [ ! -L "$DEPLOY_TRANSACTION_MARKER_PATH" ] \
+  || fail_contract "durable transaction marker is missing or unsafe"
+[ "$(read_manifest_value "$DEPLOY_TRANSACTION_MARKER_PATH" DEPLOY_INVOCATION_ID)" = "$WORKSPACE_INVOCATION_ID" ] \
+  || fail_contract "durable transaction marker invocation mismatch"
+[ "$(read_manifest_value "$DEPLOY_TRANSACTION_MARKER_PATH" DEPLOY_PLAN_DIGEST)" = "$WORKSPACE_PLAN_DIGEST" ] \
+  || fail_contract "durable transaction marker plan mismatch"
 
 ensure_release_tag "$RELEASE_TAG"
 require_docker_compose
 prepare_release_directories
+acquire_strict_managed_lock \
+  "$DEPLOY_CONFIG_LOCK_FILE" \
+  cloud-operator-config \
+  "$RELEASE_TAG" \
+  snapshot \
+  deploy-release
+DEPLOY_CONFIG_LOCK_ACQUIRED=1
 load_dotenv
+DEPLOY_ORIGINAL_ENV_SHA256=$(sha256_file "$DEPLOY_DIR/.env")
+DEPLOY_CONFIG_LOCK_TEST_HOOK=${DEPLOY_CONFIG_LOCK_TEST_HOOK:-}
+readonly DEPLOY_ORIGINAL_ENV_SHA256 DEPLOY_CONFIG_LOCK_TEST_HOOK
+DEPLOY_CONFIG_DIGEST=$(canonical_cloud_config_sha256 "$DEPLOY_DIR/.env")
+case "$DEPLOY_CONFIG_DIGEST" in
+  *[!0-9a-f]*|'') fail_contract "canonical Cloud configuration digest is invalid" ;;
+esac
+[ "${#DEPLOY_CONFIG_DIGEST}" -eq 64 ] \
+  || fail_contract "canonical Cloud configuration digest must contain 64 hex characters"
 
 actual_image_manifest_digest=$(sha256sum "$DEPLOY_IMAGE_MANIFEST_PATH" | awk '{print $1}')
 [ "$actual_image_manifest_digest" = "$DEPLOY_IMAGE_MANIFEST_DIGEST" ] \
@@ -479,7 +528,7 @@ cleanup_deploy_process() {
     else
       write_deploy_blocked_evidence blocked-support-restore "$deploy_exit_status" failed
       if lock_is_owned_by_workspace_invocation; then
-        printf '%s\n' blocked-support-restore > "${DEPLOY_RELEASE_LOCK_FILE}.d/phase"
+        printf '%s\n' blocked-support-restore | atomic_write_file "${DEPLOY_RELEASE_LOCK_FILE}.d/phase" 600
       fi
       printf 'Cloud support restore failed; lock and durable backup are preserved for operator recovery.\n' >&2
       exit 86
@@ -490,10 +539,10 @@ cleanup_deploy_process() {
       replace_env_value "$CURRENT_RELEASE_FILE" DEPLOY_PHASE runtime-healthy-cleanup-partial
       {
         printf '\nCleanup interrupted or failed after runtime promotion: invocation=%s exit=%s\n' "$WORKSPACE_INVOCATION_ID" "$deploy_exit_status"
-      } >> "$CURRENT_RELEASE_SUMMARY_FILE"
+      } | atomic_append_file "$CURRENT_RELEASE_SUMMARY_FILE" 600
       if [ -n "$history_file" ] && [ -f "$history_file" ]; then
-        cp "$CURRENT_RELEASE_FILE" "$history_file"
-        cp "$CURRENT_RELEASE_SUMMARY_FILE" "${history_file%.env}.summary.md"
+        atomic_copy_file "$CURRENT_RELEASE_FILE" "$history_file" 600
+        atomic_copy_file "$CURRENT_RELEASE_SUMMARY_FILE" "${history_file%.env}.summary.md" 600
       fi
     fi
     rm -rf "${DEPLOY_SUPPORT_BACKUP_DIR:-/missing-never}"
@@ -501,7 +550,14 @@ cleanup_deploy_process() {
   if [ -n "${DEPLOY_SUPPORT_STAGING_DIR:-}" ]; then
     rm -rf "$DEPLOY_SUPPORT_STAGING_DIR"
   fi
-  if [ "$DEPLOY_RELEASE_LOCK_ACQUIRED" -eq 1 ] && lock_is_owned_by_workspace_invocation; then
+  if [ "$DEPLOY_CONFIG_LOCK_ACQUIRED" -eq 1 ] \
+    && [ "$(managed_lock_read_field "${DEPLOY_CONFIG_LOCK_FILE}.d" pid)" = "$$" ]; then
+    release_managed_lock "$DEPLOY_CONFIG_LOCK_FILE" || true
+    DEPLOY_CONFIG_LOCK_ACQUIRED=0
+  fi
+  if [ "$DEPLOY_RELEASE_LOCK_ACQUIRED" -eq 1 ] \
+    && [ "${DEPLOY_RELEASE_LOCK_PARENT_OWNED:-0}" != 1 ] \
+    && lock_is_owned_by_workspace_invocation; then
     release_managed_lock "$DEPLOY_RELEASE_LOCK_FILE" || true
     DEPLOY_RELEASE_LOCK_ACQUIRED=0
   fi
@@ -523,10 +579,14 @@ trap 'handle_deploy_signal TERM 143' TERM
 if [ "${DEPLOY_RELEASE_LOCK_PREACQUIRED:-0}" = 1 ]; then
   DEPLOY_RELEASE_LOCK_ACQUIRED=1
   lock_owner=$(managed_lock_read_field "${DEPLOY_RELEASE_LOCK_FILE}.d" pid)
+  lock_expected_owner=${DEPLOY_RELEASE_LOCK_OWNER_PID:-$$}
   lock_release=$(managed_lock_read_field "${DEPLOY_RELEASE_LOCK_FILE}.d" release)
   lock_invocation=$(managed_lock_read_field "${DEPLOY_RELEASE_LOCK_FILE}.d" invocation-id)
   lock_plan_digest=$(managed_lock_read_field "${DEPLOY_RELEASE_LOCK_FILE}.d" plan-digest)
-  [ "$lock_owner" = "$$" ] \
+  case "$lock_expected_owner" in
+    ''|*[!0-9]*) fail_contract "pre-acquired release lock delegated owner PID is invalid" ;;
+  esac
+  [ "$lock_owner" = "$lock_expected_owner" ] \
     || fail_contract "pre-acquired release lock is not owned by the remote transaction process"
   [ "$lock_release" = "$RELEASE_TAG" ] \
     || fail_contract "pre-acquired release lock belongs to a different release: $lock_release"
@@ -540,7 +600,7 @@ else
   fail_contract "remote release requires the transaction lock acquired by the workspace support staging step"
 fi
 export DEPLOY_RELEASE_LOCK_FILE
-DEPLOY_RELEASE_LOCK_OWNER_PID=$$
+DEPLOY_RELEASE_LOCK_OWNER_PID=${DEPLOY_RELEASE_LOCK_OWNER_PID:-$$}
 export DEPLOY_RELEASE_LOCK_OWNER_PID
 
 "$SCRIPT_DIR/pre-deploy-check.sh" "$RELEASE_TAG"
@@ -565,6 +625,7 @@ current_release_matches_plan() {
   [ "$(read_manifest_value "$CURRENT_RELEASE_FILE" DEPLOY_PLAN_DIGEST)" = "$WORKSPACE_PLAN_DIGEST" ] || return 1
   [ "$(read_manifest_value "$CURRENT_RELEASE_FILE" DEPLOY_SUPPORT_MANIFEST_SHA256)" = "${EXPECTED_CLOUD_SUPPORT_MANIFEST_SHA256:-}" ] || return 1
   [ "$(read_manifest_value "$CURRENT_RELEASE_FILE" DEPLOY_IMAGE_CONTENT_SHA256)" = "$DEPLOY_IMAGE_CONTENT_DIGEST" ] || return 1
+  [ "$(read_manifest_value "$CURRENT_RELEASE_FILE" DEPLOY_CONFIG_SHA256)" = "$DEPLOY_CONFIG_DIGEST" ] || return 1
   [ "$(read_manifest_value "$CURRENT_RELEASE_FILE" DEPLOY_SERVICES)" = "$SELECTED_SERVICES" ] || return 1
 
   for current_key in $SELECTED_IMAGE_KEYS
@@ -572,6 +633,7 @@ current_release_matches_plan() {
     eval "desired_image=\${$current_key}"
     [ "$(read_manifest_value "$CURRENT_RELEASE_FILE" "$current_key")" = "$desired_image" ] || return 1
   done
+  release_image_env_matches_manifest "$RELEASE_IMAGE_ENV_FILE" "$CURRENT_RELEASE_FILE" || return 1
   running_selected_images_match_digests || return 1
   return 0
 }
@@ -582,9 +644,9 @@ sync_current_release_history_after_cleanup() {
   do
     [ -f "$candidate_history" ] || continue
     if [ "$(read_manifest_value "$candidate_history" DEPLOY_INVOCATION_ID)" = "$current_invocation" ]; then
-      cp "$CURRENT_RELEASE_FILE" "$candidate_history"
+      atomic_copy_file "$CURRENT_RELEASE_FILE" "$candidate_history" 600
       if [ -f "$CURRENT_RELEASE_SUMMARY_FILE" ]; then
-        cp "$CURRENT_RELEASE_SUMMARY_FILE" "${candidate_history%.env}.summary.md"
+        atomic_copy_file "$CURRENT_RELEASE_SUMMARY_FILE" "${candidate_history%.env}.summary.md" 600
       fi
     fi
   done
@@ -592,19 +654,19 @@ sync_current_release_history_after_cleanup() {
 
 if current_release_matches_plan; then
   update_managed_lock_phase "$DEPLOY_RELEASE_LOCK_FILE" no-op-health-check
-  COMPOSE_ENV_FILE="$DEPLOY_DIR/.env" "$SCRIPT_DIR/post-deploy-check.sh"
+  COMPOSE_ENV_FILE= "$SCRIPT_DIR/post-deploy-check.sh"
   RUNTIME_PROMOTED=1
   current_cleanup_status=$(read_manifest_value "$CURRENT_RELEASE_FILE" DEPLOY_CLEANUP_STATUS)
   if [ "$current_cleanup_status" != complete ]; then
     update_managed_lock_phase "$DEPLOY_RELEASE_LOCK_FILE" cleanup-recovery
     printf 'Current runtime already matches the approved SHA and plan; recovering cleanup only.\n'
-    if COMPOSE_ENV_FILE="$DEPLOY_DIR/.env" "$SCRIPT_DIR/post-release-cleanup.sh" --release-tag "$RELEASE_TAG"; then
+    if COMPOSE_ENV_FILE= "$SCRIPT_DIR/post-release-cleanup.sh" --release-tag "$RELEASE_TAG"; then
       replace_env_value "$CURRENT_RELEASE_FILE" DEPLOY_CLEANUP_STATUS complete
       replace_env_value "$CURRENT_RELEASE_FILE" DEPLOY_PHASE complete
       {
         printf '\nCleanup-only recovery completed: invocation=%s recovered_by=%s\n' \
           "$(read_manifest_value "$CURRENT_RELEASE_FILE" DEPLOY_INVOCATION_ID)" "$WORKSPACE_INVOCATION_ID"
-      } >> "$CURRENT_RELEASE_SUMMARY_FILE"
+      } | atomic_append_file "$CURRENT_RELEASE_SUMMARY_FILE" 600
       sync_current_release_history_after_cleanup
     else
       printf 'Cloud runtime remains healthy, but cleanup-only recovery failed. Do not rerun rollout.\n' >&2
@@ -621,9 +683,14 @@ if current_release_matches_plan; then
     printf -- '- Invocation: `%s`\n' "$WORKSPACE_INVOCATION_ID"
     printf -- '- Plan digest: `%s`\n' "$WORKSPACE_PLAN_DIGEST"
     printf -- '- Result: `healthy-no-op`\n'
-  } > "$no_op_summary"
+  } | atomic_write_file "$no_op_summary" 600
+  replace_env_value "$DEPLOY_TRANSACTION_MARKER_PATH" DEPLOY_TRANSACTION_PHASE healthy-no-op
   rm -rf "$DEPLOY_SUPPORT_BACKUP_DIR" "${DEPLOY_SUPPORT_STAGING_DIR:-/missing-never}"
-  if [ "$DEPLOY_RELEASE_LOCK_ACQUIRED" -eq 1 ] && lock_is_owned_by_workspace_invocation; then
+  release_managed_lock "$DEPLOY_CONFIG_LOCK_FILE"
+  DEPLOY_CONFIG_LOCK_ACQUIRED=0
+  if [ "$DEPLOY_RELEASE_LOCK_ACQUIRED" -eq 1 ] \
+    && [ "${DEPLOY_RELEASE_LOCK_PARENT_OWNED:-0}" != 1 ] \
+    && lock_is_owned_by_workspace_invocation; then
     release_managed_lock "$DEPLOY_RELEASE_LOCK_FILE"
     DEPLOY_RELEASE_LOCK_ACQUIRED=0
   fi
@@ -660,11 +727,22 @@ write_release_manifest \
   "${EXPECTED_CLOUD_SUPPORT_MANIFEST_SHA256:-}" \
   "$DEPLOY_IMAGE_MANIFEST_DIGEST" \
   "$SELECTED_SERVICES" \
-  "$DEPLOY_IMAGE_CONTENT_DIGEST"
+  "$DEPLOY_IMAGE_CONTENT_DIGEST" \
+  "$DEPLOY_CONFIG_DIGEST"
+write_release_image_env "$STAGED_RELEASE_IMAGE_ENV_FILE"
 
 TEMP_RELEASE_ENV_FILE=$(mktemp "$DEPLOY_DIR/.release-env.XXXXXX")
 cp "$DEPLOY_DIR/.env" "$TEMP_RELEASE_ENV_FILE"
+[ "$(sha256_file "$DEPLOY_DIR/.env")" = "$DEPLOY_ORIGINAL_ENV_SHA256" ] || {
+  printf 'Cloud .env changed while the release snapshot was created; aborting before rollout.\n' >&2
+  exit 75
+}
 apply_app_images_to_dotenv "$TEMP_RELEASE_ENV_FILE"
+temp_config_digest=$(canonical_cloud_config_sha256 "$TEMP_RELEASE_ENV_FILE")
+[ "$temp_config_digest" = "$DEPLOY_CONFIG_DIGEST" ] || {
+  printf 'Cloud configuration changed while the release environment snapshot was created; aborting before rollout.\n' >&2
+  exit 75
+}
 export COMPOSE_ENV_FILE="$TEMP_RELEASE_ENV_FILE"
 load_dotenv
 
@@ -697,15 +775,39 @@ COMPOSE_ENV_FILE="$TEMP_RELEASE_ENV_FILE" \
   POST_DEPLOY_REQUIRE_EDGE_INSTALLER_CATALOG="$post_deploy_require_edge_installer_catalog" \
   "$SCRIPT_DIR/post-deploy-check.sh"
 
-cp "$TEMP_RELEASE_ENV_FILE" "$DEPLOY_DIR/.env"
+current_config_digest=$(canonical_cloud_config_sha256 "$DEPLOY_DIR/.env")
+[ "$current_config_digest" = "$DEPLOY_CONFIG_DIGEST" ] || {
+  printf 'Cloud configuration changed concurrently during rollout; refusing runtime promotion.\n' >&2
+  exit 75
+}
+[ "$(sha256_file "$DEPLOY_DIR/.env")" = "$DEPLOY_ORIGINAL_ENV_SHA256" ] || {
+  printf 'Cloud .env changed concurrently during rollout; refusing atomic promotion.\n' >&2
+  exit 75
+}
+if [ -n "$DEPLOY_CONFIG_LOCK_TEST_HOOK" ]; then
+  if [ "${DEPLOY_CONFIG_LOCK_TEST_MODE:-}" != enabled ] \
+    || [ ! -f "$DEPLOY_CONFIG_LOCK_TEST_HOOK" ] \
+    || [ -L "$DEPLOY_CONFIG_LOCK_TEST_HOOK" ] \
+    || [ ! -x "$DEPLOY_CONFIG_LOCK_TEST_HOOK" ]; then
+    printf 'Cloud config-lock test hook was rejected.\n' >&2
+    exit 64
+  fi
+  "$DEPLOY_CONFIG_LOCK_TEST_HOOK" "$DEPLOY_DIR" "$DEPLOY_ORIGINAL_ENV_SHA256"
+fi
+[ "$(sha256_file "$DEPLOY_DIR/.env")" = "$DEPLOY_ORIGINAL_ENV_SHA256" ] || {
+  printf 'Unsupported direct .env write detected after final hash; operator content was not overwritten.\n' >&2
+  exit 75
+}
+atomic_copy_file "$STAGED_RELEASE_IMAGE_ENV_FILE" "$RELEASE_IMAGE_ENV_FILE" 600
 
 if [ -f "$CURRENT_RELEASE_FILE" ]; then
-  cp "$CURRENT_RELEASE_FILE" "$PREVIOUS_RELEASE_FILE"
+  atomic_copy_file "$CURRENT_RELEASE_FILE" "$PREVIOUS_RELEASE_FILE" 600
 fi
 
-cp "$STAGED_RELEASE_FILE" "$CURRENT_RELEASE_FILE"
+atomic_copy_file "$STAGED_RELEASE_FILE" "$CURRENT_RELEASE_FILE" 600
 replace_env_value "$CURRENT_RELEASE_FILE" DEPLOY_PHASE runtime-healthy-cleanup-pending
 history_file=$(record_release_history "$CURRENT_RELEASE_FILE" "$DEPLOY_RELEASE_ID")
+replace_env_value "$DEPLOY_TRANSACTION_MARKER_PATH" DEPLOY_TRANSACTION_PHASE runtime-promoted
 RUNTIME_PROMOTED=1
 rm -rf "$DEPLOY_SUPPORT_BACKUP_DIR"
 write_release_summary \
@@ -727,7 +829,7 @@ update_managed_lock_phase "$DEPLOY_RELEASE_LOCK_FILE" cleanup
 printf 'Post-release cleanup started; output is streamed live.\n'
 (
   set +e
-  COMPOSE_ENV_FILE="$DEPLOY_DIR/.env" \
+  COMPOSE_ENV_FILE= \
     "$SCRIPT_DIR/post-release-cleanup.sh" --release-tag "$DEPLOY_RELEASE_ID" 2>&1
   printf '%s\n' "$?" > "$cleanup_status_file"
   exit 0
@@ -741,7 +843,7 @@ esac
 {
   printf '\n'
   cat "$cleanup_log"
-} >> "$CURRENT_RELEASE_SUMMARY_FILE"
+} | atomic_append_file "$CURRENT_RELEASE_SUMMARY_FILE" 600
 rm -f "$cleanup_log" "$cleanup_status_file"
 
 history_summary_file=${history_file%.env}.summary.md
@@ -752,8 +854,8 @@ else
   replace_env_value "$CURRENT_RELEASE_FILE" DEPLOY_CLEANUP_STATUS partial
   replace_env_value "$CURRENT_RELEASE_FILE" DEPLOY_PHASE runtime-healthy-cleanup-partial
 fi
-cp "$CURRENT_RELEASE_FILE" "$history_file"
-cp "$CURRENT_RELEASE_SUMMARY_FILE" "$history_summary_file"
+atomic_copy_file "$CURRENT_RELEASE_FILE" "$history_file" 600
+atomic_copy_file "$CURRENT_RELEASE_SUMMARY_FILE" "$history_summary_file" 600
 cleanup_temp_release_env
 unset COMPOSE_ENV_FILE
 update_managed_lock_phase "$DEPLOY_RELEASE_LOCK_FILE" finalize
@@ -765,7 +867,11 @@ if [ "$cleanup_status" -ne 0 ]; then
   exit "$cleanup_status"
 fi
 
-release_managed_lock "$DEPLOY_RELEASE_LOCK_FILE"
+release_managed_lock "$DEPLOY_CONFIG_LOCK_FILE"
+DEPLOY_CONFIG_LOCK_ACQUIRED=0
+if [ "${DEPLOY_RELEASE_LOCK_PARENT_OWNED:-0}" != 1 ]; then
+  release_managed_lock "$DEPLOY_RELEASE_LOCK_FILE"
+fi
 DEPLOY_RELEASE_LOCK_ACQUIRED=0
 if [ -n "${DEPLOY_SUPPORT_STAGING_DIR:-}" ]; then
   rm -rf "$DEPLOY_SUPPORT_STAGING_DIR"

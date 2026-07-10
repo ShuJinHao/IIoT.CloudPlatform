@@ -16,6 +16,8 @@ load_dotenv
 
 BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-14}
 POSTGRES_READY_ATTEMPTS=${POSTGRES_READY_ATTEMPTS:-30}
+require_decimal_range BACKUP_RETENTION_DAYS "$BACKUP_RETENTION_DAYS" 1 3650 || exit $?
+require_decimal_range POSTGRES_READY_ATTEMPTS "$POSTGRES_READY_ATTEMPTS" 1 300 || exit $?
 
 cleanup_old_backups() {
   find "$BACKUP_DIR" -maxdepth 1 -type f -name 'iiot-db-*.dump' -mtime +"$BACKUP_RETENTION_DAYS" -print |
@@ -61,8 +63,7 @@ compose exec -T postgres pg_dump -h 127.0.0.1 -Fc -U postgres -d iiot-db > "$BAC
   sha256sum "$(basename "$BACKUP_FILE")" > "$(basename "$CHECKSUM_FILE")"
 )
 cleanup_old_backups
-printf '%s\n' "$BACKUP_FILE" > "$BACKUP_STATE_FILE"
-touch "$BACKUP_STATE_FILE"
+printf '%s\n' "$BACKUP_FILE" | atomic_write_file "$BACKUP_STATE_FILE" 600
 
 printf 'PostgreSQL backup created: %s\n' "$BACKUP_FILE"
 printf 'PostgreSQL backup checksum: %s\n' "$CHECKSUM_FILE"

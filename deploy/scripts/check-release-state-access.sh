@@ -59,5 +59,7 @@ ensure_file_access_if_exists "$CURRENT_RELEASE_FILE"
 ensure_file_access_if_exists "$PREVIOUS_RELEASE_FILE"
 ensure_file_access_if_exists "$STAGED_RELEASE_FILE"
 ensure_file_access_if_exists "$CURRENT_RELEASE_SUMMARY_FILE"
+ensure_file_access_if_exists "$RELEASE_IMAGE_ENV_FILE"
+ensure_file_access_if_exists "$STAGED_RELEASE_IMAGE_ENV_FILE"
 
 printf 'Cloud release state access check passed: %s\n' "$RELEASES_DIR"

@@ -33,7 +33,9 @@ SUPPORT_FILES=(
   scripts/pre-deploy-check.sh
   scripts/release-common.sh
   scripts/rollback-release.sh
+  scripts/update-deploy-env.sh
   scripts/verify-edge-installer-catalog.sh
+  scripts/workspace-release-transaction.sh
   nginx/nginx.conf
   docker-compose.prod.yml
 )
@@ -472,24 +474,44 @@ if [ -r "$common" ] && grep -q "ensure_managed_lock_available" "$common"; then
   DEPLOY_DIR=$REMOTE_DEPLOY_DIR
   export DEPLOY_DIR
   . "$common"
-  load_dotenv "$REMOTE_DEPLOY_DIR/.env"
+  unset DEPLOY_RELEASE_LOCK_FILE POST_RELEASE_CLEANUP_LOCK_FILE BASH_ENV ENV CDPATH IFS
   release_lock=$(resolve_managed_lock_file \
-    "${DEPLOY_RELEASE_LOCK_FILE:-$CLOUD_RELEASE_LOCK_FILE_DEFAULT}" \
+    "$CLOUD_RELEASE_LOCK_FILE_DEFAULT" \
     "$REMOTE_DEPLOY_DIR/.cloud-release.lock")
   cleanup_lock=$(resolve_managed_lock_file \
-    "${POST_RELEASE_CLEANUP_LOCK_FILE:-$POST_RELEASE_CLEANUP_LOCK_FILE_DEFAULT}" \
+    "$POST_RELEASE_CLEANUP_LOCK_FILE_DEFAULT" \
     "$REMOTE_DEPLOY_DIR/.post-release-cleanup.lock")
-  ensure_managed_lock_available "$release_lock"
-  ensure_managed_lock_available "$cleanup_lock"
-  printf "Cloud release/cleanup lock precheck passed: release=%s cleanup=%s\n" "$release_lock" "$cleanup_lock"
+  config_lock=$(resolve_managed_lock_file \
+    "${CLOUD_CONFIG_LOCK_FILE_DEFAULT:-/data/iiot-platform/.locks/cloud-config.lock}" \
+    "$REMOTE_DEPLOY_DIR/.cloud-config.lock")
+  readonly_lock_precheck() {
+    readonly_lock_file=$1
+    readonly_lock_status=$(managed_lock_status_for_dir "${readonly_lock_file}.d")
+    case "$readonly_lock_status" in
+      absent) return 0 ;;
+      *)
+        printf "Cloud lock precheck is read-only and found non-absent state: status=%s %s\n" \
+          "$readonly_lock_status" \
+          "$(describe_managed_lock "$readonly_lock_file")" >&2
+        return 75
+        ;;
+    esac
+  }
+  readonly_lock_precheck "$release_lock"
+  readonly_lock_precheck "$cleanup_lock"
+  readonly_lock_precheck "$config_lock"
+  printf "Cloud release/cleanup/config lock precheck passed: release=%s cleanup=%s config=%s\n" \
+    "$release_lock" "$cleanup_lock" "$config_lock"
   exit 0
 fi
 
 for legacy_lock_dir in \
   /data/iiot-platform/.locks/cloud-release.lock.d \
   /data/iiot-platform/.locks/deploy-cleanup.lock.d \
+  /data/iiot-platform/.locks/cloud-config.lock.d \
   "$REMOTE_DEPLOY_DIR/.cloud-release.lock.d" \
-  "$REMOTE_DEPLOY_DIR/.post-release-cleanup.lock.d"
+  "$REMOTE_DEPLOY_DIR/.post-release-cleanup.lock.d" \
+  "$REMOTE_DEPLOY_DIR/.cloud-config.lock.d"
 do
   if [ -d "$legacy_lock_dir" ]; then
     printf "Cloud deploy lock exists but the remote support scripts cannot prove whether it is stale: %s\n" "$legacy_lock_dir" >&2
@@ -972,40 +994,14 @@ deploy_dir=$remote_dir_quoted
 staging_parent=\"\$deploy_dir/.support-staging\"
 mkdir -p \"\$staging_parent\"
 staging_dir=\$(mktemp -d \"\$staging_parent/cloud-${WORKSPACE_INVOCATION_ID}.XXXXXX\")
-release_lock_file=
-release_lock_acquired=0
-support_installed=0
-support_backup_dir=\"\$deploy_dir/releases/support-recovery/${WORKSPACE_INVOCATION_ID}\"
-lock_owned_by_invocation() {
-  [ -n \"\$release_lock_file\" ] \
-    && [ -r \"\${release_lock_file}.d/pid\" ] \
-    && [ \"\$(sed -n '1p' \"\${release_lock_file}.d/pid\")\" = \"\$\$\" ] \
-    && [ \"\$(sed -n '1p' \"\${release_lock_file}.d/invocation-id\")\" = '${WORKSPACE_INVOCATION_ID}' ] \
-    && [ \"\$(sed -n '1p' \"\${release_lock_file}.d/plan-digest\")\" = '${WORKSPACE_PLAN_DIGEST}' ]
-}
-cleanup_transaction() {
+cleanup_staging_before_handoff() {
   status=\$?
   trap - EXIT HUP INT TERM
-  if [ \"\$support_installed\" -eq 1 ] && [ -x \"\$support_backup_dir/restore-support.sh\" ]; then
-    if ! sh \"\$support_backup_dir/restore-support.sh\" \"\$deploy_dir\" \"\$support_backup_dir\"; then
-      mkdir -p \"\$deploy_dir/releases/history\"
-      printf 'DEPLOY_INVOCATION_ID=%s\\nDEPLOY_PLAN_DIGEST=%s\\nDEPLOY_PHASE=blocked-support-restore\\nDEPLOY_SUPPORT_BACKUP_DIR=%s\\n' \
-        '${WORKSPACE_INVOCATION_ID}' '${WORKSPACE_PLAN_DIGEST}' \"\$support_backup_dir\" \
-        > \"\$deploy_dir/releases/deploy-blocked.env\"
-      lock_owned_by_invocation && printf '%s\\n' blocked-support-restore > \"\${release_lock_file}.d/phase\"
-      printf 'Support restore failed before deploy-release exec; lock and backup preserved.\\n' >&2
-      exit 86
-    fi
-    rm -rf \"\$support_backup_dir\"
-  fi
-  if [ \"\$release_lock_acquired\" -eq 1 ] && lock_owned_by_invocation; then
-    release_managed_lock \"\$release_lock_file\" || true
-  fi
   rm -rf \"\$staging_dir\"
   rmdir \"\$staging_parent\" 2>/dev/null || true
   exit \"\$status\"
 }
-trap cleanup_transaction EXIT HUP INT TERM
+trap cleanup_staging_before_handoff EXIT HUP INT TERM
 tar --no-same-owner -xf - -C \"\$staging_dir\"
 printf '%s  %s\\n' '$support_manifest_digest' '$SUPPORT_MANIFEST_NAME' | (cd \"\$staging_dir\" && sha256sum -c -)
 printf '%s  %s\\n' '$image_manifest_digest' '$IMAGE_MANIFEST_NAME' | (cd \"\$staging_dir\" && sha256sum -c -)
@@ -1014,49 +1010,21 @@ grep -qx 'CLOUD_DEPLOY_EXPECTED_SHA=${WORKSPACE_EXPECTED_SHA}' \"\$staging_dir/$
 grep -qx 'CLOUD_DEPLOY_PLAN_DIGEST=${WORKSPACE_PLAN_DIGEST}' \"\$staging_dir/$IMAGE_MANIFEST_NAME\"
 grep -qx 'CLOUD_DEPLOY_RELEASE_TAG=$TAG' \"\$staging_dir/$IMAGE_MANIFEST_NAME\"
 grep -qx 'CLOUD_DEPLOY_SERVICES=$deploy_services' \"\$staging_dir/$IMAGE_MANIFEST_NAME\"
-DEPLOY_DIR=\$deploy_dir
-export DEPLOY_DIR
-. \"\$staging_dir/scripts/release-common.sh\"
-load_dotenv \"\$deploy_dir/.env\"
-release_lock_file=\$(resolve_managed_lock_file \
-  \"\${DEPLOY_RELEASE_LOCK_FILE:-\$CLOUD_RELEASE_LOCK_FILE_DEFAULT}\" \
-  \"\$deploy_dir/.cloud-release.lock\")
-acquire_managed_lock \
-  \"\$release_lock_file\" \
-  cloud-release \
-  '$TAG' \
-  support-install \
-  workspace-invocation-${WORKSPACE_INVOCATION_ID}
-release_lock_acquired=1
-printf '%s\\n' '${WORKSPACE_INVOCATION_ID}' > \"\${release_lock_file}.d/invocation-id\"
-printf '%s\\n' '${WORKSPACE_PLAN_DIGEST}' > \"\${release_lock_file}.d/plan-digest\"
-sh \"\$staging_dir/$SUPPORT_INSTALLER_NAME\" \
+transaction_script=\"\$staging_dir/scripts/workspace-release-transaction.sh\"
+[ -f \"\$transaction_script\" ] && [ ! -L \"\$transaction_script\" ] && [ -x \"\$transaction_script\" ] \
+  || { printf 'Staged workspace release transaction is missing or unsafe: %s\\n' \"\$transaction_script\" >&2; exit 126; }
+bash -n \"\$transaction_script\"
+exec bash \"\$transaction_script\" \
   \"\$deploy_dir\" \
   \"\$staging_dir\" \
   '${WORKSPACE_INVOCATION_ID}' \
   '$TAG' \
+  '${WORKSPACE_EXPECTED_SHA}' \
+  '${WORKSPACE_PLAN_DIGEST}' \
   '$support_manifest_digest' \
-  \"\$\$\" \
-  \"\$release_lock_file\"
-support_installed=1
-update_managed_lock_phase \"\$release_lock_file\" preflight
-cd \"\$deploy_dir\"
-exec env \
-  IIOT_WORKSPACE_DEPLOY_ENTRYPOINT=1 \
-  IIOT_WORKSPACE_DEPLOY_INVOCATION_ID='${WORKSPACE_INVOCATION_ID}' \
-  IIOT_WORKSPACE_DEPLOY_EXPECTED_SHA='${WORKSPACE_EXPECTED_SHA}' \
-  IIOT_WORKSPACE_DEPLOY_PLAN_DIGEST='${WORKSPACE_PLAN_DIGEST}' \
-  DEPLOY_RELEASE_LOCK_PREACQUIRED=1 \
-  DEPLOY_RELEASE_LOCK_FILE=\"\$release_lock_file\" \
-  DEPLOY_SUPPORT_STAGING_DIR=\"\$staging_dir\" \
-  DEPLOY_SUPPORT_BACKUP_DIR=\"\$support_backup_dir\" \
-  DEPLOY_IMAGE_MANIFEST=\"\$staging_dir/$IMAGE_MANIFEST_NAME\" \
-  DEPLOY_IMAGE_MANIFEST_SHA256='$image_manifest_digest' \
-  DEPLOY_IMAGE_CONTENT_SHA256='$image_content_digest' \
-  EXPECTED_CLOUD_SUPPORT_MANIFEST_SHA256='$support_manifest_digest' \
-  DEPLOY_GIT_SHA='${TAG#sha-}' \
-  DEPLOY_TRIGGERED_BY=workspace \
-  ./scripts/deploy-release.sh '$TAG' --services '$deploy_services'"
+  '$image_manifest_digest' \
+  '$image_content_digest' \
+  '$deploy_services'"
 
   if COPYFILE_DISABLE=1 run_with_timeout "$SSH_TIMEOUT_SECONDS" "stage Cloud support and execute release transaction" \
     bash -c '
@@ -1065,7 +1033,7 @@ exec env \
       ssh_target="$2"
       connect_timeout="$3"
       remote_command="$4"
-      remote_bash_command="bash -c $(printf %q "$remote_command")"
+      remote_bash_command="env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=\"\$HOME\" bash -c $(printf %q "$remote_command")"
       COPYFILE_DISABLE=1 tar -C "$package_dir" -cf - . \
         | ssh -o BatchMode=yes -o "ConnectTimeout=$connect_timeout" "$ssh_target" "$remote_bash_command"
     ' bash "$package_dir" "$SSH_TARGET" "$SSH_CONNECT_TIMEOUT_SECONDS" "$remote_command"; then
@@ -1249,6 +1217,12 @@ SYNCED_IMAGE_CONTENT_DIGEST="$(image_manifest_content_digest "$LOCAL_SUPPORT_PAC
 printf 'Cloud deploy support manifest digest bound to this release: %s\n' "$SYNCED_SUPPORT_MANIFEST_DIGEST"
 printf 'Cloud image manifest digest bound to this invocation: %s\n' "$SYNCED_IMAGE_MANIFEST_DIGEST"
 printf 'Cloud stable image candidate content digest: %s\n' "$SYNCED_IMAGE_CONTENT_DIGEST"
+
+# These checks are deliberately read-only and run after a successful image
+# build but before any support staging. Stale or malformed release state must
+# be preserved for transaction recovery, never deleted by the workstation.
+check_remote_support_file_access
+check_remote_release_locks
 
 stage_support_and_deploy \
   "$LOCAL_SUPPORT_PACKAGE_DIR" \

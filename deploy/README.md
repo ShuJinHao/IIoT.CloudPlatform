@@ -1,14 +1,16 @@
 # IIoT Cloud Harbor CICD And Private Server Deploy
 
-本目录是 `IIoT.CloudPlatform` 当前生产部署实现目录。云端标准发布以操作者本机构建镜像、推送 Harbor、再通过 SSH 触发服务器本地发布脚本为准；GitHub Actions 只保留 CI 留痕和灾备手动入口，不再作为日常生产镜像构建或部署入口。三项目上传部署统一人类入口见 [上传部署总览](../../docs/上传部署总览.md)，统一可执行入口见工作区根 `deploy/Invoke-WorkspaceDeploy.ps1`。
+本目录是 `IIoT.CloudPlatform` 镜像构建和旧事务维护实现目录。Cloud 日常应用发布统一从工作区根 `deploy/Deploy.ps1` 发起：入口从 `origin/main` tip 创建隔离快照，调用本目录 `build-and-push.sh`，再以一次 SSH 请求稳定服务器 Runner。GitHub Actions 只保留 CI 留痕和灾备手动入口。三项目口径见 [上传部署总览](../../docs/上传部署总览.md)。
 
-> 当前状态（2026-07-10）：新根入口契约、expected SHA 强绑定、per-invocation services/image manifest、build-before-remote-support、单事务锁、OCI digest、健康 no-op 和 cleanup-only 恢复的隔离 fake 行为测试 9/9 通过。当前 Cloud 业务工作树仍在其它窗口迭代，且本轮没有联网、Harbor、SSH 或真实生产 deploy/history/cleanup/健康闭环；隔离回归不得冒充生产验收。
+> 当前状态（2026-07-10）：新日常入口/Runner 已通过 fake 远端仓库、脏本地工作树、不可变 OCI、一次 SSH、失败回滚和不重建续传回归；旧事务链 33/33、`DeploymentGuardTests` 20/20、名称含 `Deploy` 的门禁 39/39 仍保留。没有连接真实 Harbor/SSH/生产容器，隔离回归不得冒充生产验收。
 
-工作区标准入口示例：
+日常标准入口示例：
 
 ```powershell
-pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services web -DryRun
-pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services httpapi,gateway,dataworker,migration,web -ValidateOnly
+pwsh ./deploy/Deploy.ps1 -Target Cloud -InstallRunner # 仅首次或 Runner 升级
+pwsh ./deploy/Deploy.ps1 -Target Cloud -Doctor
+pwsh ./deploy/Deploy.ps1 -Target Cloud -Services web -DryRun
+pwsh ./deploy/Deploy.ps1 -Target Cloud -Services httpapi,dataworker -Deploy
 ```
 
 ## 部署口径
@@ -17,13 +19,16 @@ pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services httpapi,gateway
 - 生产版本统一使用 `release_tag = sha-*`，`latest` 不能作为生产应用版本。
 - 多 agent 并行部署只按 [上传部署总览](../../docs/上传部署总览.md) 的“多 agent 并行部署”执行；Cloud agent 只负责 Cloud 镜像、Cloud deploy 和 Cloud 验证。
 - Cloud 应用镜像不保留历史版本；Harbor 和服务器本机只保留当前生产正在运行的 `sha-*` 应用镜像。
-- 日常部署必须先 push GitHub，再由工作区标准入口确认标准参数、本机脚本或服务器门禁，随后本机构建受影响应用镜像并推送 Harbor；同一提交里的 `docker-compose.prod.yml`、`nginx/nginx.conf` 和服务器 scripts 必须经白名单、staging、语法/compose 校验及 SHA-256 前后校验后同步到远端。
-- 工作区外部标准入口是 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud ...`；本目录的 `deploy/scripts/local-release.sh` 与 `build-and-push.sh` 继续作为 Cloud 被调度实现脚本。
+- 日常部署必须先 push GitHub；`Deploy.ps1` 直接取配置远端 tip 建 detached worktree。本地工作树允许继续迭代，入口不会修改它，未推送改动也不会发布。
+- 工作区外部日常入口是 `pwsh ./deploy/Deploy.ps1 -Target Cloud ...`；本目录 `build-and-push.sh` 只负责镜像，`local-release.sh` / `deploy-release.sh` 只保留给基础设施维护和旧链恢复。
+- Compose、nginx 和服务器 scripts 不再随每次应用发布同步。它们属于部署基础设施，必须在独立维护窗口通过旧事务入口升级并重新运行 `Deploy.ps1 -InstallRunner/-Doctor`；不得让应用发布偷偷改变服务器执行代码。
 - 传入 `services` 时只拉取并重启指定服务；首次部署或需要全量时必须显式传 `--all`。
 - `cloud-image` / `cloud-deploy` 只保留灾备手动入口，必须输入确认词；不得在日常生产发布中等待这些 workflow。
 - 单个镜像 build/push 默认 15 分钟超时，Harbor 登录/API 检查默认 2 分钟超时，SSH deploy 默认 40 分钟超时；超时必须停止并按脚本输出诊断 Docker buildx、Harbor tag、服务器 compose/logs 和 release 状态，不得继续 watch 或无限等待。
-- 工作区入口必须实时转发 build/push/SSH/cleanup 输出，并在 30 秒静默期打印 heartbeat。不得以 PowerShell CPU 为 0 或外层日志暂空判断“未执行”，也不得因此绕开统一入口直接调用 `local-release.sh`。
+- 日常入口必须实时显示 fetch/snapshot/build/remote/backup/migration/rollout/rollback 阶段。构建完成后的远端失败优先使用 `-ResumeInvocation` 重发同一请求，不得绕开入口或重新全量构建。
 - Cloud release 和 post-release cleanup 都使用带 PID、进程启动标识、release 与 phase 的 managed lock；活锁或初始化中的锁立即失败，只有能证明进程已失效的 stale lock 才自动认领并移除，不再静默等待 15 分钟。
+- 操作员 `.env` 由独立严格配置锁保护；deploy、rollback 和受支持的 `scripts/update-deploy-env.sh` 从读取到最终状态晋升共用同一把锁。严格配置锁一旦存在一律 fail-closed，不得 stale 自动清理；必须先人工核对 owner/phase 证据。
+- deploy/rollback 不再替换 `.env`；五个应用镜像坐标是 release-owned state，原子写入 `releases/current-images.env`，compose 以 `.env` 为操作员配置基层、以 `current-images.env` 为镜像覆盖层。直接编辑 `.env` 绕过共享锁，属于不受支持操作；受支持更新必须传入 expected SHA-256。
 - self-hosted runner 仅作为灾备/历史 CI 设施时使用，仍必须是专用非 root 用户，不能用 root 跑 Actions 服务。
 - 当前服务器 Docker Root Dir 固定为 `/data/iiot-platform/runtime/docker`，runner 工作目录固定在 `/data/github-runner/*`，不要把构建缓存和 runner workdir 放回系统盘。
 - Docker Hub 不作为生产依赖源；compose 第三方镜像和 Web Dockerfile 的 Node/Nginx 基础镜像必须先同步到 Harbor mirror。
@@ -31,7 +36,7 @@ pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services httpapi,gateway
 - 生产服务器只允许 Edge `stable` 渠道；发布脚本必须拒绝并清理 `ci`、`dev`、`test` 等非 `stable` 渠道目录。
 - Cloud catalog、首装、Edge 更新和公开下载的版本集合只来自 Cloud release 记录。文件系统只校验已登记 artifact 的存在性、完整性、受控路径、权限和真实下载；不得扫描目录补出未登记版本，残留文件也不得让 `Deleted` 版本重新可见。
 - 本机 Docker 构建和 SSH 触发服务器部署是标准 Cloud 发布流程。
-- `deploy/scripts/deploy-release.sh` 是服务器端唯一发布入口，`deploy/scripts/rollback-release.sh` 是应用镜像回滚入口。
+- 工作区 `deploy/server/iiot-release-runner.sh` 是日常服务器端入口；`deploy/scripts/deploy-release.sh` 和 `deploy/scripts/rollback-release.sh` 是旧事务维护/恢复入口。
 - self-hosted runner 安装和权限要求见 [RUNNER.md](./RUNNER.md)。
 - 运维、备份、恢复和检查细节见 [OPERATIONS.md](./OPERATIONS.md)。
 - Cloud 下载中心生成 Edge 客户端 `.exe` 的上线顺序见 [EDGE_INSTALLER_GO_LIVE.md](./EDGE_INSTALLER_GO_LIVE.md)。
@@ -104,7 +109,7 @@ Harbor 变量：
 
 `cloud-image` 只保留灾备手动入口，并要求确认词 `EMERGENCY_CLOUD_IMAGE_BUILD`；不得把它当作日常发布路径，也不得等待它超时。灾备 workflow 仍必须跑在带 `iiot-linux-prod` label 的内网 self-hosted runner 上，不能改回 `ubuntu-latest`。
 
-应用镜像仓库只保留当前生产 `sha-*` tag。本机构建推送候选 tag 后，不立即删除当前生产 tag；必须等服务器 `deploy-release.sh` 健康检查通过后，由发布后清理删除旧应用 tag 并执行或确认 Harbor GC。`main-latest`、`buildcache` 和 `mirror` 基础镜像 tag 不计入应用版本保留。
+应用镜像仓库只保留当前生产 `sha-*` tag。本机构建推送候选 tag 后，不立即删除当前生产 tag；稳定 Runner 健康提交后由独立定时维护任务清理旧 tag 并执行或确认 Harbor GC。cleanup/GC 失败只产生运维告警，不得把健康应用发布改写为失败。`main-latest`、`buildcache` 和 `mirror` 基础镜像 tag 不计入应用版本保留。
 
 Cloud 发布成功且 `post-deploy-check.sh`、`ops-check.sh` 通过后，必须执行发布后清理：
 
@@ -317,7 +322,7 @@ sudo chmod 755 /data/iiot-platform/cloud/deploy/certs
 同一轮标准 non-root 发布还要求 release state 保持可访问。`pre-deploy-check.sh` 现在会先校验：
 
 - `deploy/releases/`、`deploy/releases/history/` 目录对标准部署用户可读、可写、可遍历。
-- 已存在的 `current-release.env`、`previous-release.env`、`staged-release.env`、`current-release.summary.md` 对标准部署用户可读可写。
+- 已存在的 `current-release.env`、`previous-release.env`、`staged-release.env`、`current-release.summary.md`、`current-images.env` 和 `staged-images.env` 对标准部署用户可读可写。
 
 如果之前走过 root 应急路径，必须先恢复 owner/mode，例如：
 
@@ -333,12 +338,14 @@ sudo find /data/iiot-platform/cloud/deploy/releases -type f -exec chmod 600 {} +
 
 1. 合并或推送到 `main`，保证 GitHub 有本次源码留痕。
 2. `cloud-ci` 默认只跑快速验证：restore/build、ServiceLayer、ConfigurationGuard、部署脚本语法检查、前端 build、compose config；完整 EndToEnd 只在手动 `workflow_dispatch` 勾选时运行。
-3. 在工作区根运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services <services>`；顶层入口会调度 `deploy/scripts/local-release.sh`，并校验工作区干净、HEAD 已推送到 GitHub、Docker/buildx/Harbor 可用。正式发布随后为该 HEAD 创建临时 detached worktree，support files 和镜像都只从这个固定提交读取；主工作区之后继续编辑也不会混入旧 SHA。服务包含 `web` 或使用 `-All` 时，会从 `deploy/profiles/current-production.json` 读取当前 challenge URL。
+3. 基础设施维护才运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud ...`；日常应用发布使用 `Deploy.ps1`，不进入本节 support transaction。旧入口仍要求 clean/pushed candidate 和显式 plan，用于 Compose/nginx/scripts 升级取证。
 4. 根入口为正式运行注入 entrypoint marker、唯一 invocation id、完整 expected SHA 和 plan digest；`local-release.sh` 缺任一项即在 build/SSH 前失败，并强校验 expected SHA 等于 detached 固定快照 HEAD。
-5. `local-release.sh` 先在本机构建并校验 support 白名单包，然后 `build-and-push.sh` 按服务构建并推送 `sha-<git-sha>` 镜像。构建成功后才允许 SSH staging，因此构建失败绝不安装远端 support files。
+5. 旧 `local-release.sh` 在基础设施维护窗口校验 support 白名单并完成 staging；日常 `Deploy.ps1` 不安装任何远端 support files。
 6. 每次 invocation 独占 services 文件和 image manifest；manifest 绑定 invocation、expected SHA、plan digest、release tag、services 和每个已构建镜像的 OCI digest。dry-run 不得覆盖正式清单。
-7. support 包和 image manifest 一起进入远端 invocation staging；远端先校验两份 SHA-256，再获取一把绑定 invocation/plan 的 release lock。该锁跨越 support 安装、rollout、promotion 和 cleanup；`.env`、`certs/`、`releases/`、`backups/` 仍明确排除。
-8. `deploy-release.sh` 强校验 release tag SHA、`DEPLOY_GIT_SHA`、expected SHA 三者一致，只消费本 invocation manifest，pull 后在 rollout 前核对 OCI digest。同 SHA/同 plan 且当前健康时跳过 backup/rollout；cleanup partial 只恢复 cleanup。
+7. support 包和 image manifest 一起进入远端 invocation staging；远端先校验两份 SHA-256，再由 `workspace-release-transaction.sh` 扫描未完成 transaction marker、lock、staging 和 recovery 证据。任一孤儿状态都原子写入 durable blocked 并返回 78，不得用 stale-lock 清理掩盖 SIGKILL/OOM/重启中断。通过扫描后才获取绑定 invocation/plan 的 release lock，并在 support 发生任何变更前原子写入 transaction marker。
+8. 父事务进程持锁安装 support，installer 和 `deploy-release.sh` 都在独立 session/process group 中从 `env -i` 白名单环境启动。父进程收到 HUP/INT/TERM 时向整个子进程组转发，宽限内未退出就 KILL；只有确认无子孙进程后才允许恢复 support 或释锁。current state 与 marker 共同证明 promotion 后，cleanup 绝不恢复旧 support；父进程在 marker 后 kill-9 留下的 backup/staging/lock 由下一次入口只做 cleanup-only。
+9. support 安装先在 staging 预检，再备份新旧 allowlist 并原子替换；安装中断恢复旧 manifest/文件/缺失状态。恢复失败返回专用状态 `86`，保留锁、staging 和 recovery backup，后续入口先读取阻断证据。`.env`、`certs/`、`releases/`、`backups/` 始终不进入 support 白名单。
+10. `deploy-release.sh` 强校验 release tag SHA、`DEPLOY_GIT_SHA`、expected SHA 三者一致，只消费本 invocation manifest，pull 后在 rollout 前核对 OCI digest。deploy/rollback 先获取严格操作员配置锁，在持锁期间读取和复核 `.env`，但绝不替换它；release 镜像单独经 `staged-images.env` 原子晋升到 `current-images.env`。current/previous/staged manifest、image state、summary、history 和备份验证状态继续使用同目录临时文件 + 原子 rename。受支持配置更新只能走 `update-deploy-env.sh <candidate> <expected-sha256>` 并共享严格锁；锁下竞争者返回 75，不会覆盖操作员值。dotenv 解析错误只输出 file/line/固定 category，不得输出 key、value 或 token。
 
 GitHub secrets：
 
@@ -354,11 +361,11 @@ SEED_ADMIN_PASSWORD=<固定 Cloud 管理员密码>
 
 GitHub `cloud-image` / `cloud-deploy` 只作为灾备路径，且 workflow 已要求确认词。日常发布不得等待它们。
 
-服务器端 `deploy-release.sh` 不再是手工入口，应急情况也不得手工伪造 invocation、plan digest、image manifest 或预获取锁。本机 SSH 触发不可用时，必须先恢复操作端/SSH 后从 `Invoke-WorkspaceDeploy.ps1` 恢复。旧 GitHub deploy workflow 尚未迁移到本契约，在单独改造并复验前不得使用。
+服务器端 `deploy-release.sh` 不再是日常或手工入口；日常由稳定 `runner/iiot-release-runner.sh` 接收请求。基础设施维护仍不得手工伪造旧 invocation/plan/support digest。本机 SSH 触发不可用时，恢复连接后优先用 `Deploy.ps1 -ResumeInvocation` 重发已构建请求。
 
 发布脚本会：
 
-1. 获取 Cloud release lock，并执行 `pre-deploy-check.sh`；它会同时校验 release/cleanup 锁、`.env`、镜像、`certs/` 和 `releases/*` 的 non-root 可访问性。活锁 fail-fast，已证明 stale 的锁才自动清理。
+1. 获取 Cloud release lock，并执行 `pre-deploy-check.sh`；它会同时校验 release/cleanup/config 锁、`.env`、镜像、`certs/` 和 `releases/*` 的 non-root 可访问性。release/cleanup 活锁 fail-fast，已证明 stale 的锁才可清理；config 锁永不 stale 自动清理。
 2. 执行 `postgres-backup.sh`。
 3. 根据 release tag 重写应用镜像坐标；全量发布重写五个应用镜像，按需发布必须已有 `current-release.env`，并基于当前 release 保留未选服务镜像。
 4. `docker compose pull` 从 Harbor 拉取应用镜像。

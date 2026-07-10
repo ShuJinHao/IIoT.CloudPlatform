@@ -7,12 +7,13 @@ EXPORT_DIR="$DEPLOY_DIR/backups/client-release-history"
 TIMESTAMP=$(date +"%Y%m%d%H%M%S")
 EXPORT_FILE="$EXPORT_DIR/client-release-history-$TIMESTAMP.sql"
 CHECKSUM_FILE="$EXPORT_FILE.sha256"
-POSTGRES_READY_ATTEMPTS=${POSTGRES_READY_ATTEMPTS:-30}
 
 . "$SCRIPT_DIR/release-common.sh"
 
 require_docker_compose
 load_dotenv
+POSTGRES_READY_ATTEMPTS=${POSTGRES_READY_ATTEMPTS:-30}
+require_decimal_range POSTGRES_READY_ATTEMPTS "$POSTGRES_READY_ATTEMPTS" 1 300 || exit $?
 
 mkdir -p "$EXPORT_DIR"
 compose up -d postgres >/dev/null

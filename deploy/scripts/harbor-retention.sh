@@ -80,8 +80,9 @@ if [[ "$PROJECT" == "." || "$PROJECT" == ".." || "$PROJECT" == *.example* || "$P
   exit 64
 fi
 
-if ! [[ "$KEEP" =~ ^[0-9]+$ ]] || [ "$KEEP" -lt 1 ]; then
-  printf 'HARBOR_KEEP_SHA_TAGS must be a positive integer: %s\n' "$KEEP" >&2
+if ! [[ "$KEEP" =~ ^[0-9]+$ ]] \
+  || ! awk -v value="$KEEP" 'BEGIN { exit !(value >= 1 && value <= 1000) }'; then
+  printf 'HARBOR_KEEP_SHA_TAGS must be a decimal integer in range 1..1000.\n' >&2
   exit 64
 fi
 
@@ -194,7 +195,16 @@ with open(sys.argv[1], encoding="utf-8") as handle:
     print(len(json.load(handle)))
 PY
 )"
+    if ! [[ "$count" =~ ^[0-9]+$ ]] \
+      || ! awk -v value="$count" -v maximum="$PAGE_SIZE" 'BEGIN { exit !(value >= 0 && value <= maximum) }'; then
+      printf 'Harbor artifact page returned an invalid item count.\n' >&2
+      exit 65
+    fi
     [ "$count" -ge "$PAGE_SIZE" ] || break
+    if [ "$page" -ge 10000 ]; then
+      printf 'Harbor artifact pagination exceeded the safe page limit.\n' >&2
+      exit 65
+    fi
     page=$((page + 1))
   done
 

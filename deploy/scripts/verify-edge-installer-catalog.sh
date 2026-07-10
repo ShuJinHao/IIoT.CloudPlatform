@@ -277,7 +277,13 @@ check_get_download() {
     printf '%s GET returned HTTP %s.\n' "$label" "$status" >&2
     exit 1
   fi
-  if [ -z "$actual_size" ] || [ "$actual_size" -le 0 ]; then
+  case "$actual_size" in
+    ''|*[!0-9]*)
+      printf '%s GET returned an invalid byte count.\n' "$label" >&2
+      exit 1
+      ;;
+  esac
+  if ! awk -v value="$actual_size" 'BEGIN { exit !(value > 0 && value <= 1099511627776) }'; then
     printf '%s GET returned no bytes.\n' "$label" >&2
     exit 1
   fi

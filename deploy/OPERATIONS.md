@@ -2,7 +2,9 @@
 
 三项目上传部署统一入口见 [上传部署总览](../../docs/上传部署总览.md)。
 
-> Current status (2026-07-10): the workspace contract, expected-SHA binding, per-invocation manifests, build-before-support ordering, one transaction lock, OCI digest verification, healthy no-op, and cleanup-only recovery passed 9/9 isolated fake behavior tests. No network, Harbor, SSH, or real production deploy/history/cleanup/health closure ran in this round; this guide is a target contract, not production-acceptance evidence.
+Cloud 日常应用发布使用工作区 `pwsh ./deploy/Deploy.ps1 -Target Cloud ...`。稳定 Runner 一次安装后不会在应用发布中被替换；日常事务只做必要数据库备份、选中镜像 pull、`--no-deps` 应用更新、健康检查和失败回滚。本文后续旧 `current-release`、support transaction 和 cleanup 说明继续用于基础设施维护与灾备诊断。
+
+> Current status (2026-07-10): the workspace contract, fresh remote-tip/expected-SHA binding, per-invocation manifests, build-before-support ordering, parent-owned transaction lock, promotion-proof cleanup-only recovery, bounded installer/release process groups, read-only local lock precheck, secret-free dotenv categories, bounded decimal inputs, a strict shared operator-config lock, operator `.env` / release-image state separation, atomic release-state replacement, OCI/config digest verification, healthy no-op, and durable old-transaction evidence passed 33/33 isolated fake behavior tests. `DeploymentGuardTests` passed 20/20 and the `~Deploy` gate passed 39/39. No network, Harbor, SSH, or real production deploy/history/cleanup/health closure ran in this round; this guide is a target contract, not production-acceptance evidence.
 
 ## Scope
 
@@ -22,10 +24,17 @@ Application release state is stored only on the server under `deploy/releases/`:
 
 ```text
 releases/
+  routine-current.env
+  routine-history/
+    <invocation-id>.env
+    <invocation-id>.failed.env
+  routine-incoming/
   current-release.env
   current-release.summary.md
+  current-images.env
   previous-release.env
   staged-release.env
+  staged-images.env
   history/
     <timestamp>-<release-id>.env
     <timestamp>-<release-id>.summary.md
@@ -46,8 +55,17 @@ It does not duplicate database passwords or other runtime secrets.
 Routine non-root contract:
 
 - `deploy/releases/` and `deploy/releases/history/` must stay readable, writable, and searchable by the standard deploy user.
-- Existing `current-release.env`, `previous-release.env`, `staged-release.env`, and `current-release.summary.md` must stay readable and writable by the standard deploy user.
+- Existing `current-release.env`, `previous-release.env`, `staged-release.env`, `current-release.summary.md`, `current-images.env`, and `staged-images.env` must stay readable and writable by the standard deploy user.
 - If a root emergency path touched release-state files, restore owner/mode before the next routine deploy.
+
+Operator configuration updates must use the shared strict lock:
+
+```sh
+expected_env_sha256=$(sha256sum .env | awk '{print $1}')
+./scripts/update-deploy-env.sh /secure/operator/cloud.env "$expected_env_sha256"
+```
+
+The candidate is parsed before replacement, the current digest is rechecked after the lock is acquired, and replacement is atomic. Exit `75` means either the strict config lock already exists or the expected digest is stale. Do not delete the lock directory automatically: inspect its `pid`, `process-start`, `purpose`, `release`, `phase`, `script`, and `created-at` evidence first. Direct writes to `.env` cannot participate in mutual exclusion and are therefore unsupported.
 
 ## Internal Health Probe
 
@@ -79,24 +97,28 @@ curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' "http
 
 ## Standard Release
 
-Standard production release is driven from the operator workstation: push GitHub for source traceability, run the workspace entrypoint `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud ...`, build selected application images locally, push Harbor, then SSH-trigger the server-side release entrypoint.
+Routine application release is driven from the operator workstation: push GitHub for source traceability, run `pwsh ./deploy/Deploy.ps1 -Target Cloud ... -Deploy`, build the fetched remote tip, push immutable images to Harbor, then send one SSH transaction to the stable server runner. The older workspace transaction remains for deployment-infrastructure maintenance.
 
 Routine deployment red lines:
 
 - Do not wait for `cloud-image` or `cloud-deploy` for routine deployment. Those workflows are emergency-only and require confirmation inputs.
-- Use the workspace entrypoint `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services <services>` or explicit `-All`. The project-local `local-release.sh` is a delegated implementation, not a second operator entrypoint.
+- Use `pwsh ./deploy/Deploy.ps1 -Target Cloud -Services <services> -Deploy` or explicit `-All`. The project-local `local-release.sh` is a legacy maintenance implementation, not a second operator entrypoint.
 - If a local build, Harbor operation, or SSH deploy exceeds its timeout, stop and diagnose; do not keep watching until a GitHub job or shell command times out.
-- Do not invoke the project-local script directly to work around an AI permission prompt. The workspace entrypoint streams child output and emits a 30-second heartbeat during silent phases.
-- Before retrying an interrupted or failed release, inspect the remote current release, container images, managed release/cleanup locks, and cleanup summary. A running target SHA must not be blindly redeployed.
+- Do not invoke the project-local script directly to work around an AI permission prompt. The routine entrypoint exposes stable phases and one SSH transaction.
+- Before retrying an interrupted or failed release, inspect the remote current release, container images, managed release/cleanup/config locks, and cleanup summary. A running target SHA must not be blindly redeployed.
+- Operator `.env` updates are supported only through `scripts/update-deploy-env.sh <candidate-env-file> <expected-current-sha256>`. Deployment, rollback, and that updater hold the same strict config lock; any existing config lock fails closed with `75` and is never removed by stale-lock automation.
+- Deployment and rollback never replace `.env`. Release-owned application images are atomically promoted through `releases/staged-images.env` to `releases/current-images.env`, which Docker Compose reads after the operator `.env` as an override layer. Direct `.env` editing bypasses the lock and is unsupported.
 
 The standard sequence is:
 
 1. Push or merge to `main`.
 2. `cloud-ci` runs the fast gate by default: restore/build, ServiceLayer tests, ConfigurationGuard tests, deploy script syntax checks, web build, and compose config. Full EndToEnd is manual via `workflow_dispatch`.
-3. Run `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services <services>` from the workspace root. The workspace entrypoint injects the entrypoint marker, invocation id, full expected SHA, and release-plan digest. Formal `local-release.sh` execution rejects a missing or invalid contract before build or SSH and verifies that the detached source snapshot equals the expected SHA.
+3. Run `pwsh ./deploy/Deploy.ps1 -Target Cloud -Services <services> -Deploy` from the workspace root. It fetches the configured remote tip, creates a detached snapshot, builds immutable OCI images, and sends one digest-bound request to the stable runner.
 4. `local-release.sh` packages and syntax-checks only the allowlisted support files locally, then `build-and-push.sh` builds the selected `sha-<git-sha>` images. Every invocation owns its services file and image manifest; the manifest binds invocation, plan, tag, services, image references, and OCI digests.
-5. Only after all image builds succeed does `local-release.sh` stage support plus the run-bound image manifest remotely. The remote transaction verifies both SHA-256 values, acquires one invocation/plan-bound release lock, atomically installs support, and keeps that lock through rollout, promotion, and cleanup. A build failure therefore cannot modify remote support files. `.env`, `certs/`, `releases/`, and `backups/` remain excluded.
-6. `deploy-release.sh` requires the pre-acquired transaction lock and enforces equality among `sha-<expected-sha>`, `DEPLOY_GIT_SHA`, and the approved expected SHA. It consumes only that invocation's image manifest and verifies pulled OCI digests before rollout. A healthy current release with the same SHA and plan is a no-op; a cleanup-partial release retries cleanup only.
+5. Only after all image builds succeed does `local-release.sh` stage support plus the run-bound image manifest remotely. Before lock acquisition, `workspace-release-transaction.sh` scans incomplete transaction markers, lock metadata, staging, and recovery directories. Any orphan state after SIGKILL, OOM, or reboot is converted to durable blocked evidence and returns `78`; it is never silently removed as a stale lock. The parent writes an atomic transaction marker before any support mutation.
+6. The parent owns the invocation/plan-bound lock and launches both installer and release child in isolated sessions/process groups through `env -i`. HUP/INT/TERM is sent to the whole group, followed by bounded TERM grace and KILL escalation; restore and lock release are prohibited until no descendant remains. Once current state and marker prove promotion, cleanup must never restore old support. A parent kill after the promotion marker leaves the new support/current/runtime consistent, and the next matching invocation performs transaction cleanup only.
+7. Support installation preflights the staged candidate before mutation, backs up the union of new and previous allowlists including missing-file state, and restores the previous manifest atomically on failure. Old manifest traversal, protected paths, and symlinked targets are rejected. `.env`, `certs/`, `releases/`, and `backups/` remain excluded from support synchronization.
+8. `deploy-release.sh` requires the parent-owned transaction marker/lock and verifies OCI digests. Deploy and rollback acquire the strict config lock before reading `.env`, keep it through rollout and final release-image promotion, and never overwrite operator configuration. A supported competing updater loses the lock with `75`; a detected unsupported direct edit also aborts without being overwritten. Release-owned images and current/previous/staged manifests, summaries, history, and backup/verify state use same-directory temporary files plus atomic rename. Dotenv parse errors contain only file, line, and a fixed category, never the offending key/value/token.
 
 Harbor application repositories keep only the current production `sha-*` tag. Local image build must not remove the current production tag before deploy health checks pass. Post-release cleanup deletes old application `sha-*` tags and Harbor Garbage Collection reclaims disk.
 
@@ -119,13 +141,13 @@ Release flow is fixed:
 1. acquire the managed Cloud release lock, then run `pre-deploy-check.sh`; live/initializing release or cleanup locks fail immediately, while only proven stale locks are removed
 2. `postgres-backup.sh`
 3. write `staged-release.env`
-4. rewrite the selected application image coordinates in `.env` (`--services` empty means all five; incremental keeps unselected images from `current-release.env`)
+4. construct a private rollout env from operator `.env` plus selected application image coordinates (`--services` empty means all five; incremental keeps unselected images from `current-release.env`); never replace operator `.env`
 5. `docker compose pull` selected application services from Harbor
 6. keep infrastructure available
 7. run `iiot-migration` only when migration is part of the selected service set
 8. start selected application containers, and start or restart `nginx-gateway` when the selected release affects browser traffic
 9. `post-deploy-check.sh`
-10. promote the healthy runtime to `current`, rotate `previous`, and write the base current/history state
+10. atomically promote `staged-images.env` to `current-images.env`, promote the healthy runtime to `current`, rotate `previous`, and write the base current/history state
 11. stream post-release cleanup live: remove Docker/BuildKit build cache, report and clean Docker-managed images separately from containerd-managed content, remove only local old application images that are not referenced by current containers, delete old Harbor application tags, and run or confirm Harbor GC
 12. append cleanup results to `current-release.summary.md` and the matching history summary, then release the managed Cloud release lock
 
