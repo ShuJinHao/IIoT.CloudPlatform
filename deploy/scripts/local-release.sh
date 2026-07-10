@@ -218,7 +218,7 @@ run_with_timeout() {
 print_deploy_diagnostics() {
   cat >&2 <<EOF
 
-Cloud SSH deploy failed or timed out.
+Cloud deployment step failed. Use the immediately preceding error to identify whether it was access, lock, support sync, build, SSH, or timeout.
 Diagnostics to run before retrying:
   ssh $SSH_TARGET 'cd $REMOTE_DEPLOY_DIR && docker compose --env-file .env -f docker-compose.prod.yml ps'
   ssh $SSH_TARGET 'cd $REMOTE_DEPLOY_DIR && tail -n 200 releases/current-release.summary.md'
