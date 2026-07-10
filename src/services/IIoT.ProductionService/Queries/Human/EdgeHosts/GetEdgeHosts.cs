@@ -60,6 +60,7 @@ public sealed class GetEdgeHostPagedListHandler(
         var deviceIds = page.Devices.Select(device => device.DeviceId).ToList();
         var statesByDevice = await GetClientStatesByDeviceAsync(deviceIds, cancellationToken);
         var plcStatesByDevice = await GetPlcStatesByDeviceAsync(deviceIds, cancellationToken);
+        var utcNow = DateTime.UtcNow;
 
         var pageItems = page.Devices
             .Select(device => EdgeHostMapping.ToListItemDto(
@@ -67,7 +68,8 @@ public sealed class GetEdgeHostPagedListHandler(
                 device.DeviceName,
                 device.ClientCode,
                 statesByDevice.GetValueOrDefault(device.DeviceId),
-                plcStatesByDevice.GetValueOrDefault(device.DeviceId) ?? []))
+                plcStatesByDevice.GetValueOrDefault(device.DeviceId) ?? [],
+                utcNow))
             .ToList();
 
         return Result.Success(new PagedList<EdgeHostListItemDto>(
@@ -135,8 +137,9 @@ public sealed class GetEdgeHostDetailHandler(
             device.Id,
             device.Code,
             cancellationToken);
+        var utcNow = DateTime.UtcNow;
 
-        return Result.Success(EdgeHostMapping.ToDetailDto(device, clientState, plcStates));
+        return Result.Success(EdgeHostMapping.ToDetailDto(device, clientState, plcStates, utcNow));
     }
 
     internal static async Task<Result<Device>> ResolveDeviceAsync(

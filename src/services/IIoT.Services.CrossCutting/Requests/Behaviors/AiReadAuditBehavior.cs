@@ -43,7 +43,12 @@ public sealed class AiReadAuditBehavior<TRequest, TResponse>(
         catch (Exception ex)
         {
             stopwatch.Stop();
-            await WriteAuditAsync(default, succeeded: false, stopwatch.Elapsed, ex.Message, cancellationToken);
+            await WriteAuditAsync(
+                default,
+                succeeded: false,
+                stopwatch.Elapsed,
+                $"exception:{ex.GetType().Name}",
+                cancellationToken);
             throw;
         }
     }
@@ -60,7 +65,7 @@ public sealed class AiReadAuditBehavior<TRequest, TResponse>(
         var metadata = ExtractMetadata(response);
         var requestId = httpContext?.TraceIdentifier ?? string.Empty;
         var endpoint = httpContext?.Request.Path.Value ?? typeof(TRequest).Name;
-        var delegatedUserId = principal?.FindFirst(IIoTClaimTypes.DelegatedUserId)?.Value;
+        var delegatedUserId = ResolveDelegatedUserAuditValue(principal);
         var delegatedDeviceCount = principal?.FindAll(IIoTClaimTypes.DelegatedDeviceId).Count() ?? 0;
 
         await auditTrailService.TryWriteAsync(
@@ -92,9 +97,9 @@ public sealed class AiReadAuditBehavior<TRequest, TResponse>(
 
     private static string? ExtractFailureReason(TResponse? response)
     {
-        return response is IResult { Errors: not null } result
-            ? string.Join("; ", result.Errors.Where(error => !string.IsNullOrWhiteSpace(error)))
-            : null;
+        return response is IResult result
+            ? $"result:{result.Status}"
+            : "result:unknown";
     }
 
     private static string BuildSummary(
@@ -126,6 +131,22 @@ public sealed class AiReadAuditBehavior<TRequest, TResponse>(
     {
         return principal?.FindFirstValue(ClaimTypes.Name)
                ?? principal?.FindFirstValue(ClaimTypes.NameIdentifier);
+    }
+
+    private static string ResolveDelegatedUserAuditValue(ClaimsPrincipal? principal)
+    {
+        var claims = principal?
+            .FindAll(IIoTClaimTypes.DelegatedUserId)
+            .Select(claim => claim.Value)
+            .ToArray() ?? [];
+        if (claims.Length == 0)
+            return "none";
+
+        return claims.Length == 1
+               && Guid.TryParse(claims[0], out var delegatedUserId)
+               && delegatedUserId != Guid.Empty
+            ? delegatedUserId.ToString("D")
+            : "invalid";
     }
 
     private static string? Truncate(string? value, int maxLength)

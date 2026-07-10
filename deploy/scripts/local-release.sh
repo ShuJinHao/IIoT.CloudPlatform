@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$DEPLOY_DIR/.." && pwd)"
+ORIGINAL_ARGS=("$@")
 
 REQUESTED_SERVICES=""
 REQUESTED_ALL=false
@@ -39,6 +40,17 @@ SUPPORT_FILES=(
 SUPPORT_MANIFEST_NAME=.cloud-support-manifest.sha256
 SUPPORT_ALLOWLIST_NAME=.cloud-support-allowlist.txt
 SUPPORT_INSTALLER_NAME=.install-cloud-support.sh
+IMAGE_MANIFEST_NAME=.cloud-image-manifest.env
+SYNCED_SUPPORT_MANIFEST_DIGEST=""
+SYNCED_IMAGE_MANIFEST_DIGEST=""
+SYNCED_IMAGE_CONTENT_DIGEST=""
+
+WORKSPACE_ENTRYPOINT="${IIOT_WORKSPACE_DEPLOY_ENTRYPOINT:-}"
+WORKSPACE_INVOCATION_ID="${IIOT_WORKSPACE_DEPLOY_INVOCATION_ID:-}"
+WORKSPACE_EXPECTED_SHA="${IIOT_WORKSPACE_DEPLOY_EXPECTED_SHA:-}"
+WORKSPACE_PLAN_DIGEST="${IIOT_WORKSPACE_DEPLOY_PLAN_DIGEST:-}"
+WORKSPACE_PLAN_FILE="${IIOT_WORKSPACE_DEPLOY_PLAN_FILE:-}"
+WORKSPACE_PROFILE_DIGEST="${IIOT_WORKSPACE_DEPLOY_PROFILE_DIGEST:-}"
 
 usage() {
   cat <<'EOF'
@@ -57,6 +69,136 @@ EOF
 fail() {
   printf '%s\n' "$*" >&2
   exit 64
+}
+
+sha256_early_file() {
+  local path="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$path" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$path" | awk '{print $1}'
+  else
+    fail "sha256sum or shasum is required."
+  fi
+}
+
+require_uint_range() {
+  local name="$1"
+  local value="$2"
+  local minimum="$3"
+  local maximum="$4"
+  [[ "$value" =~ ^[0-9]+$ ]] || fail "$name must contain decimal digits only: $value"
+  [ "$value" -ge "$minimum" ] && [ "$value" -le "$maximum" ] \
+    || fail "$name must be between $minimum and $maximum: $value"
+}
+
+validate_transport_inputs() {
+  case "$REMOTE_DEPLOY_DIR" in
+    /*) ;;
+    *) fail "REMOTE_DEPLOY_DIR must be an absolute path: $REMOTE_DEPLOY_DIR" ;;
+  esac
+  [[ "$REMOTE_DEPLOY_DIR" =~ ^/[A-Za-z0-9._/-]+$ ]] \
+    || fail "REMOTE_DEPLOY_DIR contains whitespace, quotes, control characters, or unsupported characters: $REMOTE_DEPLOY_DIR"
+  case "$REMOTE_DEPLOY_DIR" in
+    *..*|*//* ) fail "REMOTE_DEPLOY_DIR must not contain '..' or empty path segments: $REMOTE_DEPLOY_DIR" ;;
+  esac
+
+  [[ "$SSH_TARGET" =~ ^([A-Za-z0-9][A-Za-z0-9._-]*@)?[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+    || fail "SSH target must be a safe alias or user@host and must not start with '-': $SSH_TARGET"
+
+  require_uint_range SSH_TIMEOUT_SECONDS "$SSH_TIMEOUT_SECONDS" 60 14400
+  require_uint_range SYNC_TIMEOUT_SECONDS "$SYNC_TIMEOUT_SECONDS" 10 1800
+  require_uint_range SSH_CONNECT_TIMEOUT_SECONDS "$SSH_CONNECT_TIMEOUT_SECONDS" 1 120
+}
+
+validate_workspace_contract() {
+  local actual_sha="${1:-}"
+
+  if [ "$DRY_RUN" = true ]; then
+    return
+  fi
+
+  [ "$WORKSPACE_ENTRYPOINT" = 1 ] \
+    || fail "Formal Cloud release must be delegated by deploy/Invoke-WorkspaceDeploy.ps1 (missing IIOT_WORKSPACE_DEPLOY_ENTRYPOINT=1)."
+  [[ "$WORKSPACE_INVOCATION_ID" =~ ^[A-Za-z0-9._:-]{1,128}$ ]] \
+    || fail "Formal Cloud release requires a safe IIOT_WORKSPACE_DEPLOY_INVOCATION_ID."
+  [[ "$WORKSPACE_EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] \
+    || fail "Formal Cloud release requires a lowercase full 40-hex IIOT_WORKSPACE_DEPLOY_EXPECTED_SHA."
+  [[ "$WORKSPACE_PLAN_DIGEST" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "Formal Cloud release requires a lowercase 64-hex IIOT_WORKSPACE_DEPLOY_PLAN_DIGEST."
+  [[ "$WORKSPACE_PROFILE_DIGEST" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "Formal Cloud release requires a lowercase 64-hex IIOT_WORKSPACE_DEPLOY_PROFILE_DIGEST."
+  [ -n "$WORKSPACE_PLAN_FILE" ] && [ -r "$WORKSPACE_PLAN_FILE" ] \
+    || fail "Formal Cloud release requires a readable IIOT_WORKSPACE_DEPLOY_PLAN_FILE."
+
+  if [ -n "$actual_sha" ] && [ "$actual_sha" != "$WORKSPACE_EXPECTED_SHA" ]; then
+    fail "Cloud fixed source SHA does not match the approved release plan: expected=$WORKSPACE_EXPECTED_SHA actual=$actual_sha"
+  fi
+}
+
+canonical_requested_services() {
+  local values
+  local item
+  local normalized
+  values=""
+  if [ "$REQUESTED_ALL" = true ]; then
+    printf '%s\n' 'dataworker,gateway,httpapi,migration,web'
+    return
+  fi
+  for item in $(printf '%s' "$REQUESTED_SERVICES" | tr ',' ' '); do
+    case "$item" in
+      httpapi|iiot-httpapi) normalized=httpapi ;;
+      gateway|iiot-gateway) normalized=gateway ;;
+      dataworker|iiot-dataworker) normalized=dataworker ;;
+      migration|iiot-migration|iiot-migrationworkapp) normalized=migration ;;
+      web|iiot-web) normalized=web ;;
+      *) fail "Unsupported Cloud service in release plan binding: $item" ;;
+    esac
+    values="$values\n$normalized"
+  done
+  printf '%b\n' "$values" | sed '/^$/d' | sort -u | paste -sd, -
+}
+
+validate_release_plan_binding() {
+  local actual_digest
+  local expected_services
+  local expected_all
+
+  if [ "$DRY_RUN" = true ] && [ -z "$WORKSPACE_PLAN_FILE" ]; then
+    return
+  fi
+  [ -r "$WORKSPACE_PLAN_FILE" ] || fail "Workspace release plan is missing or unreadable: ${WORKSPACE_PLAN_FILE:-missing}"
+  actual_digest="$(sha256_early_file "$WORKSPACE_PLAN_FILE")"
+  [ "$actual_digest" = "$WORKSPACE_PLAN_DIGEST" ] \
+    || fail "Workspace release plan digest mismatch: expected=$WORKSPACE_PLAN_DIGEST actual=$actual_digest"
+  expected_services="$(canonical_requested_services)"
+  expected_all=false
+  [ "$REQUESTED_ALL" = true ] && expected_all=true
+
+  IIOT_PLAN_VALIDATE_PATH="$WORKSPACE_PLAN_FILE" \
+  IIOT_PLAN_VALIDATE_SHA="$WORKSPACE_EXPECTED_SHA" \
+  IIOT_PLAN_VALIDATE_SERVICES="$expected_services" \
+  IIOT_PLAN_VALIDATE_ALL="$expected_all" \
+  IIOT_PLAN_VALIDATE_PROFILE="$WORKSPACE_PROFILE_DIGEST" \
+  pwsh -NoProfile -Command '& {
+    $ErrorActionPreference = "Stop"
+    $PlanPath = $env:IIOT_PLAN_VALIDATE_PATH
+    $ExpectedSha = $env:IIOT_PLAN_VALIDATE_SHA
+    $ExpectedServices = $env:IIOT_PLAN_VALIDATE_SERVICES
+    $ExpectedAll = $env:IIOT_PLAN_VALIDATE_ALL
+    $ExpectedProfileDigest = $env:IIOT_PLAN_VALIDATE_PROFILE
+    $plan = Get-Content -Raw -Encoding UTF8 -LiteralPath $PlanPath | ConvertFrom-Json
+    if ([string]$plan.target -cne "Cloud") { throw "release plan target must be Cloud" }
+    if (([string]$plan.fullSha).ToLowerInvariant() -cne $ExpectedSha) { throw "release plan fullSha mismatch" }
+    if (([string]$plan.profileDigest).ToLowerInvariant() -cne $ExpectedProfileDigest) { throw "release plan profileDigest mismatch" }
+    $services = @($plan.services | ForEach-Object { ([string]$_).Trim() } | Sort-Object -Unique -CaseSensitive) -join ","
+    if ($services -cne $ExpectedServices) { throw "release plan services mismatch: expected=$ExpectedServices actual=$services" }
+    $expectedAllBoolean = [bool]::Parse($ExpectedAll)
+    if ([bool]$plan.all -ne $expectedAllBoolean) { throw "release plan all-services mismatch" }
+  }
+  ' \
+    || fail "Workspace release plan content does not match this Cloud invocation."
+  printf 'Cloud workspace release plan binding verified: digest=%s services=%s\n' "$actual_digest" "$expected_services"
 }
 
 print_shell_argument() {
@@ -122,9 +264,16 @@ fi
 if [ "$REQUESTED_ALL" != true ] && [ -z "$REQUESTED_SERVICES" ]; then
   fail "Cloud local release requires explicit --services or --all."
 fi
+validate_workspace_contract
+if [ -z "${DEPLOY_ARTIFACT_DIR:-}" ]; then
+  DEPLOY_ARTIFACT_DIR="$REPO_ROOT/artifacts/deploy/runs/${WORKSPACE_INVOCATION_ID:-dry-run-$$}"
+  export DEPLOY_ARTIFACT_DIR
+fi
 if [ -z "$SSH_TARGET" ]; then
   fail "Cloud local release requires DEPLOY_SSH_TARGET or --ssh-target."
 fi
+validate_transport_inputs
+validate_release_plan_binding
 case "$SSH_TARGET" in
   *.example*|*internal.example*)
     fail "SSH target still uses the documentation example domain: $SSH_TARGET"
@@ -135,6 +284,22 @@ case "$SSH_TARGET" in
     fi
     ;;
 esac
+
+child_process_ids() {
+  local parent_pid="$1"
+  ps -axo pid=,ppid= | awk -v parent_pid="$parent_pid" '$2 == parent_pid { print $1 }'
+}
+
+signal_process_tree() {
+  local signal_name="$1"
+  local root_pid="$2"
+  local child_pid
+
+  for child_pid in $(child_process_ids "$root_pid"); do
+    signal_process_tree "$signal_name" "$child_pid"
+  done
+  kill "-$signal_name" "$root_pid" 2>/dev/null || true
+}
 
 run_with_timeout() {
   local seconds="$1"
@@ -160,21 +325,40 @@ run_with_timeout() {
   "$@" &
   cmd_pid=$!
   (
-    sleep "$seconds"
+    local sleep_pid=""
+    stop_watchdog() {
+      if [ -n "$sleep_pid" ]; then
+        kill "$sleep_pid" 2>/dev/null || true
+        wait "$sleep_pid" 2>/dev/null || true
+      fi
+      exit 0
+    }
+    trap stop_watchdog HUP INT TERM
+
+    sleep "$seconds" &
+    sleep_pid=$!
+    wait "$sleep_pid" || exit 0
     if kill -0 "$cmd_pid" 2>/dev/null; then
       printf 'Timed out after %s seconds: %s\n' "$seconds" "$label" >&2
       : > "$marker"
-      kill -TERM "$cmd_pid" 2>/dev/null || true
-      sleep 5
-      kill -KILL "$cmd_pid" 2>/dev/null || true
+      signal_process_tree TERM "$cmd_pid"
+      grace_attempt=0
+      while kill -0 "$cmd_pid" 2>/dev/null && [ "$grace_attempt" -lt 50 ]; do
+        sleep 0.1
+        grace_attempt=$((grace_attempt + 1))
+      done
+      if kill -0 "$cmd_pid" 2>/dev/null; then
+        signal_process_tree KILL "$cmd_pid"
+      fi
     fi
   ) &
   timer_pid=$!
 
-  set +e
-  wait "$cmd_pid"
-  exit_code=$?
-  set -e
+  if wait "$cmd_pid"; then
+    exit_code=0
+  else
+    exit_code=$?
+  fi
   kill "$timer_pid" 2>/dev/null || true
   wait "$timer_pid" 2>/dev/null || true
 
@@ -189,7 +373,7 @@ run_with_timeout() {
 print_deploy_diagnostics() {
   cat >&2 <<EOF
 
-Cloud SSH deploy failed or timed out.
+Cloud deployment step failed. Use the immediately preceding error to identify whether it was access, lock, support sync, build, SSH, or timeout.
 Diagnostics to run before retrying:
   ssh $SSH_TARGET 'cd $REMOTE_DEPLOY_DIR && docker compose --env-file .env -f docker-compose.prod.yml ps'
   ssh $SSH_TARGET 'cd $REMOTE_DEPLOY_DIR && tail -n 200 releases/current-release.summary.md'
@@ -207,7 +391,7 @@ check_remote_support_file_access() {
     return
   fi
 
-  if ! run_with_timeout "$SYNC_TIMEOUT_SECONDS" "check Cloud deploy support target access" \
+  if run_with_timeout "$SYNC_TIMEOUT_SECONDS" "check Cloud deploy support target access" \
     bash -c '
       set -euo pipefail
       ssh_target="$1"
@@ -258,8 +442,13 @@ printf "Cloud deploy support target access check passed: %s\n" "$REMOTE_DEPLOY_D
 printf "Cloud deploy support protected paths: untouched .env certs/ releases/ backups/\n"
 EOF
     ' bash "$SSH_TARGET" "$REMOTE_DEPLOY_DIR" "$SSH_CONNECT_TIMEOUT_SECONDS"; then
+    access_status=0
+  else
+    access_status=$?
+  fi
+  if [ "$access_status" -ne 0 ]; then
     print_deploy_diagnostics
-    exit 73
+    exit "$access_status"
   fi
 }
 
@@ -269,7 +458,7 @@ check_remote_release_locks() {
     return
   fi
 
-  if ! run_with_timeout "$SYNC_TIMEOUT_SECONDS" "check Cloud release and cleanup locks" \
+  if run_with_timeout "$SYNC_TIMEOUT_SECONDS" "check Cloud release and cleanup locks" \
     bash -c '
       set -euo pipefail
       ssh_target="$1"
@@ -311,8 +500,13 @@ done
 printf "Cloud legacy lock precheck passed; no release/cleanup lock directory exists.\n"
 EOF
     ' bash "$SSH_TARGET" "$REMOTE_DEPLOY_DIR" "$SSH_CONNECT_TIMEOUT_SECONDS"; then
+    lock_status=0
+  else
+    lock_status=$?
+  fi
+  if [ "$lock_status" -ne 0 ]; then
     print_deploy_diagnostics
-    exit 75
+    exit "$lock_status"
   fi
 }
 
@@ -329,6 +523,82 @@ sha256_file() {
   fi
 
   fail "sha256sum or shasum is required to build the Cloud support manifest."
+}
+
+read_manifest_value() {
+  local manifest_path="$1"
+  local key="$2"
+  sed -n "s/^${key}=//p" "$manifest_path" | tail -n 1
+}
+
+validate_run_image_manifest() {
+  local manifest_path="$1"
+  local services_csv="$2"
+  local key
+  local image_ref
+  local digest
+
+  [ -f "$manifest_path" ] || fail "Missing run-private Cloud image manifest: $manifest_path"
+  [ "$(read_manifest_value "$manifest_path" CLOUD_DEPLOY_INVOCATION_ID)" = "${WORKSPACE_INVOCATION_ID:-standalone}" ] \
+    || fail "Cloud image manifest invocation does not match this run."
+  [ "$(read_manifest_value "$manifest_path" CLOUD_DEPLOY_EXPECTED_SHA)" = "${WORKSPACE_EXPECTED_SHA:-${TAG#sha-}}" ] \
+    || fail "Cloud image manifest SHA does not match the approved source SHA."
+  [ "$(read_manifest_value "$manifest_path" CLOUD_DEPLOY_PLAN_DIGEST)" = "${WORKSPACE_PLAN_DIGEST:-standalone}" ] \
+    || fail "Cloud image manifest plan digest does not match this invocation."
+  [ "$(read_manifest_value "$manifest_path" CLOUD_DEPLOY_RELEASE_TAG)" = "$TAG" ] \
+    || fail "Cloud image manifest release tag does not match the frozen source."
+  [ "$(read_manifest_value "$manifest_path" CLOUD_DEPLOY_SERVICES)" = "$services_csv" ] \
+    || fail "Cloud image manifest services do not match the run-private services file."
+
+  for key in IIOT_HTTPAPI_IMAGE IIOT_GATEWAY_IMAGE IIOT_DATAWORKER_IMAGE IIOT_MIGRATION_IMAGE IIOT_WEB_IMAGE; do
+    image_ref="$(read_manifest_value "$manifest_path" "$key")"
+    [ -n "$image_ref" ] || continue
+    case "$image_ref" in
+      *:"$TAG") ;;
+      *) fail "Cloud image manifest contains an image outside the frozen release tag: $key=$image_ref" ;;
+    esac
+    digest="$(read_manifest_value "$manifest_path" "${key}_DIGEST")"
+    if [ "$DRY_RUN" = true ]; then
+      [ "$digest" = dry-run ] || fail "Dry-run Cloud image manifest digest is invalid: ${key}_DIGEST=$digest"
+    else
+      [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
+        || fail "Cloud image manifest is missing an OCI digest: ${key}_DIGEST=$digest"
+    fi
+  done
+}
+
+image_manifest_content_digest() {
+  local manifest_path="$1"
+  local content_file
+  content_file="$(mktemp)"
+  grep -E '^(CLOUD_DEPLOY_(EXPECTED_SHA|PLAN_DIGEST|RELEASE_TAG|SERVICES)|IIOT_(HTTPAPI|GATEWAY|DATAWORKER|MIGRATION|WEB)_IMAGE(_DIGEST)?)=' "$manifest_path" \
+    | LC_ALL=C sort > "$content_file"
+  [ -s "$content_file" ] || {
+    rm -f "$content_file"
+    fail "Cloud image manifest has no stable candidate content."
+  }
+  sha256_file "$content_file"
+  rm -f "$content_file"
+}
+
+validate_local_support_package() {
+  local package_dir="$1"
+  local manifest="$package_dir/$SUPPORT_MANIFEST_NAME"
+  local relative_path
+
+  [ -s "$manifest" ] || fail "Cloud support manifest is empty: $manifest"
+  while IFS= read -r relative_path; do
+    [ -n "$relative_path" ] || continue
+    case "$relative_path" in
+      scripts/harbor-retention.sh|scripts/post-release-cleanup.sh)
+        bash -n "$package_dir/$relative_path"
+        ;;
+      scripts/*.sh)
+        sh -n "$package_dir/$relative_path"
+        ;;
+    esac
+  done < "$package_dir/$SUPPORT_ALLOWLIST_NAME"
+  printf 'Cloud support package validated locally before image build: %s\n' "$package_dir"
 }
 
 create_support_package() {
@@ -365,15 +635,21 @@ set -eu
 
 DEPLOY_DIR=$1
 STAGING_DIR=$2
+INVOCATION_ID=$3
+RELEASE_TAG=$4
+EXPECTED_SUPPORT_DIGEST=$5
+LOCK_OWNER_PID=$6
+LOCK_FILE=$7
 MANIFEST="$STAGING_DIR/.cloud-support-manifest.sha256"
 ALLOWLIST="$STAGING_DIR/.cloud-support-allowlist.txt"
+BACKUP_DIR="$DEPLOY_DIR/releases/support-recovery/$INVOCATION_ID"
 
 fail_install() {
   printf 'Cloud deploy support staging validation failed: %s\n' "$*" >&2
   exit 73
 }
 
-for command_name in sha256sum sh bash docker install cmp sed grep; do
+for command_name in sha256sum sh bash docker install cmp sed grep awk sort readlink cp mv rm ln; do
   command -v "$command_name" >/dev/null 2>&1 || fail_install "required command not found: $command_name"
 done
 docker compose version >/dev/null 2>&1 || fail_install "docker compose is not available"
@@ -382,6 +658,44 @@ docker compose version >/dev/null 2>&1 || fail_install "docker compose is not av
 [ -r "$DEPLOY_DIR/.env" ] || fail_install "production .env is not readable: $DEPLOY_DIR/.env"
 [ -f "$MANIFEST" ] || fail_install "support manifest is missing"
 [ -f "$ALLOWLIST" ] || fail_install "support allowlist is missing"
+[ ! -L "$MANIFEST" ] && [ ! -L "$ALLOWLIST" ] \
+  || fail_install "support manifest and allowlist must be regular non-symlink files"
+
+case "$INVOCATION_ID" in
+  ''|*[!A-Za-z0-9._:-]*) fail_install "unsafe invocation id" ;;
+esac
+case "$RELEASE_TAG" in
+  sha-[0-9a-f]*) ;;
+  *) fail_install "unsafe release tag: $RELEASE_TAG" ;;
+esac
+[ "$(readlink -f "$DEPLOY_DIR")" = "$DEPLOY_DIR" ] \
+  || fail_install "deploy directory must be a canonical path without symlink components: $DEPLOY_DIR"
+
+safe_support_path() {
+  candidate_path=$1
+  case "$candidate_path" in
+    ''|/*|*..*|*[!A-Za-z0-9._/-]*|.env|.env/*|certs|certs/*|releases|releases/*|backups|backups/*)
+      fail_install "unsafe or protected support path: $candidate_path"
+      ;;
+  esac
+}
+
+assert_target_path_not_symlinked() {
+  candidate_path=$1
+  safe_support_path "$candidate_path"
+  current_path=$DEPLOY_DIR
+  remaining_path=$candidate_path
+  while [ -n "$remaining_path" ]; do
+    first_component=${remaining_path%%/*}
+    if [ "$remaining_path" = "$first_component" ]; then
+      remaining_path=
+    else
+      remaining_path=${remaining_path#*/}
+    fi
+    current_path="$current_path/$first_component"
+    [ ! -L "$current_path" ] || fail_install "support target contains a symlink component: $current_path"
+  done
+}
 
 for protected_path in .env certs releases backups; do
   [ ! -e "$STAGING_DIR/$protected_path" ] || fail_install "protected path entered staging: $protected_path"
@@ -395,12 +709,10 @@ cmp "$ALLOWLIST" "$STAGING_DIR/.cloud-support-manifest-paths.txt" >/dev/null \
 
 while IFS= read -r relative_path; do
   [ -n "$relative_path" ] || continue
-  case "$relative_path" in
-    /*|*..*|.env|.env/*|certs|certs/*|releases|releases/*|backups|backups/*)
-      fail_install "unsafe or protected support path: $relative_path"
-      ;;
-  esac
+  safe_support_path "$relative_path"
+  assert_target_path_not_symlinked "$relative_path"
   [ -f "$STAGING_DIR/$relative_path" ] || fail_install "staged support file is missing: $relative_path"
+  [ ! -L "$STAGING_DIR/$relative_path" ] || fail_install "staged support file must not be a symlink: $relative_path"
 
   case "$relative_path" in
     scripts/harbor-retention.sh|scripts/post-release-cleanup.sh)
@@ -417,6 +729,30 @@ docker compose \
   -f "$STAGING_DIR/docker-compose.prod.yml" \
   config -q
 
+# Exercise the candidate support tree against the real protected state before
+# changing any installed support file.
+cleanup_candidate_links() {
+  rm -f "$STAGING_DIR/.env" "$STAGING_DIR/certs" "$STAGING_DIR/releases" "$STAGING_DIR/backups"
+}
+trap cleanup_candidate_links EXIT HUP INT TERM
+ln -s "$DEPLOY_DIR/.env" "$STAGING_DIR/.env"
+for protected_path in certs releases backups; do
+  if [ -e "$DEPLOY_DIR/$protected_path" ]; then
+    ln -s "$DEPLOY_DIR/$protected_path" "$STAGING_DIR/$protected_path"
+  fi
+done
+DEPLOY_RELEASE_LOCK_FILE="$LOCK_FILE" \
+DEPLOY_RELEASE_LOCK_OWNER_PID="$LOCK_OWNER_PID" \
+EXPECTED_CLOUD_SUPPORT_MANIFEST_SHA256="$EXPECTED_SUPPORT_DIGEST" \
+  sh "$STAGING_DIR/scripts/pre-deploy-check.sh" "$RELEASE_TAG"
+cleanup_candidate_links
+trap - EXIT HUP INT TERM
+
+# Build a durable, validated union of the new allowlist and every path from the
+# previous manifest. This is the only set the restore path may copy or remove.
+[ ! -e "$BACKUP_DIR" ] || fail_install "support recovery directory already exists: $BACKUP_DIR"
+support_install_phase=building-backup
+install_committed=0
 cleanup_install_temps() {
   while IFS= read -r relative_path; do
     [ -n "$relative_path" ] || continue
@@ -424,7 +760,149 @@ cleanup_install_temps() {
   done < "$ALLOWLIST"
   rm -f "$DEPLOY_DIR/.cloud-support-manifest.sha256.cloud-support-new.$$"
 }
-trap cleanup_install_temps EXIT HUP INT TERM
+cleanup_or_restore_install() {
+  install_status=$?
+  trap - EXIT HUP INT TERM
+  cleanup_install_temps || true
+  case "$support_install_phase" in
+    building-backup)
+      rm -rf "$BACKUP_DIR"
+      ;;
+    installing)
+      if [ "$install_committed" -ne 1 ]; then
+        if ! sh "$BACKUP_DIR/restore-support.sh" "$DEPLOY_DIR" "$BACKUP_DIR"; then
+          printf 'Cloud support installation failed and restore also failed; backup preserved: %s\n' "$BACKUP_DIR" >&2
+          exit 86
+        fi
+      fi
+      ;;
+  esac
+  exit "$install_status"
+}
+trap cleanup_or_restore_install EXIT HUP INT TERM
+
+mkdir -p "$BACKUP_DIR/files"
+chmod 700 "$BACKUP_DIR"
+restore_paths="$BACKUP_DIR/paths.txt"
+: > "$restore_paths"
+while IFS= read -r relative_path; do
+  [ -n "$relative_path" ] || continue
+  safe_support_path "$relative_path"
+  printf '%s\n' "$relative_path" >> "$restore_paths"
+done < "$ALLOWLIST"
+
+old_manifest="$DEPLOY_DIR/.cloud-support-manifest.sha256"
+if [ -e "$old_manifest" ]; then
+  [ -f "$old_manifest" ] && [ ! -L "$old_manifest" ] \
+    || fail_install "installed support manifest must be a regular non-symlink file"
+  while read -r old_digest relative_path; do
+    [ -n "${relative_path:-}" ] || continue
+    case "$old_digest" in
+      *[!0-9a-f]*|'') fail_install "installed support manifest contains an invalid digest" ;;
+    esac
+    [ "${#old_digest}" -eq 64 ] || fail_install "installed support manifest digest must contain 64 hex characters"
+    safe_support_path "$relative_path"
+    printf '%s\n' "$relative_path" >> "$restore_paths"
+  done < "$old_manifest"
+  cp -p "$old_manifest" "$BACKUP_DIR/old-manifest.sha256"
+  printf 'present\n' > "$BACKUP_DIR/old-manifest.state"
+else
+  printf 'missing\n' > "$BACKUP_DIR/old-manifest.state"
+fi
+LC_ALL=C sort -u "$restore_paths" -o "$restore_paths"
+
+restore_state="$BACKUP_DIR/state.txt"
+: > "$restore_state"
+while IFS= read -r relative_path; do
+  [ -n "$relative_path" ] || continue
+  assert_target_path_not_symlinked "$relative_path"
+  target_path="$DEPLOY_DIR/$relative_path"
+  if [ -e "$target_path" ]; then
+    [ -f "$target_path" ] && [ ! -L "$target_path" ] \
+      || fail_install "installed support target must be a regular non-symlink file: $relative_path"
+    mkdir -p "$BACKUP_DIR/files/$(dirname "$relative_path")"
+    cp -p "$target_path" "$BACKUP_DIR/files/$relative_path"
+    printf 'present %s %s\n' "$(sha256sum "$target_path" | awk '{print $1}')" "$relative_path" >> "$restore_state"
+  else
+    printf 'missing - %s\n' "$relative_path" >> "$restore_state"
+  fi
+done < "$restore_paths"
+
+cat > "$BACKUP_DIR/restore-support.sh" <<'RESTORE_EOF'
+#!/bin/sh
+set -eu
+DEPLOY_DIR=$1
+BACKUP_DIR=$2
+
+restore_fail() {
+  printf 'Cloud support restore failed: %s\n' "$*" >&2
+  exit 86
+}
+safe_support_path() {
+  candidate_path=$1
+  case "$candidate_path" in
+    ''|/*|*..*|*[!A-Za-z0-9._/-]*|.env|.env/*|certs|certs/*|releases|releases/*|backups|backups/*)
+      restore_fail "unsafe or protected restore path: $candidate_path"
+      ;;
+  esac
+}
+assert_target_path_not_symlinked() {
+  candidate_path=$1
+  safe_support_path "$candidate_path"
+  current_path=$DEPLOY_DIR
+  remaining_path=$candidate_path
+  while [ -n "$remaining_path" ]; do
+    first_component=${remaining_path%%/*}
+    if [ "$remaining_path" = "$first_component" ]; then remaining_path=; else remaining_path=${remaining_path#*/}; fi
+    current_path="$current_path/$first_component"
+    [ ! -L "$current_path" ] || restore_fail "restore target contains a symlink component: $current_path"
+  done
+}
+[ "$(readlink -f "$DEPLOY_DIR")" = "$DEPLOY_DIR" ] || restore_fail "deploy directory is not canonical"
+[ -f "$BACKUP_DIR/state.txt" ] && [ ! -L "$BACKUP_DIR/state.txt" ] || restore_fail "restore state is missing or unsafe"
+while read -r state expected_digest relative_path; do
+  [ -n "${relative_path:-}" ] || continue
+  assert_target_path_not_symlinked "$relative_path"
+  target_path="$DEPLOY_DIR/$relative_path"
+  case "$state" in
+    present)
+      backup_path="$BACKUP_DIR/files/$relative_path"
+      [ -f "$backup_path" ] && [ ! -L "$backup_path" ] || restore_fail "backup file is missing: $relative_path"
+      [ "$(sha256sum "$backup_path" | awk '{print $1}')" = "$expected_digest" ] || restore_fail "backup hash mismatch: $relative_path"
+      mkdir -p "$(dirname "$target_path")"
+      temp_path="$target_path.cloud-support-restore.$$"
+      cp -p "$backup_path" "$temp_path"
+      mv -f "$temp_path" "$target_path"
+      ;;
+    missing)
+      rm -f "$target_path"
+      ;;
+    *) restore_fail "unknown restore state for $relative_path: $state" ;;
+  esac
+done < "$BACKUP_DIR/state.txt"
+
+manifest_target="$DEPLOY_DIR/.cloud-support-manifest.sha256"
+case "$(sed -n '1p' "$BACKUP_DIR/old-manifest.state")" in
+  present)
+    [ -f "$BACKUP_DIR/old-manifest.sha256" ] && [ ! -L "$BACKUP_DIR/old-manifest.sha256" ] || restore_fail "old manifest backup is missing"
+    while read -r old_digest relative_path; do
+      [ -n "${relative_path:-}" ] || continue
+      safe_support_path "$relative_path"
+      case "$old_digest" in *[!0-9a-f]*|'') restore_fail "old manifest contains an invalid digest" ;; esac
+      [ "${#old_digest}" -eq 64 ] || restore_fail "old manifest digest length is invalid"
+    done < "$BACKUP_DIR/old-manifest.sha256"
+    cp -p "$BACKUP_DIR/old-manifest.sha256" "$manifest_target.cloud-support-restore.$$"
+    mv -f "$manifest_target.cloud-support-restore.$$" "$manifest_target"
+    (cd "$DEPLOY_DIR" && sha256sum -c "$manifest_target")
+    ;;
+  missing) rm -f "$manifest_target" ;;
+  *) restore_fail "old manifest state is invalid" ;;
+esac
+printf 'restored\n' > "$BACKUP_DIR/restore-result"
+printf 'Cloud support restored from durable backup: %s\n' "$BACKUP_DIR"
+RESTORE_EOF
+chmod 700 "$BACKUP_DIR/restore-support.sh"
+support_install_phase=installing
 
 while IFS= read -r relative_path; do
   [ -n "$relative_path" ] || continue
@@ -456,69 +934,149 @@ docker compose \
   -f "$DEPLOY_DIR/docker-compose.prod.yml" \
   config -q
 
+install_committed=1
 trap - EXIT HUP INT TERM
 cleanup_install_temps
+printf 'installed\n' > "$BACKUP_DIR/install-result"
 printf 'Cloud deploy support files synchronized and sha256-verified: %s\n' "$DEPLOY_DIR"
 printf 'Cloud deploy support manifest installed: %s\n' "$support_manifest_target"
 printf 'Cloud deploy support protected paths: untouched .env certs/ releases/ backups/\n'
 EOF
   chmod 700 "$package_dir/$SUPPORT_INSTALLER_NAME"
+  sh -n "$package_dir/$SUPPORT_INSTALLER_NAME" || fail "Generated Cloud support installer failed shell syntax validation."
 }
 
-sync_remote_deploy_files() {
-  local relative_path
-  local package_dir
+stage_support_and_deploy() {
+  local package_dir="$1"
+  local deploy_services="$2"
+  local support_manifest_digest="$3"
+  local image_manifest_digest="$4"
+  local image_content_digest="$5"
   local remote_dir_quoted
   local remote_command
-  local sync_status
+  local remote_status
 
   if [ "$DRY_RUN" = true ]; then
-    printf '[dry-run] Cloud deploy support whitelist:\n'
-    for relative_path in "${SUPPORT_FILES[@]}"; do
-      printf '[dry-run]   %s\n' "$relative_path"
-    done
-    printf '[dry-run] stage support files on %s:%s/.support-staging\n' "$SSH_TARGET" "$REMOTE_DEPLOY_DIR"
-    printf '[dry-run] validate staged sha256 manifest, shell syntax and docker compose config before install\n'
-    printf '[dry-run] atomically install whitelist, persist support manifest and verify installed sha256 values\n'
-    printf '[dry-run] protected remote paths remain untouched: .env certs/ releases/ backups/\n'
+    printf '[dry-run] after successful image build, stage the run-bound support and image manifests on %s:%s/.support-staging\n' "$SSH_TARGET" "$REMOTE_DEPLOY_DIR"
+    printf '[dry-run] acquire one Cloud release lock for support install, rollout, promotion and cleanup\n'
+    printf '[dry-run] invoke remote release with invocation=%s expected_sha=%s plan_digest=%s services=%s\n' \
+      "${WORKSPACE_INVOCATION_ID:-dry-run}" "${WORKSPACE_EXPECTED_SHA:-${TAG#sha-}}" "${WORKSPACE_PLAN_DIGEST:-dry-run}" "$deploy_services"
     return
   fi
 
-  package_dir="$(mktemp -d)"
-  create_support_package "$package_dir"
   remote_dir_quoted="$(printf '%q' "$REMOTE_DEPLOY_DIR")"
-  remote_command="set -eu
+  remote_command="set -euo pipefail
+umask 077
 deploy_dir=$remote_dir_quoted
+[ \"\$(readlink -f \"\$deploy_dir\")\" = \"\$deploy_dir\" ] || { printf 'Remote deploy directory is not canonical: %s\\n' \"\$deploy_dir\" >&2; exit 64; }
 staging_parent=\"\$deploy_dir/.support-staging\"
 mkdir -p \"\$staging_parent\"
-staging_dir=\$(mktemp -d \"\$staging_parent/cloud-support.XXXXXX\")
-cleanup_support_staging() {
+staging_dir=\$(mktemp -d \"\$staging_parent/cloud-${WORKSPACE_INVOCATION_ID}.XXXXXX\")
+release_lock_file=
+release_lock_acquired=0
+support_installed=0
+support_backup_dir=\"\$deploy_dir/releases/support-recovery/${WORKSPACE_INVOCATION_ID}\"
+lock_owned_by_invocation() {
+  [ -n \"\$release_lock_file\" ] \
+    && [ -r \"\${release_lock_file}.d/pid\" ] \
+    && [ \"\$(sed -n '1p' \"\${release_lock_file}.d/pid\")\" = \"\$\$\" ] \
+    && [ \"\$(sed -n '1p' \"\${release_lock_file}.d/invocation-id\")\" = '${WORKSPACE_INVOCATION_ID}' ] \
+    && [ \"\$(sed -n '1p' \"\${release_lock_file}.d/plan-digest\")\" = '${WORKSPACE_PLAN_DIGEST}' ]
+}
+cleanup_transaction() {
+  status=\$?
+  trap - EXIT HUP INT TERM
+  if [ \"\$support_installed\" -eq 1 ] && [ -x \"\$support_backup_dir/restore-support.sh\" ]; then
+    if ! sh \"\$support_backup_dir/restore-support.sh\" \"\$deploy_dir\" \"\$support_backup_dir\"; then
+      mkdir -p \"\$deploy_dir/releases/history\"
+      printf 'DEPLOY_INVOCATION_ID=%s\\nDEPLOY_PLAN_DIGEST=%s\\nDEPLOY_PHASE=blocked-support-restore\\nDEPLOY_SUPPORT_BACKUP_DIR=%s\\n' \
+        '${WORKSPACE_INVOCATION_ID}' '${WORKSPACE_PLAN_DIGEST}' \"\$support_backup_dir\" \
+        > \"\$deploy_dir/releases/deploy-blocked.env\"
+      lock_owned_by_invocation && printf '%s\\n' blocked-support-restore > \"\${release_lock_file}.d/phase\"
+      printf 'Support restore failed before deploy-release exec; lock and backup preserved.\\n' >&2
+      exit 86
+    fi
+    rm -rf \"\$support_backup_dir\"
+  fi
+  if [ \"\$release_lock_acquired\" -eq 1 ] && lock_owned_by_invocation; then
+    release_managed_lock \"\$release_lock_file\" || true
+  fi
   rm -rf \"\$staging_dir\"
   rmdir \"\$staging_parent\" 2>/dev/null || true
+  exit \"\$status\"
 }
-trap cleanup_support_staging EXIT HUP INT TERM
+trap cleanup_transaction EXIT HUP INT TERM
 tar --no-same-owner -xf - -C \"\$staging_dir\"
-sh \"\$staging_dir/$SUPPORT_INSTALLER_NAME\" \"\$deploy_dir\" \"\$staging_dir\""
+printf '%s  %s\\n' '$support_manifest_digest' '$SUPPORT_MANIFEST_NAME' | (cd \"\$staging_dir\" && sha256sum -c -)
+printf '%s  %s\\n' '$image_manifest_digest' '$IMAGE_MANIFEST_NAME' | (cd \"\$staging_dir\" && sha256sum -c -)
+grep -qx 'CLOUD_DEPLOY_INVOCATION_ID=${WORKSPACE_INVOCATION_ID}' \"\$staging_dir/$IMAGE_MANIFEST_NAME\"
+grep -qx 'CLOUD_DEPLOY_EXPECTED_SHA=${WORKSPACE_EXPECTED_SHA}' \"\$staging_dir/$IMAGE_MANIFEST_NAME\"
+grep -qx 'CLOUD_DEPLOY_PLAN_DIGEST=${WORKSPACE_PLAN_DIGEST}' \"\$staging_dir/$IMAGE_MANIFEST_NAME\"
+grep -qx 'CLOUD_DEPLOY_RELEASE_TAG=$TAG' \"\$staging_dir/$IMAGE_MANIFEST_NAME\"
+grep -qx 'CLOUD_DEPLOY_SERVICES=$deploy_services' \"\$staging_dir/$IMAGE_MANIFEST_NAME\"
+DEPLOY_DIR=\$deploy_dir
+export DEPLOY_DIR
+. \"\$staging_dir/scripts/release-common.sh\"
+load_dotenv \"\$deploy_dir/.env\"
+release_lock_file=\$(resolve_managed_lock_file \
+  \"\${DEPLOY_RELEASE_LOCK_FILE:-\$CLOUD_RELEASE_LOCK_FILE_DEFAULT}\" \
+  \"\$deploy_dir/.cloud-release.lock\")
+acquire_managed_lock \
+  \"\$release_lock_file\" \
+  cloud-release \
+  '$TAG' \
+  support-install \
+  workspace-invocation-${WORKSPACE_INVOCATION_ID}
+release_lock_acquired=1
+printf '%s\\n' '${WORKSPACE_INVOCATION_ID}' > \"\${release_lock_file}.d/invocation-id\"
+printf '%s\\n' '${WORKSPACE_PLAN_DIGEST}' > \"\${release_lock_file}.d/plan-digest\"
+sh \"\$staging_dir/$SUPPORT_INSTALLER_NAME\" \
+  \"\$deploy_dir\" \
+  \"\$staging_dir\" \
+  '${WORKSPACE_INVOCATION_ID}' \
+  '$TAG' \
+  '$support_manifest_digest' \
+  \"\$\$\" \
+  \"\$release_lock_file\"
+support_installed=1
+update_managed_lock_phase \"\$release_lock_file\" preflight
+cd \"\$deploy_dir\"
+exec env \
+  IIOT_WORKSPACE_DEPLOY_ENTRYPOINT=1 \
+  IIOT_WORKSPACE_DEPLOY_INVOCATION_ID='${WORKSPACE_INVOCATION_ID}' \
+  IIOT_WORKSPACE_DEPLOY_EXPECTED_SHA='${WORKSPACE_EXPECTED_SHA}' \
+  IIOT_WORKSPACE_DEPLOY_PLAN_DIGEST='${WORKSPACE_PLAN_DIGEST}' \
+  DEPLOY_RELEASE_LOCK_PREACQUIRED=1 \
+  DEPLOY_RELEASE_LOCK_FILE=\"\$release_lock_file\" \
+  DEPLOY_SUPPORT_STAGING_DIR=\"\$staging_dir\" \
+  DEPLOY_SUPPORT_BACKUP_DIR=\"\$support_backup_dir\" \
+  DEPLOY_IMAGE_MANIFEST=\"\$staging_dir/$IMAGE_MANIFEST_NAME\" \
+  DEPLOY_IMAGE_MANIFEST_SHA256='$image_manifest_digest' \
+  DEPLOY_IMAGE_CONTENT_SHA256='$image_content_digest' \
+  EXPECTED_CLOUD_SUPPORT_MANIFEST_SHA256='$support_manifest_digest' \
+  DEPLOY_GIT_SHA='${TAG#sha-}' \
+  DEPLOY_TRIGGERED_BY=workspace \
+  ./scripts/deploy-release.sh '$TAG' --services '$deploy_services'"
 
-  if COPYFILE_DISABLE=1 run_with_timeout "$SYNC_TIMEOUT_SECONDS" "sync and validate Cloud deploy support files" \
+  if COPYFILE_DISABLE=1 run_with_timeout "$SSH_TIMEOUT_SECONDS" "stage Cloud support and execute release transaction" \
     bash -c '
       set -euo pipefail
       package_dir="$1"
       ssh_target="$2"
       connect_timeout="$3"
       remote_command="$4"
+      remote_bash_command="bash -c $(printf %q "$remote_command")"
       COPYFILE_DISABLE=1 tar -C "$package_dir" -cf - . \
-        | ssh -o BatchMode=yes -o "ConnectTimeout=$connect_timeout" "$ssh_target" "$remote_command"
+        | ssh -o BatchMode=yes -o "ConnectTimeout=$connect_timeout" "$ssh_target" "$remote_bash_command"
     ' bash "$package_dir" "$SSH_TARGET" "$SSH_CONNECT_TIMEOUT_SECONDS" "$remote_command"; then
-    sync_status=0
+    remote_status=0
   else
-    sync_status=$?
+    remote_status=$?
   fi
-  rm -rf "$package_dir"
 
-  if [ "$sync_status" -ne 0 ]; then
+  if [ "$remote_status" -ne 0 ]; then
     print_deploy_diagnostics
-    exit "$sync_status"
+    exit "$remote_status"
   fi
 }
 
@@ -535,13 +1093,122 @@ require_pushed_clean_head() {
 
   local sha
   local remote
+  local branch
+  local remote_ref
+  local remote_sha
   sha="$(git -C "$REPO_ROOT" rev-parse HEAD)"
   remote="${GIT_REMOTE:-origin}"
-  git -C "$REPO_ROOT" fetch --quiet "$remote" '+refs/heads/*:refs/remotes/'"$remote"'/*'
-  if ! git -C "$REPO_ROOT" branch -r --contains "$sha" | grep -q "$remote/"; then
-    fail "HEAD $sha is not present on remote $remote. Push to GitHub before production release."
-  fi
+  [[ "$remote" =~ ^[A-Za-z0-9._-]+$ ]] && [[ "$remote" != -* ]] \
+    || fail "Cloud Git remote name is invalid: $remote"
+  branch="${CLOUD_RELEASE_SOURCE_BRANCH:-$(git -C "$REPO_ROOT" symbolic-ref --quiet --short HEAD)}"
+  [[ "$branch" =~ ^[A-Za-z0-9._/-]+$ ]] && [[ "$branch" != -* ]] \
+    || fail "Cloud release source branch is invalid or detached without an approved source branch: $branch"
+  remote_ref="refs/remotes/$remote/$branch"
+  git -C "$REPO_ROOT" fetch --quiet --no-tags "$remote" "+refs/heads/$branch:$remote_ref"
+  remote_sha="$(git -C "$REPO_ROOT" rev-parse --verify "$remote_ref")"
+  [ "$sha" = "$remote_sha" ] \
+    || fail "Cloud expected SHA is no longer the freshly fetched $remote/$branch tip: expected=$sha remoteTip=$remote_sha"
 }
+
+SNAPSHOT_PARENT=""
+SNAPSHOT_REPO=""
+SNAPSHOT_CHILD_PID=""
+
+cleanup_release_snapshot() {
+  if [ -n "$SNAPSHOT_REPO" ]; then
+    git -C "$REPO_ROOT" worktree remove --force "$SNAPSHOT_REPO" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$SNAPSHOT_PARENT" ]; then
+    rm -rf "$SNAPSHOT_PARENT"
+  fi
+  SNAPSHOT_REPO=""
+  SNAPSHOT_PARENT=""
+}
+
+handle_release_snapshot_signal() {
+  local signal_name="$1"
+  local signal_exit_code="$2"
+  trap - EXIT HUP INT TERM
+  printf 'Cloud fixed-commit release interrupted by signal %s; stopping the snapshot process tree.\n' "$signal_name" >&2
+  if [ -n "$SNAPSHOT_CHILD_PID" ] && kill -0 "$SNAPSHOT_CHILD_PID" 2>/dev/null; then
+    signal_process_tree TERM "$SNAPSHOT_CHILD_PID"
+    wait "$SNAPSHOT_CHILD_PID" 2>/dev/null || true
+  fi
+  cleanup_release_snapshot
+  exit "$signal_exit_code"
+}
+
+run_from_fixed_commit_snapshot() {
+  local release_sha
+  local run_id
+  local artifact_dir
+  local snapshot_status
+  local release_branch
+
+  release_sha="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+  release_branch="$(git -C "$REPO_ROOT" symbolic-ref --quiet --short HEAD)"
+  validate_workspace_contract "$release_sha"
+  run_id="${WORKSPACE_INVOCATION_ID:-$(date -u +%Y%m%dT%H%M%SZ)-${release_sha:0:12}-$$}"
+  artifact_dir="${DEPLOY_ARTIFACT_DIR:-$REPO_ROOT/artifacts/deploy/runs/$run_id}"
+  case "$artifact_dir" in
+    /*) ;;
+    *) artifact_dir="$REPO_ROOT/$artifact_dir" ;;
+  esac
+  mkdir -p "$artifact_dir"
+
+  SNAPSHOT_PARENT="$(mktemp -d "${TMPDIR:-/tmp}/iiot-cloud-release.XXXXXX")"
+  SNAPSHOT_REPO="$SNAPSHOT_PARENT/repo"
+  trap cleanup_release_snapshot EXIT
+  trap 'handle_release_snapshot_signal HUP 129' HUP
+  trap 'handle_release_snapshot_signal INT 130' INT
+  trap 'handle_release_snapshot_signal TERM 143' TERM
+
+  if ! git -C "$REPO_ROOT" worktree add --quiet --detach "$SNAPSHOT_REPO" "$release_sha"; then
+    printf 'Could not create the fixed-commit Cloud release worktree for %s.\n' "$release_sha" >&2
+    trap - EXIT HUP INT TERM
+    cleanup_release_snapshot
+    return 70
+  fi
+
+  printf 'Cloud release source frozen: sha=%s worktree=%s artifacts=%s\n' \
+    "$release_sha" "$SNAPSHOT_REPO" "$artifact_dir"
+  CLOUD_RELEASE_SNAPSHOT_ACTIVE=1 \
+  CLOUD_RELEASE_SOURCE_SHA="$release_sha" \
+  CLOUD_RELEASE_SOURCE_BRANCH="$release_branch" \
+  DEPLOY_ARTIFACT_DIR="$artifact_dir" \
+    bash "$SNAPSHOT_REPO/deploy/scripts/local-release.sh" "${ORIGINAL_ARGS[@]}" &
+  SNAPSHOT_CHILD_PID=$!
+  if wait "$SNAPSHOT_CHILD_PID"; then
+    snapshot_status=0
+  else
+    snapshot_status=$?
+  fi
+  SNAPSHOT_CHILD_PID=""
+
+  trap - EXIT HUP INT TERM
+  cleanup_release_snapshot
+  return "$snapshot_status"
+}
+
+if [ "$DRY_RUN" != true ]; then
+  validate_workspace_contract "$(git -C "$REPO_ROOT" rev-parse HEAD)"
+fi
+require_pushed_clean_head
+if [ "$DRY_RUN" != true ] && [ "${CLOUD_RELEASE_SNAPSHOT_ACTIVE:-0}" != 1 ]; then
+  if run_from_fixed_commit_snapshot; then
+    exit 0
+  else
+    exit $?
+  fi
+fi
+
+if [ "${CLOUD_RELEASE_SNAPSHOT_ACTIVE:-0}" = 1 ]; then
+  CURRENT_SNAPSHOT_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+  if [ -z "${CLOUD_RELEASE_SOURCE_SHA:-}" ] || [ "$CURRENT_SNAPSHOT_SHA" != "$CLOUD_RELEASE_SOURCE_SHA" ]; then
+    fail "Cloud release snapshot SHA mismatch: expected=${CLOUD_RELEASE_SOURCE_SHA:-missing} actual=$CURRENT_SNAPSHOT_SHA"
+  fi
+  validate_workspace_contract "$CURRENT_SNAPSHOT_SHA"
+fi
 
 TAG="sha-$(git -C "$REPO_ROOT" rev-parse HEAD)"
 BUILD_ARGS=()
@@ -554,32 +1221,41 @@ if [ "$DRY_RUN" = true ]; then
   BUILD_ARGS+=(--dry-run)
 fi
 
-require_pushed_clean_head
-check_remote_support_file_access
-check_remote_release_locks
-sync_remote_deploy_files
-check_remote_release_locks
+LOCAL_SUPPORT_PACKAGE_DIR="$(mktemp -d)"
+cleanup_local_support_package() {
+  rm -rf "$LOCAL_SUPPORT_PACKAGE_DIR"
+}
+trap cleanup_local_support_package EXIT HUP INT TERM
+create_support_package "$LOCAL_SUPPORT_PACKAGE_DIR"
+validate_local_support_package "$LOCAL_SUPPORT_PACKAGE_DIR"
+
+# Image build/push deliberately precedes every remote support-file mutation.
+# A failed build therefore cannot install a half-new server-side deploy stack.
 "$SCRIPT_DIR/build-and-push.sh" "${BUILD_ARGS[@]}"
 
-SERVICES_FILE="$REPO_ROOT/artifacts/deploy/cloud-built-services.txt"
+SERVICES_FILE="${DEPLOY_ARTIFACT_DIR:-$REPO_ROOT/artifacts/deploy}/cloud-built-services.txt"
+IMAGES_FILE="${DEPLOY_ARTIFACT_DIR:-$REPO_ROOT/artifacts/deploy}/cloud-images.env"
 if [ ! -f "$SERVICES_FILE" ]; then
   fail "Missing built services file: $SERVICES_FILE"
 fi
 DEPLOY_SERVICES="$(tr -d '\r\n' < "$SERVICES_FILE")"
 [ -n "$DEPLOY_SERVICES" ] || fail "Built services file is empty: $SERVICES_FILE"
+validate_run_image_manifest "$IMAGES_FILE" "$DEPLOY_SERVICES"
+cp "$IMAGES_FILE" "$LOCAL_SUPPORT_PACKAGE_DIR/$IMAGE_MANIFEST_NAME"
 
-REMOTE_COMMAND="cd '$REMOTE_DEPLOY_DIR' && DEPLOY_GIT_SHA='${TAG#sha-}' DEPLOY_TRIGGERED_BY=local ./scripts/deploy-release.sh '$TAG' --services '$DEPLOY_SERVICES'"
+SYNCED_SUPPORT_MANIFEST_DIGEST="$(sha256_file "$LOCAL_SUPPORT_PACKAGE_DIR/$SUPPORT_MANIFEST_NAME")"
+SYNCED_IMAGE_MANIFEST_DIGEST="$(sha256_file "$LOCAL_SUPPORT_PACKAGE_DIR/$IMAGE_MANIFEST_NAME")"
+SYNCED_IMAGE_CONTENT_DIGEST="$(image_manifest_content_digest "$LOCAL_SUPPORT_PACKAGE_DIR/$IMAGE_MANIFEST_NAME")"
+printf 'Cloud deploy support manifest digest bound to this release: %s\n' "$SYNCED_SUPPORT_MANIFEST_DIGEST"
+printf 'Cloud image manifest digest bound to this invocation: %s\n' "$SYNCED_IMAGE_MANIFEST_DIGEST"
+printf 'Cloud stable image candidate content digest: %s\n' "$SYNCED_IMAGE_CONTENT_DIGEST"
 
-printf '\nCloud local deploy command:\n'
-printf 'ssh'
-for argument in "${SSH_OPTIONS[@]}" "$SSH_TARGET" "$REMOTE_COMMAND"; do
-  printf ' '
-  print_shell_argument "$argument"
-done
-printf '\n'
+stage_support_and_deploy \
+  "$LOCAL_SUPPORT_PACKAGE_DIR" \
+  "$DEPLOY_SERVICES" \
+  "$SYNCED_SUPPORT_MANIFEST_DIGEST" \
+  "$SYNCED_IMAGE_MANIFEST_DIGEST" \
+  "$SYNCED_IMAGE_CONTENT_DIGEST"
 
-if ! run_with_timeout "$SSH_TIMEOUT_SECONDS" "ssh Cloud deploy-release" \
-  ssh "${SSH_OPTIONS[@]}" "$SSH_TARGET" "$REMOTE_COMMAND"; then
-  print_deploy_diagnostics
-  exit 124
-fi
+trap - EXIT HUP INT TERM
+cleanup_local_support_package

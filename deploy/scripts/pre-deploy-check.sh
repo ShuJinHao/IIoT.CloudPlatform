@@ -19,6 +19,13 @@ fi
 
 load_dotenv
 
+DEPLOY_BLOCKED_FILE="$DEPLOY_DIR/releases/deploy-blocked.env"
+if [ -e "$DEPLOY_BLOCKED_FILE" ]; then
+  printf 'Cloud deployment is blocked by durable partial/restore evidence: %s\n' "$DEPLOY_BLOCKED_FILE" >&2
+  printf 'Inspect the recorded invocation, runtime containers, support backup and lock; do not remove this evidence or retry automatically.\n' >&2
+  exit 78
+fi
+
 DEPLOY_RELEASE_LOCK_FILE=$(resolve_managed_lock_file \
   "${DEPLOY_RELEASE_LOCK_FILE:-$CLOUD_RELEASE_LOCK_FILE_DEFAULT}" \
   "$DEPLOY_DIR/.cloud-release.lock")
@@ -39,6 +46,29 @@ command -v sha256sum >/dev/null 2>&1 || {
 }
 (cd "$DEPLOY_DIR" && sha256sum -c "$SUPPORT_MANIFEST")
 printf 'preflight_support_manifest=verified path=%s\n' "$SUPPORT_MANIFEST"
+
+EXPECTED_SUPPORT_MANIFEST_SHA256=${EXPECTED_CLOUD_SUPPORT_MANIFEST_SHA256:-}
+if [ -n "$EXPECTED_SUPPORT_MANIFEST_SHA256" ]; then
+  case "$EXPECTED_SUPPORT_MANIFEST_SHA256" in
+    *[!0-9a-f]*|'')
+      printf 'Expected Cloud support manifest digest must be lowercase hex: %s\n' "$EXPECTED_SUPPORT_MANIFEST_SHA256" >&2
+      exit 64
+      ;;
+  esac
+  if [ "${#EXPECTED_SUPPORT_MANIFEST_SHA256}" -ne 64 ]; then
+    printf 'Expected Cloud support manifest digest must contain 64 hex characters: %s\n' "$EXPECTED_SUPPORT_MANIFEST_SHA256" >&2
+    exit 64
+  fi
+  ACTUAL_SUPPORT_MANIFEST_SHA256=$(sha256sum "$SUPPORT_MANIFEST" | awk '{print $1}')
+  if [ "$ACTUAL_SUPPORT_MANIFEST_SHA256" != "$EXPECTED_SUPPORT_MANIFEST_SHA256" ]; then
+    printf 'Cloud support manifest changed after local synchronization: expected=%s actual=%s\n' \
+      "$EXPECTED_SUPPORT_MANIFEST_SHA256" \
+      "$ACTUAL_SUPPORT_MANIFEST_SHA256" >&2
+    printf 'Abort before rollout; rerun the standard deployment entry after the competing release finishes.\n' >&2
+    exit 75
+  fi
+  printf 'preflight_support_manifest_digest=matched sha256=%s\n' "$ACTUAL_SUPPORT_MANIFEST_SHA256"
+fi
 
 ensure_managed_lock_available \
   "$DEPLOY_RELEASE_LOCK_FILE" \

@@ -1,4 +1,6 @@
 using System.IO;
+using System.Diagnostics;
+using System.Text;
 using FluentAssertions;
 
 namespace IIoT.EndToEndTests;
@@ -23,6 +25,24 @@ public sealed class DeploymentGuardTests
         source.Should().Contain("docker compose");
         source.Should().Contain("protected remote paths remain untouched: .env certs/ releases/ backups/");
         source.Should().Contain("BatchMode=yes");
+        source.Should().Contain("cloud-support-sync");
+        source.Should().Contain("acquire_managed_lock");
+        var stagedCommonIndex = source.IndexOf(
+            ". \\\"\\$staging_dir/scripts/release-common.sh\\\"",
+            StringComparison.Ordinal);
+        var stagedDotEnvIndex = source.IndexOf(
+            "load_dotenv \\\"\\$deploy_dir/.env\\\"",
+            stagedCommonIndex,
+            StringComparison.Ordinal);
+        var stagedLockResolutionIndex = source.IndexOf(
+            "release_lock_file=\\$(resolve_managed_lock_file",
+            stagedCommonIndex,
+            StringComparison.Ordinal);
+        stagedCommonIndex.Should().BeGreaterThanOrEqualTo(0);
+        stagedDotEnvIndex.Should().BeGreaterThan(stagedCommonIndex);
+        stagedLockResolutionIndex.Should().BeGreaterThan(stagedDotEnvIndex);
+        source.Should().Contain("EXPECTED_CLOUD_SUPPORT_MANIFEST_SHA256");
+        source.Should().Contain("Cloud deploy support manifest digest bound to this release");
         source.Should().NotContain("SUPPORT_FILES=(\n  .env");
         source.Should().NotContain("SUPPORT_FILES=(\n  certs");
         source.Should().NotContain("SUPPORT_FILES=(\n  releases");
@@ -51,7 +71,11 @@ public sealed class DeploymentGuardTests
         preflight.Should().Contain("preflight_support_manifest=verified");
         release.Should().Contain("acquire_managed_lock");
         release.Should().Contain("DEPLOY_RELEASE_LOCK_OWNER_PID");
+        release.Should().Contain("handle_deploy_signal TERM 143");
+        release.Should().NotContain("trap cleanup_deploy_process EXIT HUP INT TERM");
         cleanup.Should().Contain("ensure_managed_lock_available");
+        cleanup.Should().Contain("handle_cleanup_signal TERM 143");
+        cleanup.Should().NotContain("trap release_lock EXIT HUP INT TERM");
         cleanup.Should().NotContain("POST_RELEASE_CLEANUP_LOCK_ATTEMPTS:-180");
         cleanup.Should().NotContain("sleep 5");
     }
@@ -93,6 +117,151 @@ public sealed class DeploymentGuardTests
         var source = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-ci.yml"));
 
         source.Should().Contain("sh -n deploy/scripts/check-release-state-access.sh");
+        source.Should().Contain("--filter DeploymentGuardTests");
+    }
+
+    [Fact]
+    public void CloudTimeoutWatchdogs_ShouldStopTheirSleepersAndPreserveFailureCodes()
+    {
+        foreach (var relativePath in new[]
+                 {
+                     new[] { "deploy", "scripts", "local-release.sh" },
+                     new[] { "deploy", "scripts", "build-and-push.sh" }
+                 })
+        {
+            var source = File.ReadAllText(FindRepoFile(relativePath));
+
+            source.Should().Contain("stop_watchdog");
+            source.Should().Contain("wait \"$sleep_pid\"");
+            source.Should().Contain("signal_process_tree TERM");
+            source.Should().Contain("signal_process_tree KILL");
+            source.Should().Contain("grace_attempt");
+            source.Should().NotContain("kill -TERM \"$cmd_pid\"");
+            source.Should().NotContain("kill -KILL \"$cmd_pid\"");
+            source.Should().NotContain("sleep 5");
+            source.Should().NotContain("set +e\n  wait \"$cmd_pid\"");
+        }
+
+        var localRelease = File.ReadAllText(FindRepoFile("deploy", "scripts", "local-release.sh"));
+        var buildAndPush = File.ReadAllText(FindRepoFile("deploy", "scripts", "build-and-push.sh"));
+        localRelease.Should().Contain("exit \"$deploy_status\"");
+        buildAndPush.Should().Contain("exit \"$build_status\"");
+    }
+
+    [Theory]
+    [InlineData(42)]
+    [InlineData(129)]
+    [InlineData(130)]
+    [InlineData(143)]
+    [InlineData(255)]
+    public async Task CloudTimeoutWatchdog_ShouldPreserveOrdinarySshAndSignalExitCodes(int expectedExitCode)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var result = await RunLocalReleaseFunctionHarnessAsync(
+            $"run_with_timeout 5 'preserve {expectedExitCode}' bash -c 'exit {expectedExitCode}'");
+
+        result.ExitCode.Should().Be(expectedExitCode, result.CombinedOutput);
+    }
+
+    [Fact]
+    public async Task CloudTimeoutWatchdog_ShouldReturn124OnlyForActualTimeout()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var result = await RunLocalReleaseFunctionHarnessAsync(
+            "run_with_timeout 0.1 'actual timeout' bash -c 'sleep 5'");
+
+        result.ExitCode.Should().Be(124, result.CombinedOutput);
+        result.StandardError.Should().Contain("Timed out after 0.1 seconds");
+    }
+
+    [Theory]
+    [InlineData("check_remote_support_file_access", 42)]
+    [InlineData("check_remote_support_file_access", 73)]
+    [InlineData("check_remote_support_file_access", 255)]
+    [InlineData("check_remote_release_locks", 42)]
+    [InlineData("check_remote_release_locks", 75)]
+    [InlineData("check_remote_release_locks", 255)]
+    public async Task CloudRemotePrechecks_ShouldPreserveFakeSshExitCode(string functionName, int expectedExitCode)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var result = await RunLocalReleaseFunctionHarnessAsync(
+            $$"""
+            ssh() { return {{expectedExitCode}}; }
+            export -f ssh
+            {{functionName}}
+            """);
+
+        result.ExitCode.Should().Be(expectedExitCode, result.CombinedOutput);
+    }
+
+    [Fact]
+    public async Task CloudReleaseLockPrecheck_ShouldLoadCustomLockPathFromRemoteDotEnv()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var testRoot = Directory.CreateTempSubdirectory("iiot-cloud-lock-guard-");
+        try
+        {
+            var remoteDeployDir = Path.Combine(testRoot.FullName, "deploy");
+            var scriptsDir = Directory.CreateDirectory(Path.Combine(remoteDeployDir, "scripts"));
+            File.Copy(
+                FindRepoFile("deploy", "scripts", "release-common.sh"),
+                Path.Combine(scriptsDir.FullName, "release-common.sh"));
+
+            var customLockFile = Path.Combine(testRoot.FullName, "custom", "release.lock");
+            var cleanupLockFile = Path.Combine(testRoot.FullName, "custom", "cleanup.lock");
+            Directory.CreateDirectory(Path.GetDirectoryName(customLockFile)!);
+            var activeLockDirectory = Directory.CreateDirectory(customLockFile + ".d");
+            await File.WriteAllTextAsync(
+                Path.Combine(activeLockDirectory.FullName, "pid"),
+                Environment.ProcessId.ToString());
+            await File.WriteAllTextAsync(
+                Path.Combine(remoteDeployDir, ".env"),
+                $"DEPLOY_RELEASE_LOCK_FILE={customLockFile}{Environment.NewLine}" +
+                $"POST_RELEASE_CLEANUP_LOCK_FILE={cleanupLockFile}{Environment.NewLine}");
+
+            var result = await RunLocalReleaseFunctionHarnessAsync(
+                """
+                ssh() { sh -s; }
+                export -f ssh
+                check_remote_release_locks
+                """,
+                new Dictionary<string, string?>
+                {
+                    ["REMOTE_DEPLOY_DIR"] = remoteDeployDir
+                });
+
+            result.ExitCode.Should().Be(75, result.CombinedOutput);
+            result.StandardError.Should().Contain(customLockFile + ".d");
+        }
+        finally
+        {
+            testRoot.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CloudLocalRelease_ShouldBuildFromFixedCommitAndUsePerRunArtifacts()
+    {
+        var localRelease = File.ReadAllText(FindRepoFile("deploy", "scripts", "local-release.sh"));
+        var buildAndPush = File.ReadAllText(FindRepoFile("deploy", "scripts", "build-and-push.sh"));
+
+        localRelease.Should().Contain("git -C \"$REPO_ROOT\" worktree add --quiet --detach");
+        localRelease.Should().Contain("CLOUD_RELEASE_SNAPSHOT_ACTIVE=1");
+        localRelease.Should().Contain("CLOUD_RELEASE_SOURCE_SHA=\"$release_sha\"");
+        localRelease.Should().Contain("Cloud release source frozen");
+        localRelease.Should().Contain("artifacts/deploy/runs/$run_id");
+        localRelease.Should().Contain("DEPLOY_ARTIFACT_DIR=\"$artifact_dir\"");
+        localRelease.Should().Contain("SERVICES_FILE=\"${DEPLOY_ARTIFACT_DIR:-$REPO_ROOT/artifacts/deploy}/cloud-built-services.txt\"");
+        localRelease.Should().Contain("handle_release_snapshot_signal TERM 143");
+        buildAndPush.Should().Contain("${DEPLOY_ARTIFACT_DIR:-$REPO_ROOT/artifacts/deploy}");
     }
 
     private static string FindRepoFile(params string[] relativeSegments)
@@ -111,5 +280,69 @@ public sealed class DeploymentGuardTests
         }
 
         throw new FileNotFoundException($"Could not locate repository file: {string.Join('/', relativeSegments)}");
+    }
+
+    private static async Task<ShellResult> RunLocalReleaseFunctionHarnessAsync(
+        string body,
+        IReadOnlyDictionary<string, string?>? environment = null)
+    {
+        var source = await File.ReadAllTextAsync(FindRepoFile("deploy", "scripts", "local-release.sh"));
+        var functionsStart = source.IndexOf("child_process_ids() {", StringComparison.Ordinal);
+        var functionsEnd = source.IndexOf("sha256_file() {", functionsStart, StringComparison.Ordinal);
+        functionsStart.Should().BeGreaterThanOrEqualTo(0);
+        functionsEnd.Should().BeGreaterThan(functionsStart);
+        var functions = source[functionsStart..functionsEnd];
+
+        var testRoot = Directory.CreateTempSubdirectory("iiot-local-release-functions-");
+        try
+        {
+            var harnessPath = Path.Combine(testRoot.FullName, "harness.sh");
+            var harness = new StringBuilder()
+                .AppendLine("#!/usr/bin/env bash")
+                .AppendLine("set -uo pipefail")
+                .AppendLine("DRY_RUN=false")
+                .AppendLine("SSH_TARGET=fake@host")
+                .AppendLine("REMOTE_DEPLOY_DIR=${REMOTE_DEPLOY_DIR:-/tmp/iiot-fake-cloud-deploy}")
+                .AppendLine("export REMOTE_DEPLOY_DIR")
+                .AppendLine("SSH_CONNECT_TIMEOUT_SECONDS=1")
+                .AppendLine("SYNC_TIMEOUT_SECONDS=2")
+                .AppendLine(functions)
+                .AppendLine(body)
+                .ToString();
+            await File.WriteAllTextAsync(harnessPath, harness);
+
+            var startInfo = new ProcessStartInfo("bash")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false
+            };
+            startInfo.ArgumentList.Add(harnessPath);
+            if (environment is not null)
+            {
+                foreach (var (key, value) in environment)
+                    startInfo.Environment[key] = value;
+            }
+
+            using var process = Process.Start(startInfo)
+                                ?? throw new InvalidOperationException("Could not start bash deployment guard harness.");
+            var standardOutput = process.StandardOutput.ReadToEndAsync();
+            var standardError = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            return new ShellResult(
+                process.ExitCode,
+                await standardOutput,
+                await standardError);
+        }
+        finally
+        {
+            testRoot.Delete(recursive: true);
+        }
+    }
+
+    private sealed record ShellResult(int ExitCode, string StandardOutput, string StandardError)
+    {
+        public string CombinedOutput => $"stdout:{Environment.NewLine}{StandardOutput}{Environment.NewLine}" +
+                                        $"stderr:{Environment.NewLine}{StandardError}";
     }
 }

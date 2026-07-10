@@ -8,6 +8,7 @@ public sealed record ProcessReadItem(
 public interface IProcessReadQueryService
 {
     Task<(IReadOnlyList<ProcessReadItem> Items, int TotalCount)> GetPagedAsync(
+        Guid? processId,
         string? keyword,
         int skip,
         int take,

@@ -41,6 +41,7 @@ public static class DependencyInjection
 {
     public static void AddApplicationService(this IHostApplicationBuilder builder)
     {
+        builder.Services.AddSingleton(TimeProvider.System);
         builder.AddInfrastructures();
         builder.AddEfCore();
         builder.AddEventBus();

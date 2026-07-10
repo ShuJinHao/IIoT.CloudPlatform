@@ -297,6 +297,35 @@ public sealed class EdgeHostBehaviorTests
     }
 
     [Fact]
+    public void EdgeHostMapping_ShouldPreserveMissingAndStaleRuntimeStatusContract()
+    {
+        var utcNow = new DateTime(2026, 7, 10, 12, 0, 0, DateTimeKind.Utc);
+        var device = new Device("状态冻结设备", "DEV-STATUS-FREEZE", Guid.NewGuid());
+
+        var missing = EdgeHostMapping.ToListItemDto(device, null, [], utcNow);
+
+        Assert.Equal("MissingRuntimeHeartbeat", missing.SoftwareStatus);
+        Assert.Equal("客户端尚未上报运行心跳。", missing.Issue);
+
+        var state = new DeviceClientState(device.Id, device.Code);
+        state.ApplyRuntimeHeartbeat(new EdgeDeviceRuntimeHeartbeat(
+            device.Id,
+            device.Code,
+            "runtime-status-freeze",
+            null,
+            "1.0.0",
+            "1.0.0",
+            "Running",
+            utcNow.AddHours(-25),
+            utcNow.AddHours(-24).AddTicks(-1)));
+
+        var stale = EdgeHostMapping.ToListItemDto(device, state, [], utcNow);
+
+        Assert.Equal("RuntimeHeartbeatStale", stale.SoftwareStatus);
+        Assert.Equal("超过 24 小时未收到运行心跳。", stale.Issue);
+    }
+
+    [Fact]
     public void EdgeHostPlcRuntimeState_ShouldInferFaultedWhenDisconnectedReportHasLastError()
     {
         var state = new EdgeHostPlcRuntimeState(Guid.NewGuid(), "DEV-PLCSTATE04", "PLC-CUT-01");

@@ -1,9 +1,8 @@
 using IIoT.Core.Production.Aggregates.ClientReleases;
-using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Core.Production.Specifications.ClientReleases;
-using IIoT.Core.Production.Specifications.Devices;
 using IIoT.ProductionService.AiRead;
+using IIoT.ProductionService.ClientReleases;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.AiRead;
 using IIoT.Services.Contracts.Authorization;
@@ -52,10 +51,11 @@ public sealed record AiReadDeviceClientStateDto(
     string? HostApiVersion,
     DateTime? VersionReportedAtUtc,
     DateTime? VersionReceivedAtUtc,
+    string SoftwareStatus,
     string? RuntimeStatus,
     DateTime? RuntimeStartedAtUtc,
     DateTime? LastRuntimeHeartbeatAtUtc,
-    DateTime UpdatedAtUtc);
+    DateTime? UpdatedAtUtc);
 
 public sealed record AiReadCapacitySummaryDto(
     DateOnly Date,
@@ -109,11 +109,17 @@ public sealed record AiReadProductionRecordDto(
 
 [AuthorizeAiRead(AiReadPermissions.Device)]
 public sealed record GetAiReadDevicesQuery(
+    Guid? DeviceId = null,
+    string? DeviceCode = null,
+    Guid? ProcessId = null,
     string? Keyword = null,
-    int? MaxRows = null) : IAiReadQuery<Result<AiReadListResponse<AiReadDeviceDto>>>;
+    int? MaxRows = null,
+    IReadOnlyList<string>? UnsupportedParameters = null,
+    bool DeviceCodeSupplied = false)
+    : IAiReadQuery<Result<AiReadListResponse<AiReadDeviceDto>>>;
 
 public sealed class GetAiReadDevicesHandler(
-    IReadRepository<Device> deviceRepository,
+    IAiReadDeviceQueryService deviceQueryService,
     IAiReadScopeAccessor scopeAccessor,
     IOptions<AiReadOptions> options)
     : IQueryHandler<GetAiReadDevicesQuery, Result<AiReadListResponse<AiReadDeviceDto>>>
@@ -122,22 +128,43 @@ public sealed class GetAiReadDevicesHandler(
         GetAiReadDevicesQuery request,
         CancellationToken cancellationToken)
     {
-        var maxRows = AiReadQueryGuard.NormalizeMaxRows(request.MaxRows, options.Value);
-        var allowedDeviceIds = scopeAccessor.DelegatedDeviceIds?.ToList();
-        var countSpec = new DevicePagedSpec(0, 0, allowedDeviceIds, request.Keyword, isPaging: false);
-        var totalCount = await deviceRepository.CountAsync(countSpec, cancellationToken);
+        var queryParameterValidation = AiReadQueryGuard.ValidateDeviceQueryParameters(
+            request.DeviceCode,
+            request.DeviceCodeSupplied,
+            request.UnsupportedParameters);
+        if (queryParameterValidation is not null)
+            return queryParameterValidation;
 
-        List<Device> devices = [];
-        if (totalCount > 0)
+        var scopeValidation = AiReadQueryGuard.ResolveDeviceScope(scopeAccessor, out var allowedDeviceIds);
+        if (scopeValidation is not null)
+            return scopeValidation;
+
+        if (request.DeviceId.HasValue)
         {
-            devices = await deviceRepository.GetListAsync(
-                new DevicePagedSpec(0, maxRows, allowedDeviceIds, request.Keyword, isPaging: true),
-                cancellationToken);
+            var validation = AiReadQueryGuard.ValidateDeviceAllowed(
+                request.DeviceId.Value,
+                allowedDeviceIds);
+            if (validation is not null)
+                return validation;
         }
 
+        if (request.ProcessId == Guid.Empty)
+            return Result.Invalid("工序不能为空。");
+
+        var maxRows = AiReadQueryGuard.NormalizeMaxRows(request.MaxRows, options.Value);
+        var (devices, totalCount) = await deviceQueryService.GetPagedAsync(
+            new AiReadDeviceQueryRequest(
+                request.DeviceId,
+                request.DeviceCode,
+                request.ProcessId,
+                request.Keyword,
+                allowedDeviceIds,
+                Skip: 0,
+                Take: maxRows),
+            cancellationToken);
+
         var items = devices
-            .Take(maxRows)
-            .Select(device => new AiReadDeviceDto(device.Id, device.Code, device.DeviceName, device.ProcessId))
+            .Select(device => new AiReadDeviceDto(device.Id, device.DeviceCode, device.DeviceName, device.ProcessId))
             .ToList();
 
         return Result.Success(new AiReadListResponse<AiReadDeviceDto>(
@@ -145,9 +172,12 @@ public sealed class GetAiReadDevicesHandler(
             DateTimeOffset.UtcNow,
             "devices",
             AiReadQueryGuard.BuildScope(
-                ("keyword", request.Keyword),
-                ("delegatedUserId", scopeAccessor.DelegatedUserId?.ToString()),
-                ("delegatedDeviceCount", allowedDeviceIds?.Count.ToString())),
+                ("deviceId", AiReadQueryGuard.ScopeGuid(request.DeviceId)),
+                ("deviceCode", AiReadQueryGuard.ScopeText(request.DeviceCode)),
+                ("processId", AiReadQueryGuard.ScopeGuid(request.ProcessId)),
+                ("keyword", AiReadQueryGuard.ScopeText(request.Keyword)),
+                ("delegatedUserId", AiReadQueryGuard.ScopeGuid(scopeAccessor.DelegatedUserId)),
+                ("delegatedDeviceCount", AiReadQueryGuard.ScopeNumber(allowedDeviceIds?.Count))),
             items.Count,
             totalCount > items.Count));
     }
@@ -155,6 +185,7 @@ public sealed class GetAiReadDevicesHandler(
 
 [AuthorizeAiRead(AiReadPermissions.Process)]
 public sealed record GetAiReadProcessesQuery(
+    Guid? ProcessId = null,
     string? Keyword = null,
     int? MaxRows = null) : IAiReadQuery<Result<AiReadListResponse<AiReadProcessDto>>>;
 
@@ -167,8 +198,12 @@ public sealed class GetAiReadProcessesHandler(
         GetAiReadProcessesQuery request,
         CancellationToken cancellationToken)
     {
+        if (request.ProcessId == Guid.Empty)
+            return Result.Invalid("工序不能为空。");
+
         var maxRows = AiReadQueryGuard.NormalizeMaxRows(request.MaxRows, options.Value);
         var (processes, totalCount) = await processReadQueryService.GetPagedAsync(
+            request.ProcessId,
             request.Keyword,
             0,
             maxRows,
@@ -183,7 +218,9 @@ public sealed class GetAiReadProcessesHandler(
             items,
             DateTimeOffset.UtcNow,
             "processes",
-            AiReadQueryGuard.BuildScope(("keyword", request.Keyword)),
+            AiReadQueryGuard.BuildScope(
+                ("processId", AiReadQueryGuard.ScopeGuid(request.ProcessId)),
+                ("keyword", AiReadQueryGuard.ScopeText(request.Keyword))),
             items.Count,
             totalCount > items.Count));
     }
@@ -242,10 +279,10 @@ public sealed class GetAiReadClientReleaseVersionsHandler(
             DateTimeOffset.UtcNow,
             "client_release_versions",
             AiReadQueryGuard.BuildScope(
-                ("channel", request.Channel),
-                ("targetRuntime", request.TargetRuntime),
-                ("status", request.Status),
-                ("includeArchived", request.IncludeArchived.ToString())),
+                ("channel", AiReadQueryGuard.ScopeText(request.Channel)),
+                ("targetRuntime", AiReadQueryGuard.ScopeText(request.TargetRuntime)),
+                ("status", AiReadQueryGuard.ScopeText(request.Status)),
+                ("includeArchived", AiReadQueryGuard.ScopeBoolean(request.IncludeArchived))),
             items.Count,
             allItems.Count > items.Count));
     }
@@ -254,11 +291,16 @@ public sealed class GetAiReadClientReleaseVersionsHandler(
 [AuthorizeAiRead(AiReadPermissions.DeviceClientState)]
 public sealed record GetAiReadDeviceClientStatesQuery(
     Guid? DeviceId = null,
+    string? DeviceCode = null,
+    Guid? ProcessId = null,
     string? Keyword = null,
-    int? MaxRows = null) : IAiReadQuery<Result<AiReadListResponse<AiReadDeviceClientStateDto>>>;
+    int? MaxRows = null,
+    IReadOnlyList<string>? UnsupportedParameters = null,
+    bool DeviceCodeSupplied = false)
+    : IAiReadQuery<Result<AiReadListResponse<AiReadDeviceClientStateDto>>>;
 
 public sealed class GetAiReadDeviceClientStatesHandler(
-    IReadRepository<Device> deviceRepository,
+    IAiReadDeviceQueryService deviceQueryService,
     IDeviceClientStateStore clientStateStore,
     IAiReadScopeAccessor scopeAccessor,
     IOptions<AiReadOptions> options)
@@ -268,66 +310,98 @@ public sealed class GetAiReadDeviceClientStatesHandler(
         GetAiReadDeviceClientStatesQuery request,
         CancellationToken cancellationToken)
     {
+        var queryParameterValidation = AiReadQueryGuard.ValidateDeviceQueryParameters(
+            request.DeviceCode,
+            request.DeviceCodeSupplied,
+            request.UnsupportedParameters);
+        if (queryParameterValidation is not null)
+            return queryParameterValidation;
+
+        var scopeValidation = AiReadQueryGuard.ResolveDeviceScope(scopeAccessor, out var allowedDeviceIds);
+        if (scopeValidation is not null)
+            return scopeValidation;
+
         if (request.DeviceId.HasValue)
         {
             var validation = AiReadQueryGuard.ValidateDeviceAllowed(
                 request.DeviceId.Value,
-                scopeAccessor.DelegatedDeviceIds);
+                allowedDeviceIds);
             if (validation is not null)
                 return validation;
         }
 
+        if (request.ProcessId == Guid.Empty)
+            return Result.Invalid("工序不能为空。");
+
         var maxRows = AiReadQueryGuard.NormalizeMaxRows(request.MaxRows, options.Value);
-        List<Guid>? allowedDeviceIds = request.DeviceId.HasValue
-            ? [request.DeviceId.Value]
-            : scopeAccessor.DelegatedDeviceIds?.ToList();
-        var devices = await deviceRepository.GetListAsync(
-            new DevicePagedSpec(0, maxRows, allowedDeviceIds, request.Keyword, isPaging: true),
+        var (devices, totalCount) = await deviceQueryService.GetPagedAsync(
+            new AiReadDeviceQueryRequest(
+                request.DeviceId,
+                request.DeviceCode,
+                request.ProcessId,
+                request.Keyword,
+                allowedDeviceIds,
+                Skip: 0,
+                Take: maxRows),
             cancellationToken);
-        var deviceById = devices.ToDictionary(device => device.Id);
-        var states = await clientStateStore.GetStatesByDevicesAsync(deviceById.Keys.ToList(), cancellationToken);
-        var allItems = states
-            .Where(state => deviceById.ContainsKey(state.DeviceId))
-            .OrderBy(state => deviceById[state.DeviceId].DeviceName, StringComparer.OrdinalIgnoreCase)
-            .Select(state =>
+        var deviceIds = devices.Select(device => device.Id).ToList();
+        var states = deviceIds.Count == 0
+            ? []
+            : await clientStateStore.GetStatesByDevicesAsync(deviceIds, cancellationToken);
+        var statesByDevice = states
+            .GroupBy(state => state.DeviceId)
+            .ToDictionary(group => group.Key, group => group.ToList());
+        var utcNow = DateTime.UtcNow;
+        var items = devices
+            .Select(device =>
             {
-                var device = deviceById[state.DeviceId];
+                var state = statesByDevice.GetValueOrDefault(device.Id)?
+                    .Where(candidate => string.Equals(
+                        candidate.ClientCode,
+                        device.DeviceCode,
+                        StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(candidate => candidate.UpdatedAtUtc)
+                    .FirstOrDefault();
+                var softwareStatus = DeviceClientSoftwareStatusResolver.Resolve(state, utcNow);
                 return new AiReadDeviceClientStateDto(
-                    state.DeviceId,
+                    device.Id,
                     device.DeviceName,
-                    state.ClientCode,
+                    device.DeviceCode,
                     ResolvePrimaryIp(state),
-                    state.Channel,
-                    state.HostVersion,
-                    state.HostApiVersion,
-                    state.VersionReportedAtUtc,
-                    state.VersionReceivedAtUtc,
-                    state.RuntimeStatus,
-                    state.RuntimeStartedAtUtc,
-                    state.LastRuntimeHeartbeatAtUtc,
-                    state.UpdatedAtUtc);
+                    state?.Channel,
+                    state?.HostVersion,
+                    state?.HostApiVersion,
+                    state?.VersionReportedAtUtc,
+                    state?.VersionReceivedAtUtc,
+                    softwareStatus.SoftwareStatus,
+                    state?.RuntimeStatus,
+                    state?.RuntimeStartedAtUtc,
+                    state?.LastRuntimeHeartbeatAtUtc,
+                    state?.UpdatedAtUtc);
             })
             .ToList();
-        var items = allItems.Take(maxRows).ToList();
 
         return Result.Success(new AiReadListResponse<AiReadDeviceClientStateDto>(
             items,
-            DateTimeOffset.UtcNow,
+            new DateTimeOffset(utcNow),
             "device_client_states",
             AiReadQueryGuard.BuildScope(
-                ("deviceId", request.DeviceId?.ToString()),
-                ("keyword", request.Keyword),
-                ("delegatedUserId", scopeAccessor.DelegatedUserId?.ToString())),
+                ("deviceId", AiReadQueryGuard.ScopeGuid(request.DeviceId)),
+                ("deviceCode", AiReadQueryGuard.ScopeText(request.DeviceCode)),
+                ("processId", AiReadQueryGuard.ScopeGuid(request.ProcessId)),
+                ("keyword", AiReadQueryGuard.ScopeText(request.Keyword)),
+                ("delegatedUserId", AiReadQueryGuard.ScopeGuid(scopeAccessor.DelegatedUserId)),
+                ("delegatedDeviceCount", AiReadQueryGuard.ScopeNumber(allowedDeviceIds?.Count))),
             items.Count,
-            allItems.Count > items.Count));
+            totalCount > items.Count));
     }
 
-    private static string? ResolvePrimaryIp(DeviceClientState state)
+    private static string? ResolvePrimaryIp(DeviceClientState? state)
     {
-        return state.GetRuntimeLocalIpAddresses().FirstOrDefault()
-            ?? state.GetVersionLocalIpAddresses().FirstOrDefault()
-            ?? state.RuntimeRemoteIpAddress
-            ?? state.VersionRemoteIpAddress;
+        return state?.GetRuntimeLocalIpAddresses().FirstOrDefault()
+            ?? state?.GetVersionLocalIpAddresses().FirstOrDefault()
+            ?? state?.RuntimeRemoteIpAddress
+            ?? state?.VersionRemoteIpAddress;
     }
 }
 
@@ -349,11 +423,15 @@ public sealed class GetAiReadCapacitySummaryHandler(
         GetAiReadCapacitySummaryQuery request,
         CancellationToken cancellationToken)
     {
+        var scopeValidation = AiReadQueryGuard.ResolveDeviceScope(scopeAccessor, out var allowedDeviceIds);
+        if (scopeValidation is not null)
+            return scopeValidation;
+
         var validation = AiReadQueryGuard.ValidateDeviceAndDateRange(
             request.DeviceId,
             request.StartDate,
             request.EndDate,
-            scopeAccessor.DelegatedDeviceIds,
+            allowedDeviceIds,
             options.Value);
         if (validation is not null)
             return validation;
@@ -382,11 +460,11 @@ public sealed class GetAiReadCapacitySummaryHandler(
             DateTimeOffset.UtcNow,
             "capacity.summary",
             AiReadQueryGuard.BuildScope(
-                ("deviceId", request.DeviceId.ToString()),
-                ("startDate", request.StartDate.ToString("yyyy-MM-dd")),
-                ("endDate", request.EndDate.ToString("yyyy-MM-dd")),
-                ("plcName", request.PlcName),
-                ("delegatedUserId", scopeAccessor.DelegatedUserId?.ToString())),
+                ("deviceId", AiReadQueryGuard.ScopeGuid(request.DeviceId)),
+                ("startDate", AiReadQueryGuard.ScopeDate(request.StartDate)),
+                ("endDate", AiReadQueryGuard.ScopeDate(request.EndDate)),
+                ("plcName", AiReadQueryGuard.ScopeText(request.PlcName)),
+                ("delegatedUserId", AiReadQueryGuard.ScopeGuid(scopeAccessor.DelegatedUserId))),
             items.Count,
             data.Count > items.Count));
     }
@@ -410,9 +488,13 @@ public sealed class GetAiReadCapacityHourlyHandler(
         GetAiReadCapacityHourlyQuery request,
         CancellationToken cancellationToken)
     {
+        var scopeValidation = AiReadQueryGuard.ResolveDeviceScope(scopeAccessor, out var allowedDeviceIds);
+        if (scopeValidation is not null)
+            return scopeValidation;
+
         var deviceValidation = AiReadQueryGuard.ValidateDeviceAllowed(
             request.DeviceId,
-            scopeAccessor.DelegatedDeviceIds);
+            allowedDeviceIds);
         if (deviceValidation is not null)
             return deviceValidation;
 
@@ -450,13 +532,15 @@ public sealed class GetAiReadCapacityHourlyHandler(
             DateTimeOffset.UtcNow,
             "capacity.hourly",
             AiReadQueryGuard.BuildScope(
-                ("deviceId", request.DeviceId.ToString()),
-                ("date", request.Date?.ToString("yyyy-MM-dd")),
-                ("preset", range.RangeSource),
-                ("startTime", range.StartTime.ToString("O")),
-                ("endTime", range.EndTime.ToString("O")),
-                ("plcName", request.PlcName),
-                ("delegatedUserId", scopeAccessor.DelegatedUserId?.ToString())),
+                ("deviceId", AiReadQueryGuard.ScopeGuid(request.DeviceId)),
+                ("date", AiReadQueryGuard.ScopeDate(request.Date)),
+                ("preset", AiReadQueryGuard.ScopeClosed(
+                    range.RangeSource,
+                    "date", "last_24h", "today", "yesterday")),
+                ("startTime", AiReadQueryGuard.ScopeDateTime(range.StartTime)),
+                ("endTime", AiReadQueryGuard.ScopeDateTime(range.EndTime)),
+                ("plcName", AiReadQueryGuard.ScopeText(request.PlcName)),
+                ("delegatedUserId", AiReadQueryGuard.ScopeGuid(scopeAccessor.DelegatedUserId))),
             items.Count,
             rows.Count > items.Count));
     }
@@ -483,12 +567,16 @@ public sealed class GetAiReadDeviceLogsHandler(
         GetAiReadDeviceLogsQuery request,
         CancellationToken cancellationToken)
     {
+        var scopeValidation = AiReadQueryGuard.ResolveDeviceScope(scopeAccessor, out var allowedDeviceIds);
+        if (scopeValidation is not null)
+            return scopeValidation;
+
         if (!string.IsNullOrWhiteSpace(request.Level) && !string.IsNullOrWhiteSpace(request.MinLevel))
             return Result.Invalid("level 和 minLevel 不能同时传。");
 
         var rangeValidation = AiReadQueryGuard.ValidateDeviceAllowed(
             request.DeviceId,
-            scopeAccessor.DelegatedDeviceIds);
+            allowedDeviceIds);
         if (rangeValidation is not null)
             return rangeValidation;
 
@@ -541,14 +629,16 @@ public sealed class GetAiReadDeviceLogsHandler(
             DateTimeOffset.UtcNow,
             "device_logs",
             AiReadQueryGuard.BuildScope(
-                ("deviceId", request.DeviceId.ToString()),
-                ("startTime", range.StartTime.ToString("O")),
-                ("endTime", range.EndTime.ToString("O")),
-                ("preset", range.RangeSource),
-                ("level", request.Level),
-                ("minLevel", request.MinLevel),
-                ("keyword", string.IsNullOrWhiteSpace(request.Keyword) ? null : "present"),
-                ("delegatedUserId", scopeAccessor.DelegatedUserId?.ToString())),
+                ("deviceId", AiReadQueryGuard.ScopeGuid(request.DeviceId)),
+                ("startTime", AiReadQueryGuard.ScopeDateTime(range.StartTime)),
+                ("endTime", AiReadQueryGuard.ScopeDateTime(range.EndTime)),
+                ("preset", AiReadQueryGuard.ScopeClosed(
+                    range.RangeSource,
+                    "explicit", "last_24h", "last_7d", "today", "yesterday")),
+                ("level", AiReadQueryGuard.ScopeText(request.Level)),
+                ("minLevel", AiReadQueryGuard.ScopeText(request.MinLevel)),
+                ("keyword", AiReadQueryGuard.ScopeText(request.Keyword)),
+                ("delegatedUserId", AiReadQueryGuard.ScopeGuid(scopeAccessor.DelegatedUserId))),
             resultItems.Count,
             totalCount > resultItems.Count));
     }
@@ -578,6 +668,10 @@ public sealed class GetAiReadProductionRecordsHandler(
         GetAiReadProductionRecordsQuery request,
         CancellationToken cancellationToken)
     {
+        var scopeValidation = AiReadQueryGuard.ResolveDeviceScope(scopeAccessor, out var allowedDeviceIds);
+        if (scopeValidation is not null)
+            return scopeValidation;
+
         var fieldMode = string.IsNullOrWhiteSpace(request.FieldMode)
             ? "list"
             : request.FieldMode.Trim().ToLowerInvariant();
@@ -614,7 +708,7 @@ public sealed class GetAiReadProductionRecordsHandler(
         {
             var deviceValidation = AiReadQueryGuard.ValidateDeviceAllowed(
                 request.DeviceId.Value,
-                scopeAccessor.DelegatedDeviceIds);
+                allowedDeviceIds);
             if (deviceValidation is not null)
                 return deviceValidation;
         }
@@ -632,7 +726,7 @@ public sealed class GetAiReadProductionRecordsHandler(
 
         var (items, totalCount) = await productionRecordQueryService.GetAsync(
             queryRequest,
-            scopeAccessor.DelegatedDeviceIds,
+            allowedDeviceIds,
             cancellationToken);
         var definitions = schemaProvider.GetAll()
             .ToDictionary(definition => definition.TypeKey, StringComparer.Ordinal);
@@ -679,17 +773,19 @@ public sealed class GetAiReadProductionRecordsHandler(
             DateTimeOffset.UtcNow,
             "production_records",
             AiReadQueryGuard.BuildScope(
-                ("typeKey", requestedDefinition?.TypeKey),
-                ("processId", request.ProcessId?.ToString()),
-                ("deviceId", request.DeviceId?.ToString()),
-                ("barcode", string.IsNullOrWhiteSpace(request.Barcode) ? null : "present"),
-                ("result", request.Result),
-                ("fieldMode", fieldMode),
-                ("preset", range.RangeSource),
-                ("startTime", range.StartTime.ToString("O")),
-                ("endTime", range.EndTime.ToString("O")),
-                ("delegatedUserId", scopeAccessor.DelegatedUserId?.ToString()),
-                ("delegatedDeviceCount", scopeAccessor.DelegatedDeviceIds?.Count.ToString())),
+                ("typeKey", AiReadQueryGuard.ScopeText(requestedDefinition?.TypeKey)),
+                ("processId", AiReadQueryGuard.ScopeGuid(request.ProcessId)),
+                ("deviceId", AiReadQueryGuard.ScopeGuid(request.DeviceId)),
+                ("barcode", AiReadQueryGuard.ScopeText(request.Barcode)),
+                ("result", AiReadQueryGuard.ScopeText(request.Result)),
+                ("fieldMode", AiReadQueryGuard.ScopeClosed(fieldMode, "list", "full")),
+                ("preset", AiReadQueryGuard.ScopeClosed(
+                    range.RangeSource,
+                    "explicit", "last_24h", "last_7d", "today", "yesterday")),
+                ("startTime", AiReadQueryGuard.ScopeDateTime(range.StartTime)),
+                ("endTime", AiReadQueryGuard.ScopeDateTime(range.EndTime)),
+                ("delegatedUserId", AiReadQueryGuard.ScopeGuid(scopeAccessor.DelegatedUserId)),
+                ("delegatedDeviceCount", AiReadQueryGuard.ScopeNumber(allowedDeviceIds?.Count))),
             resultItems.Count,
             totalCount > resultItems.Count));
     }
@@ -715,8 +811,42 @@ internal sealed record AiReadResolvedTimeRange(
     DateTime EndTime,
     string RangeSource);
 
+internal readonly record struct AiReadScopeValue(string? Value);
+
 internal static class AiReadQueryGuard
 {
+    private static readonly HashSet<string> KnownUnsupportedQueryParameters = new(
+        [
+            "softwareStatus",
+            "runtimeStatus",
+            "status",
+            "lineName",
+            "processName",
+            "updatedAt",
+            "updatedAtUtc"
+        ],
+        StringComparer.Ordinal);
+
+    public static Result? ValidateDeviceQueryParameters(
+        string? deviceCode,
+        bool deviceCodeSupplied,
+        IReadOnlyList<string>? unsupportedParameters)
+    {
+        if ((deviceCodeSupplied && string.IsNullOrWhiteSpace(deviceCode))
+            || (deviceCode is not null && string.IsNullOrWhiteSpace(deviceCode)))
+            return Result.Invalid("设备编码不能为空白。");
+
+        if (unsupportedParameters is not { Count: > 0 })
+            return null;
+
+        var names = unsupportedParameters
+            .Select(parameter => KnownUnsupportedQueryParameters.Contains(parameter) ? parameter : "unknown")
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(parameter => parameter, StringComparer.Ordinal)
+            .ToArray();
+        return Result.Invalid($"不支持的查询参数：{string.Join(", ", names)}。");
+    }
+
     private static readonly HashSet<string> ProductionRecordCommonColumns = new(StringComparer.Ordinal)
     {
         "id",
@@ -733,6 +863,27 @@ internal static class AiReadQueryGuard
     {
         var requested = requestedMaxRows.GetValueOrDefault(options.MaxRows);
         return Math.Clamp(requested, 1, options.MaxRows);
+    }
+
+    public static Result? ResolveDeviceScope(
+        IAiReadScopeAccessor scopeAccessor,
+        out IReadOnlyCollection<Guid>? allowedDeviceIds)
+    {
+        switch (scopeAccessor.ScopeKind)
+        {
+            case AiReadScopeKind.Global:
+                allowedDeviceIds = null;
+                return null;
+            case AiReadScopeKind.Delegated:
+                allowedDeviceIds = scopeAccessor.DelegatedDeviceIds?.Distinct().ToArray() ?? [];
+                return null;
+            case AiReadScopeKind.Invalid:
+                allowedDeviceIds = [];
+                return Result.Forbidden("AiRead delegated device scope 无效。");
+            default:
+                allowedDeviceIds = [];
+                return Result.Forbidden("AiRead delegated device scope 无效。");
+        }
     }
 
     public static Result? ValidateDeviceAndDateRange(
@@ -893,11 +1044,51 @@ internal static class AiReadQueryGuard
         };
     }
 
-    public static string BuildScope(params (string Key, string? Value)[] values)
+    public static AiReadScopeValue ScopeGuid(Guid? value)
+    {
+        return new AiReadScopeValue(value?.ToString("D"));
+    }
+
+    public static AiReadScopeValue ScopeDate(DateOnly? value)
+    {
+        return new AiReadScopeValue(value?.ToString("yyyy-MM-dd"));
+    }
+
+    public static AiReadScopeValue ScopeDateTime(DateTime? value)
+    {
+        return new AiReadScopeValue(value.HasValue ? NormalizeUtc(value.Value).ToString("O") : null);
+    }
+
+    public static AiReadScopeValue ScopeNumber(int? value)
+    {
+        return new AiReadScopeValue(value?.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    public static AiReadScopeValue ScopeBoolean(bool value)
+    {
+        return new AiReadScopeValue(value.ToString());
+    }
+
+    public static AiReadScopeValue ScopeText(string? value)
+    {
+        return new AiReadScopeValue(string.IsNullOrWhiteSpace(value) ? null : "present");
+    }
+
+    public static AiReadScopeValue ScopeClosed(string? value, params string[] allowedValues)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return new AiReadScopeValue(null);
+
+        var normalized = allowedValues.FirstOrDefault(allowed =>
+            string.Equals(allowed, value.Trim(), StringComparison.OrdinalIgnoreCase));
+        return new AiReadScopeValue(normalized ?? "present");
+    }
+
+    public static string BuildScope(params (string Key, AiReadScopeValue Value)[] values)
     {
         var parts = values
-            .Where(value => !string.IsNullOrWhiteSpace(value.Value))
-            .Select(value => $"{value.Key}={value.Value}");
+            .Where(value => !string.IsNullOrWhiteSpace(value.Value.Value))
+            .Select(value => $"{value.Key}={value.Value.Value}");
 
         var scope = string.Join(";", parts);
         return string.IsNullOrWhiteSpace(scope) ? "default" : scope;

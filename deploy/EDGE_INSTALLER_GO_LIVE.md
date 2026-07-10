@@ -1,6 +1,8 @@
 # Edge 客户端安装包上线清单
 
-本文档用于把“Cloud 下载中心生成真实 `.exe` 安装包”上线到私有服务器。执行顺序不能倒：先部署 Cloud，再上传 Edge 安装素材，最后在 Windows 真机验收。Edge 安装素材落盘后由 Cloud 扫描 `installer-artifact.json` 并合并到 catalog；不再需要手工登记数据库 release 才能让版本可见。三项目上传部署统一入口见 [上传部署总览](../../docs/上传部署总览.md)。
+本文档用于把“Cloud 下载中心生成真实 `.exe` 安装包”上线到私有服务器。执行顺序不能倒：先部署 Cloud，再上传 Edge 安装素材，最后在 Windows 真机验收。上传阶段必须校验 `installer-artifact.json` 并生成正式 Cloud release 记录；catalog、首装和公开下载的版本集合只来自这些记录，文件系统不能补出未登记版本。三项目上传部署统一入口见 [上传部署总览](../../docs/上传部署总览.md)。
+
+> 当前状态（2026-07-10）：本文描述的是目标上线清单；本轮没有执行真实 Cloud `stable` 上传/catalog/DB/静态下载闭环，也没有执行 Windows 安装/更新实机验收，不得据此宣称 Edge 安装更新已完成生产验收。
 
 ## 1. 本地前置检查
 
@@ -43,28 +45,16 @@ cd src/ui/iiot-web && npm run build
 
 必须先把当前 Cloud 后端和前端部署到服务器，否则线上没有 `installer-package` 接口，也没有新的 `.exe` 下载按钮。
 
-标准方式是本机构建并 SSH 触发服务器部署：
+标准方式由工作区唯一入口调度本机构建、Harbor 和 SSH 部署：
 
 1. 推送或合并到 `main`。
 2. 在本机确认 HEAD 已推送且工作区干净。
-3. 运行 `REGISTRY=<harbor-registry> VITE_AICOPILOT_CHALLENGE_URL=http://<aicopilot-browser-reachable-host>:82/api/identity/cloud-oidc/challenge DEPLOY_SSH_TARGET=github-runner@<shared-host> ./deploy/scripts/local-release.sh --services web`；如后端接口也改动，则按实际服务传入 `httpapi,gateway,dataworker,migration,web` 的子集。
+3. 从工作区根运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services web`；如后端接口也改动，则按实际服务传入 `httpapi,gateway,dataworker,migration,web` 的子集。顶层入口从当前生产 profile 读取标准 Harbor、SSH 和 challenge 参数，再调度 Cloud 项目实现脚本。
 4. 确认服务器 `post-deploy-check.sh`、`ops-check.sh` 和发布后清理摘要通过。
 
 本机 `build-and-push.sh` 会给 Web Dockerfile 传入 `VITE_AICOPILOT_CHALLENGE_URL`，并使用 Harbor mirror 中的 `node:22-slim`、`nginx:1.27-alpine` 基础镜像。服务器不依赖 Docker Hub。单镜像 build/push 超过 15 分钟必须停止诊断，不得等待灾备 GitHub workflow。
 
-只有本机 SSH 触发器不可用时，才走服务器应急手工部署。全量应急恢复命令如下：
-
-```sh
-cd /data/iiot-platform/cloud/deploy
-chmod +x ./scripts/*.sh
-DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-<current-commit-or-release>
-```
-
-如果应急路径只发布前端，命令必须显式带上 `--services web`，不能留空触发全量发布：
-
-```sh
-DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-<current-commit-or-release> --services web
-```
+本机 SSH 触发器不可用时，不得改走服务器手工 `deploy-release.sh`。该脚本已强制要求根入口 invocation/plan、run-bound image manifest、OCI digest 与预获取事务锁；必须恢复操作端/SSH 后从 `Invoke-WorkspaceDeploy.ps1` 重新预检或恢复。
 
 部署前确认 `.env` 里保持密钥模式：
 
@@ -85,8 +75,8 @@ docker compose ps
 Edge 安装素材不在 CloudPlatform 仓库生成。当前有两个有效发布入口：
 
 - 正式 GitHub 打包：`IIoT.EdgeClient` 的 `edge-pack-modules.yml` 只在 `workflow_dispatch` 或 `edge-v*` / `v*` tag 上完整构建和发布，渠道固定为 `stable`。
-- 日常宿主快发：操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1 -Transport http`，本机编译、Velopack 打包、生成 installer artifact 后，通过 Cloud Human API 上传到服务器，渠道固定为 `stable`。这是本机运维快发路径，不是 GitHub CI/CD job；生产 stable 不允许 `rsync/scp`。
-- 日常插件快发：只改工序插件时运行 `IIoT.EdgeClient/scripts/PublishEdgePluginRelease.ps1`，只上传独立插件 zip 并登记插件 release，不生成宿主版本。
+- 日常宿主快发：操作者从工作区根运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target EdgeHost -ReleaseNotesPath <更新说明.md>`；顶层入口调度 EdgeClient 本机脚本完成编译、Velopack、installer artifact 和 Cloud Human API 上传，渠道固定为 `stable`。这是本机运维快发路径，不是 GitHub CI/CD job；生产 stable 不允许 `rsync/scp`。
+- 日常插件快发：只改工序插件时运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target EdgePlugin -ModuleId <真实ModuleId> -ReleaseNotesPath <更新说明.md>`，只上传独立插件 zip 并登记插件 release，不生成宿主版本。
 - 生产服务器只允许 `stable` 渠道，不保留 `ci`、`dev`、`test` 或其他测试渠道目录。
 
 正式 GitHub 打包入口：
@@ -101,13 +91,9 @@ workflow_dispatch
 日常快发入口示例：
 
 ```powershell
-pwsh <IIoT.EdgeClient>\scripts\LocalPublishAndDeploy.ps1 `
-  -Channel stable `
-  -Transport http `
-  -CloudApiBaseUrl http://<cloud-host>:81/api/v1 `
-  -CloudToken $env:IIOT_CLOUD_RELEASE_TOKEN `
-  -ReleaseNotesPath <本次更新说明.md> `
-  -UploadRateLimitMbps 1000
+pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 `
+  -Target EdgeHost `
+  -ReleaseNotesPath <本次更新说明.md>
 ```
 
 快发脚本未传 `-Version` 时会通过 Cloud Human catalog 查询 stable 最新版本并自动递增 patch。上传完成后，Cloud 服务端先校验和落盘 bundle，再从 manifest 派生 DB release 行、写入审计，按 SemVer 执行最新 3 个 stable 版本保留策略，并返回本次部署总结。脚本必须打印 version、sourceCommit、releaseNotes、上传耗时、限速、清理结果和 HTTP 验证结果。
@@ -189,7 +175,7 @@ curl -sS -I http://127.0.0.1:81/edge-updates/installers/stable/1.2.0/installer-a
    ```powershell
    pwsh <IIoT.EdgeClient>\scripts\TestEdgeDownloadedInstallerPackage.ps1 `
      -InstallerPath <下载到的 IIoT.Edge.Setup*.exe> `
-     -ExpectedModuleId Homogenization
+     -ExpectedModuleId <真实ModuleId>
    ```
 
    该脚本只读 `.exe`，不执行安装，不打印 bootstrap secret。
@@ -203,7 +189,7 @@ curl -sS -I http://127.0.0.1:81/edge-updates/installers/stable/1.2.0/installer-a
 ```powershell
 pwsh <IIoT.EdgeClient>\scripts\InvokeEdgeInstallerWindowsAcceptance.ps1 `
   -InstallerPath <下载到的 IIoT.Edge.Setup*.exe> `
-  -ExpectedModuleId Homogenization
+  -ExpectedModuleId <真实ModuleId>
 ```
 
 如果需要清理旧安装目录后做干净验收，必须显式确认：
@@ -211,7 +197,7 @@ pwsh <IIoT.EdgeClient>\scripts\InvokeEdgeInstallerWindowsAcceptance.ps1 `
 ```powershell
 pwsh <IIoT.EdgeClient>\scripts\InvokeEdgeInstallerWindowsAcceptance.ps1 `
   -InstallerPath <下载到的 IIoT.Edge.Setup*.exe> `
-  -ExpectedModuleId Homogenization `
+  -ExpectedModuleId <真实ModuleId> `
   -CleanInstallRoot `
   -ConfirmCleanInstallRoot
 ```
@@ -225,7 +211,7 @@ pwsh .\deploy\scripts\InvokeEdgeInstallerPackageDownload.ps1 `
   -CloudApiBaseUrl http://<cloud-host>:81/api/v1 `
   -CloudToken <publish-or-admin-token> `
   -DeviceId <测试设备 id> `
-  -ModuleId Homogenization `
+  -ModuleId <真实ModuleId> `
   -Channel stable `
   -TargetRuntime win-x64 `
   -OutputDirectory .\downloads `

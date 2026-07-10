@@ -173,7 +173,10 @@ public sealed class ReportDeviceRuntimeHeartbeatCommandValidator : AbstractValid
             .Must(value => new[] { "Starting", "Running", "Stopping", "Stopped" }
                 .Contains(value?.Trim(), StringComparer.OrdinalIgnoreCase))
             .WithMessage("运行状态必须是 Starting、Running、Stopping 或 Stopped。");
-        RuleFor(x => x.StartedAtUtc).NotEmpty();
+        RuleFor(x => x.StartedAtUtc)
+            .NotEmpty()
+            .LessThanOrEqualTo(x => x.ReportedAtUtc)
+            .WithMessage("运行心跳开始时间不能晚于上报时间。");
         RuleFor(x => x.ReportedAtUtc).NotEmpty();
     }
 }

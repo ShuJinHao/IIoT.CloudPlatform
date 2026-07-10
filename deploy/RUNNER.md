@@ -4,17 +4,7 @@
 
 ## 目标
 
-CloudPlatform 标准生产发布已经改为操作者本机构建、推 Harbor、SSH 触发服务器 `deploy-release.sh`。self-hosted runner 不再是日常发布链路，只作为灾备 GitHub workflow、CI 辅助和历史运维入口使用。
-
-灾备 runner 链路为：
-
-```text
-git push GitHub
--> 操作者手动 workflow_dispatch 并输入灾备确认词
--> 内网 self-hosted runner 执行
--> cloud-image 构建并 push 到内网 Harbor
--> cloud-deploy 在 ${DEPLOY_TARGET_DIR} 执行 deploy-release.sh
-```
+CloudPlatform 标准生产发布由工作区根 `Invoke-WorkspaceDeploy.ps1` 注入不可伪造的 invocation/plan 契约，再调度本机构建、Harbor push 和 SSH 事务。self-hosted runner 仅用于 CI 辅助和历史运维；旧 `cloud-deploy` workflow 不产生新契约及 run-bound image manifest，在单独迁移并复验前不得用于发布。
 
 runner 需要能出站访问 GitHub，用于接收 job 和下载 Actions；不需要把服务器 SSH 或 Docker 端口暴露到公网。
 

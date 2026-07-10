@@ -85,6 +85,7 @@ public static class DependencyInjection
         builder.Services.AddScoped<IAuditTrailService, Auditing.EfAuditTrailService>();
         builder.Services.AddScoped<IUnitOfWork, EfUnitOfWork>();
         builder.Services.AddScoped<IProcessReadQueryService, QueryServices.ProcessReadQueryService>();
+        builder.Services.AddScoped<IAiReadDeviceQueryService, QueryServices.AiReadDeviceQueryService>();
         builder.Services.AddScoped<IDeviceReadQueryService, QueryServices.DeviceReadQueryService>();
         builder.Services.AddScoped<IRecipeReadQueryService, QueryServices.RecipeReadQueryService>();
         builder.Services.AddScoped<IDeviceDeletionDependencyQueryService, QueryServices.EfDeviceDeletionDependencyService>();

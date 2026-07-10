@@ -4,6 +4,7 @@ using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using FluentAssertions;
+using IIoT.ProductionService.ClientReleases;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Configuration;
@@ -57,6 +58,85 @@ public sealed partial class CloudProductionFlowTests
         audit!.Summary.Should().Contain("endpoint=/api/v1/ai/read/devices");
         audit.Summary.Should().Contain("rowCount=");
         audit.Summary.ToLowerInvariant().Should().NotContain("prompt");
+    }
+
+    [Fact]
+    public async Task AiReadDelegatedScope_ShouldFailClosedForEmptyAndInvalidClaims()
+    {
+        await AuthenticateAsAdminAsync();
+        var target = await CreateTestDeviceRegistrationAsync("ai-read-scope");
+        var delegatedUserId = Guid.NewGuid();
+        var permissions = new[]
+        {
+            AiReadPermissions.Device,
+            AiReadPermissions.DeviceClientState,
+            AiReadPermissions.Capacity
+        };
+
+        _fixture.SetAuthToken(CreateAiReadToken(
+            permissions,
+            delegatedUserId: delegatedUserId));
+        var emptyScope = await GetFromJsonAsync<AiReadListResponseDto<AiReadDeviceDto>>(
+            "/api/v1/ai/read/devices");
+        emptyScope.Items.Should().BeEmpty();
+
+        var invalidTokens = new[]
+        {
+            CreateAiReadToken(
+                permissions,
+                rawDelegatedDeviceIds: [target.DeviceId.ToString()]),
+            CreateAiReadToken(
+                permissions,
+                rawDelegatedUserId: "invalid-user",
+                rawDelegatedDeviceIds: [target.DeviceId.ToString()]),
+            CreateAiReadToken(
+                permissions,
+                rawDelegatedUserId: delegatedUserId.ToString(),
+                rawDelegatedDeviceIds: [target.DeviceId.ToString(), "invalid-device"])
+        };
+        foreach (var invalidToken in invalidTokens)
+        {
+            _fixture.SetAuthToken(invalidToken);
+
+            using var devices = await _fixture.HttpClient.GetAsync("/api/v1/ai/read/devices");
+            devices.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+            using var states = await _fixture.HttpClient.GetAsync("/api/v1/ai/read/device-client-states");
+            states.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+            using var capacity = await _fixture.HttpClient.GetAsync(
+                $"/api/v1/ai/read/capacity/hourly?deviceId={target.DeviceId}&preset=last_24h");
+            capacity.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        }
+
+        _fixture.SetAuthToken(CreateAiReadToken(
+            permissions,
+            rawDelegatedUserId: delegatedUserId.ToString(),
+            rawDelegatedDeviceIds: [target.DeviceId.ToString(), target.DeviceId.ToString()]));
+        var deduplicatedScope = await GetFromJsonAsync<AiReadListResponseDto<AiReadDeviceDto>>(
+            $"/api/v1/ai/read/devices?deviceId={target.DeviceId}");
+        deduplicatedScope.Items.Should().ContainSingle(item => item.Id == target.DeviceId);
+    }
+
+    [Fact]
+    public async Task AiReadQueryScopeAndAudit_ShouldRedactFreeTextSentinel()
+    {
+        const string sentinel = "SENSITIVE;token=do-not-store";
+        await AuthenticateAsAdminAsync();
+        var device = await CreateTestDeviceRegistrationAsync("ai-read-redaction");
+        _fixture.SetAuthToken(CreateAiReadToken([AiReadPermissions.Device], [device.DeviceId]));
+
+        var response = await GetFromJsonAsync<AiReadListResponseDto<AiReadDeviceDto>>(
+            $"/api/v1/ai/read/devices?keyword={Uri.EscapeDataString(sentinel)}");
+
+        response.QueryScope.Should().Contain("keyword=present");
+        response.QueryScope.Should().NotContain(sentinel);
+
+        var connectionString = await _fixture.GetConnectionStringAsync(ConnectionResourceNames.IiotDatabase);
+        var audit = await EventuallyAsync(
+            async () => await GetLatestAiReadAuditAsync(connectionString, "GetAiReadDevicesQuery"),
+            row => row is not null && row.Succeeded && row.Summary.Contains("keyword=present", StringComparison.Ordinal));
+        audit!.Summary.Should().NotContain(sentinel);
     }
 
     [Fact]
@@ -164,6 +244,366 @@ public sealed partial class CloudProductionFlowTests
         productionRecord.TypeKey.Should().Be("injection");
         productionRecord.Fields.Should().ContainKey("injectionVolume");
         productionRecord.Fields.Should().NotContainKey("notConfigured");
+    }
+
+    [Fact]
+    public async Task AiReadDevices_ShouldSupportExactFiltersAndStrictFieldContract()
+    {
+        await AuthenticateAsAdminAsync();
+        var target = await CreateTestDeviceRegistrationAsync("ai-read-exact");
+        var outsideScope = await CreateTestDeviceRegistrationAsync("ai-read-outside");
+        _fixture.SetAuthToken(CreateAiReadToken([AiReadPermissions.Device], [target.DeviceId]));
+
+        var byId = await GetFromJsonAsync<AiReadListResponseDto<AiReadDeviceDto>>(
+            $"/api/v1/ai/read/devices?deviceId={target.DeviceId}");
+        byId.Items.Should().ContainSingle(item => item.Id == target.DeviceId);
+
+        var encodedCode = Uri.EscapeDataString($" {target.Code.ToLowerInvariant()} ");
+        var byCode = await GetFromJsonAsync<AiReadListResponseDto<AiReadDeviceDto>>(
+            $"/api/v1/ai/read/devices?deviceCode={encodedCode}");
+        byCode.Items.Should().ContainSingle(item => item.Id == target.DeviceId);
+
+        var byProcess = await GetFromJsonAsync<AiReadListResponseDto<AiReadDeviceDto>>(
+            $"/api/v1/ai/read/devices?processId={target.ProcessId}");
+        byProcess.Items.Should().ContainSingle(item => item.Id == target.DeviceId);
+
+        using var rawResponse = await _fixture.HttpClient.GetAsync(
+            $"/api/v1/ai/read/devices?deviceId={target.DeviceId}&deviceCode={target.Code}&processId={target.ProcessId}");
+        rawResponse.EnsureSuccessStatusCode();
+        using var rawJson = JsonDocument.Parse(await rawResponse.Content.ReadAsStringAsync());
+        var itemProperties = rawJson.RootElement
+            .GetProperty("items")[0]
+            .EnumerateObject()
+            .Select(property => property.Name)
+            .ToArray();
+        itemProperties.Should().BeEquivalentTo(
+            ["id", "deviceCode", "deviceName", "processId"],
+            options => options.WithStrictOrdering());
+
+        using var forbidden = await _fixture.HttpClient.GetAsync(
+            $"/api/v1/ai/read/devices?deviceId={outsideScope.DeviceId}");
+        forbidden.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+        var nonexistentId = Guid.NewGuid();
+        _fixture.SetAuthToken(CreateAiReadToken([AiReadPermissions.Device], [nonexistentId]));
+        var nonexistent = await GetFromJsonAsync<AiReadListResponseDto<AiReadDeviceDto>>(
+            $"/api/v1/ai/read/devices?deviceId={nonexistentId}");
+        nonexistent.Items.Should().BeEmpty();
+
+        _fixture.SetAuthToken(CreateAiReadToken([AiReadPermissions.Device], [target.DeviceId]));
+        var hiddenOutsideCode = await GetFromJsonAsync<AiReadListResponseDto<AiReadDeviceDto>>(
+            $"/api/v1/ai/read/devices?deviceCode={outsideScope.Code}");
+        hiddenOutsideCode.Items.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("status")]
+    [InlineData("lineName")]
+    [InlineData("processName")]
+    [InlineData("updatedAt")]
+    public async Task AiReadDevices_ShouldRejectKnownMisleadingQueryParameters(string parameterName)
+    {
+        _fixture.SetAuthToken(CreateAiReadToken([AiReadPermissions.Device]));
+
+        using var response = await _fixture.HttpClient.GetAsync(
+            $"/api/v1/ai/read/devices?{parameterName}=misleading");
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task AiReadInvalidDeviceParameters_ShouldReturnBadRequestAndWriteFailureAudit()
+    {
+        _fixture.SetAuthToken(CreateAiReadToken(
+            [AiReadPermissions.Device, AiReadPermissions.DeviceClientState]));
+
+        using (var unsupported = await _fixture.HttpClient.GetAsync(
+                   "/api/v1/ai/read/devices?status=misleading"))
+        {
+            unsupported.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        }
+
+        using (var blankDeviceCode = await _fixture.HttpClient.GetAsync(
+                   "/api/v1/ai/read/devices?deviceCode=%20%20%20"))
+        {
+            blankDeviceCode.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        }
+
+        using (var blankStateDeviceCode = await _fixture.HttpClient.GetAsync(
+                   "/api/v1/ai/read/device-client-states?deviceCode=%20%20%20"))
+        {
+            blankStateDeviceCode.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        }
+
+        var connectionString = await _fixture.GetConnectionStringAsync(ConnectionResourceNames.IiotDatabase);
+        var audit = await EventuallyAsync(
+            async () => await GetLatestAiReadAuditAsync(connectionString, "GetAiReadDevicesQuery"),
+            row => row is not null && !row.Succeeded);
+        audit!.Summary.Should().Contain("endpoint=/api/v1/ai/read/devices");
+        audit.Summary.Should().NotContain("misleading");
+    }
+
+    [Fact]
+    public async Task AiReadDeviceClientStates_ShouldRequireDedicatedPermissionAndDelegatedScope()
+    {
+        await AuthenticateAsAdminAsync();
+        var target = await CreateTestDeviceRegistrationAsync("ai-state-auth");
+        var outsideScope = await CreateTestDeviceRegistrationAsync("ai-state-outside");
+
+        _fixture.ClearAuthToken();
+        using (var anonymous = await _fixture.HttpClient.GetAsync("/api/v1/ai/read/device-client-states"))
+        {
+            anonymous.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        }
+
+        await AuthenticateAsAdminAsync();
+        using (var human = await _fixture.HttpClient.GetAsync("/api/v1/ai/read/device-client-states"))
+        {
+            human.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        }
+
+        _fixture.SetAuthToken(CreateAiReadToken([]));
+        using (var missingPermission = await _fixture.HttpClient.GetAsync("/api/v1/ai/read/device-client-states"))
+        {
+            missingPermission.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        }
+
+        _fixture.SetAuthToken(CreateAiReadToken([AiReadPermissions.Device], [target.DeviceId]));
+        using (var devicePermissionOnly = await _fixture.HttpClient.GetAsync("/api/v1/ai/read/device-client-states"))
+        {
+            devicePermissionOnly.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        }
+
+        _fixture.SetAuthToken(CreateAiReadToken([AiReadPermissions.DeviceClientState], [target.DeviceId]));
+        var allowed = await GetFromJsonAsync<AiReadListResponseDto<AiReadDeviceClientStateDto>>(
+            $"/api/v1/ai/read/device-client-states?deviceId={target.DeviceId}");
+        allowed.Items.Should().ContainSingle(item => item.DeviceId == target.DeviceId);
+
+        using var forbidden = await _fixture.HttpClient.GetAsync(
+            $"/api/v1/ai/read/device-client-states?deviceId={outsideScope.DeviceId}");
+        forbidden.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task AiReadDeviceClientStates_ShouldProjectMissingHeartbeatAndKeepRuntimeFreshnessIndependent()
+    {
+        await AuthenticateAsAdminAsync();
+        var target = await CreateTestDeviceRegistrationAsync("ai-state-flow");
+        var second = await CreateTestDeviceRegistrationAsync("ai-state-page");
+        _fixture.SetAuthToken(CreateAiReadToken(
+            [AiReadPermissions.DeviceClientState],
+            [target.DeviceId, second.DeviceId]));
+
+        var encodedCode = Uri.EscapeDataString($" {target.Code.ToLowerInvariant()} ");
+        var missing = await GetFromJsonAsync<AiReadListResponseDto<AiReadDeviceClientStateDto>>(
+            $"/api/v1/ai/read/device-client-states?deviceId={target.DeviceId}&deviceCode={encodedCode}" +
+            $"&processId={target.ProcessId}&keyword={Uri.EscapeDataString(target.Code)}");
+        var missingItem = missing.Items.Should().ContainSingle().Subject;
+        missing.RowCount.Should().Be(1);
+        missing.Truncated.Should().BeFalse();
+        missing.QueryScope.Should().Contain("deviceCode=present");
+        missing.QueryScope.Should().NotContain(target.Code);
+        missingItem.DeviceId.Should().Be(target.DeviceId);
+        missingItem.ClientCode.Should().Be(target.Code);
+        missingItem.SoftwareStatus.Should().Be("MissingRuntimeHeartbeat");
+        missingItem.PrimaryIp.Should().BeNull();
+        missingItem.Channel.Should().BeNull();
+        missingItem.HostVersion.Should().BeNull();
+        missingItem.HostApiVersion.Should().BeNull();
+        missingItem.VersionReportedAtUtc.Should().BeNull();
+        missingItem.VersionReceivedAtUtc.Should().BeNull();
+        missingItem.RuntimeStatus.Should().BeNull();
+        missingItem.RuntimeStartedAtUtc.Should().BeNull();
+        missingItem.LastRuntimeHeartbeatAtUtc.Should().BeNull();
+        missingItem.UpdatedAtUtc.Should().BeNull();
+
+        var paged = await GetFromJsonAsync<AiReadListResponseDto<AiReadDeviceClientStateDto>>(
+            "/api/v1/ai/read/device-client-states?maxRows=1");
+        paged.Items.Should().ContainSingle();
+        paged.RowCount.Should().Be(1);
+        paged.Truncated.Should().BeTrue();
+
+        using (var strictResponse = await _fixture.HttpClient.GetAsync(
+                   $"/api/v1/ai/read/device-client-states?deviceId={target.DeviceId}"))
+        {
+            strictResponse.EnsureSuccessStatusCode();
+            using var json = JsonDocument.Parse(await strictResponse.Content.ReadAsStringAsync());
+            json.RootElement.GetProperty("items")[0]
+                .EnumerateObject()
+                .Select(property => property.Name)
+                .Should()
+                .BeEquivalentTo(
+                    [
+                        "deviceId",
+                        "deviceName",
+                        "clientCode",
+                        "primaryIp",
+                        "channel",
+                        "hostVersion",
+                        "hostApiVersion",
+                        "versionReportedAtUtc",
+                        "versionReceivedAtUtc",
+                        "softwareStatus",
+                        "runtimeStatus",
+                        "runtimeStartedAtUtc",
+                        "lastRuntimeHeartbeatAtUtc",
+                        "updatedAtUtc"
+                    ],
+                    options => options.WithStrictOrdering());
+        }
+
+        var startedAtUtc = DateTime.SpecifyKind(DateTime.UtcNow.AddMinutes(-5), DateTimeKind.Utc);
+        var heartbeatCandidate = DateTime.UtcNow.AddSeconds(-2);
+        var heartbeatReportedAtUtc = new DateTime(
+            heartbeatCandidate.Ticks - heartbeatCandidate.Ticks % 10,
+            DateTimeKind.Utc);
+        var runtimeInstanceId = $"runtime-{Guid.NewGuid():N}";
+        var heartbeatPayload = new
+        {
+            DeviceId = target.DeviceId,
+            ClientCode = target.Code,
+            RuntimeInstanceId = runtimeInstanceId,
+            MachineProfile = "ai-state-e2e",
+            HostVersion = "1.0.25",
+            HostApiVersion = "1.0.0",
+            Status = "Running",
+            StartedAtUtc = startedAtUtc,
+            ReportedAtUtc = heartbeatReportedAtUtc,
+            LocalIpAddresses = new[] { "10.20.30.40" }
+        };
+        await AuthenticateAsEdgeAsync(target.DeviceId);
+        await PostJsonAsync("/api/v1/edge/runtime-heartbeats", heartbeatPayload);
+        await PostJsonAsync("/api/v1/edge/runtime-heartbeats", heartbeatPayload);
+
+        using (var staleHeartbeat = await _fixture.HttpClient.PostAsJsonAsync(
+                   "/api/v1/edge/runtime-heartbeats",
+                   new
+                   {
+                       heartbeatPayload.DeviceId,
+                       heartbeatPayload.ClientCode,
+                       heartbeatPayload.RuntimeInstanceId,
+                       heartbeatPayload.MachineProfile,
+                       heartbeatPayload.HostVersion,
+                       heartbeatPayload.HostApiVersion,
+                       Status = "Stopped",
+                       heartbeatPayload.StartedAtUtc,
+                       ReportedAtUtc = heartbeatReportedAtUtc.AddSeconds(-1),
+                       heartbeatPayload.LocalIpAddresses
+                   }))
+        {
+            staleHeartbeat.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        }
+
+        using (var conflictingHeartbeat = await _fixture.HttpClient.PostAsJsonAsync(
+                   "/api/v1/edge/runtime-heartbeats",
+                   new
+                   {
+                       heartbeatPayload.DeviceId,
+                       heartbeatPayload.ClientCode,
+                       heartbeatPayload.RuntimeInstanceId,
+                       heartbeatPayload.MachineProfile,
+                       heartbeatPayload.HostVersion,
+                       heartbeatPayload.HostApiVersion,
+                       Status = "Stopped",
+                       heartbeatPayload.StartedAtUtc,
+                       heartbeatPayload.ReportedAtUtc,
+                       heartbeatPayload.LocalIpAddresses
+                   }))
+        {
+            conflictingHeartbeat.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        }
+
+        using (var futureHeartbeat = await _fixture.HttpClient.PostAsJsonAsync(
+                   "/api/v1/edge/runtime-heartbeats",
+                   new
+                   {
+                       heartbeatPayload.DeviceId,
+                       heartbeatPayload.ClientCode,
+                       heartbeatPayload.RuntimeInstanceId,
+                       heartbeatPayload.MachineProfile,
+                       heartbeatPayload.HostVersion,
+                       heartbeatPayload.HostApiVersion,
+                       heartbeatPayload.Status,
+                       StartedAtUtc = DateTime.UtcNow,
+                       ReportedAtUtc = DateTime.UtcNow
+                           .Add(DeviceClientSoftwareStatusResolver.MaximumFutureClockSkew)
+                           .AddSeconds(1),
+                       heartbeatPayload.LocalIpAddresses
+                   }))
+        {
+            futureHeartbeat.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        }
+
+        _fixture.SetAuthToken(CreateAiReadToken([AiReadPermissions.DeviceClientState], [target.DeviceId]));
+        var running = await GetFromJsonAsync<AiReadListResponseDto<AiReadDeviceClientStateDto>>(
+            $"/api/v1/ai/read/device-client-states?deviceId={target.DeviceId}");
+        var runningItem = running.Items.Should().ContainSingle().Subject;
+        runningItem.SoftwareStatus.Should().Be("Running");
+        runningItem.RuntimeStatus.Should().Be("Running");
+        runningItem.LastRuntimeHeartbeatAtUtc.Should().Be(heartbeatReportedAtUtc);
+        runningItem.PrimaryIp.Should().Be("10.20.30.40");
+
+        await AuthenticateAsEdgeAsync(target.DeviceId);
+        await PostJsonAsync("/api/v1/edge/client-releases/version-reports", new
+        {
+            DeviceId = target.DeviceId,
+            ClientCode = target.Code,
+            HostVersion = "1.0.26",
+            HostApiVersion = "1.0.0",
+            InstalledPlugins = Array.Empty<object>(),
+            EnabledPlugins = Array.Empty<string>(),
+            Channel = "stable",
+            ReportedAtUtc = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
+            LocalIpAddresses = new[] { "10.20.30.41" }
+        });
+
+        _fixture.SetAuthToken(CreateAiReadToken([AiReadPermissions.DeviceClientState], [target.DeviceId]));
+        var afterVersionReport = await GetFromJsonAsync<AiReadListResponseDto<AiReadDeviceClientStateDto>>(
+            $"/api/v1/ai/read/device-client-states?deviceId={target.DeviceId}");
+        var afterVersionItem = afterVersionReport.Items.Should().ContainSingle().Subject;
+        afterVersionItem.SoftwareStatus.Should().Be("Running");
+        afterVersionItem.RuntimeStatus.Should().Be("Running");
+        afterVersionItem.LastRuntimeHeartbeatAtUtc.Should().Be(heartbeatReportedAtUtc);
+        afterVersionItem.PrimaryIp.Should().Be("10.20.30.40");
+        afterVersionItem.HostVersion.Should().Be("1.0.26");
+    }
+
+    [Theory]
+    [InlineData("softwareStatus")]
+    [InlineData("runtimeStatus")]
+    [InlineData("status")]
+    [InlineData("lineName")]
+    [InlineData("processName")]
+    [InlineData("updatedAt")]
+    [InlineData("updatedAtUtc")]
+    public async Task AiReadDeviceClientStates_ShouldRejectKnownMisleadingQueryParameters(string parameterName)
+    {
+        _fixture.SetAuthToken(CreateAiReadToken([AiReadPermissions.DeviceClientState]));
+
+        using var response = await _fixture.HttpClient.GetAsync(
+            $"/api/v1/ai/read/device-client-states?{parameterName}=misleading");
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task AiReadProcesses_ShouldSupportExactProcessId()
+    {
+        await AuthenticateAsAdminAsync();
+        var device = await CreateTestDeviceRegistrationAsync("ai-read-process");
+        _fixture.SetAuthToken(CreateAiReadToken([AiReadPermissions.Process]));
+
+        var result = await GetFromJsonAsync<AiReadListResponseDto<AiReadProcessDto>>(
+            $"/api/v1/ai/read/processes?processId={device.ProcessId}");
+
+        var process = result.Items.Single();
+        process.Id.Should().Be(device.ProcessId);
+        process.ProcessCode.Should().NotBeNullOrWhiteSpace();
+        process.ProcessName.Should().NotBeNullOrWhiteSpace();
+
+        using var invalid = await _fixture.HttpClient.GetAsync(
+            $"/api/v1/ai/read/processes?processId={Guid.Empty}");
+        invalid.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
     [Fact]
@@ -285,7 +725,9 @@ public sealed partial class CloudProductionFlowTests
     private static string CreateAiReadToken(
         IEnumerable<string> permissions,
         IReadOnlyCollection<Guid>? delegatedDeviceIds = null,
-        Guid? delegatedUserId = null)
+        Guid? delegatedUserId = null,
+        string? rawDelegatedUserId = null,
+        IReadOnlyCollection<string>? rawDelegatedDeviceIds = null)
     {
         var subjectId = Guid.NewGuid();
         var claims = new List<Claim>
@@ -300,12 +742,30 @@ public sealed partial class CloudProductionFlowTests
 
         claims.AddRange(permissions.Select(permission => new Claim(IIoTClaimTypes.Permission, permission)));
 
-        if (delegatedUserId.HasValue)
+        var effectiveDelegatedUserId = delegatedUserId;
+        if (!effectiveDelegatedUserId.HasValue
+            && delegatedDeviceIds is not null
+            && rawDelegatedUserId is null
+            && rawDelegatedDeviceIds is null)
         {
-            claims.Add(new Claim(IIoTClaimTypes.DelegatedUserId, delegatedUserId.Value.ToString()));
+            effectiveDelegatedUserId = Guid.NewGuid();
         }
 
-        if (delegatedDeviceIds is not null)
+        if (rawDelegatedUserId is not null)
+        {
+            claims.Add(new Claim(IIoTClaimTypes.DelegatedUserId, rawDelegatedUserId));
+        }
+        else if (effectiveDelegatedUserId.HasValue)
+        {
+            claims.Add(new Claim(IIoTClaimTypes.DelegatedUserId, effectiveDelegatedUserId.Value.ToString()));
+        }
+
+        if (rawDelegatedDeviceIds is not null)
+        {
+            claims.AddRange(rawDelegatedDeviceIds.Select(deviceId =>
+                new Claim(IIoTClaimTypes.DelegatedDeviceId, deviceId)));
+        }
+        else if (delegatedDeviceIds is not null)
         {
             claims.AddRange(delegatedDeviceIds.Select(deviceId =>
                 new Claim(IIoTClaimTypes.DelegatedDeviceId, deviceId.ToString())));
@@ -368,6 +828,27 @@ public sealed record AiReadDeviceDto(
     string DeviceCode,
     string DeviceName,
     Guid ProcessId);
+
+public sealed record AiReadProcessDto(
+    Guid Id,
+    string ProcessCode,
+    string ProcessName);
+
+public sealed record AiReadDeviceClientStateDto(
+    Guid DeviceId,
+    string DeviceName,
+    string ClientCode,
+    string? PrimaryIp,
+    string? Channel,
+    string? HostVersion,
+    string? HostApiVersion,
+    DateTime? VersionReportedAtUtc,
+    DateTime? VersionReceivedAtUtc,
+    string SoftwareStatus,
+    string? RuntimeStatus,
+    DateTime? RuntimeStartedAtUtc,
+    DateTime? LastRuntimeHeartbeatAtUtc,
+    DateTime? UpdatedAtUtc);
 
 public sealed record AiReadCapacitySummaryDto(
     DateOnly Date,

@@ -469,6 +469,18 @@ public sealed class ConfigurationGuardTests
             "Human",
             "ClientReleases",
             "GetDeviceClientVersionInventory.cs"));
+        var edgeHostSource = File.ReadAllText(FindRepoFile(
+            "src",
+            "services",
+            "IIoT.ProductionService",
+            "EdgeHosts",
+            "EdgeHostContracts.cs"));
+        var softwareStatusResolverSource = File.ReadAllText(FindRepoFile(
+            "src",
+            "services",
+            "IIoT.ProductionService",
+            "ClientReleases",
+            "DeviceClientSoftwareStatusResolver.cs"));
         var aiReadSource = File.ReadAllText(FindRepoFile(
             "src",
             "services",
@@ -512,10 +524,21 @@ public sealed class ConfigurationGuardTests
         inventorySource.Should().Contain("IDeviceClientStateStore clientStateStore");
         inventorySource.Should().Contain("GetStatesByDevicesAsync");
         inventorySource.Should().Contain("DeviceClientState? state");
+        inventorySource.Should().Contain("DeviceClientSoftwareStatusResolver.Resolve(state, utcNow)");
+        edgeHostSource.Should().Contain("DeviceClientSoftwareStatusResolver.Resolve(clientState, utcNow)");
+        softwareStatusResolverSource.Should().Contain("LastRuntimeHeartbeatAtUtc");
+        softwareStatusResolverSource.Should().Contain("> RuntimeHeartbeatStaleThreshold");
+        softwareStatusResolverSource.Should().NotContain("DateTime.UtcNow");
+        softwareStatusResolverSource.Should().NotContain("VersionReceivedAtUtc");
+        softwareStatusResolverSource.Should().NotContain("UpdatedAtUtc");
         aiReadSource.Should().Contain("[AuthorizeAiRead(AiReadPermissions.DeviceClientState)]");
         aiReadSource.Should().Contain("GetAiReadDeviceClientStatesHandler");
+        aiReadSource.Should().Contain("IAiReadDeviceQueryService deviceQueryService");
         aiReadSource.Should().Contain("IDeviceClientStateStore clientStateStore");
         aiReadSource.Should().Contain("GetStatesByDevicesAsync");
+        aiReadSource.Should().Contain("string SoftwareStatus");
+        aiReadSource.Should().Contain("DateTime? UpdatedAtUtc");
+        aiReadSource.Should().Contain("totalCount > items.Count");
         contractSource.Should().Contain("`DeviceClientState` 是客户端状态官方投影");
         contractSource.Should().Contain("不得临时拼接");
         genericRepositoryOffenders.Should().BeEmpty();
@@ -687,6 +710,86 @@ public sealed class ConfigurationGuardTests
         contractSource.Should().Contain("不得出现 `HttpPost`");
         contractSource.Should().Contain("不返回 raw `payload_jsonb`");
         contractSource.Should().Contain("不得用 MCP、Tool、Agent workflow、Text-to-SQL 或后台任务绕过本契约直连生产库");
+    }
+
+    [Fact]
+    public void AiReadMasterData_ShouldUseExactDatabaseFiltersAndRejectMisleadingDeviceParameters()
+    {
+        var contractSource = File.ReadAllText(FindRepoFile("docs", "AI只读接口契约.md"));
+        var controllerSource = File.ReadAllText(FindRepoFile(
+            "src", "hosts", "IIoT.HttpApi", "Controllers", "AiRead", "AiReadController.cs"));
+        var querySource = File.ReadAllText(FindRepoFile(
+            "src", "services", "IIoT.ProductionService", "Queries", "AiRead", "AiReadQueries.cs"));
+        var deviceQuerySource = File.ReadAllText(FindRepoFile(
+            "src", "infrastructure", "IIoT.EntityFrameworkCore", "QueryServices", "AiReadDeviceQueryService.cs"));
+        var processQuerySource = File.ReadAllText(FindRepoFile(
+            "src", "infrastructure", "IIoT.EntityFrameworkCore", "QueryServices", "ProcessReadQueryService.cs"));
+        var deviceDto = Regex.Match(
+            querySource,
+            @"public sealed record AiReadDeviceDto\((?<body>.*?)\);",
+            RegexOptions.Singleline).Groups["body"].Value;
+
+        controllerSource.Should().Contain("[FromQuery] Guid? deviceId = null");
+        controllerSource.Should().Contain("[FromQuery] string? deviceCode = null");
+        controllerSource.Should().Contain("[FromQuery] Guid? processId = null");
+        controllerSource.Should().Contain("GetKnownUnsupportedQueryParameters");
+        controllerSource.Should().Contain("\"status\"");
+        controllerSource.Should().Contain("\"lineName\"");
+        controllerSource.Should().Contain("\"processName\"");
+        controllerSource.Should().Contain("\"updatedAt\"");
+        querySource.Should().Contain("IAiReadDeviceQueryService deviceQueryService");
+        querySource.Should().Contain("new AiReadDeviceQueryRequest(");
+        querySource.Should().Contain("ValidateDeviceQueryParameters(");
+        querySource.Should().Contain("UnsupportedParameters");
+        querySource.Should().Contain("request.ProcessId == Guid.Empty");
+        deviceQuerySource.Should().Contain("allowedDeviceIds.Contains(device.Id)");
+        deviceQuerySource.Should().Contain("device.Id == request.DeviceId.Value");
+        deviceQuerySource.Should().Contain("device.Code == normalizedDeviceCode");
+        deviceQuerySource.Should().Contain("device.ProcessId == request.ProcessId.Value");
+        deviceQuerySource.Should().Contain("var totalCount = await query.CountAsync");
+        deviceQuerySource.Should().Contain(".ThenBy(device => device.Id)");
+        processQuerySource.Should().Contain("process.Id == processId.Value");
+        deviceDto.Should().Contain("Guid Id");
+        deviceDto.Should().Contain("string DeviceCode");
+        deviceDto.Should().Contain("string DeviceName");
+        deviceDto.Should().Contain("Guid ProcessId");
+        deviceDto.Should().NotContain("Status");
+        deviceDto.Should().NotContain("LineName");
+        deviceDto.Should().NotContain("ProcessName");
+        contractSource.Should().Contain("设备与工序主数据精确查询");
+        contractSource.Should().Contain("多个条件同时出现时必须按 AND 相交");
+        contractSource.Should().Contain("传入这些已知误导参数必须返回 400");
+    }
+
+    [Fact]
+    public void AiReadScopeAndFailureAudit_ShouldRedactUntrustedText()
+    {
+        var contractSource = File.ReadAllText(FindRepoFile("docs", "AI只读接口契约.md"));
+        var querySource = File.ReadAllText(FindRepoFile(
+            "src", "services", "IIoT.ProductionService", "Queries", "AiRead", "AiReadQueries.cs"));
+        var auditSource = File.ReadAllText(FindRepoFile(
+            "src", "services", "IIoT.Services.CrossCutting", "Requests", "Behaviors", "AiReadAuditBehavior.cs"));
+
+        querySource.Should().Contain("ScopeText(request.DeviceCode)");
+        querySource.Should().Contain("ScopeText(request.Keyword)");
+        querySource.Should().Contain("ScopeText(request.PlcName)");
+        querySource.Should().Contain("ScopeText(request.Channel)");
+        querySource.Should().Contain("ScopeText(request.TargetRuntime)");
+        querySource.Should().Contain("ScopeText(request.Status)");
+        querySource.Should().Contain("ScopeText(request.Result)");
+        querySource.Should().Contain("ScopeClosed(fieldMode, \"list\", \"full\")");
+        querySource.Should().Contain("BuildScope(params (string Key, AiReadScopeValue Value)[] values)");
+        querySource.Should().NotContain("(\"keyword\", request.Keyword)");
+        querySource.Should().NotContain("(\"plcName\", request.PlcName)");
+        auditSource.Should().Contain("$\"result:{result.Status}\"");
+        auditSource.Should().Contain("$\"exception:{ex.GetType().Name}\"");
+        auditSource.Should().Contain("delegatedUserId.ToString(\"D\")");
+        auditSource.Should().Contain(": \"invalid\"");
+        auditSource.Should().NotContain("ex.Message");
+        auditSource.Should().NotContain("string.Join(\"; \", result.Errors");
+        contractSource.Should().Contain("请求字符串只能记录固定 `present`");
+        contractSource.Should().Contain("FailureReason");
+        contractSource.Should().Contain("不保存 `Result.Errors`、`Exception.Message`");
     }
 
     [Fact]
@@ -1201,6 +1304,8 @@ public sealed class ConfigurationGuardTests
     public void StandardDeploymentDocs_ShouldUseLocalBuildPushAndSshDeployPath()
     {
         var readmeSource = File.ReadAllText(FindRepoFile("deploy", "README.md"));
+        var operationsSource = File.ReadAllText(FindRepoFile("deploy", "OPERATIONS.md"));
+        var edgeGoLiveSource = File.ReadAllText(FindRepoFile("deploy", "EDGE_INSTALLER_GO_LIVE.md"));
         var runnerSource = File.ReadAllText(FindRepoFile("deploy", "RUNNER.md"));
         var buildAndPushSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "build-and-push.sh"));
         var localReleaseSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "local-release.sh"));
@@ -1210,8 +1315,12 @@ public sealed class ConfigurationGuardTests
         readmeSource.Should().Contain("工作区外部标准入口是 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud ...`");
         readmeSource.Should().Contain("`cloud-image` / `cloud-deploy` 只保留灾备手动入口，必须输入确认词");
         readmeSource.Should().Contain("单个镜像 build/push 默认 15 分钟超时");
-        readmeSource.Should().Contain("本机 `build-and-push.sh` 按服务构建并推送 `sha-<git-sha>` 镜像到 Harbor");
+        readmeSource.Should().Contain("support 和锁门禁通过后，本机 `build-and-push.sh` 才按服务构建并推送 `sha-<git-sha>` 镜像到 Harbor");
         readmeSource.Should().Contain("DEPLOY_GIT_SHA=<sha> DEPLOY_TRIGGERED_BY=local ./scripts/deploy-release.sh");
+        operationsSource.Should().Contain("pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services <services>");
+        operationsSource.Should().Contain("project-local `local-release.sh` is a delegated implementation");
+        edgeGoLiveSource.Should().Contain("pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target EdgeHost");
+        edgeGoLiveSource.Should().Contain("pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target EdgePlugin");
         runnerSource.Should().Contain("/data/github-runner/cloud");
         runnerSource.Should().Contain("github-runner");
         runnerSource.Should().Contain("self-hosted runner 不再是日常发布链路，只作为灾备 GitHub workflow");
@@ -1222,7 +1331,7 @@ public sealed class ConfigurationGuardTests
         buildAndPushSource.Should().Contain("HARBOR_PROJECT must be a single Harbor project segment");
         buildAndPushSource.Should().Contain("BUILD_TIMEOUT_SECONDS=\"${BUILD_TIMEOUT_SECONDS:-900}\"");
         buildAndPushSource.Should().Contain("HARBOR_TIMEOUT_SECONDS=\"${HARBOR_TIMEOUT_SECONDS:-120}\"");
-        buildAndPushSource.Should().Contain("artifact_dir=\"$REPO_ROOT/artifacts/deploy\"");
+        buildAndPushSource.Should().Contain("artifact_dir=\"${DEPLOY_ARTIFACT_DIR:-$REPO_ROOT/artifacts/deploy}\"");
         buildAndPushSource.Should().Contain("cloud-built-services.txt");
         buildAndPushSource.Should().Contain("IIOT_HTTPAPI_IMAGE");
         localReleaseSource.Should().Contain("DEPLOY_SSH_TARGET");
@@ -1236,7 +1345,7 @@ public sealed class ConfigurationGuardTests
         deployWorkflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
         deployWorkflowSource.Should().Contain("emergency_confirm:");
         deployWorkflowSource.Should().Contain("EMERGENCY_CLOUD_DEPLOY");
-        deployWorkflowSource.Should().Contain("Use deploy/scripts/local-release.sh");
+        deployWorkflowSource.Should().Contain("Use deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud from the workspace root");
 
         foreach (var source in new[] { readmeSource, runnerSource, imageWorkflowSource, deployWorkflowSource, buildAndPushSource, localReleaseSource })
         {
@@ -1260,7 +1369,10 @@ public sealed class ConfigurationGuardTests
         readmeSource.Should().Contain("pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud");
         readmeSource.Should().Contain("禁止把 `cloud-image` 或 `cloud-deploy` 当成日常部署入口");
         readmeSource.Should().Contain("传入 `services` 时只拉取并重启指定服务");
-        readmeSource.Should().Contain("Cloud catalog 会扫描 `/app/edge-updates/installers/stable/{version}/installer-artifact.json`");
+        readmeSource.Should().Contain("版本集合只来自 Cloud release 记录");
+        readmeSource.Should().Contain("文件系统只校验已登记 artifact");
+        readmeSource.Should().Contain("不得扫描目录补出未登记版本");
+        readmeSource.Should().NotContain("Cloud catalog 会扫描");
         readmeSource.Should().Contain("专用非 root 用户");
         readmeSource.Should().Contain("Docker Hub 不作为生产依赖源");
         readmeSource.Should().Contain("Edge 客户端安装素材不进 Harbor");
@@ -1725,10 +1837,10 @@ public sealed class ConfigurationGuardTests
 
         workflowSource.Should().Contain("release_tag:");
         workflowSource.Should().Contain("Emergency release tag from local Harbor build or disaster-recovery cloud-image (sha-*)");
-        workflowSource.Should().Contain("Emergency only. Prefer local-release.sh; empty means full release only.");
+        workflowSource.Should().Contain("Emergency only. Use the workspace deploy entrypoint for routine releases; empty means full emergency release only.");
         workflowSource.Should().Contain("emergency_confirm:");
         workflowSource.Should().Contain("EMERGENCY_CLOUD_DEPLOY");
-        workflowSource.Should().Contain("cloud-deploy is no longer the routine production release path. Use deploy/scripts/local-release.sh.");
+        workflowSource.Should().Contain("cloud-deploy is emergency-only. Use deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud from the workspace root.");
         workflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
         workflowSource.Should().Contain("if [[ ! \"$release_tag\" =~ ^sha-[0-9a-f]+$ ]]");
         workflowSource.Should().Contain("RELEASE_TAG: ${{ inputs.release_tag }}");

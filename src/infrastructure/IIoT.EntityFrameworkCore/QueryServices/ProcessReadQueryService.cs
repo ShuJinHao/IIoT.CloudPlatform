@@ -6,6 +6,7 @@ namespace IIoT.EntityFrameworkCore.QueryServices;
 public sealed class ProcessReadQueryService(IIoTDbContext dbContext) : IProcessReadQueryService
 {
     public async Task<(IReadOnlyList<ProcessReadItem> Items, int TotalCount)> GetPagedAsync(
+        Guid? processId,
         string? keyword,
         int skip,
         int take,
@@ -13,6 +14,11 @@ public sealed class ProcessReadQueryService(IIoTDbContext dbContext) : IProcessR
     {
         var normalizedKeyword = keyword?.Trim();
         var query = dbContext.MfgProcesses.AsNoTracking();
+        if (processId.HasValue)
+        {
+            query = query.Where(process => process.Id == processId.Value);
+        }
+
         if (!string.IsNullOrWhiteSpace(normalizedKeyword))
         {
             query = query.Where(process =>
@@ -23,6 +29,7 @@ public sealed class ProcessReadQueryService(IIoTDbContext dbContext) : IProcessR
         var totalCount = await query.CountAsync(cancellationToken);
         var items = await query
             .OrderBy(process => process.ProcessCode)
+            .ThenBy(process => process.Id)
             .Skip(skip)
             .Take(take)
             .Select(process => new ProcessReadItem(

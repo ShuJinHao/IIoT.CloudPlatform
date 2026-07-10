@@ -2,6 +2,8 @@
 
 三项目上传部署统一入口见 [上传部署总览](../../docs/上传部署总览.md)。
 
+> Current status (2026-07-10): the workspace contract, expected-SHA binding, per-invocation manifests, build-before-support ordering, one transaction lock, OCI digest verification, healthy no-op, and cleanup-only recovery passed 9/9 isolated fake behavior tests. No network, Harbor, SSH, or real production deploy/history/cleanup/health closure ran in this round; this guide is a target contract, not production-acceptance evidence.
+
 ## Scope
 
 This document defines the minimum operations baseline for the current single-machine production starter.
@@ -49,7 +51,7 @@ Routine non-root contract:
 
 ## Internal Health Probe
 
-Production readiness for this batch is:
+The internal application health probe for this batch is:
 
 - `GET /internal/healthz`
 
@@ -58,6 +60,8 @@ Behavior:
 - It verifies `nginx -> iiot-gateway -> iiot-httpapi`.
 - It returns `200` only when HttpApi is responsive and PostgreSQL is reachable.
 - It does not include Redis, RabbitMQ, or DataWorker health in the result.
+
+`/internal/healthz` is necessary but is not sufficient production release acceptance. A release selecting `iiot-httpapi`, `iiot-gateway`, `iiot-web`, or all services must also pass the fail-closed Edge installer catalog and Velopack static-download verification performed by `deploy-release.sh`; `skipped` is a failure for that service scope. Final acceptance also requires the workspace deploy summary, remote release/history, cleanup result, selected-service runtime state, and target-specific post-deploy checks to close successfully.
 
 Access policy:
 
@@ -80,7 +84,7 @@ Standard production release is driven from the operator workstation: push GitHub
 Routine deployment red lines:
 
 - Do not wait for `cloud-image` or `cloud-deploy` for routine deployment. Those workflows are emergency-only and require confirmation inputs.
-- Use `deploy/scripts/local-release.sh --services <services>` or explicit `--all`. Empty services are not a routine deployment input.
+- Use the workspace entrypoint `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services <services>` or explicit `-All`. The project-local `local-release.sh` is a delegated implementation, not a second operator entrypoint.
 - If a local build, Harbor operation, or SSH deploy exceeds its timeout, stop and diagnose; do not keep watching until a GitHub job or shell command times out.
 - Do not invoke the project-local script directly to work around an AI permission prompt. The workspace entrypoint streams child output and emits a 30-second heartbeat during silent phases.
 - Before retrying an interrupted or failed release, inspect the remote current release, container images, managed release/cleanup locks, and cleanup summary. A running target SHA must not be blindly redeployed.
@@ -89,10 +93,10 @@ The standard sequence is:
 
 1. Push or merge to `main`.
 2. `cloud-ci` runs the fast gate by default: restore/build, ServiceLayer tests, ConfigurationGuard tests, deploy script syntax checks, web build, and compose config. Full EndToEnd is manual via `workflow_dispatch`.
-3. Run `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services <services>` from the workspace root for the standard path. It delegates to `deploy/scripts/local-release.sh`, which verifies clean worktree, pushed HEAD, Docker/buildx, Harbor access, and SSH target.
-4. `local-release.sh` first checks remote support-directory access and release/cleanup locks, then packages only the allowlisted `docker-compose.prod.yml`, `nginx/nginx.conf`, and server scripts. It explicitly excludes `.env`, `certs/`, `releases/`, and `backups/`; the remote staging area must pass SHA-256, shell syntax, and compose validation before atomic install and persistent-manifest verification.
-5. After support and lock validation succeeds, `build-and-push.sh` builds selected images and pushes Harbor tags with `sha-<git-sha>`. It writes `artifacts/deploy/cloud-built-services.txt` and prints the same `Deploy services input`. If the selected services include `web` or use `--all`, pass `VITE_AICOPILOT_CHALLENGE_URL=http://<aicopilot-browser-reachable-host>:82/api/identity/cloud-oidc/challenge`; backend-only builds do not require it.
-6. `local-release.sh` uses BatchMode SSH to `/data/iiot-platform/cloud/deploy` and calls `DEPLOY_GIT_SHA=<sha> DEPLOY_TRIGGERED_BY=local ./scripts/deploy-release.sh sha-<sha> --services <services>`.
+3. Run `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services <services>` from the workspace root. The workspace entrypoint injects the entrypoint marker, invocation id, full expected SHA, and release-plan digest. Formal `local-release.sh` execution rejects a missing or invalid contract before build or SSH and verifies that the detached source snapshot equals the expected SHA.
+4. `local-release.sh` packages and syntax-checks only the allowlisted support files locally, then `build-and-push.sh` builds the selected `sha-<git-sha>` images. Every invocation owns its services file and image manifest; the manifest binds invocation, plan, tag, services, image references, and OCI digests.
+5. Only after all image builds succeed does `local-release.sh` stage support plus the run-bound image manifest remotely. The remote transaction verifies both SHA-256 values, acquires one invocation/plan-bound release lock, atomically installs support, and keeps that lock through rollout, promotion, and cleanup. A build failure therefore cannot modify remote support files. `.env`, `certs/`, `releases/`, and `backups/` remain excluded.
+6. `deploy-release.sh` requires the pre-acquired transaction lock and enforces equality among `sha-<expected-sha>`, `DEPLOY_GIT_SHA`, and the approved expected SHA. It consumes only that invocation's image manifest and verifies pulled OCI digests before rollout. A healthy current release with the same SHA and plan is a no-op; a cleanup-partial release retries cleanup only.
 
 Harbor application repositories keep only the current production `sha-*` tag. Local image build must not remove the current production tag before deploy health checks pass. Post-release cleanup deletes old application `sha-*` tags and Harbor Garbage Collection reclaims disk.
 
@@ -100,23 +104,7 @@ The self-hosted runner must not run as root if emergency workflows are used. See
 
 Application images and infrastructure images must already exist in Harbor before deploy. Docker Hub is not a production dependency source; `pre-deploy-check.sh` rejects Docker Hub shorthand infrastructure image values.
 
-Manual release from the server is an emergency fallback. Log in to Harbor on the private deployment server first:
-
-```sh
-docker login <OCI_REGISTRY> --username <OCI_REGISTRY_USERNAME>
-```
-
-For a full emergency release, use the single release entrypoint without `--services`:
-
-```sh
-DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-0123456789abcdef
-```
-
-For an incremental release, pass only the services that were rebuilt. For example, frontend-only deployment must use `--services web`:
-
-```sh
-DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-0123456789abcdef --services web
-```
+Direct server-side invocation is no longer a release entrypoint, including emergencies. `deploy-release.sh` requires the workspace-generated invocation contract, run-bound image manifest, OCI digests, and pre-acquired transaction lock; manually reconstructing those values is prohibited. Restore workstation/SSH access and resume through `Invoke-WorkspaceDeploy.ps1`. The legacy GitHub deploy workflow is not compatible with this contract and must not be used until it is separately migrated and revalidated.
 
 Incremental release requires an existing `current-release.env`; first deployment must be full. The script preserves image coordinates for services not included in `--services` by reading the current release manifest before rewriting selected services.
 

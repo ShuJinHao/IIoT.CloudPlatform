@@ -1,6 +1,7 @@
 using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.EdgeHosts;
+using IIoT.ProductionService.ClientReleases;
 
 namespace IIoT.ProductionService.EdgeHosts;
 
@@ -60,26 +61,26 @@ public sealed record EdgeHostPlcRuntimeStateReportResultDto(
 
 public static class EdgeHostMapping
 {
-    private static readonly TimeSpan RuntimeHeartbeatStaleThreshold = TimeSpan.FromHours(24);
-
     public static EdgeHostListItemDto ToListItemDto(
         Device device,
         DeviceClientState? clientState,
-        IReadOnlyList<EdgeHostPlcRuntimeState> plcStates)
-        => ToListItemDto(device.Id, device.DeviceName, device.Code, clientState, plcStates);
+        IReadOnlyList<EdgeHostPlcRuntimeState> plcStates,
+        DateTime utcNow)
+        => ToListItemDto(device.Id, device.DeviceName, device.Code, clientState, plcStates, utcNow);
 
     public static EdgeHostListItemDto ToListItemDto(
         Guid deviceId,
         string hostName,
         string clientCode,
         DeviceClientState? clientState,
-        IReadOnlyList<EdgeHostPlcRuntimeState> plcStates)
+        IReadOnlyList<EdgeHostPlcRuntimeState> plcStates,
+        DateTime utcNow)
     {
-        var softwareStatus = ResolveSoftwareStatus(clientState, out var softwareIssue);
+        var softwareStatus = DeviceClientSoftwareStatusResolver.Resolve(clientState, utcNow);
         var lastPlcSeenAtUtc = plcStates.Count == 0
             ? (DateTime?)null
             : plcStates.Max(state => state.LastSeenAtUtc);
-        var issue = ResolveIssue(softwareIssue, plcStates);
+        var issue = ResolveIssue(softwareStatus.Issue, plcStates);
 
         return new EdgeHostListItemDto(
             deviceId,
@@ -88,7 +89,7 @@ public static class EdgeHostMapping
             hostName,
             ResolvePrimaryIp(clientState),
             ResolveLocalIpAddresses(clientState),
-            softwareStatus,
+            softwareStatus.SoftwareStatus,
             BuildCurrentVersion(clientState),
             clientState?.LastRuntimeHeartbeatAtUtc,
             plcStates.Count,
@@ -101,9 +102,10 @@ public static class EdgeHostMapping
     public static EdgeHostDto ToDetailDto(
         Device device,
         DeviceClientState? clientState,
-        IReadOnlyList<EdgeHostPlcRuntimeState> plcStates)
+        IReadOnlyList<EdgeHostPlcRuntimeState> plcStates,
+        DateTime utcNow)
     {
-        var listItem = ToListItemDto(device, clientState, plcStates);
+        var listItem = ToListItemDto(device, clientState, plcStates, utcNow);
         return new EdgeHostDto(
             listItem.Id,
             listItem.DeviceId,
@@ -142,30 +144,6 @@ public static class EdgeHostMapping
             state.LastError,
             state.LastSeenAtUtc,
             state.UpdatedAtUtc);
-    }
-
-    private static string ResolveSoftwareStatus(DeviceClientState? state, out string? issue)
-    {
-        issue = null;
-        if (state?.LastRuntimeHeartbeatAtUtc is null)
-        {
-            issue = "客户端尚未上报运行心跳。";
-            return "MissingRuntimeHeartbeat";
-        }
-
-        if (DateTime.UtcNow - state.LastRuntimeHeartbeatAtUtc.Value.ToUniversalTime() > RuntimeHeartbeatStaleThreshold)
-        {
-            issue = "超过 24 小时未收到运行心跳。";
-            return "RuntimeHeartbeatStale";
-        }
-
-        return state.RuntimeStatus switch
-        {
-            "Starting" => "Starting",
-            "Running" => "Running",
-            "Stopping" or "Stopped" => "Stopped",
-            _ => "Unknown"
-        };
     }
 
     private static string? ResolveIssue(

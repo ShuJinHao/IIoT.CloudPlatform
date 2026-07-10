@@ -2,6 +2,8 @@
 
 本目录是 `IIoT.CloudPlatform` 当前生产部署实现目录。云端标准发布以操作者本机构建镜像、推送 Harbor、再通过 SSH 触发服务器本地发布脚本为准；GitHub Actions 只保留 CI 留痕和灾备手动入口，不再作为日常生产镜像构建或部署入口。三项目上传部署统一人类入口见 [上传部署总览](../../docs/上传部署总览.md)，统一可执行入口见工作区根 `deploy/Invoke-WorkspaceDeploy.ps1`。
 
+> 当前状态（2026-07-10）：新根入口契约、expected SHA 强绑定、per-invocation services/image manifest、build-before-remote-support、单事务锁、OCI digest、健康 no-op 和 cleanup-only 恢复的隔离 fake 行为测试 9/9 通过。当前 Cloud 业务工作树仍在其它窗口迭代，且本轮没有联网、Harbor、SSH 或真实生产 deploy/history/cleanup/健康闭环；隔离回归不得冒充生产验收。
+
 工作区标准入口示例：
 
 ```powershell
@@ -25,9 +27,9 @@ pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services httpapi,gateway
 - self-hosted runner 仅作为灾备/历史 CI 设施时使用，仍必须是专用非 root 用户，不能用 root 跑 Actions 服务。
 - 当前服务器 Docker Root Dir 固定为 `/data/iiot-platform/runtime/docker`，runner 工作目录固定在 `/data/github-runner/*`，不要把构建缓存和 runner workdir 放回系统盘。
 - Docker Hub 不作为生产依赖源；compose 第三方镜像和 Web Dockerfile 的 Node/Nginx 基础镜像必须先同步到 Harbor mirror。
-- Edge 客户端安装素材不进 Harbor；日常 push main 只跑 smoke，完整 GitHub 打包只在 `workflow_dispatch` 或 `edge-v*` / `v*` tag 时执行；日常宿主快发由操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1 -Transport http`，本机完成编译打包后通过内网受控 HTTP 上传到服务器 `${EDGE_UPDATES_DIR}/installers/stable/{version}` 和 `${EDGE_UPDATES_DIR}/velopack/stable`。生产 `stable` 不允许用 `rsync/scp` 绕过 Cloud DB、审计和保留策略；只改工序插件时运行 `IIoT.EdgeClient/scripts/PublishEdgePluginRelease.ps1`，只上传独立插件 zip。
+- Edge 客户端安装素材不进 Harbor；日常 push main 只跑 smoke，完整 GitHub 打包只在 `workflow_dispatch` 或 `edge-v*` / `v*` tag 时执行。日常宿主快发统一从工作区根运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target EdgeHost ...`，只改工序插件时运行 `-Target EdgePlugin ...`；顶层入口再调度 EdgeClient 项目脚本完成内网受控 HTTP 上传。生产 `stable` 不允许用 `rsync/scp` 绕过 Cloud DB、审计和保留策略。
 - 生产服务器只允许 Edge `stable` 渠道；发布脚本必须拒绝并清理 `ci`、`dev`、`test` 等非 `stable` 渠道目录。
-- Cloud catalog 会扫描 `/app/edge-updates/installers/stable/{version}/installer-artifact.json` 并与数据库 release 记录合并；同 key 数据库记录优先，可用于 Draft/Archived 抑制文件落盘版本。
+- Cloud catalog、首装、Edge 更新和公开下载的版本集合只来自 Cloud release 记录。文件系统只校验已登记 artifact 的存在性、完整性、受控路径、权限和真实下载；不得扫描目录补出未登记版本，残留文件也不得让 `Deleted` 版本重新可见。
 - 本机 Docker 构建和 SSH 触发服务器部署是标准 Cloud 发布流程。
 - `deploy/scripts/deploy-release.sh` 是服务器端唯一发布入口，`deploy/scripts/rollback-release.sh` 是应用镜像回滚入口。
 - self-hosted runner 安装和权限要求见 [RUNNER.md](./RUNNER.md)。
@@ -97,7 +99,7 @@ Harbor 变量：
 - `OCI_REGISTRY_USERNAME`：Harbor 登录用户名。
 - `OCI_REGISTRY_PASSWORD`：Harbor 登录密码或 robot account token。
 
-标准生产镜像由操作者本机 `deploy/scripts/build-and-push.sh` 构建并推送 Harbor。脚本必须显式传入 `--services httpapi,gateway,dataworker,migration,web` 的子集，或显式 `--all`；无参数直接失败，避免误全量。它会输出 `Deploy services input` 和 `artifacts/deploy/cloud-built-services.txt`，后续部署必须使用这个服务清单。
+标准生产镜像由统一入口调度 `deploy/scripts/build-and-push.sh` 构建并推送 Harbor。脚本必须显式传入 `--services httpapi,gateway,dataworker,migration,web` 的子集，或显式 `--all`；无参数直接失败，避免误全量。正式发布时统一入口为每次 run 传入私有 output 目录，`local-release.sh` 只读取同一次运行的 `cloud-built-services.txt` 和 image manifest；默认共享路径只服务单独诊断实现脚本，不得作为正式发布控制面。
 构建 `web` 或 `--all` 时必须显式传入 `VITE_AICOPILOT_CHALLENGE_URL`，backend-only 构建不需要该变量；脚本会拒绝 `.example` / `internal.example` 文档域名。
 
 `cloud-image` 只保留灾备手动入口，并要求确认词 `EMERGENCY_CLOUD_IMAGE_BUILD`；不得把它当作日常发布路径，也不得等待它超时。灾备 workflow 仍必须跑在带 `iiot-linux-prod` label 的内网 self-hosted runner 上，不能改回 `ubuntu-latest`。
@@ -146,8 +148,8 @@ Edge 客户端产物不属于 Cloud Docker 镜像，也不进入 Harbor。当前
 
 - `push main`：只跑 smoke 编译和测试，不发布安装包。
 - `workflow_dispatch` 或 `edge-v*` / `v*` tag：由 GitHub hosted `windows-latest` 构建 runtime、installer artifact 和 Velopack releases，再由内网 `iiot-linux-prod` runner 把 GitHub Actions artifacts 发布到 `${EDGE_UPDATES_DIR}`，渠道固定为 `stable`。
-- 日常宿主快发：操作者本机运行 `IIoT.EdgeClient/scripts/LocalPublishAndDeploy.ps1 -Transport http`，本机编译、Velopack 打包、生成 installer artifact 后，通过 Cloud Human API 上传 release bundle。Cloud 服务端默认限速 `1000 Mbps`、单并发、服务端审计，渠道固定为 `stable`。这是本机运维快发路径，不是 GitHub CI/CD job。生产 `stable` 不允许用 `rsync/scp`。
-- 日常插件快发：只改工序插件时运行 `IIoT.EdgeClient/scripts/PublishEdgePluginRelease.ps1`，Cloud 通过 `POST /api/v1/human/client-releases/plugin-packages` 收独立插件 zip，落盘到 `${EDGE_UPDATES_DIR}/plugins/stable/<ModuleId>/<version>/` 并写插件 release。
+- 日常宿主快发：操作者从工作区根运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target EdgeHost ...`。顶层入口调度 EdgeClient 本机实现脚本完成编译、Velopack 打包、installer artifact 生成和 Cloud Human API 上传。Cloud 服务端默认限速 `1000 Mbps`、单并发、服务端审计，渠道固定为 `stable`。这是本机运维快发路径，不是 GitHub CI/CD job。生产 `stable` 不允许用 `rsync/scp`。
+- 日常插件快发：只改工序插件时从工作区根运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target EdgePlugin -ModuleId <真实ModuleId> ...`，顶层入口只上传独立插件 zip；Cloud 通过 `POST /api/v1/human/client-releases/plugin-packages` 落盘到 `${EDGE_UPDATES_DIR}/plugins/stable/<ModuleId>/<version>/` 并写插件 release。
 - Edge 更新内容必须显式填写。本机快发传 `-ReleaseNotes` 或 `-ReleaseNotesPath`；正式 `workflow_dispatch` 填 `release_notes`；tag 发布必须使用带正文的 annotated tag。Cloud Human 发布接口和 host/plugin release upsert 会拒绝 `Published` 空更新内容。
 
 GitHub 完整打包流程固定为：
@@ -180,7 +182,7 @@ ${EDGE_UPDATES_DIR}/velopack/stable/
   *-Portable.zip
 ```
 
-`iiot-httpapi` 以可写方式挂载 `${EDGE_UPDATES_DIR}` 到 `/app/edge-updates`，仅用于内网受控 Edge HTTP 发布；`nginx-gateway` 仍以只读方式挂载同一目录。HttpApi 通过 `EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers` 读取安装素材，并通过 `EdgeInstallerArtifacts__VelopackReleasesBaseUrl=${PUBLIC_BASE_URL}/edge-updates/velopack` 返回运行时更新源。Cloud 的公开下载目录、Edge catalog 和 Human catalog 会扫描 `installer-artifact.json` v2、独立插件 zip 和数据库 release 记录；HTTP 宿主上传成功后，服务端会从 manifest 派生 host DB 行，并为缺失登记的插件版本生成真实独立 zip 后写 plugin DB 行，已登记同版本插件不会被宿主发布覆盖。插件独立发布必须走 `plugin-packages`，文件存在性以落盘包为准，可见性和生命周期以 DB 状态为准。保留策略默认每个 stable/runtime/component 按 SemVer 最多保留最新 3 次，旧版本先 Archived/Deprecated，只有已归档且无设备在用的文件才会回收。登录 Cloud 后，“客户端下载中心 -> 首装下载”会按 `installer-artifact.json` v2 选择一份 `host/` 和所选 `plugins/<ModuleId>/`，把 `launcher/iiot-binding.json`、`launcher/iiot-enabled-plugins.json`、`launcher/launcher.update.json`、`plugins/<ModuleId>/iiot-plugin-binding.json` 注入本次下载的安装器 payload，并返回真正的 `.exe`。这些绑定配置不写回素材目录、不落盘到共享模板、不写日志。
+`iiot-httpapi` 以可写方式挂载 `${EDGE_UPDATES_DIR}` 到 `/app/edge-updates`，仅用于内网受控 Edge HTTP 发布；`nginx-gateway` 仍以只读方式挂载同一目录。HttpApi 通过 `EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers` 读取安装素材，并通过 `EdgeInstallerArtifacts__VelopackReleasesBaseUrl=${PUBLIC_BASE_URL}/edge-updates/velopack` 返回运行时更新源。HTTP 宿主上传成功后，服务端会校验 `installer-artifact.json` v2 和独立插件 zip，从 manifest 派生并写入正式 host/plugin release 记录；公开下载目录、Edge catalog、Human catalog 和首装链路只按这些 Cloud release 记录决定版本集合，文件系统只验证已登记产物。已登记同版本插件不会被宿主发布覆盖。插件独立发布必须走 `plugin-packages`，文件存在性以落盘包为准，可见性和生命周期以 DB 状态为准。保留策略默认每个 stable/runtime/component 按 SemVer 最多保留最新 3 次，旧版本先 Archived/Deprecated，只有已归档且无设备在用的文件才会回收。登录 Cloud 后，“客户端下载中心 -> 首装下载”会按已登记版本对应的 `installer-artifact.json` v2 选择一份 `host/` 和所选 `plugins/<ModuleId>/`，把 `launcher/iiot-binding.json`、`launcher/iiot-enabled-plugins.json`、`launcher/launcher.update.json`、`plugins/<ModuleId>/iiot-plugin-binding.json` 注入本次下载的安装器 payload，并返回真正的 `.exe`。这些绑定配置不写回素材目录、不落盘到共享模板、不写日志。
 
 `iiot-web` 是 Vite 静态构建，Cloud 左侧“打开助手”按钮需要在构建镜像时注入 AICopilot challenge URL：
 
@@ -331,11 +333,12 @@ sudo find /data/iiot-platform/cloud/deploy/releases -type f -exec chmod 600 {} +
 
 1. 合并或推送到 `main`，保证 GitHub 有本次源码留痕。
 2. `cloud-ci` 默认只跑快速验证：restore/build、ServiceLayer、ConfigurationGuard、部署脚本语法检查、前端 build、compose config；完整 EndToEnd 只在手动 `workflow_dispatch` 勾选时运行。
-3. 在工作区根运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services <services>`；顶层入口会调度 `deploy/scripts/local-release.sh`，并校验工作区干净、HEAD 已推送到 GitHub、Docker/buildx/Harbor 可用。服务包含 `web` 或使用 `-All` 时，会从 `deploy/profiles/current-production.json` 读取当前 challenge URL。
-4. `local-release.sh` 先确认远端 support 目录可写且没有活跃 release/cleanup 锁，再只打包白名单 support files；文件先进入远端 staging，SHA-256、shell 语法和 compose config 全部通过后逐文件原子替换并持久化 manifest。`.env`、`certs/`、`releases/`、`backups/` 明确排除。
-5. support 和锁门禁通过后，本机 `build-and-push.sh` 才按服务构建并推送 `sha-<git-sha>` 镜像到 Harbor，输出 `Deploy services input` 和 `artifacts/deploy/cloud-built-services.txt`。
-6. 本机脚本通过 BatchMode SSH 在服务器 `/data/iiot-platform/cloud/deploy` 执行 `DEPLOY_GIT_SHA=<sha> DEPLOY_TRIGGERED_BY=local ./scripts/deploy-release.sh sha-<sha> --services <services>`。
-7. 服务器端 `deploy-release.sh` 持有全局 Cloud release lock，执行 pre-check、PostgreSQL backup、镜像 pull、容器启动、健康检查、发布后清理和 release history；cleanup 输出必须实时回传。
+3. 在工作区根运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services <services>`；顶层入口会调度 `deploy/scripts/local-release.sh`，并校验工作区干净、HEAD 已推送到 GitHub、Docker/buildx/Harbor 可用。正式发布随后为该 HEAD 创建临时 detached worktree，support files 和镜像都只从这个固定提交读取；主工作区之后继续编辑也不会混入旧 SHA。服务包含 `web` 或使用 `-All` 时，会从 `deploy/profiles/current-production.json` 读取当前 challenge URL。
+4. 根入口为正式运行注入 entrypoint marker、唯一 invocation id、完整 expected SHA 和 plan digest；`local-release.sh` 缺任一项即在 build/SSH 前失败，并强校验 expected SHA 等于 detached 固定快照 HEAD。
+5. `local-release.sh` 先在本机构建并校验 support 白名单包，然后 `build-and-push.sh` 按服务构建并推送 `sha-<git-sha>` 镜像。构建成功后才允许 SSH staging，因此构建失败绝不安装远端 support files。
+6. 每次 invocation 独占 services 文件和 image manifest；manifest 绑定 invocation、expected SHA、plan digest、release tag、services 和每个已构建镜像的 OCI digest。dry-run 不得覆盖正式清单。
+7. support 包和 image manifest 一起进入远端 invocation staging；远端先校验两份 SHA-256，再获取一把绑定 invocation/plan 的 release lock。该锁跨越 support 安装、rollout、promotion 和 cleanup；`.env`、`certs/`、`releases/`、`backups/` 仍明确排除。
+8. `deploy-release.sh` 强校验 release tag SHA、`DEPLOY_GIT_SHA`、expected SHA 三者一致，只消费本 invocation manifest，pull 后在 rollout 前核对 OCI digest。同 SHA/同 plan 且当前健康时跳过 backup/rollout；cleanup partial 只恢复 cleanup。
 
 GitHub secrets：
 
@@ -351,22 +354,7 @@ SEED_ADMIN_PASSWORD=<固定 Cloud 管理员密码>
 
 GitHub `cloud-image` / `cloud-deploy` 只作为灾备路径，且 workflow 已要求确认词。日常发布不得等待它们。
 
-服务器手工路径只在本机 SSH 触发器不可用时使用。
-
-全量应急恢复时，在服务器上执行：
-
-```sh
-cd /data/iiot-platform/cloud/deploy
-chmod +x ./scripts/*.sh
-docker login <OCI_REGISTRY> --username <OCI_REGISTRY_USERNAME>
-DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-0123456789abcdef
-```
-
-如果应急路径只发布部分服务，必须加 `--services`，例如只发布前端：
-
-```sh
-DEPLOY_GIT_SHA=<git-sha> DEPLOY_TRIGGERED_BY=manual ./scripts/deploy-release.sh sha-0123456789abcdef --services web
-```
+服务器端 `deploy-release.sh` 不再是手工入口，应急情况也不得手工伪造 invocation、plan digest、image manifest 或预获取锁。本机 SSH 触发不可用时，必须先恢复操作端/SSH 后从 `Invoke-WorkspaceDeploy.ps1` 恢复。旧 GitHub deploy workflow 尚未迁移到本契约，在单独改造并复验前不得使用。
 
 发布脚本会：
 

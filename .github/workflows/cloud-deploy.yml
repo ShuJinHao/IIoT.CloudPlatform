@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       services:
-        description: "Emergency only. Prefer local-release.sh; empty means full release only."
+        description: "Emergency only. Use the workspace deploy entrypoint for routine releases; empty means full emergency release only."
         required: false
         type: string
       emergency_confirm:
@@ -56,7 +56,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ '${{ inputs.emergency_confirm }}' != 'EMERGENCY_CLOUD_DEPLOY' ]; then
-            echo "cloud-deploy is no longer the routine production release path. Use deploy/scripts/local-release.sh." >&2
+            echo "cloud-deploy is emergency-only. Use deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud from the workspace root." >&2
             exit 64
           fi
           release_tag='${{ inputs.release_tag }}'

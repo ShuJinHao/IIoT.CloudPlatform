@@ -1045,6 +1045,13 @@ write_release_manifest() {
   deploy_triggered_by=$4
   deployed_at_utc=$5
   pre_deploy_backup_file=$6
+  deploy_invocation_id=${7:-}
+  deploy_expected_sha=${8:-}
+  deploy_plan_digest=${9:-}
+  deploy_support_manifest_sha256=${10:-}
+  deploy_image_manifest_sha256=${11:-}
+  deploy_services=${12:-}
+  deploy_image_content_sha256=${13:-}
 
   umask 077
   {
@@ -1053,6 +1060,17 @@ write_release_manifest() {
     printf 'DEPLOY_TRIGGERED_BY=%s\n' "$deploy_triggered_by"
     printf 'DEPLOYED_AT_UTC=%s\n' "$deployed_at_utc"
     printf 'PRE_DEPLOY_BACKUP_FILE=%s\n' "$pre_deploy_backup_file"
+    if [ -n "$deploy_invocation_id" ]; then
+      printf 'DEPLOY_INVOCATION_ID=%s\n' "$deploy_invocation_id"
+      printf 'DEPLOY_EXPECTED_SHA=%s\n' "$deploy_expected_sha"
+      printf 'DEPLOY_PLAN_DIGEST=%s\n' "$deploy_plan_digest"
+      printf 'DEPLOY_SUPPORT_MANIFEST_SHA256=%s\n' "$deploy_support_manifest_sha256"
+      printf 'DEPLOY_IMAGE_MANIFEST_SHA256=%s\n' "$deploy_image_manifest_sha256"
+      printf 'DEPLOY_IMAGE_CONTENT_SHA256=%s\n' "$deploy_image_content_sha256"
+      printf 'DEPLOY_SERVICES=%s\n' "$deploy_services"
+      printf 'DEPLOY_CLEANUP_STATUS=pending\n'
+      printf 'DEPLOY_PHASE=staged\n'
+    fi
 
     for key in $APP_IMAGE_KEYS
     do
@@ -1084,6 +1102,10 @@ write_release_summary() {
   deployed_at_utc=$5
   deployed_services=$6
   release_notes=${7:-}
+  deploy_invocation_id=${8:-}
+  deploy_plan_digest=${9:-}
+  deploy_support_manifest_sha256=${10:-}
+  deploy_image_manifest_sha256=${11:-}
 
   umask 077
   {
@@ -1093,6 +1115,12 @@ write_release_summary() {
     printf -- '- Triggered by: `%s`\n' "$deploy_triggered_by"
     printf -- '- Deployed at UTC: `%s`\n' "$deployed_at_utc"
     printf -- '- Services: `%s`\n' "${deployed_services:-all}"
+    if [ -n "$deploy_invocation_id" ]; then
+      printf -- '- Invocation: `%s`\n' "$deploy_invocation_id"
+      printf -- '- Plan digest: `%s`\n' "$deploy_plan_digest"
+      printf -- '- Support manifest SHA-256: `%s`\n' "$deploy_support_manifest_sha256"
+      printf -- '- Image manifest SHA-256: `%s`\n' "$deploy_image_manifest_sha256"
+    fi
     printf '\n#### Changes\n'
 
     if [ -n "$release_notes" ]; then

@@ -26,7 +26,7 @@ public sealed class GetDeviceClientVersionInventoryHandler(
     IReadRepository<ClientReleaseComponent> componentRepository)
     : IQueryHandler<GetDeviceClientVersionInventoryQuery, Result<IReadOnlyList<DeviceClientVersionInventoryDto>>>
 {
-    private static readonly TimeSpan ReportStaleThreshold = TimeSpan.FromHours(24);
+    private static readonly TimeSpan VersionReportStaleThreshold = TimeSpan.FromHours(24);
 
     public async Task<Result<IReadOnlyList<DeviceClientVersionInventoryDto>>> Handle(
         GetDeviceClientVersionInventoryQuery request,
@@ -80,6 +80,7 @@ public sealed class GetDeviceClientVersionInventoryHandler(
                     .ThenByDescending(item => item.Version.PublishedAtUtc ?? item.Version.CreatedAtUtc)
                     .FirstOrDefault(),
                 StringComparer.OrdinalIgnoreCase);
+        var utcNow = DateTime.UtcNow;
 
         var result = devices
             .OrderBy(device => device.DeviceName, StringComparer.OrdinalIgnoreCase)
@@ -88,7 +89,8 @@ public sealed class GetDeviceClientVersionInventoryHandler(
                 snapshotByDevice.GetValueOrDefault(device.Id),
                 stateByDevice.GetValueOrDefault(device.Id),
                 referenceHost,
-                referencePluginsByModule))
+                referencePluginsByModule,
+                utcNow))
             .ToList();
 
         return Result.Success<IReadOnlyList<DeviceClientVersionInventoryDto>>(result);
@@ -99,7 +101,8 @@ public sealed class GetDeviceClientVersionInventoryHandler(
         DeviceClientVersionSnapshot? snapshot,
         DeviceClientState? state,
         (ClientReleaseComponent Component, ClientReleaseVersion Version) referenceHost,
-        IReadOnlyDictionary<string, (ClientReleaseComponent Component, ClientReleaseVersion Version)> referencePluginsByModule)
+        IReadOnlyDictionary<string, (ClientReleaseComponent Component, ClientReleaseVersion Version)> referencePluginsByModule,
+        DateTime utcNow)
     {
         var hostStatus = ResolveHostStatus(state, referenceHost, out var hostIssue);
         var installedPlugins = snapshot?.InstalledPlugins ?? [];
@@ -117,10 +120,10 @@ public sealed class GetDeviceClientVersionInventoryHandler(
             ?? NormalizeOptional(state?.VersionRemoteIpAddress)
             ?? NormalizeOptional(snapshot?.RemoteIpAddress);
         var installStatus = ResolveInstallStatus(state, hostStatus, pluginRows);
-        var softwareStatus = ResolveSoftwareStatus(state, out var runtimeIssue);
-        var versionIssue = ResolveVersionIssue(state, hostStatus, hostIssue, pluginRows);
+        var softwareStatus = DeviceClientSoftwareStatusResolver.Resolve(state, utcNow);
+        var versionIssue = ResolveVersionIssue(state, hostStatus, hostIssue, pluginRows, utcNow);
         var cloudIssue = ResolveCloudIssue();
-        var issue = runtimeIssue ?? versionIssue ?? cloudIssue;
+        var issue = softwareStatus.Issue ?? versionIssue ?? cloudIssue;
 
         return new DeviceClientVersionInventoryDto(
             device.Id,
@@ -135,7 +138,7 @@ public sealed class GetDeviceClientVersionInventoryHandler(
             hostStatus,
             hostIssue,
             installStatus,
-            softwareStatus,
+            softwareStatus.SoftwareStatus,
             BuildCurrentVersion(state, snapshot, pluginRows),
             issue,
             versionIssue,
@@ -201,44 +204,19 @@ public sealed class GetDeviceClientVersionInventoryHandler(
         return "Normal";
     }
 
-    private static string ResolveSoftwareStatus(
-        DeviceClientState? state,
-        out string? issue)
-    {
-        issue = null;
-        if (state?.LastRuntimeHeartbeatAtUtc is null)
-        {
-            issue = "客户端尚未上报运行心跳。";
-            return "MissingRuntimeHeartbeat";
-        }
-
-        if (DateTime.UtcNow - state.LastRuntimeHeartbeatAtUtc.Value.ToUniversalTime() > ReportStaleThreshold)
-        {
-            issue = "超过 24 小时未收到运行心跳。";
-            return "RuntimeHeartbeatStale";
-        }
-
-        return state.RuntimeStatus switch
-        {
-            "Starting" => "Starting",
-            "Running" => "Running",
-            "Stopping" or "Stopped" => "Stopped",
-            _ => "Unknown"
-        };
-    }
-
     private static string? ResolveVersionIssue(
         DeviceClientState? state,
         string hostStatus,
         string? hostIssue,
-        IReadOnlyList<DeviceClientPluginInventoryDto> plugins)
+        IReadOnlyList<DeviceClientPluginInventoryDto> plugins,
+        DateTime utcNow)
     {
         if (state?.VersionReceivedAtUtc is null)
         {
             return "客户端尚未上报安装状态。";
         }
 
-        if (DateTime.UtcNow - state.VersionReceivedAtUtc.Value.ToUniversalTime() > ReportStaleThreshold)
+        if (utcNow.ToUniversalTime() - state.VersionReceivedAtUtc.Value.ToUniversalTime() > VersionReportStaleThreshold)
         {
             return "超过 24 小时未上报版本。";
         }

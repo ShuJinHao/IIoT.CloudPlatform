@@ -6,6 +6,66 @@ DEPLOY_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 
 . "$SCRIPT_DIR/release-common.sh"
 
+lock_is_owned_by_workspace_invocation() {
+  ownership_lock_file=${DEPLOY_RELEASE_LOCK_FILE:-}
+  ownership_invocation=${WORKSPACE_INVOCATION_ID:-${IIOT_WORKSPACE_DEPLOY_INVOCATION_ID:-}}
+  ownership_plan=${WORKSPACE_PLAN_DIGEST:-${IIOT_WORKSPACE_DEPLOY_PLAN_DIGEST:-}}
+  [ -n "$ownership_lock_file" ] \
+    && [ "$(managed_lock_read_field "${ownership_lock_file}.d" pid)" = "$$" ] \
+    && [ "$(managed_lock_read_field "${ownership_lock_file}.d" invocation-id)" = "$ownership_invocation" ] \
+    && [ "$(managed_lock_read_field "${ownership_lock_file}.d" plan-digest)" = "$ownership_plan" ]
+}
+
+write_deploy_blocked_evidence() {
+  blocked_phase=$1
+  blocked_exit_code=$2
+  blocked_restore_status=$3
+  mkdir -p "$RELEASES_DIR/history"
+  blocked_file="$RELEASES_DIR/deploy-blocked.env"
+  blocked_history="$RELEASES_DIR/history/$(date -u +%Y%m%dT%H%M%SZ)-blocked-$(safe_release_file_name "${WORKSPACE_INVOCATION_ID:-unknown}").env"
+  {
+    printf 'DEPLOY_INVOCATION_ID=%s\n' "${WORKSPACE_INVOCATION_ID:-unknown}"
+    printf 'DEPLOY_EXPECTED_SHA=%s\n' "${WORKSPACE_EXPECTED_SHA:-unknown}"
+    printf 'DEPLOY_PLAN_DIGEST=%s\n' "${WORKSPACE_PLAN_DIGEST:-unknown}"
+    printf 'DEPLOY_PHASE=%s\n' "$blocked_phase"
+    printf 'DEPLOY_EXIT_CODE=%s\n' "$blocked_exit_code"
+    printf 'DEPLOY_SUPPORT_RESTORE_STATUS=%s\n' "$blocked_restore_status"
+    printf 'DEPLOY_SUPPORT_BACKUP_DIR=%s\n' "${DEPLOY_SUPPORT_BACKUP_DIR:-missing}"
+    printf 'RECORDED_AT_UTC=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$blocked_file"
+  cp "$blocked_file" "$blocked_history"
+  printf 'Cloud durable blocked evidence: %s\n' "$blocked_file" >&2
+}
+
+restore_support_backup() {
+  restore_backup_dir=${DEPLOY_SUPPORT_BACKUP_DIR:-}
+  [ -n "$restore_backup_dir" ] || return 0
+  [ -x "$restore_backup_dir/restore-support.sh" ] || return 86
+  sh "$restore_backup_dir/restore-support.sh" "$DEPLOY_DIR" "$restore_backup_dir"
+}
+
+cleanup_early_release_contract() {
+  early_status=$?
+  trap - EXIT HUP INT TERM
+  if [ -n "${DEPLOY_SUPPORT_BACKUP_DIR:-}" ] && [ -d "$DEPLOY_SUPPORT_BACKUP_DIR" ]; then
+    if restore_support_backup; then
+      rm -rf "$DEPLOY_SUPPORT_BACKUP_DIR"
+    else
+      write_deploy_blocked_evidence blocked-early-support-restore "$early_status" failed
+      lock_is_owned_by_workspace_invocation && printf '%s\n' blocked-early-support-restore > "${DEPLOY_RELEASE_LOCK_FILE}.d/phase"
+      exit 86
+    fi
+  fi
+  if [ "${DEPLOY_RELEASE_LOCK_PREACQUIRED:-0}" = 1 ] && lock_is_owned_by_workspace_invocation; then
+    release_managed_lock "$DEPLOY_RELEASE_LOCK_FILE" 2>/dev/null || true
+  fi
+  if [ -n "${DEPLOY_SUPPORT_STAGING_DIR:-}" ]; then
+    rm -rf "$DEPLOY_SUPPORT_STAGING_DIR"
+  fi
+  exit "$early_status"
+}
+trap cleanup_early_release_contract EXIT HUP INT TERM
+
 RELEASE_TAG=${RELEASE_TAG:-}
 REQUESTED_SERVICES=${DEPLOY_SERVICES:-}
 
@@ -37,10 +97,86 @@ do
   shift
 done
 
+WORKSPACE_ENTRYPOINT=${IIOT_WORKSPACE_DEPLOY_ENTRYPOINT:-}
+WORKSPACE_INVOCATION_ID=${IIOT_WORKSPACE_DEPLOY_INVOCATION_ID:-}
+WORKSPACE_EXPECTED_SHA=${IIOT_WORKSPACE_DEPLOY_EXPECTED_SHA:-}
+WORKSPACE_PLAN_DIGEST=${IIOT_WORKSPACE_DEPLOY_PLAN_DIGEST:-}
+DEPLOY_GIT_SHA_VALUE=${DEPLOY_GIT_SHA:-}
+DEPLOY_IMAGE_MANIFEST_PATH=${DEPLOY_IMAGE_MANIFEST:-}
+DEPLOY_IMAGE_MANIFEST_DIGEST=${DEPLOY_IMAGE_MANIFEST_SHA256:-}
+DEPLOY_IMAGE_CONTENT_DIGEST=${DEPLOY_IMAGE_CONTENT_SHA256:-}
+DEPLOY_SUPPORT_BACKUP_DIR=${DEPLOY_SUPPORT_BACKUP_DIR:-}
+
+fail_contract() {
+  printf 'Cloud release contract rejected: %s\n' "$*" >&2
+  exit 64
+}
+
+[ "$WORKSPACE_ENTRYPOINT" = 1 ] \
+  || fail_contract "missing IIOT_WORKSPACE_DEPLOY_ENTRYPOINT=1"
+case "$WORKSPACE_INVOCATION_ID" in
+  ''|*[!A-Za-z0-9._:-]*) fail_contract "invalid IIOT_WORKSPACE_DEPLOY_INVOCATION_ID" ;;
+esac
+case "$WORKSPACE_EXPECTED_SHA" in
+  *[!0-9a-f]*) fail_contract "IIOT_WORKSPACE_DEPLOY_EXPECTED_SHA must be lowercase hex" ;;
+esac
+[ "${#WORKSPACE_EXPECTED_SHA}" -eq 40 ] \
+  || fail_contract "IIOT_WORKSPACE_DEPLOY_EXPECTED_SHA must contain 40 hex characters"
+case "$WORKSPACE_PLAN_DIGEST" in
+  *[!0-9a-f]*) fail_contract "IIOT_WORKSPACE_DEPLOY_PLAN_DIGEST must be lowercase hex" ;;
+esac
+[ "${#WORKSPACE_PLAN_DIGEST}" -eq 64 ] \
+  || fail_contract "IIOT_WORKSPACE_DEPLOY_PLAN_DIGEST must contain 64 hex characters"
+[ "$RELEASE_TAG" = "sha-$WORKSPACE_EXPECTED_SHA" ] \
+  || fail_contract "release tag, expected SHA and approved plan do not match: tag=$RELEASE_TAG expected=sha-$WORKSPACE_EXPECTED_SHA"
+[ "$DEPLOY_GIT_SHA_VALUE" = "$WORKSPACE_EXPECTED_SHA" ] \
+  || fail_contract "DEPLOY_GIT_SHA, release tag and expected SHA do not match: deploy_git_sha=${DEPLOY_GIT_SHA_VALUE:-missing} expected=$WORKSPACE_EXPECTED_SHA"
+case "$DEPLOY_IMAGE_MANIFEST_DIGEST" in
+  *[!0-9a-f]*) fail_contract "DEPLOY_IMAGE_MANIFEST_SHA256 must be lowercase hex" ;;
+esac
+[ "${#DEPLOY_IMAGE_MANIFEST_DIGEST}" -eq 64 ] \
+  || fail_contract "DEPLOY_IMAGE_MANIFEST_SHA256 must contain 64 hex characters"
+case "$DEPLOY_IMAGE_CONTENT_DIGEST" in
+  *[!0-9a-f]*) fail_contract "DEPLOY_IMAGE_CONTENT_SHA256 must be lowercase hex" ;;
+esac
+[ "${#DEPLOY_IMAGE_CONTENT_DIGEST}" -eq 64 ] \
+  || fail_contract "DEPLOY_IMAGE_CONTENT_SHA256 must contain 64 hex characters"
+[ -f "$DEPLOY_IMAGE_MANIFEST_PATH" ] && [ -r "$DEPLOY_IMAGE_MANIFEST_PATH" ] && [ ! -L "$DEPLOY_IMAGE_MANIFEST_PATH" ] \
+  || fail_contract "run-bound image manifest is missing or unreadable: ${DEPLOY_IMAGE_MANIFEST_PATH:-missing}"
+case "$(readlink -f "$DEPLOY_IMAGE_MANIFEST_PATH")" in
+  "$(readlink -f "${DEPLOY_SUPPORT_STAGING_DIR:-/missing}")"/*) ;;
+  *) fail_contract "run-bound image manifest escaped its invocation staging directory" ;;
+esac
+[ "$DEPLOY_SUPPORT_BACKUP_DIR" = "$DEPLOY_DIR/releases/support-recovery/$WORKSPACE_INVOCATION_ID" ] \
+  || fail_contract "support backup directory is not bound to this invocation"
+[ -d "$DEPLOY_SUPPORT_BACKUP_DIR" ] && [ ! -L "$DEPLOY_SUPPORT_BACKUP_DIR" ] \
+  || fail_contract "support backup directory is missing or is a symlink"
+[ "$(readlink -f "$DEPLOY_SUPPORT_BACKUP_DIR")" = "$DEPLOY_SUPPORT_BACKUP_DIR" ] \
+  || fail_contract "support backup directory is not canonical"
+
 ensure_release_tag "$RELEASE_TAG"
 require_docker_compose
 prepare_release_directories
 load_dotenv
+
+actual_image_manifest_digest=$(sha256sum "$DEPLOY_IMAGE_MANIFEST_PATH" | awk '{print $1}')
+[ "$actual_image_manifest_digest" = "$DEPLOY_IMAGE_MANIFEST_DIGEST" ] \
+  || fail_contract "image manifest digest changed before rollout: expected=$DEPLOY_IMAGE_MANIFEST_DIGEST actual=$actual_image_manifest_digest"
+image_content_file=$(mktemp "$DEPLOY_DIR/.image-content.XXXXXX")
+grep -E '^(CLOUD_DEPLOY_(EXPECTED_SHA|PLAN_DIGEST|RELEASE_TAG|SERVICES)|IIOT_(HTTPAPI|GATEWAY|DATAWORKER|MIGRATION|WEB)_IMAGE(_DIGEST)?)=' "$DEPLOY_IMAGE_MANIFEST_PATH" \
+  | LC_ALL=C sort > "$image_content_file"
+actual_image_content_digest=$(sha256sum "$image_content_file" | awk '{print $1}')
+rm -f "$image_content_file"
+[ "$actual_image_content_digest" = "$DEPLOY_IMAGE_CONTENT_DIGEST" ] \
+  || fail_contract "stable image candidate content digest mismatch: expected=$DEPLOY_IMAGE_CONTENT_DIGEST actual=$actual_image_content_digest"
+[ "$(read_manifest_value "$DEPLOY_IMAGE_MANIFEST_PATH" CLOUD_DEPLOY_INVOCATION_ID)" = "$WORKSPACE_INVOCATION_ID" ] \
+  || fail_contract "image manifest invocation does not match the remote invocation"
+[ "$(read_manifest_value "$DEPLOY_IMAGE_MANIFEST_PATH" CLOUD_DEPLOY_EXPECTED_SHA)" = "$WORKSPACE_EXPECTED_SHA" ] \
+  || fail_contract "image manifest SHA does not match the remote invocation"
+[ "$(read_manifest_value "$DEPLOY_IMAGE_MANIFEST_PATH" CLOUD_DEPLOY_PLAN_DIGEST)" = "$WORKSPACE_PLAN_DIGEST" ] \
+  || fail_contract "image manifest plan digest does not match the remote invocation"
+[ "$(read_manifest_value "$DEPLOY_IMAGE_MANIFEST_PATH" CLOUD_DEPLOY_RELEASE_TAG)" = "$RELEASE_TAG" ] \
+  || fail_contract "image manifest release tag does not match the remote invocation"
 
 normalize_services() {
   services_input=${1:-}
@@ -146,6 +282,74 @@ image_key_is_selected() {
   esac
 }
 
+load_selected_images_from_invocation_manifest() {
+  for selected_key in $SELECTED_IMAGE_KEYS
+  do
+    selected_image_ref=$(read_manifest_value "$DEPLOY_IMAGE_MANIFEST_PATH" "$selected_key")
+    selected_image_digest=$(read_manifest_value "$DEPLOY_IMAGE_MANIFEST_PATH" "${selected_key}_DIGEST")
+    case "$selected_image_ref" in
+      *:"$RELEASE_TAG") ;;
+      *) fail_contract "selected image is not bound to the approved release tag: $selected_key=$selected_image_ref" ;;
+    esac
+    case "$selected_image_digest" in
+      sha256:*) ;;
+      *) fail_contract "selected image digest is missing: ${selected_key}_DIGEST=$selected_image_digest" ;;
+    esac
+    digest_hex=${selected_image_digest#sha256:}
+    case "$digest_hex" in
+      *[!0-9a-f]*) fail_contract "selected image digest must be lowercase hex: ${selected_key}_DIGEST=$selected_image_digest" ;;
+    esac
+    [ "${#digest_hex}" -eq 64 ] \
+      || fail_contract "selected image digest must contain 64 hex characters: ${selected_key}_DIGEST=$selected_image_digest"
+    eval "$selected_key=\$selected_image_ref"
+    eval "${selected_key}_DIGEST=\$selected_image_digest"
+  done
+}
+
+verify_selected_image_digests() {
+  for selected_key in $SELECTED_IMAGE_KEYS
+  do
+    eval "selected_image_ref=\${$selected_key}"
+    eval "selected_image_digest=\${${selected_key}_DIGEST}"
+    repo_digests=$(docker image inspect --format '{{json .RepoDigests}}' "$selected_image_ref" 2>/dev/null || true)
+    case "$repo_digests" in
+      *"@$selected_image_digest"*)
+        printf 'Cloud pulled image digest verified: image=%s digest=%s\n' "$selected_image_ref" "$selected_image_digest"
+        ;;
+      *)
+        printf 'Pulled Cloud image does not match the run-bound OCI digest: image=%s expected=%s repo_digests=%s\n' \
+          "$selected_image_ref" "$selected_image_digest" "${repo_digests:-missing}" >&2
+        exit 66
+        ;;
+    esac
+  done
+}
+
+running_selected_images_match_digests() {
+  for running_key in $SELECTED_IMAGE_KEYS
+  do
+    running_service=$(service_for_image_key "$running_key")
+    if [ "$running_service" = iiot-migration ]; then
+      continue
+    fi
+    eval "running_expected_digest=\${${running_key}_DIGEST}"
+    running_container_id=$(compose ps -q "$running_service" 2>/dev/null | head -n 1 || true)
+    [ -n "$running_container_id" ] || return 1
+    running_image_id=$(docker inspect --format '{{.Image}}' "$running_container_id" 2>/dev/null || true)
+    [ -n "$running_image_id" ] || return 1
+    running_repo_digests=$(docker image inspect --format '{{json .RepoDigests}}' "$running_image_id" 2>/dev/null || true)
+    case "$running_repo_digests" in
+      *"@$running_expected_digest"*) ;;
+      *)
+        printf 'Cloud runtime image drift detected: service=%s expected=%s repo_digests=%s\n' \
+          "$running_service" "$running_expected_digest" "${running_repo_digests:-missing}" >&2
+        return 1
+        ;;
+    esac
+  done
+  return 0
+}
+
 image_ref_is_placeholder() {
   image_ref=${1:-}
   case "$image_ref" in
@@ -225,6 +429,10 @@ requires_edge_installer_catalog_verification() {
 }
 
 SELECTED_SERVICES=$(normalize_services "$REQUESTED_SERVICES")
+MANIFEST_SERVICES=$(read_manifest_value "$DEPLOY_IMAGE_MANIFEST_PATH" CLOUD_DEPLOY_SERVICES)
+NORMALIZED_MANIFEST_SERVICES=$(normalize_services "$MANIFEST_SERVICES")
+[ "$NORMALIZED_MANIFEST_SERVICES" = "$SELECTED_SERVICES" ] \
+  || fail_contract "requested services do not match the run-bound image manifest: requested=$SELECTED_SERVICES manifest=$NORMALIZED_MANIFEST_SERVICES"
 SELECTED_IMAGE_KEYS=""
 RUNTIME_SELECTED_SERVICES=""
 RUN_MIGRATION=false
@@ -251,36 +459,91 @@ DEPLOY_RELEASE_LOCK_FILE=$(resolve_managed_lock_file \
   "${DEPLOY_RELEASE_LOCK_FILE:-$CLOUD_RELEASE_LOCK_FILE_DEFAULT}" \
   "$DEPLOY_DIR/.cloud-release.lock")
 DEPLOY_RELEASE_LOCK_ACQUIRED=0
+RUNTIME_PROMOTED=0
+ROLLOUT_STARTED=0
+history_file=
+
+trap - EXIT HUP INT TERM
 
 cleanup_deploy_process() {
+  deploy_exit_status=$?
+  trap - EXIT HUP INT TERM
   cleanup_temp_release_env
-  if [ "$DEPLOY_RELEASE_LOCK_ACQUIRED" -eq 1 ]; then
+  if [ "$RUNTIME_PROMOTED" -eq 0 ] && [ -d "${DEPLOY_SUPPORT_BACKUP_DIR:-/missing}" ]; then
+    if restore_support_backup; then
+      if [ "$ROLLOUT_STARTED" -eq 1 ]; then
+        write_deploy_blocked_evidence blocked-partial-rollout-support-restored "$deploy_exit_status" restored
+      else
+        rm -rf "$DEPLOY_SUPPORT_BACKUP_DIR"
+      fi
+    else
+      write_deploy_blocked_evidence blocked-support-restore "$deploy_exit_status" failed
+      if lock_is_owned_by_workspace_invocation; then
+        printf '%s\n' blocked-support-restore > "${DEPLOY_RELEASE_LOCK_FILE}.d/phase"
+      fi
+      printf 'Cloud support restore failed; lock and durable backup are preserved for operator recovery.\n' >&2
+      exit 86
+    fi
+  elif [ "$RUNTIME_PROMOTED" -eq 1 ]; then
+    if [ "$deploy_exit_status" -ne 0 ] && [ -f "$CURRENT_RELEASE_FILE" ]; then
+      replace_env_value "$CURRENT_RELEASE_FILE" DEPLOY_CLEANUP_STATUS partial
+      replace_env_value "$CURRENT_RELEASE_FILE" DEPLOY_PHASE runtime-healthy-cleanup-partial
+      {
+        printf '\nCleanup interrupted or failed after runtime promotion: invocation=%s exit=%s\n' "$WORKSPACE_INVOCATION_ID" "$deploy_exit_status"
+      } >> "$CURRENT_RELEASE_SUMMARY_FILE"
+      if [ -n "$history_file" ] && [ -f "$history_file" ]; then
+        cp "$CURRENT_RELEASE_FILE" "$history_file"
+        cp "$CURRENT_RELEASE_SUMMARY_FILE" "${history_file%.env}.summary.md"
+      fi
+    fi
+    rm -rf "${DEPLOY_SUPPORT_BACKUP_DIR:-/missing-never}"
+  fi
+  if [ -n "${DEPLOY_SUPPORT_STAGING_DIR:-}" ]; then
+    rm -rf "$DEPLOY_SUPPORT_STAGING_DIR"
+  fi
+  if [ "$DEPLOY_RELEASE_LOCK_ACQUIRED" -eq 1 ] && lock_is_owned_by_workspace_invocation; then
     release_managed_lock "$DEPLOY_RELEASE_LOCK_FILE" || true
     DEPLOY_RELEASE_LOCK_ACQUIRED=0
   fi
+  exit "$deploy_exit_status"
 }
 
-acquire_managed_lock \
-  "$DEPLOY_RELEASE_LOCK_FILE" \
-  cloud-release \
-  "$RELEASE_TAG" \
-  preflight \
-  "$0"
-DEPLOY_RELEASE_LOCK_ACQUIRED=1
+handle_deploy_signal() {
+  signal_name=$1
+  signal_exit_code=$2
+  printf 'Cloud release interrupted by signal %s; releasing the deployment lock and exiting.\n' "$signal_name" >&2
+  exit "$signal_exit_code"
+}
+
+trap cleanup_deploy_process EXIT
+trap 'handle_deploy_signal HUP 129' HUP
+trap 'handle_deploy_signal INT 130' INT
+trap 'handle_deploy_signal TERM 143' TERM
+
+if [ "${DEPLOY_RELEASE_LOCK_PREACQUIRED:-0}" = 1 ]; then
+  DEPLOY_RELEASE_LOCK_ACQUIRED=1
+  lock_owner=$(managed_lock_read_field "${DEPLOY_RELEASE_LOCK_FILE}.d" pid)
+  lock_release=$(managed_lock_read_field "${DEPLOY_RELEASE_LOCK_FILE}.d" release)
+  lock_invocation=$(managed_lock_read_field "${DEPLOY_RELEASE_LOCK_FILE}.d" invocation-id)
+  lock_plan_digest=$(managed_lock_read_field "${DEPLOY_RELEASE_LOCK_FILE}.d" plan-digest)
+  [ "$lock_owner" = "$$" ] \
+    || fail_contract "pre-acquired release lock is not owned by the remote transaction process"
+  [ "$lock_release" = "$RELEASE_TAG" ] \
+    || fail_contract "pre-acquired release lock belongs to a different release: $lock_release"
+  [ "$lock_invocation" = "$WORKSPACE_INVOCATION_ID" ] \
+    || fail_contract "pre-acquired release lock belongs to a different invocation: $lock_invocation"
+  [ "$lock_plan_digest" = "$WORKSPACE_PLAN_DIGEST" ] \
+    || fail_contract "pre-acquired release lock belongs to a different plan"
+  DEPLOY_RELEASE_LOCK_ACQUIRED=1
+  printf 'Cloud release continues under the support-install transaction lock: invocation=%s\n' "$WORKSPACE_INVOCATION_ID"
+else
+  fail_contract "remote release requires the transaction lock acquired by the workspace support staging step"
+fi
 export DEPLOY_RELEASE_LOCK_FILE
 DEPLOY_RELEASE_LOCK_OWNER_PID=$$
 export DEPLOY_RELEASE_LOCK_OWNER_PID
-trap cleanup_deploy_process EXIT HUP INT TERM
 
 "$SCRIPT_DIR/pre-deploy-check.sh" "$RELEASE_TAG"
-update_managed_lock_phase "$DEPLOY_RELEASE_LOCK_FILE" backup
-"$SCRIPT_DIR/postgres-backup.sh"
-
-PRE_DEPLOY_BACKUP_FILE=$(read_state_path "$BACKUP_STATE_FILE" || true)
-if [ -z "$PRE_DEPLOY_BACKUP_FILE" ]; then
-  printf 'Could not resolve the latest successful backup marker: %s\n' "$BACKUP_STATE_FILE" >&2
-  exit 1
-fi
 
 if [ -n "$REQUESTED_SERVICES" ]; then
   if [ ! -f "$CURRENT_RELEASE_FILE" ]; then
@@ -292,8 +555,91 @@ if [ -n "$REQUESTED_SERVICES" ]; then
   hydrate_unselected_images_from_running_containers
 fi
 
-resolve_release_images_for_keys "$RELEASE_TAG" $SELECTED_IMAGE_KEYS
+load_selected_images_from_invocation_manifest
 ensure_target_images_not_latest
+
+current_release_matches_plan() {
+  [ -f "$CURRENT_RELEASE_FILE" ] || return 1
+  [ "$(read_manifest_value "$CURRENT_RELEASE_FILE" DEPLOY_RELEASE_ID)" = "$RELEASE_TAG" ] || return 1
+  [ "$(read_manifest_value "$CURRENT_RELEASE_FILE" DEPLOY_GIT_SHA)" = "$WORKSPACE_EXPECTED_SHA" ] || return 1
+  [ "$(read_manifest_value "$CURRENT_RELEASE_FILE" DEPLOY_PLAN_DIGEST)" = "$WORKSPACE_PLAN_DIGEST" ] || return 1
+  [ "$(read_manifest_value "$CURRENT_RELEASE_FILE" DEPLOY_SUPPORT_MANIFEST_SHA256)" = "${EXPECTED_CLOUD_SUPPORT_MANIFEST_SHA256:-}" ] || return 1
+  [ "$(read_manifest_value "$CURRENT_RELEASE_FILE" DEPLOY_IMAGE_CONTENT_SHA256)" = "$DEPLOY_IMAGE_CONTENT_DIGEST" ] || return 1
+  [ "$(read_manifest_value "$CURRENT_RELEASE_FILE" DEPLOY_SERVICES)" = "$SELECTED_SERVICES" ] || return 1
+
+  for current_key in $SELECTED_IMAGE_KEYS
+  do
+    eval "desired_image=\${$current_key}"
+    [ "$(read_manifest_value "$CURRENT_RELEASE_FILE" "$current_key")" = "$desired_image" ] || return 1
+  done
+  running_selected_images_match_digests || return 1
+  return 0
+}
+
+sync_current_release_history_after_cleanup() {
+  current_invocation=$(read_manifest_value "$CURRENT_RELEASE_FILE" DEPLOY_INVOCATION_ID)
+  for candidate_history in "$RELEASE_HISTORY_DIR"/*.env
+  do
+    [ -f "$candidate_history" ] || continue
+    if [ "$(read_manifest_value "$candidate_history" DEPLOY_INVOCATION_ID)" = "$current_invocation" ]; then
+      cp "$CURRENT_RELEASE_FILE" "$candidate_history"
+      if [ -f "$CURRENT_RELEASE_SUMMARY_FILE" ]; then
+        cp "$CURRENT_RELEASE_SUMMARY_FILE" "${candidate_history%.env}.summary.md"
+      fi
+    fi
+  done
+}
+
+if current_release_matches_plan; then
+  update_managed_lock_phase "$DEPLOY_RELEASE_LOCK_FILE" no-op-health-check
+  COMPOSE_ENV_FILE="$DEPLOY_DIR/.env" "$SCRIPT_DIR/post-deploy-check.sh"
+  RUNTIME_PROMOTED=1
+  current_cleanup_status=$(read_manifest_value "$CURRENT_RELEASE_FILE" DEPLOY_CLEANUP_STATUS)
+  if [ "$current_cleanup_status" != complete ]; then
+    update_managed_lock_phase "$DEPLOY_RELEASE_LOCK_FILE" cleanup-recovery
+    printf 'Current runtime already matches the approved SHA and plan; recovering cleanup only.\n'
+    if COMPOSE_ENV_FILE="$DEPLOY_DIR/.env" "$SCRIPT_DIR/post-release-cleanup.sh" --release-tag "$RELEASE_TAG"; then
+      replace_env_value "$CURRENT_RELEASE_FILE" DEPLOY_CLEANUP_STATUS complete
+      replace_env_value "$CURRENT_RELEASE_FILE" DEPLOY_PHASE complete
+      {
+        printf '\nCleanup-only recovery completed: invocation=%s recovered_by=%s\n' \
+          "$(read_manifest_value "$CURRENT_RELEASE_FILE" DEPLOY_INVOCATION_ID)" "$WORKSPACE_INVOCATION_ID"
+      } >> "$CURRENT_RELEASE_SUMMARY_FILE"
+      sync_current_release_history_after_cleanup
+    else
+      printf 'Cloud runtime remains healthy, but cleanup-only recovery failed. Do not rerun rollout.\n' >&2
+      exit 1
+    fi
+  else
+    printf 'Cloud release is already healthy for the same SHA and plan; rollout is a no-op.\n'
+  fi
+  no_op_summary="$RELEASE_HISTORY_DIR/$(date -u +%Y%m%dT%H%M%SZ)-noop-$(safe_release_file_name "$WORKSPACE_INVOCATION_ID").summary.md"
+  {
+    printf '### Cloud deploy no-op\n\n'
+    printf -- '- Release tag: `%s`\n' "$RELEASE_TAG"
+    printf -- '- Git SHA: `%s`\n' "$WORKSPACE_EXPECTED_SHA"
+    printf -- '- Invocation: `%s`\n' "$WORKSPACE_INVOCATION_ID"
+    printf -- '- Plan digest: `%s`\n' "$WORKSPACE_PLAN_DIGEST"
+    printf -- '- Result: `healthy-no-op`\n'
+  } > "$no_op_summary"
+  rm -rf "$DEPLOY_SUPPORT_BACKUP_DIR" "${DEPLOY_SUPPORT_STAGING_DIR:-/missing-never}"
+  if [ "$DEPLOY_RELEASE_LOCK_ACQUIRED" -eq 1 ] && lock_is_owned_by_workspace_invocation; then
+    release_managed_lock "$DEPLOY_RELEASE_LOCK_FILE"
+    DEPLOY_RELEASE_LOCK_ACQUIRED=0
+  fi
+  trap - EXIT HUP INT TERM
+  printf 'Cloud no-op history summary: %s\n' "$no_op_summary"
+  exit 0
+fi
+
+update_managed_lock_phase "$DEPLOY_RELEASE_LOCK_FILE" backup
+"$SCRIPT_DIR/postgres-backup.sh"
+
+PRE_DEPLOY_BACKUP_FILE=$(read_state_path "$BACKUP_STATE_FILE" || true)
+if [ -z "$PRE_DEPLOY_BACKUP_FILE" ]; then
+  printf 'Could not resolve the latest successful backup marker: %s\n' "$BACKUP_STATE_FILE" >&2
+  exit 1
+fi
 
 DEPLOY_RELEASE_ID="$RELEASE_TAG"
 DEPLOY_GIT_SHA_VALUE=${DEPLOY_GIT_SHA:-unknown}
@@ -307,7 +653,14 @@ write_release_manifest \
   "$DEPLOY_GIT_SHA_VALUE" \
   "$DEPLOY_TRIGGERED_BY_VALUE" \
   "$DEPLOYED_AT_UTC_VALUE" \
-  "$PRE_DEPLOY_BACKUP_FILE"
+  "$PRE_DEPLOY_BACKUP_FILE" \
+  "$WORKSPACE_INVOCATION_ID" \
+  "$WORKSPACE_EXPECTED_SHA" \
+  "$WORKSPACE_PLAN_DIGEST" \
+  "${EXPECTED_CLOUD_SUPPORT_MANIFEST_SHA256:-}" \
+  "$DEPLOY_IMAGE_MANIFEST_DIGEST" \
+  "$SELECTED_SERVICES" \
+  "$DEPLOY_IMAGE_CONTENT_DIGEST"
 
 TEMP_RELEASE_ENV_FILE=$(mktemp "$DEPLOY_DIR/.release-env.XXXXXX")
 cp "$DEPLOY_DIR/.env" "$TEMP_RELEASE_ENV_FILE"
@@ -316,7 +669,9 @@ export COMPOSE_ENV_FILE="$TEMP_RELEASE_ENV_FILE"
 load_dotenv
 
 compose pull $SELECTED_SERVICES
+verify_selected_image_digests
 update_managed_lock_phase "$DEPLOY_RELEASE_LOCK_FILE" rollout
+ROLLOUT_STARTED=1
 compose up -d postgres redis-cache rabbitmq seq >/dev/null
 if [ "$RUN_MIGRATION" = "true" ]; then
   compose run -T --rm iiot-migration
@@ -349,7 +704,10 @@ if [ -f "$CURRENT_RELEASE_FILE" ]; then
 fi
 
 cp "$STAGED_RELEASE_FILE" "$CURRENT_RELEASE_FILE"
+replace_env_value "$CURRENT_RELEASE_FILE" DEPLOY_PHASE runtime-healthy-cleanup-pending
 history_file=$(record_release_history "$CURRENT_RELEASE_FILE" "$DEPLOY_RELEASE_ID")
+RUNTIME_PROMOTED=1
+rm -rf "$DEPLOY_SUPPORT_BACKUP_DIR"
 write_release_summary \
   "$CURRENT_RELEASE_SUMMARY_FILE" \
   "$DEPLOY_RELEASE_ID" \
@@ -357,7 +715,11 @@ write_release_summary \
   "$DEPLOY_TRIGGERED_BY_VALUE" \
   "$DEPLOYED_AT_UTC_VALUE" \
   "$SELECTED_SERVICES" \
-  "$DEPLOY_RELEASE_NOTES_VALUE"
+  "$DEPLOY_RELEASE_NOTES_VALUE" \
+  "$WORKSPACE_INVOCATION_ID" \
+  "$WORKSPACE_PLAN_DIGEST" \
+  "${EXPECTED_CLOUD_SUPPORT_MANIFEST_SHA256:-}" \
+  "$DEPLOY_IMAGE_MANIFEST_DIGEST"
 
 cleanup_log=$(mktemp "$DEPLOY_DIR/post-release-cleanup.XXXXXX")
 cleanup_status_file=$(mktemp "$DEPLOY_DIR/post-release-cleanup-status.XXXXXX")
@@ -383,6 +745,14 @@ esac
 rm -f "$cleanup_log" "$cleanup_status_file"
 
 history_summary_file=${history_file%.env}.summary.md
+if [ "$cleanup_status" -eq 0 ]; then
+  replace_env_value "$CURRENT_RELEASE_FILE" DEPLOY_CLEANUP_STATUS complete
+  replace_env_value "$CURRENT_RELEASE_FILE" DEPLOY_PHASE complete
+else
+  replace_env_value "$CURRENT_RELEASE_FILE" DEPLOY_CLEANUP_STATUS partial
+  replace_env_value "$CURRENT_RELEASE_FILE" DEPLOY_PHASE runtime-healthy-cleanup-partial
+fi
+cp "$CURRENT_RELEASE_FILE" "$history_file"
 cp "$CURRENT_RELEASE_SUMMARY_FILE" "$history_summary_file"
 cleanup_temp_release_env
 unset COMPOSE_ENV_FILE
@@ -397,6 +767,9 @@ fi
 
 release_managed_lock "$DEPLOY_RELEASE_LOCK_FILE"
 DEPLOY_RELEASE_LOCK_ACQUIRED=0
+if [ -n "${DEPLOY_SUPPORT_STAGING_DIR:-}" ]; then
+  rm -rf "$DEPLOY_SUPPORT_STAGING_DIR"
+fi
 trap - EXIT HUP INT TERM
 
 printf 'Release deployed successfully: %s\n' "$DEPLOY_RELEASE_ID"

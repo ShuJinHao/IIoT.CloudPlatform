@@ -3,6 +3,14 @@ using System.Text.Json;
 
 namespace IIoT.Core.Production.Aggregates.ClientReleases;
 
+public enum RuntimeHeartbeatReportUpdateResult
+{
+    Applied,
+    Idempotent,
+    Stale,
+    Conflict
+}
+
 /// <summary>
 /// Edge 客户端运行态心跳快照，只表示 Shell/宿主进程运行状态，不表示版本安装状态或上传门控。
 /// </summary>
@@ -23,7 +31,8 @@ public sealed class EdgeDeviceRuntimeHeartbeat : BaseEntity<Guid>
         DateTime startedAtUtc,
         DateTime reportedAtUtc,
         IEnumerable<string>? localIpAddresses = null,
-        string? remoteIpAddress = null)
+        string? remoteIpAddress = null,
+        DateTime? receivedAtUtc = null)
     {
         if (deviceId == Guid.Empty)
         {
@@ -33,7 +42,8 @@ public sealed class EdgeDeviceRuntimeHeartbeat : BaseEntity<Guid>
         Id = Guid.NewGuid();
         DeviceId = deviceId;
         ClientCode = NormalizeRequired(clientCode, nameof(clientCode)).ToUpperInvariant();
-        CreatedAtUtc = DateTime.UtcNow;
+        var normalizedReceivedAtUtc = NormalizeUtc(receivedAtUtc ?? DateTime.UtcNow);
+        CreatedAtUtc = normalizedReceivedAtUtc;
         ReplaceReport(
             runtimeInstanceId,
             machineProfile,
@@ -43,7 +53,8 @@ public sealed class EdgeDeviceRuntimeHeartbeat : BaseEntity<Guid>
             startedAtUtc,
             reportedAtUtc,
             localIpAddresses,
-            remoteIpAddress);
+            remoteIpAddress,
+            normalizedReceivedAtUtc);
     }
 
     public Guid DeviceId { get; private set; }
@@ -74,7 +85,7 @@ public sealed class EdgeDeviceRuntimeHeartbeat : BaseEntity<Guid>
 
     public DateTime UpdatedAtUtc { get; private set; }
 
-    public void ReplaceReport(
+    public RuntimeHeartbeatReportUpdateResult ReplaceReport(
         string runtimeInstanceId,
         string? machineProfile,
         string hostVersion,
@@ -83,21 +94,56 @@ public sealed class EdgeDeviceRuntimeHeartbeat : BaseEntity<Guid>
         DateTime startedAtUtc,
         DateTime reportedAtUtc,
         IEnumerable<string>? localIpAddresses = null,
-        string? remoteIpAddress = null)
+        string? remoteIpAddress = null,
+        DateTime? receivedAtUtc = null)
     {
-        RuntimeInstanceId = NormalizeRequired(runtimeInstanceId, nameof(runtimeInstanceId));
-        MachineProfile = NormalizeOptional(machineProfile);
-        HostVersion = NormalizeRequired(hostVersion, nameof(hostVersion));
-        HostApiVersion = NormalizeRequired(hostApiVersion, nameof(hostApiVersion));
-        Status = NormalizeStatus(status);
-        StartedAtUtc = NormalizeUtc(startedAtUtc);
-        LastHeartbeatAtUtc = NormalizeUtc(reportedAtUtc);
+        var normalizedRuntimeInstanceId = NormalizeRequired(runtimeInstanceId, nameof(runtimeInstanceId));
+        var normalizedMachineProfile = NormalizeOptional(machineProfile);
+        var normalizedHostVersion = NormalizeRequired(hostVersion, nameof(hostVersion));
+        var normalizedHostApiVersion = NormalizeRequired(hostApiVersion, nameof(hostApiVersion));
+        var normalizedStatus = NormalizeStatus(status);
+        var normalizedStartedAtUtc = NormalizeUtc(startedAtUtc);
+        var normalizedReportedAtUtc = NormalizeUtc(reportedAtUtc);
+        var normalizedLocalIpAddressesJson = SerializeIpAddresses(localIpAddresses);
+        var normalizedRemoteIpAddress = NormalizeOptional(remoteIpAddress);
+
+        if (LastHeartbeatAtUtc != default)
+        {
+            if (normalizedReportedAtUtc < LastHeartbeatAtUtc)
+            {
+                return RuntimeHeartbeatReportUpdateResult.Stale;
+            }
+
+            if (normalizedReportedAtUtc == LastHeartbeatAtUtc)
+            {
+                return MatchesCurrentReport(
+                    normalizedRuntimeInstanceId,
+                    normalizedMachineProfile,
+                    normalizedHostVersion,
+                    normalizedHostApiVersion,
+                    normalizedStatus,
+                    normalizedStartedAtUtc,
+                    normalizedLocalIpAddressesJson,
+                    normalizedRemoteIpAddress)
+                    ? RuntimeHeartbeatReportUpdateResult.Idempotent
+                    : RuntimeHeartbeatReportUpdateResult.Conflict;
+            }
+        }
+
+        RuntimeInstanceId = normalizedRuntimeInstanceId;
+        MachineProfile = normalizedMachineProfile;
+        HostVersion = normalizedHostVersion;
+        HostApiVersion = normalizedHostApiVersion;
+        Status = normalizedStatus;
+        StartedAtUtc = normalizedStartedAtUtc;
+        LastHeartbeatAtUtc = normalizedReportedAtUtc;
         LastStoppedAtUtc = Status is "Stopping" or "Stopped"
             ? LastHeartbeatAtUtc
             : LastStoppedAtUtc;
-        UpdatedAtUtc = DateTime.UtcNow;
-        LocalIpAddressesJson = SerializeIpAddresses(localIpAddresses);
-        RemoteIpAddress = NormalizeOptional(remoteIpAddress);
+        UpdatedAtUtc = NormalizeUtc(receivedAtUtc ?? DateTime.UtcNow);
+        LocalIpAddressesJson = normalizedLocalIpAddressesJson;
+        RemoteIpAddress = normalizedRemoteIpAddress;
+        return RuntimeHeartbeatReportUpdateResult.Applied;
     }
 
     public IReadOnlyList<string> GetLocalIpAddresses()
@@ -115,6 +161,26 @@ public sealed class EdgeDeviceRuntimeHeartbeat : BaseEntity<Guid>
         {
             return [];
         }
+    }
+
+    private bool MatchesCurrentReport(
+        string runtimeInstanceId,
+        string? machineProfile,
+        string hostVersion,
+        string hostApiVersion,
+        string status,
+        DateTime startedAtUtc,
+        string localIpAddressesJson,
+        string? remoteIpAddress)
+    {
+        return string.Equals(RuntimeInstanceId, runtimeInstanceId, StringComparison.Ordinal)
+               && string.Equals(MachineProfile, machineProfile, StringComparison.Ordinal)
+               && string.Equals(HostVersion, hostVersion, StringComparison.Ordinal)
+               && string.Equals(HostApiVersion, hostApiVersion, StringComparison.Ordinal)
+               && string.Equals(Status, status, StringComparison.Ordinal)
+               && StartedAtUtc == startedAtUtc
+               && string.Equals(LocalIpAddressesJson, localIpAddressesJson, StringComparison.Ordinal)
+               && string.Equals(RemoteIpAddress, remoteIpAddress, StringComparison.Ordinal);
     }
 
     private static DateTime NormalizeUtc(DateTime value)
@@ -155,6 +221,7 @@ public sealed class EdgeDeviceRuntimeHeartbeat : BaseEntity<Guid>
             .Select(value => value!)
             .Where(value => value.Length <= 128)
             .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
             .Take(16)
             .ToList();
 

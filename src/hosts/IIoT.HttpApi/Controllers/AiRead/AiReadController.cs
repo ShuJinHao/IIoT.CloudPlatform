@@ -15,20 +15,41 @@ public sealed class AiReadController : ApiControllerBase
 {
     [HttpGet("devices")]
     public async Task<IActionResult> GetDevices(
+        [FromQuery] Guid? deviceId = null,
+        [FromQuery] string? deviceCode = null,
+        [FromQuery] Guid? processId = null,
         [FromQuery] string? keyword = null,
         [FromQuery] int? maxRows = null,
         CancellationToken cancellationToken = default)
     {
-        return ReturnResult(await Sender.Send(new GetAiReadDevicesQuery(keyword, maxRows), cancellationToken));
+        var unsupported = GetKnownUnsupportedQueryParameters(
+            "status",
+            "lineName",
+            "processName",
+            "updatedAt");
+
+        return ReturnResult(await Sender.Send(
+            new GetAiReadDevicesQuery(
+                deviceId,
+                deviceCode,
+                processId,
+                keyword,
+                maxRows,
+                unsupported,
+                DeviceCodeSupplied: Request.Query.ContainsKey("deviceCode")),
+            cancellationToken));
     }
 
     [HttpGet("processes")]
     public async Task<IActionResult> GetProcesses(
+        [FromQuery] Guid? processId = null,
         [FromQuery] string? keyword = null,
         [FromQuery] int? maxRows = null,
         CancellationToken cancellationToken = default)
     {
-        return ReturnResult(await Sender.Send(new GetAiReadProcessesQuery(keyword, maxRows), cancellationToken));
+        return ReturnResult(await Sender.Send(
+            new GetAiReadProcessesQuery(processId, keyword, maxRows),
+            cancellationToken));
     }
 
     [HttpGet("client-releases")]
@@ -48,12 +69,30 @@ public sealed class AiReadController : ApiControllerBase
     [HttpGet("device-client-states")]
     public async Task<IActionResult> GetDeviceClientStates(
         [FromQuery] Guid? deviceId = null,
+        [FromQuery] string? deviceCode = null,
+        [FromQuery] Guid? processId = null,
         [FromQuery] string? keyword = null,
         [FromQuery] int? maxRows = null,
         CancellationToken cancellationToken = default)
     {
+        var unsupported = GetKnownUnsupportedQueryParameters(
+            "softwareStatus",
+            "runtimeStatus",
+            "status",
+            "lineName",
+            "processName",
+            "updatedAt",
+            "updatedAtUtc");
+
         return ReturnResult(await Sender.Send(
-            new GetAiReadDeviceClientStatesQuery(deviceId, keyword, maxRows),
+            new GetAiReadDeviceClientStatesQuery(
+                deviceId,
+                deviceCode,
+                processId,
+                keyword,
+                maxRows,
+                unsupported,
+                DeviceCodeSupplied: Request.Query.ContainsKey("deviceCode")),
             cancellationToken));
     }
 
@@ -129,5 +168,12 @@ public sealed class AiReadController : ApiControllerBase
                 fieldMode,
                 maxRows),
             cancellationToken));
+    }
+
+    private IReadOnlyList<string> GetKnownUnsupportedQueryParameters(params string[] parameterNames)
+    {
+        return parameterNames
+            .Where(Request.Query.ContainsKey)
+            .ToArray();
     }
 }

@@ -254,15 +254,19 @@ internal sealed class StubProcessReadQueryService : IProcessReadQueryService
     public bool HasRecipes { get; set; }
 
     public Task<(IReadOnlyList<ProcessReadItem> Items, int TotalCount)> GetPagedAsync(
+        Guid? processId,
         string? keyword,
         int skip,
         int take,
         CancellationToken cancellationToken = default)
     {
         var normalizedKeyword = keyword?.Trim();
+        var processQuery = processId.HasValue
+            ? PagedProcesses.Where(process => process.Id == processId.Value).ToList()
+            : PagedProcesses;
         var query = string.IsNullOrWhiteSpace(normalizedKeyword)
-            ? PagedProcesses
-            : PagedProcesses
+            ? processQuery
+            : processQuery
                 .Where(process =>
                     process.ProcessCode.Contains(normalizedKeyword, StringComparison.OrdinalIgnoreCase)
                     || process.ProcessName.Contains(normalizedKeyword, StringComparison.OrdinalIgnoreCase))
@@ -301,6 +305,39 @@ internal sealed class StubProcessReadQueryService : IProcessReadQueryService
     public Task<bool> HasRecipesAsync(Guid processId, CancellationToken cancellationToken = default)
     {
         return Task.FromResult(HasRecipes);
+    }
+}
+
+internal sealed class StubAiReadDeviceQueryService : IAiReadDeviceQueryService
+{
+    public List<AiReadDeviceQueryItem> Devices { get; } = [];
+
+    public AiReadDeviceQueryRequest? LastRequest { get; private set; }
+
+    public Task<(IReadOnlyList<AiReadDeviceQueryItem> Items, int TotalCount)> GetPagedAsync(
+        AiReadDeviceQueryRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        LastRequest = request;
+        var normalizedDeviceCode = request.DeviceCode?.Trim().ToUpperInvariant();
+        var keyword = request.Keyword?.Trim();
+        var normalizedKeyword = keyword?.ToUpperInvariant();
+        var query = Devices.Where(device =>
+            (request.AllowedDeviceIds is null || request.AllowedDeviceIds.Contains(device.Id))
+            && (!request.DeviceId.HasValue || device.Id == request.DeviceId.Value)
+            && (string.IsNullOrWhiteSpace(normalizedDeviceCode) || device.DeviceCode == normalizedDeviceCode)
+            && (!request.ProcessId.HasValue || device.ProcessId == request.ProcessId.Value)
+            && (string.IsNullOrWhiteSpace(keyword)
+                || device.DeviceName.Contains(keyword, StringComparison.Ordinal)
+                || device.DeviceCode.Contains(normalizedKeyword!, StringComparison.Ordinal)));
+        var filtered = query
+            .OrderBy(device => device.DeviceName, StringComparer.Ordinal)
+            .ThenBy(device => device.Id)
+            .ToList();
+
+        return Task.FromResult((
+            (IReadOnlyList<AiReadDeviceQueryItem>)filtered.Skip(request.Skip).Take(request.Take).ToList(),
+            filtered.Count));
     }
 }
 
@@ -1015,6 +1052,11 @@ internal sealed class TestCurrentUser : ICurrentUser
 internal sealed class TestAiReadScopeAccessor : IAiReadScopeAccessor
 {
     public string Caller { get; init; } = "ai-read-test";
+
+    public AiReadScopeKind ScopeKind => ScopeKindOverride
+        ?? (DelegatedDeviceIds is null ? AiReadScopeKind.Global : AiReadScopeKind.Delegated);
+
+    public AiReadScopeKind? ScopeKindOverride { get; init; }
 
     public Guid? DelegatedUserId { get; init; }
 
