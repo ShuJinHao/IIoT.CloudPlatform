@@ -239,8 +239,14 @@ run_with_timeout() {
       printf 'Timed out after %s seconds: %s\n' "$seconds" "$label" >&2
       : > "$marker"
       signal_process_tree TERM "$cmd_pid"
-      sleep 5
-      signal_process_tree KILL "$cmd_pid"
+      grace_attempt=0
+      while kill -0 "$cmd_pid" 2>/dev/null && [ "$grace_attempt" -lt 50 ]; do
+        sleep 0.1
+        grace_attempt=$((grace_attempt + 1))
+      done
+      if kill -0 "$cmd_pid" 2>/dev/null; then
+        signal_process_tree KILL "$cmd_pid"
+      fi
     fi
   ) &
   timer_pid=$!

@@ -119,8 +119,10 @@ public sealed class DeploymentGuardTests
             source.Should().Contain("wait \"$sleep_pid\"");
             source.Should().Contain("signal_process_tree TERM");
             source.Should().Contain("signal_process_tree KILL");
+            source.Should().Contain("grace_attempt");
             source.Should().NotContain("kill -TERM \"$cmd_pid\"");
             source.Should().NotContain("kill -KILL \"$cmd_pid\"");
+            source.Should().NotContain("sleep 5");
         }
 
         var localRelease = File.ReadAllText(FindRepoFile("deploy", "scripts", "local-release.sh"));
