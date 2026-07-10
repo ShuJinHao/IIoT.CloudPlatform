@@ -606,8 +606,17 @@ for argument in "${SSH_OPTIONS[@]}" "$SSH_TARGET" "$REMOTE_COMMAND"; do
 done
 printf '\n'
 
-if ! run_with_timeout "$SSH_TIMEOUT_SECONDS" "ssh Cloud deploy-release" \
-  ssh "${SSH_OPTIONS[@]}" "$SSH_TARGET" "$REMOTE_COMMAND"; then
+set +e
+run_with_timeout "$SSH_TIMEOUT_SECONDS" "ssh Cloud deploy-release" \
+  ssh "${SSH_OPTIONS[@]}" "$SSH_TARGET" "$REMOTE_COMMAND"
+deploy_status=$?
+set -e
+if [ "$deploy_status" -ne 0 ]; then
+  if [ "$deploy_status" -eq 124 ]; then
+    printf 'Cloud SSH deploy timed out after %s seconds.\n' "$SSH_TIMEOUT_SECONDS" >&2
+  else
+    printf 'Cloud SSH deploy failed with exit code %s.\n' "$deploy_status" >&2
+  fi
   print_deploy_diagnostics
-  exit 124
+  exit "$deploy_status"
 fi

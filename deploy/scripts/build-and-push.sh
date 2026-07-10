@@ -325,7 +325,8 @@ build_and_push_service() {
   image="$IMAGE_PREFIX/$image_name:$TAG"
 
   printf 'Building Cloud image: service=%s image=%s\n' "$service" "$image"
-  if ! run_with_timeout "$BUILD_TIMEOUT_SECONDS" "build/push $service" \
+  set +e
+  run_with_timeout "$BUILD_TIMEOUT_SECONDS" "build/push $service" \
     docker buildx build \
       --platform "$PLATFORM" \
       --push \
@@ -336,9 +337,17 @@ build_and_push_service() {
       --build-arg "NODE_BASE_IMAGE=$NODE_BASE_IMAGE" \
       --build-arg "NGINX_BASE_IMAGE=$NGINX_BASE_IMAGE" \
       --tag "$image" \
-      "$REPO_ROOT"; then
+      "$REPO_ROOT"
+  local build_status=$?
+  set -e
+  if [ "$build_status" -ne 0 ]; then
+    if [ "$build_status" -eq 124 ]; then
+      printf 'Cloud image build timed out after %s seconds: service=%s\n' "$BUILD_TIMEOUT_SECONDS" "$service" >&2
+    else
+      printf 'Cloud image build failed with exit code %s: service=%s\n' "$build_status" "$service" >&2
+    fi
     print_diagnostics "$service" "$image_name"
-    exit 124
+    exit "$build_status"
   fi
 }
 
