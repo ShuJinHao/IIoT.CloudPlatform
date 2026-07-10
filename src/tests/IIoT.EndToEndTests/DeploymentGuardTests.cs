@@ -132,6 +132,23 @@ public sealed class DeploymentGuardTests
         buildAndPush.Should().Contain("exit \"$build_status\"");
     }
 
+    [Fact]
+    public void CloudLocalRelease_ShouldBuildFromFixedCommitAndUsePerRunArtifacts()
+    {
+        var localRelease = File.ReadAllText(FindRepoFile("deploy", "scripts", "local-release.sh"));
+        var buildAndPush = File.ReadAllText(FindRepoFile("deploy", "scripts", "build-and-push.sh"));
+
+        localRelease.Should().Contain("git -C \"$REPO_ROOT\" worktree add --quiet --detach");
+        localRelease.Should().Contain("CLOUD_RELEASE_SNAPSHOT_ACTIVE=1");
+        localRelease.Should().Contain("CLOUD_RELEASE_SOURCE_SHA=\"$release_sha\"");
+        localRelease.Should().Contain("Cloud release source frozen");
+        localRelease.Should().Contain("artifacts/deploy/runs/$run_id");
+        localRelease.Should().Contain("DEPLOY_ARTIFACT_DIR=\"$artifact_dir\"");
+        localRelease.Should().Contain("SERVICES_FILE=\"${DEPLOY_ARTIFACT_DIR:-$REPO_ROOT/artifacts/deploy}/cloud-built-services.txt\"");
+        localRelease.Should().Contain("handle_release_snapshot_signal TERM 143");
+        buildAndPush.Should().Contain("${DEPLOY_ARTIFACT_DIR:-$REPO_ROOT/artifacts/deploy}");
+    }
+
     private static string FindRepoFile(params string[] relativeSegments)
     {
         var current = new DirectoryInfo(AppContext.BaseDirectory);

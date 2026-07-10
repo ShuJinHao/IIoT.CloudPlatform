@@ -362,7 +362,7 @@ build_and_push_service() {
 emit_outputs() {
   local services="$1"
   local services_csv="$2"
-  local artifact_dir="$REPO_ROOT/artifacts/deploy"
+  local artifact_dir="${DEPLOY_ARTIFACT_DIR:-$REPO_ROOT/artifacts/deploy}"
   local services_file="$artifact_dir/cloud-built-services.txt"
   local images_file="$artifact_dir/cloud-images.env"
   mkdir -p "$artifact_dir"

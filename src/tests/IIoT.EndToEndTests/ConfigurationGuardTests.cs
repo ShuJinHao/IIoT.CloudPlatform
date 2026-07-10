@@ -1222,7 +1222,7 @@ public sealed class ConfigurationGuardTests
         buildAndPushSource.Should().Contain("HARBOR_PROJECT must be a single Harbor project segment");
         buildAndPushSource.Should().Contain("BUILD_TIMEOUT_SECONDS=\"${BUILD_TIMEOUT_SECONDS:-900}\"");
         buildAndPushSource.Should().Contain("HARBOR_TIMEOUT_SECONDS=\"${HARBOR_TIMEOUT_SECONDS:-120}\"");
-        buildAndPushSource.Should().Contain("artifact_dir=\"$REPO_ROOT/artifacts/deploy\"");
+        buildAndPushSource.Should().Contain("artifact_dir=\"${DEPLOY_ARTIFACT_DIR:-$REPO_ROOT/artifacts/deploy}\"");
         buildAndPushSource.Should().Contain("cloud-built-services.txt");
         buildAndPushSource.Should().Contain("IIOT_HTTPAPI_IMAGE");
         localReleaseSource.Should().Contain("DEPLOY_SSH_TARGET");

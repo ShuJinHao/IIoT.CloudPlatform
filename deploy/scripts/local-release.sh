@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$DEPLOY_DIR/.." && pwd)"
+ORIGINAL_ARGS=("$@")
 
 REQUESTED_SERVICES=""
 REQUESTED_ALL=false
@@ -618,6 +619,98 @@ require_pushed_clean_head() {
   fi
 }
 
+SNAPSHOT_PARENT=""
+SNAPSHOT_REPO=""
+SNAPSHOT_CHILD_PID=""
+
+cleanup_release_snapshot() {
+  if [ -n "$SNAPSHOT_REPO" ]; then
+    git -C "$REPO_ROOT" worktree remove --force "$SNAPSHOT_REPO" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$SNAPSHOT_PARENT" ]; then
+    rm -rf "$SNAPSHOT_PARENT"
+  fi
+  SNAPSHOT_REPO=""
+  SNAPSHOT_PARENT=""
+}
+
+handle_release_snapshot_signal() {
+  local signal_name="$1"
+  local signal_exit_code="$2"
+  trap - EXIT HUP INT TERM
+  printf 'Cloud fixed-commit release interrupted by signal %s; stopping the snapshot process tree.\n' "$signal_name" >&2
+  if [ -n "$SNAPSHOT_CHILD_PID" ] && kill -0 "$SNAPSHOT_CHILD_PID" 2>/dev/null; then
+    signal_process_tree TERM "$SNAPSHOT_CHILD_PID"
+    wait "$SNAPSHOT_CHILD_PID" 2>/dev/null || true
+  fi
+  cleanup_release_snapshot
+  exit "$signal_exit_code"
+}
+
+run_from_fixed_commit_snapshot() {
+  local release_sha
+  local run_id
+  local artifact_dir
+  local snapshot_status
+
+  release_sha="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+  run_id="$(date -u +%Y%m%dT%H%M%SZ)-${release_sha:0:12}-$$"
+  artifact_dir="${DEPLOY_ARTIFACT_DIR:-$REPO_ROOT/artifacts/deploy/runs/$run_id}"
+  case "$artifact_dir" in
+    /*) ;;
+    *) artifact_dir="$REPO_ROOT/$artifact_dir" ;;
+  esac
+  mkdir -p "$artifact_dir"
+
+  SNAPSHOT_PARENT="$(mktemp -d "${TMPDIR:-/tmp}/iiot-cloud-release.XXXXXX")"
+  SNAPSHOT_REPO="$SNAPSHOT_PARENT/repo"
+  trap cleanup_release_snapshot EXIT
+  trap 'handle_release_snapshot_signal HUP 129' HUP
+  trap 'handle_release_snapshot_signal INT 130' INT
+  trap 'handle_release_snapshot_signal TERM 143' TERM
+
+  if ! git -C "$REPO_ROOT" worktree add --quiet --detach "$SNAPSHOT_REPO" "$release_sha"; then
+    printf 'Could not create the fixed-commit Cloud release worktree for %s.\n' "$release_sha" >&2
+    trap - EXIT HUP INT TERM
+    cleanup_release_snapshot
+    return 70
+  fi
+
+  printf 'Cloud release source frozen: sha=%s worktree=%s artifacts=%s\n' \
+    "$release_sha" "$SNAPSHOT_REPO" "$artifact_dir"
+  CLOUD_RELEASE_SNAPSHOT_ACTIVE=1 \
+  CLOUD_RELEASE_SOURCE_SHA="$release_sha" \
+  DEPLOY_ARTIFACT_DIR="$artifact_dir" \
+    bash "$SNAPSHOT_REPO/deploy/scripts/local-release.sh" "${ORIGINAL_ARGS[@]}" &
+  SNAPSHOT_CHILD_PID=$!
+  if wait "$SNAPSHOT_CHILD_PID"; then
+    snapshot_status=0
+  else
+    snapshot_status=$?
+  fi
+  SNAPSHOT_CHILD_PID=""
+
+  trap - EXIT HUP INT TERM
+  cleanup_release_snapshot
+  return "$snapshot_status"
+}
+
+require_pushed_clean_head
+if [ "$DRY_RUN" != true ] && [ "${CLOUD_RELEASE_SNAPSHOT_ACTIVE:-0}" != 1 ]; then
+  if run_from_fixed_commit_snapshot; then
+    exit 0
+  else
+    exit $?
+  fi
+fi
+
+if [ "${CLOUD_RELEASE_SNAPSHOT_ACTIVE:-0}" = 1 ]; then
+  CURRENT_SNAPSHOT_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+  if [ -z "${CLOUD_RELEASE_SOURCE_SHA:-}" ] || [ "$CURRENT_SNAPSHOT_SHA" != "$CLOUD_RELEASE_SOURCE_SHA" ]; then
+    fail "Cloud release snapshot SHA mismatch: expected=${CLOUD_RELEASE_SOURCE_SHA:-missing} actual=$CURRENT_SNAPSHOT_SHA"
+  fi
+fi
+
 TAG="sha-$(git -C "$REPO_ROOT" rev-parse HEAD)"
 BUILD_ARGS=()
 if [ "$REQUESTED_ALL" = true ]; then
@@ -636,7 +729,7 @@ sync_remote_deploy_files
 check_remote_release_locks
 "$SCRIPT_DIR/build-and-push.sh" "${BUILD_ARGS[@]}"
 
-SERVICES_FILE="$REPO_ROOT/artifacts/deploy/cloud-built-services.txt"
+SERVICES_FILE="${DEPLOY_ARTIFACT_DIR:-$REPO_ROOT/artifacts/deploy}/cloud-built-services.txt"
 if [ ! -f "$SERVICES_FILE" ]; then
   fail "Missing built services file: $SERVICES_FILE"
 fi

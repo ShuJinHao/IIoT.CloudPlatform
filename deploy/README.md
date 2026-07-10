@@ -331,9 +331,9 @@ sudo find /data/iiot-platform/cloud/deploy/releases -type f -exec chmod 600 {} +
 
 1. 合并或推送到 `main`，保证 GitHub 有本次源码留痕。
 2. `cloud-ci` 默认只跑快速验证：restore/build、ServiceLayer、ConfigurationGuard、部署脚本语法检查、前端 build、compose config；完整 EndToEnd 只在手动 `workflow_dispatch` 勾选时运行。
-3. 在工作区根运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services <services>`；顶层入口会调度 `deploy/scripts/local-release.sh`，并校验工作区干净、HEAD 已推送到 GitHub、Docker/buildx/Harbor 可用。服务包含 `web` 或使用 `-All` 时，会从 `deploy/profiles/current-production.json` 读取当前 challenge URL。
+3. 在工作区根运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud -Services <services>`；顶层入口会调度 `deploy/scripts/local-release.sh`，并校验工作区干净、HEAD 已推送到 GitHub、Docker/buildx/Harbor 可用。正式发布随后为该 HEAD 创建临时 detached worktree，support files 和镜像都只从这个固定提交读取；主工作区之后继续编辑也不会混入旧 SHA。服务包含 `web` 或使用 `-All` 时，会从 `deploy/profiles/current-production.json` 读取当前 challenge URL。
 4. `local-release.sh` 先确认远端 support 目录可写且没有活跃 release/cleanup 锁，再只打包白名单 support files；文件先进入远端 staging，SHA-256、shell 语法和 compose config 全部通过后逐文件原子替换并持久化 manifest。`.env`、`certs/`、`releases/`、`backups/` 明确排除。
-5. support 和锁门禁通过后，本机 `build-and-push.sh` 按服务构建并推送 `sha-<git-sha>` 镜像到 Harbor，输出 `Deploy services input` 和 `artifacts/deploy/cloud-built-services.txt`。
+5. support 和锁门禁通过后，本机 `build-and-push.sh` 按服务构建并推送 `sha-<git-sha>` 镜像到 Harbor；每次正式发布把 `Deploy services input`、`cloud-built-services.txt` 和镜像 manifest 写入独立的 `artifacts/deploy/runs/<run-id>/`，不得让另一个 AI 的 dry-run 或发布覆盖本次服务清单。
 6. 本机脚本通过 BatchMode SSH 在服务器 `/data/iiot-platform/cloud/deploy` 执行 `DEPLOY_GIT_SHA=<sha> DEPLOY_TRIGGERED_BY=local ./scripts/deploy-release.sh sha-<sha> --services <services>`。
 7. 服务器端 `deploy-release.sh` 持有全局 Cloud release lock，执行 pre-check、PostgreSQL backup、镜像 pull、容器启动、健康检查、发布后清理和 release history；cleanup 输出必须实时回传。
 
