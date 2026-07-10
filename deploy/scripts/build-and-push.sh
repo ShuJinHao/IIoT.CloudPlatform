@@ -182,6 +182,22 @@ Context:
 EOF
 }
 
+child_process_ids() {
+  local parent_pid="$1"
+  ps -axo pid=,ppid= | awk -v parent_pid="$parent_pid" '$2 == parent_pid { print $1 }'
+}
+
+signal_process_tree() {
+  local signal_name="$1"
+  local root_pid="$2"
+  local child_pid
+
+  for child_pid in $(child_process_ids "$root_pid"); do
+    signal_process_tree "$signal_name" "$child_pid"
+  done
+  kill "-$signal_name" "$root_pid" 2>/dev/null || true
+}
+
 run_with_timeout() {
   local seconds="$1"
   local label="$2"
@@ -206,13 +222,25 @@ run_with_timeout() {
   "$@" &
   cmd_pid=$!
   (
-    sleep "$seconds"
+    local sleep_pid=""
+    stop_watchdog() {
+      if [ -n "$sleep_pid" ]; then
+        kill "$sleep_pid" 2>/dev/null || true
+        wait "$sleep_pid" 2>/dev/null || true
+      fi
+      exit 0
+    }
+    trap stop_watchdog HUP INT TERM
+
+    sleep "$seconds" &
+    sleep_pid=$!
+    wait "$sleep_pid" || exit 0
     if kill -0 "$cmd_pid" 2>/dev/null; then
       printf 'Timed out after %s seconds: %s\n' "$seconds" "$label" >&2
       : > "$marker"
-      kill -TERM "$cmd_pid" 2>/dev/null || true
+      signal_process_tree TERM "$cmd_pid"
       sleep 5
-      kill -KILL "$cmd_pid" 2>/dev/null || true
+      signal_process_tree KILL "$cmd_pid"
     fi
   ) &
   timer_pid=$!
