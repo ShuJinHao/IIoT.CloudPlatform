@@ -4,17 +4,27 @@ run-name: Cloud routine request ${{ inputs.invocation_id }}
 on:
   workflow_dispatch:
     inputs:
+      operation:
+        description: Inspect current production state or deliver a deployment request
+        required: true
+        default: deploy
+        type: choice
+        options:
+          - deploy
+          - inspect
       invocation_id:
         description: Digest-bound routine invocation id
         required: true
         type: string
       request_base64:
         description: Base64 encoded non-secret routine request.env
-        required: true
+        required: false
+        default: ''
         type: string
       request_sha256:
         description: SHA-256 of the decoded request.env bytes
-        required: true
+        required: false
+        default: ''
         type: string
       confirm:
         description: Type ROUTINE_CLOUD_REQUEST
@@ -34,7 +44,36 @@ jobs:
       - name: Checkout pinned runner source
         uses: actions/checkout@v4
 
+      - name: Export allowlisted current production state
+        if: inputs.operation == 'inspect'
+        shell: bash
+        env:
+          DEPLOY_TARGET_DIR: ${{ secrets.DEPLOY_TARGET_DIR }}
+          INVOCATION_ID: ${{ inputs.invocation_id }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          [ "$CONFIRM" = "ROUTINE_CLOUD_REQUEST" ] || { echo "invalid Cloud routine confirmation" >&2; exit 64; }
+          [[ "$INVOCATION_ID" =~ ^[A-Za-z0-9._-]{1,96}$ ]] || { echo "invalid invocation id" >&2; exit 64; }
+          [ "$(id -un)" = "github-runner" ] && [ "$(id -u)" -ne 0 ] || { echo "inspection must run as github-runner non-root" >&2; exit 77; }
+          state="$DEPLOY_TARGET_DIR/releases/routine-current.env"
+          [ -r "$state" ] || { echo "Cloud current production state is unavailable" >&2; exit 66; }
+          output="$RUNNER_TEMP/cloud-current-state.env"
+          awk -F= '$1 ~ /^(RUNNER_PROTOCOL|TARGET|INVOCATION_ID|GIT_SHA|RELEASE_TAG|SERVICES|REQUEST_DIGEST|STATUS|FINISHED_AT_UTC)$/ { print }' "$state" > "$output"
+          grep -Eq '^GIT_SHA=[0-9a-f]{40}$' "$output" || { echo "Cloud current state has no valid Git SHA" >&2; exit 65; }
+          grep -Fx 'STATUS=healthy' "$output" >/dev/null || { echo "Cloud current state is not healthy" >&2; exit 65; }
+
+      - name: Upload current production state
+        if: inputs.operation == 'inspect'
+        uses: actions/upload-artifact@v4
+        with:
+          name: routine-state-${{ inputs.invocation_id }}
+          path: ${{ runner.temp }}/cloud-current-state.env
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Deliver immutable request to stable runner
+        if: inputs.operation == 'deploy'
         shell: bash
         env:
           DEPLOY_TARGET_DIR: ${{ secrets.DEPLOY_TARGET_DIR }}

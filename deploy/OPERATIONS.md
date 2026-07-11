@@ -2,7 +2,7 @@
 
 三项目上传部署统一入口见 [上传部署总览](../../docs/上传部署总览.md)。
 
-Cloud 日常应用发布使用工作区 `pwsh ./deploy/Deploy.ps1 -Target Cloud ...`。稳定 Runner 一次安装后不会在应用发布中被替换；日常事务只做必要数据库备份、选中镜像 pull、`--no-deps` 应用更新、健康检查和失败回滚。本文后续旧 `current-release`、support transaction 和 cleanup 说明继续用于基础设施维护与灾备诊断。
+Cloud 日常应用发布使用工作区 `pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud`，自动 push Git、读取生产 SHA 并只选择受影响镜像；`Deploy.ps1 -Target Cloud -Services ...` 是其内部执行器与恢复入口。稳定 Runner 一次安装后不会在应用发布中被替换；日常事务只做必要数据库备份、选中镜像 pull、`--no-deps` 应用更新、健康检查和失败回滚。本文后续旧 `current-release`、support transaction 和 cleanup 说明继续用于基础设施维护与灾备诊断。
 
 > Current status (2026-07-10): the workspace contract, fresh remote-tip/expected-SHA binding, per-invocation manifests, build-before-support ordering, parent-owned transaction lock, promotion-proof cleanup-only recovery, bounded installer/release process groups, read-only local lock precheck, secret-free dotenv categories, bounded decimal inputs, a strict shared operator-config lock, operator `.env` / release-image state separation, atomic release-state replacement, OCI/config digest verification, healthy no-op, and durable old-transaction evidence passed 33/33 isolated fake behavior tests. `DeploymentGuardTests` passed 20/20 and the `~Deploy` gate passed 39/39. No network, Harbor, SSH, or real production deploy/history/cleanup/health closure ran in this round; this guide is a target contract, not production-acceptance evidence.
 

@@ -75,8 +75,7 @@ docker compose ps
 Edge 安装素材不在 CloudPlatform 仓库生成。当前有两个有效发布入口：
 
 - 正式 GitHub 打包：`IIoT.EdgeClient` 的 `edge-pack-modules.yml` 只在 `workflow_dispatch` 或 `edge-v*` / `v*` tag 上完整构建和发布，渠道固定为 `stable`。
-- 日常宿主快发：操作者从工作区根运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target EdgeHost -ReleaseNotesPath <更新说明.md>`；顶层入口调度 EdgeClient 本机脚本完成编译、Velopack、installer artifact 和 Cloud Human API 上传，渠道固定为 `stable`。这是本机运维快发路径，不是 GitHub CI/CD job；生产 stable 不允许 `rsync/scp`。
-- 日常插件快发：只改工序插件时运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target EdgePlugin -ModuleId <真实ModuleId> -ReleaseNotesPath <更新说明.md>`，只上传独立插件 zip 并登记插件 release，不生成宿主版本。
+- 日常自动发布：操作者从工作区根运行 `pwsh ./deploy/Deploy-Changed.ps1 -Targets Edge -EdgeReleaseNotesPath <更新说明.md>`。入口自动 push Git、读取已发布宿主基线并按改动选择 EdgeHost 或真实 EdgePlugin；本机完成 Windows 安装器/Velopack/插件构建，通过 Cloud Human API 上传服务器并验证 Windows 下载。生产 stable 不允许 `rsync/scp`，Edge 不推 Harbor。
 - 生产服务器只允许 `stable` 渠道，不保留 `ci`、`dev`、`test` 或其他测试渠道目录。
 
 正式 GitHub 打包入口：

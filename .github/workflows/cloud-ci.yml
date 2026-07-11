@@ -53,6 +53,10 @@ jobs:
       - name: Restore cloud solution
         run: dotnet restore IIoT.CloudPlatform.slnx
 
+      - name: Enforce incremental deployment policy
+        shell: pwsh
+        run: ./deploy/tests/TestDeploymentPolicy.ps1
+
       - name: Build cloud solution
         run: dotnet build IIoT.CloudPlatform.slnx -c Release --no-restore
 
