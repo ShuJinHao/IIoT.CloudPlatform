@@ -1149,7 +1149,11 @@ public sealed class ClientReleaseBehaviorTests
         var lockService = new InMemoryKeyedDistributedLockService();
         var behavior = new DistributedLockBehavior<
             ReportDeviceRuntimeHeartbeatCommand,
-            Result<DeviceRuntimeHeartbeatResultDto>>(lockService);
+            Result<DeviceRuntimeHeartbeatResultDto>>(
+                lockService,
+                NullLogger<DistributedLockBehavior<
+                    ReportDeviceRuntimeHeartbeatCommand,
+                    Result<DeviceRuntimeHeartbeatResultDto>>>.Instance);
         var older = CreateRuntimeHeartbeatCommand(
             deviceId,
             "Starting",
@@ -2141,7 +2145,7 @@ public sealed class ClientReleaseBehaviorTests
 
         public List<string> AcquiredResources { get; } = [];
 
-        public async Task<IAsyncDisposable> AcquireAsync(
+        public async Task<IDistributedLockLease> AcquireAsync(
             string resource,
             TimeSpan? acquireTimeout = null,
             CancellationToken cancellationToken = default)
@@ -2153,8 +2157,10 @@ public sealed class ClientReleaseBehaviorTests
             return new AsyncLockHandle(semaphore);
         }
 
-        private sealed class AsyncLockHandle(SemaphoreSlim semaphore) : IAsyncDisposable
+        private sealed class AsyncLockHandle(SemaphoreSlim semaphore) : IDistributedLockLease
         {
+            public CancellationToken OwnershipLost => CancellationToken.None;
+
             public ValueTask DisposeAsync()
             {
                 semaphore.Release();

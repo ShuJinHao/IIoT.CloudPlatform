@@ -185,17 +185,19 @@ internal sealed record AdminOnlyHumanCommand() : IHumanCommand<Result<bool>>;
 
 internal sealed class NoopDistributedLockService : IDistributedLockService
 {
-    public Task<IAsyncDisposable> AcquireAsync(
+    public Task<IDistributedLockLease> AcquireAsync(
         string resource,
         TimeSpan? acquireTimeout = null,
         CancellationToken cancellationToken = default)
     {
-        return Task.FromResult<IAsyncDisposable>(new NoopAsyncDisposable());
+        return Task.FromResult<IDistributedLockLease>(new NoopDistributedLockLease());
     }
 }
 
-internal sealed class NoopAsyncDisposable : IAsyncDisposable
+internal sealed class NoopDistributedLockLease : IDistributedLockLease
 {
+    public CancellationToken OwnershipLost => CancellationToken.None;
+
     public ValueTask DisposeAsync()
     {
         return ValueTask.CompletedTask;

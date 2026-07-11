@@ -774,7 +774,10 @@ public sealed class AuthorizationAndIdentityBehaviorTests
     [Fact]
     public async Task DistributedLockBehavior_ShouldRejectMissingTemplateProperty()
     {
-        var behavior = new DistributedLockBehavior<BrokenLockCommand, Result<bool>>(new NoopDistributedLockService());
+        var behavior = new DistributedLockBehavior<BrokenLockCommand, Result<bool>>(
+            new NoopDistributedLockService(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<
+                DistributedLockBehavior<BrokenLockCommand, Result<bool>>>.Instance);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             behavior.Handle(
@@ -782,7 +785,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
                 _ => Task.FromResult(Result.Success(true)),
                 CancellationToken.None));
 
-        Assert.Contains("MissingProperty", exception.Message, StringComparison.Ordinal);
+        Assert.Equal("Distributed lock key could not be resolved.", exception.Message);
     }
 
     [Fact]

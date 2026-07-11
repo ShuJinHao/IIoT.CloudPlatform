@@ -1027,6 +1027,12 @@ public sealed class ConfigurationGuardTests
 
         httpApiConfiguration.GetValue<int>("DistributedLock:LeaseSeconds").Should().BeGreaterThan(0);
         httpApiConfiguration.GetValue<int>("DistributedLock:RenewalCadenceSeconds").Should().BeGreaterThan(0);
+        httpApiConfiguration.GetValue<int>("DistributedLock:OperationTimeoutMilliseconds").Should().BeGreaterThan(0);
+        httpApiConfiguration.GetValue<int>("DistributedLock:RenewalShutdownTimeoutMilliseconds").Should().BeGreaterThan(0);
+        dataWorkerConfiguration.GetValue<int>("DistributedLock:OperationTimeoutMilliseconds").Should().BeGreaterThan(0);
+        dataWorkerConfiguration.GetValue<int>("DistributedLock:RenewalShutdownTimeoutMilliseconds").Should().BeGreaterThan(0);
+        migrationConfiguration.GetValue<int>("DistributedLock:OperationTimeoutMilliseconds").Should().BeGreaterThan(0);
+        migrationConfiguration.GetValue<int>("DistributedLock:RenewalShutdownTimeoutMilliseconds").Should().BeGreaterThan(0);
         httpApiConfiguration.GetValue<int>("CacheSafety:FailSafeMinutes").Should().Be(30);
         httpApiConfiguration.GetValue<bool>("ForwardedHeaders:Enabled").Should().BeFalse();
         httpApiConfiguration.GetValue<int>("ForwardedHeaders:ForwardLimit").Should().BeGreaterThan(0);

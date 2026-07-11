@@ -1,3 +1,4 @@
+using IIoT.Services.Contracts;
 using IIoT.Services.CrossCutting.Exceptions;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
@@ -19,6 +20,24 @@ public sealed class UseCaseExceptionHandler : IExceptionHandler
                 "禁止访问",
                 "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/403",
                 forbidden.Message,
+                httpContext.Request.Path),
+            DistributedLockConflictException conflict => CreateProblem(
+                StatusCodes.Status409Conflict,
+                "请求冲突",
+                "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/409",
+                conflict.Message,
+                httpContext.Request.Path),
+            DistributedLockUnavailableException unavailable => CreateProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "服务暂时不可用",
+                "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/503",
+                unavailable.Message,
+                httpContext.Request.Path),
+            DistributedLockOwnershipLostException ownershipLost => CreateProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "服务暂时不可用",
+                "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/503",
+                ownershipLost.Message,
                 httpContext.Request.Path),
             TimeoutException timeout => CreateProblem(
                 StatusCodes.Status409Conflict,

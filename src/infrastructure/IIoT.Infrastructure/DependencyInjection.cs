@@ -41,8 +41,23 @@ public static class DependencyInjection
 
         builder.Services.Configure<JwtSettings>(
             builder.Configuration.GetSection(JwtSettings.SectionName));
-        builder.Services.Configure<DistributedLockOptions>(
-            builder.Configuration.GetSection(DistributedLockOptions.SectionName));
+        builder.Services.AddOptions<DistributedLockOptions>()
+            .Bind(builder.Configuration.GetSection(DistributedLockOptions.SectionName))
+            .Validate(
+                static options =>
+                {
+                    try
+                    {
+                        options.Validate();
+                        return true;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        return false;
+                    }
+                },
+                "DistributedLock configuration is invalid.")
+            .ValidateOnStart();
         builder.Services.Configure<CacheSafetyOptions>(
             builder.Configuration.GetSection(CacheSafetyOptions.SectionName));
         builder.Services.PostConfigure<JwtSettings>(options =>
