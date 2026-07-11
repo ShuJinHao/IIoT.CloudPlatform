@@ -17,7 +17,7 @@ internal static class ClientReleaseArtifactBuilder
         {
             new(
                 ClientReleaseArtifactKind.InstallerDirectory,
-                $"installers/{EscapePath(channel)}/{EscapePath(version)}")
+                $"installers/{EscapePathSegment(channel)}/{EscapePathSegment(version)}")
         };
 
         var relativePath = TryExtractEdgeUpdatesPath(downloadUrl);
@@ -45,7 +45,7 @@ internal static class ClientReleaseArtifactBuilder
         {
             new(
                 ClientReleaseArtifactKind.PluginPackageDirectory,
-                $"plugins/{EscapePath(channel)}/{EscapePath(moduleId)}/{EscapePath(version)}")
+                $"plugins/{EscapePathSegment(channel)}/{EscapePathSegment(moduleId)}/{EscapePathSegment(version)}")
         };
 
         var relativePath = TryExtractEdgeUpdatesPath(downloadUrl);
@@ -73,7 +73,7 @@ internal static class ClientReleaseArtifactBuilder
         {
             new(
                 ClientReleaseArtifactKind.InstallerDirectory,
-                $"installers/{EscapePath(channel)}/{EscapePath(version)}")
+                $"installers/{EscapePathSegment(channel)}/{EscapePathSegment(version)}")
         };
 
         var manifestRelativePath = TryExtractEdgeUpdatesPath(manifestDownloadUrl)
@@ -85,7 +85,7 @@ internal static class ClientReleaseArtifactBuilder
             manifest.Size));
         artifacts.Add(new ClientReleaseArtifact(
             ClientReleaseArtifactKind.PackageFile,
-            $"installers/{EscapePath(channel)}/{EscapePath(version)}/{installerStubRelativePath.Replace('\\', '/').TrimStart('/')}",
+            $"installers/{EscapePathSegment(channel)}/{EscapePathSegment(version)}/{installerStubRelativePath.Replace('\\', '/').TrimStart('/')}",
             installerStub.Sha256,
             installerStub.Size));
         return artifacts;
@@ -99,10 +99,26 @@ internal static class ClientReleaseArtifactBuilder
     {
         return new ClientReleaseArtifact(
             ClientReleaseArtifactKind.VelopackFile,
-            $"velopack/{EscapePath(channel)}/{relativePath.Replace('\\', '/').TrimStart('/')}",
+            $"velopack/{EscapePathSegment(channel)}/{relativePath.Replace('\\', '/').TrimStart('/')}",
             sha256,
             size);
     }
+
+    public static string BuildInstallerManifestDownloadUrl(string channel, string version)
+        => $"/edge-updates/installers/{EscapeUrlSegment(channel)}/{EscapeUrlSegment(version)}/installer-artifact.json";
+
+    public static string BuildPluginDownloadUrl(
+        string channel,
+        string moduleId,
+        string version,
+        string packageFileName)
+        => $"/edge-updates/plugins/{EscapeUrlSegment(channel)}/{EscapeUrlSegment(moduleId)}/{EscapeUrlSegment(version)}/{EscapeUrlSegment(packageFileName)}";
+
+    public static string EscapePathSegment(string value)
+        => Uri.EscapeDataString(value.Trim());
+
+    private static string EscapeUrlSegment(string value)
+        => Uri.EscapeDataString(value);
 
     public static string? TryExtractEdgeUpdatesPath(string? downloadUrl)
     {
@@ -125,10 +141,5 @@ internal static class ClientReleaseArtifactBuilder
         return Uri.UnescapeDataString(normalized[EdgeUpdatesPrefix.Length..])
             .Replace('\\', '/')
             .TrimStart('/');
-    }
-
-    private static string EscapePath(string value)
-    {
-        return Uri.EscapeDataString(value.Trim());
     }
 }

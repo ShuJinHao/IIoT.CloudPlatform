@@ -65,16 +65,6 @@ public sealed class PublishEdgeReleaseBundleHandler(
         @"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private static readonly Regex Sha256Pattern = new(
-        "^[0-9a-fA-F]{64}$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
-    private static readonly string[] RequiredVelopackManifestNames =
-    [
-        "releases.stable.json",
-        "assets.stable.json"
-    ];
-
     private static readonly string[] ForbiddenFileNameSuffixes =
     [
         "launcher.accounts.json",
@@ -114,7 +104,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
             copiedBytes = await uploadSession.ReceiveAsync(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
 
-            ExtractBundle(zipPath, extractRoot);
+            ClientReleaseZipArchive.ExtractToDirectory(zipPath, extractRoot, "Edge 发布包");
             cancellationToken.ThrowIfCancellationRequested();
             var artifact = await LoadAndValidateBundleAsync(extractRoot, cancellationToken);
             if (!artifact.IsSuccess)
@@ -132,7 +122,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 throw new ClientReleasePublishConflictException();
             }
 
-            AssertFreeDiskSpace(edgeRoot, copiedBytes);
+            ClientReleaseFileFacts.AssertFreeDiskSpace(edgeRoot, copiedBytes, "Edge 发布");
             velopackTransaction = new VelopackReleasePublishFileTransaction(
                 edgeRoot,
                 artifact.VelopackRoot!,
@@ -175,7 +165,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
 
             expectedVersions = await PrepareDatabaseRowsAsync(
                 manifest,
-                BuildManifestDownloadUrl(channel, version),
+                ClientReleaseArtifactBuilder.BuildInstallerManifestDownloadUrl(channel, version),
                 pluginPackages,
                 installerTarget,
                 velopackTransaction.PublishedFiles,
@@ -504,9 +494,9 @@ public sealed class PublishEdgeReleaseBundleHandler(
         return new EdgeReleaseBundlePublishResultDto(
             channel,
             version,
-            NormalizeOptional(manifest.SourceCommit),
-            NormalizeOptional(manifest.PreviousSourceCommit),
-            NormalizeOptional(manifest.ReleaseNotes),
+            ClientReleaseText.NormalizeOptional(manifest.SourceCommit),
+            ClientReleaseText.NormalizeOptional(manifest.PreviousSourceCommit),
+            ClientReleaseText.NormalizeOptional(manifest.ReleaseNotes),
             SplitReleaseNotes(manifest.ReleaseNotes),
             BuildComponentSummary(manifest),
             bundleSize,
@@ -561,7 +551,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
         };
         await auditTrailService.TryWriteAsync(
             new AuditTrailEntry(
-                ParseActorUserId(currentUser.Id),
+                ClientReleaseAuditActor.ParseId(currentUser.Id),
                 currentUser.UserName,
                 operationType,
                 "EdgeReleaseBundle",
@@ -571,46 +561,6 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 summary,
                 failureReason),
             CancellationToken.None);
-    }
-
-    private static void ExtractBundle(string zipPath, string extractRoot)
-    {
-        Directory.CreateDirectory(extractRoot);
-        using var archive = ZipFile.OpenRead(zipPath);
-        foreach (var entry in archive.Entries)
-        {
-            var relativePath = NormalizeZipEntryPath(entry.FullName);
-            if (string.IsNullOrWhiteSpace(relativePath))
-            {
-                continue;
-            }
-
-            var targetPath = Path.GetFullPath(Path.Combine(extractRoot, relativePath));
-            if (!ClientReleaseFileFacts.IsStrictChildPath(extractRoot, targetPath))
-            {
-                throw new ClientReleaseValidationException("Edge 发布包包含非法路径。");
-            }
-
-            if (entry.FullName.EndsWith("/", StringComparison.Ordinal))
-            {
-                Directory.CreateDirectory(targetPath);
-                continue;
-            }
-
-            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-            entry.ExtractToFile(targetPath, overwrite: false);
-        }
-
-        foreach (var fileSystemInfo in Directory.EnumerateFileSystemEntries(
-            extractRoot,
-            "*",
-            SearchOption.AllDirectories))
-        {
-            if ((File.GetAttributes(fileSystemInfo) & FileAttributes.ReparsePoint) != 0)
-            {
-                throw new ClientReleaseValidationException("Edge 发布包不允许包含符号链接或重解析点。");
-            }
-        }
     }
 
     private async Task<BundleValidationResult> LoadAndValidateBundleAsync(
@@ -791,7 +741,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
             }
         }
 
-        foreach (var required in RequiredVelopackManifestNames)
+        foreach (var required in ClientReleaseVelopackPaths.StableManifestNames)
         {
             if (!File.Exists(Path.Combine(velopackRoot, required)))
             {
@@ -818,7 +768,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
         EdgeInstallerArtifactManifest manifest)
     {
         var installerPath = Path.Combine(installerRoot, manifest.InstallerStubFile);
-        if (!IsSha256(manifest.InstallerStubSha256)
+        if (!ClientReleaseFileFacts.IsSha256(manifest.InstallerStubSha256)
             || !string.Equals(ClientReleaseFileFacts.ComputeSha256(installerPath), manifest.InstallerStubSha256, StringComparison.OrdinalIgnoreCase)
             || new FileInfo(installerPath).Length != manifest.InstallerStubSize)
         {
@@ -826,7 +776,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
         }
 
         var hostDirectory = Path.Combine(installerRoot, manifest.HostDirectory);
-        if (!IsSha256(manifest.HostDirectorySha256)
+        if (!ClientReleaseFileFacts.IsSha256(manifest.HostDirectorySha256)
             || !string.Equals(ClientReleaseFileFacts.ComputeDirectorySha256(hostDirectory), manifest.HostDirectorySha256, StringComparison.OrdinalIgnoreCase)
             || ClientReleaseFileFacts.GetDirectorySize(hostDirectory) != manifest.HostDirectorySize)
         {
@@ -836,7 +786,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
         if (!string.IsNullOrWhiteSpace(manifest.VelopackSetupFile))
         {
             var setupPath = Path.Combine(installerRoot, manifest.VelopackSetupFile);
-            if (!IsSha256(manifest.VelopackSetupSha256)
+            if (!ClientReleaseFileFacts.IsSha256(manifest.VelopackSetupSha256)
                 || !string.Equals(ClientReleaseFileFacts.ComputeSha256(setupPath), manifest.VelopackSetupSha256, StringComparison.OrdinalIgnoreCase)
                 || new FileInfo(setupPath).Length != manifest.VelopackSetupSize)
             {
@@ -847,7 +797,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
         foreach (var module in manifest.Modules)
         {
             var pluginDirectory = Path.Combine(installerRoot, manifest.PluginsRoot, module.PluginDirectory);
-            if (!IsSha256(module.PluginSha256)
+            if (!ClientReleaseFileFacts.IsSha256(module.PluginSha256)
                 || !string.Equals(ClientReleaseFileFacts.ComputeDirectorySha256(pluginDirectory), module.PluginSha256, StringComparison.OrdinalIgnoreCase)
                 || ClientReleaseFileFacts.GetDirectorySize(pluginDirectory) != module.PluginSize)
             {
@@ -915,7 +865,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 edgeRoot,
                 "plugins",
                 manifest.Channel,
-                EscapeFileSystemSegment(module.ModuleId),
+                ClientReleaseArtifactBuilder.EscapePathSegment(module.ModuleId),
                 module.Version);
             if (Directory.Exists(packageDirectory))
             {
@@ -934,7 +884,11 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 module.ModuleId,
                 module.Version,
                 fileTransaction.TargetPackagePath,
-                BuildPluginDownloadUrl(manifest.Channel, module.ModuleId, module.Version, packageFileName),
+                ClientReleaseArtifactBuilder.BuildPluginDownloadUrl(
+                    manifest.Channel,
+                    module.ModuleId,
+                    module.Version,
+                    packageFileName),
                 sha256,
                 size,
                 fileTransaction);
@@ -1159,37 +1113,9 @@ public sealed class PublishEdgeReleaseBundleHandler(
         var deletedVelopackFiles = CleanupVelopackFiles(
             Path.Combine(edgeRoot, "velopack", channel),
             removableVersions);
-        await CleanupArchivedPluginFilesAsync(edgeRoot, channel, targetRuntime, cancellationToken);
+        ClientReleaseArchivedFileCleanup.DeletePluginDirectories(edgeRoot, components);
 
         return new FileCleanupResult(archivedVersions, deletedInstallers, deletedVelopackFiles);
-    }
-
-    private async Task CleanupArchivedPluginFilesAsync(
-        string edgeRoot,
-        string channel,
-        string targetRuntime,
-        CancellationToken cancellationToken)
-    {
-        var components = await componentRepository.GetListAsync(
-            new ClientReleaseComponentsByChannelSpec(channel, targetRuntime, onlyPublished: false, includeArchived: true),
-            cancellationToken);
-
-        foreach (var component in components.Where(component => component.ComponentKind == ClientReleaseComponentKind.Plugin))
-        {
-            foreach (var release in component.Versions.Where(release => release.Status == ClientReleaseStatus.Archived))
-            {
-                var directory = Path.Combine(
-                    edgeRoot,
-                    "plugins",
-                    component.Channel,
-                    EscapeFileSystemSegment(component.ComponentKey),
-                    release.Version);
-                if (Directory.Exists(directory))
-                {
-                    Directory.Delete(directory, recursive: true);
-                }
-            }
-        }
     }
 
     private static IReadOnlyList<string> CleanupVelopackFiles(
@@ -1215,7 +1141,10 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 continue;
             }
 
-            if (VelopackManifestsReferenceFile(velopackChannelRoot, name))
+            var manifestPaths = ClientReleaseVelopackPaths.StableManifestNames
+                .Concat(["RELEASES"])
+                .Select(manifestName => Path.Combine(velopackChannelRoot, manifestName));
+            if (ClientReleaseVelopackPaths.IsReferencedByManifests(manifestPaths, name))
             {
                 continue;
             }
@@ -1227,56 +1156,17 @@ public sealed class PublishEdgeReleaseBundleHandler(
         return deleted;
     }
 
-    private static bool VelopackManifestsReferenceFile(string velopackChannelRoot, string fileName)
-    {
-        foreach (var manifestName in RequiredVelopackManifestNames.Concat(["RELEASES"]))
-        {
-            var manifestPath = Path.Combine(velopackChannelRoot, manifestName);
-            if (File.Exists(manifestPath)
-                && File.ReadAllText(manifestPath).Contains(fileName, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     private static bool FileNameContainsVersion(string fileName, string version)
     {
         var pattern = $@"(^|[._-]){Regex.Escape(version)}([._-]|$)";
         return Regex.IsMatch(fileName, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
-    private static void AssertFreeDiskSpace(string rootPath, long bundleBytes)
-    {
-        var drive = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(rootPath))!);
-        var required = bundleBytes * 2;
-        if (drive.AvailableFreeSpace < required)
-        {
-            throw new ClientReleaseValidationException(
-                $"Edge 发布磁盘剩余空间不足，至少需要 {required} 字节。");
-        }
-    }
-
-    private static string BuildManifestDownloadUrl(string channel, string version)
-        => $"/edge-updates/installers/{Uri.EscapeDataString(channel)}/{Uri.EscapeDataString(version)}/installer-artifact.json";
-
-    private static string BuildPluginDownloadUrl(
-        string channel,
-        string moduleId,
-        string version,
-        string packageFileName)
-        => $"/edge-updates/plugins/{Uri.EscapeDataString(channel)}/{Uri.EscapeDataString(moduleId)}/{Uri.EscapeDataString(version)}/{Uri.EscapeDataString(packageFileName)}";
-
     private static string BuildPluginPackageFileName(
         string moduleId,
         string version,
         string targetRuntime)
         => $"IIoT.EdgePlugin.{SanitizeFileNameSegment(moduleId)}-{SanitizeFileNameSegment(version)}-{SanitizeFileNameSegment(targetRuntime)}.zip";
-
-    private static string EscapeFileSystemSegment(string value)
-        => Uri.EscapeDataString(value.Trim());
 
     private static string SanitizeFileNameSegment(string value)
     {
@@ -1318,7 +1208,13 @@ public sealed class PublishEdgeReleaseBundleHandler(
             Path.Combine(installerTarget, manifest.InstallerStubFile),
             Path.Combine(velopackTarget, "RELEASES")
         };
-        files.AddRange(RequiredVelopackManifestNames.Select(name => Path.Combine(velopackTarget, name)));
+        files.AddRange(ClientReleaseVelopackPaths.StableManifestNames.Select(
+            name => Path.Combine(velopackTarget, name)));
+
+        var velopackManifestPaths = ClientReleaseVelopackPaths.StableManifestNames
+            .Concat(["RELEASES"])
+            .Select(name => Path.Combine(velopackTarget, name))
+            .ToArray();
 
         var currentVersionNupkg = Directory
             .EnumerateFiles(velopackTarget, "*.nupkg", SearchOption.TopDirectoryOnly)
@@ -1328,7 +1224,9 @@ public sealed class PublishEdgeReleaseBundleHandler(
             {
                 var fileName = Path.GetFileName(file);
                 return !string.IsNullOrWhiteSpace(fileName)
-                    && VelopackManifestsReferenceFile(velopackTarget, fileName);
+                    && ClientReleaseVelopackPaths.IsReferencedByManifests(
+                        velopackManifestPaths,
+                        fileName);
             });
         if (currentVersionNupkg is null)
         {
@@ -1376,7 +1274,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
 
         await auditTrailService.TryWriteAsync(
             new AuditTrailEntry(
-                ParseActorUserId(currentUser.Id),
+                ClientReleaseAuditActor.ParseId(currentUser.Id),
                 currentUser.UserName,
                 "ClientRelease.Publish",
                 "EdgeReleaseBundle",
@@ -1387,9 +1285,6 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 failureReason),
             cancellationToken);
     }
-
-    private static Guid? ParseActorUserId(string? userId)
-        => Guid.TryParse(userId, out var parsed) ? parsed : null;
 
     private static void AssertNoForbiddenFiles(string root)
     {
@@ -1431,18 +1326,6 @@ public sealed class PublishEdgeReleaseBundleHandler(
         }
     }
 
-    private static string NormalizeZipEntryPath(string path)
-    {
-        var normalized = path.Replace('\\', '/').TrimStart('/');
-        if (normalized.Contains(':', StringComparison.Ordinal)
-            || normalized.Split('/').Any(segment => segment == ".."))
-        {
-            throw new ClientReleaseValidationException("Edge 发布包包含非法 zip 路径。");
-        }
-
-        return normalized;
-    }
-
     private static bool IsSafeRelativePath(string path)
     {
         if (string.IsNullOrWhiteSpace(path))
@@ -1455,15 +1338,6 @@ public sealed class PublishEdgeReleaseBundleHandler(
             && !Path.IsPathRooted(path)
             && !normalized.Contains(':', StringComparison.Ordinal)
             && !normalized.Split('/').Any(segment => segment is "" or "." or "..");
-    }
-
-    private static bool IsSha256(string? value)
-        => !string.IsNullOrWhiteSpace(value) && Sha256Pattern.IsMatch(value);
-
-    private static string? NormalizeOptional(string? value)
-    {
-        var normalized = value?.Trim();
-        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
     private sealed record BundleValidationResult(

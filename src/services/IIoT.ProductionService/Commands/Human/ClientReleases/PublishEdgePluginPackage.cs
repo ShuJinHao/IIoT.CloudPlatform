@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Core.Production.Specifications.ClientReleases;
@@ -59,10 +58,6 @@ public sealed class PublishEdgePluginPackageHandler(
         PropertyNameCaseInsensitive = true
     };
 
-    private static readonly Regex Sha256Pattern = new(
-        "^[0-9a-fA-F]{64}$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
     private static readonly string[] ForbiddenFileNameSuffixes =
     [
         "launcher.accounts.json",
@@ -97,8 +92,11 @@ public sealed class PublishEdgePluginPackageHandler(
             var copiedBytes = await uploadSession.ReceiveAsync(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
 
-            AssertFreeDiskSpace(edgeRoot, copiedBytes);
-            ExtractZip(wrapperPath, extractRoot, "Edge 插件发布包");
+            ClientReleaseFileFacts.AssertFreeDiskSpace(edgeRoot, copiedBytes, "Edge 插件发布");
+            ClientReleaseZipArchive.ExtractToDirectory(
+                wrapperPath,
+                extractRoot,
+                "Edge 插件发布包");
             cancellationToken.ThrowIfCancellationRequested();
             var loadResult = await LoadAndValidateAsync(extractRoot, cancellationToken);
             if (!loadResult.IsSuccess)
@@ -130,8 +128,8 @@ public sealed class PublishEdgePluginPackageHandler(
                 edgeRoot,
                 "plugins",
                 releaseIdentity.Channel,
-                EscapeFileSystemSegment(releaseIdentity.ComponentKey),
-                EscapeFileSystemSegment(releaseIdentity.Version));
+                ClientReleaseArtifactBuilder.EscapePathSegment(releaseIdentity.ComponentKey),
+                ClientReleaseArtifactBuilder.EscapePathSegment(releaseIdentity.Version));
             if (Directory.Exists(packageTargetDirectory))
             {
                 throw new ClientReleasePublishConflictException();
@@ -154,7 +152,7 @@ public sealed class PublishEdgePluginPackageHandler(
                 [packageTargetDirectory],
                 [fileTransaction.TargetPackagePath]);
             cancellationToken.ThrowIfCancellationRequested();
-            var downloadUrl = BuildPluginDownloadUrl(
+            var downloadUrl = ClientReleaseArtifactBuilder.BuildPluginDownloadUrl(
                 releaseIdentity.Channel,
                 releaseIdentity.ComponentKey,
                 releaseIdentity.Version,
@@ -273,11 +271,14 @@ public sealed class PublishEdgePluginPackageHandler(
                     releaseIdentity.Channel,
                     releaseIdentity.TargetRuntime,
                     cancellationToken);
-                await CleanupArchivedPluginFilesAsync(
-                    edgeRoot,
-                    releaseIdentity.Channel,
-                    releaseIdentity.TargetRuntime,
+                var components = await componentRepository.GetListAsync(
+                    new ClientReleaseComponentsByChannelSpec(
+                        releaseIdentity.Channel,
+                        releaseIdentity.TargetRuntime,
+                        onlyPublished: false,
+                        includeArchived: true),
                     cancellationToken);
+                ClientReleaseArchivedFileCleanup.DeletePluginDirectories(edgeRoot, components);
             }
             catch (OperationCanceledException)
             {
@@ -442,19 +443,19 @@ public sealed class PublishEdgePluginPackageHandler(
         return new ClientReleaseExpectedVersionState(
             identity,
             displayName,
-            NormalizeOptional(metadata.Description),
-            NormalizeOptional(metadata.IconKind),
-            NormalizeOptional(metadata.AccentColor),
+            ClientReleaseText.NormalizeOptional(metadata.Description),
+            ClientReleaseText.NormalizeOptional(metadata.IconKind),
+            ClientReleaseText.NormalizeOptional(metadata.AccentColor),
             metadata.HostApiVersion.Trim(),
             metadata.MinHostVersion.Trim(),
             metadata.MaxHostVersion.Trim(),
-            NormalizeOptional(metadata.TargetFramework),
+            ClientReleaseText.NormalizeOptional(metadata.TargetFramework),
             downloadUrl,
             metadata.Sha256.Trim(),
             metadata.PackageSize,
-            NormalizeOptional(metadata.ReleaseNotes),
+            ClientReleaseText.NormalizeOptional(metadata.ReleaseNotes),
             JsonSerializer.Serialize(metadata.Dependencies ?? [], JsonOptions),
-            NormalizeOptional(metadata.Signature),
+            ClientReleaseText.NormalizeOptional(metadata.Signature),
             publisher,
             NormalizePublishedAtUtc(metadata.CreatedAtUtc),
             artifacts
@@ -531,7 +532,7 @@ public sealed class PublishEdgePluginPackageHandler(
         var target = $"{identity.Channel}/{identity.ComponentKey}/{identity.Version}";
         await auditTrailService.TryWriteAsync(
             new AuditTrailEntry(
-                ParseActorUserId(currentUser.Id),
+                ClientReleaseAuditActor.ParseId(currentUser.Id),
                 currentUser.UserName,
                 operationType,
                 "EdgePluginPackage",
@@ -541,12 +542,6 @@ public sealed class PublishEdgePluginPackageHandler(
                 summary,
                 failureReason),
             CancellationToken.None);
-    }
-
-    private static string? NormalizeOptional(string? value)
-    {
-        var normalized = value?.Trim();
-        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
     private static DateTime? NormalizePublishedAtUtc(DateTime? value)
@@ -647,7 +642,7 @@ public sealed class PublishEdgePluginPackageHandler(
             return "Edge 插件发布包文件名非法。";
         }
 
-        if (!Sha256Pattern.IsMatch(manifest.Sha256 ?? string.Empty) || manifest.PackageSize <= 0)
+        if (!ClientReleaseFileFacts.IsSha256(manifest.Sha256) || manifest.PackageSize <= 0)
         {
             return "Edge 插件发布包 sha256 或 size 非法。";
         }
@@ -667,7 +662,9 @@ public sealed class PublishEdgePluginPackageHandler(
         using var archive = ZipFile.OpenRead(packagePath);
         foreach (var entry in archive.Entries)
         {
-            var normalized = NormalizeZipEntryPath(entry.FullName, "Edge 插件 zip");
+            var normalized = ClientReleaseZipArchive.NormalizeEntryPath(
+                entry.FullName,
+                "Edge 插件 zip");
             if (string.IsNullOrWhiteSpace(normalized))
             {
                 continue;
@@ -771,34 +768,6 @@ public sealed class PublishEdgePluginPackageHandler(
         }
     }
 
-    private async Task CleanupArchivedPluginFilesAsync(
-        string edgeRoot,
-        string channel,
-        string targetRuntime,
-        CancellationToken cancellationToken)
-    {
-        var components = await componentRepository.GetListAsync(
-            new ClientReleaseComponentsByChannelSpec(channel, targetRuntime, onlyPublished: false, includeArchived: true),
-            cancellationToken);
-
-        foreach (var component in components.Where(component => component.ComponentKind == ClientReleaseComponentKind.Plugin))
-        {
-            foreach (var release in component.Versions.Where(release => release.Status == ClientReleaseStatus.Archived))
-            {
-                var directory = Path.Combine(
-                    edgeRoot,
-                    "plugins",
-                    component.Channel,
-                    EscapeFileSystemSegment(component.ComponentKey),
-                    release.Version);
-                if (Directory.Exists(directory))
-                {
-                    Directory.Delete(directory, recursive: true);
-                }
-            }
-        }
-    }
-
     private async Task WriteAuditAsync(
         EdgePluginPackagePublishResultDto? result,
         string? sourceIp,
@@ -815,7 +784,7 @@ public sealed class PublishEdgePluginPackageHandler(
 
         await auditTrailService.TryWriteAsync(
             new AuditTrailEntry(
-                ParseActorUserId(currentUser.Id),
+                ClientReleaseAuditActor.ParseId(currentUser.Id),
                 currentUser.UserName,
                 "ClientRelease.PublishPlugin",
                 "EdgePluginPackage",
@@ -825,58 +794,6 @@ public sealed class PublishEdgePluginPackageHandler(
                 summary,
                 failureReason),
             cancellationToken);
-    }
-
-    private static void ExtractZip(string zipPath, string extractRoot, string label)
-    {
-        Directory.CreateDirectory(extractRoot);
-        using var archive = ZipFile.OpenRead(zipPath);
-        foreach (var entry in archive.Entries)
-        {
-            var relativePath = NormalizeZipEntryPath(entry.FullName, label);
-            if (string.IsNullOrWhiteSpace(relativePath))
-            {
-                continue;
-            }
-
-            var targetPath = Path.GetFullPath(Path.Combine(extractRoot, relativePath));
-            if (!ClientReleaseFileFacts.IsStrictChildPath(extractRoot, targetPath))
-            {
-                throw new ClientReleaseValidationException($"{label} 包含非法路径。");
-            }
-
-            if (entry.FullName.EndsWith("/", StringComparison.Ordinal))
-            {
-                Directory.CreateDirectory(targetPath);
-                continue;
-            }
-
-            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-            entry.ExtractToFile(targetPath, overwrite: false);
-        }
-
-        foreach (var fileSystemInfo in Directory.EnumerateFileSystemEntries(
-            extractRoot,
-            "*",
-            SearchOption.AllDirectories))
-        {
-            if ((File.GetAttributes(fileSystemInfo) & FileAttributes.ReparsePoint) != 0)
-            {
-                throw new ClientReleaseValidationException($"{label} 不允许包含符号链接或重解析点。");
-            }
-        }
-    }
-
-    private static string NormalizeZipEntryPath(string path, string label)
-    {
-        var normalized = path.Replace('\\', '/').TrimStart('/');
-        if (normalized.Contains(':', StringComparison.Ordinal)
-            || normalized.Split('/').Any(segment => segment == ".."))
-        {
-            throw new ClientReleaseValidationException($"{label} 包含非法 zip 路径。");
-        }
-
-        return normalized;
     }
 
     private static bool IsSafeRelativeFileName(string path)
@@ -892,30 +809,6 @@ public sealed class PublishEdgePluginPackageHandler(
 
         return path.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
     }
-
-    private static void AssertFreeDiskSpace(string rootPath, long packageBytes)
-    {
-        var drive = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(rootPath))!);
-        var required = packageBytes * 2;
-        if (drive.AvailableFreeSpace < required)
-        {
-            throw new ClientReleaseValidationException(
-                $"Edge 插件发布磁盘剩余空间不足，至少需要 {required} 字节。");
-        }
-    }
-
-    private static string BuildPluginDownloadUrl(
-        string channel,
-        string moduleId,
-        string version,
-        string packageFileName)
-        => $"/edge-updates/plugins/{Uri.EscapeDataString(channel)}/{Uri.EscapeDataString(moduleId)}/{Uri.EscapeDataString(version)}/{Uri.EscapeDataString(packageFileName)}";
-
-    private static string EscapeFileSystemSegment(string value)
-        => Uri.EscapeDataString(value.Trim());
-
-    private static Guid? ParseActorUserId(string? userId)
-        => Guid.TryParse(userId, out var parsed) ? parsed : null;
 
     private static string FormatValidationFailure(Exception ex)
         => ex switch

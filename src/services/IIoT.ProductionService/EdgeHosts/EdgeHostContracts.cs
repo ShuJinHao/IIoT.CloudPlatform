@@ -179,9 +179,9 @@ public static class EdgeHostMapping
         var runtimeIps = state?.GetRuntimeLocalIpAddresses() ?? [];
         var versionIps = state?.GetVersionLocalIpAddresses() ?? [];
         return runtimeIps.FirstOrDefault()
-            ?? NormalizeOptional(state?.RuntimeRemoteIpAddress)
+            ?? ClientReleaseText.NormalizeOptional(state?.RuntimeRemoteIpAddress)
             ?? versionIps.FirstOrDefault()
-            ?? NormalizeOptional(state?.VersionRemoteIpAddress);
+            ?? ClientReleaseText.NormalizeOptional(state?.VersionRemoteIpAddress);
     }
 
     private static IReadOnlyList<string> ResolveLocalIpAddresses(DeviceClientState? state)
@@ -195,9 +195,4 @@ public static class EdgeHostMapping
         return state?.GetVersionLocalIpAddresses() ?? [];
     }
 
-    private static string? NormalizeOptional(string? value)
-    {
-        var normalized = value?.Trim();
-        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
-    }
 }

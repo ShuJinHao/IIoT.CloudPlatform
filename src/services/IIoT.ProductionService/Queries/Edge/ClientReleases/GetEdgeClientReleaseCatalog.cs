@@ -33,7 +33,7 @@ public sealed class GetEdgeClientReleaseCatalogHandler(
             return Result.Failure("Catalog 查询失败: 设备不存在");
         }
 
-        var channel = string.IsNullOrWhiteSpace(request.Channel) ? "stable" : request.Channel.Trim();
+        var channel = ClientReleaseText.NormalizeChannel(request.Channel);
         var components = await componentRepository.GetListAsync(
             new ClientReleaseComponentsByChannelSpec(channel, request.TargetRuntime, onlyPublished: true),
             cancellationToken);
@@ -42,16 +42,11 @@ public sealed class GetEdgeClientReleaseCatalogHandler(
         return Result.Success(new ClientReleaseCatalogDto(
             ClientReleaseCatalogSchema.Version,
             channel,
-            NormalizeOptional(request.TargetRuntime),
+            ClientReleaseText.NormalizeOptional(request.TargetRuntime),
             ClientReleaseMapping.ToHostComponent(components, maxVersions, onlyPublished: true),
             ClientReleaseMapping.ToPluginComponents(components, maxVersions, onlyPublished: true),
             DateTime.UtcNow,
             artifactOptions.Value.BuildVelopackUpdateSource(channel)));
     }
 
-    private static string? NormalizeOptional(string? value)
-    {
-        var normalized = value?.Trim();
-        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
-    }
 }

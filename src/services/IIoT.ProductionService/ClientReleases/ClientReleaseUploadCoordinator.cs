@@ -24,7 +24,7 @@ public sealed class ClientReleaseUploadCoordinator(
             ClientReleaseUploadKind.PluginPackage => ("edge-plugin-packages", "plugin-package.zip"),
             _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "未知客户端发布上传类型。")
         };
-        var edgeRoot = ResolveEdgeUpdatesRoot();
+        var edgeRoot = artifactOptions.Value.ResolveEdgeUpdatesRoot();
         Directory.CreateDirectory(edgeRoot);
         var stagingRoot = Path.Combine(
             edgeRoot,
@@ -69,17 +69,6 @@ public sealed class ClientReleaseUploadCoordinator(
         }
     }
 
-    private string ResolveEdgeUpdatesRoot()
-    {
-        var installerRoot = Path.GetFullPath(artifactOptions.Value.RootPath);
-        var parent = Directory.GetParent(installerRoot);
-        if (parent is null)
-        {
-            throw new InvalidOperationException("EdgeInstallerArtifacts:RootPath 必须位于 edge-updates/installers 下。");
-        }
-
-        return parent.FullName;
-    }
 }
 
 public sealed class ClientReleaseUploadSession : IDisposable

@@ -367,12 +367,3 @@ internal sealed class VelopackReleasePublishFileTransaction
         ClientReleaseFileFact? Previous,
         string? BackupPath);
 }
-
-internal static class ClientReleaseVelopackPaths
-{
-    public static bool IsChannelManifest(string relativePath)
-        => relativePath.Equals("releases.stable.json", StringComparison.OrdinalIgnoreCase)
-           || relativePath.Equals("assets.stable.json", StringComparison.OrdinalIgnoreCase)
-           || relativePath.Equals("RELEASES", StringComparison.OrdinalIgnoreCase)
-           || relativePath.StartsWith("RELEASES-", StringComparison.OrdinalIgnoreCase);
-}

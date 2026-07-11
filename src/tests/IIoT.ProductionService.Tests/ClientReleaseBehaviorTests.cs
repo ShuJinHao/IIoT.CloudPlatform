@@ -567,6 +567,43 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
+    public async Task PublishEdgePluginPackageHandler_ShouldRejectWrapperZipTraversal()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-edge-plugin-upload-root");
+        var wrapperRoot = CreateTempDirectory("iiot-edge-plugin-upload-wrapper");
+        var wrapperPath = Path.Combine(wrapperRoot, "wrapper.zip");
+        try
+        {
+            using (var archive = ZipFile.Open(wrapperPath, ZipArchiveMode.Create))
+            {
+                var entry = archive.CreateEntry("../evil.txt");
+                await using var stream = entry.Open();
+                await stream.WriteAsync("evil"u8.ToArray());
+            }
+
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            var handler = CreatePluginPackageHandler(
+                edgeRoot,
+                componentRepository,
+                new NoopRetentionService(),
+                new RecordingAuditTrailService());
+
+            var result = await PublishPluginPackageAsync(handler, wrapperPath);
+
+            Assert.False(result.IsSuccess);
+            Assert.Contains(
+                result.Errors ?? [],
+                error => error.Contains("非法 zip 路径", StringComparison.Ordinal));
+            Assert.Empty(componentRepository.Items);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            TryDeleteDirectory(wrapperRoot);
+        }
+    }
+
+    [Fact]
     public async Task PublishEdgePluginPackageHandler_ShouldRejectDuplicatePluginVersion()
     {
         var edgeRoot = CreateTempDirectory("iiot-edge-plugin-upload-root");

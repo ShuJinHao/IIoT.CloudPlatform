@@ -5,6 +5,30 @@ namespace IIoT.ProductionService.ClientReleases;
 
 internal static class ClientReleaseFileFacts
 {
+    public static bool IsSha256(string? value)
+    {
+        if (value is not { Length: 64 })
+        {
+            return false;
+        }
+
+        return value.All(Uri.IsHexDigit);
+    }
+
+    public static void AssertFreeDiskSpace(
+        string rootPath,
+        long payloadBytes,
+        string publishLabel)
+    {
+        var drive = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(rootPath))!);
+        var required = payloadBytes * 2;
+        if (drive.AvailableFreeSpace < required)
+        {
+            throw new ClientReleaseValidationException(
+                $"{publishLabel}磁盘剩余空间不足，至少需要 {required} 字节。");
+        }
+    }
+
     public static ClientReleaseFileFact GetFileFact(string path)
     {
         if (!File.Exists(path)

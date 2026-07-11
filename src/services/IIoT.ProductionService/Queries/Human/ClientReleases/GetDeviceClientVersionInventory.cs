@@ -57,7 +57,7 @@ public sealed class GetDeviceClientVersionInventoryHandler(
                 group => group.Key,
                 group => group.OrderByDescending(state => state.UpdatedAtUtc).First());
 
-        var channel = string.IsNullOrWhiteSpace(request.Channel) ? "stable" : request.Channel.Trim();
+        var channel = ClientReleaseText.NormalizeChannel(request.Channel);
         var components = await componentRepository.GetListAsync(
             new ClientReleaseComponentsByChannelSpec(channel, request.TargetRuntime, onlyPublished: true),
             cancellationToken);
@@ -116,9 +116,9 @@ public sealed class GetDeviceClientVersionInventoryHandler(
             ? runtimeLocalIpAddresses
             : snapshotLocalIpAddresses;
         var primaryIp = localIpAddresses.FirstOrDefault()
-            ?? NormalizeOptional(state?.RuntimeRemoteIpAddress)
-            ?? NormalizeOptional(state?.VersionRemoteIpAddress)
-            ?? NormalizeOptional(snapshot?.RemoteIpAddress);
+            ?? ClientReleaseText.NormalizeOptional(state?.RuntimeRemoteIpAddress)
+            ?? ClientReleaseText.NormalizeOptional(state?.VersionRemoteIpAddress)
+            ?? ClientReleaseText.NormalizeOptional(snapshot?.RemoteIpAddress);
         var installStatus = ResolveInstallStatus(state, hostStatus, pluginRows);
         var softwareStatus = DeviceClientSoftwareStatusResolver.Resolve(state, utcNow);
         var versionIssue = ResolveVersionIssue(state, hostStatus, hostIssue, pluginRows, utcNow);
@@ -312,12 +312,6 @@ public sealed class GetDeviceClientVersionInventoryHandler(
             plugin.Enabled,
             updateStatus,
             compatibilityIssue);
-    }
-
-    private static string? NormalizeOptional(string? value)
-    {
-        var normalized = value?.Trim();
-        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
     private sealed class VersionStringComparer : IComparer<string>

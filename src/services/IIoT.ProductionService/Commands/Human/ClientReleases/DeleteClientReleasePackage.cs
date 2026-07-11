@@ -87,7 +87,7 @@ public sealed class DeleteClientReleasePackageHandler(
             return Result.Invalid(inUseReason);
         }
 
-        var edgeRoot = ResolveEdgeUpdatesRoot();
+        var edgeRoot = artifactOptions.Value.ResolveEdgeUpdatesRoot();
         var plan = ClientReleaseFileDeletionPlan.ForRelease(edgeRoot, component, release);
         return await ExecuteDeletionAsync(
             component,
@@ -128,7 +128,7 @@ public sealed class DeleteClientReleasePackageHandler(
             return Result.Invalid(inUseReason);
         }
 
-        var edgeRoot = ResolveEdgeUpdatesRoot();
+        var edgeRoot = artifactOptions.Value.ResolveEdgeUpdatesRoot();
         var plan = ClientReleaseFileDeletionPlan.ForRelease(edgeRoot, component, release);
         return await ExecuteDeletionAsync(
             component,
@@ -265,18 +265,6 @@ public sealed class DeleteClientReleasePackageHandler(
         }
     }
 
-    private string ResolveEdgeUpdatesRoot()
-    {
-        var installerRoot = Path.GetFullPath(artifactOptions.Value.RootPath);
-        var parent = Directory.GetParent(installerRoot);
-        if (parent is null)
-        {
-            throw new InvalidOperationException("EdgeInstallerArtifacts:RootPath 必须位于 edge-updates/installers 下。");
-        }
-
-        return parent.FullName;
-    }
-
     private async Task WriteAuditAsync(
         Guid releaseId,
         string componentKind,
@@ -302,7 +290,7 @@ public sealed class DeleteClientReleasePackageHandler(
 
         await auditTrailService.TryWriteAsync(
             new AuditTrailEntry(
-                ParseActorUserId(currentUser.Id),
+                ClientReleaseAuditActor.ParseId(currentUser.Id),
                 currentUser.UserName,
                 "ClientRelease.DeletePackage",
                 "ClientRelease",
@@ -314,8 +302,6 @@ public sealed class DeleteClientReleasePackageHandler(
             cancellationToken);
     }
 
-    private static Guid? ParseActorUserId(string? userId)
-        => Guid.TryParse(userId, out var parsed) ? parsed : null;
 }
 
 internal sealed class ClientReleaseFileDeletionPlan
@@ -378,7 +364,19 @@ internal sealed class ClientReleaseFileDeletionPlan
             return;
         }
 
-        if (IsVelopackChannelManifest(name) || VelopackManifestsReferenceFile(velopackRoot, name))
+        if (ClientReleaseVelopackPaths.IsProtectedChannelManifest(name))
+        {
+            skipped.Add(ToRelative(edgeRoot, path));
+            return;
+        }
+
+        var manifestPaths = Directory.EnumerateFiles(
+                velopackRoot,
+                "*",
+                SearchOption.TopDirectoryOnly)
+            .Where(candidate => ClientReleaseVelopackPaths.IsProtectedChannelManifest(
+                Path.GetFileName(candidate)));
+        if (ClientReleaseVelopackPaths.IsReferencedByManifests(manifestPaths, name))
         {
             skipped.Add(ToRelative(edgeRoot, path));
             return;
@@ -413,25 +411,6 @@ internal sealed class ClientReleaseFileDeletionPlan
         }
 
         targets.Add(ClientReleaseFileDeletionTarget.File(edgeRoot, path));
-    }
-
-    private static bool IsVelopackChannelManifest(string fileName)
-        => fileName.StartsWith("releases.", StringComparison.OrdinalIgnoreCase)
-           || fileName.StartsWith("assets.", StringComparison.OrdinalIgnoreCase)
-           || string.Equals(fileName, "RELEASES", StringComparison.OrdinalIgnoreCase);
-
-    private static bool VelopackManifestsReferenceFile(string velopackChannelRoot, string fileName)
-    {
-        foreach (var manifestPath in Directory.EnumerateFiles(velopackChannelRoot, "*", SearchOption.TopDirectoryOnly)
-                     .Where(path => IsVelopackChannelManifest(Path.GetFileName(path))))
-        {
-            if (File.ReadAllText(manifestPath).Contains(fileName, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static string ToRelative(string edgeRoot, string path)

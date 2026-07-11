@@ -430,7 +430,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             await cacheService.RemoveAsync(CacheKeys.DeviceCode(device.Code), cancellationToken);
             await auditTrailService.TryWriteAsync(
                 new AuditTrailEntry(
-                    ParseActorUserId(currentUser.Id),
+                    ClientReleaseAuditActor.ParseId(currentUser.Id),
                     currentUser.UserName,
                     "Edge.GenerateInstallerPackage",
                     "Device",
@@ -835,7 +835,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
     {
         await auditTrailService.TryWriteAsync(
             new AuditTrailEntry(
-                ParseActorUserId(currentUser.Id),
+                ClientReleaseAuditActor.ParseId(currentUser.Id),
                 currentUser.UserName,
                 "Edge.GenerateInstallerPackage",
                 "Device",
@@ -862,9 +862,6 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? defaultValue : normalized;
     }
-
-    private static Guid? ParseActorUserId(string? rawUserId)
-        => Guid.TryParse(rawUserId, out var actorUserId) ? actorUserId : null;
 
     private sealed record HostReleaseSelection(
         ClientReleaseComponent Component,

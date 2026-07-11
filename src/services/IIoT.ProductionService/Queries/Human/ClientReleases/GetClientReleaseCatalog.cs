@@ -25,7 +25,7 @@ public sealed class GetClientReleaseCatalogHandler(
         GetClientReleaseCatalogQuery request,
         CancellationToken cancellationToken)
     {
-        var channel = NormalizeChannel(request.Channel);
+        var channel = ClientReleaseText.NormalizeChannel(request.Channel);
         var components = await componentRepository.GetListAsync(
             new ClientReleaseComponentsByChannelSpec(
                 channel,
@@ -37,7 +37,7 @@ public sealed class GetClientReleaseCatalogHandler(
         return Result.Success(new ClientReleaseCatalogDto(
             ClientReleaseCatalogSchema.Version,
             channel,
-            NormalizeOptional(request.TargetRuntime),
+            ClientReleaseText.NormalizeOptional(request.TargetRuntime),
             ClientReleaseMapping.ToHostComponent(
                 components,
                 onlyPublished: request.OnlyPublished,
@@ -49,14 +49,4 @@ public sealed class GetClientReleaseCatalogHandler(
             DateTime.UtcNow));
     }
 
-    private static string NormalizeChannel(string? channel)
-    {
-        return string.IsNullOrWhiteSpace(channel) ? "stable" : channel.Trim();
-    }
-
-    private static string? NormalizeOptional(string? value)
-    {
-        var normalized = value?.Trim();
-        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
-    }
 }
