@@ -5,11 +5,16 @@
         <h3 class="text-[var(--fs-2xl)] font-[var(--fw-strong)] text-[var(--text-0)]">{{ t('dashboard.productionTrend') }}</h3>
         <p class="mt-1 text-[var(--fs-base)] font-[var(--fw-semibold)] text-[var(--muted-foreground)]">{{ t('dashboard.trendSubtitle') }}</p>
       </div>
-      <span class="rounded-[var(--radius-sm)] bg-[var(--bg-1)] px-3 py-2 text-[var(--fs-sm)] font-[var(--fw-strong)] text-white">{{ t('common.live') }}</span>
     </div>
-    <div class="dashboard-bars" :aria-label="t('dashboard.productionTrend')">
+    <EmptyState
+      v-if="!trendBars.length"
+      data-testid="dashboard-trend-empty"
+      :title="t('dashboard.trendEmptyTitle')"
+      :description="t('dashboard.trendEmptyDesc')"
+    />
+    <div v-else class="dashboard-bars" :aria-label="t('dashboard.productionTrend')">
       <div v-for="(bar, index) in trendBars" :key="`${bar.label}-${index}`" class="dashboard-bars__group">
-        <span class="dashboard-bars__bar" :style="{ height: bar.height, background: bar.color }"></span>
+        <span class="dashboard-bars__bar" :style="{ height: bar.height, background: bar.color }" :title="`${bar.label}: ${bar.value}`"></span>
         <small>{{ bar.label }}</small>
       </div>
     </div>
@@ -18,6 +23,7 @@
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n';
+import EmptyState from '../../components/states/EmptyState.vue';
 import type { DashboardTrendBar } from './types';
 
 defineProps<{

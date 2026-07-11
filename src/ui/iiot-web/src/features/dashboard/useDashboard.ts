@@ -17,11 +17,13 @@ import type { AppLocale } from '../../i18n';
 import { useAuthStore } from '../../stores/auth';
 import {
   mapDashboardEvent,
+  hasDashboardData,
   todayIsoDate,
   type AnalysisLink,
   type DashboardCard,
   type DashboardEvent,
-  type DashboardTeamMember,
+  type DashboardNonReadyState,
+  type DashboardViewState,
 } from './types';
 
 export function useDashboard() {
@@ -35,9 +37,10 @@ export function useDashboard() {
   const todayProduction = ref(0);
   const todayOkProduction = ref(0);
   const alertCount = ref(0);
-  const loadingDashboard = ref(true);
-  const dashboardError = ref('');
-  const dataReady = ref(false);
+  const dashboardState = ref<DashboardViewState>('loading');
+  const dashboardNonReadyState = computed<DashboardNonReadyState | null>(() =>
+    dashboardState.value === 'ready' ? null : dashboardState.value,
+  );
   const hourly = ref<{ label: string; value: number }[]>([]);
   const events = ref<DashboardEvent[]>([]);
 
@@ -46,20 +49,24 @@ export function useDashboard() {
     currentLocale.value === 'zh-CN' ? 'zh-CN' : 'en-US',
   );
   const displayRole = computed(() => {
-    if (!authStore.role) return t('dashboard.subtitleFallback');
+    if (!authStore.role) return t('layout.roleFallback');
     if (currentLocale.value === 'zh-CN' && authStore.role === 'Admin') return '管理员';
     return authStore.role;
   });
   const formattedProduction = computed(() =>
     todayProduction.value.toLocaleString(browserLocale.value),
   );
+  const hasHourlyData = computed(() => hourly.value.length > 0);
   const passRate = computed(() =>
     todayProduction.value > 0
       ? (todayOkProduction.value / todayProduction.value) * 100
       : 0,
   );
   const productionDisplay = computed(() =>
-    dataReady.value ? formattedProduction.value : '--',
+    hasHourlyData.value ? formattedProduction.value : '--',
+  );
+  const passRateDisplay = computed(() =>
+    hasHourlyData.value ? `${passRate.value.toFixed(1)}%` : '--',
   );
   const todayLabel = computed(() =>
     new Date().toLocaleDateString(browserLocale.value, {
@@ -70,6 +77,7 @@ export function useDashboard() {
   );
   const dashboardCards = computed<DashboardCard[]>(() => [
     {
+      id: 'production',
       label: t('dashboard.totalOutput'),
       value: productionDisplay.value,
       helper: t('dashboard.totalOutputHelper'),
@@ -77,51 +85,36 @@ export function useDashboard() {
       icon: Factory,
     },
     {
+      id: 'online-devices',
       label: t('dashboard.onlineDevices'),
-      value: dataReady.value ? onlineDevices.value : '--',
+      value: onlineDevices.value,
       helper: t('dashboard.onlineDevicesHelper', {
-        count: dataReady.value ? `/ ${totalDevices.value}` : '',
+        count: `/ ${totalDevices.value}`,
       }),
       background: 'var(--chart-2)',
       icon: Activity,
     },
     {
+      id: 'pass-rate',
       label: t('dashboard.passRate'),
-      value: dataReady.value ? `${passRate.value.toFixed(1)}%` : '--',
+      value: passRateDisplay.value,
       helper: t('dashboard.passRateHelper', {
-        count: dataReady.value ? alertCount.value : '--',
+        count: alertCount.value,
       }),
       background: 'var(--chart-3)',
       icon: Gauge,
     },
   ]);
-  const defaultTrend = computed(() =>
-    currentLocale.value === 'zh-CN'
-      ? [
-          { label: '周日', value: 32 },
-          { label: '周一', value: 46 },
-          { label: '周二', value: 58 },
-          { label: '周三', value: 39 },
-          { label: '周四', value: 52 },
-          { label: '周五', value: 42 },
-          { label: '周六', value: 56 },
-        ]
-      : [
-          { label: 'Sun', value: 32 },
-          { label: 'Mon', value: 46 },
-          { label: 'Tue', value: 58 },
-          { label: 'Wed', value: 39 },
-          { label: 'Thu', value: 52 },
-          { label: 'Fri', value: 42 },
-          { label: 'Sat', value: 56 },
-        ],
-  );
   const trendBars = computed(() => {
-    const source = hourly.value.length ? hourly.value.slice(-10) : defaultTrend.value;
+    const source = hourly.value.slice(-10);
+    if (!source.length) return [];
     const max = Math.max(...source.map((item) => item.value), 1);
     return source.map((item, index) => ({
       label: item.label,
-      height: `${Math.max(24, Math.round((item.value / max) * 100))}%`,
+      value: item.value,
+      height: item.value > 0
+        ? `${Math.max(8, Math.round((item.value / max) * 100))}%`
+        : '0%',
       color: index % 2 === 0 ? 'var(--chart-1)' : 'var(--chart-3)',
     }));
   });
@@ -136,12 +129,6 @@ export function useDashboard() {
     { label: t('dashboard.error'), value: errorDevices.value, color: 'var(--error)' },
     { label: t('dashboard.offline'), value: offlineDevices.value, color: 'var(--text-2)' },
   ]);
-  const teamMembers = computed<DashboardTeamMember[]>(() => [
-    { name: currentLocale.value === 'zh-CN' ? '甲班组' : 'Shift A', role: t('dashboard.shiftLead'), initial: 'A', color: 'var(--chart-1)' },
-    { name: currentLocale.value === 'zh-CN' ? '质检岗' : 'Quality', role: t('dashboard.quality'), initial: 'Q', color: 'var(--chart-2)' },
-    { name: currentLocale.value === 'zh-CN' ? '维修岗' : 'Maintenance', role: t('dashboard.maintenance'), initial: 'M', color: 'var(--chart-3)' },
-  ]);
-
   function resetDashboardData() {
     totalDevices.value = 0;
     onlineDevices.value = 0;
@@ -156,9 +143,8 @@ export function useDashboard() {
   }
 
   async function loadDashboard() {
-    loadingDashboard.value = true;
-    dashboardError.value = '';
-    dataReady.value = false;
+    dashboardState.value = 'loading';
+    resetDashboardData();
 
     try {
       const [statusSummary, hourlyData, alertSummary, recentLogs] = await Promise.all([
@@ -180,13 +166,15 @@ export function useDashboard() {
         value: item.totalCount,
       }));
       events.value = recentLogs.map((log) => mapDashboardEvent(log, browserLocale.value));
-      dataReady.value = true;
+      dashboardState.value = hasDashboardData({
+        totalDevices: totalDevices.value,
+        hourlyCount: hourly.value.length,
+        alertCount: alertCount.value,
+        eventCount: events.value.length,
+      }) ? 'ready' : 'empty';
     } catch {
       resetDashboardData();
-      dataReady.value = false;
-      dashboardError.value = t('dashboard.loadFailed');
-    } finally {
-      loadingDashboard.value = false;
+      dashboardState.value = 'error';
     }
   }
 
@@ -199,11 +187,9 @@ export function useDashboard() {
     trendBars,
     analysisLinks,
     events,
-    loadingDashboard,
+    dashboardNonReadyState,
     productionDisplay,
     statusRows,
-    teamMembers,
-    dashboardError,
     loadDashboard,
   };
 }

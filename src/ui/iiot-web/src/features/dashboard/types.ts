@@ -2,6 +2,7 @@ import type { Component } from 'vue';
 import type { DeviceLogListItemDto } from '../device-logs/api';
 
 export interface DashboardCard {
+  id: 'production' | 'online-devices' | 'pass-rate';
   label: string;
   value: string | number;
   helper: string;
@@ -25,6 +26,7 @@ export interface DashboardEvent {
 
 export interface DashboardTrendBar {
   label: string;
+  value: number;
   height: string;
   color: string;
 }
@@ -35,11 +37,19 @@ export interface DashboardStatusRow {
   color: string;
 }
 
-export interface DashboardTeamMember {
-  name: string;
-  role: string;
-  initial: string;
-  color: string;
+export type DashboardViewState = 'loading' | 'empty' | 'error' | 'ready';
+export type DashboardNonReadyState = Exclude<DashboardViewState, 'ready'>;
+
+export function hasDashboardData(value: {
+  totalDevices: number;
+  hourlyCount: number;
+  alertCount: number;
+  eventCount: number;
+}): boolean {
+  return value.totalDevices > 0
+    || value.hourlyCount > 0
+    || value.alertCount > 0
+    || value.eventCount > 0;
 }
 
 export function todayIsoDate(date = new Date()): string {

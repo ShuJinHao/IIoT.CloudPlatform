@@ -20,17 +20,11 @@
         <ChevronRight :size="16" />
       </router-link>
     </div>
-    <div class="mt-7 flex items-center gap-2 text-[var(--fs-sm)] font-[var(--fw-semibold)] text-[var(--muted-foreground)]">
-      {{ t('dashboard.analysisCreatedBy') }}
-      <span class="grid size-7 place-items-center rounded-full bg-[var(--accent-chip)] text-[var(--text-0)]">
-        <Sparkles :size="14" />
-      </span>
-    </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { ChevronRight, Sparkles } from 'lucide-vue-next';
+import { ChevronRight } from 'lucide-vue-next';
 import { useI18n } from 'vue-i18n';
 import type { AnalysisLink } from './types';
 

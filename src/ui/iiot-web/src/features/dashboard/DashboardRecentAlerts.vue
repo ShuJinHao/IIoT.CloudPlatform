@@ -26,7 +26,7 @@
         </div>
       </div>
       <div v-else class="px-4 py-10 text-center text-[var(--fs-base)] font-[var(--fw-semibold)] text-[var(--muted-foreground)]">
-        {{ loading ? t('common.loading') : t('dashboard.noAlerts') }}
+        {{ t('dashboard.noAlerts') }}
       </div>
     </div>
   </section>
@@ -38,7 +38,6 @@ import type { DashboardEvent } from './types';
 
 defineProps<{
   events: DashboardEvent[];
-  loading: boolean;
 }>();
 
 const { t } = useI18n();

@@ -10,26 +10,27 @@
       </div>
     </section>
 
-    <section class="grid grid-cols-[minmax(0,1fr)_260px] gap-7 max-[1180px]:grid-cols-1">
+    <DashboardStatePanel
+      v-if="dashboardNonReadyState"
+      :state="dashboardNonReadyState"
+      @retry="loadDashboard"
+    />
+
+    <section v-else data-testid="dashboard-ready" class="grid grid-cols-[minmax(0,1fr)_260px] gap-7 max-[1180px]:grid-cols-1">
       <div class="min-w-0 space-y-7">
         <DashboardMetricCards :cards="dashboardCards" />
         <div class="grid grid-cols-[minmax(0,1.45fr)_minmax(280px,0.85fr)] gap-7 max-[1180px]:grid-cols-1">
           <DashboardTrendPanel :trend-bars="trendBars" />
           <DashboardAnalysisPanel :links="analysisLinks" />
         </div>
-        <DashboardRecentAlerts :events="events" :loading="loadingDashboard" />
+        <DashboardRecentAlerts :events="events" />
       </div>
 
       <DashboardSidebar
         :production-display="productionDisplay"
         :status-rows="statusRows"
-        :team-members="teamMembers"
       />
     </section>
-
-    <div v-if="dashboardError" class="rounded-[var(--radius-lg)] border border-[rgba(239,68,68,0.20)] bg-[rgba(239,68,68,0.10)] px-5 py-4 text-[var(--fs-base)] font-[var(--fw-semibold)] text-[var(--error)]">
-      {{ dashboardError }}
-    </div>
   </div>
 </template>
 
@@ -39,6 +40,7 @@ import DashboardAnalysisPanel from './DashboardAnalysisPanel.vue';
 import DashboardMetricCards from './DashboardMetricCards.vue';
 import DashboardRecentAlerts from './DashboardRecentAlerts.vue';
 import DashboardSidebar from './DashboardSidebar.vue';
+import DashboardStatePanel from './DashboardStatePanel.vue';
 import DashboardTrendPanel from './DashboardTrendPanel.vue';
 import { useDashboard } from './useDashboard';
 import './dashboard-page.css';
@@ -52,11 +54,9 @@ const {
   trendBars,
   analysisLinks,
   events,
-  loadingDashboard,
+  dashboardNonReadyState,
   productionDisplay,
   statusRows,
-  teamMembers,
-  dashboardError,
   loadDashboard,
 } = useDashboard();
 
