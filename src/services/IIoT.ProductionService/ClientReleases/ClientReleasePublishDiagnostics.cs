@@ -12,6 +12,11 @@ internal static class ClientReleasePublishDiagnostics
     public static readonly EventId PluginPublishFailed = new(6120, nameof(PluginPublishFailed));
     public static readonly EventId PluginRetentionCleanupFailed = new(6121, nameof(PluginRetentionCleanupFailed));
     public static readonly EventId PluginRollbackCleanupFailed = new(6122, nameof(PluginRollbackCleanupFailed));
+    public static readonly EventId PluginCommitRecovered = new(6123, nameof(PluginCommitRecovered));
+    public static readonly EventId PluginCommitUnknown = new(6124, nameof(PluginCommitUnknown));
+    public static readonly EventId PluginCommitConflict = new(6125, nameof(PluginCommitConflict));
+    public static readonly EventId PluginRollbackOwnershipMismatch = new(6126, nameof(PluginRollbackOwnershipMismatch));
+    public static readonly EventId PluginOwnershipMarkerCleanupFailed = new(6127, nameof(PluginOwnershipMarkerCleanupFailed));
 
     public static void LogFailure(
         ILogger logger,

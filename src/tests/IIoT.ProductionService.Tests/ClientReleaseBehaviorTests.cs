@@ -325,7 +325,7 @@ public sealed class ClientReleaseBehaviorTests
                 "*.zip"));
             AssertGatewayReadableDirectory(Path.GetDirectoryName(pluginPackage)!);
             AssertGatewayReadableFile(pluginPackage);
-            Assert.Equal(HashFile(pluginPackage), pluginRelease.Sha256);
+            Assert.Equal(ClientReleaseFileFacts.ComputeSha256(pluginPackage), pluginRelease.Sha256);
             Assert.Equal(new FileInfo(pluginPackage).Length, pluginRelease.PackageSize);
             Assert.Contains(auditTrail.Entries, entry => entry.Succeeded && entry.OperationType == "ClientRelease.Publish");
         }
@@ -450,7 +450,7 @@ public sealed class ClientReleaseBehaviorTests
             AssertGatewayReadableDirectory(edgeRoot);
             AssertGatewayReadableDirectory(Path.GetDirectoryName(package)!);
             AssertGatewayReadableFile(package);
-            Assert.Equal(HashFile(package), release.Sha256);
+            Assert.Equal(ClientReleaseFileFacts.ComputeSha256(package), release.Sha256);
             Assert.Contains(auditTrail.Entries, entry => entry.Succeeded && entry.OperationType == "ClientRelease.PublishPlugin");
         }
         finally
@@ -489,10 +489,8 @@ public sealed class ClientReleaseBehaviorTests
                 new NoopRetentionService(),
                 new RecordingAuditTrailService());
 
-            var result = await PublishPluginPackageAsync(handler, wrapper.ZipPath);
-
-            Assert.False(result.IsSuccess);
-            Assert.Contains(result.Errors ?? [], error => error.Contains("插件版本已存在", StringComparison.Ordinal));
+            await Assert.ThrowsAsync<ClientReleasePublishConflictException>(
+                () => PublishPluginPackageAsync(handler, wrapper.ZipPath));
             Assert.Single(componentRepository.Items);
             Assert.False(Directory.Exists(Path.Combine(edgeRoot, "plugins", "stable", "Homogenization", "1.1.1")));
         }
@@ -544,6 +542,76 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
+    public async Task PublishEdgePluginPackageHandler_ShouldRejectCreatedAtWithoutUtcOrOffset()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-edge-plugin-upload-root");
+        var wrapper = CreatePluginReleaseWrapper(
+            "Homogenization",
+            "1.1.9",
+            createdAtUtcText: "2026-07-11T12:00:00");
+        try
+        {
+            var repository = new InMemoryRepository<ClientReleaseComponent>();
+            var publisher = CreatePluginPackageHandler(
+                edgeRoot,
+                repository,
+                new NoopRetentionService(),
+                new RecordingAuditTrailService());
+
+            var result = await PublishPluginPackageAsync(publisher, wrapper.ZipPath);
+
+            Assert.False(result.IsSuccess);
+            Assert.Contains(
+                result.Errors ?? [],
+                error => error.Contains("createdAtUtc", StringComparison.Ordinal));
+            Assert.Empty(repository.Items);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            wrapper.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task PublishEdgePluginPackageHandler_ShouldNormalizeCreatedAtOffsetToUtc()
+    {
+        const string createdAtWithOffset = "2026-07-11T12:00:00+08:00";
+        var edgeRoot = CreateTempDirectory("iiot-edge-plugin-upload-root");
+        var wrapper = CreatePluginReleaseWrapper(
+            "Homogenization",
+            "1.1.10",
+            createdAtUtcText: createdAtWithOffset);
+        try
+        {
+            var repository = new InMemoryRepository<ClientReleaseComponent>();
+            var publisher = CreatePluginPackageHandler(
+                edgeRoot,
+                repository,
+                new NoopRetentionService(),
+                new RecordingAuditTrailService());
+
+            var result = await PublishPluginPackageAsync(publisher, wrapper.ZipPath);
+
+            Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
+            var publishedAt = SingleVersion(SingleComponent(
+                repository,
+                ClientReleaseComponentKind.Plugin,
+                "Homogenization")).PublishedAtUtc;
+            Assert.NotNull(publishedAt);
+            Assert.Equal(DateTimeKind.Utc, publishedAt!.Value.Kind);
+            Assert.Equal(
+                DateTimeOffset.Parse(createdAtWithOffset).UtcDateTime,
+                publishedAt.Value);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            wrapper.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task PublishEdgeReleaseBundleHandler_ShouldRollbackFilesAndHideCatalog_WhenDatabaseCommitFails()
     {
         const string sensitiveFailure = "/private/release/SECRET-db-unavailable";
@@ -557,7 +625,7 @@ public sealed class ClientReleaseBehaviorTests
         {
             var componentRepository = new InMemoryRepository<ClientReleaseComponent>
             {
-                SaveChangesException = new InvalidOperationException(sensitiveFailure)
+                SaveChangesAsyncOverride = _ => Task.FromException<int>(new InvalidOperationException(sensitiveFailure))
             };
             var auditTrail = new RecordingAuditTrailService();
             var handler = CreatePublishHandler(edgeRoot, componentRepository, new NoopRetentionService(), auditTrail);
@@ -593,7 +661,7 @@ public sealed class ClientReleaseBehaviorTests
         {
             var repository = new InMemoryRepository<ClientReleaseComponent>
             {
-                SaveChangesException = new InvalidDataException(sensitiveFailure)
+                SaveChangesAsyncOverride = _ => Task.FromException<int>(new InvalidDataException(sensitiveFailure))
             };
             var auditTrail = new RecordingAuditTrailService();
             var publisher = CreatePublishHandler(
@@ -619,7 +687,7 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
-    public async Task PublishEdgePluginPackageHandler_ShouldNotExposeIoFailureDetails()
+    public async Task PublishEdgePluginPackageHandler_SaveResponseFailureWithoutObservation_ShouldPreservePackageAndReturnUnknown()
     {
         const string sensitiveFailure = "/private/release/SECRET-plugin-io";
         var edgeRoot = CreateTempDirectory("iiot-edge-plugin-upload-root");
@@ -628,7 +696,7 @@ public sealed class ClientReleaseBehaviorTests
         {
             var repository = new InMemoryRepository<ClientReleaseComponent>
             {
-                SaveChangesException = new IOException(sensitiveFailure)
+                SaveChangesAsyncOverride = _ => Task.FromException<int>(new IOException(sensitiveFailure))
             };
             var auditTrail = new RecordingAuditTrailService();
             var publisher = CreatePluginPackageHandler(
@@ -637,21 +705,215 @@ public sealed class ClientReleaseBehaviorTests
                 new NoopRetentionService(),
                 auditTrail);
 
-            var result = await PublishPluginPackageAsync(publisher, wrapper.ZipPath);
+            await Assert.ThrowsAsync<ClientReleaseCommitUnknownException>(
+                () => PublishPluginPackageAsync(publisher, wrapper.ZipPath));
 
-            Assert.False(result.IsSuccess);
-            Assert.Equal(
-                "Edge 插件发布包处理失败，请检查上传包和发布目录后重试。",
-                Assert.Single(result.Errors ?? []));
-            var failureAudit = Assert.Single(auditTrail.Entries, entry => !entry.Succeeded);
-            Assert.Equal(Assert.Single(result.Errors ?? []), failureAudit.FailureReason);
+            var failureAudit = Assert.Single(
+                auditTrail.Entries,
+                entry => entry.OperationType == "ClientRelease.PublishPlugin.CommitUnknown");
+            Assert.False(failureAudit.Succeeded);
             Assert.DoesNotContain(sensitiveFailure, failureAudit.FailureReason!, StringComparison.Ordinal);
-            Assert.False(Directory.Exists(Path.Combine(
+            Assert.DoesNotContain(sensitiveFailure, failureAudit.Summary, StringComparison.Ordinal);
+            Assert.Single(Directory.GetFiles(Path.Combine(
                 edgeRoot,
                 "plugins",
                 "stable",
                 "Homogenization",
-                "1.1.3")));
+                "1.1.3"), "*.zip"));
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            wrapper.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task PublishEdgePluginPackageHandler_PostCommitExceptionSimulation_ShouldRecoverExactUppercaseHash()
+    {
+        const string sensitiveFailure = "/private/release/SECRET-post-commit-response";
+        var edgeRoot = CreateTempDirectory("iiot-edge-plugin-upload-root");
+        var wrapper = CreatePluginReleaseWrapper("Homogenization", "1.1.5", uppercaseSha256: true);
+        try
+        {
+            var repository = new InMemoryRepository<ClientReleaseComponent>
+            {
+                SaveChangesAsyncOverride = _ => Task.FromException<int>(new IOException(sensitiveFailure))
+            };
+            var auditTrail = new RecordingAuditTrailService();
+            var observationReader = new RepositoryBackedReleaseReader(
+                repository,
+                observation => observation with
+                {
+                    Sha256 = observation.Sha256.ToLowerInvariant(),
+                    Artifacts = observation.Artifacts
+                        .Select(artifact => artifact with { Sha256 = artifact.Sha256?.ToLowerInvariant() })
+                        .ToList()
+                });
+            var publisher = CreatePluginPackageHandler(
+                edgeRoot,
+                repository,
+                new NoopRetentionService(),
+                auditTrail,
+                observationReader);
+
+            var result = await PublishPluginPackageAsync(publisher, wrapper.ZipPath);
+
+            Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
+            Assert.Contains("保留/清理旧版本未执行", result.Value!.CleanupWarning, StringComparison.Ordinal);
+            var targetDirectory = Path.Combine(
+                edgeRoot,
+                "plugins",
+                "stable",
+                "Homogenization",
+                "1.1.5");
+            Assert.Single(Directory.GetFiles(targetDirectory, "*.zip"));
+            Assert.False(File.Exists(Path.Combine(targetDirectory, ".iiot-plugin-publish-owner")));
+            var audit = Assert.Single(
+                auditTrail.Entries,
+                entry => entry.OperationType == "ClientRelease.PublishPlugin.CommitRecovered");
+            Assert.True(audit.Succeeded);
+            Assert.DoesNotContain(sensitiveFailure, audit.Summary, StringComparison.Ordinal);
+            Assert.Null(audit.FailureReason);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            wrapper.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task PublishEdgePluginPackageHandler_PostCommitExceptionSimulation_Mismatch_ShouldReturnConflictWithoutDeletingPackage()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-edge-plugin-upload-root");
+        var wrapper = CreatePluginReleaseWrapper("Homogenization", "1.1.6");
+        try
+        {
+            var repository = new InMemoryRepository<ClientReleaseComponent>
+            {
+                SaveChangesAsyncOverride = _ => Task.FromException<int>(new IOException("db-response-lost"))
+            };
+            var auditTrail = new RecordingAuditTrailService();
+            var publisher = CreatePluginPackageHandler(
+                edgeRoot,
+                repository,
+                new NoopRetentionService(),
+                auditTrail,
+                new RepositoryBackedReleaseReader(
+                    repository,
+                    observation => observation with { ReleaseNotes = "different-persisted-state" }));
+
+            await Assert.ThrowsAsync<ClientReleasePublishConflictException>(
+                () => PublishPluginPackageAsync(publisher, wrapper.ZipPath));
+
+            var targetDirectory = Path.Combine(
+                edgeRoot,
+                "plugins",
+                "stable",
+                "Homogenization",
+                "1.1.6");
+            Assert.Single(Directory.GetFiles(targetDirectory, "*.zip"));
+            Assert.True(File.Exists(Path.Combine(targetDirectory, ".iiot-plugin-publish-owner")));
+            var audit = Assert.Single(
+                auditTrail.Entries,
+                entry => entry.OperationType == "ClientRelease.PublishPlugin.CommitConflict");
+            Assert.False(audit.Succeeded);
+            Assert.Equal("persisted-state-mismatch", audit.FailureReason);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            wrapper.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task PublishEdgePluginPackageHandler_PostCommitCancellationSimulation_ShouldRethrowAfterSuccessfulAudit()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-edge-plugin-upload-root");
+        var wrapper = CreatePluginReleaseWrapper("Homogenization", "1.1.7");
+        try
+        {
+            var repository = new InMemoryRepository<ClientReleaseComponent>
+            {
+                SaveChangesAsyncOverride = _ => Task.FromException<int>(new OperationCanceledException("lease-lost"))
+            };
+            var auditTrail = new RecordingAuditTrailService();
+            var observationReader = new RepositoryBackedReleaseReader(repository);
+            var publisher = CreatePluginPackageHandler(
+                edgeRoot,
+                repository,
+                new NoopRetentionService(),
+                auditTrail,
+                observationReader);
+
+            await Assert.ThrowsAsync<OperationCanceledException>(
+                () => PublishPluginPackageAsync(publisher, wrapper.ZipPath));
+
+            var targetDirectory = Path.Combine(
+                edgeRoot,
+                "plugins",
+                "stable",
+                "Homogenization",
+                "1.1.7");
+            Assert.Single(Directory.GetFiles(targetDirectory, "*.zip"));
+            Assert.False(File.Exists(Path.Combine(targetDirectory, ".iiot-plugin-publish-owner")));
+            var audit = Assert.Single(
+                auditTrail.Entries,
+                entry => entry.OperationType == "ClientRelease.PublishPlugin.CommittedResponseCancelled");
+            Assert.True(audit.Succeeded);
+            Assert.Null(audit.FailureReason);
+            Assert.Equal(1, observationReader.Calls);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            wrapper.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task PublishEdgePluginPackageHandler_CancellationObservedAfterMarkerCleanup_ShouldKeepCleanupIdempotent()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-edge-plugin-upload-root");
+        var wrapper = CreatePluginReleaseWrapper("Homogenization", "1.1.8");
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            var repository = new InMemoryRepository<ClientReleaseComponent>
+            {
+                SaveChangesAsyncOverride = _ =>
+                {
+                    cancellation.Cancel();
+                    return Task.FromResult(1);
+                }
+            };
+            var auditTrail = new RecordingAuditTrailService();
+            var observationReader = new RepositoryBackedReleaseReader(repository);
+            var publisher = CreatePluginPackageHandler(
+                edgeRoot,
+                repository,
+                new NoopRetentionService(),
+                auditTrail,
+                observationReader);
+
+            await Assert.ThrowsAsync<OperationCanceledException>(
+                () => PublishPluginPackageAsync(publisher, wrapper.ZipPath, cancellation.Token));
+
+            var targetDirectory = Path.Combine(
+                edgeRoot,
+                "plugins",
+                "stable",
+                "Homogenization",
+                "1.1.8");
+            Assert.Single(Directory.GetFiles(targetDirectory, "*.zip"));
+            Assert.False(File.Exists(Path.Combine(targetDirectory, ".iiot-plugin-publish-owner")));
+            var audit = Assert.Single(
+                auditTrail.Entries,
+                entry => entry.OperationType == "ClientRelease.PublishPlugin.CommittedResponseCancelled");
+            Assert.True(audit.Succeeded);
+            Assert.Equal(1, observationReader.Calls);
         }
         finally
         {
@@ -1637,12 +1899,14 @@ public sealed class ClientReleaseBehaviorTests
         string edgeRoot,
         InMemoryRepository<ClientReleaseComponent> componentRepository,
         IClientReleaseRetentionService retentionService,
-        RecordingAuditTrailService auditTrail)
+        RecordingAuditTrailService auditTrail,
+        IClientReleaseVersionObservationReader? observationReader = null)
     {
         var source = new ClientReleaseUploadTestSource();
         var handler = new PublishEdgePluginPackageHandler(
             ClientReleaseUploadTestSupport.CreateCoordinator(edgeRoot, source),
             componentRepository,
+            observationReader ?? new NotObservedReleaseReader(),
             retentionService,
             new TestCurrentUser(),
             auditTrail,
@@ -1662,12 +1926,13 @@ public sealed class ClientReleaseBehaviorTests
 
     private static async Task<IIoT.SharedKernel.Result.Result<EdgePluginPackagePublishResultDto>> PublishPluginPackageAsync(
         (PublishEdgePluginPackageHandler Handler, ClientReleaseUploadTestSource Source) publisher,
-        string wrapperPath)
+        string wrapperPath,
+        CancellationToken cancellationToken = default)
     {
         publisher.Source.LoadFile(wrapperPath);
         return await publisher.Handler.Handle(
             new PublishEdgePluginPackageCommand(),
-            CancellationToken.None);
+            cancellationToken);
     }
 
     private static EdgeReleaseBundleFixture CreateEdgeReleaseBundle(
@@ -1727,7 +1992,7 @@ public sealed class ClientReleaseBehaviorTests
             previousSourceCommit = new string('b', 40),
             releaseNotes = $"release {version}\n- changed",
             installerStubFile = "IIoT.Edge.Setup.exe",
-            installerStubSha256 = HashFile(setupPath),
+            installerStubSha256 = ClientReleaseFileFacts.ComputeSha256(setupPath),
             installerStubSize = new FileInfo(setupPath).Length,
             launcherDirectory = "launcher",
             hostDirectory = "host",
@@ -1735,7 +2000,7 @@ public sealed class ClientReleaseBehaviorTests
             hostDirectorySize = GetDirectorySize(hostRoot),
             pluginsRoot = "plugins",
             velopackSetupFile = "velopack/IIoT.Edge.Setup.exe",
-            velopackSetupSha256 = HashFile(velopackSetupPath),
+            velopackSetupSha256 = ClientReleaseFileFacts.ComputeSha256(velopackSetupPath),
             velopackSetupSize = new FileInfo(velopackSetupPath).Length,
             modules = new[]
             {
@@ -1767,7 +2032,9 @@ public sealed class ClientReleaseBehaviorTests
     private static EdgeReleaseBundleFixture CreatePluginReleaseWrapper(
         string moduleId,
         string version,
-        Action<string>? mutatePackageRoot = null)
+        Action<string>? mutatePackageRoot = null,
+        bool uppercaseSha256 = false,
+        string? createdAtUtcText = null)
     {
         var workingRoot = CreateTempDirectory("iiot-edge-plugin-wrapper");
         var packageRoot = Path.Combine(workingRoot, "package-root");
@@ -1793,6 +2060,7 @@ public sealed class ClientReleaseBehaviorTests
         var wrapperRoot = Path.Combine(workingRoot, "wrapper");
         Directory.CreateDirectory(Path.Combine(wrapperRoot, "plugin"));
         File.Copy(packagePath, Path.Combine(wrapperRoot, "plugin", packageFileName));
+        var packageSha256 = ClientReleaseFileFacts.ComputeSha256(packagePath);
         var manifest = new
         {
             packageSchemaVersion = 1,
@@ -1809,11 +2077,11 @@ public sealed class ClientReleaseBehaviorTests
             targetFramework = "net10.0",
             packageFileName,
             packageSize = new FileInfo(packagePath).Length,
-            sha256 = HashFile(packagePath),
+            sha256 = uppercaseSha256 ? packageSha256.ToUpperInvariant() : packageSha256,
             signature = "",
             publisher = "IIoT",
             releaseNotes = "独立插件更新",
-            createdAtUtc = DateTime.UtcNow
+            createdAtUtc = createdAtUtcText ?? DateTime.UtcNow.ToString("O")
         };
         File.WriteAllText(
             Path.Combine(wrapperRoot, "plugin-release.json"),
@@ -1836,12 +2104,6 @@ public sealed class ClientReleaseBehaviorTests
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, content, new UTF8Encoding(false));
-    }
-
-    private static string HashFile(string file)
-    {
-        using var stream = File.OpenRead(file);
-        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
     }
 
     private static string HashDirectory(string directory)
@@ -1923,6 +2185,81 @@ public sealed class ClientReleaseBehaviorTests
         {
             Entries.Add(entry);
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class NotObservedReleaseReader : IClientReleaseVersionObservationReader
+    {
+        public Task<ClientReleaseVersionObservation?> ObserveAsync(
+            ClientReleaseVersionIdentity identity,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult<ClientReleaseVersionObservation?>(null);
+        }
+    }
+
+    private sealed class RepositoryBackedReleaseReader(
+        InMemoryRepository<ClientReleaseComponent> repository,
+        Func<ClientReleaseVersionObservation, ClientReleaseVersionObservation>? mutate = null)
+        : IClientReleaseVersionObservationReader
+    {
+        public int Calls { get; private set; }
+
+        public Task<ClientReleaseVersionObservation?> ObserveAsync(
+            ClientReleaseVersionIdentity identity,
+            CancellationToken cancellationToken)
+        {
+            Calls++;
+            cancellationToken.ThrowIfCancellationRequested();
+            var component = repository.Items.SingleOrDefault(item =>
+                item.ComponentKind == identity.ComponentKind
+                && item.ComponentKey == identity.ComponentKey
+                && item.Channel == identity.Channel
+                && item.TargetRuntime == identity.TargetRuntime);
+            var version = component?.Versions.SingleOrDefault(item => item.Version == identity.Version);
+            if (component is null || version is null)
+            {
+                return Task.FromResult<ClientReleaseVersionObservation?>(null);
+            }
+
+            var observation = new ClientReleaseVersionObservation(
+                component.Id,
+                component.ComponentKind,
+                component.ComponentKey,
+                component.DisplayName,
+                component.Description,
+                component.IconKind,
+                component.AccentColor,
+                component.Channel,
+                component.TargetRuntime,
+                version.Id,
+                version.Version,
+                version.HostApiVersion,
+                version.MinHostVersion,
+                version.MaxHostVersion,
+                version.TargetFramework,
+                version.DownloadUrl,
+                version.Sha256,
+                version.PackageSize,
+                version.ReleaseNotes,
+                version.DependenciesJson,
+                version.Status,
+                version.Signature,
+                version.Publisher,
+                version.PublishedAtUtc,
+                version.DeletedAtUtc,
+                version.DeletionReason,
+                version.DeletionFailure,
+                version.Artifacts
+                    .Select(artifact => new ClientReleaseArtifactObservation(
+                        artifact.ArtifactKind,
+                        artifact.RelativePath,
+                        artifact.Sha256,
+                        artifact.Size))
+                    .ToList());
+            return Task.FromResult<ClientReleaseVersionObservation?>(
+                mutate is null ? observation : mutate(observation));
         }
     }
 
@@ -2254,7 +2591,7 @@ public sealed class ClientReleaseBehaviorTests
 
         public T? AddedEntity { get; private set; }
 
-        public Exception? SaveChangesException { get; init; }
+        public Func<CancellationToken, Task<int>>? SaveChangesAsyncOverride { get; init; }
 
         public T Add(T entity)
         {
@@ -2274,9 +2611,9 @@ public sealed class ClientReleaseBehaviorTests
 
         public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
         {
-            if (SaveChangesException is not null)
+            if (SaveChangesAsyncOverride is not null)
             {
-                throw SaveChangesException;
+                return SaveChangesAsyncOverride(cancellationToken);
             }
 
             return Task.FromResult(1);

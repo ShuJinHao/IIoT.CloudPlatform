@@ -26,6 +26,9 @@
     <ProjectReference Include="..\..\hosts\IIoT.AppHost\IIoT.AppHost.csproj" />
     <ProjectReference Include="..\..\hosts\IIoT.HttpApi\IIoT.HttpApi.csproj" />
     <ProjectReference Include="..\..\hosts\IIoT.MigrationWorkApp\IIoT.MigrationWorkApp.csproj" />
+    <ProjectReference Include="..\..\core\IIoT.Core.Production\IIoT.Core.Production.csproj" />
+    <ProjectReference Include="..\..\infrastructure\IIoT.EntityFrameworkCore\IIoT.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="..\..\services\IIoT.ProductionService\IIoT.ProductionService.csproj" />
     <ProjectReference Include="..\..\services\IIoT.Services.Contracts\IIoT.Services.Contracts.csproj" />
     <ProjectReference Include="..\..\shared\IIoT.SharedKernel\IIoT.SharedKernel.csproj" />
   </ItemGroup>

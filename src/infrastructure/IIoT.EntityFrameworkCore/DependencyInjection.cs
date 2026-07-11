@@ -80,6 +80,7 @@ public static class DependencyInjection
         builder.Services.AddScoped<IEdgeReleaseApiKeyService, EdgeReleaseApiKeyService>();
         builder.Services.AddScoped<IIntegrationEventOutbox, EfIntegrationEventOutbox>();
         builder.Services.AddScoped<IUploadReceiveRegistry, EfUploadReceiveRegistry>();
+        builder.Services.AddScoped<IClientReleaseVersionObservationReader, EfClientReleaseVersionObservationReader>();
         builder.Services.AddScoped<IRolePolicyService, RolePolicyService>();
         builder.Services.AddScoped<IUserQueryService, UserQueryService>();
         builder.Services.AddScoped<IAuditTrailService, Auditing.EfAuditTrailService>();

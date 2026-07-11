@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using System.IO.Compression;
-using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using IIoT.Core.Production.Aggregates.ClientReleases;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Core.Production.Specifications.ClientReleases;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.Services.Contracts;
@@ -46,6 +46,7 @@ public sealed record EdgePluginPackagePublishResultDto(
 public sealed class PublishEdgePluginPackageHandler(
     ClientReleaseUploadCoordinator uploadCoordinator,
     IRepository<ClientReleaseComponent> componentRepository,
+    IClientReleaseVersionObservationReader observationReader,
     IClientReleaseRetentionService retentionService,
     ICurrentUser currentUser,
     IAuditTrailService auditTrailService,
@@ -84,8 +85,12 @@ public sealed class PublishEdgePluginPackageHandler(
         var stagingRoot = uploadSession.StagingRoot;
         var wrapperPath = uploadSession.UploadedFilePath;
         var extractRoot = Path.Combine(stagingRoot, "extracted");
-        string? packageTargetDirectory = null;
-        var databaseSaved = false;
+        PluginReleasePublishFileTransaction? fileTransaction = null;
+        ClientReleaseVersionIdentity? releaseIdentity = null;
+        PluginReleaseExpectedState? expectedState = null;
+        var saveChangesInvoked = false;
+        var saveChangesReturned = false;
+        var stableOutcomeAuditWritten = false;
 
         try
         {
@@ -103,110 +108,175 @@ public sealed class PublishEdgePluginPackageHandler(
 
             var metadata = loadResult.Metadata!;
             var packagePath = loadResult.PackagePath!;
+            releaseIdentity = new ClientReleaseVersionIdentity(
+                ClientReleaseComponentKind.Plugin,
+                metadata.ModuleId.Trim(),
+                metadata.Channel.Trim(),
+                metadata.TargetRuntime.Trim(),
+                metadata.Version.Trim());
             var component = await componentRepository.GetSingleOrDefaultAsync(
                 new ClientReleaseComponentByIdentitySpec(
-                    ClientReleaseComponentKind.Plugin,
-                    metadata.ModuleId,
-                    metadata.Channel,
-                    metadata.TargetRuntime),
+                    releaseIdentity.ComponentKind,
+                    releaseIdentity.ComponentKey,
+                    releaseIdentity.Channel,
+                    releaseIdentity.TargetRuntime),
                 cancellationToken);
-            if (component?.FindVersion(metadata.Version) is not null)
+            if (component?.FindVersion(releaseIdentity.Version) is not null)
             {
-                return await FailAsync(
-                    $"插件版本已存在，拒绝重复发布: {metadata.ModuleId}/{metadata.Channel}/{metadata.Version}/{metadata.TargetRuntime}。",
-                    cancellationToken);
+                throw new ClientReleasePublishConflictException();
             }
 
-            packageTargetDirectory = Path.Combine(
+            var packageTargetDirectory = Path.Combine(
                 edgeRoot,
                 "plugins",
-                metadata.Channel,
-                EscapeFileSystemSegment(metadata.ModuleId),
-                metadata.Version);
+                releaseIdentity.Channel,
+                EscapeFileSystemSegment(releaseIdentity.ComponentKey),
+                EscapeFileSystemSegment(releaseIdentity.Version));
             if (Directory.Exists(packageTargetDirectory))
             {
-                return await FailAsync(
-                    $"插件版本目录已存在，拒绝覆盖: {metadata.Channel}/{metadata.ModuleId}/{metadata.Version}。",
-                    cancellationToken);
+                throw new ClientReleasePublishConflictException();
             }
 
-            Directory.CreateDirectory(packageTargetDirectory);
-            var targetPackagePath = Path.Combine(packageTargetDirectory, metadata.PackageFileName);
-            File.Move(packagePath, targetPackagePath);
+            fileTransaction = new PluginReleasePublishFileTransaction(
+                edgeRoot,
+                packageTargetDirectory,
+                metadata.PackageFileName,
+                metadata.Sha256,
+                metadata.PackageSize,
+                logger);
+            fileTransaction.Publish(packagePath);
             EdgeReleasePublishedFilePermissions.EnsureGatewayReadable(
                 edgeRoot,
                 [packageTargetDirectory],
-                [targetPackagePath]);
+                [fileTransaction.TargetPackagePath]);
             EdgeReleasePublishedFilePermissions.AssertPublishedPathsReady(
                 edgeRoot,
                 [packageTargetDirectory],
-                [targetPackagePath]);
+                [fileTransaction.TargetPackagePath]);
             cancellationToken.ThrowIfCancellationRequested();
             var downloadUrl = BuildPluginDownloadUrl(
-                metadata.Channel,
-                metadata.ModuleId,
-                metadata.Version,
+                releaseIdentity.Channel,
+                releaseIdentity.ComponentKey,
+                releaseIdentity.Version,
                 metadata.PackageFileName);
-            var displayName = string.IsNullOrWhiteSpace(metadata.DisplayName) ? metadata.ModuleId : metadata.DisplayName;
+            var artifacts = ClientReleaseArtifactBuilder.FromPluginDownloadUrl(
+                downloadUrl,
+                releaseIdentity.Channel,
+                releaseIdentity.ComponentKey,
+                releaseIdentity.Version,
+                metadata.Sha256,
+                metadata.PackageSize);
+            expectedState = BuildExpectedState(metadata, releaseIdentity, downloadUrl, artifacts);
             if (component is null)
             {
                 component = ClientReleaseComponent.CreatePlugin(
-                    metadata.ModuleId,
-                    displayName,
-                    metadata.Description,
-                    metadata.IconKind,
-                    metadata.AccentColor,
-                    metadata.Channel,
-                    metadata.TargetRuntime);
+                    releaseIdentity.ComponentKey,
+                    expectedState.DisplayName,
+                    expectedState.Description,
+                    expectedState.IconKind,
+                    expectedState.AccentColor,
+                    releaseIdentity.Channel,
+                    releaseIdentity.TargetRuntime);
                 componentRepository.Add(component);
             }
             else
             {
                 component.UpdatePluginMetadata(
-                    displayName,
-                    metadata.Description,
-                    metadata.IconKind,
-                    metadata.AccentColor);
+                    expectedState.DisplayName,
+                    expectedState.Description,
+                    expectedState.IconKind,
+                    expectedState.AccentColor);
             }
 
             component.UpsertPluginVersion(
-                metadata.Version,
-                metadata.HostApiVersion,
-                metadata.MinHostVersion,
-                metadata.MaxHostVersion,
-                metadata.TargetFramework,
-                downloadUrl,
-                metadata.Sha256,
-                metadata.PackageSize,
-                metadata.ReleaseNotes,
-                JsonSerializer.Serialize(metadata.Dependencies ?? [], JsonOptions),
+                releaseIdentity.Version,
+                expectedState.HostApiVersion,
+                expectedState.MinHostVersion,
+                expectedState.MaxHostVersion,
+                expectedState.TargetFramework,
+                expectedState.DownloadUrl,
+                expectedState.Sha256,
+                expectedState.PackageSize,
+                expectedState.ReleaseNotes,
+                expectedState.DependenciesJson,
                 ClientReleaseStatus.Published,
-                metadata.Signature,
-                string.IsNullOrWhiteSpace(metadata.Publisher) ? "IIoT" : metadata.Publisher,
-                metadata.CreatedAtUtc,
-                ClientReleaseArtifactBuilder.FromPluginDownloadUrl(
-                    downloadUrl,
-                    metadata.Channel,
-                    metadata.ModuleId,
-                    metadata.Version,
-                    metadata.Sha256,
-                    metadata.PackageSize));
-            await componentRepository.SaveChangesAsync(cancellationToken);
-            databaseSaved = true;
+                expectedState.Signature,
+                expectedState.Publisher,
+                expectedState.PublishedAtUtc,
+                artifacts);
+            saveChangesInvoked = true;
+            try
+            {
+                await componentRepository.SaveChangesAsync(cancellationToken);
+                saveChangesReturned = true;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                ClientReleasePublishDiagnostics.LogFailure(
+                    logger,
+                    LogLevel.Warning,
+                    ClientReleasePublishDiagnostics.PluginPublishFailed,
+                    "plugin-save-response",
+                    ex,
+                    "plugin-release");
+                var outcome = await PluginReleaseCommitRecovery.ObserveAsync(
+                    observationReader,
+                    expectedState,
+                    fileTransaction,
+                    logger);
+                switch (outcome)
+                {
+                    case PluginReleaseCommitObservationOutcome.Committed:
+                    {
+                        var markerWarning = fileTransaction.TryRemoveOwnershipMarker()
+                            ? null
+                            : "插件发布已确认，但发布所有权标记未完成清理。";
+                        stopwatch.Stop();
+                        var recoveredResult = BuildResult(
+                            expectedState,
+                            stopwatch.Elapsed,
+                            uploadSession.MaxUploadMbps,
+                            CombineWarnings(
+                                "插件发布已确认，但保留/清理旧版本未执行。",
+                                markerWarning));
+                        await WriteStableOutcomeAuditAsync(
+                            releaseIdentity,
+                            PluginPublishAuditOutcome.CommitRecovered);
+                        stableOutcomeAuditWritten = true;
+                        return Result.Success(recoveredResult);
+                    }
+                    case PluginReleaseCommitObservationOutcome.Conflict:
+                        await WriteStableOutcomeAuditAsync(
+                            releaseIdentity,
+                            PluginPublishAuditOutcome.CommitConflict);
+                        stableOutcomeAuditWritten = true;
+                        throw new ClientReleasePublishConflictException();
+                    default:
+                        await WriteStableOutcomeAuditAsync(
+                            releaseIdentity,
+                            PluginPublishAuditOutcome.CommitUnknown);
+                        stableOutcomeAuditWritten = true;
+                        throw new ClientReleaseCommitUnknownException();
+                }
+            }
+
+            var markerCleanupWarning = fileTransaction.TryRemoveOwnershipMarker()
+                ? null
+                : "插件发布成功，但发布所有权标记未完成清理。";
             cancellationToken.ThrowIfCancellationRequested();
 
-            string? cleanupWarning = null;
+            var cleanupWarning = markerCleanupWarning;
             try
             {
                 await retentionService.ApplyPluginPolicyAsync(
-                    metadata.ModuleId,
-                    metadata.Channel,
-                    metadata.TargetRuntime,
+                    releaseIdentity.ComponentKey,
+                    releaseIdentity.Channel,
+                    releaseIdentity.TargetRuntime,
                     cancellationToken);
                 await CleanupArchivedPluginFilesAsync(
                     edgeRoot,
-                    metadata.Channel,
-                    metadata.TargetRuntime,
+                    releaseIdentity.Channel,
+                    releaseIdentity.TargetRuntime,
                     cancellationToken);
             }
             catch (OperationCanceledException)
@@ -222,26 +292,16 @@ public sealed class PublishEdgePluginPackageHandler(
                     "plugin-retention-cleanup",
                     ex,
                     "plugin-release");
-                cleanupWarning = "插件发布成功，但保留/清理旧版本未完成。";
+                cleanupWarning = CombineWarnings(
+                    cleanupWarning,
+                    "插件发布成功，但保留/清理旧版本未完成。");
             }
 
             stopwatch.Stop();
-            var result = new EdgePluginPackagePublishResultDto(
-                metadata.ModuleId,
-                string.IsNullOrWhiteSpace(metadata.DisplayName) ? metadata.ModuleId : metadata.DisplayName,
-                metadata.Channel,
-                metadata.Version,
-                metadata.HostApiVersion,
-                metadata.MinHostVersion,
-                metadata.MaxHostVersion,
-                metadata.TargetRuntime,
-                metadata.TargetFramework,
-                downloadUrl,
-                metadata.Sha256,
-                metadata.PackageSize,
-                stopwatch.Elapsed.TotalSeconds,
+            var result = BuildResult(
+                expectedState,
+                stopwatch.Elapsed,
                 uploadSession.MaxUploadMbps,
-                [downloadUrl],
                 cleanupWarning);
             await WriteAuditAsync(
                 result,
@@ -253,11 +313,49 @@ public sealed class PublishEdgePluginPackageHandler(
         }
         catch (OperationCanceledException)
         {
-            if (!databaseSaved && packageTargetDirectory is not null)
+            if (!saveChangesInvoked)
             {
-                TryDeleteDirectory(packageTargetDirectory);
+                fileTransaction?.TryRollbackBeforeSave();
+                throw;
             }
 
+            if (releaseIdentity is not null && expectedState is not null && fileTransaction is not null)
+            {
+                var outcome = await PluginReleaseCommitRecovery.ObserveAsync(
+                    observationReader,
+                    expectedState,
+                    fileTransaction,
+                    logger);
+                if (outcome == PluginReleaseCommitObservationOutcome.Committed)
+                {
+                    fileTransaction.TryRemoveOwnershipMarker();
+                }
+
+                await WriteStableOutcomeAuditAsync(
+                    releaseIdentity,
+                    outcome switch
+                    {
+                        PluginReleaseCommitObservationOutcome.Committed => PluginPublishAuditOutcome.CommittedResponseCancelled,
+                        PluginReleaseCommitObservationOutcome.Conflict => PluginPublishAuditOutcome.CommitConflict,
+                        _ => PluginPublishAuditOutcome.CommitUnknown
+                    });
+            }
+
+            throw;
+        }
+        catch (ClientReleasePublishConflictException)
+        {
+            if (!stableOutcomeAuditWritten && releaseIdentity is not null)
+            {
+                await WriteStableOutcomeAuditAsync(
+                    releaseIdentity,
+                    PluginPublishAuditOutcome.PreflightConflict);
+            }
+
+            throw;
+        }
+        catch (ClientReleasePublishException)
+        {
             throw;
         }
         catch (Exception ex)
@@ -269,15 +367,58 @@ public sealed class PublishEdgePluginPackageHandler(
                 "plugin-publish",
                 ex,
                 "plugin-release");
-            var failureMessage = FormatPublishFailure(ex);
-            if (!databaseSaved
-                && packageTargetDirectory is not null
-                && !TryDeleteDirectory(packageTargetDirectory))
+            if (!saveChangesInvoked)
             {
-                failureMessage = $"{failureMessage} 发布回滚清理未完全完成。";
+                var rollbackSucceeded = fileTransaction?.TryRollbackBeforeSave() ?? true;
+                if (ex is ClientReleaseValidationException or InvalidDataException)
+                {
+                    var failureMessage = FormatValidationFailure(ex);
+                    if (!rollbackSucceeded)
+                    {
+                        failureMessage = $"{failureMessage} 发布回滚清理未完全完成。";
+                    }
+
+                    return await FailAsync(failureMessage, CancellationToken.None);
+                }
+
+                await WriteAuditAsync(
+                    null,
+                    uploadSession.AuditSource,
+                    succeeded: false,
+                    ClientReleasePublishUnavailableException.PublicMessage,
+                    CancellationToken.None);
+                throw new ClientReleasePublishUnavailableException();
             }
 
-            return await FailAsync(failureMessage, CancellationToken.None);
+            if (saveChangesReturned && expectedState is not null && fileTransaction is not null)
+            {
+                var markerWarning = fileTransaction.TryRemoveOwnershipMarker()
+                    ? null
+                    : "插件发布已提交，但发布所有权标记未完成清理。";
+                stopwatch.Stop();
+                var result = BuildResult(
+                    expectedState,
+                    stopwatch.Elapsed,
+                    uploadSession.MaxUploadMbps,
+                    CombineWarnings("插件发布已提交，但响应后处理未完成。", markerWarning));
+                if (releaseIdentity is not null)
+                {
+                    await WriteStableOutcomeAuditAsync(
+                        releaseIdentity,
+                        PluginPublishAuditOutcome.CommittedPostProcessingFailed);
+                }
+
+                return Result.Success(result);
+            }
+
+            if (!stableOutcomeAuditWritten && releaseIdentity is not null)
+            {
+                await WriteStableOutcomeAuditAsync(
+                    releaseIdentity,
+                    PluginPublishAuditOutcome.CommitUnknown);
+            }
+
+            throw new ClientReleaseCommitUnknownException();
         }
         async Task<Result<EdgePluginPackagePublishResultDto>> FailAsync(
             string message,
@@ -286,6 +427,146 @@ public sealed class PublishEdgePluginPackageHandler(
             await WriteAuditAsync(null, uploadSession.AuditSource, succeeded: false, message, token);
             return Result.Invalid(message);
         }
+    }
+
+    private static PluginReleaseExpectedState BuildExpectedState(
+        PluginPackageReleaseManifest metadata,
+        ClientReleaseVersionIdentity identity,
+        string downloadUrl,
+        IReadOnlyList<ClientReleaseArtifact> artifacts)
+    {
+        var displayName = metadata.DisplayName.Trim();
+        var publisher = string.IsNullOrWhiteSpace(metadata.Publisher)
+            ? "IIoT"
+            : metadata.Publisher.Trim();
+        return new PluginReleaseExpectedState(
+            identity,
+            displayName,
+            NormalizeOptional(metadata.Description),
+            NormalizeOptional(metadata.IconKind),
+            NormalizeOptional(metadata.AccentColor),
+            metadata.HostApiVersion.Trim(),
+            metadata.MinHostVersion.Trim(),
+            metadata.MaxHostVersion.Trim(),
+            NormalizeOptional(metadata.TargetFramework),
+            downloadUrl,
+            metadata.Sha256.Trim(),
+            metadata.PackageSize,
+            NormalizeOptional(metadata.ReleaseNotes),
+            JsonSerializer.Serialize(metadata.Dependencies ?? [], JsonOptions),
+            NormalizeOptional(metadata.Signature),
+            publisher,
+            NormalizePublishedAtUtc(metadata.CreatedAtUtc),
+            artifacts
+                .Select(artifact => new ClientReleaseArtifactObservation(
+                    artifact.ArtifactKind,
+                    artifact.RelativePath,
+                    artifact.Sha256,
+                    artifact.Size))
+                .ToList());
+    }
+
+    private static EdgePluginPackagePublishResultDto BuildResult(
+        PluginReleaseExpectedState expected,
+        TimeSpan elapsed,
+        int uploadRateLimitMbps,
+        string? cleanupWarning)
+    {
+        return new EdgePluginPackagePublishResultDto(
+            expected.Identity.ComponentKey,
+            expected.DisplayName,
+            expected.Identity.Channel,
+            expected.Identity.Version,
+            expected.HostApiVersion,
+            expected.MinHostVersion,
+            expected.MaxHostVersion,
+            expected.Identity.TargetRuntime,
+            expected.TargetFramework,
+            expected.DownloadUrl,
+            expected.Sha256,
+            expected.PackageSize,
+            elapsed.TotalSeconds,
+            uploadRateLimitMbps,
+            [expected.DownloadUrl],
+            cleanupWarning);
+    }
+
+    private async Task WriteStableOutcomeAuditAsync(
+        ClientReleaseVersionIdentity identity,
+        PluginPublishAuditOutcome outcome)
+    {
+        var (operationType, succeeded, summary, failureReason) = outcome switch
+        {
+            PluginPublishAuditOutcome.PreflightConflict => (
+                "ClientRelease.PublishPlugin.Conflict",
+                false,
+                "Plugin publish was rejected because the target version or directory already exists.",
+                "target-already-exists"),
+            PluginPublishAuditOutcome.CommitRecovered => (
+                "ClientRelease.PublishPlugin.CommitRecovered",
+                true,
+                "Plugin publish commit was confirmed by one bounded independent observation after the save response failed.",
+                (string?)null),
+            PluginPublishAuditOutcome.CommittedResponseCancelled => (
+                "ClientRelease.PublishPlugin.CommittedResponseCancelled",
+                true,
+                "Plugin publish commit was confirmed after response cancellation or lease loss.",
+                (string?)null),
+            PluginPublishAuditOutcome.CommittedPostProcessingFailed => (
+                "ClientRelease.PublishPlugin.CommittedPostProcessingFailed",
+                true,
+                "Plugin publish commit completed before response post-processing failed.",
+                (string?)null),
+            PluginPublishAuditOutcome.CommitConflict => (
+                "ClientRelease.PublishPlugin.CommitConflict",
+                false,
+                "Plugin publish commit observation found a conflicting persisted state.",
+                "persisted-state-mismatch"),
+            _ => (
+                "ClientRelease.PublishPlugin.CommitUnknown",
+                false,
+                "Plugin publish commit could not be confirmed by the bounded independent observation.",
+                "commit-state-not-observed")
+        };
+        var target = $"{identity.Channel}/{identity.ComponentKey}/{identity.Version}";
+        await auditTrailService.TryWriteAsync(
+            new AuditTrailEntry(
+                ParseActorUserId(currentUser.Id),
+                currentUser.UserName,
+                operationType,
+                "EdgePluginPackage",
+                target,
+                DateTime.UtcNow,
+                succeeded,
+                summary,
+                failureReason),
+            CancellationToken.None);
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private static DateTime? NormalizePublishedAtUtc(DateTime? value)
+        => value?.Kind switch
+        {
+            null => null,
+            DateTimeKind.Utc => value,
+            DateTimeKind.Local => value.Value.ToUniversalTime(),
+            _ => throw new ClientReleaseValidationException(
+                "Edge 插件发布包 createdAtUtc 必须包含 UTC 标记或明确时区偏移。")
+        };
+
+    private static string? CombineWarnings(string? first, string? second)
+    {
+        if (string.IsNullOrWhiteSpace(first))
+        {
+            return string.IsNullOrWhiteSpace(second) ? null : second;
+        }
+
+        return string.IsNullOrWhiteSpace(second) ? first : $"{first} {second}";
     }
 
     private async Task<PluginPackageValidationResult> LoadAndValidateAsync(
@@ -331,8 +612,10 @@ public sealed class PublishEdgePluginPackageHandler(
             return PluginPackageValidationResult.Fail("Edge 插件发布包缺少插件 zip。");
         }
 
-        if (!string.Equals(HashFile(packagePath), manifest.Sha256, StringComparison.OrdinalIgnoreCase)
-            || new FileInfo(packagePath).Length != manifest.PackageSize)
+        if (!ClientReleaseFileFacts.IsExactRegularFile(
+                packagePath,
+                manifest.Sha256,
+                manifest.PackageSize))
         {
             return PluginPackageValidationResult.Fail("Edge 插件 zip 的 sha256 或 size 与 manifest 不一致。");
         }
@@ -377,6 +660,11 @@ public sealed class PublishEdgePluginPackageHandler(
         if (!Sha256Pattern.IsMatch(manifest.Sha256 ?? string.Empty) || manifest.PackageSize <= 0)
         {
             return "Edge 插件发布包 sha256 或 size 非法。";
+        }
+
+        if (manifest.CreatedAtUtc is { Kind: DateTimeKind.Unspecified })
+        {
+            return "Edge 插件发布包 createdAtUtc 必须包含 UTC 标记或明确时区偏移。";
         }
 
         return null;
@@ -562,7 +850,7 @@ public sealed class PublishEdgePluginPackageHandler(
             }
 
             var targetPath = Path.GetFullPath(Path.Combine(extractRoot, relativePath));
-            if (!IsChildPath(extractRoot, targetPath))
+            if (!ClientReleaseFileFacts.IsStrictChildPath(extractRoot, targetPath))
             {
                 throw new ClientReleaseValidationException($"{label} 包含非法路径。");
             }
@@ -615,22 +903,6 @@ public sealed class PublishEdgePluginPackageHandler(
         return path.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
     }
 
-    private static bool IsChildPath(string parentPath, string childPath)
-    {
-        var normalizedParent = Path.GetFullPath(parentPath)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var normalizedChild = Path.GetFullPath(childPath);
-        return normalizedChild.StartsWith(
-            normalizedParent + Path.DirectorySeparatorChar,
-            StringComparison.Ordinal);
-    }
-
-    private static string HashFile(string file)
-    {
-        using var stream = File.OpenRead(file);
-        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
-    }
-
     private static void AssertFreeDiskSpace(string rootPath, long packageBytes)
     {
         var drive = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(rootPath))!);
@@ -655,39 +927,13 @@ public sealed class PublishEdgePluginPackageHandler(
     private static Guid? ParseActorUserId(string? userId)
         => Guid.TryParse(userId, out var parsed) ? parsed : null;
 
-    private static string FormatPublishFailure(Exception ex)
+    private static string FormatValidationFailure(Exception ex)
         => ex switch
         {
             ClientReleaseValidationException validation => validation.SafeMessage,
             InvalidDataException => "Edge 插件发布包格式无效。",
-            IOException => "Edge 插件发布包处理失败，请检查上传包和发布目录后重试。",
-            _ => "Edge 插件发布失败。"
+            _ => "Edge 插件发布包无效。"
         };
-
-    private bool TryDeleteDirectory(string path)
-    {
-        if (!Directory.Exists(path))
-        {
-            return true;
-        }
-
-        try
-        {
-            Directory.Delete(path, recursive: true);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            ClientReleasePublishDiagnostics.LogFailure(
-                logger,
-                LogLevel.Warning,
-                ClientReleasePublishDiagnostics.PluginRollbackCleanupFailed,
-                "plugin-rollback-directory-delete",
-                ex,
-                "plugin-publish-target");
-            return false;
-        }
-    }
 
     private sealed record PluginPackageValidationResult(
         bool IsSuccess,
@@ -764,5 +1010,15 @@ public sealed class PublishEdgePluginPackageHandler(
         public string MaxHostVersion { get; set; } = string.Empty;
 
         public string EntryAssembly { get; set; } = string.Empty;
+    }
+
+    private enum PluginPublishAuditOutcome
+    {
+        PreflightConflict,
+        CommitRecovered,
+        CommittedResponseCancelled,
+        CommittedPostProcessingFailed,
+        CommitConflict,
+        CommitUnknown
     }
 }

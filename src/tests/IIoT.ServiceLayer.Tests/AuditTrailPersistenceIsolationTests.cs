@@ -2,10 +2,11 @@ using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.EntityFrameworkCore;
 using IIoT.EntityFrameworkCore.Auditing;
 using IIoT.Services.Contracts.Auditing;
-using Microsoft.Data.Sqlite;
+using IIoT.ServiceLayer.Tests.TestInfrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace IIoT.ServiceLayer.Tests;
@@ -15,11 +16,11 @@ public sealed class AuditTrailPersistenceIsolationTests
     [Fact]
     public async Task TryWriteAsync_ShouldPersistOnlyAudit_WhenBusinessContextHasPendingAggregate()
     {
-        await using var database = await SqliteAuditDatabase.CreateAsync();
+        await using var database = await SqliteEfTestDatabase.CreateAsync();
         await using var businessContext = database.CreateContext();
         var pendingRelease = ClientReleaseComponent.CreateHost("audit-pending", "win-x64");
         businessContext.ClientReleaseComponents.Add(pendingRelease);
-        var service = database.CreateService();
+        var service = CreateService(database);
 
         await service.TryWriteAsync(CreateEntry("Audit.Isolated"), CancellationToken.None);
 
@@ -36,11 +37,11 @@ public sealed class AuditTrailPersistenceIsolationTests
         const string sensitiveFailure = "/private/audit/SECRET-write-failure";
         var interceptor = new ThrowAuditSaveInterceptor(sensitiveFailure);
         var logger = new RecordingAuditLogger();
-        await using var database = await SqliteAuditDatabase.CreateAsync(logger, interceptor);
+        await using var database = await SqliteEfTestDatabase.CreateAsync(interceptor);
         await using var businessContext = database.CreateContext();
         var pendingRelease = ClientReleaseComponent.CreateHost("audit-failure", "win-x64");
         businessContext.ClientReleaseComponents.Add(pendingRelease);
-        var service = database.CreateService();
+        var service = CreateService(database, logger);
 
         await service.TryWriteAsync(CreateEntry("Audit.Failure"), CancellationToken.None);
 
@@ -61,8 +62,8 @@ public sealed class AuditTrailPersistenceIsolationTests
     public async Task TryWriteAsync_ShouldUseIndependentContextForEveryAudit()
     {
         var interceptor = new ContextRecordingInterceptor();
-        await using var database = await SqliteAuditDatabase.CreateAsync(interceptors: interceptor);
-        var service = database.CreateService();
+        await using var database = await SqliteEfTestDatabase.CreateAsync(interceptor);
+        var service = CreateService(database);
 
         await service.TryWriteAsync(CreateEntry("Audit.First"), CancellationToken.None);
         await service.TryWriteAsync(CreateEntry("Audit.Second"), CancellationToken.None);
@@ -76,8 +77,8 @@ public sealed class AuditTrailPersistenceIsolationTests
     [Fact]
     public async Task TryWriteAsync_ShouldPropagateCallerCancellation()
     {
-        await using var database = await SqliteAuditDatabase.CreateAsync();
-        var service = database.CreateService();
+        await using var database = await SqliteEfTestDatabase.CreateAsync();
+        var service = CreateService(database);
         using var cancellation = new CancellationTokenSource();
         await cancellation.CancelAsync();
 
@@ -91,8 +92,8 @@ public sealed class AuditTrailPersistenceIsolationTests
     [Fact]
     public async Task TryWriteAsync_ShouldPersistCompleteAuditEntry()
     {
-        await using var database = await SqliteAuditDatabase.CreateAsync();
-        var service = database.CreateService();
+        await using var database = await SqliteEfTestDatabase.CreateAsync();
+        var service = CreateService(database);
         var entry = CreateEntry("Audit.Success");
 
         await service.TryWriteAsync(entry, CancellationToken.None);
@@ -124,54 +125,10 @@ public sealed class AuditTrailPersistenceIsolationTests
             null);
     }
 
-    private sealed class SqliteAuditDatabase : IAsyncDisposable
-    {
-        private readonly SqliteConnection connection;
-        private readonly RecordingAuditLogger logger;
-
-        private SqliteAuditDatabase(
-            SqliteConnection connection,
-            DbContextOptions<IIoTDbContext> options,
-            RecordingAuditLogger logger)
-        {
-            this.connection = connection;
-            this.logger = logger;
-            Options = options;
-        }
-
-        public DbContextOptions<IIoTDbContext> Options { get; }
-
-        public static async Task<SqliteAuditDatabase> CreateAsync(
-            RecordingAuditLogger? logger = null,
-            params IInterceptor[] interceptors)
-        {
-            var connection = new SqliteConnection("Data Source=:memory:");
-            await connection.OpenAsync();
-            var optionsBuilder = new DbContextOptionsBuilder<IIoTDbContext>()
-                .UseSqlite(connection);
-            if (interceptors.Length > 0)
-            {
-                optionsBuilder.AddInterceptors(interceptors);
-            }
-
-            var database = new SqliteAuditDatabase(
-                connection,
-                optionsBuilder.Options,
-                logger ?? new RecordingAuditLogger());
-            await using var context = database.CreateContext();
-            await context.Database.EnsureCreatedAsync();
-            return database;
-        }
-
-        public IIoTDbContext CreateContext() => new(Options);
-
-        public EfAuditTrailService CreateService() => new(Options, logger);
-
-        public async ValueTask DisposeAsync()
-        {
-            await connection.DisposeAsync();
-        }
-    }
+    private static EfAuditTrailService CreateService(
+        SqliteEfTestDatabase database,
+        ILogger<EfAuditTrailService>? logger = null)
+        => new(database.Options, logger ?? NullLogger<EfAuditTrailService>.Instance);
 
     private sealed class ThrowAuditSaveInterceptor(string message) : SaveChangesInterceptor
     {

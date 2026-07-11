@@ -15,6 +15,27 @@ public sealed class UseCaseExceptionHandler : IExceptionHandler
     {
         var problem = exception switch
         {
+            ClientReleasePublishConflictException conflict => CreateProblem(
+                StatusCodes.Status409Conflict,
+                "请求冲突",
+                "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/409",
+                conflict.SafeMessage,
+                httpContext.Request.Path,
+                conflict.ProblemCode),
+            ClientReleaseCommitUnknownException unknown => CreateProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "服务暂时不可用",
+                "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/503",
+                unknown.SafeMessage,
+                httpContext.Request.Path,
+                unknown.ProblemCode),
+            ClientReleasePublishUnavailableException unavailable => CreateProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "服务暂时不可用",
+                "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/503",
+                unavailable.SafeMessage,
+                httpContext.Request.Path,
+                unavailable.ProblemCode),
             ForbiddenException forbidden => CreateProblem(
                 StatusCodes.Status403Forbidden,
                 "禁止访问",
@@ -87,7 +108,8 @@ public sealed class UseCaseExceptionHandler : IExceptionHandler
         string title,
         string type,
         string detail,
-        PathString path)
+        PathString path,
+        string? explicitCode = null)
     {
         return new ProblemDetails
         {
@@ -95,6 +117,6 @@ public sealed class UseCaseExceptionHandler : IExceptionHandler
             Title = title,
             Type = type,
             Detail = detail
-        }.AddCode(CloudProblemCodes.Resolve(status, path, [detail]));
+        }.AddCode(explicitCode ?? CloudProblemCodes.Resolve(status, path, [detail]));
     }
 }

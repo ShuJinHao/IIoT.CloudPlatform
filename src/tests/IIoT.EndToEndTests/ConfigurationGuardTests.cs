@@ -1813,14 +1813,32 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
-    public void CloudCiWorkflow_ShouldKeepPushCiFastAndGateFullEndToEndBehindManualDispatch()
+    public void CloudCiWorkflow_ShouldRunRegularReleaseRecoveryGatesAndKeepFullEndToEndBehindManualDispatch()
     {
         var workflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-ci.yml"));
+        var productionServiceStep = GetNamedGitHubWorkflowStep(
+            workflowSource,
+            "Run production service tests");
+        var postgresRecoveryStep = GetNamedGitHubWorkflowStep(
+            workflowSource,
+            "Run client release PostgreSQL post-commit recovery test");
+        var fullEndToEndStep = GetNamedGitHubWorkflowStep(
+            workflowSource,
+            "Run end-to-end tests");
 
         workflowSource.Should().Contain("workflow_dispatch:");
         workflowSource.Should().Contain("include_end_to_end:");
         workflowSource.Should().Contain("Run configuration guard tests");
         workflowSource.Should().Contain("--filter ConfigurationGuardTests");
+        productionServiceStep.Should().Contain(
+            "run: dotnet test src/tests/IIoT.ProductionService.Tests/IIoT.ProductionService.Tests.csproj -c Release --no-build");
+        productionServiceStep.Should().NotContain("--filter");
+        productionServiceStep.Should().NotContain("if:");
+        postgresRecoveryStep.Should().Contain("timeout-minutes: 8");
+        postgresRecoveryStep.Should().Contain(
+            "run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --filter FullyQualifiedName~ClientReleaseCommitRecoveryPostgresTests");
+        postgresRecoveryStep.Should().NotContain("if:");
+        postgresRecoveryStep.Should().NotContain("continue-on-error:");
         workflowSource.Should().Contain("Validate deploy script syntax");
         workflowSource.Should().Contain("sh -n deploy/scripts/release-common.sh");
         workflowSource.Should().Contain("sh -n deploy/scripts/pre-deploy-check.sh");
@@ -1833,10 +1851,11 @@ public sealed class ConfigurationGuardTests
         workflowSource.Should().Contain("bash -n deploy/scripts/post-release-cleanup.sh");
         workflowSource.Should().Contain("pwsh -NoProfile -Command");
         workflowSource.Should().Contain("Parser]::ParseFile(\"deploy/scripts/InvokeEdgeInstallerPackageDownload.ps1\"");
-        workflowSource.Should().Contain("if: github.event_name == 'workflow_dispatch' && inputs.include_end_to_end == true");
-        workflowSource.Should().Contain("timeout-minutes: 15");
-        workflowSource.Should().Contain("Run end-to-end tests");
-        workflowSource.Should().Contain("dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build");
+        fullEndToEndStep.Should().Contain(
+            "if: github.event_name == 'workflow_dispatch' && inputs.include_end_to_end == true");
+        fullEndToEndStep.Should().Contain("timeout-minutes: 15");
+        fullEndToEndStep.Should().Contain(
+            "run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build");
     }
 
     [Fact]
@@ -2704,6 +2723,32 @@ public sealed class ConfigurationGuardTests
     }
 
     private sealed record RequestDeclaration(string RecordName, string InterfaceName);
+
+    private static string GetNamedGitHubWorkflowStep(string workflowSource, string stepName)
+    {
+        var lines = workflowSource.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var expectedName = $"- name: {stepName}";
+        var start = Array.FindIndex(
+            lines,
+            line => string.Equals(line.Trim(), expectedName, StringComparison.Ordinal));
+        if (start < 0)
+        {
+            throw new InvalidOperationException($"GitHub workflow step '{stepName}' was not found.");
+        }
+
+        var indentation = lines[start].Length - lines[start].TrimStart().Length;
+        var nextStepPrefix = $"{new string(' ', indentation)}- ";
+        var end = Array.FindIndex(
+            lines,
+            start + 1,
+            line => line.StartsWith(nextStepPrefix, StringComparison.Ordinal));
+        if (end < 0)
+        {
+            end = lines.Length;
+        }
+
+        return string.Join('\n', lines[start..end]);
+    }
 
     private static void AssertUnixUserExecutable(string scriptName)
     {
