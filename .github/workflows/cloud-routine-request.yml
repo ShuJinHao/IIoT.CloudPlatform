@@ -42,6 +42,7 @@ jobs:
 
     steps:
       - name: Checkout pinned runner source
+        if: inputs.operation == 'deploy'
         uses: actions/checkout@v4
 
       - name: Export allowlisted current production state
