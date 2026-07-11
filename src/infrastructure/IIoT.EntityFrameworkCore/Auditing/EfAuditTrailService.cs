@@ -5,29 +5,31 @@ using Microsoft.Extensions.Logging;
 namespace IIoT.EntityFrameworkCore.Auditing;
 
 internal sealed class EfAuditTrailService(
-    IIoTDbContext dbContext,
+    DbContextOptions<IIoTDbContext> dbContextOptions,
     ILogger<EfAuditTrailService> logger) : IAuditTrailService
 {
+    internal static readonly EventId PersistenceFailed = new(4301, nameof(PersistenceFailed));
+
     public async Task TryWriteAsync(
         AuditTrailEntry entry,
         CancellationToken cancellationToken = default)
     {
-        var record = AuditTrailRecord.FromEntry(entry);
-        dbContext.Add(record);
-
         try
         {
+            await using var dbContext = new IIoTDbContext(dbContextOptions);
+            dbContext.AuditTrails.Add(AuditTrailRecord.FromEntry(entry));
             await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
-            dbContext.Entry(record).State = EntityState.Detached;
             logger.LogError(
-                ex,
-                "Failed to write audit trail for {OperationType} on {TargetType}:{TargetIdOrKey}.",
-                entry.OperationType,
-                entry.TargetType,
-                entry.TargetIdOrKey);
+                PersistenceFailed,
+                "Audit trail persistence failed; ErrorType={ErrorType}.",
+                ex.GetType().Name);
         }
     }
 }
