@@ -97,12 +97,12 @@ curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' "http
 
 ## Standard Release
 
-Routine application release is driven from the operator workstation: push GitHub for source traceability, run `pwsh ./deploy/Deploy.ps1 -Target Cloud ... -Deploy`, build the fetched remote tip, push immutable images to Harbor, then send one digest-bound request to the stable server runner. `RemoteTransport=Auto` uses SSH when its TCP endpoint is reachable and otherwise dispatches `cloud-routine-request.yml` to the production self-hosted runner; both transports consume the same request and stable runner. The older workspace transaction remains for deployment-infrastructure maintenance.
+Routine application release is driven from the operator workstation: run `pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud`; it validates and pushes Git, reads the production baseline, computes the affected service closure, builds the fetched remote tip, pushes immutable images to Harbor, then sends one digest-bound request to the stable server runner. `RemoteTransport=Auto` uses SSH when its TCP endpoint is reachable and otherwise dispatches `cloud-routine-request.yml` to the production self-hosted runner; both transports consume the same request and stable runner. The older workspace transaction remains for deployment-infrastructure maintenance.
 
 Routine deployment red lines:
 
 - Do not wait for `cloud-image` or `cloud-deploy` for routine deployment. Those workflows are emergency-only and require confirmation inputs.
-- Use `pwsh ./deploy/Deploy.ps1 -Target Cloud -Services <services> -Deploy` or explicit `-All`. The project-local `local-release.sh` is a legacy maintenance implementation, not a second operator entrypoint.
+- Use `pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud`. `Deploy.ps1 -Target Cloud -Services ...` is the internal executor and explicit recovery path; `-All` is not a routine fallback. The project-local `local-release.sh` is a legacy maintenance implementation, not a second operator entrypoint.
 - If a local build, Harbor operation, or SSH deploy exceeds its timeout, stop and diagnose; do not keep watching until a GitHub job or shell command times out.
 - Do not invoke the project-local script directly to work around an AI permission prompt. The routine entrypoint exposes stable phases and one SSH transaction.
 - Before retrying an interrupted or failed release, inspect the remote current release, container images, managed release/cleanup/config locks, and cleanup summary. A running target SHA must not be blindly redeployed.
@@ -113,7 +113,7 @@ The standard sequence is:
 
 1. Push or merge to `main`.
 2. `cloud-ci` runs the fast gate by default: restore/build, ServiceLayer tests, ConfigurationGuard tests, deploy script syntax checks, web build, and compose config. Full EndToEnd is manual via `workflow_dispatch`.
-3. Run `pwsh ./deploy/Deploy.ps1 -Target Cloud -Services <services> -Deploy` from the workspace root. It fetches the configured remote tip, creates a detached snapshot, builds immutable OCI images, and sends one digest-bound request to the stable runner.
+3. Run `pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud` from the workspace root. It pushes the committed main branch, reads production state, computes affected services, then invokes the detached immutable build and stable runner request.
 4. `local-release.sh` packages and syntax-checks only the allowlisted support files locally, then `build-and-push.sh` builds the selected `sha-<git-sha>` images. Every invocation owns its services file and image manifest; the manifest binds invocation, plan, tag, services, image references, and OCI digests.
 5. Only after all image builds succeed does `local-release.sh` stage support plus the run-bound image manifest remotely. Before lock acquisition, `workspace-release-transaction.sh` scans incomplete transaction markers, lock metadata, staging, and recovery directories. Any orphan state after SIGKILL, OOM, or reboot is converted to durable blocked evidence and returns `78`; it is never silently removed as a stale lock. The parent writes an atomic transaction marker before any support mutation.
 6. The parent owns the invocation/plan-bound lock and launches both installer and release child in isolated sessions/process groups through `env -i`. HUP/INT/TERM is sent to the whole group, followed by bounded TERM grace and KILL escalation; restore and lock release are prohibited until no descendant remains. Once current state and marker prove promotion, cleanup must never restore old support. A parent kill after the promotion marker leaves the new support/current/runtime consistent, and the next matching invocation performs transaction cleanup only.
@@ -126,7 +126,7 @@ The self-hosted runner must not run as root if emergency workflows are used. See
 
 Application images and infrastructure images must already exist in Harbor before deploy. Docker Hub is not a production dependency source; `pre-deploy-check.sh` rejects Docker Hub shorthand infrastructure image values.
 
-Direct server-side invocation is no longer a release entrypoint, including emergencies. `deploy-release.sh` requires the workspace-generated invocation contract, run-bound image manifest, OCI digests, and pre-acquired transaction lock; manually reconstructing those values is prohibited. Restore workstation/SSH access and resume through `Invoke-WorkspaceDeploy.ps1`. The legacy GitHub deploy workflow is not compatible with this contract and must not be used until it is separately migrated and revalidated.
+Direct server-side invocation is no longer a release entrypoint, including emergencies. The legacy implementation file `./scripts/deploy-release.sh` requires the workspace-generated invocation contract, run-bound image manifest, OCI digests, and pre-acquired transaction lock; manually reconstructing those values is prohibited. Restore workstation/Runner access and resume through the workspace entrypoint. The legacy GitHub deploy workflow is not compatible with this contract and must not be used until it is separately migrated and revalidated.
 
 Incremental release requires an existing `current-release.env`; first deployment must be full. The script preserves image coordinates for services not included in `--services` by reading the current release manifest before rewriting selected services.
 

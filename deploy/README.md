@@ -9,8 +9,7 @@
 ```powershell
 pwsh ./deploy/Deploy.ps1 -Target Cloud -InstallRunner # 仅首次或 Runner 升级
 pwsh ./deploy/Deploy.ps1 -Target Cloud -Doctor
-pwsh ./deploy/Deploy.ps1 -Target Cloud -Services web -DryRun
-pwsh ./deploy/Deploy.ps1 -Target Cloud -Services httpapi,dataworker -Deploy
+pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud -PlanOnly
 pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud
 ```
 

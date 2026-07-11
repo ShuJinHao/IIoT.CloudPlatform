@@ -1312,15 +1312,15 @@ public sealed class ConfigurationGuardTests
         var imageWorkflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-image.yml"));
         var deployWorkflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-deploy.yml"));
 
-        readmeSource.Should().Contain("工作区外部日常入口是 `pwsh ./deploy/Deploy.ps1 -Target Cloud ...`");
+        readmeSource.Should().Contain("工作区外部日常入口是 `pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud`");
         readmeSource.Should().Contain("`cloud-image` / `cloud-deploy` 只保留灾备手动入口，必须输入确认词");
         readmeSource.Should().Contain("单个镜像 build/push 默认 15 分钟超时");
-        readmeSource.Should().Contain("日常 `Deploy.ps1` 不安装任何远端 support files");
+        readmeSource.Should().Contain("日常 `Deploy-Changed.ps1` 内部调用的 `Deploy.ps1` 不安装任何远端 support files");
         readmeSource.Should().Contain("服务器端 `deploy-release.sh` 不再是日常或手工入口");
-        operationsSource.Should().Contain("pwsh ./deploy/Deploy.ps1 -Target Cloud -Services <services> -Deploy");
+        operationsSource.Should().Contain("pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud");
         operationsSource.Should().Contain("project-local `local-release.sh` is a legacy maintenance implementation");
-        edgeGoLiveSource.Should().Contain("pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target EdgeHost");
-        edgeGoLiveSource.Should().Contain("pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target EdgePlugin");
+        edgeGoLiveSource.Should().Contain("pwsh ./deploy/Deploy-Changed.ps1 -Targets Edge");
+        edgeGoLiveSource.Should().Contain("Windows 安装器/Velopack/插件构建");
         runnerSource.Should().Contain("/data/github-runner/cloud");
         runnerSource.Should().Contain("github-runner");
         runnerSource.Should().Contain("self-hosted runner 仅用于 CI 辅助和历史运维");
@@ -1348,7 +1348,7 @@ public sealed class ConfigurationGuardTests
         deployWorkflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
         deployWorkflowSource.Should().Contain("emergency_confirm:");
         deployWorkflowSource.Should().Contain("EMERGENCY_CLOUD_DEPLOY");
-        deployWorkflowSource.Should().Contain("Use deploy/Deploy.ps1 -Target Cloud -Deploy from the workspace root");
+        deployWorkflowSource.Should().Contain("Use deploy/Deploy-Changed.ps1 -Targets Cloud from the workspace root");
 
         foreach (var source in new[] { readmeSource, runnerSource, imageWorkflowSource, deployWorkflowSource, buildAndPushSource, localReleaseSource })
         {
@@ -1368,8 +1368,8 @@ public sealed class ConfigurationGuardTests
 
         readmeSource.Should().Contain("single-machine production starter");
         readmeSource.Should().Contain("`release_tag = sha-*`");
-        readmeSource.Should().Contain("日常部署必须先 push GitHub");
-        readmeSource.Should().Contain("pwsh ./deploy/Deploy.ps1 -Target Cloud");
+        readmeSource.Should().Contain("日常部署必须由 `Deploy-Changed.ps1` 确认 clean/main 并自动 push GitHub");
+        readmeSource.Should().Contain("pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud");
         readmeSource.Should().Contain("禁止把 `cloud-image` 或 `cloud-deploy` 当成日常部署入口");
         readmeSource.Should().Contain("传入 `services` 时只拉取并重启指定服务");
         readmeSource.Should().Contain("版本集合只来自 Cloud release 记录");
@@ -1843,7 +1843,7 @@ public sealed class ConfigurationGuardTests
         workflowSource.Should().Contain("Emergency only. Use the workspace deploy entrypoint for routine releases; empty means full emergency release only.");
         workflowSource.Should().Contain("emergency_confirm:");
         workflowSource.Should().Contain("EMERGENCY_CLOUD_DEPLOY");
-        workflowSource.Should().Contain("cloud-deploy is emergency-only. Use deploy/Deploy.ps1 -Target Cloud -Deploy from the workspace root for routine application releases.");
+        workflowSource.Should().Contain("cloud-deploy is emergency-only. Use deploy/Deploy-Changed.ps1 -Targets Cloud from the workspace root for routine application releases.");
         workflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
         workflowSource.Should().Contain("if [[ ! \"$release_tag\" =~ ^sha-[0-9a-f]+$ ]]");
         workflowSource.Should().Contain("RELEASE_TAG: ${{ inputs.release_tag }}");

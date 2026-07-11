@@ -49,7 +49,7 @@ cd src/ui/iiot-web && npm run build
 
 1. 推送或合并到 `main`。
 2. 确认目标改动已推送到 `origin/main`；本机工作区可以继续修改。
-3. 从工作区根运行 `pwsh ./deploy/Deploy.ps1 -Target Cloud -Services web -Deploy`；如后端接口也改动，则按实际服务传入 `httpapi,gateway,dataworker,migration,web` 的子集。入口从生产 profile 读取 Harbor、SSH 和 challenge 参数。
+3. 从工作区根运行 `pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud`；入口自动 push Git、读取生产 SHA 并按影响选择 Web 或后端服务，不允许人工猜服务或回退全量。生产 profile 提供 Harbor、Runner 和 challenge 参数。
 4. 确认 Runner `routine-current.env`、HTTP health 和对应服务运行态通过；post-deploy 深度巡检与 cleanup 摘要作为独立维护证据。
 
 本机 `build-and-push.sh` 会给 Web Dockerfile 传入 `VITE_AICOPILOT_CHALLENGE_URL`，并使用 Harbor mirror 中的 `node:22-slim`、`nginx:1.27-alpine` 基础镜像。服务器不依赖 Docker Hub。单镜像 build/push 超过 15 分钟必须停止诊断，不得等待灾备 GitHub workflow。
