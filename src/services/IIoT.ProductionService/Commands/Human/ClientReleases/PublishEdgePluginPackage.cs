@@ -14,16 +14,12 @@ using IIoT.Services.CrossCutting.Attributes;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
-using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
 
 namespace IIoT.ProductionService.Commands.ClientReleases;
 
 [AuthorizeRequirement(ClientReleasePermissions.Publish)]
-public sealed record PublishEdgePluginPackageCommand(
-    Stream PackageStream,
-    long? ContentLength,
-    string? ContentType,
-    string? SourceIp)
+public sealed record PublishEdgePluginPackageCommand()
     : IHumanCommand<Result<EdgePluginPackagePublishResultDto>>;
 
 public sealed record EdgePluginPackagePublishResultDto(
@@ -45,17 +41,15 @@ public sealed record EdgePluginPackagePublishResultDto(
     string? CleanupWarning);
 
 public sealed class PublishEdgePluginPackageHandler(
-    IOptions<EdgeInstallerArtifactOptions> artifactOptions,
-    IOptions<EdgeReleaseUploadOptions> uploadOptions,
+    ClientReleaseUploadCoordinator uploadCoordinator,
     IRepository<ClientReleaseComponent> componentRepository,
     IClientReleaseRetentionService retentionService,
     ICurrentUser currentUser,
-    IAuditTrailService auditTrailService)
+    IAuditTrailService auditTrailService,
+    ILogger<PublishEdgePluginPackageHandler> logger)
     : ICommandHandler<PublishEdgePluginPackageCommand, Result<EdgePluginPackagePublishResultDto>>
 {
     private const string ManifestFileName = "plugin-release.json";
-    public const string UploadInProgressMessage = "已有 Edge 发布上传正在执行，请稍后重试。";
-
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true
@@ -77,37 +71,27 @@ public sealed class PublishEdgePluginPackageHandler(
     ];
 
     public async Task<Result<EdgePluginPackagePublishResultDto>> Handle(
-        PublishEdgePluginPackageCommand request,
+        PublishEdgePluginPackageCommand _,
         CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
-        var edgeRoot = ResolveEdgeUpdatesRoot();
-        Directory.CreateDirectory(edgeRoot);
-        var lockPath = Path.Combine(edgeRoot, ".edge-release-upload.lock");
-        await using var uploadLock = TryAcquireUploadLock(lockPath);
-        if (uploadLock is null)
+        await using var uploadSession = await uploadCoordinator.TryBeginAsync(
+            ClientReleaseUploadKind.PluginPackage);
+        if (uploadSession is null)
         {
-            return Result.Invalid(UploadInProgressMessage);
+            return Result.Invalid(ClientReleaseUploadErrors.ConcurrentUpload);
         }
 
-        var stagingRoot = Path.Combine(
-            edgeRoot,
-            uploadOptions.Value.StagingDirectoryName,
-            "edge-plugin-packages",
-            Guid.NewGuid().ToString("N"));
-        var wrapperPath = Path.Combine(stagingRoot, "plugin-package.zip");
+        var edgeRoot = uploadSession.EdgeRoot;
+        var stagingRoot = uploadSession.StagingRoot;
+        var wrapperPath = uploadSession.UploadedFilePath;
         var extractRoot = Path.Combine(stagingRoot, "extracted");
         string? packageTargetDirectory = null;
         var databaseSaved = false;
 
         try
         {
-            Directory.CreateDirectory(stagingRoot);
-            var copiedBytes = await CopyWithLimitAsync(request.PackageStream, wrapperPath, cancellationToken);
-            if (request.ContentLength is { } declaredLength && declaredLength != copiedBytes)
-            {
-                return await FailAsync("Edge 插件发布包上传大小与请求头不一致。", cancellationToken);
-            }
+            var copiedBytes = await uploadSession.ReceiveAsync(cancellationToken);
 
             AssertFreeDiskSpace(edgeRoot, copiedBytes);
             ExtractZip(wrapperPath, extractRoot, "Edge 插件发布包");
@@ -221,7 +205,14 @@ public sealed class PublishEdgePluginPackageHandler(
             }
             catch (Exception ex)
             {
-                cleanupWarning = $"插件发布成功，但保留/清理旧版本未完成：{ex.Message}";
+                ClientReleasePublishDiagnostics.LogFailure(
+                    logger,
+                    LogLevel.Warning,
+                    ClientReleasePublishDiagnostics.PluginRetentionCleanupFailed,
+                    "plugin-retention-cleanup",
+                    ex,
+                    "plugin-release");
+                cleanupWarning = "插件发布成功，但保留/清理旧版本未完成。";
             }
 
             stopwatch.Stop();
@@ -239,117 +230,52 @@ public sealed class PublishEdgePluginPackageHandler(
                 metadata.Sha256,
                 metadata.PackageSize,
                 stopwatch.Elapsed.TotalSeconds,
-                uploadOptions.Value.MaxUploadMbps,
+                uploadSession.MaxUploadMbps,
                 [downloadUrl],
                 cleanupWarning);
-            await WriteAuditAsync(result, request.SourceIp, succeeded: true, cleanupWarning, CancellationToken.None);
+            await WriteAuditAsync(
+                result,
+                uploadSession.AuditSource,
+                succeeded: true,
+                cleanupWarning,
+                CancellationToken.None);
             return Result.Success(result);
         }
-        catch (Exception ex)
+        catch (OperationCanceledException)
         {
             if (!databaseSaved && packageTargetDirectory is not null)
             {
                 TryDeleteDirectory(packageTargetDirectory);
             }
 
-            return await FailAsync(FormatPublishFailure(ex), CancellationToken.None);
+            throw;
         }
-        finally
+        catch (Exception ex)
         {
-            TryDeleteDirectory(stagingRoot);
-        }
+            ClientReleasePublishDiagnostics.LogFailure(
+                logger,
+                LogLevel.Error,
+                ClientReleasePublishDiagnostics.PluginPublishFailed,
+                "plugin-publish",
+                ex,
+                "plugin-release");
+            var failureMessage = FormatPublishFailure(ex);
+            if (!databaseSaved
+                && packageTargetDirectory is not null
+                && !TryDeleteDirectory(packageTargetDirectory))
+            {
+                failureMessage = $"{failureMessage} 发布回滚清理未完全完成。";
+            }
 
+            return await FailAsync(failureMessage, CancellationToken.None);
+        }
         async Task<Result<EdgePluginPackagePublishResultDto>> FailAsync(
             string message,
             CancellationToken token)
         {
-            await WriteAuditAsync(null, request.SourceIp, succeeded: false, message, token);
+            await WriteAuditAsync(null, uploadSession.AuditSource, succeeded: false, message, token);
             return Result.Invalid(message);
         }
-    }
-
-    private string ResolveEdgeUpdatesRoot()
-    {
-        var installerRoot = Path.GetFullPath(artifactOptions.Value.RootPath);
-        var parent = Directory.GetParent(installerRoot);
-        if (parent is null)
-        {
-            throw new InvalidOperationException("EdgeInstallerArtifacts:RootPath 必须位于 edge-updates/installers 下。");
-        }
-
-        return parent.FullName;
-    }
-
-    private static FileStream? TryAcquireUploadLock(string lockPath)
-    {
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
-            return new FileStream(
-                lockPath,
-                FileMode.OpenOrCreate,
-                FileAccess.ReadWrite,
-                FileShare.None,
-                bufferSize: 1,
-                FileOptions.DeleteOnClose);
-        }
-        catch (IOException)
-        {
-            return null;
-        }
-    }
-
-    private async Task<long> CopyWithLimitAsync(
-        Stream source,
-        string targetPath,
-        CancellationToken cancellationToken)
-    {
-        var limitBytes = uploadOptions.Value.MaxBundleBytes;
-        var maxBytesPerSecond = Math.Max(1L, uploadOptions.Value.MaxUploadMbps) * 1024L * 1024L / 8L;
-        var window = Stopwatch.StartNew();
-        var windowBytes = 0L;
-        var totalBytes = 0L;
-        var buffer = new byte[1024 * 1024];
-
-        await using var target = new FileStream(
-            targetPath,
-            FileMode.CreateNew,
-            FileAccess.Write,
-            FileShare.None,
-            buffer.Length,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
-
-        while (true)
-        {
-            var read = await source.ReadAsync(buffer, cancellationToken);
-            if (read == 0)
-            {
-                break;
-            }
-
-            totalBytes += read;
-            windowBytes += read;
-            if (totalBytes > limitBytes)
-            {
-                throw new InvalidDataException($"Edge 插件发布包超过最大限制 {limitBytes} 字节。");
-            }
-
-            await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-            if (windowBytes >= maxBytesPerSecond)
-            {
-                var remaining = TimeSpan.FromSeconds(1) - window.Elapsed;
-                if (remaining > TimeSpan.Zero)
-                {
-                    await Task.Delay(remaining, cancellationToken);
-                }
-
-                window.Restart();
-                windowBytes = 0;
-            }
-        }
-
-        await target.FlushAsync(cancellationToken);
-        return totalBytes;
     }
 
     private async Task<PluginPackageValidationResult> LoadAndValidateAsync(
@@ -533,7 +459,7 @@ public sealed class PublishEdgePluginPackageHandler(
         }
         catch (JsonException)
         {
-            throw new InvalidDataException($"Edge 插件 zip 的配置文件无法解析: {normalizedPath}");
+            throw new ClientReleaseValidationException("Edge 插件 zip 的配置文件无法解析。");
         }
 
         using (document)
@@ -628,7 +554,7 @@ public sealed class PublishEdgePluginPackageHandler(
             var targetPath = Path.GetFullPath(Path.Combine(extractRoot, relativePath));
             if (!IsChildPath(extractRoot, targetPath))
             {
-                throw new InvalidDataException($"{label} 包含非法路径: {entry.FullName}");
+                throw new ClientReleaseValidationException($"{label} 包含非法路径。");
             }
 
             if (entry.FullName.EndsWith("/", StringComparison.Ordinal))
@@ -648,7 +574,7 @@ public sealed class PublishEdgePluginPackageHandler(
         {
             if ((File.GetAttributes(fileSystemInfo) & FileAttributes.ReparsePoint) != 0)
             {
-                throw new InvalidDataException($"{label} 不允许包含符号链接或重解析点。");
+                throw new ClientReleaseValidationException($"{label} 不允许包含符号链接或重解析点。");
             }
         }
     }
@@ -659,7 +585,7 @@ public sealed class PublishEdgePluginPackageHandler(
         if (normalized.Contains(':', StringComparison.Ordinal)
             || normalized.Split('/').Any(segment => segment == ".."))
         {
-            throw new InvalidDataException($"{label} 包含非法 zip 路径: {path}");
+            throw new ClientReleaseValidationException($"{label} 包含非法 zip 路径。");
         }
 
         return normalized;
@@ -701,7 +627,7 @@ public sealed class PublishEdgePluginPackageHandler(
         var required = packageBytes * 2;
         if (drive.AvailableFreeSpace < required)
         {
-            throw new InvalidDataException(
+            throw new ClientReleaseValidationException(
                 $"Edge 插件发布磁盘剩余空间不足，至少需要 {required} 字节。");
         }
     }
@@ -722,28 +648,34 @@ public sealed class PublishEdgePluginPackageHandler(
     private static string FormatPublishFailure(Exception ex)
         => ex switch
         {
-            InvalidDataException => ex.Message,
-            IOException => $"Edge 插件发布包处理失败：{ex.Message}",
-            OperationCanceledException => "Edge 插件发布上传已取消。",
-            _ => $"Edge 插件发布失败：{ex.Message}"
+            ClientReleaseValidationException validation => validation.SafeMessage,
+            InvalidDataException => "Edge 插件发布包格式无效。",
+            IOException => "Edge 插件发布包处理失败，请检查上传包和发布目录后重试。",
+            _ => "Edge 插件发布失败。"
         };
 
-    private static void TryDeleteDirectory(string path)
+    private bool TryDeleteDirectory(string path)
     {
         if (!Directory.Exists(path))
         {
-            return;
+            return true;
         }
 
         try
         {
             Directory.Delete(path, recursive: true);
+            return true;
         }
-        catch (IOException)
+        catch (Exception ex)
         {
-        }
-        catch (UnauthorizedAccessException)
-        {
+            ClientReleasePublishDiagnostics.LogFailure(
+                logger,
+                LogLevel.Warning,
+                ClientReleasePublishDiagnostics.PluginRollbackCleanupFailed,
+                "plugin-rollback-directory-delete",
+                ex,
+                "plugin-publish-target");
+            return false;
         }
     }
 

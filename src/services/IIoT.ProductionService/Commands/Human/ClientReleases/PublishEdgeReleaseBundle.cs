@@ -15,16 +15,12 @@ using IIoT.Services.CrossCutting.Attributes;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
-using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
 
 namespace IIoT.ProductionService.Commands.ClientReleases;
 
 [AuthorizeRequirement(ClientReleasePermissions.Publish)]
-public sealed record PublishEdgeReleaseBundleCommand(
-    Stream BundleStream,
-    long? ContentLength,
-    string? ContentType,
-    string? SourceIp)
+public sealed record PublishEdgeReleaseBundleCommand()
     : IHumanCommand<Result<EdgeReleaseBundlePublishResultDto>>;
 
 public sealed record EdgeReleaseBundlePublishResultDto(
@@ -48,12 +44,12 @@ public sealed record EdgeReleaseBundlePublishResultDto(
     IReadOnlyList<string> VerificationUrls);
 
 public sealed class PublishEdgeReleaseBundleHandler(
-    IOptions<EdgeInstallerArtifactOptions> artifactOptions,
-    IOptions<EdgeReleaseUploadOptions> uploadOptions,
+    ClientReleaseUploadCoordinator uploadCoordinator,
     IRepository<ClientReleaseComponent> componentRepository,
     IClientReleaseRetentionService retentionService,
     ICurrentUser currentUser,
-    IAuditTrailService auditTrailService)
+    IAuditTrailService auditTrailService,
+    ILogger<PublishEdgeReleaseBundleHandler> logger)
     : ICommandHandler<PublishEdgeReleaseBundleCommand, Result<EdgeReleaseBundlePublishResultDto>>
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -85,30 +81,22 @@ public sealed class PublishEdgeReleaseBundleHandler(
         "crash.log"
     ];
 
-    public const string UploadInProgressMessage = "已有 Edge 发布上传正在执行，请稍后重试。";
-
     public async Task<Result<EdgeReleaseBundlePublishResultDto>> Handle(
-        PublishEdgeReleaseBundleCommand request,
+        PublishEdgeReleaseBundleCommand _,
         CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
-        var edgeRoot = ResolveEdgeUpdatesRoot();
-        Directory.CreateDirectory(edgeRoot);
-        var lockPath = Path.Combine(edgeRoot, ".edge-release-upload.lock");
-        await using var uploadLock = TryAcquireUploadLock(lockPath);
-        if (uploadLock is null)
+        await using var uploadSession = await uploadCoordinator.TryBeginAsync(
+            ClientReleaseUploadKind.HostBundle);
+        if (uploadSession is null)
         {
-            return Result.Invalid(UploadInProgressMessage);
+            return Result.Invalid(ClientReleaseUploadErrors.ConcurrentUpload);
         }
 
-        var stagingRoot = Path.Combine(
-            edgeRoot,
-            uploadOptions.Value.StagingDirectoryName,
-            "edge-release-bundles",
-            Guid.NewGuid().ToString("N"));
-        var zipPath = Path.Combine(stagingRoot, "bundle.zip");
+        var edgeRoot = uploadSession.EdgeRoot;
+        var stagingRoot = uploadSession.StagingRoot;
+        var zipPath = uploadSession.UploadedFilePath;
         var extractRoot = Path.Combine(stagingRoot, "extracted");
-        var succeeded = false;
         var commitPointReached = false;
         string? installerTargetForRollback = null;
         VelopackFilePublishTransaction? velopackTransaction = null;
@@ -116,12 +104,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
 
         try
         {
-            Directory.CreateDirectory(stagingRoot);
-            var copiedBytes = await CopyBundleAsync(request.BundleStream, zipPath, cancellationToken);
-            if (request.ContentLength is { } declaredLength && declaredLength != copiedBytes)
-            {
-                return await FailAsync("Edge 发布包上传大小与请求头不一致。", cancellationToken);
-            }
+            var copiedBytes = await uploadSession.ReceiveAsync(cancellationToken);
 
             ExtractBundle(zipPath, extractRoot);
             var artifact = await LoadAndValidateBundleAsync(extractRoot, cancellationToken);
@@ -200,8 +183,15 @@ public sealed class PublishEdgeReleaseBundleHandler(
             }
             catch (Exception ex)
             {
+                ClientReleasePublishDiagnostics.LogFailure(
+                    logger,
+                    LogLevel.Warning,
+                    ClientReleasePublishDiagnostics.HostRetentionCleanupFailed,
+                    "host-retention-cleanup",
+                    ex,
+                    "host-release");
                 cleanupSucceeded = false;
-                cleanupWarning = $"Edge 发布成功，但保留/清理旧版本未完成：{ex.Message}";
+                cleanupWarning = "Edge 发布成功，但保留/清理旧版本未完成。";
             }
 
             stopwatch.Stop();
@@ -216,7 +206,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 BuildComponentSummary(manifest),
                 copiedBytes,
                 stopwatch.Elapsed.TotalSeconds,
-                uploadOptions.Value.MaxUploadMbps,
+                uploadSession.MaxUploadMbps,
                 installerTarget,
                 velopackTarget,
                 cleanup.ArchivedVersions,
@@ -226,45 +216,52 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 cleanupWarning,
                 BuildVerificationUrls(channel, version, pluginPackages.Values));
 
-            await WriteAuditAsync(result, request.SourceIp, succeeded: true, cleanupWarning, CancellationToken.None);
-            succeeded = true;
+            await WriteAuditAsync(
+                result,
+                uploadSession.AuditSource,
+                succeeded: true,
+                cleanupWarning,
+                CancellationToken.None);
             return Result.Success(result);
         }
-        catch (Exception ex)
+        catch (OperationCanceledException)
         {
-            var failureMessage = FormatPublishFailure(ex);
             if (!commitPointReached)
             {
-                var rollbackWarnings = RollbackPreCommitArtifacts(
+                RollbackPreCommitArtifacts(
                     installerTargetForRollback,
                     velopackTransaction,
                     pluginPackageRollbackTargets);
-                if (rollbackWarnings.Count > 0)
-                {
-                    failureMessage = $"{failureMessage} 回滚警告：{string.Join("；", rollbackWarnings)}";
-                }
+            }
+
+            throw;
+        }
+        catch (Exception ex)
+        {
+            ClientReleasePublishDiagnostics.LogFailure(
+                logger,
+                LogLevel.Error,
+                ClientReleasePublishDiagnostics.HostPublishFailed,
+                "host-publish",
+                ex,
+                "host-release");
+            var failureMessage = FormatPublishFailure(ex);
+            if (!commitPointReached
+                && !RollbackPreCommitArtifacts(
+                    installerTargetForRollback,
+                    velopackTransaction,
+                    pluginPackageRollbackTargets))
+            {
+                failureMessage = $"{failureMessage} 发布回滚清理未完全完成。";
             }
 
             return await FailAsync(failureMessage, CancellationToken.None);
         }
-        finally
-        {
-            if (!succeeded)
-            {
-                TryDeleteDirectory(stagingRoot);
-            }
-            else
-            {
-                TryDeleteFile(zipPath);
-                TryDeleteDirectory(stagingRoot);
-            }
-        }
-
         async Task<Result<EdgeReleaseBundlePublishResultDto>> FailAsync(
             string message,
             CancellationToken token)
         {
-            await WriteAuditAsync(null, request.SourceIp, succeeded: false, message, token);
+            await WriteAuditAsync(null, uploadSession.AuditSource, succeeded: false, message, token);
             return Result.Invalid(message);
         }
     }
@@ -272,114 +269,34 @@ public sealed class PublishEdgeReleaseBundleHandler(
     private static string FormatPublishFailure(Exception ex)
         => ex switch
         {
-            InvalidDataException => ex.Message,
-            IOException => $"Edge 发布包处理失败：{ex.Message}",
-            OperationCanceledException => "Edge 发布上传已取消。",
-            _ => $"Edge 发布包发布失败：{ex.Message}"
+            ClientReleaseValidationException validation => validation.SafeMessage,
+            InvalidDataException => "Edge 发布包格式无效。",
+            IOException => "Edge 发布包处理失败，请检查上传包和发布目录后重试。",
+            _ => "Edge 发布包发布失败。"
         };
 
-    private static IReadOnlyList<string> RollbackPreCommitArtifacts(
+    private bool RollbackPreCommitArtifacts(
         string? installerTarget,
         VelopackFilePublishTransaction? velopackTransaction,
         IEnumerable<string> pluginPackageTargets)
     {
-        var warnings = new List<string>();
+        var succeeded = true;
         foreach (var pluginPackageTarget in pluginPackageTargets)
         {
-            TryDeleteDirectory(pluginPackageTarget, warnings);
+            succeeded &= TryDeleteDirectory(pluginPackageTarget);
         }
 
         if (!string.IsNullOrWhiteSpace(installerTarget))
         {
-            TryDeleteDirectory(installerTarget, warnings);
+            succeeded &= TryDeleteDirectory(installerTarget);
         }
 
-        velopackTransaction?.Rollback(warnings);
-        return warnings;
-    }
-
-    private string ResolveEdgeUpdatesRoot()
-    {
-        var installerRoot = Path.GetFullPath(artifactOptions.Value.RootPath);
-        var parent = Directory.GetParent(installerRoot);
-        if (parent is null)
+        if (velopackTransaction is not null)
         {
-            throw new InvalidOperationException("EdgeInstallerArtifacts:RootPath 必须位于 edge-updates/installers 下。");
+            succeeded &= RollbackVelopackFiles(velopackTransaction);
         }
 
-        return parent.FullName;
-    }
-
-    private static FileStream? TryAcquireUploadLock(string lockPath)
-    {
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
-            return new FileStream(
-                lockPath,
-                FileMode.OpenOrCreate,
-                FileAccess.ReadWrite,
-                FileShare.None,
-                bufferSize: 1,
-                FileOptions.DeleteOnClose);
-        }
-        catch (IOException)
-        {
-            return null;
-        }
-    }
-
-    private async Task<long> CopyBundleAsync(
-        Stream source,
-        string targetPath,
-        CancellationToken cancellationToken)
-    {
-        var limitBytes = uploadOptions.Value.MaxBundleBytes;
-        var maxBytesPerSecond = Math.Max(1L, uploadOptions.Value.MaxUploadMbps) * 1024L * 1024L / 8L;
-        var window = Stopwatch.StartNew();
-        var windowBytes = 0L;
-        var totalBytes = 0L;
-        var buffer = new byte[1024 * 1024];
-
-        await using var target = new FileStream(
-            targetPath,
-            FileMode.CreateNew,
-            FileAccess.Write,
-            FileShare.None,
-            buffer.Length,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
-
-        while (true)
-        {
-            var read = await source.ReadAsync(buffer, cancellationToken);
-            if (read == 0)
-            {
-                break;
-            }
-
-            totalBytes += read;
-            windowBytes += read;
-            if (totalBytes > limitBytes)
-            {
-                throw new InvalidDataException($"Edge 发布包超过最大限制 {limitBytes} 字节。");
-            }
-
-            await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-            if (windowBytes >= maxBytesPerSecond)
-            {
-                var remaining = TimeSpan.FromSeconds(1) - window.Elapsed;
-                if (remaining > TimeSpan.Zero)
-                {
-                    await Task.Delay(remaining, cancellationToken);
-                }
-
-                window.Restart();
-                windowBytes = 0;
-            }
-        }
-
-        await target.FlushAsync(cancellationToken);
-        return totalBytes;
+        return succeeded;
     }
 
     private static void ExtractBundle(string zipPath, string extractRoot)
@@ -397,7 +314,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
             var targetPath = Path.GetFullPath(Path.Combine(extractRoot, relativePath));
             if (!IsChildPath(extractRoot, targetPath))
             {
-                throw new InvalidDataException($"Edge 发布包包含非法路径: {entry.FullName}");
+                throw new ClientReleaseValidationException("Edge 发布包包含非法路径。");
             }
 
             if (entry.FullName.EndsWith("/", StringComparison.Ordinal))
@@ -417,7 +334,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
         {
             if ((File.GetAttributes(fileSystemInfo) & FileAttributes.ReparsePoint) != 0)
             {
-                throw new InvalidDataException("Edge 发布包不允许包含符号链接或重解析点。");
+                throw new ClientReleaseValidationException("Edge 发布包不允许包含符号链接或重解析点。");
             }
         }
     }
@@ -670,7 +587,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
         {
             if (!IsSafeRelativePath(file.RelativePath))
             {
-                throw new InvalidDataException($"Velopack 发布文件路径非法: {file.RelativePath}");
+                throw new ClientReleaseValidationException("Velopack 发布文件路径非法。");
             }
 
             var targetPath = Path.Combine(targetRoot, file.RelativePath);
@@ -756,13 +673,13 @@ public sealed class PublishEdgeReleaseBundleHandler(
             var pluginDirectory = Path.Combine(installerTarget, manifest.PluginsRoot, module.PluginDirectory);
             if (!Directory.Exists(pluginDirectory))
             {
-                throw new InvalidDataException($"Edge 发布包缺少插件目录: {module.ModuleId}。");
+                throw new ClientReleaseValidationException("Edge 发布包缺少声明的插件目录。");
             }
 
             var pluginManifestPath = Path.Combine(pluginDirectory, "plugin.json");
             if (!File.Exists(pluginManifestPath))
             {
-                throw new InvalidDataException($"Edge 发布包插件目录缺少 plugin.json: {module.ModuleId}。");
+                throw new ClientReleaseValidationException("Edge 发布包插件目录缺少 plugin.json。");
             }
 
             var packageFileName = BuildPluginPackageFileName(module.ModuleId, module.Version, manifest.TargetRuntime);
@@ -788,8 +705,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 module.Version);
             if (Directory.Exists(packageDirectory))
             {
-                throw new InvalidDataException(
-                    $"Edge 插件包版本目录已存在，拒绝覆盖: {manifest.Channel}/{module.ModuleId}/{module.Version}。");
+                throw new ClientReleaseValidationException("Edge 插件包版本目录已存在，拒绝覆盖。");
             }
 
             Directory.CreateDirectory(packageDirectory);
@@ -823,7 +739,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
             manifest.Version,
             cancellationToken))
         {
-            throw new InvalidDataException($"Edge 发布版本已存在，默认不覆盖: {manifest.Channel}/{manifest.Version}。");
+            throw new ClientReleaseValidationException("Edge 发布版本已存在，默认不覆盖。");
         }
 
         var hostComponent = await componentRepository.GetSingleOrDefaultAsync(
@@ -882,7 +798,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
 
             if (!pluginPackages.TryGetValue(module.ModuleId, out var package))
             {
-                throw new InvalidDataException($"插件 {module.ModuleId} 缺少可安装的独立发布包。");
+                throw new ClientReleaseValidationException("Edge 发布包中的插件缺少可安装的独立发布包。");
             }
 
             var pluginComponent = await componentRepository.GetSingleOrDefaultAsync(
@@ -1145,7 +1061,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
         var required = bundleBytes * 2;
         if (drive.AvailableFreeSpace < required)
         {
-            throw new InvalidDataException(
+            throw new ClientReleaseValidationException(
                 $"Edge 发布磁盘剩余空间不足，至少需要 {required} 字节。");
         }
     }
@@ -1223,8 +1139,8 @@ public sealed class PublishEdgeReleaseBundleHandler(
             });
         if (currentVersionNupkg is null)
         {
-            throw new InvalidDataException(
-                $"Edge 发布版本 {manifest.Channel}/{manifest.Version} 缺少被 Velopack manifests 引用的 .nupkg，拒绝置为 Published。");
+            throw new ClientReleaseValidationException(
+                "Edge 发布版本缺少被 Velopack manifests 引用的 .nupkg，拒绝置为 Published。");
         }
 
         files.Add(currentVersionNupkg);
@@ -1296,7 +1212,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 || lower.Contains("bootstrapsecret", StringComparison.Ordinal)
                 || lower.Contains("bootstrap-secret", StringComparison.Ordinal))
             {
-                throw new InvalidDataException($"Edge 发布包包含禁止上传的现场数据或密钥文件: {relativePath}");
+                throw new ClientReleaseValidationException("Edge 发布包包含禁止上传的现场数据或密钥文件。");
             }
         }
     }
@@ -1316,8 +1232,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 if (cloudApi.TryGetProperty(key, out var value)
                     && !string.IsNullOrWhiteSpace(value.GetString()))
                 {
-                    var relativePath = Path.GetRelativePath(root, file).Replace('\\', '/');
-                    throw new InvalidDataException($"Edge 发布包配置包含真实 CloudApi:{key}: {relativePath}");
+                    throw new ClientReleaseValidationException($"Edge 发布包配置包含真实 CloudApi:{key}。");
                 }
             }
         }
@@ -1329,7 +1244,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
         if (normalized.Contains(':', StringComparison.Ordinal)
             || normalized.Split('/').Any(segment => segment == ".."))
         {
-            throw new InvalidDataException($"Edge 发布包包含非法 zip 路径: {path}");
+            throw new ClientReleaseValidationException("Edge 发布包包含非法 zip 路径。");
         }
 
         return normalized;
@@ -1401,42 +1316,98 @@ public sealed class PublishEdgeReleaseBundleHandler(
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
-    private static void TryDeleteDirectory(string path, ICollection<string>? warnings = null)
+    private bool TryDeleteDirectory(string path)
     {
-        if (Directory.Exists(path))
+        if (!Directory.Exists(path))
         {
-            try
-            {
-                Directory.Delete(path, recursive: true);
-            }
-            catch (IOException ex)
-            {
-                warnings?.Add($"无法删除目录 {path}: {ex.Message}");
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                warnings?.Add($"无法删除目录 {path}: {ex.Message}");
-            }
+            return true;
+        }
+
+        try
+        {
+            Directory.Delete(path, recursive: true);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            ClientReleasePublishDiagnostics.LogFailure(
+                logger,
+                LogLevel.Warning,
+                ClientReleasePublishDiagnostics.HostRollbackCleanupFailed,
+                "host-rollback-directory-delete",
+                ex,
+                "host-publish-target");
+            return false;
         }
     }
 
-    private static void TryDeleteFile(string path, ICollection<string>? warnings = null)
+    private bool TryDeleteFile(string path)
     {
-        if (File.Exists(path))
+        if (!File.Exists(path))
         {
+            return true;
+        }
+
+        try
+        {
+            File.Delete(path);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            ClientReleasePublishDiagnostics.LogFailure(
+                logger,
+                LogLevel.Warning,
+                ClientReleasePublishDiagnostics.HostRollbackCleanupFailed,
+                "host-rollback-file-delete",
+                ex,
+                "host-publish-artifact");
+            return false;
+        }
+    }
+
+    private bool RollbackVelopackFiles(VelopackFilePublishTransaction transaction)
+    {
+        var succeeded = true;
+        foreach (var change in transaction.Changes.Reverse())
+        {
+            if (change.BackupPath is null)
+            {
+                succeeded &= TryDeleteFile(change.TargetPath);
+                continue;
+            }
+
+            if (!File.Exists(change.BackupPath))
+            {
+                ClientReleasePublishDiagnostics.LogCondition(
+                    logger,
+                    ClientReleasePublishDiagnostics.HostRollbackCleanupFailed,
+                    "host-rollback-velopack-restore",
+                    "backup-missing",
+                    "velopack-artifact");
+                succeeded = false;
+                continue;
+            }
+
             try
             {
-                File.Delete(path);
+                Directory.CreateDirectory(Path.GetDirectoryName(change.TargetPath)!);
+                File.Copy(change.BackupPath, change.TargetPath, overwrite: true);
             }
-            catch (IOException ex)
+            catch (Exception ex)
             {
-                warnings?.Add($"无法删除文件 {path}: {ex.Message}");
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                warnings?.Add($"无法删除文件 {path}: {ex.Message}");
+                ClientReleasePublishDiagnostics.LogFailure(
+                    logger,
+                    LogLevel.Warning,
+                    ClientReleasePublishDiagnostics.HostRollbackCleanupFailed,
+                    "host-rollback-velopack-restore",
+                    ex,
+                    "velopack-artifact");
+                succeeded = false;
             }
         }
+
+        return succeeded;
     }
 
     private sealed record BundleValidationResult(
@@ -1474,41 +1445,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
 
     private sealed record VelopackFilePublishTransaction(
         string TargetRoot,
-        IReadOnlyList<VelopackFileChange> Changes)
-    {
-        public void Rollback(ICollection<string> warnings)
-        {
-            foreach (var change in Changes.Reverse())
-            {
-                if (change.BackupPath is not null)
-                {
-                    if (!File.Exists(change.BackupPath))
-                    {
-                        warnings.Add($"无法恢复 Velopack 文件 {change.RelativePath}: 备份文件缺失。");
-                        continue;
-                    }
-
-                    try
-                    {
-                        Directory.CreateDirectory(Path.GetDirectoryName(change.TargetPath)!);
-                        File.Copy(change.BackupPath, change.TargetPath, overwrite: true);
-                    }
-                    catch (IOException ex)
-                    {
-                        warnings.Add($"无法恢复 Velopack 文件 {change.RelativePath}: {ex.Message}");
-                    }
-                    catch (UnauthorizedAccessException ex)
-                    {
-                        warnings.Add($"无法恢复 Velopack 文件 {change.RelativePath}: {ex.Message}");
-                    }
-                }
-                else
-                {
-                    TryDeleteFile(change.TargetPath, warnings);
-                }
-            }
-        }
-    }
+        IReadOnlyList<VelopackFileChange> Changes);
 
     private sealed record VelopackFileChange(
         string RelativePath,

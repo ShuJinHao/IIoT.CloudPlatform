@@ -109,27 +109,9 @@ public sealed class HumanClientReleaseController : ApiControllerBase
     public async Task<IActionResult> PublishEdgeReleaseBundle(CancellationToken cancellationToken)
     {
         var result = await Sender.Send(
-            new PublishEdgeReleaseBundleCommand(
-                Request.Body,
-                Request.ContentLength,
-                Request.ContentType,
-                HttpContext.Connection.RemoteIpAddress?.ToString()),
+            new PublishEdgeReleaseBundleCommand(),
             cancellationToken);
-
-        if (!result.IsSuccess
-            && result.Status == ResultStatus.Invalid
-            && result.Errors?.Contains(PublishEdgeReleaseBundleHandler.UploadInProgressMessage) == true)
-        {
-            return Conflict(new ProblemDetails
-            {
-                Status = StatusCodes.Status409Conflict,
-                Title = "Edge 发布上传正在执行",
-                Detail = result.Errors.Single(),
-                Instance = HttpContext.Request.Path
-            });
-        }
-
-        return ReturnResult(result);
+        return ReturnUploadResult(result);
     }
 
     [HttpPost("plugin-packages")]
@@ -137,22 +119,22 @@ public sealed class HumanClientReleaseController : ApiControllerBase
     public async Task<IActionResult> PublishEdgePluginPackage(CancellationToken cancellationToken)
     {
         var result = await Sender.Send(
-            new PublishEdgePluginPackageCommand(
-                Request.Body,
-                Request.ContentLength,
-                Request.ContentType,
-                HttpContext.Connection.RemoteIpAddress?.ToString()),
+            new PublishEdgePluginPackageCommand(),
             cancellationToken);
+        return ReturnUploadResult(result);
+    }
 
+    private IActionResult ReturnUploadResult<T>(Result<T> result)
+    {
         if (!result.IsSuccess
             && result.Status == ResultStatus.Invalid
-            && result.Errors?.Contains(PublishEdgePluginPackageHandler.UploadInProgressMessage) == true)
+            && result.Errors?.Contains(ClientReleaseUploadErrors.ConcurrentUpload) == true)
         {
             return Conflict(new ProblemDetails
             {
                 Status = StatusCodes.Status409Conflict,
                 Title = "Edge 发布上传正在执行",
-                Detail = result.Errors.Single(),
+                Detail = ClientReleaseUploadErrors.ConcurrentUpload,
                 Instance = HttpContext.Request.Path
             });
         }

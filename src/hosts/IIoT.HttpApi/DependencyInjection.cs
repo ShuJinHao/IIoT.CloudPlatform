@@ -92,6 +92,7 @@ public static class DependencyInjection
         builder.Services.AddScoped<IClientReleaseRetentionService, ClientReleaseRetentionService>();
         builder.Services.AddScoped<IClientReleaseRetentionPolicyReader>(sp =>
             sp.GetRequiredService<IClientReleaseRetentionService>());
+        builder.Services.AddScoped<ClientReleaseUploadCoordinator>();
         builder.Services.AddPassStationRuntime();
 
         builder.Services.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
@@ -292,6 +293,7 @@ public static class DependencyInjection
 
         builder.Services.AddScoped<ICurrentUser, CurrentUser>();
         builder.Services.AddScoped<ICurrentUserDeviceAccessService, CurrentUserDeviceAccessService>();
+        builder.Services.AddScoped<IClientReleaseUploadSource, CurrentClientReleaseUploadSource>();
         builder.Services.AddScoped<ICloudOidcSessionService, CloudOidcSessionService>();
         builder.Services.AddScoped<IAiReadScopeAccessor, HttpAiReadScopeAccessor>();
         builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, CloudAuthorizationResultHandler>();
