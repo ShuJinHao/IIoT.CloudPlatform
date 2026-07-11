@@ -2,7 +2,7 @@
 
 本目录是 `IIoT.CloudPlatform` 镜像构建和旧事务维护实现目录。Cloud 日常应用发布统一从工作区根 `deploy/Deploy-Changed.ps1` 发起：入口自动 push 已提交的 `main`，读取生产 SHA，按 Git 改动与项目依赖闭包只选择受影响镜像，再调用 `Deploy.ps1 -Services ...` 从 `origin/main` tip 创建隔离快照、推 Harbor 并把不可变请求交给稳定服务器 Runner。影响无法安全归属禁止退化全量。`Auto` 传输优先 SSH，SSH TCP 不可达时使用 `cloud-routine-request.yml` self-hosted Runner；旧 `cloud-image` / `cloud-deploy` 仍只是灾备入口。三项目口径见 [上传部署总览](../../docs/上传部署总览.md)。
 
-> 当前状态（2026-07-10）：新日常入口/Runner 已通过 fake 远端仓库、脏本地工作树、不可变 OCI、一次 SSH、失败回滚和不重建续传回归；旧事务链 33/33、`DeploymentGuardTests` 20/20、名称含 `Deploy` 的门禁 39/39 仍保留。没有连接真实 Harbor/SSH/生产容器，隔离回归不得冒充生产验收。
+> 当前状态（2026-07-11）：Cloud 全量应用已完成真实 Harbor、生产 Runner、备份、migration、rollout 与健康检查；自动增量入口的编译门禁、依赖影响测试和生产 SHA 只读 inspect 已通过，但尚未用新的单服务业务变更执行生产发布，因此不得把全量成功冒充增量生产 E2E。
 
 日常标准入口示例：
 
