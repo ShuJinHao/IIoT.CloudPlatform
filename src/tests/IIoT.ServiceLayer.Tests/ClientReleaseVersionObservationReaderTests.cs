@@ -20,19 +20,41 @@ public sealed class ClientReleaseVersionObservationReaderTests
         var identity = await SeedPluginReleaseAsync(database, new string('a', 64));
         var reader = new EfClientReleaseVersionObservationReader(database.Options);
 
-        var first = await reader.ObserveAsync(identity, CancellationToken.None);
-        var second = await reader.ObserveAsync(identity, CancellationToken.None);
+        var first = Assert.Single(await reader.ObserveAsync([identity], CancellationToken.None));
+        var second = Assert.Single(await reader.ObserveAsync([identity], CancellationToken.None));
 
-        Assert.NotNull(first);
-        Assert.NotNull(second);
         Assert.Equal(2, interceptor.ObservationCommandCount);
         Assert.Equal(2, interceptor.ObservationContexts.Count);
         Assert.NotSame(interceptor.ObservationContexts[0], interceptor.ObservationContexts[1]);
         Assert.All(
             interceptor.ObservationCommands,
             command => Assert.Contains("edge_client_release_artifacts", command, StringComparison.Ordinal));
-        Assert.Equal(2, first!.Artifacts.Count);
+        Assert.Equal(2, first.Artifacts.Count);
         Assert.Equal(new string('a', 64), first.Sha256);
+    }
+
+    [Fact]
+    public async Task ObserveAsync_ShouldReadHostAndPluginExpectedSetWithOneSqlCommand()
+    {
+        var interceptor = new ObservationCommandInterceptor();
+        await using var database = await SqliteEfTestDatabase.CreateAsync(interceptor);
+        var pluginIdentity = await SeedPluginReleaseAsync(database, new string('c', 64));
+        var hostIdentity = await SeedHostReleaseAsync(database);
+        var reader = new EfClientReleaseVersionObservationReader(database.Options);
+
+        var observations = await reader.ObserveAsync(
+            [hostIdentity, pluginIdentity],
+            CancellationToken.None);
+
+        Assert.Equal(2, observations.Count);
+        Assert.Equal(1, interceptor.ObservationCommandCount);
+        Assert.Contains(observations, observation =>
+            observation.ComponentKind == ClientReleaseComponentKind.Host
+            && observation.ComponentKey == ClientReleaseComponent.HostComponentKey);
+        Assert.Contains(observations, observation =>
+            observation.ComponentKind == ClientReleaseComponentKind.Plugin
+            && observation.ComponentKey == pluginIdentity.ComponentKey);
+        Assert.Contains("edge_client_release_artifacts", Assert.Single(interceptor.ObservationCommands), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -46,7 +68,7 @@ public sealed class ClientReleaseVersionObservationReaderTests
         var identity = await SeedPluginReleaseAsync(database, initialArtifactHash);
         var reader = new EfClientReleaseVersionObservationReader(database.Options);
 
-        var observationTask = reader.ObserveAsync(identity, CancellationToken.None);
+        var observationTask = reader.ObserveAsync([identity], CancellationToken.None);
         await interceptor.QueryStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         try
         {
@@ -61,11 +83,10 @@ public sealed class ClientReleaseVersionObservationReaderTests
             interceptor.ResumeQuery();
         }
 
-        var observation = await observationTask;
+        var observation = Assert.Single(await observationTask);
 
-        Assert.NotNull(observation);
         Assert.Equal(1, interceptor.ObservationCommandCount);
-        Assert.Equal(mutatedReleaseNotes, observation!.ReleaseNotes);
+        Assert.Equal(mutatedReleaseNotes, observation.ReleaseNotes);
         var package = Assert.Single(
             observation.Artifacts,
             artifact => artifact.ArtifactKind == ClientReleaseArtifactKind.PackageFile);
@@ -119,6 +140,46 @@ public sealed class ClientReleaseVersionObservationReaderTests
         return new ClientReleaseVersionIdentity(
             ClientReleaseComponentKind.Plugin,
             moduleId,
+            channel,
+            targetRuntime,
+            version);
+    }
+
+    private static async Task<ClientReleaseVersionIdentity> SeedHostReleaseAsync(
+        SqliteEfTestDatabase database)
+    {
+        const string channel = "stable";
+        const string targetRuntime = "win-x64";
+        const string version = "2.0.0";
+        var component = ClientReleaseComponent.CreateHost(channel, targetRuntime);
+        component.UpsertHostVersion(
+            version,
+            "1.0.0",
+            "net10.0",
+            "/edge-updates/installers/stable/2.0.0/installer-artifact.json",
+            new string('d', 64),
+            256,
+            "host expected state",
+            ClientReleaseStatus.Published,
+            null,
+            "IIoT",
+            new DateTime(2026, 7, 11, 3, 30, 0, DateTimeKind.Utc),
+            [
+                new ClientReleaseArtifact(
+                    ClientReleaseArtifactKind.InstallerDirectory,
+                    "installers/stable/2.0.0"),
+                new ClientReleaseArtifact(
+                    ClientReleaseArtifactKind.ManifestFile,
+                    "installers/stable/2.0.0/installer-artifact.json",
+                    new string('e', 64),
+                    64)
+            ]);
+        await using var context = database.CreateContext();
+        context.ClientReleaseComponents.Add(component);
+        await context.SaveChangesAsync();
+        return new ClientReleaseVersionIdentity(
+            ClientReleaseComponentKind.Host,
+            ClientReleaseComponent.HostComponentKey,
             channel,
             targetRuntime,
             version);

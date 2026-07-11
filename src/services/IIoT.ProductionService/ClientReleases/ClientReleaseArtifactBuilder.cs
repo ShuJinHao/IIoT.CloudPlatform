@@ -61,13 +61,47 @@ internal static class ClientReleaseArtifactBuilder
         return artifacts;
     }
 
+    public static IReadOnlyList<ClientReleaseArtifact> FromPublishedHostFiles(
+        string manifestDownloadUrl,
+        string channel,
+        string version,
+        ClientReleaseFileFact manifest,
+        string installerStubRelativePath,
+        ClientReleaseFileFact installerStub)
+    {
+        var artifacts = new List<ClientReleaseArtifact>
+        {
+            new(
+                ClientReleaseArtifactKind.InstallerDirectory,
+                $"installers/{EscapePath(channel)}/{EscapePath(version)}")
+        };
+
+        var manifestRelativePath = TryExtractEdgeUpdatesPath(manifestDownloadUrl)
+            ?? throw new ClientReleaseValidationException("Edge installer manifest 下载地址非法。");
+        artifacts.Add(new ClientReleaseArtifact(
+            ClientReleaseArtifactKind.ManifestFile,
+            manifestRelativePath,
+            manifest.Sha256,
+            manifest.Size));
+        artifacts.Add(new ClientReleaseArtifact(
+            ClientReleaseArtifactKind.PackageFile,
+            $"installers/{EscapePath(channel)}/{EscapePath(version)}/{installerStubRelativePath.Replace('\\', '/').TrimStart('/')}",
+            installerStub.Sha256,
+            installerStub.Size));
+        return artifacts;
+    }
+
     public static ClientReleaseArtifact VelopackFile(
         string channel,
-        string relativePath)
+        string relativePath,
+        string sha256,
+        long size)
     {
         return new ClientReleaseArtifact(
             ClientReleaseArtifactKind.VelopackFile,
-            $"velopack/{EscapePath(channel)}/{relativePath.Replace('\\', '/').TrimStart('/')}");
+            $"velopack/{EscapePath(channel)}/{relativePath.Replace('\\', '/').TrimStart('/')}",
+            sha256,
+            size);
     }
 
     public static string? TryExtractEdgeUpdatesPath(string? downloadUrl)

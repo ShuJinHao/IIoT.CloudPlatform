@@ -1,4 +1,3 @@
-using System.Text;
 using IIoT.Services.Contracts;
 using Microsoft.Extensions.Logging;
 
@@ -14,7 +13,7 @@ internal sealed class PluginReleasePublishFileTransaction
     private readonly string privateDirectory;
     private readonly string privatePackagePath;
     private readonly string privateOwnershipMarkerPath;
-    private readonly string ownershipToken = Guid.NewGuid().ToString("N");
+    private readonly string ownershipToken = ClientReleaseOwnershipMarker.CreateToken();
     private readonly string expectedSha256;
     private readonly long expectedSize;
     private readonly ILogger logger;
@@ -43,28 +42,58 @@ internal sealed class PluginReleasePublishFileTransaction
         this.expectedSha256 = expectedSha256;
         this.expectedSize = expectedSize;
         this.logger = logger;
-        this.writeOwnershipMarker = writeOwnershipMarker ?? WriteOwnershipMarker;
+        this.writeOwnershipMarker = writeOwnershipMarker ?? ClientReleaseOwnershipMarker.Write;
 
-        if (!ClientReleaseFileFacts.IsStrictChildPath(this.edgeRoot, this.targetDirectory)
-            || !ClientReleaseFileFacts.IsStrictChildPath(this.edgeRoot, privateDirectory)
-            || !string.Equals(Path.GetDirectoryName(targetPackagePath), this.targetDirectory, StringComparison.Ordinal)
+        if (!string.Equals(Path.GetDirectoryName(targetPackagePath), this.targetDirectory, StringComparison.Ordinal)
             || !string.Equals(Path.GetFileName(targetPackagePath), packageFileName, StringComparison.Ordinal))
         {
             throw new ClientReleaseValidationException("Edge 插件发布目录非法。");
         }
+
+        ClientReleaseControlledDirectory.ValidateChain(
+            this.edgeRoot,
+            this.targetDirectory,
+            "Edge 插件发布目录非法。",
+            requireStrictChild: true);
+        ClientReleaseControlledDirectory.ValidateChain(
+            this.edgeRoot,
+            privateDirectory,
+            "Edge 插件发布目录非法。",
+            requireStrictChild: true);
     }
 
     public string TargetPackagePath => targetPackagePath;
 
     public void Publish(string sourcePackagePath)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(privateDirectory)!);
-        Directory.CreateDirectory(privateDirectory);
+        var fullSourcePackagePath = Path.GetFullPath(sourcePackagePath);
+        ClientReleaseControlledDirectory.ValidateChain(
+            edgeRoot,
+            Path.GetDirectoryName(fullSourcePackagePath)!,
+            "Edge 插件暂存包非法。");
+        if (!ClientReleaseFileFacts.IsExactRegularFile(
+                fullSourcePackagePath,
+                expectedSha256,
+                expectedSize))
+        {
+            throw new ClientReleaseValidationException("Edge 插件暂存包非法。");
+        }
+
+        ClientReleaseControlledDirectory.EnsureExists(
+            edgeRoot,
+            Path.GetDirectoryName(privateDirectory)!,
+            createdDirectories: null,
+            "Edge 插件发布目录非法。");
+        ClientReleaseControlledDirectory.EnsureExists(
+            edgeRoot,
+            privateDirectory,
+            createdDirectories: null,
+            "Edge 插件发布目录非法。");
         privateDirectoryCreated = true;
 
         writeOwnershipMarker(privateOwnershipMarkerPath, ownershipToken);
 
-        File.Move(sourcePackagePath, privatePackagePath, overwrite: false);
+        File.Move(fullSourcePackagePath, privatePackagePath, overwrite: false);
         try
         {
             Directory.Move(privateDirectory, targetDirectory);
@@ -150,7 +179,7 @@ internal sealed class PluginReleasePublishFileTransaction
         try
         {
             if (!targetOwned
-                || !IsCurrentOwnershipMarker(targetOwnershipMarkerPath))
+                || !ClientReleaseOwnershipMarker.Matches(targetOwnershipMarkerPath, ownershipToken))
             {
                 ClientReleasePublishDiagnostics.LogCondition(
                     logger,
@@ -182,7 +211,7 @@ internal sealed class PluginReleasePublishFileTransaction
     {
         return IsControlledDirectory(targetDirectory, targetPackagePath)
                && HasExactEntries(targetDirectory, targetOwnershipMarkerPath, targetPackagePath)
-               && IsCurrentOwnershipMarker(targetOwnershipMarkerPath)
+               && ClientReleaseOwnershipMarker.Matches(targetOwnershipMarkerPath, ownershipToken)
                && ClientReleaseFileFacts.IsExactRegularFile(
                    targetPackagePath,
                    expectedSha256,
@@ -249,7 +278,7 @@ internal sealed class PluginReleasePublishFileTransaction
     private bool ValidateOwnedPrivateDirectory()
     {
         if (!IsControlledDirectory(privateDirectory, privatePackagePath)
-            || !IsCurrentOwnershipMarker(privateOwnershipMarkerPath))
+            || !ClientReleaseOwnershipMarker.Matches(privateOwnershipMarkerPath, ownershipToken))
         {
             return false;
         }
@@ -272,9 +301,7 @@ internal sealed class PluginReleasePublishFileTransaction
 
     private bool IsControlledDirectory(string directory, string packagePath)
     {
-        return Directory.Exists(directory)
-               && (File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0
-               && ClientReleaseFileFacts.IsStrictChildPath(edgeRoot, directory)
+        return ClientReleaseControlledDirectory.IsExistingDirectory(edgeRoot, directory)
                && string.Equals(Path.GetDirectoryName(packagePath), directory, StringComparison.Ordinal);
     }
 
@@ -292,51 +319,6 @@ internal sealed class PluginReleasePublishFileTransaction
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
         return entries.SequenceEqual(expectedEntries, StringComparer.Ordinal);
-    }
-
-    private bool IsCurrentOwnershipMarker(string path)
-    {
-        if (!File.Exists(path))
-        {
-            return false;
-        }
-
-        var attributes = File.GetAttributes(path);
-        if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
-        {
-            return false;
-        }
-
-        using var marker = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
-        if (marker.Length != 32)
-        {
-            return false;
-        }
-
-        Span<byte> actual = stackalloc byte[32];
-        marker.ReadExactly(actual);
-        Span<byte> expected = stackalloc byte[32];
-        if (!Encoding.ASCII.TryGetBytes(ownershipToken, expected, out var bytesWritten)
-            || bytesWritten != expected.Length)
-        {
-            return false;
-        }
-
-        return actual.SequenceEqual(expected);
-    }
-
-    private static void WriteOwnershipMarker(string path, string token)
-    {
-        var markerBytes = Encoding.ASCII.GetBytes(token);
-        using var marker = new FileStream(
-            path,
-            FileMode.CreateNew,
-            FileAccess.Write,
-            FileShare.None,
-            bufferSize: 4096,
-            FileOptions.WriteThrough);
-        marker.Write(markerBytes);
-        marker.Flush(flushToDisk: true);
     }
 
     private static void DeleteKnownOwnedDirectory(

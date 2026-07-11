@@ -46,12 +46,13 @@ public sealed record ClientReleaseVersionObservation(
     IReadOnlyList<ClientReleaseArtifactObservation> Artifacts);
 
 /// <summary>
-/// Reads a release version through a newly-created persistence context. A null result means only
-/// that the requested version was not observed by this read; it is not proof that no commit occurred.
+/// Reads an expected release-version set through one newly-created persistence context and one
+/// database snapshot. A missing item means only that the version was not observed by this read;
+/// it is not proof that no commit occurred.
 /// </summary>
 public interface IClientReleaseVersionObservationReader
 {
-    Task<ClientReleaseVersionObservation?> ObserveAsync(
-        ClientReleaseVersionIdentity identity,
+    Task<IReadOnlyList<ClientReleaseVersionObservation>> ObserveAsync(
+        IReadOnlyCollection<ClientReleaseVersionIdentity> identities,
         CancellationToken cancellationToken);
 }

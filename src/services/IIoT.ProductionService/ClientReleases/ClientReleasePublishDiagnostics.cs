@@ -9,6 +9,11 @@ internal static class ClientReleasePublishDiagnostics
     public static readonly EventId HostPublishFailed = new(6110, nameof(HostPublishFailed));
     public static readonly EventId HostRetentionCleanupFailed = new(6111, nameof(HostRetentionCleanupFailed));
     public static readonly EventId HostRollbackCleanupFailed = new(6112, nameof(HostRollbackCleanupFailed));
+    public static readonly EventId HostCommitRecovered = new(6113, nameof(HostCommitRecovered));
+    public static readonly EventId HostCommitUnknown = new(6114, nameof(HostCommitUnknown));
+    public static readonly EventId HostCommitConflict = new(6115, nameof(HostCommitConflict));
+    public static readonly EventId HostRollbackOwnershipMismatch = new(6116, nameof(HostRollbackOwnershipMismatch));
+    public static readonly EventId HostOwnershipMarkerCleanupFailed = new(6117, nameof(HostOwnershipMarkerCleanupFailed));
     public static readonly EventId PluginPublishFailed = new(6120, nameof(PluginPublishFailed));
     public static readonly EventId PluginRetentionCleanupFailed = new(6121, nameof(PluginRetentionCleanupFailed));
     public static readonly EventId PluginRollbackCleanupFailed = new(6122, nameof(PluginRollbackCleanupFailed));
@@ -55,4 +60,17 @@ internal sealed class ClientReleaseValidationException(string message)
     : Exception(message)
 {
     public string SafeMessage { get; } = message;
+}
+
+internal static class ClientReleasePublishWarnings
+{
+    public static string? Combine(string? first, string? second)
+    {
+        if (string.IsNullOrWhiteSpace(first))
+        {
+            return string.IsNullOrWhiteSpace(second) ? null : second;
+        }
+
+        return string.IsNullOrWhiteSpace(second) ? first : $"{first} {second}";
+    }
 }

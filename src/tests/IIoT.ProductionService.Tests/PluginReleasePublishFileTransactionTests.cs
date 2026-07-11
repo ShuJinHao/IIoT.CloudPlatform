@@ -119,6 +119,25 @@ public sealed class PluginReleasePublishFileTransactionTests
         Assert.True(File.Exists(fixture.SourcePackage));
     }
 
+    [Fact]
+    public void Publish_WhenTargetTraversesSymlinkAncestor_ShouldRejectWithoutWritingOutsideRoot()
+    {
+        if (!ExternalDirectorySymlink.IsSupported)
+        {
+            return;
+        }
+
+        using var fixture = PublishFileFixture.Create("symlink-target");
+        using var symlink = ExternalDirectorySymlink.Create(
+            Path.Combine(fixture.Root, "plugins"),
+            "plugin-target");
+
+        Assert.Throws<ClientReleaseValidationException>(() => fixture.CreateTransaction());
+
+        Assert.Empty(Directory.EnumerateFileSystemEntries(symlink.OutsideRoot));
+        Assert.True(File.Exists(fixture.SourcePackage));
+    }
+
     private sealed class PublishFileFixture(
         string root,
         string targetDirectory,

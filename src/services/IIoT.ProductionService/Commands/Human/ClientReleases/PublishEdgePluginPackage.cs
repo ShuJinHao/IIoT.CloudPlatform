@@ -87,7 +87,7 @@ public sealed class PublishEdgePluginPackageHandler(
         var extractRoot = Path.Combine(stagingRoot, "extracted");
         PluginReleasePublishFileTransaction? fileTransaction = null;
         ClientReleaseVersionIdentity? releaseIdentity = null;
-        PluginReleaseExpectedState? expectedState = null;
+        ClientReleaseExpectedVersionState? expectedState = null;
         var saveChangesInvoked = false;
         var saveChangesReturned = false;
         var stableOutcomeAuditWritten = false;
@@ -191,8 +191,8 @@ public sealed class PublishEdgePluginPackageHandler(
             component.UpsertPluginVersion(
                 releaseIdentity.Version,
                 expectedState.HostApiVersion,
-                expectedState.MinHostVersion,
-                expectedState.MaxHostVersion,
+                expectedState.MinHostVersion!,
+                expectedState.MaxHostVersion!,
                 expectedState.TargetFramework,
                 expectedState.DownloadUrl,
                 expectedState.Sha256,
@@ -227,24 +227,24 @@ public sealed class PublishEdgePluginPackageHandler(
                 switch (outcome)
                 {
                     case PluginReleaseCommitObservationOutcome.Committed:
-                    {
-                        var markerWarning = fileTransaction.TryRemoveOwnershipMarker()
-                            ? null
-                            : "插件发布已确认，但发布所有权标记未完成清理。";
-                        stopwatch.Stop();
-                        var recoveredResult = BuildResult(
-                            expectedState,
-                            stopwatch.Elapsed,
-                            uploadSession.MaxUploadMbps,
-                            CombineWarnings(
-                                "插件发布已确认，但保留/清理旧版本未执行。",
-                                markerWarning));
-                        await WriteStableOutcomeAuditAsync(
-                            releaseIdentity,
-                            PluginPublishAuditOutcome.CommitRecovered);
-                        stableOutcomeAuditWritten = true;
-                        return Result.Success(recoveredResult);
-                    }
+                        {
+                            var markerWarning = fileTransaction.TryRemoveOwnershipMarker()
+                                ? null
+                                : "插件发布已确认，但发布所有权标记未完成清理。";
+                            stopwatch.Stop();
+                            var recoveredResult = BuildResult(
+                                expectedState,
+                                stopwatch.Elapsed,
+                                uploadSession.MaxUploadMbps,
+                                ClientReleasePublishWarnings.Combine(
+                                    "插件发布已确认，但保留/清理旧版本未执行。",
+                                    markerWarning));
+                            await WriteStableOutcomeAuditAsync(
+                                releaseIdentity,
+                                PluginPublishAuditOutcome.CommitRecovered);
+                            stableOutcomeAuditWritten = true;
+                            return Result.Success(recoveredResult);
+                        }
                     case PluginReleaseCommitObservationOutcome.Conflict:
                         await WriteStableOutcomeAuditAsync(
                             releaseIdentity,
@@ -292,7 +292,7 @@ public sealed class PublishEdgePluginPackageHandler(
                     "plugin-retention-cleanup",
                     ex,
                     "plugin-release");
-                cleanupWarning = CombineWarnings(
+                cleanupWarning = ClientReleasePublishWarnings.Combine(
                     cleanupWarning,
                     "插件发布成功，但保留/清理旧版本未完成。");
             }
@@ -400,7 +400,7 @@ public sealed class PublishEdgePluginPackageHandler(
                     expectedState,
                     stopwatch.Elapsed,
                     uploadSession.MaxUploadMbps,
-                    CombineWarnings("插件发布已提交，但响应后处理未完成。", markerWarning));
+                    ClientReleasePublishWarnings.Combine("插件发布已提交，但响应后处理未完成。", markerWarning));
                 if (releaseIdentity is not null)
                 {
                     await WriteStableOutcomeAuditAsync(
@@ -429,7 +429,7 @@ public sealed class PublishEdgePluginPackageHandler(
         }
     }
 
-    private static PluginReleaseExpectedState BuildExpectedState(
+    private static ClientReleaseExpectedVersionState BuildExpectedState(
         PluginPackageReleaseManifest metadata,
         ClientReleaseVersionIdentity identity,
         string downloadUrl,
@@ -439,7 +439,7 @@ public sealed class PublishEdgePluginPackageHandler(
         var publisher = string.IsNullOrWhiteSpace(metadata.Publisher)
             ? "IIoT"
             : metadata.Publisher.Trim();
-        return new PluginReleaseExpectedState(
+        return new ClientReleaseExpectedVersionState(
             identity,
             displayName,
             NormalizeOptional(metadata.Description),
@@ -467,7 +467,7 @@ public sealed class PublishEdgePluginPackageHandler(
     }
 
     private static EdgePluginPackagePublishResultDto BuildResult(
-        PluginReleaseExpectedState expected,
+        ClientReleaseExpectedVersionState expected,
         TimeSpan elapsed,
         int uploadRateLimitMbps,
         string? cleanupWarning)
@@ -478,8 +478,8 @@ public sealed class PublishEdgePluginPackageHandler(
             expected.Identity.Channel,
             expected.Identity.Version,
             expected.HostApiVersion,
-            expected.MinHostVersion,
-            expected.MaxHostVersion,
+            expected.MinHostVersion!,
+            expected.MaxHostVersion!,
             expected.Identity.TargetRuntime,
             expected.TargetFramework,
             expected.DownloadUrl,
@@ -558,16 +558,6 @@ public sealed class PublishEdgePluginPackageHandler(
             _ => throw new ClientReleaseValidationException(
                 "Edge 插件发布包 createdAtUtc 必须包含 UTC 标记或明确时区偏移。")
         };
-
-    private static string? CombineWarnings(string? first, string? second)
-    {
-        if (string.IsNullOrWhiteSpace(first))
-        {
-            return string.IsNullOrWhiteSpace(second) ? null : second;
-        }
-
-        return string.IsNullOrWhiteSpace(second) ? first : $"{first} {second}";
-    }
 
     private async Task<PluginPackageValidationResult> LoadAndValidateAsync(
         string extractRoot,
