@@ -2,7 +2,6 @@ using IIoT.HttpApi.Infrastructure;
 using IIoT.ProductionService.Commands.ClientReleases;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.Queries.ClientReleases;
-using IIoT.SharedKernel.Result;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -111,7 +110,7 @@ public sealed class HumanClientReleaseController : ApiControllerBase
         var result = await Sender.Send(
             new PublishEdgeReleaseBundleCommand(),
             cancellationToken);
-        return ReturnUploadResult(result);
+        return ReturnResult(result);
     }
 
     [HttpPost("plugin-packages")]
@@ -121,24 +120,6 @@ public sealed class HumanClientReleaseController : ApiControllerBase
         var result = await Sender.Send(
             new PublishEdgePluginPackageCommand(),
             cancellationToken);
-        return ReturnUploadResult(result);
-    }
-
-    private IActionResult ReturnUploadResult<T>(Result<T> result)
-    {
-        if (!result.IsSuccess
-            && result.Status == ResultStatus.Invalid
-            && result.Errors?.Contains(ClientReleaseUploadErrors.ConcurrentUpload) == true)
-        {
-            return Conflict(new ProblemDetails
-            {
-                Status = StatusCodes.Status409Conflict,
-                Title = "Edge 发布上传正在执行",
-                Detail = ClientReleaseUploadErrors.ConcurrentUpload,
-                Instance = HttpContext.Request.Path
-            });
-        }
-
         return ReturnResult(result);
     }
 

@@ -247,9 +247,8 @@ public sealed class ClientReleaseBehaviorTests
                 CancellationToken.None));
 
             Assert.Empty(auditTrail.Entries);
-            await AssertUploadSessionReleasedAsync(
+            AssertUploadSessionCleaned(
                 edgeRoot,
-                ClientReleaseUploadKind.HostBundle,
                 "edge-release-bundles");
         }
         finally
@@ -278,9 +277,8 @@ public sealed class ClientReleaseBehaviorTests
                 CancellationToken.None));
 
             Assert.Empty(auditTrail.Entries);
-            await AssertUploadSessionReleasedAsync(
+            AssertUploadSessionCleaned(
                 edgeRoot,
-                ClientReleaseUploadKind.PluginPackage,
                 "edge-plugin-packages");
         }
         finally
@@ -1605,24 +1603,15 @@ public sealed class ClientReleaseBehaviorTests
             && string.Equals(component.ComponentKey, key, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static async Task AssertUploadSessionReleasedAsync(
+    private static void AssertUploadSessionCleaned(
         string edgeRoot,
-        ClientReleaseUploadKind kind,
         string stagingDirectoryName)
     {
-        Assert.False(File.Exists(Path.Combine(edgeRoot, ".edge-release-upload.lock")));
         var stagingKindRoot = Path.Combine(edgeRoot, ".staging", stagingDirectoryName);
         if (Directory.Exists(stagingKindRoot))
         {
             Assert.Empty(Directory.EnumerateFileSystemEntries(stagingKindRoot));
         }
-
-        var retrySource = new ClientReleaseUploadTestSource();
-        retrySource.LoadBytes([]);
-        var retryCoordinator = ClientReleaseUploadTestSupport.CreateCoordinator(edgeRoot, retrySource);
-        var retrySession = await retryCoordinator.TryBeginAsync(kind);
-        Assert.NotNull(retrySession);
-        await retrySession.DisposeAsync();
     }
 
     private static (PublishEdgeReleaseBundleHandler Handler, ClientReleaseUploadTestSource Source)

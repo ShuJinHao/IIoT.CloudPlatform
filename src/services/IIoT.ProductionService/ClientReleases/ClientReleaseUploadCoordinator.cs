@@ -10,19 +10,13 @@ public enum ClientReleaseUploadKind
     PluginPackage
 }
 
-public static class ClientReleaseUploadErrors
-{
-    public const string ConcurrentUpload = "已有 Edge 发布上传正在执行，请稍后重试。";
-}
-
 public sealed class ClientReleaseUploadCoordinator(
     IOptions<EdgeInstallerArtifactOptions> artifactOptions,
     IOptions<EdgeReleaseUploadOptions> uploadOptions,
     IClientReleaseUploadSource source,
     ILogger<ClientReleaseUploadCoordinator> logger)
 {
-    public async ValueTask<ClientReleaseUploadSession?> TryBeginAsync(
-        ClientReleaseUploadKind kind)
+    public ClientReleaseUploadSession Begin(ClientReleaseUploadKind kind)
     {
         var (directoryName, fileName) = kind switch
         {
@@ -32,12 +26,6 @@ public sealed class ClientReleaseUploadCoordinator(
         };
         var edgeRoot = ResolveEdgeUpdatesRoot();
         Directory.CreateDirectory(edgeRoot);
-        var uploadLock = TryAcquireUploadLock(Path.Combine(edgeRoot, ".edge-release-upload.lock"));
-        if (uploadLock is null)
-        {
-            return null;
-        }
-
         var stagingRoot = Path.Combine(
             edgeRoot,
             uploadOptions.Value.StagingDirectoryName,
@@ -55,7 +43,6 @@ public sealed class ClientReleaseUploadCoordinator(
                 uploadOptions.Value.MaxBundleBytes,
                 uploadOptions.Value.MaxUploadMbps,
                 source,
-                uploadLock,
                 logger);
         }
         catch
@@ -78,21 +65,6 @@ public sealed class ClientReleaseUploadCoordinator(
                     "staging-directory");
             }
 
-            try
-            {
-                await uploadLock.DisposeAsync();
-            }
-            catch (Exception cleanupException)
-            {
-                ClientReleasePublishDiagnostics.LogFailure(
-                    logger,
-                    LogLevel.Warning,
-                    ClientReleasePublishDiagnostics.UploadSessionLockReleaseFailed,
-                    "session-creation-lock-release",
-                    cleanupException,
-                    "shared-upload-lock");
-            }
-
             throw;
         }
     }
@@ -108,34 +80,14 @@ public sealed class ClientReleaseUploadCoordinator(
 
         return parent.FullName;
     }
-
-    private static FileStream? TryAcquireUploadLock(string lockPath)
-    {
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
-            return new FileStream(
-                lockPath,
-                FileMode.OpenOrCreate,
-                FileAccess.ReadWrite,
-                FileShare.None,
-                bufferSize: 1,
-                FileOptions.DeleteOnClose);
-        }
-        catch (IOException)
-        {
-            return null;
-        }
-    }
 }
 
-public sealed class ClientReleaseUploadSession : IAsyncDisposable
+public sealed class ClientReleaseUploadSession : IDisposable
 {
     private readonly ClientReleaseUploadKind kind;
     private readonly long? declaredLength;
     private readonly long maxBytes;
     private readonly IClientReleaseUploadSource source;
-    private readonly FileStream uploadLock;
     private readonly ILogger logger;
     private int receiveStarted;
     private int disposeStarted;
@@ -148,14 +100,12 @@ public sealed class ClientReleaseUploadSession : IAsyncDisposable
         long maxBytes,
         int maxUploadMbps,
         IClientReleaseUploadSource source,
-        FileStream uploadLock,
         ILogger logger)
     {
         this.kind = kind;
         declaredLength = source.DeclaredLength;
         this.maxBytes = maxBytes;
         this.source = source;
-        this.uploadLock = uploadLock;
         this.logger = logger;
         EdgeRoot = edgeRoot;
         StagingRoot = stagingRoot;
@@ -238,7 +188,7 @@ public sealed class ClientReleaseUploadSession : IAsyncDisposable
         return totalBytes;
     }
 
-    public async ValueTask DisposeAsync()
+    public void Dispose()
     {
         if (Interlocked.Exchange(ref disposeStarted, 1) != 0)
         {
@@ -262,23 +212,6 @@ public sealed class ClientReleaseUploadSession : IAsyncDisposable
                 exception,
                 "staging-directory");
         }
-
-        try
-        {
-            await uploadLock.DisposeAsync();
-        }
-        catch (Exception exception)
-        {
-            ClientReleasePublishDiagnostics.LogFailure(
-                logger,
-                LogLevel.Error,
-                ClientReleasePublishDiagnostics.UploadSessionLockReleaseFailed,
-                "session-lock-release",
-                exception,
-                "shared-upload-lock");
-        }
-
-        GC.SuppressFinalize(this);
     }
 
     private string UploadLabel => kind == ClientReleaseUploadKind.HostBundle

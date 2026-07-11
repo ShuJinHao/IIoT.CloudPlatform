@@ -6,7 +6,6 @@ internal static class ClientReleasePublishDiagnostics
 {
     public static readonly EventId UploadSessionCreationCleanupFailed = new(6101, nameof(UploadSessionCreationCleanupFailed));
     public static readonly EventId UploadSessionStagingCleanupFailed = new(6102, nameof(UploadSessionStagingCleanupFailed));
-    public static readonly EventId UploadSessionLockReleaseFailed = new(6103, nameof(UploadSessionLockReleaseFailed));
     public static readonly EventId HostPublishFailed = new(6110, nameof(HostPublishFailed));
     public static readonly EventId HostRetentionCleanupFailed = new(6111, nameof(HostRetentionCleanupFailed));
     public static readonly EventId HostRollbackCleanupFailed = new(6112, nameof(HostRollbackCleanupFailed));

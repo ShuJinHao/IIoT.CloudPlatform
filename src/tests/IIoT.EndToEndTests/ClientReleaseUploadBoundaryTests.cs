@@ -1,20 +1,47 @@
 using System.Net;
 using System.Reflection;
 using System.Text;
+using IIoT.HttpApi;
 using IIoT.HttpApi.Controllers;
 using IIoT.HttpApi.Infrastructure;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.Commands.ClientReleases;
 using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.CrossCutting.Behaviors;
 using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.CrossCutting.DependencyInjection;
+using MediatR;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
 
 namespace IIoT.EndToEndTests;
 
 public sealed class ClientReleaseUploadBoundaryTests
 {
+    [Fact]
+    public void ApplicationPipeline_ShouldRegisterAuthorizationBeforeDistributedLock()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().Build();
+
+        services.AddConfiguredMediatR(
+            configuration,
+            DependencyInjection.ConfigureApplicationMediatR);
+
+        var behaviorTypes = services
+            .Where(descriptor => descriptor.ServiceType == typeof(IPipelineBehavior<,>))
+            .Select(descriptor => descriptor.ImplementationType)
+            .ToList();
+        var authorizationIndex = behaviorTypes.IndexOf(typeof(AuthorizationBehavior<,>));
+        var distributedLockIndex = behaviorTypes.IndexOf(typeof(DistributedLockBehavior<,>));
+
+        Assert.True(authorizationIndex >= 0);
+        Assert.True(distributedLockIndex >= 0);
+        Assert.True(authorizationIndex < distributedLockIndex);
+    }
+
     [Fact]
     public void UploadCommands_ShouldRemainTransportNeutralPermissionMarkers()
     {

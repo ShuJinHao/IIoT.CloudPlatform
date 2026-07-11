@@ -20,6 +20,9 @@ using Microsoft.Extensions.Logging;
 namespace IIoT.ProductionService.Commands.ClientReleases;
 
 [AuthorizeRequirement(ClientReleasePermissions.Publish)]
+[DistributedLock(
+    ClientReleasePublishLock.Resource,
+    TimeoutSeconds = ClientReleasePublishLock.AcquireTimeoutSeconds)]
 public sealed record PublishEdgeReleaseBundleCommand()
     : IHumanCommand<Result<EdgeReleaseBundlePublishResultDto>>;
 
@@ -86,12 +89,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
         CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
-        await using var uploadSession = await uploadCoordinator.TryBeginAsync(
-            ClientReleaseUploadKind.HostBundle);
-        if (uploadSession is null)
-        {
-            return Result.Invalid(ClientReleaseUploadErrors.ConcurrentUpload);
-        }
+        using var uploadSession = uploadCoordinator.Begin(ClientReleaseUploadKind.HostBundle);
 
         var edgeRoot = uploadSession.EdgeRoot;
         var stagingRoot = uploadSession.StagingRoot;
@@ -105,8 +103,10 @@ public sealed class PublishEdgeReleaseBundleHandler(
         try
         {
             var copiedBytes = await uploadSession.ReceiveAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
 
             ExtractBundle(zipPath, extractRoot);
+            cancellationToken.ThrowIfCancellationRequested();
             var artifact = await LoadAndValidateBundleAsync(extractRoot, cancellationToken);
             if (!artifact.IsSuccess)
             {
@@ -131,6 +131,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 artifact.VelopackRoot!,
                 velopackTarget,
                 Path.Combine(stagingRoot, "velopack-backup"));
+            cancellationToken.ThrowIfCancellationRequested();
 
             Directory.Move(artifact.InstallerRoot!, installerTarget);
             installerTargetForRollback = installerTarget;
@@ -159,6 +160,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 edgeRoot,
                 publishedDirectories,
                 publishedFiles);
+            cancellationToken.ThrowIfCancellationRequested();
 
             await UpsertDatabaseRowsAsync(
                 manifest,
@@ -168,18 +170,23 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 cancellationToken);
 
             commitPointReached = true;
+            cancellationToken.ThrowIfCancellationRequested();
 
             var cleanup = FileCleanupResult.Empty;
             var cleanupSucceeded = true;
             string? cleanupWarning = null;
             try
             {
-                await ApplyRetentionAsync(manifest, CancellationToken.None);
+                await ApplyRetentionAsync(manifest, cancellationToken);
                 cleanup = await CleanupArchivedFilesAsync(
                     edgeRoot,
                     channel,
                     manifest.TargetRuntime,
-                    CancellationToken.None);
+                    cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -221,7 +228,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 uploadSession.AuditSource,
                 succeeded: true,
                 cleanupWarning,
-                CancellationToken.None);
+                cancellationToken);
             return Result.Success(result);
         }
         catch (OperationCanceledException)

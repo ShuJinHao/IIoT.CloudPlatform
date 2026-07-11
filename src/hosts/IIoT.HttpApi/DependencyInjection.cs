@@ -55,22 +55,9 @@ public static class DependencyInjection
             typeof(IIoT.ProductionService.Commands.Recipes.CreateRecipeCommand).Assembly
         ]);
 
-        builder.Services.AddConfiguredMediatR(builder.Configuration, cfg =>
-        {
-            cfg.RegisterServicesFromAssemblies(
-                typeof(IIoT.IdentityService.Commands.LoginUserCommand).Assembly,
-                typeof(OnboardEmployeeCommand).Assembly,
-                typeof(CreateProcessCommand).Assembly,
-                typeof(IIoT.ProductionService.Commands.Recipes.CreateRecipeCommand).Assembly);
-            cfg.AddOpenBehavior(typeof(RequestKindGuardBehavior<,>));
-            cfg.AddOpenBehavior(typeof(ValidationBehavior<,>));
-            cfg.AddOpenBehavior(typeof(DeviceBindingBehavior<,>));
-            cfg.AddOpenBehavior(typeof(AiReadAuditBehavior<,>));
-            cfg.AddOpenBehavior(typeof(AiReadAuthorizationBehavior<,>));
-            cfg.AddOpenBehavior(typeof(AuthorizationBehavior<,>));
-            cfg.AddOpenBehavior(typeof(AdminOnlyBehavior<,>));
-            cfg.AddOpenBehavior(typeof(DistributedLockBehavior<,>));
-        });
+        builder.Services.AddConfiguredMediatR(
+            builder.Configuration,
+            ConfigureApplicationMediatR);
 
         builder.Services.AddScoped<IDeviceCacheInvalidationService, DeviceCacheInvalidationService>();
         builder.Services.AddScoped<IRecipeCacheInvalidationService, RecipeCacheInvalidationService>();
@@ -96,6 +83,23 @@ public static class DependencyInjection
         builder.Services.AddPassStationRuntime();
 
         builder.Services.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
+    }
+
+    internal static void ConfigureApplicationMediatR(MediatRServiceConfiguration cfg)
+    {
+        cfg.RegisterServicesFromAssemblies(
+            typeof(IIoT.IdentityService.Commands.LoginUserCommand).Assembly,
+            typeof(OnboardEmployeeCommand).Assembly,
+            typeof(CreateProcessCommand).Assembly,
+            typeof(IIoT.ProductionService.Commands.Recipes.CreateRecipeCommand).Assembly);
+        cfg.AddOpenBehavior(typeof(RequestKindGuardBehavior<,>));
+        cfg.AddOpenBehavior(typeof(ValidationBehavior<,>));
+        cfg.AddOpenBehavior(typeof(DeviceBindingBehavior<,>));
+        cfg.AddOpenBehavior(typeof(AiReadAuditBehavior<,>));
+        cfg.AddOpenBehavior(typeof(AiReadAuthorizationBehavior<,>));
+        cfg.AddOpenBehavior(typeof(AuthorizationBehavior<,>));
+        cfg.AddOpenBehavior(typeof(AdminOnlyBehavior<,>));
+        cfg.AddOpenBehavior(typeof(DistributedLockBehavior<,>));
     }
 
     public static void AddWebServices(this IHostApplicationBuilder builder)

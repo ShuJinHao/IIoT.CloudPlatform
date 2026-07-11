@@ -19,6 +19,9 @@ using Microsoft.Extensions.Logging;
 namespace IIoT.ProductionService.Commands.ClientReleases;
 
 [AuthorizeRequirement(ClientReleasePermissions.Publish)]
+[DistributedLock(
+    ClientReleasePublishLock.Resource,
+    TimeoutSeconds = ClientReleasePublishLock.AcquireTimeoutSeconds)]
 public sealed record PublishEdgePluginPackageCommand()
     : IHumanCommand<Result<EdgePluginPackagePublishResultDto>>;
 
@@ -75,12 +78,7 @@ public sealed class PublishEdgePluginPackageHandler(
         CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
-        await using var uploadSession = await uploadCoordinator.TryBeginAsync(
-            ClientReleaseUploadKind.PluginPackage);
-        if (uploadSession is null)
-        {
-            return Result.Invalid(ClientReleaseUploadErrors.ConcurrentUpload);
-        }
+        using var uploadSession = uploadCoordinator.Begin(ClientReleaseUploadKind.PluginPackage);
 
         var edgeRoot = uploadSession.EdgeRoot;
         var stagingRoot = uploadSession.StagingRoot;
@@ -92,9 +90,11 @@ public sealed class PublishEdgePluginPackageHandler(
         try
         {
             var copiedBytes = await uploadSession.ReceiveAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
 
             AssertFreeDiskSpace(edgeRoot, copiedBytes);
             ExtractZip(wrapperPath, extractRoot, "Edge 插件发布包");
+            cancellationToken.ThrowIfCancellationRequested();
             var loadResult = await LoadAndValidateAsync(extractRoot, cancellationToken);
             if (!loadResult.IsSuccess)
             {
@@ -141,6 +141,7 @@ public sealed class PublishEdgePluginPackageHandler(
                 edgeRoot,
                 [packageTargetDirectory],
                 [targetPackagePath]);
+            cancellationToken.ThrowIfCancellationRequested();
             var downloadUrl = BuildPluginDownloadUrl(
                 metadata.Channel,
                 metadata.ModuleId,
@@ -192,6 +193,7 @@ public sealed class PublishEdgePluginPackageHandler(
                     metadata.PackageSize));
             await componentRepository.SaveChangesAsync(cancellationToken);
             databaseSaved = true;
+            cancellationToken.ThrowIfCancellationRequested();
 
             string? cleanupWarning = null;
             try
@@ -200,8 +202,16 @@ public sealed class PublishEdgePluginPackageHandler(
                     metadata.ModuleId,
                     metadata.Channel,
                     metadata.TargetRuntime,
-                    CancellationToken.None);
-                await CleanupArchivedPluginFilesAsync(edgeRoot, metadata.Channel, metadata.TargetRuntime, CancellationToken.None);
+                    cancellationToken);
+                await CleanupArchivedPluginFilesAsync(
+                    edgeRoot,
+                    metadata.Channel,
+                    metadata.TargetRuntime,
+                    cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -238,7 +248,7 @@ public sealed class PublishEdgePluginPackageHandler(
                 uploadSession.AuditSource,
                 succeeded: true,
                 cleanupWarning,
-                CancellationToken.None);
+                cancellationToken);
             return Result.Success(result);
         }
         catch (OperationCanceledException)
