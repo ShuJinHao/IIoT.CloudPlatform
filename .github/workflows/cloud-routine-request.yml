@@ -31,6 +31,9 @@ jobs:
     timeout-minutes: 35
 
     steps:
+      - name: Checkout pinned runner source
+        uses: actions/checkout@v4
+
       - name: Deliver immutable request to stable runner
         shell: bash
         env:
@@ -51,7 +54,22 @@ jobs:
           [ -n "$DEPLOY_TARGET_DIR" ] || { echo "DEPLOY_TARGET_DIR is required" >&2; exit 64; }
 
           runner="$DEPLOY_TARGET_DIR/runner/iiot-release-runner.sh"
-          [ -x "$runner" ] || { echo "stable Cloud runner is missing: $runner" >&2; exit 66; }
+          runner_source="$GITHUB_WORKSPACE/deploy/runner/iiot-release-runner.sh"
+          if [ ! -e "$runner" ]; then
+            [ -r "$runner_source" ] || { echo "pinned Cloud runner source is missing" >&2; exit 66; }
+            mkdir -p "$DEPLOY_TARGET_DIR/runner" \
+              "$DEPLOY_TARGET_DIR/releases/routine-history" \
+              "$DEPLOY_TARGET_DIR/releases/routine-incoming" \
+              "$DEPLOY_TARGET_DIR/.locks" \
+              "$DEPLOY_TARGET_DIR/backups/postgres"
+            runner_temp="$DEPLOY_TARGET_DIR/runner/.iiot-release-runner.$$.tmp"
+            trap 'rm -f "${runner_temp:-}"' EXIT
+            install -m 700 "$runner_source" "$runner_temp"
+            mv -f "$runner_temp" "$runner"
+            trap - EXIT
+            echo "runner_bootstrap=installed target=Cloud path=$runner"
+          fi
+          [ -x "$runner" ] || { echo "stable Cloud runner is not executable: $runner" >&2; exit 66; }
           request_file="$(mktemp "$RUNNER_TEMP/cloud-request.XXXXXX")"
           trap 'rm -f "$request_file"' EXIT
           printf '%s' "$REQUEST_BASE64" | base64 --decode > "$request_file"
