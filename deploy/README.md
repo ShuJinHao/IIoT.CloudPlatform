@@ -154,8 +154,8 @@ Edge 客户端产物不属于 Cloud Docker 镜像，也不进入 Harbor。当前
 
 - `push main`：只跑 smoke 编译和测试，不发布安装包。
 - `workflow_dispatch` 或 `edge-v*` / `v*` tag：由 GitHub hosted `windows-latest` 构建 runtime、installer artifact 和 Velopack releases，再由内网 `iiot-linux-prod` runner 把 GitHub Actions artifacts 发布到 `${EDGE_UPDATES_DIR}`，渠道固定为 `stable`。
-- 日常宿主快发：操作者从工作区根运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target EdgeHost ...`。顶层入口调度 EdgeClient 本机实现脚本完成编译、Velopack 打包、installer artifact 生成和 Cloud Human API 上传。Cloud 服务端默认限速 `1000 Mbps`、单并发、服务端审计，渠道固定为 `stable`。这是本机运维快发路径，不是 GitHub CI/CD job。生产 `stable` 不允许用 `rsync/scp`。
-- 日常插件快发：只改工序插件时从工作区根运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target EdgePlugin -ModuleId <真实ModuleId> ...`，顶层入口只上传独立插件 zip；Cloud 通过 `POST /api/v1/human/client-releases/plugin-packages` 落盘到 `${EDGE_UPDATES_DIR}/plugins/stable/<ModuleId>/<version>/` 并写插件 release。
+- 日常自动发布：从工作区根运行 `pwsh ./deploy/Deploy-Changed.ps1 -Targets Edge -EdgeReleaseNotesPath <更新说明.md>`。入口自动 push Git、读取已发布基线并选择 EdgeHost 或真实 EdgePlugin；本机实现完成 Windows 安装器/Velopack/插件构建和 Cloud Human API 上传。Cloud 服务端默认限速 `1000 Mbps`、单并发、服务端审计，渠道固定为 `stable`。生产 `stable` 不允许用 `rsync/scp`。
+- `Invoke-WorkspaceDeploy.ps1 -Target EdgeHost|EdgePlugin` 只保留给统一入口内部调度和显式恢复，不再作为日常人工选择入口。插件包由 Cloud `POST /api/v1/human/client-releases/plugin-packages` 落盘到 `${EDGE_UPDATES_DIR}/plugins/stable/<ModuleId>/<version>/` 并写插件 release。
 - Edge 更新内容必须显式填写。本机快发传 `-ReleaseNotes` 或 `-ReleaseNotesPath`；正式 `workflow_dispatch` 填 `release_notes`；tag 发布必须使用带正文的 annotated tag。Cloud Human 发布接口和 host/plugin release upsert 会拒绝 `Published` 空更新内容。
 
 GitHub 完整打包流程固定为：
@@ -341,7 +341,7 @@ sudo find /data/iiot-platform/cloud/deploy/releases -type f -exec chmod 600 {} +
 2. `cloud-ci` 默认只跑快速验证：restore/build、ServiceLayer、ConfigurationGuard、部署脚本语法检查、前端 build、compose config；完整 EndToEnd 只在手动 `workflow_dispatch` 勾选时运行。
 3. 基础设施维护才运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud ...`；日常应用发布使用 `Deploy-Changed.ps1`，不进入本节 support transaction。旧入口仍要求 clean/pushed candidate 和显式 plan，用于 Compose/nginx/scripts 升级取证。
 4. 根入口为正式运行注入 entrypoint marker、唯一 invocation id、完整 expected SHA 和 plan digest；`local-release.sh` 缺任一项即在 build/SSH 前失败，并强校验 expected SHA 等于 detached 固定快照 HEAD。
-5. 旧 `local-release.sh` 在基础设施维护窗口校验 support 白名单并完成 staging；日常 `Deploy.ps1` 不安装任何远端 support files。
+5. 旧 `local-release.sh` 在基础设施维护窗口校验 support 白名单并完成 staging；日常 `Deploy-Changed.ps1` 内部调用的 `Deploy.ps1` 不安装任何远端 support files。
 6. 每次 invocation 独占 services 文件和 image manifest；manifest 绑定 invocation、expected SHA、plan digest、release tag、services 和每个已构建镜像的 OCI digest。dry-run 不得覆盖正式清单。
 7. support 包和 image manifest 一起进入远端 invocation staging；远端先校验两份 SHA-256，再由 `workspace-release-transaction.sh` 扫描未完成 transaction marker、lock、staging 和 recovery 证据。任一孤儿状态都原子写入 durable blocked 并返回 78，不得用 stale-lock 清理掩盖 SIGKILL/OOM/重启中断。通过扫描后才获取绑定 invocation/plan 的 release lock，并在 support 发生任何变更前原子写入 transaction marker。
 8. 父事务进程持锁安装 support，installer 和 `deploy-release.sh` 都在独立 session/process group 中从 `env -i` 白名单环境启动。父进程收到 HUP/INT/TERM 时向整个子进程组转发，宽限内未退出就 KILL；只有确认无子孙进程后才允许恢复 support 或释锁。current state 与 marker 共同证明 promotion 后，cleanup 绝不恢复旧 support；父进程在 marker 后 kill-9 留下的 backup/staging/lock 由下一次入口只做 cleanup-only。
