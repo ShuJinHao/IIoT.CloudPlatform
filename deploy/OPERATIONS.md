@@ -97,7 +97,7 @@ curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' "http
 
 ## Standard Release
 
-Routine application release is driven from the operator workstation: push GitHub for source traceability, run `pwsh ./deploy/Deploy.ps1 -Target Cloud ... -Deploy`, build the fetched remote tip, push immutable images to Harbor, then send one SSH transaction to the stable server runner. The older workspace transaction remains for deployment-infrastructure maintenance.
+Routine application release is driven from the operator workstation: push GitHub for source traceability, run `pwsh ./deploy/Deploy.ps1 -Target Cloud ... -Deploy`, build the fetched remote tip, push immutable images to Harbor, then send one digest-bound request to the stable server runner. `RemoteTransport=Auto` uses SSH when its TCP endpoint is reachable and otherwise dispatches `cloud-routine-request.yml` to the production self-hosted runner; both transports consume the same request and stable runner. The older workspace transaction remains for deployment-infrastructure maintenance.
 
 Routine deployment red lines:
 
