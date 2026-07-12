@@ -479,7 +479,18 @@ exit 0
 RESTORE_EOF
 chmod +x "$backup_dir/restore-support.sh"
 printf 'mutated\n' >"$backup_dir/support-mutation-started"
-kill -KILL "$PPID"
+transaction_marker="$1/releases/transactions/$3.env"
+wait_attempt=0
+until grep -qx 'DEPLOY_TRANSACTION_PHASE=support-installer-running' "$transaction_marker" 2>/dev/null \
+  && grep -qx "DEPLOY_TRANSACTION_PARENT_PID=$6" "$transaction_marker" 2>/dev/null; do
+  wait_attempt=$((wait_attempt + 1))
+  if [ "$wait_attempt" -ge 200 ]; then
+    printf 'Parent never recorded support-installer-running before the kill fixture.\n' >&2
+    exit 87
+  fi
+  sleep 0.01
+done
+kill -KILL "$6"
 exit 0
 EOF
       ;;
@@ -688,9 +699,18 @@ run_workspace_transaction_fixture "$PARENT_KILL_FIXTURE" "$PARENT_KILL_STAGING" 
   >"$PARENT_KILL_FIXTURE/output.log" 2>&1
 parent_kill_status=$?
 set -e
-[ "$parent_kill_status" -eq 137 ]
-grep -qx 'DEPLOY_TRANSACTION_PHASE=support-installer-running' \
-  "$PARENT_KILL_FIXTURE/deploy/releases/transactions/parent-killed.env"
+if [ "$parent_kill_status" -ne 137 ]; then
+  printf 'Support-install parent-kill fixture returned unexpected status: %s\n' "$parent_kill_status" >&2
+  sed -n '1,200p' "$PARENT_KILL_FIXTURE/output.log" >&2
+  exit 1
+fi
+parent_kill_marker="$PARENT_KILL_FIXTURE/deploy/releases/transactions/parent-killed.env"
+if ! grep -qx 'DEPLOY_TRANSACTION_PHASE=support-installer-running' "$parent_kill_marker"; then
+  printf 'Support-install parent-kill fixture did not preserve the synchronized running phase.\n' >&2
+  sed -n '1,200p' "$parent_kill_marker" >&2 || true
+  sed -n '1,200p' "$PARENT_KILL_FIXTURE/output.log" >&2
+  exit 1
+fi
 [ -d "$PARENT_KILL_FIXTURE/release.lock.d" ]
 [ -d "$PARENT_KILL_FIXTURE/deploy/releases/support-recovery/parent-killed" ]
 [ -d "$PARENT_KILL_STAGING" ]

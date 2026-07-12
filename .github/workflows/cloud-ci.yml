@@ -4,77 +4,107 @@ on:
   workflow_dispatch:
     inputs:
       include_end_to_end:
-        description: "Run the full IIoT.EndToEndTests suite"
+        description: "Run repository EndToEnd tests; excludes LiveExternal workspace alignment"
         required: false
         type: boolean
-        default: true
+        default: false
   push:
     branches: [main]
-    paths:
-      - "src/**"
-      - "deploy/**"
-      - "docs/**"
-      - ".dockerignore"
-      - "Directory.Build.props"
-      - "global.json"
-      - "IIoT.CloudPlatform.slnx"
-      - ".github/workflows/cloud-ci.yml"
-  pull_request:
-    paths:
-      - "src/**"
-      - "deploy/**"
-      - "docs/**"
-      - ".dockerignore"
-      - "Directory.Build.props"
-      - "global.json"
-      - "IIoT.CloudPlatform.slnx"
-      - ".github/workflows/cloud-ci.yml"
+  pull_request: {}
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
 
 jobs:
   build-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Validate immutable test baseline anchor
+        shell: pwsh
+        run: |
+          $eventName = '${{ github.event_name }}'
+          $eventRef = '${{ github.ref }}'
+          if ($eventName -eq 'workflow_dispatch' -and $eventRef -ne 'refs/heads/main') {
+            throw 'workflow_dispatch is trusted only on refs/heads/main.'
+          }
+          $trustedBase = '${{ github.event.pull_request.base.sha || github.event.before }}'
+          if ($trustedBase -notmatch '^[0-9a-fA-F]{40}$' -or $trustedBase -match '^0{40}$') {
+            $trustedBase = (git rev-parse HEAD^ | Out-String).Trim()
+          }
+          ./scripts/tests/TestCloudTestGovernancePolicy.ps1 -Mode ValidateBaselineAnchor -TrustedBaseRevision $trustedBase
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
-          dotnet-version: "10.0.301"
+          global-json-file: global.json
+
+      - name: Verify .NET SDK
+        run: test "$(dotnet --version)" = "10.0.301"
+
+      - name: Validate reviewed restore and build inputs
+        shell: pwsh
+        run: ./scripts/tests/TestCloudTestGovernancePolicy.ps1 -Mode ValidateStatic -Configuration Release
+
+      - name: Run Cloud test governance self-tests
+        shell: pwsh
+        run: ./scripts/tests/TestCloudTestGovernanceBehavior.ps1
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: "22"
+          node-version: "22.17.0"
           cache: "npm"
           cache-dependency-path: "src/ui/iiot-web/package-lock.json"
 
+      - name: Create test evidence directory
+        run: mkdir -p artifacts/test-results
+
       - name: Restore cloud solution
-        run: dotnet restore IIoT.CloudPlatform.slnx
+        run: dotnet restore IIoT.CloudPlatform.slnx --disable-build-servers --nologo -noAutoResponse
+
+      - name: Restore web dependencies
+        working-directory: src/ui/iiot-web
+        run: npm ci
 
       - name: Enforce incremental deployment policy
         shell: pwsh
         run: ./deploy/tests/TestDeploymentPolicy.ps1
 
       - name: Build cloud solution
-        run: dotnet build IIoT.CloudPlatform.slnx -c Release --no-restore
+        run: dotnet build IIoT.CloudPlatform.slnx -c Release --no-restore --disable-build-servers --nologo -noAutoResponse
+
+      - name: Validate Cloud test repository and discovery
+        shell: pwsh
+        run: |
+          ./scripts/tests/TestCloudTestGovernancePolicy.ps1 -Mode ValidateRepository -Configuration Release
+          ./scripts/tests/TestCloudTestGovernancePolicy.ps1 -Mode ValidateDiscovery -Configuration Release
 
       - name: Run service layer tests
-        run: dotnet test src/tests/IIoT.ServiceLayer.Tests/IIoT.ServiceLayer.Tests.csproj -c Release --no-build
+        run: dotnet test src/tests/IIoT.ServiceLayer.Tests/IIoT.ServiceLayer.Tests.csproj -c Release --no-build --no-restore --disable-build-servers --nologo -noAutoResponse --logger "trx;LogFileName=service-layer.trx" --results-directory artifacts/test-results
 
       - name: Run production service tests
-        run: dotnet test src/tests/IIoT.ProductionService.Tests/IIoT.ProductionService.Tests.csproj -c Release --no-build
+        run: dotnet test src/tests/IIoT.ProductionService.Tests/IIoT.ProductionService.Tests.csproj -c Release --no-build --no-restore --disable-build-servers --nologo -noAutoResponse --logger "trx;LogFileName=production-service.trx" --results-directory artifacts/test-results
 
       - name: Run client release PostgreSQL post-commit recovery test
         timeout-minutes: 8
-        run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --filter FullyQualifiedName~ClientReleaseCommitRecoveryPostgresTests
+        run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --filter FullyQualifiedName~ClientReleaseCommitRecoveryPostgresTests --no-restore --disable-build-servers --nologo -noAutoResponse --logger "trx;LogFileName=postgres-recovery.trx" --results-directory artifacts/test-results
 
       - name: Run configuration guard tests
-        run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --filter ConfigurationGuardTests
+        run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --no-restore --disable-build-servers --nologo -noAutoResponse --filter ConfigurationGuardTests --logger "trx;LogFileName=configuration-guard.trx" --results-directory artifacts/test-results
 
       - name: Run deployment guard tests
-        run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --filter DeploymentGuardTests
+        run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --no-restore --disable-build-servers --nologo -noAutoResponse --filter DeploymentGuardTests --logger "trx;LogFileName=deployment-guard.trx" --results-directory artifacts/test-results
 
       - name: Validate deploy script syntax
         run: |
@@ -98,16 +128,100 @@ jobs:
           bash -n deploy/scripts/post-release-cleanup.sh
           pwsh -NoProfile -Command '$tokens = $null; $errors = $null; $null = [System.Management.Automation.Language.Parser]::ParseFile("deploy/scripts/InvokeEdgeInstallerPackageDownload.ps1", [ref]$tokens, [ref]$errors); if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }'
 
-      - name: Run end-to-end tests
-        if: github.event_name == 'workflow_dispatch' && inputs.include_end_to_end == true
-        timeout-minutes: 15
-        run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build
+      - name: Run deployment behavior tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash deploy/tests/deployment-behavior.sh 2>&1 | tee artifacts/test-results/deployment-behavior.log
 
-      - name: Build web app
+      - name: Test and build web app
         working-directory: src/ui/iiot-web
         run: |
-          npm ci
+          npm run test:unit -- --reporter=json --outputFile=../../../artifacts/test-results/vitest.json
           npm run build
 
       - name: Validate production compose
         run: docker compose --env-file deploy/.env.example -f deploy/docker-compose.prod.yml config -q
+
+      - name: Reconcile required test results
+        shell: pwsh
+        run: |
+          $expected = @{
+            'service-layer.trx' = 293
+            'production-service.trx' = 107
+            'postgres-recovery.trx' = 2
+            'configuration-guard.trx' = 81
+            'deployment-guard.trx' = 20
+          }
+          foreach ($entry in $expected.GetEnumerator()) {
+            $path = Join-Path 'artifacts/test-results' $entry.Key
+            if (-not (Test-Path $path -PathType Leaf)) {
+              throw "Missing required TRX: $path"
+            }
+            [xml]$trx = Get-Content $path -Raw
+            $counters = $trx.TestRun.ResultSummary.Counters
+            $total = [int]$counters.total
+            $passed = [int]$counters.passed
+            $failed = [int]$counters.failed
+            $notExecuted = [int]$counters.notExecuted
+            if ($total -ne $entry.Value -or $passed -ne $entry.Value -or $failed -ne 0 -or $notExecuted -ne 0) {
+              throw "$($entry.Key) reconciliation failed: expected=$($entry.Value), total=$total, passed=$passed, failed=$failed, notExecuted=$notExecuted"
+            }
+          }
+
+          $vitestPath = 'artifacts/test-results/vitest.json'
+          if (-not (Test-Path $vitestPath -PathType Leaf)) {
+            throw "Missing required Vitest result: $vitestPath"
+          }
+          $vitest = Get-Content $vitestPath -Raw | ConvertFrom-Json
+          if (-not [bool]$vitest.success -or
+              [int]$vitest.numTotalTests -ne 67 -or
+              [int]$vitest.numPassedTests -ne 67 -or
+              [int]$vitest.numFailedTests -ne 0 -or
+              [int]$vitest.numPendingTests -ne 0 -or
+              @($vitest.testResults).Count -ne 16) {
+            throw "Vitest reconciliation failed: files=$(@($vitest.testResults).Count), total=$($vitest.numTotalTests), passed=$($vitest.numPassedTests), failed=$($vitest.numFailedTests), pending=$($vitest.numPendingTests)"
+          }
+
+          $deploymentPath = 'artifacts/test-results/deployment-behavior.log'
+          if (-not (Test-Path $deploymentPath -PathType Leaf)) {
+            throw "Missing required deployment behavior log: $deploymentPath"
+          }
+          $deploymentLines = @(Get-Content $deploymentPath)
+          $deploymentCases = @($deploymentLines | Where-Object { $_ -match '^ok [0-9]+ - ' }).Count
+          if ($deploymentCases -ne 33 -or
+              @($deploymentLines | Where-Object { $_ -eq 'Cloud deployment behavior tests passed: 33' }).Count -ne 1) {
+            throw "Deployment behavior reconciliation failed: cases=$deploymentCases"
+          }
+
+      - name: Upload required test evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: cloud-required-test-results
+          path: artifacts/test-results/**
+          if-no-files-found: warn
+
+  full-end-to-end:
+    needs: build-test
+    if: github.event_name == 'workflow_dispatch' && inputs.include_end_to_end == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Setup .NET
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+      - name: Validate reviewed restore and build inputs
+        shell: pwsh
+        run: ./scripts/tests/TestCloudTestGovernancePolicy.ps1 -Mode ValidateStatic -Configuration Release
+      - name: Restore and build cloud solution
+        run: |
+          dotnet restore IIoT.CloudPlatform.slnx --disable-build-servers --nologo -noAutoResponse
+          dotnet build IIoT.CloudPlatform.slnx -c Release --no-restore --disable-build-servers --nologo -noAutoResponse
+      - name: Run end-to-end tests
+        if: github.event_name == 'workflow_dispatch' && inputs.include_end_to_end == true
+        timeout-minutes: 15
+        run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --filter 'Category!=CloudAiReadWorkspaceAlignment' --no-restore --disable-build-servers --nologo -noAutoResponse
