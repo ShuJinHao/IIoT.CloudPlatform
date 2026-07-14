@@ -107,10 +107,10 @@ try {
             )
         },
         @{
-            Name = "Test ServiceLayer"
+            Name = "Test Application layer"
             Args = @(
                 "test",
-                ".\src\tests\IIoT.ServiceLayer.Tests\IIoT.ServiceLayer.Tests.csproj",
+                ".\src\tests\IIoT.CloudPlatform.ApplicationTests\IIoT.CloudPlatform.ApplicationTests.csproj",
                 "--no-build",
                 "-p:BuildInParallel=false",
                 "-nologo",

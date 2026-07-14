@@ -66,7 +66,7 @@ internal static class CloudArchitectureDiagnostics
         category: Category,
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true,
-        description: "生产 Cloud 项目禁止引用 *.Tests、*.Testing、*TestKit* 和常见测试框架程序集.",
+        description: "生产 Cloud 项目禁止引用 *Tests、*.Testing、*TestKit* 和常见测试框架程序集.",
         helpLinkUri: HelpBase + "#cloudarch006-生产依赖测试资产",
         customTags: WellKnownDiagnosticTags.CompilationEnd);
 }

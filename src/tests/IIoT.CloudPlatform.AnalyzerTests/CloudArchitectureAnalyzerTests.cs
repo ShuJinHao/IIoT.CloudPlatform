@@ -681,7 +681,7 @@ public sealed class CloudArchitectureAnalyzerTests
         var testKit = CreateReference("IIoT.CloudPlatform.TestKit", "public sealed class FakeDeviceFactory { }");
 
         var diagnostics = await AnalyzeAsync(
-            "IIoT.ProductionService.Tests",
+            "IIoT.CloudPlatform.WorkflowTests",
             ["public sealed class TestType { }"],
             testKit);
 

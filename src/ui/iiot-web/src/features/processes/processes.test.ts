@@ -12,13 +12,12 @@ describe('processes feature', () => {
     expect(processRoutes[0]!.meta?.requiredPermission).toBe(Permissions.Process.Read);
   });
 
-  it('normalizes paged and legacy array responses', () => {
+  it('normalizes the paged process response', () => {
     const item = { id: 'p1', processCode: 'AP', processName: '阳极' };
     expect(normalizeProcessPageResult({
       items: [item],
       metaData: { totalCount: 1, pageSize: 10, currentPage: 1, totalPages: 1 },
     }).items).toEqual([item]);
-    expect(normalizeProcessPageResult([item]).metaData.totalCount).toBe(1);
     expect(normalizeProcessPageResult(null)).toEqual({
       items: [],
       metaData: emptyProcessMetaData(),

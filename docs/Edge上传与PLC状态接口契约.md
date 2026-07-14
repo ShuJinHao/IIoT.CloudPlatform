@@ -45,6 +45,6 @@
 
 ```bash
 rg -n "plc-runtime-states|ReportEdgeHostPlcRuntimeStates|IEdgeHostPlcRuntimeStateStore" IIoT.CloudPlatform/src IIoT.CloudPlatform/docs
-dotnet test IIoT.CloudPlatform/src/tests/IIoT.ProductionService.Tests/IIoT.ProductionService.Tests.csproj --filter FullyQualifiedName~EdgeHostBehaviorTests --no-restore --disable-build-servers
-dotnet test IIoT.CloudPlatform/src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj --filter FullyQualifiedName~ConfigurationGuardTests --no-restore --disable-build-servers
+dotnet test src/tests/IIoT.CloudPlatform.ApplicationTests/IIoT.CloudPlatform.ApplicationTests.csproj -c Release --no-build --no-restore --disable-build-servers
+dotnet test src/tests/IIoT.CloudPlatform.ArchitectureTests/IIoT.CloudPlatform.ArchitectureTests.csproj -c Release --no-build --no-restore --disable-build-servers
 ```

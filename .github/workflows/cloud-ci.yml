@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       include_end_to_end:
-        description: "Run repository EndToEnd tests; excludes LiveExternal workspace alignment"
+        description: "Run the repository Aspire EndToEnd runner; WorkspaceAlignment remains a separate manual runner"
         required: false
         type: boolean
         default: false
@@ -68,31 +68,10 @@ jobs:
           set -euo pipefail
           bash scripts/tests/TestCloudArchitectureAnalyzerFixtures.sh 2>&1 | tee artifacts/test-results/cloud-architecture-fixtures.log
 
-      - name: Run architecture analyzer tests
-        run: dotnet test src/tests/IIoT.CloudPlatform.AnalyzerTests/IIoT.CloudPlatform.AnalyzerTests.csproj -c Release --no-build --no-restore --disable-build-servers --nologo -noAutoResponse --logger "trx;LogFileName=cloud-architecture-analyzer.trx" --results-directory artifacts/test-results
-
-      - name: Run service layer tests
-        run: dotnet test src/tests/IIoT.ServiceLayer.Tests/IIoT.ServiceLayer.Tests.csproj -c Release --no-build --no-restore --disable-build-servers --nologo -noAutoResponse --logger "trx;LogFileName=service-layer.trx" --results-directory artifacts/test-results
-
-      - name: Run production service tests
-        run: dotnet test src/tests/IIoT.ProductionService.Tests/IIoT.ProductionService.Tests.csproj -c Release --no-build --no-restore --disable-build-servers --nologo -noAutoResponse --logger "trx;LogFileName=production-service.trx" --results-directory artifacts/test-results
-
-      - name: Run cache semantics tests
-        run: dotnet test src/tests/IIoT.Infrastructure.Tests/IIoT.Infrastructure.Tests.csproj -c Release --no-build --no-restore --disable-build-servers --nologo -noAutoResponse --logger "trx;LogFileName=cache-semantics.trx" --results-directory artifacts/test-results
-
-      - name: Run real Redis cache failure tests
-        timeout-minutes: 5
-        run: dotnet test src/tests/IIoT.RedisIntegrationTests/IIoT.RedisIntegrationTests.csproj -c Release --no-build --no-restore --disable-build-servers --nologo -noAutoResponse --logger "trx;LogFileName=redis-integration.trx" --results-directory artifacts/test-results
-
-      - name: Run PostgreSQL persistence integration tests
-        timeout-minutes: 8
-        run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --filter Category=PostgresPersistenceIntegration --no-restore --disable-build-servers --nologo -noAutoResponse --logger "trx;LogFileName=postgres-persistence.trx" --results-directory artifacts/test-results
-
-      - name: Run configuration guard tests
-        run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --no-restore --disable-build-servers --nologo -noAutoResponse --filter ConfigurationGuardTests --logger "trx;LogFileName=configuration-guard.trx" --results-directory artifacts/test-results
-
-      - name: Run deployment guard tests
-        run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --no-restore --disable-build-servers --nologo -noAutoResponse --filter DeploymentGuardTests --logger "trx;LogFileName=deployment-guard.trx" --results-directory artifacts/test-results
+      - name: Run and reconcile required test inventory
+        shell: pwsh
+        timeout-minutes: 15
+        run: ./scripts/tests/Invoke-CloudTestInventory.ps1 -Mode Required -Configuration Release -NoBuild
 
       - name: Validate deploy script syntax
         run: |
@@ -134,30 +113,19 @@ jobs:
       - name: Reconcile required test results
         shell: pwsh
         run: |
-          $expected = @{
-            'cloud-architecture-analyzer.trx' = 35
-            'service-layer.trx' = 291
-            'production-service.trx' = 107
-            'cache-semantics.trx' = 37
-            'redis-integration.trx' = 1
-            'postgres-persistence.trx' = 5
-            'configuration-guard.trx' = 81
-            'deployment-guard.trx' = 20
+          $inventoryPath = 'artifacts/test-results/cloud-test-inventory.json'
+          if (-not (Test-Path $inventoryPath -PathType Leaf)) {
+            throw "Missing required test inventory: $inventoryPath"
           }
-          foreach ($entry in $expected.GetEnumerator()) {
-            $path = Join-Path 'artifacts/test-results' $entry.Key
-            if (-not (Test-Path $path -PathType Leaf)) {
-              throw "Missing required TRX: $path"
-            }
-            [xml]$trx = Get-Content $path -Raw
-            $counters = $trx.TestRun.ResultSummary.Counters
-            $total = [int]$counters.total
-            $passed = [int]$counters.passed
-            $failed = [int]$counters.failed
-            $notExecuted = [int]$counters.notExecuted
-            if ($total -ne $entry.Value -or $passed -ne $entry.Value -or $failed -ne 0 -or $notExecuted -ne 0) {
-              throw "$($entry.Key) reconciliation failed: expected=$($entry.Value), total=$total, passed=$passed, failed=$failed, notExecuted=$notExecuted"
-            }
+          $inventory = Get-Content $inventoryPath -Raw | ConvertFrom-Json
+          $requiredCases = @($inventory.cases | Where-Object required)
+          if ([int]$inventory.baselineCases -ne 665 -or
+              [int]$inventory.requiredCases -ne 603 -or
+              $requiredCases.Count -ne 603 -or
+              @($requiredCases | Where-Object recentStatus -ne 'Passed').Count -ne 0 -or
+              @($requiredCases | Where-Object skip).Count -ne 0 -or
+              @($inventory.support | Where-Object caseCount -ne 0).Count -ne 0) {
+            throw "Required inventory reconciliation failed"
           }
 
           $architectureFixturePath = 'artifacts/test-results/cloud-architecture-fixtures.log'
@@ -222,4 +190,5 @@ jobs:
       - name: Run end-to-end tests
         if: github.event_name == 'workflow_dispatch' && inputs.include_end_to_end == true
         timeout-minutes: 15
-        run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --filter 'Category!=CloudAiReadWorkspaceAlignment' --no-restore --disable-build-servers --nologo -noAutoResponse
+        shell: pwsh
+        run: ./scripts/tests/Invoke-CloudTestInventory.ps1 -Mode EndToEnd -Configuration Release -NoBuild

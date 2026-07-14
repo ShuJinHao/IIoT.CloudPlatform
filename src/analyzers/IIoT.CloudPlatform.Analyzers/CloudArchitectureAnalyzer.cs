@@ -792,7 +792,7 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
 
         private static bool IsTestOnlyAssembly(string assemblyName)
         {
-            return assemblyName.EndsWith(".Tests", StringComparison.OrdinalIgnoreCase) ||
+            return assemblyName.EndsWith("Tests", StringComparison.OrdinalIgnoreCase) ||
                    assemblyName.IndexOf(".Tests.", StringComparison.OrdinalIgnoreCase) >= 0 ||
                    assemblyName.EndsWith(".Testing", StringComparison.OrdinalIgnoreCase) ||
                    assemblyName.IndexOf(".Testing.", StringComparison.OrdinalIgnoreCase) >= 0 ||
