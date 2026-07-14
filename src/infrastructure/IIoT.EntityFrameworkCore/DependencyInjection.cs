@@ -7,7 +7,6 @@ using IIoT.EntityFrameworkCore.Outbox;
 using IIoT.EntityFrameworkCore.Persistence;
 using IIoT.EntityFrameworkCore.Repository;
 using IIoT.EntityFrameworkCore.Uploads;
-using IIoT.Services.CrossCutting.Caching.Options;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
@@ -63,8 +62,6 @@ public static class DependencyInjection
                     .ReplaceDefaultEntities<Guid>();
             });
 
-        builder.Services.Configure<PermissionCacheOptions>(
-            builder.Configuration.GetSection("PermissionCache"));
         builder.Services.AddScoped<IPermissionProvider, PermissionProvider>();
 
         builder.Services.AddScoped(typeof(IReadRepository<>), typeof(EfReadRepository<>));

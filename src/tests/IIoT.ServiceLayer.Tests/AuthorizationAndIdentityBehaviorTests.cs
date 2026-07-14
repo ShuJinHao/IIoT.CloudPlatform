@@ -8,8 +8,6 @@ using IIoT.ProductionService.Commands.Devices;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.CrossCutting.Authorization;
 using IIoT.Services.CrossCutting.Behaviors;
-using IIoT.Services.CrossCutting.Caching;
-using IIoT.Services.CrossCutting.Caching.Options;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.CrossCutting.Exceptions;
@@ -24,32 +22,30 @@ namespace IIoT.ServiceLayer.Tests;
 public sealed class AuthorizationAndIdentityBehaviorTests
 {
     [Fact]
-    public async Task DevicePermissionService_ShouldUseResolvedCacheExpiration()
+    public async Task DevicePermissionService_ShouldReadCurrentAssignmentsDirectly()
     {
         using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
         using var scope = provider.CreateScope();
 
         var dbContext = scope.ServiceProvider.GetRequiredService<IIoT.EntityFrameworkCore.IIoTDbContext>();
         var employee = new IIoT.Core.Employees.Aggregates.Employees.Employee(Guid.NewGuid(), "E1001", "Operator");
-        employee.AddDeviceAccess(Guid.NewGuid());
+        var firstDeviceId = Guid.NewGuid();
+        var secondDeviceId = Guid.NewGuid();
+        employee.AddDeviceAccess(firstDeviceId);
         dbContext.Employees.Add(employee);
         await dbContext.SaveChangesAsync();
 
-        var cacheService = new RecordingCacheService();
-        var service = new DevicePermissionService(
-            dbContext,
-            cacheService,
-            Microsoft.Extensions.Options.Options.Create(new PermissionCacheOptions
-            {
-                ExpirationMinutes = 10,
-                ExpirationHours = 2
-            }));
+        var service = new DevicePermissionService(dbContext);
 
-        var accessibleDeviceIds = await service.GetAccessibleDeviceIdsAsync(employee.Id);
+        var firstRead = await service.GetAccessibleDeviceIdsAsync(employee.Id);
+        employee.AddDeviceAccess(secondDeviceId);
+        await dbContext.SaveChangesAsync();
+        var secondRead = await service.GetAccessibleDeviceIdsAsync(employee.Id);
 
-        Assert.Single(accessibleDeviceIds);
-        Assert.Equal(TimeSpan.FromMinutes(10), cacheService.LastAbsoluteExpireTime);
-        Assert.Equal(1, cacheService.GetOrSetCalls);
+        Assert.Equal([firstDeviceId], firstRead);
+        Assert.Equal(
+            new[] { firstDeviceId, secondDeviceId }.OrderBy(value => value),
+            secondRead.OrderBy(value => value));
     }
 
     [Fact]
@@ -145,23 +141,16 @@ public sealed class AuthorizationAndIdentityBehaviorTests
     }
 
     [Fact]
-    public async Task PermissionProvider_ShouldUseSharedCacheKeyForInvalidationCompatibility()
+    public async Task PermissionProvider_ShouldReadCurrentRoleClaimsDirectly()
     {
         using var provider = TestServiceProviders.CreateIdentityServiceProvider();
         using var scope = provider.CreateScope();
 
         var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
         var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
-        var cacheService = new RecordingCacheService();
         var permissionProvider = new PermissionProvider(
             userManager,
-            roleManager,
-            cacheService,
-            Microsoft.Extensions.Options.Options.Create(new PermissionCacheOptions
-            {
-                KeyPrefix = "custom-prefix:",
-                ExpirationMinutes = 10
-            }));
+            roleManager);
 
         const string roleName = "Supervisor";
         await roleManager.CreateAsync(new IdentityRole<Guid>(roleName));
@@ -182,10 +171,15 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         Assert.True(addRole.Succeeded);
 
         var permissions = await permissionProvider.GetPermissionsAsync(user.Id);
+        var role = await roleManager.FindByNameAsync(roleName)
+                   ?? throw new InvalidOperationException("Role was not created.");
+        var addUpdatedClaim = await roleManager.AddClaimAsync(role, new Claim("Permission", "Recipe.Read"));
+        var updatedPermissions = await permissionProvider.GetPermissionsAsync(user.Id);
 
+        Assert.True(addUpdatedClaim.Succeeded);
         Assert.Contains("Device.Read", permissions);
-        Assert.Equal(CacheKeys.PermissionByUser(user.Id), cacheService.LastSetKey);
-        Assert.Equal(1, cacheService.GetOrSetCalls);
+        Assert.Contains("Device.Read", updatedPermissions);
+        Assert.Contains("Recipe.Read", updatedPermissions);
     }
 
     [Fact]
@@ -382,11 +376,9 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         {
             UpdateUserPersonalPermissionsResult = Result.Failure("user permission update failed")
         };
-        var cacheService = new RecordingCacheService();
         var auditTrail = new RecordingAuditTrailService();
         var handler = new UpdateUserPermissionsHandler(
             rolePolicyService,
-            cacheService,
             new TestCurrentUser
             {
                 Id = Guid.NewGuid().ToString(),
@@ -806,7 +798,6 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         var handler = new RefreshHumanIdentityHandler(
             identityStore,
             new StubPermissionProvider(),
-            new RecordingCacheService(),
             new StubJwtTokenGenerator(),
             refreshTokenService);
 

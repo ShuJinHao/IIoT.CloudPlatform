@@ -1,7 +1,6 @@
 using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.Employees.Specifications;
 using IIoT.Services.CrossCutting.Attributes;
-using IIoT.Services.CrossCutting.Caching;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Messaging;
@@ -18,7 +17,6 @@ public class DeactivateEmployeeHandler(
     IRepository<Employee> employeeRepository,
     IIdentityAccountStore identityAccountStore,
     IUnitOfWork unitOfWork,
-    ICacheService cacheService,
     IRefreshTokenService refreshTokenService)
     : ICommandHandler<DeactivateEmployeeCommand, Result>
 {
@@ -58,7 +56,6 @@ public class DeactivateEmployeeHandler(
                 return Result.Failure(identityResult.Errors?.ToArray() ?? ["员工身份账号停用失败"]);
             }
 
-            await cacheService.RemoveAsync(CacheKeys.DeviceAccessesByUser(request.EmployeeId), cancellationToken);
             await refreshTokenService.RevokeSubjectTokensAsync(
                 IIoTClaimTypes.HumanActor,
                 request.EmployeeId,

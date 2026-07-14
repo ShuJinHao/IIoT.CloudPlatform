@@ -68,8 +68,7 @@ public class DeleteDeviceHandler(
         if (deletionResult.DeviceDeleted)
         {
             await deviceCacheInvalidationService.InvalidateAfterDeleteAsync(
-                new DeviceCacheDescriptor(device.Id, device.ProcessId, device.Code),
-                deletionResult.AffectedEmployeeIds,
+                new DeviceCacheDescriptor(device.Id, device.ProcessId),
                 cancellationToken);
         }
 

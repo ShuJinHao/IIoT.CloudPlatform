@@ -2,17 +2,9 @@ namespace IIoT.Services.CrossCutting.Caching;
 
 public static class CacheKeys
 {
-    public static string PermissionByUser(Guid userId) => $"iiot:permissions:v1:user:{userId}";
-
     public static string AllDefinedPermissions() => "iiot:permissions:v1:all-defined";
 
-    public static string PermissionByUserPattern() => "iiot:permissions:v1:user:*";
-
     public static string ProcessesAll() => "iiot:master-data:processes:v1:all";
-
-    public static string DeviceCode(string code) => $"iiot:device:code:v1:{code.Trim().ToUpperInvariant()}";
-
-    public static string DeviceIdentity(Guid deviceId) => $"iiot:device:identity:v1:{deviceId}";
 
     public static string AllDevices() => "iiot:devices:v1:all-active";
 
@@ -44,5 +36,4 @@ public static class CacheKeys
 
     public static string CapacityPagedByDevicePattern(Guid deviceId) => $"iiot:capacity:paged:v1:*:{deviceId}:*:*";
 
-    public static string DeviceAccessesByUser(Guid userId) => $"iiot:device-access:user:{userId}";
 }

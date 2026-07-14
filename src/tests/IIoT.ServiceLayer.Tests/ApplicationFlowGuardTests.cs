@@ -234,7 +234,6 @@ public sealed class ApplicationFlowGuardTests
             deviceRepository,
             new InMemoryRepository<ClientReleaseComponent>(),
             Path.Combine(Path.GetTempPath(), $"iiot-baseurl-guard-{Guid.NewGuid():N}"),
-            new RecordingCacheService(),
             new RecordingAuditTrailService());
 
         var result = await handler.Handle(
@@ -270,7 +269,6 @@ public sealed class ApplicationFlowGuardTests
                 deviceRepository,
                 componentRepository,
                 artifactRoot,
-                new RecordingCacheService(),
                 new RecordingAuditTrailService());
 
             var result = await handler.Handle(
@@ -317,7 +315,6 @@ public sealed class ApplicationFlowGuardTests
                 deviceRepository,
                 componentRepository,
                 artifactRoot,
-                new RecordingCacheService(),
                 new RecordingAuditTrailService());
 
             var result = await handler.Handle(
@@ -364,7 +361,6 @@ public sealed class ApplicationFlowGuardTests
                 deviceRepository,
                 componentRepository,
                 artifactRoot,
-                new RecordingCacheService(),
                 new RecordingAuditTrailService());
 
             var result = await handler.Handle(
@@ -408,7 +404,6 @@ public sealed class ApplicationFlowGuardTests
         var deviceRepository = new InMemoryRepository<Device>();
         deviceRepository.Add(device);
         var componentRepository = CreatePublishedReleaseComponentRepository(targetRuntime);
-        var cache = new RecordingCacheService();
         var auditTrail = new RecordingAuditTrailService();
         var artifactRoot = CreateInstallerArtifactFixture("stable", "1.2.0", targetRuntime);
 
@@ -418,7 +413,6 @@ public sealed class ApplicationFlowGuardTests
                 deviceRepository,
                 componentRepository,
                 artifactRoot,
-                cache,
                 auditTrail);
 
             var result = await handler.Handle(
@@ -483,7 +477,6 @@ public sealed class ApplicationFlowGuardTests
             Assert.Equal(device.Code, pluginBinding.RootElement.GetProperty("clientCode").GetString());
             Assert.Equal(bootstrapSecret, pluginBinding.RootElement.GetProperty("bootstrapSecret").GetString());
 
-            Assert.Contains(CacheKeys.DeviceCode(device.Code), cache.RemovedKeys);
             Assert.DoesNotContain(auditTrail.Entries, entry =>
                 entry.Summary.Contains(bootstrapSecret!, StringComparison.Ordinal)
                 || (entry.FailureReason?.Contains(bootstrapSecret!, StringComparison.Ordinal) ?? false));
@@ -574,7 +567,6 @@ public sealed class ApplicationFlowGuardTests
             identityStore,
             unitOfWork,
             refreshTokenService,
-            new RecordingCacheService(),
             new TestCurrentUser { Id = Guid.NewGuid().ToString(), IsAuthenticated = true },
             new RecordingPermissionProvider());
 
@@ -668,12 +660,10 @@ public sealed class ApplicationFlowGuardTests
             SetEnabledResult = Result.Failure("disable failed")
         };
         var unitOfWork = new RecordingUnitOfWork();
-        var cache = new RecordingCacheService();
         var handler = new DeactivateEmployeeHandler(
             repository,
             identityStore,
             unitOfWork,
-            cache,
             new StubRefreshTokenService());
 
         var result = await handler.Handle(new DeactivateEmployeeCommand(employeeId), CancellationToken.None);
@@ -695,13 +685,11 @@ public sealed class ApplicationFlowGuardTests
         };
         var identityStore = new RecordingIdentityAccountStore();
         var unitOfWork = new RecordingUnitOfWork();
-        var cache = new RecordingCacheService();
         var refreshTokenService = new StubRefreshTokenService();
         var handler = new DeactivateEmployeeHandler(
             repository,
             identityStore,
             unitOfWork,
-            cache,
             refreshTokenService);
 
         var result = await handler.Handle(new DeactivateEmployeeCommand(employeeId), CancellationToken.None);
@@ -771,7 +759,7 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
-    public async Task UpdateEmployeeAccessHandler_ShouldClearDeviceAccessCacheWhenAccessChanges()
+    public async Task UpdateEmployeeAccessHandler_ShouldPersistCurrentDeviceAssignmentsWithoutCacheDependency()
     {
         var employeeId = Guid.NewGuid();
         var originalDeviceId = Guid.NewGuid();
@@ -783,15 +771,15 @@ public sealed class ApplicationFlowGuardTests
         {
             SingleOrDefaultResult = employee
         };
-        var cache = new RecordingCacheService();
-        var handler = new UpdateEmployeeAccessHandler(repository, cache);
+        var handler = new UpdateEmployeeAccessHandler(repository);
 
         var result = await handler.Handle(
             new UpdateEmployeeAccessCommand(employeeId, [updatedDeviceId]),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        Assert.Contains(CacheKeys.DeviceAccessesByUser(employeeId), cache.RemovedKeys);
+        Assert.DoesNotContain(employee.DeviceAccesses, access => access.DeviceId == originalDeviceId);
+        Assert.Contains(employee.DeviceAccesses, access => access.DeviceId == updatedDeviceId);
     }
 
     [Fact]
@@ -825,7 +813,6 @@ public sealed class ApplicationFlowGuardTests
     public async Task DeleteDeviceHandler_ShouldCascadeDelete_InvalidateCache_AndWriteAudit()
     {
         var processId = Guid.NewGuid();
-        var employeeId = Guid.NewGuid();
         var device = new Device("Device-Delete", "DEV-DELETE001", processId);
         device.ClearDomainEvents();
         var repository = new InMemoryRepository<Device>
@@ -846,8 +833,7 @@ public sealed class ApplicationFlowGuardTests
                 EmployeeDeviceAccesses: 7,
                 RefreshTokenSessions: 8,
                 RuntimeHeartbeats: 1,
-                EdgeHostPlcRuntimeStates: 3),
-            AffectedEmployeeIds = [employeeId]
+                EdgeHostPlcRuntimeStates: 3)
         };
         var cacheInvalidation = new RecordingDeviceCacheInvalidationService();
         var auditTrail = new RecordingAuditTrailService();
@@ -870,9 +856,7 @@ public sealed class ApplicationFlowGuardTests
         Assert.True(result.IsSuccess);
         Assert.Contains(cacheInvalidation.DeletedDevices, x =>
             x.DeviceId == device.Id
-            && x.ProcessId == processId
-            && x.DeviceCode == device.Code);
-        Assert.Contains(employeeId, cacheInvalidation.DeleteAffectedEmployeeIds);
+            && x.ProcessId == processId);
         Assert.Contains(auditTrail.Entries, x =>
             x.OperationType == "Device.Delete"
             && x.TargetIdOrKey == device.Id.ToString()
@@ -903,12 +887,10 @@ public sealed class ApplicationFlowGuardTests
         Assert.Contains(processId, cacheInvalidation.RegisteredProcessIds);
         Assert.Contains(cacheInvalidation.RenamedDevices, x =>
             x.DeviceId == deviceId
-            && x.ProcessId == processId
-            && x.DeviceCode == "DEV-CACHE001");
+            && x.ProcessId == processId);
         Assert.Contains(cacheInvalidation.DeletedDevices, x =>
             x.DeviceId == deviceId
-            && x.ProcessId == processId
-            && x.DeviceCode == "DEV-CACHE001");
+            && x.ProcessId == processId);
     }
 
     [Fact]
@@ -2300,7 +2282,6 @@ public sealed class ApplicationFlowGuardTests
         InMemoryRepository<Device> deviceRepository,
         InMemoryRepository<ClientReleaseComponent> componentRepository,
         string artifactRoot,
-        RecordingCacheService cache,
         RecordingAuditTrailService auditTrail)
     {
         return new GenerateEdgeInstallerPackageHandler(
@@ -2314,7 +2295,6 @@ public sealed class ApplicationFlowGuardTests
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
             deviceRepository,
             componentRepository,
-            cache,
             auditTrail,
             Options.Create(new EdgeInstallerArtifactOptions { RootPath = artifactRoot }));
     }

@@ -49,9 +49,6 @@ public class DefineRolePolicyHandler(
                     cancellationToken);
             }
 
-            await cacheService.RemoveByPatternAsync(
-                CacheKeys.PermissionByUserPattern(),
-                cancellationToken);
             await cacheService.RemoveAsync(
                 CacheKeys.AllDefinedPermissions(),
                 cancellationToken);

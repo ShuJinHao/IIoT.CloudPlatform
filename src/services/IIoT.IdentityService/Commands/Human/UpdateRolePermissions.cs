@@ -34,9 +34,6 @@ public class UpdateRolePermissionsHandler(
 
         if (result.IsSuccess && result.Value)
         {
-            await cacheService.RemoveByPatternAsync(
-                CacheKeys.PermissionByUserPattern(),
-                cancellationToken);
             await cacheService.RemoveAsync(
                 CacheKeys.AllDefinedPermissions(),
                 cancellationToken);

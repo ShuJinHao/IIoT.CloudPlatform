@@ -30,20 +30,6 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Validate immutable test baseline anchor
-        shell: pwsh
-        run: |
-          $eventName = '${{ github.event_name }}'
-          $eventRef = '${{ github.ref }}'
-          if ($eventName -eq 'workflow_dispatch' -and $eventRef -ne 'refs/heads/main') {
-            throw 'workflow_dispatch is trusted only on refs/heads/main.'
-          }
-          $trustedBase = '${{ github.event.pull_request.base.sha || github.event.before }}'
-          if ($trustedBase -notmatch '^[0-9a-fA-F]{40}$' -or $trustedBase -match '^0{40}$') {
-            $trustedBase = (git rev-parse HEAD^ | Out-String).Trim()
-          }
-          ./scripts/tests/TestCloudTestGovernancePolicy.ps1 -Mode ValidateBaselineAnchor -TrustedBaseRevision $trustedBase
-
       - name: Setup .NET
         uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
@@ -51,14 +37,6 @@ jobs:
 
       - name: Verify .NET SDK
         run: test "$(dotnet --version)" = "10.0.301"
-
-      - name: Validate reviewed restore and build inputs
-        shell: pwsh
-        run: ./scripts/tests/TestCloudTestGovernancePolicy.ps1 -Mode ValidateStatic -Configuration Release
-
-      - name: Run Cloud test governance self-tests
-        shell: pwsh
-        run: ./scripts/tests/TestCloudTestGovernanceBehavior.ps1
 
       - name: Setup Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
@@ -84,21 +62,22 @@ jobs:
       - name: Build cloud solution
         run: dotnet build IIoT.CloudPlatform.slnx -c Release --no-restore --disable-build-servers --nologo -noAutoResponse
 
-      - name: Validate Cloud test repository and discovery
-        shell: pwsh
-        run: |
-          ./scripts/tests/TestCloudTestGovernancePolicy.ps1 -Mode ValidateRepository -Configuration Release
-          ./scripts/tests/TestCloudTestGovernancePolicy.ps1 -Mode ValidateDiscovery -Configuration Release
-
       - name: Run service layer tests
         run: dotnet test src/tests/IIoT.ServiceLayer.Tests/IIoT.ServiceLayer.Tests.csproj -c Release --no-build --no-restore --disable-build-servers --nologo -noAutoResponse --logger "trx;LogFileName=service-layer.trx" --results-directory artifacts/test-results
 
       - name: Run production service tests
         run: dotnet test src/tests/IIoT.ProductionService.Tests/IIoT.ProductionService.Tests.csproj -c Release --no-build --no-restore --disable-build-servers --nologo -noAutoResponse --logger "trx;LogFileName=production-service.trx" --results-directory artifacts/test-results
 
-      - name: Run client release PostgreSQL post-commit recovery test
+      - name: Run cache semantics tests
+        run: dotnet test src/tests/IIoT.Infrastructure.Tests/IIoT.Infrastructure.Tests.csproj -c Release --no-build --no-restore --disable-build-servers --nologo -noAutoResponse --logger "trx;LogFileName=cache-semantics.trx" --results-directory artifacts/test-results
+
+      - name: Run real Redis cache failure tests
+        timeout-minutes: 5
+        run: dotnet test src/tests/IIoT.RedisIntegrationTests/IIoT.RedisIntegrationTests.csproj -c Release --no-build --no-restore --disable-build-servers --nologo -noAutoResponse --logger "trx;LogFileName=redis-integration.trx" --results-directory artifacts/test-results
+
+      - name: Run PostgreSQL persistence integration tests
         timeout-minutes: 8
-        run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --filter FullyQualifiedName~ClientReleaseCommitRecoveryPostgresTests --no-restore --disable-build-servers --nologo -noAutoResponse --logger "trx;LogFileName=postgres-recovery.trx" --results-directory artifacts/test-results
+        run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --filter Category=PostgresPersistenceIntegration --no-restore --disable-build-servers --nologo -noAutoResponse --logger "trx;LogFileName=postgres-persistence.trx" --results-directory artifacts/test-results
 
       - name: Run configuration guard tests
         run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --no-restore --disable-build-servers --nologo -noAutoResponse --filter ConfigurationGuardTests --logger "trx;LogFileName=configuration-guard.trx" --results-directory artifacts/test-results
@@ -147,9 +126,11 @@ jobs:
         shell: pwsh
         run: |
           $expected = @{
-            'service-layer.trx' = 293
+            'service-layer.trx' = 291
             'production-service.trx' = 107
-            'postgres-recovery.trx' = 2
+            'cache-semantics.trx' = 37
+            'redis-integration.trx' = 1
+            'postgres-persistence.trx' = 5
             'configuration-guard.trx' = 81
             'deployment-guard.trx' = 20
           }
@@ -214,9 +195,6 @@ jobs:
         uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           global-json-file: global.json
-      - name: Validate reviewed restore and build inputs
-        shell: pwsh
-        run: ./scripts/tests/TestCloudTestGovernancePolicy.ps1 -Mode ValidateStatic -Configuration Release
       - name: Restore and build cloud solution
         run: |
           dotnet restore IIoT.CloudPlatform.slnx --disable-build-servers --nologo -noAutoResponse

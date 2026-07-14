@@ -14,9 +14,10 @@ using Xunit;
 
 namespace IIoT.EndToEndTests;
 
+[Trait("Category", "PostgresPersistenceIntegration")]
+[Collection(PostgresPersistenceIntegrationCollection.Name)]
 public sealed class ClientReleaseCommitRecoveryPostgresTests(
     ClientReleaseCommitRecoveryPostgresFixture fixture)
-    : IClassFixture<ClientReleaseCommitRecoveryPostgresFixture>
 {
     [Fact]
     public async Task PostCommitExceptionSimulation_ShouldBeConfirmedByFreshPostgresObservation()
@@ -369,6 +370,13 @@ public sealed class ClientReleaseCommitRecoveryPostgresTests(
             return ValueTask.FromResult(result);
         }
     }
+}
+
+[CollectionDefinition("Postgres persistence integration", DisableParallelization = true)]
+public sealed class PostgresPersistenceIntegrationCollection
+    : ICollectionFixture<ClientReleaseCommitRecoveryPostgresFixture>
+{
+    public const string Name = "Postgres persistence integration";
 }
 
 public sealed class ClientReleaseCommitRecoveryPostgresFixture : IAsyncLifetime

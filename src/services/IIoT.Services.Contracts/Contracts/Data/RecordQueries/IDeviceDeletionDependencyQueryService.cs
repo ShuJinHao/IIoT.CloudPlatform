@@ -55,5 +55,4 @@ public sealed record DeviceDeletionImpact(
 
 public sealed record DeviceCascadeDeletionResult(
     bool DeviceDeleted,
-    DeviceDeletionImpact Impact,
-    IReadOnlyList<Guid>? AffectedEmployeeIds = null);
+    DeviceDeletionImpact Impact);

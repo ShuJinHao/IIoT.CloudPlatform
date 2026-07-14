@@ -951,14 +951,26 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
-    public void HttpApiAppSettings_ShouldDefinePermissionCacheExpirationMinutes()
+    public void SecuritySensitiveIdentityAndAuthorizationReads_ShouldBypassValueCache()
     {
         var appSettingsPath = FindRepoFile("src", "hosts", "IIoT.HttpApi", "appsettings.json");
         var configuration = new ConfigurationBuilder()
             .AddJsonFile(appSettingsPath)
             .Build();
+        var permissionProvider = File.ReadAllText(
+            FindRepoFile("src", "infrastructure", "IIoT.EntityFrameworkCore", "Identity", "PermissionProvider.cs"));
+        var devicePermissionService = File.ReadAllText(
+            FindRepoFile("src", "infrastructure", "IIoT.EntityFrameworkCore", "Identity", "DevicePermissionService.cs"));
+        var deviceIdentityQueryService = File.ReadAllText(
+            FindRepoFile("src", "infrastructure", "IIoT.Dapper", "Production", "QueryServices", "Device", "DeviceIdentityQueryService.cs"));
 
-        configuration.GetValue<int>("PermissionCache:ExpirationMinutes").Should().BeGreaterThan(0);
+        configuration.GetSection("PermissionCache").Exists().Should().BeFalse();
+        permissionProvider.Should().NotContain("ICacheService");
+        permissionProvider.Should().NotContain("CacheKeys");
+        devicePermissionService.Should().NotContain("ICacheService");
+        devicePermissionService.Should().NotContain("CacheKeys");
+        deviceIdentityQueryService.Should().NotContain("ICacheService");
+        deviceIdentityQueryService.Should().NotContain("CacheKeys");
     }
 
     [Fact]
@@ -1813,15 +1825,15 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
-    public void CloudCiWorkflow_ShouldRunRegularReleaseRecoveryGatesAndKeepFullEndToEndBehindManualDispatch()
+    public void CloudCiWorkflow_ShouldRunRequiredPostgresPersistenceGatesAndKeepFullEndToEndBehindManualDispatch()
     {
         var workflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-ci.yml"));
         var productionServiceStep = GetNamedGitHubWorkflowStep(
             workflowSource,
             "Run production service tests");
-        var postgresRecoveryStep = GetNamedGitHubWorkflowStep(
+        var postgresPersistenceStep = GetNamedGitHubWorkflowStep(
             workflowSource,
-            "Run client release PostgreSQL post-commit recovery test");
+            "Run PostgreSQL persistence integration tests");
         var fullEndToEndStep = GetNamedGitHubWorkflowStep(
             workflowSource,
             "Run end-to-end tests");
@@ -1834,11 +1846,11 @@ public sealed class ConfigurationGuardTests
             "run: dotnet test src/tests/IIoT.ProductionService.Tests/IIoT.ProductionService.Tests.csproj -c Release --no-build");
         productionServiceStep.Should().NotContain("--filter");
         productionServiceStep.Should().NotContain("if:");
-        postgresRecoveryStep.Should().Contain("timeout-minutes: 8");
-        postgresRecoveryStep.Should().Contain(
-            "run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --filter FullyQualifiedName~ClientReleaseCommitRecoveryPostgresTests");
-        postgresRecoveryStep.Should().NotContain("if:");
-        postgresRecoveryStep.Should().NotContain("continue-on-error:");
+        postgresPersistenceStep.Should().Contain("timeout-minutes: 8");
+        postgresPersistenceStep.Should().Contain(
+            "run: dotnet test src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj -c Release --no-build --filter Category=PostgresPersistenceIntegration");
+        postgresPersistenceStep.Should().NotContain("if:");
+        postgresPersistenceStep.Should().NotContain("continue-on-error:");
         workflowSource.Should().Contain("Validate deploy script syntax");
         workflowSource.Should().Contain("sh -n deploy/scripts/release-common.sh");
         workflowSource.Should().Contain("sh -n deploy/scripts/pre-deploy-check.sh");

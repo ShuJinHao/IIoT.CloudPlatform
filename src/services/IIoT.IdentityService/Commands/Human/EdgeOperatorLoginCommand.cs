@@ -1,4 +1,3 @@
-using IIoT.Services.CrossCutting.Caching;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
@@ -17,7 +16,6 @@ public class EdgeOperatorLoginHandler(
     IIdentityAccountStore identityAccountStore,
     IIdentityPasswordService identityPasswordService,
     IPermissionProvider permissionProvider,
-    ICacheService cacheService,
     IJwtTokenGenerator jwtTokenGenerator,
     IRefreshTokenService refreshTokenService,
     IEmployeeLookupService employeeLookupService)
@@ -75,8 +73,6 @@ public class EdgeOperatorLoginHandler(
                 return Result.Failure("无设备权限，请联系管理员授权");
             }
         }
-
-        await cacheService.RemoveAsync(CacheKeys.PermissionByUser(account.Id), cancellationToken);
 
         var permissions = await permissionProvider.GetPermissionsAsync(account.Id, cancellationToken);
         var accessToken = jwtTokenGenerator.GenerateHumanToken(

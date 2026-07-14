@@ -2,8 +2,7 @@ namespace IIoT.Services.Contracts.Caching;
 
 public sealed record DeviceCacheDescriptor(
     Guid DeviceId,
-    Guid ProcessId,
-    string DeviceCode);
+    Guid ProcessId);
 
 public interface IDeviceCacheInvalidationService
 {
@@ -17,6 +16,5 @@ public interface IDeviceCacheInvalidationService
 
     Task InvalidateAfterDeleteAsync(
         DeviceCacheDescriptor device,
-        IReadOnlyCollection<Guid>? affectedEmployeeIds = null,
         CancellationToken cancellationToken = default);
 }

@@ -1,4 +1,3 @@
-using IIoT.Services.CrossCutting.Caching;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Messaging;
@@ -12,7 +11,6 @@ public class LoginUserHandler(
     IIdentityAccountStore identityAccountStore,
     IIdentityPasswordService identityPasswordService,
     IPermissionProvider permissionProvider,
-    ICacheService cacheService,
     IJwtTokenGenerator jwtTokenGenerator,
     IRefreshTokenService refreshTokenService)
     : ICommandHandler<LoginUserCommand, Result<HumanIdentitySessionResult>>
@@ -48,8 +46,6 @@ public class LoginUserHandler(
         }
 
         var roles = await identityAccountStore.GetRolesAsync(account.Id, cancellationToken);
-
-        await cacheService.RemoveAsync(CacheKeys.PermissionByUser(account.Id), cancellationToken);
 
         var permissions = await permissionProvider.GetPermissionsAsync(account.Id, cancellationToken);
         var accessToken = jwtTokenGenerator.GenerateHumanToken(account.Id, request.EmployeeNo, roles, permissions);

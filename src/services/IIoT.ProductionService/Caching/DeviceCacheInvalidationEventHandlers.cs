@@ -29,8 +29,7 @@ public sealed class DeviceRenamedCacheInvalidationHandler(
         return cacheInvalidationService.InvalidateAfterRenameAsync(
             new DeviceCacheDescriptor(
                 notification.DeviceId,
-                notification.ProcessId,
-                notification.Code),
+                notification.ProcessId),
             cancellationToken: cancellationToken);
     }
 }
@@ -46,8 +45,7 @@ public sealed class DeviceDeletedCacheInvalidationHandler(
         return cacheInvalidationService.InvalidateAfterDeleteAsync(
             new DeviceCacheDescriptor(
                 notification.DeviceId,
-                notification.ProcessId,
-                notification.Code),
+                notification.ProcessId),
             cancellationToken: cancellationToken);
     }
 }
