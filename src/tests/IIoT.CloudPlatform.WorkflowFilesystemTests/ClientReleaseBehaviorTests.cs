@@ -49,7 +49,7 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
-    public async Task ClientReleaseComponent_ShouldNotTouchHostComponent_WhenAppendingNewVersion()
+    public void ClientReleaseComponent_ShouldNotTouchHostComponent_WhenAppendingNewVersion()
     {
         var component = CreateHostComponent(
             "stable",
@@ -62,9 +62,9 @@ public sealed class ClientReleaseBehaviorTests
             100,
             "initial",
             ClientReleaseStatus.Published);
-        var updatedAt = component.UpdatedAtUtc;
+        var updatedAt = new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        SetUpdatedAtUtc(component, updatedAt);
 
-        await Task.Delay(20);
         component.UpdateHostMetadata();
         component.UpsertHostVersion(
             "1.0.1",
@@ -83,7 +83,7 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
-    public async Task ClientReleaseComponent_ShouldTouchHostComponent_WhenUpdatingExistingVersion()
+    public void ClientReleaseComponent_ShouldTouchHostComponent_WhenUpdatingExistingVersion()
     {
         var component = CreateHostComponent(
             "stable",
@@ -96,9 +96,9 @@ public sealed class ClientReleaseBehaviorTests
             100,
             "initial",
             ClientReleaseStatus.Published);
-        var updatedAt = component.UpdatedAtUtc;
+        var updatedAt = new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        SetUpdatedAtUtc(component, updatedAt);
 
-        await Task.Delay(20);
         component.UpsertHostVersion(
             "1.0.0",
             "1",
@@ -115,7 +115,7 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
-    public async Task ClientReleaseComponent_ShouldTouchPluginComponentOnlyForMetadataOrExistingVersionChanges()
+    public void ClientReleaseComponent_ShouldTouchPluginComponentOnlyForMetadataOrExistingVersionChanges()
     {
         var component = CreatePluginComponent(
             "Homogenization",
@@ -132,9 +132,9 @@ public sealed class ClientReleaseBehaviorTests
             100,
             "initial",
             ClientReleaseStatus.Published);
-        var updatedAt = component.UpdatedAtUtc;
+        var updatedAt = new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        SetUpdatedAtUtc(component, updatedAt);
 
-        await Task.Delay(20);
         component.UpdatePluginMetadata("匀浆", null, null, null);
         component.UpsertPluginVersion(
             "1.0.1",
@@ -153,13 +153,13 @@ public sealed class ClientReleaseBehaviorTests
 
         Assert.Equal(updatedAt, component.UpdatedAtUtc);
 
-        await Task.Delay(20);
         component.UpdatePluginMetadata("匀浆插件", null, null, null);
         var metadataUpdatedAt = component.UpdatedAtUtc;
 
         Assert.True(metadataUpdatedAt > updatedAt);
 
-        await Task.Delay(20);
+        var existingVersionUpdateBaseline = new DateTime(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        SetUpdatedAtUtc(component, existingVersionUpdateBaseline);
         component.UpsertPluginVersion(
             "1.0.1",
             "1",
@@ -175,7 +175,7 @@ public sealed class ClientReleaseBehaviorTests
             null,
             "IIoT");
 
-        Assert.True(component.UpdatedAtUtc > metadataUpdatedAt);
+        Assert.True(component.UpdatedAtUtc > existingVersionUpdateBaseline);
     }
 
     [Fact]
@@ -774,17 +774,47 @@ public sealed class ClientReleaseBehaviorTests
             var auditTrail = new RecordingAuditTrailService();
             var handler = CreatePublishHandler(edgeRoot, componentRepository, new NoopRetentionService(), auditTrail);
 
-            await Assert.ThrowsAsync<ClientReleasePublishUnavailableException>(
-                () => PublishBundleAsync(handler, bundle.ZipPath));
+            await AssertPublishUnavailableAsync(handler, bundle.ZipPath, auditTrail, sensitiveFailure);
 
             Assert.False(Directory.Exists(Path.Combine(edgeRoot, "installers", "stable", "1.2.1")));
             Assert.Equal("old-manifest", File.ReadAllText(Path.Combine(edgeRoot, "velopack", "stable", "releases.stable.json")));
             Assert.Equal("old-assets", File.ReadAllText(Path.Combine(edgeRoot, "velopack", "stable", "assets.stable.json")));
             Assert.False(File.Exists(Path.Combine(edgeRoot, "velopack", "stable", "IIoT.EdgeClient-1.2.1-full.nupkg")));
-            var failureAudit = Assert.Single(auditTrail.Entries, entry => !entry.Succeeded);
-            Assert.Equal(ClientReleasePublishUnavailableException.PublicMessage, failureAudit.FailureReason);
-            Assert.DoesNotContain(sensitiveFailure, failureAudit.Summary, StringComparison.Ordinal);
-            Assert.DoesNotContain(sensitiveFailure, failureAudit.FailureReason!, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            bundle.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task PublishEdgeReleaseBundleHandler_ShouldPreservePrimaryFailure_WhenPreSaveRollbackFailsClosed()
+    {
+        const string version = "1.2.11";
+        const string sensitiveFailure = "/private/release/SECRET-primary-db-unavailable";
+        var edgeRoot = CreateTempDirectory("iiot-edge-upload-root");
+        var bundle = CreateEdgeReleaseBundle(version);
+        var installerTarget = Path.Combine(edgeRoot, "installers", "stable", version);
+        var foreignFile = Path.Combine(installerTarget, "competitor-owned.txt");
+        try
+        {
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>
+            {
+                AnyAsyncPredicateOverride = (_, _) =>
+                {
+                    Directory.CreateDirectory(installerTarget);
+                    File.WriteAllText(foreignFile, "keep");
+                    return Task.FromException<bool>(new InvalidOperationException(sensitiveFailure));
+                }
+            };
+            var auditTrail = new RecordingAuditTrailService();
+            var handler = CreatePublishHandler(edgeRoot, componentRepository, new NoopRetentionService(), auditTrail);
+
+            await AssertPublishUnavailableAsync(handler, bundle.ZipPath, auditTrail, sensitiveFailure);
+
+            Assert.True(Directory.Exists(installerTarget));
+            Assert.Equal("keep", File.ReadAllText(foreignFile));
         }
         finally
         {
@@ -2242,6 +2272,13 @@ public sealed class ClientReleaseBehaviorTests
         return Assert.Single(component.Versions);
     }
 
+    private static void SetUpdatedAtUtc(ClientReleaseComponent component, DateTime value)
+    {
+        var property = typeof(ClientReleaseComponent).GetProperty(nameof(ClientReleaseComponent.UpdatedAtUtc))
+                       ?? throw new InvalidOperationException("ClientReleaseComponent.UpdatedAtUtc is missing.");
+        property.SetValue(component, value);
+    }
+
     private static ClientReleaseComponent SingleComponent(
         InMemoryRepository<ClientReleaseComponent> repository,
         ClientReleaseComponentKind kind,
@@ -2261,6 +2298,27 @@ public sealed class ClientReleaseBehaviorTests
         {
             Assert.Empty(Directory.EnumerateFileSystemEntries(stagingKindRoot));
         }
+    }
+
+    private static void AssertSanitizedPublishUnavailableAudit(
+        RecordingAuditTrailService auditTrail,
+        string sensitiveFailure)
+    {
+        var failureAudit = Assert.Single(auditTrail.Entries, entry => !entry.Succeeded);
+        Assert.Equal(ClientReleasePublishUnavailableException.PublicMessage, failureAudit.FailureReason);
+        Assert.DoesNotContain(sensitiveFailure, failureAudit.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain(sensitiveFailure, failureAudit.FailureReason!, StringComparison.Ordinal);
+    }
+
+    private static async Task AssertPublishUnavailableAsync(
+        (PublishEdgeReleaseBundleHandler Handler, ClientReleaseUploadTestSource Source) publisher,
+        string bundlePath,
+        RecordingAuditTrailService auditTrail,
+        string sensitiveFailure)
+    {
+        await Assert.ThrowsAsync<ClientReleasePublishUnavailableException>(
+            () => PublishBundleAsync(publisher, bundlePath));
+        AssertSanitizedPublishUnavailableAudit(auditTrail, sensitiveFailure);
     }
 
     private static (PublishEdgeReleaseBundleHandler Handler, ClientReleaseUploadTestSource Source)

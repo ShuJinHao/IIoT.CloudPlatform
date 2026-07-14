@@ -5,12 +5,15 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <CloudTestKind>Persistence</CloudTestKind>
+    <CloudTestRuntime>SQLite</CloudTestRuntime>
+    <CloudTestExecutionGroup>Database</CloudTestExecutionGroup>
+    <CloudTestRequired>true</CloudTestRequired>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.9" />
+    <PackageReference Include="FluentAssertions" Version="8.8.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.9" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
-    <PackageReference Include="Npgsql" Version="10.0.3" />
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
@@ -24,11 +27,9 @@
     <ProjectReference Include="..\..\services\IIoT.ProductionService\IIoT.ProductionService.csproj" />
     <ProjectReference Include="..\..\services\IIoT.Services.Contracts\IIoT.Services.Contracts.csproj" />
     <ProjectReference Include="..\..\services\IIoT.Services.CrossCutting\IIoT.Services.CrossCutting.csproj" />
-    <ProjectReference Include="..\..\testing\IIoT.CloudPlatform.IntegrationTestKit\IIoT.CloudPlatform.IntegrationTestKit.csproj" />
     <ProjectReference Include="..\..\testing\IIoT.CloudPlatform.TestKit\IIoT.CloudPlatform.TestKit.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <Using Include="IIoT.CloudPlatform.IntegrationTestKit" />
     <Using Include="IIoT.CloudPlatform.TestKit" />
     <None Include="..\xunit.runner.json" Link="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

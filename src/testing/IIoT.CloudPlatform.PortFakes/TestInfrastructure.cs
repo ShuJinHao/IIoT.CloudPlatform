@@ -3,48 +3,7 @@ using IIoT.Services.Contracts;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 using MediatR;
-using Microsoft.AspNetCore.Identity;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
-using IIoT.EntityFrameworkCore;
-using IIoT.EntityFrameworkCore.Identity;
-
 namespace IIoT.CloudPlatform.TestKit;
-
-internal static class TestServiceProviders
-{
-    public static ServiceProvider CreateEfServiceProvider(IMediator mediator)
-    {
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddSingleton(mediator);
-        services.AddSingleton<IMediator>(mediator);
-        services.AddDbContext<IIoTDbContext>(options =>
-            options.UseInMemoryDatabase(Guid.NewGuid().ToString("N")));
-
-        return services.BuildServiceProvider();
-    }
-
-    public static ServiceProvider CreateIdentityServiceProvider()
-    {
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddDbContext<IIoTDbContext>(options =>
-            options.UseInMemoryDatabase(Guid.NewGuid().ToString("N")));
-        services.AddIdentityCore<ApplicationUser>(options =>
-            {
-                options.Password.RequireNonAlphanumeric = false;
-                options.Password.RequiredLength = 8;
-                options.Lockout.AllowedForNewUsers = true;
-                options.Lockout.MaxFailedAccessAttempts = 5;
-                options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
-            })
-            .AddRoles<IdentityRole<Guid>>()
-            .AddEntityFrameworkStores<IIoTDbContext>();
-
-        return services.BuildServiceProvider();
-    }
-}
 
 internal sealed class RecordingMediator : IMediator
 {

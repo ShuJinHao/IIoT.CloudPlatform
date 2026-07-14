@@ -10,36 +10,44 @@ internal sealed class RouteSurfaceApiExplorerConvention : IApplicationModelConve
         {
             foreach (var action in controller.Actions)
             {
-                action.ApiExplorer.GroupName = ResolveGroupName(controller, action);
+                action.ApiExplorer.GroupName = ResolveGroupName(
+                    controllerRoute: controller.Selectors
+                        .Select(selector => selector.AttributeRouteModel?.Template)
+                        .FirstOrDefault(template => !string.IsNullOrWhiteSpace(template))
+                        ?? string.Empty,
+                    controllerName: controller.ControllerName,
+                    actionName: action.ActionMethod.Name);
             }
         }
     }
 
-    private static string ResolveGroupName(ControllerModel controller, ActionModel action)
+    internal static string ResolveGroupName(
+        string controllerRoute,
+        string controllerName,
+        string actionName)
     {
-        var controllerRoute = controller.Selectors
-            .Select(selector => selector.AttributeRouteModel?.Template)
-            .FirstOrDefault(template => !string.IsNullOrWhiteSpace(template))
-            ?? string.Empty;
-
-        if (string.Equals(controller.ControllerName, "HumanIdentity", StringComparison.Ordinal)
-            && string.Equals(action.ActionMethod.Name, "EdgeLogin", StringComparison.Ordinal))
+        if (string.Equals(controllerName, "HumanIdentity", StringComparison.Ordinal)
+            && string.Equals(actionName, "EdgeLogin", StringComparison.Ordinal))
         {
             return "bootstrap";
         }
 
-        if (controllerRoute.StartsWith("api/v1/edge/bootstrap", StringComparison.OrdinalIgnoreCase))
+        if (MatchesSurface(controllerRoute, "api/v1/edge/bootstrap"))
             return "bootstrap";
 
-        if (controllerRoute.StartsWith("api/v1/ai/read/", StringComparison.OrdinalIgnoreCase))
+        if (MatchesSurface(controllerRoute, "api/v1/ai/read"))
             return "ai-read";
 
-        if (controllerRoute.StartsWith("api/v1/machine/", StringComparison.OrdinalIgnoreCase))
+        if (MatchesSurface(controllerRoute, "api/v1/machine"))
             return "machine";
 
-        if (controllerRoute.StartsWith("api/v1/edge/", StringComparison.OrdinalIgnoreCase))
+        if (MatchesSurface(controllerRoute, "api/v1/edge"))
             return "edge";
 
         return "human";
     }
+
+    private static bool MatchesSurface(string controllerRoute, string surfacePrefix) =>
+        string.Equals(controllerRoute, surfacePrefix, StringComparison.OrdinalIgnoreCase)
+        || controllerRoute.StartsWith($"{surfacePrefix}/", StringComparison.OrdinalIgnoreCase);
 }

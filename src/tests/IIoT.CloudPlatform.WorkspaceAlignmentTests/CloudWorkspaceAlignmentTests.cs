@@ -218,35 +218,27 @@ public sealed class CloudWorkspaceAlignmentTests : IAsyncLifetime
             });
         }
 
-        await _driver.PostJsonAsync("/api/v1/edge/process-records", new
+        await _driver.PostJsonAsync("/api/v1/edge/pass-stations/injection/batch", new
         {
-            TypeKey = "injection",
-            ProcessType = "injection",
-            SchemaVersion = 1,
             DeviceId = device.DeviceId,
-            Records = new[]
+            Items = new[]
             {
-                CreateAlignmentProcessRecord(device.DeviceId, "X0-LIVE-0001", firstTime, true, 1.1m),
-                CreateAlignmentProcessRecord(device.DeviceId, "X0-LIVE-0002", secondTime, false, 1.2m)
+                CreateAlignmentPassStationItem("X0-LIVE-0001", firstTime, "OK", 1.1m),
+                CreateAlignmentPassStationItem("X0-LIVE-0002", secondTime, "NG", 1.2m)
             }
         });
     }
 
-    private static object CreateAlignmentProcessRecord(
-        Guid deviceId,
+    private static object CreateAlignmentPassStationItem(
         string barcode,
         DateTime completedAt,
-        bool result,
+        string cellResult,
         decimal volume)
     {
         return new
         {
-            TypeKey = "injection",
-            ProcessType = "injection",
-            SchemaVersion = 1,
-            DeviceId = deviceId,
             Barcode = barcode,
-            CellResult = result,
+            CellResult = cellResult,
             CompletedTime = completedAt,
             Payload = new
             {

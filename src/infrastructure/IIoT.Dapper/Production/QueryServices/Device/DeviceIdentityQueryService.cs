@@ -15,6 +15,7 @@ public class DeviceIdentityQueryService(
         Guid deviceId,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (deviceId == Guid.Empty) return null;
 
         const string sql = @"

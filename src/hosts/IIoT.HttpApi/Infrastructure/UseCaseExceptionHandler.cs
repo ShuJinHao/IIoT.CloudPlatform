@@ -13,6 +13,11 @@ public sealed class UseCaseExceptionHandler : IExceptionHandler
         Exception exception,
         CancellationToken cancellationToken)
     {
+        if (exception is OperationCanceledException)
+        {
+            return false;
+        }
+
         var problem = exception switch
         {
             ClientReleasePublishConflictException conflict => CreateProblem(

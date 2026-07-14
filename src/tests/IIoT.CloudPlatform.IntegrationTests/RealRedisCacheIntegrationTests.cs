@@ -1,23 +1,18 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using IIoT.Infrastructure;
 using IIoT.Infrastructure.Caching;
-using Microsoft.Extensions.Caching.Distributed;
+using IIoT.Services.Contracts;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Hosting;
 using StackExchange.Redis;
 using Xunit;
 using ZiggyCreatures.Caching.Fusion;
-using ZiggyCreatures.Caching.Fusion.Backplane.StackExchangeRedis;
-using ZiggyCreatures.Caching.Fusion.Serialization.SystemTextJson;
 
 namespace IIoT.CloudPlatform.IntegrationTests;
 
-[Trait("TestKind", "Integration")]
-[Trait("Runtime", "Redis")]
-[Trait("Risk", "P0")]
-[Trait("Capability", "Caching")]
-[Trait("Owner", "Cloud.Infrastructure")]
 public sealed class RealRedisCacheIntegrationTests
 {
     private const string RedisImage =
@@ -205,12 +200,17 @@ public sealed class RealRedisCacheIntegrationTests
         string expected,
         TimeSpan timeout)
     {
+        var key = $"{keyPrefix}:backplane";
+        const string stale = "stale-before-backplane-update";
+        await writer.SetAsync(key, stale);
+        Assert.Equal(stale, await reader.GetAsync<string>(key));
+
+        await writer.SetAsync(key, expected);
         var deadline = DateTime.UtcNow + timeout;
         var attempt = 0;
         while (DateTime.UtcNow < deadline)
         {
-            var key = $"{keyPrefix}:{++attempt}";
-            await writer.SetAsync(key, expected);
+            attempt++;
             var actual = await reader.GetAsync<string>(key);
             if (string.Equals(expected, actual, StringComparison.Ordinal))
                 return;
@@ -218,7 +218,7 @@ public sealed class RealRedisCacheIntegrationTests
             await Task.Delay(100);
         }
 
-        Assert.Fail($"Redis distributed cache did not recover after {attempt} attempts.");
+        Assert.Fail($"Redis backplane did not invalidate the reader L1 cache after {attempt} attempts.");
     }
 
     private static Task<string> RunDockerAsync(params string[] arguments) =>
@@ -284,47 +284,38 @@ public sealed class RealRedisCacheIntegrationTests
 
         public static async Task<RedisRuntime> CreateAsync(string endpoint)
         {
-            var connectionOptions = ConfigurationOptions.Parse(endpoint);
-            connectionOptions.AbortOnConnectFail = false;
-            connectionOptions.ConnectRetry = 1;
-            connectionOptions.ConnectTimeout = 1_000;
-            connectionOptions.AsyncTimeout = 1_000;
-            connectionOptions.SyncTimeout = 1_000;
-            connectionOptions.KeepAlive = 1;
-            connectionOptions.ReconnectRetryPolicy = new ExponentialRetry(500);
-
-            var connection = await ConnectionMultiplexer.ConnectAsync(connectionOptions);
-            var services = new ServiceCollection();
-            services.AddLogging();
-            services.AddStackExchangeRedisCache(options =>
+            var connectionString = string.Join(",",
+                endpoint,
+                "abortConnect=false",
+                "connectRetry=1",
+                "connectTimeout=1000",
+                "asyncTimeout=1000",
+                "syncTimeout=1000",
+                "keepAlive=1");
+            var builder = Host.CreateApplicationBuilder();
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
             {
-                options.ConfigurationOptions = connectionOptions;
+                ["ConnectionStrings:redis-cache"] = connectionString,
+                ["CacheSafety:FailSafeMinutes"] = "17"
             });
-            services.AddFusionCache()
-                .WithDefaultEntryOptions(new FusionCacheEntryOptions
-                {
-                    Duration = TimeSpan.FromMinutes(5),
-                    IsFailSafeEnabled = false
-                })
-                .WithSystemTextJsonSerializer()
-                .WithDistributedCache(provider => provider.GetRequiredService<IDistributedCache>())
-                .WithStackExchangeRedisBackplane(options =>
-                {
-                    options.Configuration = endpoint;
-                });
-            var provider = services.BuildServiceProvider();
+            builder.AddInfrastructures();
+
+            var provider = builder.Services.BuildServiceProvider();
             var fusion = provider.GetRequiredService<IFusionCache>();
-            var service = new RedisCacheService(
-                fusion,
-                connection,
-                NullLogger<RedisCacheService>.Instance);
+            Assert.Equal(TimeSpan.FromMinutes(5), fusion.DefaultEntryOptions.Duration);
+            Assert.True(fusion.DefaultEntryOptions.IsFailSafeEnabled);
+            Assert.Equal(TimeSpan.FromMinutes(17), fusion.DefaultEntryOptions.FailSafeMaxDuration);
+            Assert.Equal(TimeSpan.FromSeconds(10), fusion.DefaultEntryOptions.FailSafeThrottleDuration);
+
+            var connection = provider.GetRequiredService<IConnectionMultiplexer>();
+            await connection.GetDatabase().PingAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            var service = Assert.IsType<RedisCacheService>(provider.GetRequiredService<ICacheService>());
             return new RedisRuntime(provider, connection, service);
         }
 
         public async ValueTask DisposeAsync()
         {
             await _provider.DisposeAsync();
-            await Connection.DisposeAsync();
         }
     }
 }

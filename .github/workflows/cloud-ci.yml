@@ -4,10 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       include_end_to_end:
-        description: "Run the repository Aspire EndToEnd runner; WorkspaceAlignment remains a separate manual runner"
+        description: "Run real backend and browser Aspire EndToEnd lanes; WorkspaceAlignment remains a separate workspace runner"
         required: false
         type: boolean
         default: false
+      include_mutation:
+        description: "Run the pinned report-only mutation lane"
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: "17 18 * * *"
   push:
     branches: [main]
   pull_request: {}
@@ -60,7 +67,7 @@ jobs:
         run: ./deploy/tests/TestDeploymentPolicy.ps1
 
       - name: Build cloud solution
-        run: dotnet build IIoT.CloudPlatform.slnx -c Release --no-restore --disable-build-servers --nologo -noAutoResponse
+        run: dotnet build IIoT.CloudPlatform.slnx -c Release --no-restore --disable-build-servers --nologo -noAutoResponse -property:RunAnalyzers=true -property:RunAnalyzersDuringBuild=true
 
       - name: Run architecture analyzer fixture gate
         shell: bash
@@ -68,10 +75,28 @@ jobs:
           set -euo pipefail
           bash scripts/tests/TestCloudArchitectureAnalyzerFixtures.sh 2>&1 | tee artifacts/test-results/cloud-architecture-fixtures.log
 
+      - name: Enforce test declaration migration ledger
+        shell: pwsh
+        run: ./scripts/tests/Test-CloudTestMigration.ps1
+
+      - name: Enforce compatibility retirement inventory
+        shell: pwsh
+        run: ./scripts/tests/Test-CloudCompatibility.ps1
+
+      - name: Enforce duplication ratchets
+        shell: pwsh
+        run: ./scripts/tests/Test-CloudDuplication.ps1
+
       - name: Run and reconcile required test inventory
         shell: pwsh
         timeout-minutes: 15
-        run: ./scripts/tests/Invoke-CloudTestInventory.ps1 -Mode Required -Configuration Release -NoBuild
+        run: ./scripts/tests/Invoke-CloudTestInventory.ps1 -Mode Required -Configuration Release -NoBuild -CollectCoverage
+
+      - name: Enforce merged and changed P0 coverage
+        shell: pwsh
+        env:
+          CLOUD_COVERAGE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
+        run: ./scripts/tests/Test-CloudCoverage.ps1 -BaseRef $env:CLOUD_COVERAGE_BASE_REF
 
       - name: Validate deploy script syntax
         run: |
@@ -101,11 +126,21 @@ jobs:
           set -euo pipefail
           bash deploy/tests/deployment-behavior.sh 2>&1 | tee artifacts/test-results/deployment-behavior.log
 
-      - name: Test and build web app
+      - name: Install pinned browser runtime
+        working-directory: src/ui/iiot-web
+        run: npx playwright install --with-deps chromium
+
+      - name: Type-check, test, build and browser-smoke web app
         working-directory: src/ui/iiot-web
         run: |
+          npm run type-check
           npm run test:unit -- --reporter=json --outputFile=../../../artifacts/test-results/vitest.json
           npm run build
+          PLAYWRIGHT_JSON_OUTPUT_FILE=../../../artifacts/test-results/playwright-browser-smoke.json npm run test:browser-smoke -- --reporter=json
+
+      - name: Reconcile required web test inventory
+        shell: pwsh
+        run: ./scripts/tests/Test-CloudWebInventory.ps1 -Mode Required
 
       - name: Validate production compose
         run: docker compose --env-file deploy/.env.example -f deploy/docker-compose.prod.yml config -q
@@ -119,13 +154,65 @@ jobs:
           }
           $inventory = Get-Content $inventoryPath -Raw | ConvertFrom-Json
           $requiredCases = @($inventory.cases | Where-Object required)
-          if ([int]$inventory.baselineCases -ne 665 -or
-              [int]$inventory.requiredCases -ne 603 -or
-              $requiredCases.Count -ne 603 -or
+          $runnerEvidence = @($inventory.runnerEvidence)
+          $selectedRunnerEvidence = @($runnerEvidence | Where-Object selected)
+          $regressionEvidence = @($inventory.regressionEvidence)
+          $invalidSelectedEvidence = @($selectedRunnerEvidence | Where-Object {
+            [int]$_.expected -ne [int]$_.discovered -or
+            [int]$_.expected -ne [int]$_.total -or
+            [int]$_.expected -ne [int]$_.executed -or
+            [int]$_.expected -ne [int]$_.passed -or
+            [int]$_.failed -ne 0 -or [int]$_.notExecuted -ne 0
+          })
+          if ([int]$inventory.schemaVersion -ne 2 -or
+              [int]$inventory.migrationBaselineCases -ne 591 -or
+              [int]$inventory.baselineCases -ne 673 -or
+              [int]$inventory.requiredCases -ne 609 -or
+              $requiredCases.Count -ne 609 -or
+              $runnerEvidence.Count -ne 18 -or
+              $selectedRunnerEvidence.Count -ne 16 -or
+              $invalidSelectedEvidence.Count -ne 0 -or
+              [int](($selectedRunnerEvidence | Measure-Object expected -Sum).Sum) -ne 609 -or
+              [int]$inventory.regressionZeroCount -ne 0 -or
+              $regressionEvidence.Count -ne 18 -or
+              [int](($regressionEvidence | Measure-Object actualCases -Sum).Sum) -ne 673 -or
+              @($regressionEvidence | Where-Object {
+                [string]::IsNullOrWhiteSpace([string]$_.regressionId) -or
+                [int]$_.minimumCases -le 0 -or
+                [int]$_.actualCases -lt [int]$_.minimumCases
+              }).Count -ne 0 -or
               @($requiredCases | Where-Object recentStatus -ne 'Passed').Count -ne 0 -or
               @($requiredCases | Where-Object skip).Count -ne 0 -or
+              @($requiredCases | Where-Object {
+                [string]::IsNullOrWhiteSpace([string]$_.testKind) -or
+                [string]::IsNullOrWhiteSpace([string]$_.capability) -or
+                [string]::IsNullOrWhiteSpace([string]$_.runtime) -or
+                [string]::IsNullOrWhiteSpace([string]$_.risk) -or
+                [string]::IsNullOrWhiteSpace([string]$_.concern) -or
+                [string]::IsNullOrWhiteSpace([string]$_.cadence) -or
+                [string]::IsNullOrWhiteSpace([string]$_.profile) -or
+                [string]::IsNullOrWhiteSpace([string]$_.regressionId) -or
+                [string]::IsNullOrWhiteSpace([string]$_.ruleId) -or
+                [string]::IsNullOrWhiteSpace([string]$_.owner)
+              }).Count -ne 0 -or
+              @($inventory.support).Count -ne 5 -or
               @($inventory.support | Where-Object caseCount -ne 0).Count -ne 0) {
             throw "Required inventory reconciliation failed"
+          }
+
+          $webInventoryPath = 'artifacts/test-results/cloud-web-required-inventory.json'
+          if (-not (Test-Path $webInventoryPath -PathType Leaf)) {
+            throw "Missing required Web inventory: $webInventoryPath"
+          }
+          $webInventory = Get-Content $webInventoryPath -Raw | ConvertFrom-Json
+          if ([string]$webInventory.mode -ne 'Required' -or
+              [int]$webInventory.runners -ne 2 -or
+              [int]$webInventory.files -ne 17 -or
+              [int]$webInventory.cases -ne 69 -or
+              [int]$webInventory.failed -ne 0 -or
+              [int]$webInventory.skipped -ne 0 -or
+              @($webInventory.evidence | Where-Object status -ne 'Passed').Count -ne 0) {
+            throw "Required Web inventory reconciliation failed"
           }
 
           $architectureFixturePath = 'artifacts/test-results/cloud-architecture-fixtures.log'
@@ -133,9 +220,37 @@ jobs:
             throw "Missing required architecture fixture result: $architectureFixturePath"
           }
           $architectureFixtureLines = @(Get-Content $architectureFixturePath)
-          $expectedArchitectureFixtureSummary = 'ARCHITECTURE_FIXTURES_OK valid=4 invalid=8 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006'
+          $expectedArchitectureFixtureSummary = 'ARCHITECTURE_FIXTURES_OK valid=4 invalid=13 suppressionBypass=3 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010'
           if (@($architectureFixtureLines | Where-Object { $_ -eq $expectedArchitectureFixtureSummary }).Count -ne 1) {
             throw "Architecture fixture reconciliation failed"
+          }
+
+          $migrationPath = 'artifacts/test-results/cloud-test-migration.json'
+          if (-not (Test-Path $migrationPath -PathType Leaf)) {
+            throw "Missing test declaration migration ledger: $migrationPath"
+          }
+          $migration = Get-Content $migrationPath -Raw | ConvertFrom-Json
+          $migrationCountSum = [int]$migration.counts.retained +
+            [int]$migration.counts.moved +
+            [int]$migration.counts.replacement +
+            [int]$migration.counts.analyzer +
+            [int]$migration.counts.'retired-duplicate'
+          if ([int]$migration.schemaVersion -ne 1 -or
+              [string]$migration.baseCommit -ne '88c41109fbcf0b87b18939a139e0bff751e03d07' -or
+              [string]$migration.baseSourcePath -ne 'src/tests' -or
+              [string]$migration.baseTestsTreeObject -ne '604fc2c1f2b9e4746657f314191a4514ccf75530' -or
+              [string]$migration.baseDeclarationDigestSha256 -ne 'd75d5529e418be31819676abeb210a79550149e14896fbe1857c30a83149c77c' -or
+              [int]$migration.baseDeclarationCount -ne 529 -or
+              [int]$migration.currentDeclarationCount -ne 605 -or
+              [int]$migration.currentDeltaCount -ne 136 -or
+              @($migration.currentDelta).Count -ne 136 -or
+              @($migration.currentDelta | Where-Object path -like '*IIoT.CloudPlatform.AnalyzerTests/*').Count -ne 52 -or
+              @($migration.currentDelta | Where-Object path -like '*RedisCacheServiceSemanticsTests.cs').Count -ne 37 -or
+              [int]$migration.negativeFixtureCount -ne 7 -or
+              [int]$migration.unresolvedCount -ne 0 -or
+              @($migration.entries).Count -ne 529 -or
+              $migrationCountSum -ne 529) {
+            throw "Test declaration migration ledger reconciliation failed"
           }
 
           $vitestPath = 'artifacts/test-results/vitest.json'
@@ -168,14 +283,17 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: cloud-required-test-results
-          path: artifacts/test-results/**
+          path: |
+            artifacts/test-results/**
+            !artifacts/test-results/**/*state*.json
+            !artifacts/test-results/**/*credential*.json
           if-no-files-found: warn
 
   full-end-to-end:
     needs: build-test
-    if: github.event_name == 'workflow_dispatch' && inputs.include_end_to_end == true
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.include_end_to_end == true)
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -183,12 +301,80 @@ jobs:
         uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           global-json-file: global.json
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22.17.0"
+          cache: "npm"
+          cache-dependency-path: "src/ui/iiot-web/package-lock.json"
+      - name: Restore web dependencies and browser
+        working-directory: src/ui/iiot-web
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
       - name: Restore and build cloud solution
         run: |
           dotnet restore IIoT.CloudPlatform.slnx --disable-build-servers --nologo -noAutoResponse
-          dotnet build IIoT.CloudPlatform.slnx -c Release --no-restore --disable-build-servers --nologo -noAutoResponse
+          dotnet build IIoT.CloudPlatform.slnx -c Release --no-restore --disable-build-servers --nologo -noAutoResponse -property:RunAnalyzers=true -property:RunAnalyzersDuringBuild=true
       - name: Run end-to-end tests
-        if: github.event_name == 'workflow_dispatch' && inputs.include_end_to_end == true
-        timeout-minutes: 15
+        timeout-minutes: 60
         shell: pwsh
         run: ./scripts/tests/Invoke-CloudTestInventory.ps1 -Mode EndToEnd -Configuration Release -NoBuild
+      - name: Run real browser EndToEnd against Aspire
+        timeout-minutes: 15
+        working-directory: src/ui/iiot-web
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_FILE: ../../../artifacts/test-results/playwright-real-e2e.json
+        run: npm run test:e2e-real
+      - name: Reconcile real browser EndToEnd inventory
+        shell: pwsh
+        run: ./scripts/tests/Test-CloudWebInventory.ps1 -Mode EndToEnd
+      - name: Reconcile EndToEnd discovery and execution
+        shell: pwsh
+        run: |
+          $backend = Get-Content 'artifacts/test-results/cloud-test-inventory.json' -Raw | ConvertFrom-Json
+          $backendCases = @($backend.cases | Where-Object assembly -eq 'IIoT.CloudPlatform.EndToEndTests')
+          if ($backendCases.Count -ne 63 -or
+              @($backendCases | Where-Object recentStatus -ne 'Passed').Count -ne 0 -or
+              @($backendCases | Where-Object skip).Count -ne 0) {
+            throw "Backend EndToEnd reconciliation failed"
+          }
+          $web = Get-Content 'artifacts/test-results/cloud-web-endtoend-inventory.json' -Raw | ConvertFrom-Json
+          if ([int]$web.runners -ne 1 -or [int]$web.files -ne 1 -or [int]$web.cases -ne 1 -or
+              [int]$web.failed -ne 0 -or [int]$web.skipped -ne 0 -or
+              @($web.evidence | Where-Object status -ne 'Passed').Count -ne 0) {
+            throw "Web EndToEnd reconciliation failed"
+          }
+      - name: Upload EndToEnd evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: cloud-end-to-end-test-results
+          path: |
+            artifacts/test-results/**
+            !artifacts/test-results/**/*state*.json
+            !artifacts/test-results/**/*credential*.json
+          if-no-files-found: error
+
+  mutation-report:
+    needs: build-test
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.include_mutation == true)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Setup .NET
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+      - name: Run pinned report-only mutation analysis
+        shell: pwsh
+        run: ./scripts/tests/Invoke-CloudMutation.ps1
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: cloud-mutation-report
+          path: artifacts/test-results/mutation/**
+          if-no-files-found: error

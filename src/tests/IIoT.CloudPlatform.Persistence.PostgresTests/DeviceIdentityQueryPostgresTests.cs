@@ -3,14 +3,8 @@ using IIoT.Dapper.Production.QueryServices.Device;
 using Npgsql;
 using Xunit;
 
-namespace IIoT.CloudPlatform.PersistenceTests;
+namespace IIoT.CloudPlatform.Persistence.PostgresTests;
 
-[Trait("Category", "PostgresPersistenceIntegration")]
-[Trait("TestKind", "Integration")]
-[Trait("Runtime", "Postgres")]
-[Trait("Risk", "P0")]
-[Trait("Capability", "DeviceIdentity")]
-[Trait("Owner", "Cloud.Persistence")]
 [Collection(PostgresPersistenceIntegrationCollection.Name)]
 public sealed class DeviceIdentityQueryPostgresTests(
     ClientReleaseCommitRecoveryPostgresFixture fixture)
@@ -18,21 +12,23 @@ public sealed class DeviceIdentityQueryPostgresTests(
     [Fact]
     public async Task GetByDeviceIdAsync_MissingAndCurrentPostgresFacts_ReturnExpectedSnapshots()
     {
-        using var testTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        var testToken = testTimeout.Token;
-        var connectionString = await fixture.GetConnectionStringAsync();
-        var service = CreateService(connectionString, $"device-identity-current-{Guid.NewGuid():N}");
+        using var runtime = await CreateRuntimeAsync($"device-identity-current-{Guid.NewGuid():N}");
         var missingDeviceId = Guid.NewGuid();
+        using var preCancelled = new CancellationTokenSource();
+        preCancelled.Cancel();
 
-        var missing = await service.GetByDeviceIdAsync(missingDeviceId, testToken);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => runtime.Service.GetByDeviceIdAsync(Guid.Empty, preCancelled.Token));
+
+        var missing = await runtime.Service.GetByDeviceIdAsync(missingDeviceId, runtime.Token);
 
         Assert.Null(missing);
 
         var deviceId = Guid.NewGuid();
         var code = $"DEV-PG-{Guid.NewGuid():N}"[..24].ToUpperInvariant();
-        await InsertDeviceAsync(connectionString, deviceId, code, testToken);
+        await InsertDeviceAsync(runtime.ConnectionString, deviceId, code, runtime.Token);
 
-        var current = await service.GetByDeviceIdAsync(deviceId, testToken);
+        var current = await runtime.Service.GetByDeviceIdAsync(deviceId, runtime.Token);
 
         Assert.NotNull(current);
         Assert.Equal(deviceId, current.DeviceId);
@@ -42,18 +38,15 @@ public sealed class DeviceIdentityQueryPostgresTests(
     [Fact]
     public async Task GetByDeviceIdAsync_DirectPostgresMutation_IsVisibleOnSecondRead()
     {
-        using var testTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        var testToken = testTimeout.Token;
-        var connectionString = await fixture.GetConnectionStringAsync();
-        var service = CreateService(connectionString, $"device-identity-mutation-{Guid.NewGuid():N}");
+        using var runtime = await CreateRuntimeAsync($"device-identity-mutation-{Guid.NewGuid():N}");
         var deviceId = Guid.NewGuid();
         var originalCode = $"DEV-OLD-{Guid.NewGuid():N}"[..24].ToUpperInvariant();
         var updatedCode = $"DEV-NEW-{Guid.NewGuid():N}"[..24].ToUpperInvariant();
-        await InsertDeviceAsync(connectionString, deviceId, originalCode, testToken);
+        await InsertDeviceAsync(runtime.ConnectionString, deviceId, originalCode, runtime.Token);
 
-        var first = await service.GetByDeviceIdAsync(deviceId, testToken);
-        await UpdateDeviceCodeAsync(connectionString, deviceId, updatedCode, testToken);
-        var second = await service.GetByDeviceIdAsync(deviceId, testToken);
+        var first = await runtime.Service.GetByDeviceIdAsync(deviceId, runtime.Token);
+        await UpdateDeviceCodeAsync(runtime.ConnectionString, deviceId, updatedCode, runtime.Token);
+        var second = await runtime.Service.GetByDeviceIdAsync(deviceId, runtime.Token);
 
         Assert.NotNull(first);
         Assert.Equal(originalCode, first.Code);
@@ -64,11 +57,10 @@ public sealed class DeviceIdentityQueryPostgresTests(
     [Fact]
     public async Task GetByDeviceIdAsync_CallerCancellationWhilePostgresQueryIsBlocked_Propagates()
     {
-        using var testTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        var testToken = testTimeout.Token;
-        var connectionString = await fixture.GetConnectionStringAsync();
         var applicationName = $"device-identity-lock-wait-{Guid.NewGuid():N}";
-        var service = CreateService(connectionString, applicationName);
+        using var runtime = await CreateRuntimeAsync(applicationName);
+        var testToken = runtime.Token;
+        var connectionString = runtime.ConnectionString;
         await using var blocker = new NpgsqlConnection(connectionString);
         await blocker.OpenAsync(testToken);
         await using var transaction = await blocker.BeginTransactionAsync(testToken);
@@ -84,7 +76,7 @@ public sealed class DeviceIdentityQueryPostgresTests(
             }
 
             using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(testToken);
-            var query = service.GetByDeviceIdAsync(Guid.NewGuid(), cancellation.Token);
+            var query = runtime.Service.GetByDeviceIdAsync(Guid.NewGuid(), cancellation.Token);
             await WaitForLockWaitAsync(connectionString, applicationName, testToken);
             Assert.False(query.IsCompleted, "The observed PostgreSQL lock wait must still block the Dapper query.");
 
@@ -96,8 +88,7 @@ public sealed class DeviceIdentityQueryPostgresTests(
         }
         finally
         {
-            using var cleanupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            await transaction.RollbackAsync(cleanupTimeout.Token);
+            await PostgresTestBudget.RollbackAsync(transaction);
         }
     }
 
@@ -110,6 +101,14 @@ public sealed class DeviceIdentityQueryPostgresTests(
             ApplicationName = applicationName
         };
         return new DeviceIdentityQueryService(new NpgsqlConnectionFactory(builder.ConnectionString));
+    }
+
+    private async Task<DeviceIdentityRuntime> CreateRuntimeAsync(string applicationName)
+    {
+        var budget = await PostgresTestBudget.CreateAsync(fixture);
+        return new DeviceIdentityRuntime(
+            budget,
+            CreateService(budget.ConnectionString, applicationName));
     }
 
     private static async Task InsertDeviceAsync(
@@ -147,6 +146,19 @@ public sealed class DeviceIdentityQueryPostgresTests(
         deviceCommand.Parameters.AddWithValue("processId", processId);
         deviceCommand.Parameters.AddWithValue("code", code);
         await deviceCommand.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private sealed class DeviceIdentityRuntime(
+        PostgresTestBudget budget,
+        DeviceIdentityQueryService service) : IDisposable
+    {
+        public string ConnectionString => budget.ConnectionString;
+
+        public CancellationToken Token => budget.Token;
+
+        public DeviceIdentityQueryService Service => service;
+
+        public void Dispose() => budget.Dispose();
     }
 
     private static async Task UpdateDeviceCodeAsync(

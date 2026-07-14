@@ -68,6 +68,10 @@ public sealed class OutboxMessageDispatcher(
                 message.MarkProcessed();
                 succeededCount++;
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 logger.LogError(ex, "Failed to dispatch outbox message {OutboxMessageId}.", message.Id);

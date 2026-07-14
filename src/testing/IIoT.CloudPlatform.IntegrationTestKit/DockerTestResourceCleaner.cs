@@ -23,6 +23,7 @@ internal static class DockerTestResourceCleaner
 
     private static async Task CleanupNamedVolumeAsync(string volumeName)
     {
+        using var retryTimer = new PeriodicTimer(CleanupRetryDelay);
         for (var attempt = 1; attempt <= MaxCleanupAttempts; attempt++)
         {
             await RemoveContainersUsingVolumeAsync(volumeName);
@@ -38,7 +39,10 @@ internal static class DockerTestResourceCleaner
                 return;
             }
 
-            await Task.Delay(CleanupRetryDelay);
+            if (attempt < MaxCleanupAttempts)
+            {
+                await retryTimer.WaitForNextTickAsync();
+            }
         }
 
         Console.Error.WriteLine(

@@ -5,6 +5,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <CloudTestKind>Architecture</CloudTestKind>
+    <CloudTestRuntime>Pure</CloudTestRuntime>
+    <CloudTestExecutionGroup>Pure</CloudTestExecutionGroup>
+    <CloudTestRequired>true</CloudTestRequired>
   </PropertyGroup>
 
   <ItemGroup>

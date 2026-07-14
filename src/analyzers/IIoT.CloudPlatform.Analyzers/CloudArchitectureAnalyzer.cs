@@ -38,6 +38,9 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             "ExecuteNonQuery",
             "ExecuteNonQueryAsync");
 
+    private static readonly ImmutableHashSet<string> ConnectionResourceLiterals =
+        ImmutableHashSet.Create(StringComparer.Ordinal, "iiot-db", "eventbus");
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
         ImmutableArray.Create(
             CloudArchitectureDiagnostics.LayerDependency,
@@ -45,11 +48,16 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             CloudArchitectureDiagnostics.DatabaseOwner,
             CloudArchitectureDiagnostics.AiReadWritePath,
             CloudArchitectureDiagnostics.AiReadAuthorization,
-            CloudArchitectureDiagnostics.ProductionTestReference);
+            CloudArchitectureDiagnostics.ProductionTestReference,
+            CloudArchitectureDiagnostics.SecurityReadCachePath,
+            CloudArchitectureDiagnostics.UnsignedJwtParsing,
+            CloudArchitectureDiagnostics.RetiredServicesCommonNamespace,
+            CloudArchitectureDiagnostics.ConnectionResourceLiteral);
 
     public override void Initialize(AnalysisContext context)
     {
-        context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
+        context.ConfigureGeneratedCodeAnalysis(
+            GeneratedCodeAnalysisFlags.Analyze | GeneratedCodeAnalysisFlags.ReportDiagnostics);
         context.EnableConcurrentExecution();
         context.RegisterCompilationStartAction(StartCompilationAnalysis);
     }
@@ -64,7 +72,10 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
         context.RegisterSymbolAction(state.AnalyzeProperty, SymbolKind.Property);
         context.RegisterSymbolAction(state.AnalyzeMethod, SymbolKind.Method);
         context.RegisterOperationAction(state.AnalyzeInvocation, OperationKind.Invocation);
+        context.RegisterOperationAction(state.AnalyzeDelegateCreation, OperationKind.DelegateCreation);
+        context.RegisterOperationAction(state.AnalyzeDynamicInvocation, OperationKind.DynamicInvocation);
         context.RegisterOperationAction(state.AnalyzeObjectCreation, OperationKind.ObjectCreation);
+        context.RegisterOperationAction(state.AnalyzeLiteral, OperationKind.Literal);
         context.RegisterCompilationEndAction(state.AnalyzeCompilationEnd);
     }
 
@@ -95,11 +106,16 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
         private readonly INamedTypeSymbol? _authorizeRequirementAttribute;
         private readonly INamedTypeSymbol? _adminOnlyAttribute;
         private readonly INamedTypeSymbol? _command;
+        private readonly INamedTypeSymbol? _cacheService;
+        private readonly INamedTypeSymbol? _jwtSecurityTokenHandler;
+        private readonly ImmutableArray<INamedTypeSymbol> _securityReadInterfaces;
         private readonly ImmutableHashSet<string> _databaseAllowedProjects;
         private readonly ImmutableHashSet<string> _databaseAllowedTypes;
         private readonly ConcurrentDictionary<IMethodSymbol, ConcurrentBag<InvocationEdge>> _callGraph =
             new(SymbolEqualityComparer.Default);
         private readonly ConcurrentDictionary<IMethodSymbol, byte> _aiReadHandlerRoots =
+            new(SymbolEqualityComparer.Default);
+        private readonly ConcurrentDictionary<IMethodSymbol, byte> _securityReadRoots =
             new(SymbolEqualityComparer.Default);
 
         internal CompilationState(
@@ -125,6 +141,18 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             _adminOnlyAttribute = compilation.GetTypeByMetadataName(
                 "IIoT.Services.CrossCutting.Attributes.AdminOnlyAttribute");
             _command = compilation.GetTypeByMetadataName("IIoT.SharedKernel.Messaging.ICommand`1");
+            _cacheService = compilation.GetTypeByMetadataName("IIoT.Services.Contracts.ICacheService");
+            _jwtSecurityTokenHandler = compilation.GetTypeByMetadataName(
+                "System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler");
+            _securityReadInterfaces = new[]
+                {
+                    compilation.GetTypeByMetadataName("IIoT.Services.Contracts.Authorization.IPermissionProvider"),
+                    compilation.GetTypeByMetadataName("IIoT.Services.Contracts.Authorization.IDevicePermissionService"),
+                    compilation.GetTypeByMetadataName("IIoT.Services.Contracts.RecordQueries.IDeviceIdentityQueryService")
+                }
+                .Where(static symbol => symbol is not null)
+                .Cast<INamedTypeSymbol>()
+                .ToImmutableArray();
             _databaseAllowedProjects = ReadOptionSet(
                 analyzerConfigOptionsProvider,
                 "dotnet_diagnostic.cloudarch003.allowed_projects");
@@ -145,7 +173,9 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
                 AnalyzeRepositoryType(context, type, @interface);
 
             AnalyzeAiReadAuthorization(context, type);
+            AnalyzeRetiredServicesCommonNamespace(context, type);
             CaptureAiReadHandlerRoots(type);
+            CaptureSecurityReadRoots(type);
             CaptureInterfaceDispatch(type);
         }
 
@@ -181,6 +211,7 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
         {
             var invocation = (IInvocationOperation)context.Operation;
             AnalyzeRepositoryOperationResult(context, invocation);
+            AnalyzeUnsignedJwtParsing(context, invocation);
 
             var caller = NormalizeMethod(context.ContainingSymbol as IMethodSymbol);
             var target = NormalizeMethod(invocation.TargetMethod);
@@ -192,6 +223,9 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
                     IsDirectWriteSink(invocation, target),
                     target.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat));
                 _callGraph.GetOrAdd(caller, static _ => new ConcurrentBag<InvocationEdge>()).Add(edge);
+
+                foreach (var argument in invocation.Arguments)
+                    CaptureDelegateTargets(caller, argument.Value, argument.Syntax.GetLocation());
             }
 
             if (ShouldEnforceDatabaseOwner(context.ContainingSymbol) &&
@@ -203,6 +237,137 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
                     context.ContainingSymbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
                     invocation.TargetMethod.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat)));
             }
+        }
+
+        internal void AnalyzeDelegateCreation(OperationAnalysisContext context)
+        {
+            var caller = NormalizeMethod(context.ContainingSymbol as IMethodSymbol);
+            if (caller is null)
+                return;
+
+            CaptureDelegateTargets(
+                caller,
+                ((IDelegateCreationOperation)context.Operation).Target,
+                context.Operation.Syntax.GetLocation());
+        }
+
+        internal void AnalyzeDynamicInvocation(OperationAnalysisContext context)
+        {
+            var caller = NormalizeMethod(context.ContainingSymbol as IMethodSymbol);
+            if (caller is null)
+                return;
+
+            _callGraph.GetOrAdd(caller, static _ => new ConcurrentBag<InvocationEdge>()).Add(
+                new InvocationEdge(
+                    caller,
+                    context.Operation.Syntax.GetLocation(),
+                    isDirectWriteSink: true,
+                    targetDisplay: "unresolved dynamic invocation",
+                    isUnresolvedDynamic: true));
+        }
+
+        private void CaptureDelegateTargets(IMethodSymbol caller, IOperation operation, Location location)
+        {
+            switch (operation)
+            {
+                case IConversionOperation conversion:
+                    CaptureDelegateTargets(caller, conversion.Operand, location);
+                    return;
+                case IDelegateCreationOperation delegateCreation:
+                    CaptureDelegateTargets(caller, delegateCreation.Target, location);
+                    return;
+                case IAnonymousFunctionOperation anonymousFunction:
+                    AddDelegateEdge(caller, anonymousFunction.Symbol, location);
+                    return;
+                case IMethodReferenceOperation methodReference:
+                    AddDelegateEdge(caller, methodReference.Method, location);
+                    return;
+            }
+        }
+
+        private void AddDelegateEdge(IMethodSymbol caller, IMethodSymbol targetMethod, Location location)
+        {
+            var target = NormalizeMethod(targetMethod);
+            if (target is null || SymbolEqualityComparer.Default.Equals(caller, target))
+                return;
+
+            _callGraph.GetOrAdd(caller, static _ => new ConcurrentBag<InvocationEdge>()).Add(
+                new InvocationEdge(
+                    target,
+                    location,
+                    isDirectWriteSink: false,
+                    target.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat)));
+        }
+
+        private void AnalyzeUnsignedJwtParsing(
+            OperationAnalysisContext context,
+            IInvocationOperation invocation)
+        {
+            if (IsTestOnlyAssembly(_assemblyName) || _jwtSecurityTokenHandler is null)
+                return;
+
+            var method = invocation.TargetMethod;
+            if (!string.Equals(method.Name, "ReadJwtToken", StringComparison.Ordinal) ||
+                (!SymbolEqualityComparer.Default.Equals(method.ContainingType, _jwtSecurityTokenHandler) &&
+                 !SymbolEqualityComparer.Default.Equals(method.ContainingType.OriginalDefinition, _jwtSecurityTokenHandler)))
+            {
+                return;
+            }
+
+            context.ReportDiagnostic(Diagnostic.Create(
+                CloudArchitectureDiagnostics.UnsignedJwtParsing,
+                invocation.Syntax.GetLocation(),
+                context.ContainingSymbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
+                method.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat)));
+        }
+
+        private void AnalyzeRetiredServicesCommonNamespace(
+            SymbolAnalysisContext context,
+            INamedTypeSymbol type)
+        {
+            if (IsTestOnlyAssembly(_assemblyName))
+                return;
+
+            var namespaceName = type.ContainingNamespace.ToDisplayString();
+            if (!string.Equals(namespaceName, "IIoT.Services.Common", StringComparison.Ordinal) &&
+                !namespaceName.StartsWith("IIoT.Services.Common.", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            context.ReportDiagnostic(Diagnostic.Create(
+                CloudArchitectureDiagnostics.RetiredServicesCommonNamespace,
+                GetSourceLocation(type),
+                type.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
+                namespaceName));
+        }
+
+        internal void AnalyzeLiteral(OperationAnalysisContext context)
+        {
+            if (IsTestOnlyAssembly(_assemblyName) ||
+                context.Operation is not ILiteralOperation literal ||
+                !literal.ConstantValue.HasValue ||
+                literal.ConstantValue.Value is not string value ||
+                !ConnectionResourceLiterals.Contains(value))
+            {
+                return;
+            }
+
+            var containingTypeName = context.ContainingSymbol.ContainingType?
+                .ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat);
+            if (string.Equals(
+                    containingTypeName,
+                    "IIoT.SharedKernel.Configuration.ConnectionResourceNames",
+                    StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            context.ReportDiagnostic(Diagnostic.Create(
+                CloudArchitectureDiagnostics.ConnectionResourceLiteral,
+                literal.Syntax.GetLocation(),
+                context.ContainingSymbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
+                value));
         }
 
         internal void AnalyzeObjectCreation(OperationAnalysisContext context)
@@ -230,6 +395,7 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             AnalyzeLayerDependencies(context);
             AnalyzeProductionTestReferences(context);
             AnalyzeAiReadWritePaths(context);
+            AnalyzeSecurityReadCachePaths(context);
         }
 
         private void AnalyzeAggregateOwner(SymbolAnalysisContext context, INamedTypeSymbol type)
@@ -489,6 +655,31 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             }
         }
 
+        private void CaptureSecurityReadRoots(INamedTypeSymbol type)
+        {
+            if (type.TypeKind is TypeKind.Interface or TypeKind.Delegate || _securityReadInterfaces.IsDefaultOrEmpty)
+                return;
+
+            foreach (var @interface in type.AllInterfaces)
+            {
+                if (!_securityReadInterfaces.Any(candidate =>
+                        SymbolEqualityComparer.Default.Equals(@interface, candidate)))
+                {
+                    continue;
+                }
+
+                foreach (var interfaceMethod in @interface.GetMembers().OfType<IMethodSymbol>())
+                {
+                    if (type.FindImplementationForInterfaceMember(interfaceMethod) is not IMethodSymbol implementation)
+                        continue;
+
+                    var normalized = NormalizeMethod(implementation);
+                    if (normalized is not null)
+                        _securityReadRoots.TryAdd(normalized, 0);
+                }
+            }
+        }
+
         private static bool IsQueryHandlerInterface(INamedTypeSymbol type)
         {
             var namespaceName = type.ContainingNamespace.ToDisplayString();
@@ -592,8 +783,41 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
 
         private void AnalyzeAiReadWritePaths(CompilationAnalysisContext context)
         {
+            AnalyzeCallPaths(
+                context,
+                _aiReadHandlerRoots.Keys,
+                CloudArchitectureDiagnostics.AiReadWritePath,
+                TryResolveSink);
+        }
+
+        private bool TryResolveSink(
+            InvocationEdge edge,
+            HashSet<IMethodSymbol> visited,
+            out string sink)
+        {
+            return TryResolvePathSink(edge, visited, static item => item.IsDirectWriteSink, out sink);
+        }
+
+        private void AnalyzeSecurityReadCachePaths(CompilationAnalysisContext context)
+        {
+            if (_cacheService is null)
+                return;
+
+            AnalyzeCallPaths(
+                context,
+                _securityReadRoots.Keys,
+                CloudArchitectureDiagnostics.SecurityReadCachePath,
+                TryResolveCacheSink);
+        }
+
+        private void AnalyzeCallPaths(
+            CompilationAnalysisContext context,
+            IEnumerable<IMethodSymbol> roots,
+            DiagnosticDescriptor descriptor,
+            SinkResolver resolveSink)
+        {
             var reported = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var root in _aiReadHandlerRoots.Keys.OrderBy(
+            foreach (var root in roots.OrderBy(
                          static method => method.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
                          StringComparer.Ordinal))
             {
@@ -602,8 +826,13 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
 
                 foreach (var edge in rootEdges.OrderBy(static item => item.Location.SourceSpan.Start))
                 {
-                    if (!TryResolveSink(edge, new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default) { root }, out var sink))
+                    if (!resolveSink(
+                            edge,
+                            new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default) { root },
+                            out var sink))
+                    {
                         continue;
+                    }
 
                     var key = root.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) + ":" +
                               edge.Location.SourceTree?.FilePath + ":" + edge.Location.SourceSpan.Start;
@@ -611,7 +840,7 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
                         continue;
 
                     context.ReportDiagnostic(Diagnostic.Create(
-                        CloudArchitectureDiagnostics.AiReadWritePath,
+                        descriptor,
                         edge.Location,
                         root.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
                         edge.TargetDisplay,
@@ -620,12 +849,25 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             }
         }
 
-        private bool TryResolveSink(
+        private bool TryResolveCacheSink(
             InvocationEdge edge,
             HashSet<IMethodSymbol> visited,
             out string sink)
         {
-            if (edge.IsDirectWriteSink)
+            return TryResolvePathSink(
+                edge,
+                visited,
+                item => item.IsUnresolvedDynamic || IsCacheServiceType(item.Target.ContainingType),
+                out sink);
+        }
+
+        private bool TryResolvePathSink(
+            InvocationEdge edge,
+            HashSet<IMethodSymbol> visited,
+            Func<InvocationEdge, bool> isSink,
+            out string sink)
+        {
+            if (isSink(edge))
             {
                 sink = edge.TargetDisplay;
                 return true;
@@ -639,12 +881,23 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
 
             foreach (var child in children.OrderBy(static item => item.Location.SourceSpan.Start))
             {
-                if (TryResolveSink(child, visited, out sink))
+                if (TryResolvePathSink(child, visited, isSink, out sink))
                     return true;
             }
 
             sink = string.Empty;
             return false;
+        }
+
+        private bool IsCacheServiceType(INamedTypeSymbol? type)
+        {
+            if (type is null || _cacheService is null)
+                return false;
+
+            return SymbolEqualityComparer.Default.Equals(type, _cacheService) ||
+                   SymbolEqualityComparer.Default.Equals(type.OriginalDefinition, _cacheService) ||
+                   type.AllInterfaces.Any(@interface =>
+                       SymbolEqualityComparer.Default.Equals(@interface, _cacheService));
         }
 
         private void AnalyzeLayerDependencies(CompilationAnalysisContext context)
@@ -792,7 +1045,11 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
 
         private static bool IsTestOnlyAssembly(string assemblyName)
         {
-            return assemblyName.EndsWith("Tests", StringComparison.OrdinalIgnoreCase) ||
+            return string.Equals(
+                       assemblyName,
+                       "IIoT.CloudPlatform.PortFakes",
+                       StringComparison.OrdinalIgnoreCase) ||
+                   assemblyName.EndsWith("Tests", StringComparison.OrdinalIgnoreCase) ||
                    assemblyName.IndexOf(".Tests.", StringComparison.OrdinalIgnoreCase) >= 0 ||
                    assemblyName.EndsWith(".Testing", StringComparison.OrdinalIgnoreCase) ||
                    assemblyName.IndexOf(".Testing.", StringComparison.OrdinalIgnoreCase) >= 0 ||
@@ -885,18 +1142,26 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
                 IMethodSymbol target,
                 Location location,
                 bool isDirectWriteSink,
-                string targetDisplay)
+                string targetDisplay,
+                bool isUnresolvedDynamic = false)
             {
                 Target = target;
                 Location = location;
                 IsDirectWriteSink = isDirectWriteSink;
                 TargetDisplay = targetDisplay;
+                IsUnresolvedDynamic = isUnresolvedDynamic;
             }
 
             internal IMethodSymbol Target { get; }
             internal Location Location { get; }
             internal bool IsDirectWriteSink { get; }
             internal string TargetDisplay { get; }
+            internal bool IsUnresolvedDynamic { get; }
         }
+
+        private delegate bool SinkResolver(
+            InvocationEdge edge,
+            HashSet<IMethodSymbol> visited,
+            out string sink);
     }
 }

@@ -15,23 +15,6 @@ public sealed record PassStationBatchUploadRequest(
     int SchemaVersion = 1,
     string? ProcessType = null);
 
-public sealed record ProcessRecordUploadRequest(
-    string? TypeKey,
-    string? ProcessType,
-    int SchemaVersion,
-    Guid DeviceId,
-    List<ProcessRecordItemInput>? Records);
-
-public sealed record ProcessRecordItemInput(
-    string? TypeKey,
-    string? ProcessType,
-    int SchemaVersion,
-    Guid DeviceId,
-    string? Barcode,
-    bool? CellResult,
-    DateTime? CompletedTime,
-    JsonElement Payload);
-
 public sealed record ReceivePassStationBatchCommand(
     string TypeKey,
     Guid DeviceId,
@@ -45,82 +28,6 @@ public sealed record PassStationItemInput(
     string CellResult,
     DateTime CompletedTime,
     JsonElement Payload);
-
-public static class ProcessRecordUploadRequestMapper
-{
-    public static Result<ReceivePassStationBatchCommand> ToPassStationCommand(
-        ProcessRecordUploadRequest? request)
-    {
-        if (request is null)
-            return Result.Invalid("process-records 请求体不能为空。");
-
-        if (string.IsNullOrWhiteSpace(request.TypeKey))
-            return Result.Invalid("process-records typeKey 不能为空。");
-
-        if (string.IsNullOrWhiteSpace(request.ProcessType))
-            return Result.Invalid("process-records processType 不能为空。");
-
-        if (request.SchemaVersion != 1)
-            return Result.Invalid($"过站数据 schemaVersion [{request.SchemaVersion}] 不受支持。");
-
-        if (request.DeviceId == Guid.Empty)
-            return Result.Invalid("process-records deviceId 不能为空。");
-
-        if (request.Records is null || request.Records.Count == 0)
-            return Result.Invalid("process-records records 不能为空。");
-
-        var typeKey = PassStationPayloadJson.NormalizeTypeKey(request.TypeKey);
-        var processType = PassStationPayloadJson.NormalizeOptionalProcessType(request.ProcessType)!;
-        if (!string.Equals(typeKey, processType, StringComparison.Ordinal))
-            return Result.Invalid("process-records 顶层 processType 必须与 typeKey 保持一致。");
-
-        var items = new List<PassStationItemInput>(request.Records.Count);
-        for (var index = 0; index < request.Records.Count; index++)
-        {
-            var record = request.Records[index];
-            var prefix = $"records[{index}]";
-
-            if (string.IsNullOrWhiteSpace(record.TypeKey))
-                return Result.Invalid($"{prefix}.typeKey 不能为空。");
-
-            if (string.IsNullOrWhiteSpace(record.ProcessType))
-                return Result.Invalid($"{prefix}.processType 不能为空。");
-
-            var recordTypeKey = PassStationPayloadJson.NormalizeTypeKey(record.TypeKey);
-            var recordProcessType = PassStationPayloadJson.NormalizeOptionalProcessType(record.ProcessType);
-            if (!string.Equals(recordTypeKey, typeKey, StringComparison.Ordinal)
-                || !string.Equals(recordProcessType, processType, StringComparison.Ordinal))
-            {
-                return Result.Invalid($"{prefix}.typeKey/processType 必须与顶层保持一致。");
-            }
-
-            if (record.SchemaVersion != request.SchemaVersion)
-                return Result.Invalid($"{prefix}.schemaVersion 必须与顶层 schemaVersion 保持一致。");
-
-            if (record.DeviceId != request.DeviceId)
-                return Result.Invalid($"{prefix}.deviceId 必须与顶层 deviceId 保持一致。");
-
-            if (record.CellResult is null)
-                return Result.Invalid($"{prefix}.cellResult 不能为空。");
-
-            if (record.CompletedTime is null)
-                return Result.Invalid($"{prefix}.completedTime 不能为空。");
-
-            items.Add(new PassStationItemInput(
-                record.Barcode ?? string.Empty,
-                record.CellResult.Value ? "OK" : "NG",
-                record.CompletedTime.Value,
-                record.Payload));
-        }
-
-        return Result.Success(new ReceivePassStationBatchCommand(
-            typeKey,
-            request.DeviceId,
-            items,
-            SchemaVersion: request.SchemaVersion,
-            ProcessType: processType));
-    }
-}
 
 public sealed class ReceivePassStationBatchHandler(
     IPassStationReceiveService receiveService,

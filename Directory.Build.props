@@ -8,6 +8,7 @@
     <_IsCloudProductionProject Condition="$([System.String]::Copy('$(MSBuildProjectName)').StartsWith('IIoT.')) and
                                           !$([System.String]::Copy('$(MSBuildProjectName)').EndsWith('Tests')) and
                                           !$([System.String]::Copy('$(MSBuildProjectName)').EndsWith('TestKit')) and
+                                          '$(MSBuildProjectName)' != 'IIoT.CloudPlatform.PortFakes' and
                                           !$([System.String]::Copy('$(MSBuildProjectName)').StartsWith('IIoT.CloudPlatform.Analyzer'))">true</_IsCloudProductionProject>
   </PropertyGroup>
 

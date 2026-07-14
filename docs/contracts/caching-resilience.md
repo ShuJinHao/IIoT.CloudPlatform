@@ -75,5 +75,5 @@ factory 的业务失败优先于同时出现的可降级 provider 失败；缓�
 ## 5. Required 验证
 
 - `IIoT.CloudPlatform.WorkflowTests` 中的 37 条确定性语义测试覆盖本契约的白名单、未知异常、取消点、factory 单次执行和同实例传播。
-- `IIoT.CloudPlatform.IntegrationTests` 必须直接进入 `cloud-ci / build-test`，使用固定镜像 `redis@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99`，真实验证 pause/unpause、stop/start、断连降级、恢复、factory/fallback 单次执行和 pattern 删除故障。
+- `IIoT.CloudPlatform.IntegrationTests` 必须直接进入 `cloud-ci / build-test`，使用固定镜像 `redis@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99`，真实验证 pause/unpause、stop/start、断连降级、恢复、factory/fallback 单次执行和 pattern 删除故障。测试必须创建两个彼此独立、均由生产 `AddInfrastructures` 接线的 service provider/runtime，并分别解析 `ICacheService`、`IFusionCache` 和 `IConnectionMultiplexer`；同一 key 必须先让 reader 的 L1 持有旧值，再由 writer 更新，最终证明 backplane 让 reader 观察到新值。删除或绕过 backplane 接线必须导致该 required 测试失败。
 - 两组必须分别精确对账为 37/37 与 1/1，`failed = 0`、`notExecuted/Skip = 0`；Docker/Redis 不可用必须失败，不能 Skip 或改用环境变量替换镜像。

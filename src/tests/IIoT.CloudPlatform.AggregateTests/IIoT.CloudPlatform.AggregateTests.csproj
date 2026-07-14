@@ -5,6 +5,10 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <CloudTestKind>Aggregate</CloudTestKind>
+    <CloudTestRuntime>Pure</CloudTestRuntime>
+    <CloudTestExecutionGroup>Pure</CloudTestExecutionGroup>
+    <CloudTestRequired>true</CloudTestRequired>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />

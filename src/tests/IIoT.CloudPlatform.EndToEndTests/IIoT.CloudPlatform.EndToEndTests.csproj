@@ -5,6 +5,10 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <CloudTestKind>EndToEnd</CloudTestKind>
+    <CloudTestRuntime>Aspire</CloudTestRuntime>
+    <CloudTestExecutionGroup>Aspire</CloudTestExecutionGroup>
+    <CloudTestRequired>false</CloudTestRequired>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="FluentAssertions" Version="8.8.0" />

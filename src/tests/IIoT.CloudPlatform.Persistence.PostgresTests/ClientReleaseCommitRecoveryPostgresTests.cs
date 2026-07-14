@@ -12,9 +12,8 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
-namespace IIoT.CloudPlatform.PersistenceTests;
+namespace IIoT.CloudPlatform.Persistence.PostgresTests;
 
-[Trait("Category", "PostgresPersistenceIntegration")]
 [Collection(PostgresPersistenceIntegrationCollection.Name)]
 public sealed class ClientReleaseCommitRecoveryPostgresTests(
     ClientReleaseCommitRecoveryPostgresFixture fixture)

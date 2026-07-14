@@ -102,6 +102,10 @@ public sealed class IIoTAppFixture : IAsyncDisposable
         HttpClient.DefaultRequestHeaders.Authorization = null;
     }
 
+    public Uri GetEndpoint(string resourceName, string? endpointName = null) =>
+        _app?.GetEndpoint(resourceName, endpointName)
+        ?? throw new InvalidOperationException("环境未启动。");
+
     public async Task<string> GetConnectionStringAsync(
         string resourceName,
         CancellationToken cancellationToken = default)
@@ -172,6 +176,7 @@ public sealed class IIoTAppFixture : IAsyncDisposable
         HttpClient httpClient,
         CancellationToken cancellationToken)
     {
+        using var healthProbeTimer = new PeriodicTimer(HealthProbeInterval);
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -189,7 +194,10 @@ public sealed class IIoTAppFixture : IAsyncDisposable
                 // Gateway can accept connections before downstream health checks are ready.
             }
 
-            await Task.Delay(HealthProbeInterval, cancellationToken);
+            if (!await healthProbeTimer.WaitForNextTickAsync(cancellationToken))
+            {
+                throw new InvalidOperationException("Gateway health probe timer stopped before the gateway became healthy.");
+            }
         }
     }
 }

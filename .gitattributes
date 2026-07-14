@@ -14,6 +14,9 @@
 **/runtimeconfig.template.json text eol=lf
 /global.json text eol=lf
 /IIoT.CloudPlatform.slnx text eol=lf
+/scripts/tests/*.ps1 text eol=lf
+/scripts/tests/*.psm1 text eol=lf
+/scripts/tests/baselines/*.json text eol=lf
 /src/tests/**/*.cs text eol=lf
 /src/tests/**/*.csproj text eol=lf
 /src/tests/**/*.props text eol=lf

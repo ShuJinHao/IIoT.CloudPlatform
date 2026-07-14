@@ -87,6 +87,33 @@ public sealed class DistributedLockBehaviorTests
     }
 
     [Fact]
+    public async Task Behavior_ShouldPreserveCallerCancellationWhenDisposeAlsoFails()
+    {
+        var lease = new TestDistributedLockLease
+        {
+            DisposeException = new DistributedLockUnavailableException()
+        };
+        var behavior = CreateBehavior(lease);
+        using var callerCancellation = new CancellationTokenSource();
+        callerCancellation.Cancel();
+        var handlerCalls = 0;
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => behavior.Handle(
+            new LeaseAwareCommand(Guid.NewGuid()),
+            cancellationToken =>
+            {
+                handlerCalls++;
+                return Task.FromCanceled<Result<bool>>(cancellationToken);
+            },
+            callerCancellation.Token));
+
+        Assert.IsType<OperationCanceledException>(exception);
+        Assert.Equal(callerCancellation.Token, exception.CancellationToken);
+        Assert.Equal(1, handlerCalls);
+        Assert.Equal(1, lease.DisposeCalls);
+    }
+
+    [Fact]
     public async Task Behavior_ShouldPreserveHandlerFailureWhenDisposeAlsoFails()
     {
         var handlerFailure = new InvalidOperationException("handler failure");

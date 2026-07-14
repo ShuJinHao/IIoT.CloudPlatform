@@ -248,7 +248,7 @@ public sealed class RedisDistributedLockServiceTests
     {
         var renewalDelay = new ControlledDelay();
         var callbackStarted = NewCompletionSource<bool>();
-        var releaseCallback = NewCompletionSource<bool>();
+        using var releaseCallback = new ManualResetEventSlim();
         var primitive = new ControllableRedisLockPrimitive
         {
             Renew = (_, _, _) => Task.FromResult(false)
@@ -258,7 +258,10 @@ public sealed class RedisDistributedLockServiceTests
         using var registration = lease.OwnershipLost.Register(() =>
         {
             callbackStarted.TrySetResult(true);
-            releaseCallback.Task.GetAwaiter().GetResult();
+            if (!releaseCallback.Wait(TimeSpan.FromSeconds(10)))
+            {
+                throw new TimeoutException("Ownership-lost callback barrier was not released within the test timeout.");
+            }
         });
 
         await renewalDelay.WaitUntilRequestedAsync();
@@ -272,7 +275,7 @@ public sealed class RedisDistributedLockServiceTests
         }
         finally
         {
-            releaseCallback.TrySetResult(true);
+            releaseCallback.Set();
         }
     }
 

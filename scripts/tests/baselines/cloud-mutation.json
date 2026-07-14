@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "tool": "dotnet-stryker",
+  "version": "4.16.0",
+  "target": "src/services/IIoT.ProductionService/ClientReleases/DeviceClientSoftwareStatusResolver.cs",
+  "testProject": "src/tests/IIoT.CloudPlatform.UnitTests/IIoT.CloudPlatform.UnitTests.csproj",
+  "created": 27,
+  "tested": 21,
+  "killed": 21,
+  "survived": 0,
+  "ignored": 4,
+  "compileError": 2,
+  "score": 100.0,
+  "gate": "report-only-nightly-or-manual"
+}

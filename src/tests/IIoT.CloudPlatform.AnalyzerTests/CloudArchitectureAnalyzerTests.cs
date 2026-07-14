@@ -86,12 +86,13 @@ public sealed class CloudArchitectureAnalyzerTests
         var diagnostics = new CloudArchitectureAnalyzer().SupportedDiagnostics;
 
         Assert.Equal(
-            ["CLOUDARCH001", "CLOUDARCH002", "CLOUDARCH003", "CLOUDARCH004", "CLOUDARCH005", "CLOUDARCH006"],
+            ["CLOUDARCH001", "CLOUDARCH002", "CLOUDARCH003", "CLOUDARCH004", "CLOUDARCH005", "CLOUDARCH006", "CLOUDARCH007", "CLOUDARCH008", "CLOUDARCH009", "CLOUDARCH010"],
             diagnostics.Select(descriptor => descriptor.Id).Order(StringComparer.Ordinal));
         Assert.All(diagnostics, descriptor =>
         {
             Assert.Equal(DiagnosticSeverity.Error, descriptor.DefaultSeverity);
             Assert.True(descriptor.IsEnabledByDefault);
+            Assert.Contains(WellKnownDiagnosticTags.NotConfigurable, descriptor.CustomTags);
         });
     }
 
@@ -486,15 +487,37 @@ public sealed class CloudArchitectureAnalyzerTests
             public sealed class Handler : IIoT.SharedKernel.Messaging.IQueryHandler<Query, int>
             {
                 private readonly IIoT.SharedKernel.Repository.IRepository<object> repository;
-                public Handler(IIoT.SharedKernel.Repository.IRepository<object> repository) => this.repository = repository;
-                public async System.Threading.Tasks.Task<int> Handle(Query request, System.Threading.CancellationToken token)
-                    => await repository.SaveChangesAsync();
+                private readonly dynamic dynamicRepository;
+                public Handler(
+                    IIoT.SharedKernel.Repository.IRepository<object> repository,
+                    dynamic dynamicRepository)
+                {
+                    this.repository = repository;
+                    this.dynamicRepository = dynamicRepository;
+                }
+                public async System.Threading.Tasks.Task<int> Handle(
+                    Query request,
+                    System.Threading.CancellationToken token)
+                {
+                    await PersistDirectly();
+                    await InvokeCallback(() => repository.SaveChangesAsync());
+                    System.Func<System.Threading.Tasks.Task<int>> deferred = () => repository.SaveChangesAsync();
+                    await deferred();
+                    return await PersistDynamically();
+                }
+                private System.Threading.Tasks.Task<int> PersistDirectly()
+                    => repository.SaveChangesAsync();
+                private static System.Threading.Tasks.Task<int> InvokeCallback(
+                    System.Func<System.Threading.Tasks.Task<int>> callback) => callback();
+                private System.Threading.Tasks.Task<int> PersistDynamically()
+                    => dynamicRepository.SaveChangesAsync();
             }
             """;
 
-        var diagnostics = await AnalyzeAsync("IIoT.ProductionService.Fixture", [source]);
+        var diagnostics = await AnalyzeAsync("IIoT.ProductionService.Fixture.WritePaths", [source]);
 
-        AssertSingle(diagnostics, "CLOUDARCH004");
+        Assert.Equal(4, diagnostics.Length);
+        Assert.All(diagnostics, diagnostic => Assert.Equal("CLOUDARCH004", diagnostic.Id));
     }
 
     [Fact]
@@ -650,16 +673,23 @@ public sealed class CloudArchitectureAnalyzerTests
     }
 
     [Fact]
-    public async Task ProductionReferenceToTestKit_ReportsTestReference()
+    public async Task ProductionReferencesToKnownTestSupportAssemblies_ReportTestReference()
     {
-        var testKit = CreateReference("IIoT.CloudPlatform.TestKit", "public sealed class FakeDeviceFactory { }");
+        foreach (var assemblyName in new[]
+                 {
+                     "IIoT.CloudPlatform.TestKit",
+                     "IIoT.CloudPlatform.PortFakes"
+                 })
+        {
+            var testSupport = CreateReference(assemblyName, "public sealed class FakeDeviceFactory { }");
 
-        var diagnostics = await AnalyzeAsync(
-            "IIoT.ProductionService.Fixture",
-            ["public sealed class ProductionType { }"],
-            testKit);
+            var diagnostics = await AnalyzeAsync(
+                "IIoT.ProductionService.Fixture",
+                ["public sealed class ProductionType { }"],
+                testSupport);
 
-        AssertSingle(diagnostics, "CLOUDARCH006");
+            AssertSingle(diagnostics, "CLOUDARCH006");
+        }
     }
 
     [Fact]
@@ -687,6 +717,363 @@ public sealed class CloudArchitectureAnalyzerTests
 
         Assert.Empty(diagnostics);
     }
+
+    [Fact]
+    public async Task PermissionProviderDirectCacheCall_ReportsSecurityReadCachePath()
+    {
+        var source = SecurityCachePrelude + """
+            public sealed class PermissionProvider : IIoT.Services.Contracts.Authorization.IPermissionProvider
+            {
+                private readonly IIoT.Services.Contracts.ICacheService cache;
+                public PermissionProvider(IIoT.Services.Contracts.ICacheService cache) => this.cache = cache;
+                public System.Threading.Tasks.Task<int> ReadAsync() => cache.GetAsync("permissions");
+            }
+            """;
+
+        var diagnostics = await AnalyzeAsync("IIoT.EntityFrameworkCore.Fixture", [source]);
+
+        AssertSingle(diagnostics, "CLOUDARCH007");
+    }
+
+    [Fact]
+    public async Task DevicePermissionCacheAliasCall_ReportsSecurityReadCachePath()
+    {
+        var source = SecurityCachePrelude + """
+            namespace Fixture
+            {
+                using CachePort = IIoT.Services.Contracts.ICacheService;
+                public sealed class DevicePermissionService : IIoT.Services.Contracts.Authorization.IDevicePermissionService
+                {
+                    private readonly CachePort cache;
+                    public DevicePermissionService(CachePort cache) => this.cache = cache;
+                    public System.Threading.Tasks.Task<int> ReadAsync() => cache.GetAsync("device-permissions");
+                }
+            }
+            """;
+
+        var diagnostics = await AnalyzeAsync("IIoT.EntityFrameworkCore.Fixture", [source]);
+
+        AssertSingle(diagnostics, "CLOUDARCH007");
+    }
+
+    [Fact]
+    public async Task DeviceIdentityHelperAcrossFiles_ReportsSecurityReadCachePath()
+    {
+        var root = SecurityCachePrelude + """
+            public sealed class DeviceIdentityQueryService : IIoT.Services.Contracts.RecordQueries.IDeviceIdentityQueryService
+            {
+                private readonly CacheHelper helper;
+                public DeviceIdentityQueryService(CacheHelper helper) => this.helper = helper;
+                public System.Threading.Tasks.Task<int> ReadAsync() => helper.ReadAsync();
+            }
+            """;
+        const string helper = """
+            public sealed class CacheHelper
+            {
+                private readonly IIoT.Services.Contracts.ICacheService cache;
+                public CacheHelper(IIoT.Services.Contracts.ICacheService cache) => this.cache = cache;
+                public System.Threading.Tasks.Task<int> ReadAsync() => cache.GetAsync("device-identity");
+            }
+            """;
+
+        var diagnostics = await AnalyzeAsync("IIoT.Dapper.Fixture", [root, helper]);
+
+        AssertSingle(diagnostics, "CLOUDARCH007");
+    }
+
+    [Fact]
+    public async Task SecurityReadInterfaceHelperAcrossFiles_ReportsSecurityReadCachePath()
+    {
+        var root = SecurityCachePrelude + """
+            public interface IReadHelper { System.Threading.Tasks.Task<int> ReadAsync(); }
+            public sealed class PermissionProvider : IIoT.Services.Contracts.Authorization.IPermissionProvider
+            {
+                private readonly IReadHelper helper;
+                public PermissionProvider(IReadHelper helper) => this.helper = helper;
+                public System.Threading.Tasks.Task<int> ReadAsync() => helper.ReadAsync();
+            }
+            """;
+        const string helper = """
+            public sealed class ReadHelper : IReadHelper
+            {
+                private readonly IIoT.Services.Contracts.ICacheService cache;
+                public ReadHelper(IIoT.Services.Contracts.ICacheService cache) => this.cache = cache;
+                public System.Threading.Tasks.Task<int> ReadAsync() => cache.GetAsync("permissions");
+            }
+            """;
+
+        var diagnostics = await AnalyzeAsync("IIoT.EntityFrameworkCore.Fixture", [root, helper]);
+
+        AssertSingle(diagnostics, "CLOUDARCH007");
+    }
+
+    [Fact]
+    public async Task SecurityReadUsingAuthoritativeStore_DoesNotReportCachePath()
+    {
+        var source = SecurityCachePrelude + """
+            public interface IAuthoritativeStore { System.Threading.Tasks.Task<int> ReadAsync(); }
+            public sealed class PermissionProvider : IIoT.Services.Contracts.Authorization.IPermissionProvider
+            {
+                private readonly IAuthoritativeStore store;
+                public PermissionProvider(IAuthoritativeStore store) => this.store = store;
+                public System.Threading.Tasks.Task<int> ReadAsync() => store.ReadAsync();
+            }
+            """;
+
+        var diagnostics = await AnalyzeAsync("IIoT.EntityFrameworkCore.Fixture", [source]);
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public async Task NonSecurityServiceMayUseValueCache()
+    {
+        var source = SecurityCachePrelude + """
+            public sealed class RecipeQuery
+            {
+                private readonly IIoT.Services.Contracts.ICacheService cache;
+                public RecipeQuery(IIoT.Services.Contracts.ICacheService cache) => this.cache = cache;
+                public System.Threading.Tasks.Task<int> ReadAsync() => cache.GetAsync("recipes");
+            }
+            """;
+
+        var diagnostics = await AnalyzeAsync("IIoT.ProductionService.Fixture", [source]);
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public async Task SecurityReadGenericHelperAcrossFiles_ReportsSecurityReadCachePath()
+    {
+        var root = SecurityCachePrelude + """
+            public interface IReadHelper<T> { System.Threading.Tasks.Task<T> ReadAsync(); }
+            public sealed class PermissionProvider : IIoT.Services.Contracts.Authorization.IPermissionProvider
+            {
+                private readonly IReadHelper<int> helper;
+                public PermissionProvider(IReadHelper<int> helper) => this.helper = helper;
+                public System.Threading.Tasks.Task<int> ReadAsync() => helper.ReadAsync();
+            }
+            """;
+        const string helper = """
+            public sealed class GenericReadHelper<T> : IReadHelper<T>
+            {
+                private readonly IIoT.Services.Contracts.ICacheService cache;
+                public GenericReadHelper(IIoT.Services.Contracts.ICacheService cache) => this.cache = cache;
+                public async System.Threading.Tasks.Task<T> ReadAsync()
+                {
+                    _ = await cache.GetAsync("permissions");
+                    return default!;
+                }
+            }
+            """;
+
+        var diagnostics = await AnalyzeAsync("IIoT.EntityFrameworkCore.Fixture", [root, helper]);
+
+        AssertSingle(diagnostics, "CLOUDARCH007");
+    }
+
+    [Fact]
+    public async Task SameNamedNonContractCacheService_DoesNotReportSecurityReadCachePath()
+    {
+        var source = SecurityCachePrelude + """
+            namespace Fixture
+            {
+                public interface ICacheService { System.Threading.Tasks.Task<int> GetAsync(string key); }
+                public sealed class PermissionProvider : IIoT.Services.Contracts.Authorization.IPermissionProvider
+                {
+                    private readonly ICacheService cache;
+                    public PermissionProvider(ICacheService cache) => this.cache = cache;
+                    public System.Threading.Tasks.Task<int> ReadAsync() => cache.GetAsync("local-value");
+                }
+            }
+            """;
+
+        var diagnostics = await AnalyzeAsync("IIoT.EntityFrameworkCore.Fixture", [source]);
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public async Task ProductionReadJwtTokenCall_ReportsUnsignedJwtParsing()
+    {
+        var source = JwtPrelude + """
+            public sealed class TokenReader
+            {
+                public object Read(string token)
+                    => new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().ReadJwtToken(token);
+            }
+            """;
+
+        var diagnostics = await AnalyzeAsync("IIoT.HttpApi.Fixture", [source]);
+
+        AssertSingle(diagnostics, "CLOUDARCH008");
+    }
+
+    [Fact]
+    public async Task AliasedReadJwtTokenCall_ReportsUnsignedJwtParsing()
+    {
+        var source = JwtPrelude + """
+            namespace Fixture
+            {
+                using TokenHandler = System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler;
+                public static class TokenHelper
+                {
+                    public static object Read(string token)
+                    {
+                        var handler = new TokenHandler();
+                        return handler.ReadJwtToken(token);
+                    }
+                }
+            }
+            """;
+
+        var diagnostics = await AnalyzeAsync("IIoT.Infrastructure.Fixture", [source]);
+
+        AssertSingle(diagnostics, "CLOUDARCH008");
+    }
+
+    [Fact]
+    public async Task TestAssemblyMayInspectServerIssuedJwt()
+    {
+        var source = JwtPrelude + """
+            public sealed class TokenAssertion
+            {
+                public object Read(string token)
+                    => new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().ReadJwtToken(token);
+            }
+            """;
+
+        var diagnostics = await AnalyzeAsync("IIoT.CloudPlatform.EndToEndTests", [source]);
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public async Task ValidatedJwtApiDoesNotReportUnsignedParsing()
+    {
+        var source = JwtPrelude + """
+            public sealed class TokenReader
+            {
+                public object Read(string token)
+                    => new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().ValidateToken(token);
+            }
+            """;
+
+        var diagnostics = await AnalyzeAsync("IIoT.HttpApi.Fixture", [source]);
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public async Task SameNamedJwtHandlerOutsideIdentityModelNamespace_DoesNotReportUnsignedParsing()
+    {
+        var source = JwtPrelude + """
+            namespace Fixture
+            {
+                public sealed class JwtSecurityTokenHandler
+                {
+                    public object ReadJwtToken(string token) => new object();
+                }
+
+                public sealed class TokenReader
+                {
+                    public object Read(string token) => new JwtSecurityTokenHandler().ReadJwtToken(token);
+                }
+            }
+            """;
+
+        var diagnostics = await AnalyzeAsync("IIoT.HttpApi.Fixture", [source]);
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public async Task TypeInRetiredServicesCommonNamespace_ReportsRetiredNamespace()
+    {
+        const string source = "namespace IIoT.Services.Common.Legacy; public sealed class ShadowAdapter { }";
+
+        var diagnostics = await AnalyzeAsync("IIoT.ProductionService.Fixture", [source]);
+
+        AssertSingle(diagnostics, "CLOUDARCH009");
+    }
+
+    [Fact]
+    public async Task AdjacentServicesCommonName_DoesNotReportRetiredNamespace()
+    {
+        const string source = "namespace IIoT.Services.Commonplace; public sealed class CurrentService { }";
+
+        var diagnostics = await AnalyzeAsync("IIoT.ProductionService.Fixture", [source]);
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public async Task ConnectionResourceLiteralOutsideAuthority_ReportsResourceLiteral()
+    {
+        const string source = "namespace Fixture; public sealed class ResourceConsumer { public string Name => \"iiot-db\"; }";
+
+        var diagnostics = await AnalyzeAsync("IIoT.AppHost.Fixture", [source]);
+
+        AssertSingle(diagnostics, "CLOUDARCH010");
+    }
+
+    [Fact]
+    public async Task ConnectionResourceAuthorityAndSameNamedAdjacentType_AreDistinguishedSemantically()
+    {
+        const string authority = """
+            namespace IIoT.SharedKernel.Configuration;
+            public static class ConnectionResourceNames
+            {
+                public const string IiotDatabase = "iiot-db";
+                public const string EventBus = "eventbus";
+            }
+            """;
+        const string adjacent = """
+            namespace Fixture;
+            public static class ConnectionResourceNames
+            {
+                public const string Value = "eventbus";
+            }
+            """;
+
+        var validDiagnostics = await AnalyzeAsync("IIoT.SharedKernel.Fixture", [authority]);
+        var invalidDiagnostics = await AnalyzeAsync("IIoT.SharedKernel.Fixture", [adjacent]);
+
+        Assert.Empty(validDiagnostics);
+        AssertSingle(invalidDiagnostics, "CLOUDARCH010");
+    }
+
+    private const string JwtPrelude = """
+        namespace System.IdentityModel.Tokens.Jwt
+        {
+            public sealed class JwtSecurityTokenHandler
+            {
+                public object ReadJwtToken(string token) => new object();
+                public object ValidateToken(string token) => new object();
+            }
+        }
+        """;
+
+    private const string SecurityCachePrelude = """
+        namespace IIoT.Services.Contracts
+        {
+            public interface ICacheService
+            {
+                System.Threading.Tasks.Task<int> GetAsync(string key);
+            }
+        }
+
+        namespace IIoT.Services.Contracts.Authorization
+        {
+            public interface IPermissionProvider { System.Threading.Tasks.Task<int> ReadAsync(); }
+            public interface IDevicePermissionService { System.Threading.Tasks.Task<int> ReadAsync(); }
+        }
+
+        namespace IIoT.Services.Contracts.RecordQueries
+        {
+            public interface IDeviceIdentityQueryService { System.Threading.Tasks.Task<int> ReadAsync(); }
+        }
+        """;
 
     private const string AuthorizedQuery = """
         [IIoT.Services.CrossCutting.Attributes.AuthorizeAiRead("AiRead.Device")]

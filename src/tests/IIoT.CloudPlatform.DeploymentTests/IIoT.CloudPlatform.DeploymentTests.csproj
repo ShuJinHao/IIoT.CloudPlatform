@@ -5,6 +5,10 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <CloudTestKind>Deployment</CloudTestKind>
+    <CloudTestRuntime>Filesystem</CloudTestRuntime>
+    <CloudTestExecutionGroup>Filesystem</CloudTestExecutionGroup>
+    <CloudTestRequired>true</CloudTestRequired>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="FluentAssertions" Version="8.8.0" />
@@ -13,6 +17,10 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\testing\IIoT.CloudPlatform.FilesystemTestKit\IIoT.CloudPlatform.FilesystemTestKit.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="IIoT.CloudPlatform.FilesystemTestKit" />
     <Using Include="Xunit" />
     <None Include="..\xunit.runner.json" Link="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

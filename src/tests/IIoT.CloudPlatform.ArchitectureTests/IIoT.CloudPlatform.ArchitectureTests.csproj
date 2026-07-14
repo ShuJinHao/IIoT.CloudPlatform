@@ -5,6 +5,10 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <CloudTestKind>Architecture</CloudTestKind>
+    <CloudTestRuntime>Filesystem</CloudTestRuntime>
+    <CloudTestExecutionGroup>Filesystem</CloudTestExecutionGroup>
+    <CloudTestRequired>true</CloudTestRequired>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="FluentAssertions" Version="8.8.0" />
@@ -15,10 +19,16 @@
   <ItemGroup>
     <ProjectReference Include="..\..\hosts\IIoT.HttpApi\IIoT.HttpApi.csproj" />
     <ProjectReference Include="..\..\hosts\IIoT.MigrationWorkApp\IIoT.MigrationWorkApp.csproj" />
-    <ProjectReference Include="..\..\testing\IIoT.CloudPlatform.IntegrationTestKit\IIoT.CloudPlatform.IntegrationTestKit.csproj" />
+    <ProjectReference Include="..\..\infrastructure\IIoT.EntityFrameworkCore\IIoT.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="..\..\infrastructure\IIoT.EventBus\IIoT.EventBus.csproj" />
+    <ProjectReference Include="..\..\infrastructure\IIoT.Infrastructure\IIoT.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\services\IIoT.IdentityService\IIoT.IdentityService.csproj" />
+    <ProjectReference Include="..\..\services\IIoT.Services.Contracts\IIoT.Services.Contracts.csproj" />
+    <ProjectReference Include="..\..\services\IIoT.Services.CrossCutting\IIoT.Services.CrossCutting.csproj" />
+    <ProjectReference Include="..\..\testing\IIoT.CloudPlatform.FilesystemTestKit\IIoT.CloudPlatform.FilesystemTestKit.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <Using Include="IIoT.CloudPlatform.IntegrationTestKit" />
+    <Using Include="IIoT.CloudPlatform.FilesystemTestKit" />
     <Using Include="Xunit" />
     <None Include="..\xunit.runner.json" Link="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

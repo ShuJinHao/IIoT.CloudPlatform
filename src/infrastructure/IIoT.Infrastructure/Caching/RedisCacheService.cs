@@ -162,6 +162,7 @@ public class RedisCacheService(
         try
         {
             endpoints = _redis.GetEndPoints();
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch (OperationCanceledException)
         {

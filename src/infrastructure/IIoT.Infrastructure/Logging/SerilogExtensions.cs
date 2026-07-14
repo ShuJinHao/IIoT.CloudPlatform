@@ -7,8 +7,8 @@ namespace IIoT.Infrastructure.Logging;
 
 public static class SerilogExtensions
 {
-    private const int RollingFileRetentionCount = 30;
-    private const long SingleLogFileSizeLimitBytes = 10 * 1024 * 1024;
+    internal const int RollingFileRetentionCount = 30;
+    internal const long SingleLogFileSizeLimitBytes = 10 * 1024 * 1024;
 
     /// <summary>
     /// 统一配置 Serilog：控制台 + 按天滚动文件
@@ -37,15 +37,7 @@ public static class SerilogExtensions
 
         if (TryEnsureWritableDirectory(logDirectory))
         {
-            loggerConfiguration.WriteTo.File(
-                path: Path.Combine(logDirectory, $"iiot-{serviceName}-.log"),
-                rollingInterval: RollingInterval.Day,
-                retainedFileCountLimit: RollingFileRetentionCount,
-                fileSizeLimitBytes: SingleLogFileSizeLimitBytes,
-                rollOnFileSizeLimit: true,
-                outputTemplate:
-                    "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] [{ServiceName}] [{SourceContext}] {Message:lj}{NewLine}{Exception}",
-                shared: true);
+            ConfigureRollingFileSink(loggerConfiguration, logDirectory, serviceName);
         }
 
         if (seqOptions.Enabled)
@@ -60,7 +52,23 @@ public static class SerilogExtensions
         builder.Services.AddSerilog();
     }
 
-    private static bool TryEnsureWritableDirectory(string directory)
+    internal static void ConfigureRollingFileSink(
+        LoggerConfiguration loggerConfiguration,
+        string logDirectory,
+        string serviceName)
+    {
+        loggerConfiguration.WriteTo.File(
+            path: Path.Combine(logDirectory, $"iiot-{serviceName}-.log"),
+            rollingInterval: RollingInterval.Day,
+            retainedFileCountLimit: RollingFileRetentionCount,
+            fileSizeLimitBytes: SingleLogFileSizeLimitBytes,
+            rollOnFileSizeLimit: true,
+            outputTemplate:
+                "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] [{ServiceName}] [{SourceContext}] {Message:lj}{NewLine}{Exception}",
+            shared: true);
+    }
+
+    internal static bool TryEnsureWritableDirectory(string directory)
     {
         try
         {

@@ -32,7 +32,7 @@ internal sealed class SqliteEfTestDatabase : IAsyncDisposable
         return database;
     }
 
-    public IIoTDbContext CreateContext() => new(Options);
+    public IIoTDbContext CreateContext() => new SqliteTestDbContext(Options);
 
     public ValueTask DisposeAsync()
     {

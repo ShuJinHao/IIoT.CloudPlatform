@@ -1,4 +1,9 @@
 <Project>
+  <PropertyGroup Condition="'$(_IsCloudProductionProject)' == 'true'">
+    <RunAnalyzers>true</RunAnalyzers>
+    <RunAnalyzersDuringBuild>true</RunAnalyzersDuringBuild>
+  </PropertyGroup>
+
   <Target Name="ValidateCloudDeploymentPolicy"
           BeforeTargets="PrepareForBuild"
           Condition="'$(DesignTimeBuild)' != 'true' and '$(MSBuildProjectName)' == 'IIoT.HttpApi'">

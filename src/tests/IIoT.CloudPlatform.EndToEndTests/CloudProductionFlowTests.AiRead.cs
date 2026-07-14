@@ -179,22 +179,15 @@ public sealed partial class CloudProductionFlowTests
             NgCount = 1,
             PlcName = plcName
         });
-        await PostJsonAsync("/api/v1/edge/process-records", new
+        await PostJsonAsync("/api/v1/edge/pass-stations/injection/batch", new
         {
-            TypeKey = "injection",
-            ProcessType = "injection",
-            SchemaVersion = 1,
             DeviceId = device.DeviceId,
-            Records = new[]
+            Items = new[]
             {
                 new
                 {
-                    TypeKey = "injection",
-                    ProcessType = "injection",
-                    SchemaVersion = 1,
-                    DeviceId = device.DeviceId,
                     Barcode = barcode,
-                    CellResult = true,
+                    CellResult = "OK",
                     CompletedTime = completedTime,
                     Payload = new
                     {
@@ -607,31 +600,24 @@ public sealed partial class CloudProductionFlowTests
     }
 
     [Fact]
-    public async Task ProcessRecordsUpload_ShouldPersistOnceAndBeReadableByHumanAndAiRead()
+    public async Task PassStationBatchUpload_ShouldPersistOnceAndBeReadableByHumanAndAiRead()
     {
         await AuthenticateAsAdminAsync();
 
-        var device = await CreateTestDeviceRegistrationAsync("process-records");
+        var device = await CreateTestDeviceRegistrationAsync("pass-station-batch");
         await AuthenticateAsEdgeAsync(device.DeviceId);
         var completedTime = DateTime.SpecifyKind(DateTime.UtcNow.AddMinutes(-2), DateTimeKind.Utc);
         var barcode = $"PR-{Guid.NewGuid():N}"[..14];
 
         var request = new
         {
-            TypeKey = "injection",
-            ProcessType = "injection",
-            SchemaVersion = 1,
             DeviceId = device.DeviceId,
-            Records = new[]
+            Items = new[]
             {
                 new
                 {
-                    TypeKey = "injection",
-                    ProcessType = "injection",
-                    SchemaVersion = 1,
-                    DeviceId = device.DeviceId,
                     Barcode = barcode,
-                    CellResult = false,
+                    CellResult = "NG",
                     CompletedTime = completedTime,
                     Payload = new
                     {
@@ -645,8 +631,8 @@ public sealed partial class CloudProductionFlowTests
             }
         };
 
-        await PostJsonAsync("/api/v1/edge/process-records", request);
-        using (var duplicateResponse = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/edge/process-records", request))
+        await PostJsonAsync("/api/v1/edge/pass-stations/injection/batch", request);
+        using (var duplicateResponse = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/edge/pass-stations/injection/batch", request))
         {
             duplicateResponse.EnsureSuccessStatusCode();
             var duplicate = await duplicateResponse.Content.ReadFromJsonAsync<EdgeUploadAcceptedResponseDto>(JsonOptions);

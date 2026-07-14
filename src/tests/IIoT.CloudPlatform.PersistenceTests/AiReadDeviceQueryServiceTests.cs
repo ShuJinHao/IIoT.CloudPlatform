@@ -13,11 +13,12 @@ public sealed class AiReadDeviceQueryServiceTests
     [Fact]
     public async Task GetPagedAsync_ShouldIntersectExactFiltersKeywordAndDelegatedScope()
     {
-        await using var dbContext = CreateDbContext();
+        await using var database = await SqliteEfTestDatabase.CreateAsync();
+        await using var dbContext = database.CreateContext();
         var processId = Guid.NewGuid();
-        var target = new Device("Assembly Device", "DEV-AIQUERY-001", processId);
-        var wrongProcess = new Device("Assembly Device", "DEV-AIQUERY-002", Guid.NewGuid());
-        var outsideScope = new Device("Assembly Device", "DEV-AIQUERY-003", processId);
+        var target = new Device("Assembly Device Target", "DEV-AIQUERY-001", processId);
+        var wrongProcess = new Device("Assembly Device Wrong Process", "DEV-AIQUERY-002", Guid.NewGuid());
+        var outsideScope = new Device("Assembly Device Outside Scope", "DEV-AIQUERY-003", processId);
         dbContext.Devices.AddRange(target, wrongProcess, outsideScope);
         await dbContext.SaveChangesAsync();
         var service = new AiReadDeviceQueryService(dbContext);
@@ -41,7 +42,8 @@ public sealed class AiReadDeviceQueryServiceTests
     [Fact]
     public async Task GetPagedAsync_ShouldUseSameFilteredSetForCountAndStablePage()
     {
-        await using var dbContext = CreateDbContext();
+        await using var database = await SqliteEfTestDatabase.CreateAsync();
+        await using var dbContext = database.CreateContext();
         var processId = Guid.NewGuid();
         var devices = new[]
         {
@@ -72,7 +74,8 @@ public sealed class AiReadDeviceQueryServiceTests
     [Fact]
     public async Task GetPagedAsync_ShouldReturnEmptyForEmptyDelegatedScope()
     {
-        await using var dbContext = CreateDbContext();
+        await using var database = await SqliteEfTestDatabase.CreateAsync();
+        await using var dbContext = database.CreateContext();
         dbContext.Devices.Add(new Device("Scoped Device", "DEV-AIQUERY-201", Guid.NewGuid()));
         await dbContext.SaveChangesAsync();
         var service = new AiReadDeviceQueryService(dbContext);
@@ -84,13 +87,6 @@ public sealed class AiReadDeviceQueryServiceTests
         Assert.Empty(items);
     }
 
-    private static IIoTDbContext CreateDbContext()
-    {
-        var options = new DbContextOptionsBuilder<IIoTDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
-            .Options;
-        return new IIoTDbContext(options);
-    }
 }
 
 public sealed class AiReadProcessQueryServiceTests
@@ -98,7 +94,8 @@ public sealed class AiReadProcessQueryServiceTests
     [Fact]
     public async Task GetPagedAsync_ShouldIntersectProcessIdAndKeyword()
     {
-        await using var dbContext = CreateDbContext();
+        await using var database = await SqliteEfTestDatabase.CreateAsync();
+        await using var dbContext = database.CreateContext();
         var target = new MfgProcess("Injection", "注液工序");
         dbContext.MfgProcesses.AddRange(
             target,
@@ -117,11 +114,4 @@ public sealed class AiReadProcessQueryServiceTests
         Assert.Equal(target.Id, Assert.Single(items).Id);
     }
 
-    private static IIoTDbContext CreateDbContext()
-    {
-        var options = new DbContextOptionsBuilder<IIoTDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
-            .Options;
-        return new IIoTDbContext(options);
-    }
 }

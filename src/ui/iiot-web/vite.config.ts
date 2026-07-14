@@ -10,10 +10,6 @@ const apiUrl = process.env.VITE_API_URL
   || process.env['services__iiot-httpapi__https__0']
   || 'http://localhost:5191'
 
-console.log('=== ALL ENV WITH iiot or VITE ===')
-console.log(Object.entries(process.env).filter(([k]) => /iiot|vite|PORT/i.test(k)))
-console.log('=== Using API target:', apiUrl, '===')
-
 export default defineConfig({
   plugins: [vue(), tailwindcss()],
   server: {

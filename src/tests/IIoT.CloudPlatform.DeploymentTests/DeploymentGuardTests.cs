@@ -10,8 +10,8 @@ public sealed class DeploymentGuardTests
     [Fact]
     public void CloudLocalRelease_ShouldSyncOnlyVersionedSupportFilesAndVerifyRemoteHashes()
     {
-        var source = File.ReadAllText(FindRepoFile("deploy", "scripts", "local-release.sh"));
-        var transaction = File.ReadAllText(FindRepoFile("deploy", "scripts", "workspace-release-transaction.sh"));
+        var source = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "local-release.sh"));
+        var transaction = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "workspace-release-transaction.sh"));
 
         source.Should().Contain("SUPPORT_FILES=(");
         source.Should().Contain("docker-compose.prod.yml");
@@ -58,12 +58,12 @@ public sealed class DeploymentGuardTests
     [Fact]
     public void CloudReleaseLocks_ShouldFailFastAndRecoverOnlyProvenStaleLocks()
     {
-        var common = File.ReadAllText(FindRepoFile("deploy", "scripts", "release-common.sh"));
-        var preflight = File.ReadAllText(FindRepoFile("deploy", "scripts", "pre-deploy-check.sh"));
-        var release = File.ReadAllText(FindRepoFile("deploy", "scripts", "deploy-release.sh"));
-        var transaction = File.ReadAllText(FindRepoFile("deploy", "scripts", "workspace-release-transaction.sh"));
-        var cleanup = File.ReadAllText(FindRepoFile("deploy", "scripts", "post-release-cleanup.sh"));
-        var configUpdate = File.ReadAllText(FindRepoFile("deploy", "scripts", "update-deploy-env.sh"));
+        var common = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "release-common.sh"));
+        var preflight = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "pre-deploy-check.sh"));
+        var release = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "deploy-release.sh"));
+        var transaction = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "workspace-release-transaction.sh"));
+        var cleanup = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "post-release-cleanup.sh"));
+        var configUpdate = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "update-deploy-env.sh"));
 
         common.Should().Contain("managed_lock_status_for_dir");
         common.Should().Contain("process-start");
@@ -124,7 +124,7 @@ public sealed class DeploymentGuardTests
     [Fact]
     public void DeployRelease_ShouldStreamCleanupAndExplainPartialSuccess()
     {
-        var source = File.ReadAllText(FindRepoFile("deploy", "scripts", "deploy-release.sh"));
+        var source = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "deploy-release.sh"));
 
         source.Should().Contain("Post-release cleanup started; output is streamed live.");
         source.Should().Contain("| tee \"$cleanup_log\"");
@@ -146,7 +146,7 @@ public sealed class DeploymentGuardTests
                      "check-release-state-access.sh"
                  })
         {
-            var mode = File.GetUnixFileMode(FindRepoFile("deploy", "scripts", script));
+            var mode = File.GetUnixFileMode(CloudRepositoryPath.Find("deploy", "scripts", script));
             (mode & UnixFileMode.UserExecute)
                 .Should().NotBe(0, $"{script} is executed directly by pre-deploy-check.sh");
         }
@@ -155,8 +155,8 @@ public sealed class DeploymentGuardTests
     [Fact]
     public void CloudCi_ShouldSyntaxCheckReleaseStateAccessScript()
     {
-        var source = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-ci.yml"));
-        var inventory = File.ReadAllText(FindRepoFile("src", "tests", "cloud-test-inventory.json"));
+        var source = File.ReadAllText(CloudRepositoryPath.Find(".github", "workflows", "cloud-ci.yml"));
+        var inventory = File.ReadAllText(CloudRepositoryPath.Find("src", "tests", "cloud-test-inventory.json"));
 
         source.Should().Contain("sh -n deploy/scripts/check-release-state-access.sh");
         source.Should().Contain("Invoke-CloudTestInventory.ps1 -Mode Required");
@@ -173,7 +173,7 @@ public sealed class DeploymentGuardTests
                      new[] { "deploy", "scripts", "build-and-push.sh" }
                  })
         {
-            var source = File.ReadAllText(FindRepoFile(relativePath));
+            var source = File.ReadAllText(CloudRepositoryPath.Find(relativePath));
 
             source.Should().Contain("stop_watchdog");
             source.Should().Contain("wait \"$sleep_pid\"");
@@ -186,8 +186,8 @@ public sealed class DeploymentGuardTests
             source.Should().NotContain("set +e\n  wait \"$cmd_pid\"");
         }
 
-        var localRelease = File.ReadAllText(FindRepoFile("deploy", "scripts", "local-release.sh"));
-        var buildAndPush = File.ReadAllText(FindRepoFile("deploy", "scripts", "build-and-push.sh"));
+        var localRelease = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "local-release.sh"));
+        var buildAndPush = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "build-and-push.sh"));
         localRelease.Should().Contain("exit \"$remote_status\"");
         buildAndPush.Should().Contain("exit \"$build_status\"");
     }
@@ -256,7 +256,7 @@ public sealed class DeploymentGuardTests
             var remoteDeployDir = Path.Combine(testRoot.FullName, "deploy");
             var scriptsDir = Directory.CreateDirectory(Path.Combine(remoteDeployDir, "scripts"));
             File.Copy(
-                FindRepoFile("deploy", "scripts", "release-common.sh"),
+                CloudRepositoryPath.Find("deploy", "scripts", "release-common.sh"),
                 Path.Combine(scriptsDir.FullName, "release-common.sh"));
 
             var customLockFile = Path.Combine(testRoot.FullName, "custom", "release.lock");
@@ -299,8 +299,8 @@ public sealed class DeploymentGuardTests
     [Fact]
     public void CloudLocalRelease_ShouldBuildFromFixedCommitAndUsePerRunArtifacts()
     {
-        var localRelease = File.ReadAllText(FindRepoFile("deploy", "scripts", "local-release.sh"));
-        var buildAndPush = File.ReadAllText(FindRepoFile("deploy", "scripts", "build-and-push.sh"));
+        var localRelease = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "local-release.sh"));
+        var buildAndPush = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "build-and-push.sh"));
 
         localRelease.Should().Contain("git -C \"$REPO_ROOT\" worktree add --quiet --detach");
         localRelease.Should().Contain("CLOUD_RELEASE_SNAPSHOT_ACTIVE=1");
@@ -313,29 +313,11 @@ public sealed class DeploymentGuardTests
         buildAndPush.Should().Contain("${DEPLOY_ARTIFACT_DIR:-$REPO_ROOT/artifacts/deploy}");
     }
 
-    private static string FindRepoFile(params string[] relativeSegments)
-    {
-        var current = new DirectoryInfo(AppContext.BaseDirectory);
-
-        while (current is not null)
-        {
-            var candidate = Path.Combine(new[] { current.FullName }.Concat(relativeSegments).ToArray());
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-
-            current = current.Parent;
-        }
-
-        throw new FileNotFoundException($"Could not locate repository file: {string.Join('/', relativeSegments)}");
-    }
-
     private static async Task<ShellResult> RunLocalReleaseFunctionHarnessAsync(
         string body,
         IReadOnlyDictionary<string, string?>? environment = null)
     {
-        var source = await File.ReadAllTextAsync(FindRepoFile("deploy", "scripts", "local-release.sh"));
+        var source = await File.ReadAllTextAsync(CloudRepositoryPath.Find("deploy", "scripts", "local-release.sh"));
         var functionsStart = source.IndexOf("child_process_ids() {", StringComparison.Ordinal);
         var functionsEnd = source.IndexOf("sha256_file() {", functionsStart, StringComparison.Ordinal);
         functionsStart.Should().BeGreaterThanOrEqualTo(0);

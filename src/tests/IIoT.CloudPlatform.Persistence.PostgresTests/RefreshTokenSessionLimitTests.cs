@@ -5,14 +5,16 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Xunit;
 
-namespace IIoT.CloudPlatform.PersistenceTests;
+namespace IIoT.CloudPlatform.Persistence.PostgresTests;
 
-public sealed class RefreshTokenSessionLimitTests
+[Collection(PostgresPersistenceIntegrationCollection.Name)]
+public sealed class RefreshTokenSessionLimitTests(
+    ClientReleaseCommitRecoveryPostgresFixture fixture)
 {
     [Fact]
     public async Task IssueAsync_ShouldRevokeOldestHumanSessionWhenLimitIsReached()
     {
-        await using var dbContext = CreateDbContext();
+        await using var dbContext = await CreateDbContextAsync();
         var subjectId = Guid.NewGuid();
         var now = DateTimeOffset.UtcNow;
         var oldestSessionId = Guid.NewGuid();
@@ -45,7 +47,7 @@ public sealed class RefreshTokenSessionLimitTests
     [Fact]
     public async Task IssueAsync_ShouldNotLimitEdgeDeviceSessionsWithHumanLimitConfigured()
     {
-        await using var dbContext = CreateDbContext();
+        await using var dbContext = await CreateDbContextAsync();
         var subjectId = Guid.NewGuid();
         var service = CreateService(dbContext, humanMaxActiveSessions: 1);
 
@@ -64,7 +66,7 @@ public sealed class RefreshTokenSessionLimitTests
     [Fact]
     public async Task RotateAsync_ShouldNotApplyHumanLoginSessionLimit()
     {
-        await using var dbContext = CreateDbContext();
+        await using var dbContext = await CreateDbContextAsync();
         var subjectId = Guid.NewGuid();
         var unlimitedService = CreateService(dbContext, humanMaxActiveSessions: 0);
 
@@ -99,13 +101,14 @@ public sealed class RefreshTokenSessionLimitTests
         Assert.Contains("active session limit", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static IIoTDbContext CreateDbContext()
+    private async Task<IIoTDbContext> CreateDbContextAsync()
     {
         var options = new DbContextOptionsBuilder<IIoTDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .UseNpgsql(await fixture.GetConnectionStringAsync())
             .Options;
-
-        return new IIoTDbContext(options);
+        var dbContext = new IIoTDbContext(options);
+        await dbContext.Database.ExecuteSqlRawAsync("TRUNCATE TABLE refresh_token_sessions");
+        return dbContext;
     }
 
     private static EfRefreshTokenService CreateService(

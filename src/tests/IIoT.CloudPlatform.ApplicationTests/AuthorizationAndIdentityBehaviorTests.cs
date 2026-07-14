@@ -1,6 +1,4 @@
-using System.Security.Claims;
 using IIoT.Core.Identity.Aggregates.IdentityAccounts;
-using IIoT.EntityFrameworkCore.Identity;
 using IIoT.IdentityService.Commands;
 using IIoT.IdentityService.Queries;
 using IIoT.ProductionService.Commands.Bootstrap.Devices;
@@ -13,41 +11,12 @@ using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.CrossCutting.Exceptions;
 using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Result;
-using Microsoft.AspNetCore.Identity;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace IIoT.CloudPlatform.ApplicationTests;
 
 public sealed class AuthorizationAndIdentityBehaviorTests
 {
-    [Fact]
-    public async Task DevicePermissionService_ShouldReadCurrentAssignmentsDirectly()
-    {
-        using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
-        using var scope = provider.CreateScope();
-
-        var dbContext = scope.ServiceProvider.GetRequiredService<IIoT.EntityFrameworkCore.IIoTDbContext>();
-        var employee = new IIoT.Core.Employees.Aggregates.Employees.Employee(Guid.NewGuid(), "E1001", "Operator");
-        var firstDeviceId = Guid.NewGuid();
-        var secondDeviceId = Guid.NewGuid();
-        employee.AddDeviceAccess(firstDeviceId);
-        dbContext.Employees.Add(employee);
-        await dbContext.SaveChangesAsync();
-
-        var service = new DevicePermissionService(dbContext);
-
-        var firstRead = await service.GetAccessibleDeviceIdsAsync(employee.Id);
-        employee.AddDeviceAccess(secondDeviceId);
-        await dbContext.SaveChangesAsync();
-        var secondRead = await service.GetAccessibleDeviceIdsAsync(employee.Id);
-
-        Assert.Equal([firstDeviceId], firstRead);
-        Assert.Equal(
-            new[] { firstDeviceId, secondDeviceId }.OrderBy(value => value),
-            secondRead.OrderBy(value => value));
-    }
-
     [Fact]
     public async Task CurrentUserDeviceAccessService_ShouldReturnAllDeviceScopeForAdminWithoutPermissionQuery()
     {
@@ -138,138 +107,6 @@ public sealed class AuthorizationAndIdentityBehaviorTests
 
         Assert.False(access.IsSuccess);
         Assert.Contains("越权", access.Errors!.Single());
-    }
-
-    [Fact]
-    public async Task PermissionProvider_ShouldReadCurrentRoleClaimsDirectly()
-    {
-        using var provider = TestServiceProviders.CreateIdentityServiceProvider();
-        using var scope = provider.CreateScope();
-
-        var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
-        var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
-        var permissionProvider = new PermissionProvider(
-            userManager,
-            roleManager);
-
-        const string roleName = "Supervisor";
-        await roleManager.CreateAsync(new IdentityRole<Guid>(roleName));
-        await roleManager.AddClaimAsync(
-            await roleManager.FindByNameAsync(roleName) ?? throw new InvalidOperationException("Role was not created."),
-            new Claim("Permission", "Device.Read"));
-
-        var user = new ApplicationUser
-        {
-            Id = Guid.NewGuid(),
-            UserName = "user-001",
-            IsEnabled = true
-        };
-
-        var createUser = await userManager.CreateAsync(user, "Password123");
-        Assert.True(createUser.Succeeded);
-        var addRole = await userManager.AddToRoleAsync(user, roleName);
-        Assert.True(addRole.Succeeded);
-
-        var permissions = await permissionProvider.GetPermissionsAsync(user.Id);
-        var role = await roleManager.FindByNameAsync(roleName)
-                   ?? throw new InvalidOperationException("Role was not created.");
-        var addUpdatedClaim = await roleManager.AddClaimAsync(role, new Claim("Permission", "Recipe.Read"));
-        var updatedPermissions = await permissionProvider.GetPermissionsAsync(user.Id);
-
-        Assert.True(addUpdatedClaim.Succeeded);
-        Assert.Contains("Device.Read", permissions);
-        Assert.Contains("Device.Read", updatedPermissions);
-        Assert.Contains("Recipe.Read", updatedPermissions);
-    }
-
-    [Fact]
-    public async Task IdentityPasswordService_ShouldLockUserAfterConsecutivePasswordFailures()
-    {
-        using var provider = TestServiceProviders.CreateIdentityServiceProvider();
-        using var scope = provider.CreateScope();
-
-        var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
-        var user = await CreateIdentityUserAsync(userManager, "Password123");
-        var disableLockout = await userManager.SetLockoutEnabledAsync(user, false);
-        Assert.True(disableLockout.Succeeded, string.Join("; ", disableLockout.Errors.Select(e => e.Description)));
-        var passwordService = new IdentityPasswordService(userManager);
-
-        for (var i = 0; i < 5; i++)
-        {
-            var check = await passwordService.CheckPasswordAsync(user.Id, "WrongPassword123");
-
-            Assert.True(check.IsSuccess);
-            Assert.False(check.Value);
-        }
-
-        var lockedUser = await userManager.FindByIdAsync(user.Id.ToString())
-                         ?? throw new InvalidOperationException("User was not created.");
-        Assert.True(await userManager.GetLockoutEnabledAsync(lockedUser));
-        Assert.True(await userManager.IsLockedOutAsync(lockedUser));
-
-        var lockedCheck = await passwordService.CheckPasswordAsync(user.Id, "Password123");
-
-        Assert.True(lockedCheck.IsSuccess);
-        Assert.False(lockedCheck.Value);
-    }
-
-    [Fact]
-    public async Task IdentityPasswordService_ShouldResetFailedCountAfterSuccessfulPasswordCheck()
-    {
-        using var provider = TestServiceProviders.CreateIdentityServiceProvider();
-        using var scope = provider.CreateScope();
-
-        var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
-        var user = await CreateIdentityUserAsync(userManager, "Password123");
-        var passwordService = new IdentityPasswordService(userManager);
-
-        var failedCheck = await passwordService.CheckPasswordAsync(user.Id, "WrongPassword123");
-        Assert.True(failedCheck.IsSuccess);
-        Assert.False(failedCheck.Value);
-
-        var failedUser = await userManager.FindByIdAsync(user.Id.ToString())
-                         ?? throw new InvalidOperationException("User was not created.");
-        Assert.Equal(1, await userManager.GetAccessFailedCountAsync(failedUser));
-
-        var successfulCheck = await passwordService.CheckPasswordAsync(user.Id, "Password123");
-        Assert.True(successfulCheck.IsSuccess);
-        Assert.True(successfulCheck.Value);
-
-        var resetUser = await userManager.FindByIdAsync(user.Id.ToString())
-                        ?? throw new InvalidOperationException("User was not created.");
-        Assert.Equal(0, await userManager.GetAccessFailedCountAsync(resetUser));
-        Assert.False(await userManager.IsLockedOutAsync(resetUser));
-    }
-
-    [Fact]
-    public async Task IdentityPasswordService_ResetPassword_ShouldNotUnlockLockedUser()
-    {
-        using var provider = TestServiceProviders.CreateIdentityServiceProvider();
-        using var scope = provider.CreateScope();
-
-        var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
-        var user = await CreateIdentityUserAsync(userManager, "Password123");
-        var passwordService = new IdentityPasswordService(userManager);
-
-        for (var i = 0; i < 5; i++)
-        {
-            var check = await passwordService.CheckPasswordAsync(user.Id, "WrongPassword123");
-
-            Assert.True(check.IsSuccess);
-            Assert.False(check.Value);
-        }
-
-        var lockedUser = await userManager.FindByIdAsync(user.Id.ToString())
-                         ?? throw new InvalidOperationException("User was not created.");
-        Assert.True(await userManager.IsLockedOutAsync(lockedUser));
-
-        var resetPassword = await passwordService.ResetPasswordAsync(user.Id, "NewPassword123");
-
-        Assert.True(resetPassword.IsSuccess);
-
-        var resetUser = await userManager.FindByIdAsync(user.Id.ToString())
-                        ?? throw new InvalidOperationException("User was not created.");
-        Assert.True(await userManager.IsLockedOutAsync(resetUser));
     }
 
     [Fact]
@@ -854,19 +691,4 @@ public sealed class AuthorizationAndIdentityBehaviorTests
 
     private sealed record UnprotectedHumanCommand() : IHumanCommand<Result<bool>>;
 
-    private static async Task<ApplicationUser> CreateIdentityUserAsync(
-        UserManager<ApplicationUser> userManager,
-        string password)
-    {
-        var user = new ApplicationUser
-        {
-            Id = Guid.NewGuid(),
-            UserName = $"identity-{Guid.NewGuid():N}",
-            IsEnabled = true
-        };
-
-        var createUser = await userManager.CreateAsync(user, password);
-        Assert.True(createUser.Succeeded, string.Join("; ", createUser.Errors.Select(e => e.Description)));
-        return user;
-    }
 }

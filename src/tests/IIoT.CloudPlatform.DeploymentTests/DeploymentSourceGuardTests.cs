@@ -1,136 +1,22 @@
 using System.IO;
 using System.Text.RegularExpressions;
 using FluentAssertions;
-using IIoT.HttpApi;
-using IIoT.MigrationWorkApp.SeedData;
-using Microsoft.Extensions.Configuration;
 
-namespace IIoT.CloudPlatform.ArchitectureTests;
+namespace IIoT.CloudPlatform.DeploymentTests;
 
-public sealed class ConfigurationGuardTests
+public sealed class DeploymentSourceGuardTests
 {
     private const string KnownWeakSeedAdminPassword = "Ljh123456!";
     private const string KnownWeakJwtSecret = "iiot-cloud-jwt-secret-2026-04-22";
 
     [Fact]
-    public void DesignTimeConnectionStringResolver_MissingConnectionString_ShouldThrowClearError()
-    {
-        var act = () => DesignTimeConnectionStringResolver.Resolve(_ => null);
-
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage($"*{DesignTimeConnectionStringResolver.ConnectionStringEnvironmentVariable}*");
-    }
-
-    [Fact]
-    public void SeedAdminOptions_Load_ShouldDefaultRealName_AndAllowMissingPassword()
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                [SeedAdminOptions.EmployeeNoKey] = IIoTAppFixture.SeedAdminEmployeeNo
-            })
-            .Build();
-
-        var options = SeedAdminOptions.Load(configuration);
-
-        options.EmployeeNo.Should().Be(IIoTAppFixture.SeedAdminEmployeeNo);
-        options.Password.Should().BeNull();
-        options.RealName.Should().Be(IIoTAppFixture.SeedAdminRealName);
-    }
-
-    [Fact]
-    public void SeedAdminOptions_Load_ShouldRequireEmployeeNumber()
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>())
-            .Build();
-
-        var act = () => SeedAdminOptions.Load(configuration);
-
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage($"*{SeedAdminOptions.EmployeeNoKey}*");
-    }
-
-    [Fact]
-    public void SeedAdminOptions_RequirePassword_ShouldThrowWhenMissing()
-    {
-        var options = new SeedAdminOptions(
-            IIoTAppFixture.SeedAdminEmployeeNo,
-            null,
-            IIoTAppFixture.SeedAdminRealName,
-            ResetPassword: false);
-
-        var act = () => options.RequirePassword();
-
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage($"*{SeedAdminOptions.PasswordKey}*");
-    }
-
-    [Fact]
-    public void SeedAdminOptions_Load_ShouldOnlyRequestPasswordResetWhenExplicitlyEnabled()
-    {
-        var defaultConfiguration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                [SeedAdminOptions.EmployeeNoKey] = IIoTAppFixture.SeedAdminEmployeeNo,
-                [SeedAdminOptions.PasswordKey] = IIoTAppFixture.SeedAdminPassword
-            })
-            .Build();
-
-        SeedAdminOptions.Load(defaultConfiguration).ResetPassword.Should().BeFalse();
-
-        var resetConfiguration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                [SeedAdminOptions.EmployeeNoKey] = IIoTAppFixture.SeedAdminEmployeeNo,
-                [SeedAdminOptions.PasswordKey] = IIoTAppFixture.SeedAdminPassword,
-                [SeedAdminOptions.ResetPasswordKey] = "true"
-            })
-            .Build();
-
-        SeedAdminOptions.Load(resetConfiguration).ResetPassword.Should().BeTrue();
-        SeedAdminOptions.IsPasswordResetRequested(resetConfiguration).Should().BeTrue();
-    }
-
-    [Fact]
-    public void MigrationWorkApp_ShouldNotSeedCloudSideEdgeHostConfiguration()
-    {
-        var seedDataRoot = FindRepoFile("src", "hosts", "IIoT.MigrationWorkApp", "SeedData");
-        var orchestratorSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.MigrationWorkApp", "DatabaseInitializationOrchestrator.cs"));
-        var appSettingsSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.MigrationWorkApp", "appsettings.json"));
-
-        File.Exists(Path.Combine(seedDataRoot, "EdgeHostSeedOptions.cs")).Should().BeFalse();
-        File.Exists(Path.Combine(seedDataRoot, "EdgeHostSeedData.cs")).Should().BeFalse();
-        orchestratorSource.Should().NotContain("SeedEdgeHostDataAsync");
-        orchestratorSource.Should().NotContain("EdgeHostSeedData");
-        appSettingsSource.Should().NotContain("EdgeHostSeeds");
-    }
-
-    [Fact]
-    public void AppHost_ShouldWireSeedAdminParametersIntoMigrationProject()
-    {
-        var appHostSource = File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.AppHost", "AppHost.cs"));
-
-        appHostSource.Should().Contain("AddParameter(\"seed-admin-no\"");
-        appHostSource.Should().Contain("AddParameter(\"seed-admin-password\", secret: true)");
-        appHostSource.Should().Contain("WithEnvironment(\"SEED_ADMIN_NO\", seedAdminNo)");
-        appHostSource.Should().Contain("WithEnvironment(\"SEED_ADMIN_PASSWORD\", seedAdminPassword)");
-        appHostSource.Should().Contain("AddProject<Projects.IIoT_Gateway>(\"iiot-gateway\")");
-        appHostSource.Should().Contain("ReverseProxy__Clusters__httpapi__Destinations__primary__Address");
-        appHostSource.Should().Contain(".WithReference(gatewayService)");
-        appHostSource.Should().Contain("VITE_API_URL\", gatewayService.GetEndpoint(\"http\")");
-    }
-
-    [Fact]
     public void AppHostConfiguration_ShouldNotCommitDefaultDatabasePasswordOrRealRegistryValues()
     {
         var appHostSettingsSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.AppHost", "appsettings.json"));
-        var rootAspirateSource = File.ReadAllText(FindRepoFile("aspirate.json"));
+            CloudRepositoryPath.Find("src", "hosts", "IIoT.AppHost", "appsettings.json"));
+        var rootAspirateSource = File.ReadAllText(CloudRepositoryPath.Find("aspirate.json"));
         var appHostAspirateSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.AppHost", "aspirate.json"));
+            CloudRepositoryPath.Find("src", "hosts", "IIoT.AppHost", "aspirate.json"));
 
         appHostSettingsSource.Should().NotContain("pg-password");
         appHostSettingsSource.Should().NotContain("123456");
@@ -144,7 +30,7 @@ public sealed class ConfigurationGuardTests
     public void AppHostLaunchSettings_ShouldNotDefineProxyEnvironmentVariables()
     {
         var launchSettingsSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.AppHost", "Properties", "launchSettings.json"));
+            CloudRepositoryPath.Find("src", "hosts", "IIoT.AppHost", "Properties", "launchSettings.json"));
 
         launchSettingsSource.Should().NotContain("HTTP_PROXY");
         launchSettingsSource.Should().NotContain("HTTPS_PROXY");
@@ -157,44 +43,26 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
-    public void AppFixture_ShouldNormalizeProxyEnvironmentBeforeCreatingAspireBuilder()
-    {
-        var fixtureSource = File.ReadAllText(
-            FindRepoFile("src", "testing", "IIoT.CloudPlatform.IntegrationTestKit", "IIoTAppFixture.cs"));
-        var proxyIndex = fixtureSource.IndexOf("ConfigureAspireProxyEnvironment();", StringComparison.Ordinal);
-        var builderIndex = fixtureSource.IndexOf(
-            "DistributedApplicationTestingBuilder.CreateAsync",
-            StringComparison.Ordinal);
-
-        proxyIndex.Should().BeGreaterThanOrEqualTo(0);
-        builderIndex.Should().BeGreaterThan(proxyIndex);
-        fixtureSource.Should().Contain("\"HTTP_PROXY\"");
-        fixtureSource.Should().Contain("\"http_proxy\"");
-        fixtureSource.Should().Contain("SetEnvironmentVariable(name, null)");
-        fixtureSource.Should().Contain("SetEnvironmentVariable(\"NO_PROXY\", TestNoProxyValue)");
-        fixtureSource.Should().Contain("StartupTimeout = TimeSpan.FromMinutes(3)");
-        fixtureSource.Should().Contain("WaitForGatewayHealthzAsync");
-        fixtureSource.Should().Contain("GetAsync(\"/internal/healthz\"");
-        fixtureSource.Should().Contain("HttpStatusCode.OK");
-        fixtureSource.Should().Contain("WaitAsync(startupTimeout.Token)");
-        fixtureSource.Should().Contain("Aspire 端到端测试环境");
-    }
-
-    [Fact]
     public void TestRuntimeCredentials_ShouldNotUseKnownWeakDeploymentSecrets()
     {
-        IIoTAppFixture.SeedAdminPassword.Should().NotBe(KnownWeakSeedAdminPassword);
-        IIoTAppFixture.TestJwtSecret.Should().NotBe(KnownWeakJwtSecret);
-        IIoTAppFixture.SeedAdminPassword.Should().StartWith("E2eSeed-");
-        IIoTAppFixture.SeedAdminPassword.Should().EndWith("!");
-        IIoTAppFixture.TestJwtSecret.Should().StartWith("iiot-e2e-");
+        var fixtureSource = File.ReadAllText(CloudRepositoryPath.Find(
+            "src", "testing", "IIoT.CloudPlatform.IntegrationTestKit", "IIoTAppFixture.cs"));
+
+        fixtureSource.Should().NotContain($"= \"{KnownWeakSeedAdminPassword}\"");
+        fixtureSource.Should().NotContain($"= \"{KnownWeakJwtSecret}\"");
+        fixtureSource.Should().Contain(
+            "SeedAdminPassword = $\"E2eSeed-{Convert.ToHexString(RandomNumberGenerator.GetBytes(16))}!\";");
+        fixtureSource.Should().Contain(
+            "TestJwtSecret = $\"iiot-e2e-{Convert.ToHexString(RandomNumberGenerator.GetBytes(32))}\";");
+        fixtureSource.Should().Contain("SetEnvironmentVariable(\"SEED_ADMIN_PASSWORD\", SeedAdminPassword)");
+        fixtureSource.Should().Contain("SetEnvironmentVariable(\"JWTSETTINGS__SECRET\", TestJwtSecret)");
     }
 
     [Fact]
     public void DeployPrecheck_ShouldRejectKnownWeakDeploymentSecrets()
     {
-        var preDeploySource = File.ReadAllText(FindRepoFile("deploy", "scripts", "pre-deploy-check.sh"));
-        var releaseCommonSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "release-common.sh"));
+        var preDeploySource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "pre-deploy-check.sh"));
+        var releaseCommonSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "release-common.sh"));
 
         preDeploySource.Should().Contain("ensure_required_secret_values_changed");
         preDeploySource.Should().Contain("ensure_required_public_values_changed");
@@ -224,9 +92,9 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void ProductionRedeployGuide_ShouldPreserveOnlyClientReleaseHistory()
     {
-        var guide = File.ReadAllText(FindRepoFile("docs", "三项目生产清空重部署对齐手册.md"));
-        var exportScript = File.ReadAllText(FindRepoFile("deploy", "scripts", "export-client-release-history.sh"));
-        var importScript = File.ReadAllText(FindRepoFile("deploy", "scripts", "import-client-release-history.sh"));
+        var guide = File.ReadAllText(CloudRepositoryPath.Find("docs", "三项目生产清空重部署对齐手册.md"));
+        var exportScript = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "export-client-release-history.sh"));
+        var importScript = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "import-client-release-history.sh"));
 
         guide.Should().Contain("唯一需要保留的数据是 Cloud 客户端更新历史元数据");
         guide.Should().Contain("不保留");
@@ -245,7 +113,7 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void LocalDeployEnv_WhenPresent_ShouldNotUseKnownWeakDeploymentSecrets()
     {
-        var envPath = FindRepoFile("deploy", ".env");
+        var envPath = CloudRepositoryPath.Find("deploy", ".env");
         if (!File.Exists(envPath))
         {
             return;
@@ -258,315 +126,28 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
-    public void MigrationWorkApp_ShouldPrecheckAndNormalizeLegacyDeviceCodesBeforeCreatingUniqueIndex()
-    {
-        var orchestratorSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.MigrationWorkApp", "DatabaseInitializationOrchestrator.cs"));
-
-        orchestratorSource.Should().Contain("UPPER(BTRIM(client_code))");
-        orchestratorSource.Should().Contain("COUNT(*) AS duplicate_count");
-        orchestratorSource.Should().Contain("BuildNormalizedClientCodeConflictMessage");
-        orchestratorSource.Should().Contain("CREATE UNIQUE INDEX IF NOT EXISTS ix_devices_client_code ON devices (client_code);");
-        orchestratorSource.Should().Contain("ALTER TABLE devices DROP COLUMN IF EXISTS mac_address;");
-    }
-
-    [Fact]
-    public void EdgeBootstrapController_ShouldRequireClientCodeAndBootstrapSecret()
-    {
-        var controllerSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Edge", "EdgeBootstrapController.cs"));
-        var programSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Program.cs"));
-        var filterSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Infrastructure", "RefreshTokenResponseFilter.cs"));
-
-        controllerSource.Should().Contain("[FromQuery] string clientCode");
-        controllerSource.Should().Contain("X-IIoT-Bootstrap-Secret");
-        controllerSource.Should().Contain("RefreshTokenResponseFilter.SetHeaders");
-        controllerSource.Should().NotContain("RefreshTokenHeaderNames.ApplyTo");
-        programSource.Should().Contain("RefreshTokenResponseFilter");
-        filterSource.Should().Contain("IAsyncResultFilter");
-        controllerSource.Should().Contain("BootstrapSecretHeaderNames.Secret");
-        controllerSource.Should().Contain("string? bootstrapSecret");
-    }
-
-    [Fact]
-    public void HumanDeviceController_ShouldNotExposeManualBootstrapSecretRotation()
-    {
-        var controllerSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Human", "HumanDeviceController.cs"));
-
-        controllerSource.Should().NotContain("bootstrap-secret/rotate");
-        controllerSource.Should().NotContain("RotateBootstrapSecret");
-        controllerSource.Should().NotContain("RotateDeviceBootstrapSecretCommand");
-    }
-
-    [Fact]
-    public void BootstrapHardeningDesign_ShouldDocumentMandatorySecret()
-    {
-        var cloudRulesSource = File.ReadAllText(FindRepoFile("docs", "云端规则.md"));
-        var envExampleSource = File.ReadAllText(FindRepoFile("deploy", ".env.example"));
-        var deployReadmeSource = File.ReadAllText(FindRepoFile("deploy", "README.md"));
-        var handlerSource = File.ReadAllText(
-            FindRepoFile(
-                "src",
-                "services",
-                "IIoT.ProductionService",
-                "Queries",
-                "Bootstrap",
-                "Devices",
-                "GetDeviceByInstance.cs"));
-        var appSettingsSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "appsettings.json"));
-        var composeSource = File.ReadAllText(FindRepoFile("deploy", "docker-compose.prod.yml"));
-
-        cloudRulesSource.Should().Contain("ClientCode");
-        cloudRulesSource.Should().Contain("DeviceId");
-        deployReadmeSource.Should().Contain("/api/v1/bootstrap/device-instance");
-        deployReadmeSource.Should().Contain("X-IIoT-Bootstrap-Secret");
-        envExampleSource.Should().NotContain("BOOTSTRAP_AUTH_REQUIRE_SECRET");
-        envExampleSource.Should().Contain("X-IIoT-Bootstrap-Secret");
-        handlerSource.Should().NotContain("RequireSecret");
-        handlerSource.Should().NotContain("cacheService");
-        appSettingsSource.Should().NotContain("BootstrapAuth");
-        composeSource.Should().NotContain("BootstrapAuth__RequireSecret");
-    }
-
-    [Fact]
-    public void IdentityPasswordChecks_ShouldUseLockoutAndUnifiedCredentialFailure()
-    {
-        var dependencyInjectionSource = File.ReadAllText(
-            FindRepoFile("src", "infrastructure", "IIoT.EntityFrameworkCore", "DependencyInjection.cs"));
-        var passwordServiceSource = File.ReadAllText(
-            FindRepoFile("src", "infrastructure", "IIoT.EntityFrameworkCore", "Identity", "IdentityPasswordService.cs"));
-        var loginUserSource = File.ReadAllText(
-            FindRepoFile("src", "services", "IIoT.IdentityService", "Commands", "Human", "LoginUser.cs"));
-        var edgeOperatorLoginSource = File.ReadAllText(
-            FindRepoFile("src", "services", "IIoT.IdentityService", "Commands", "Human", "EdgeOperatorLoginCommand.cs"));
-
-        dependencyInjectionSource.Should().Contain("options.Lockout.AllowedForNewUsers = true");
-        dependencyInjectionSource.Should().Contain("options.Lockout.MaxFailedAccessAttempts = 5");
-        dependencyInjectionSource.Should().Contain("options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15)");
-        passwordServiceSource.Should().Contain("GetLockoutEnabledAsync");
-        passwordServiceSource.Should().Contain("SetLockoutEnabledAsync");
-        passwordServiceSource.Should().Contain("IsLockedOutAsync");
-        passwordServiceSource.Should().Contain("AccessFailedAsync");
-        passwordServiceSource.Should().Contain("ResetAccessFailedCountAsync");
-        loginUserSource.Should().Contain("InvalidLoginMessage");
-        loginUserSource.Should().Contain("账号不存在或密码错误");
-        loginUserSource.Should().NotContain("账号已停用，请联系管理员");
-        loginUserSource.Should().NotContain("工号不存在或密码错误");
-        edgeOperatorLoginSource.Should().Contain("InvalidLoginMessage");
-        edgeOperatorLoginSource.Should().Contain("账号不存在或密码错误");
-        edgeOperatorLoginSource.Should().NotContain("账号已冻结，请联系管理员");
-    }
-
-    [Fact]
-    public void EdgeHostPlcRuntimeState_ShouldKeepDedicatedEdgeWriteAndHumanReadBoundary()
-    {
-        var contractSource = File.ReadAllText(FindRepoFile("docs", "Edge上传与PLC状态接口契约.md"));
-        var edgeControllerSource = File.ReadAllText(FindRepoFile(
-            "src",
-            "hosts",
-            "IIoT.HttpApi",
-            "Controllers",
-            "Edge",
-            "EdgeHostPlcRuntimeStateController.cs"));
-        var humanControllerSource = File.ReadAllText(FindRepoFile(
-            "src",
-            "hosts",
-            "IIoT.HttpApi",
-            "Controllers",
-            "Human",
-            "HumanEdgeHostController.cs"));
-        var commandSource = File.ReadAllText(FindRepoFile(
-            "src",
-            "services",
-            "IIoT.ProductionService",
-            "Commands",
-            "Edge",
-            "EdgeHosts",
-            "ReportEdgeHostPlcRuntimeStates.cs"));
-        var querySource = File.ReadAllText(FindRepoFile(
-            "src",
-            "services",
-            "IIoT.ProductionService",
-            "Queries",
-            "Human",
-            "EdgeHosts",
-            "GetEdgeHosts.cs"));
-        var controllersRoot = FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers");
-        var controllersWithWriteCommand = Directory.GetFiles(controllersRoot, "*.cs", SearchOption.AllDirectories)
-            .Where(file => File.ReadAllText(file).Contains(
-                "ReportEdgeHostPlcRuntimeStatesCommand",
-                StringComparison.Ordinal))
-            .Select(Path.GetFileName)
-            .ToList();
-        var aiReadSource = string.Join(
-            Environment.NewLine,
-            Directory.GetFiles(
-                    FindRepoFile("src", "services", "IIoT.ProductionService", "Queries", "AiRead"),
-                    "*.cs",
-                    SearchOption.AllDirectories)
-                .Select(File.ReadAllText));
-
-        controllersWithWriteCommand.Should().Equal(["EdgeHostPlcRuntimeStateController.cs"]);
-        edgeControllerSource.Should().Contain("[Authorize(Policy = HttpApiPolicies.RequireEdgeDeviceToken)]");
-        edgeControllerSource.Should().Contain("[Route(\"api/v1/edge/edge-hosts/plc-runtime-states\")]");
-        edgeControllerSource.Should().Contain("[HttpPost]");
-        edgeControllerSource.Should().Contain("HttpApiRateLimitPolicies.EdgeHostPlcStateUpload");
-        humanControllerSource.Should().Contain("[HttpGet(\"{deviceId:guid}/plc-runtime-states\")]");
-        humanControllerSource.Should().NotContain("ReportEdgeHostPlcRuntimeStatesCommand");
-        commandSource.Should().Contain(": IDeviceCommand<Result<EdgeHostPlcRuntimeStateReportResultDto>>");
-        commandSource.Should().Contain("GetByDeviceIdAsync");
-        commandSource.Should().NotContain("EdgeHostByDeviceIdentitySpec");
-        commandSource.Should().Contain("runtimeStateStore.Add(state)");
-        commandSource.Should().Contain("runtimeStateStore.Delete(missingState)");
-        commandSource.Should().NotContain("PlcBindingId");
-        commandSource.Should().NotContain("binding?.Id");
-        querySource.Should().Contain("public sealed record GetEdgeHostPlcRuntimeStatesQuery");
-        querySource.Should().Contain("[AuthorizeRequirement(EdgeHostPermissions.Read)]");
-        querySource.Should().NotContain("GetEdgeHostPlcCapacitySummaryQuery");
-        querySource.Should().Contain("ICurrentUserDeviceAccessService");
-        querySource.Should().Contain("IEdgeHostOverviewQueryService");
-        querySource.Should().NotContain("new DevicePagedSpec(0, 0, allowedDeviceIds");
-        aiReadSource.Should().NotContain("ReportEdgeHostPlcRuntimeStatesCommand");
-        aiReadSource.Should().NotContain("plc-runtime-states");
-        contractSource.Should().Contain("POST /api/v1/edge/edge-hosts/plc-runtime-states");
-        contractSource.Should().Contain("GET /api/v1/human/edge-hosts/{deviceId}/plc-runtime-states");
-        contractSource.Should().Contain("完整 PLC 配置快照");
-        contractSource.Should().Contain("合法空列表");
-        contractSource.Should().Contain("改名不变的 PLC 稳定身份");
-        contractSource.Should().Contain("AI Read");
-        contractSource.Should().Contain("不得写 PLC runtime state");
-    }
-
-    [Fact]
-    public void DeviceClientState_ShouldRemainOfficialProjectionForHumanAndAiRead()
-    {
-        var contractSource = File.ReadAllText(FindRepoFile("docs", "设备客户端状态投影契约.md"));
-        var versionReportSource = File.ReadAllText(FindRepoFile(
-            "src",
-            "services",
-            "IIoT.ProductionService",
-            "Commands",
-            "Edge",
-            "ClientVersions",
-            "ReportDeviceClientVersion.cs"));
-        var runtimeHeartbeatSource = File.ReadAllText(FindRepoFile(
-            "src",
-            "services",
-            "IIoT.ProductionService",
-            "Commands",
-            "Edge",
-            "ClientVersions",
-            "ReportDeviceRuntimeHeartbeat.cs"));
-        var inventorySource = File.ReadAllText(FindRepoFile(
-            "src",
-            "services",
-            "IIoT.ProductionService",
-            "Queries",
-            "Human",
-            "ClientReleases",
-            "GetDeviceClientVersionInventory.cs"));
-        var edgeHostSource = File.ReadAllText(FindRepoFile(
-            "src",
-            "services",
-            "IIoT.ProductionService",
-            "EdgeHosts",
-            "EdgeHostContracts.cs"));
-        var softwareStatusResolverSource = File.ReadAllText(FindRepoFile(
-            "src",
-            "services",
-            "IIoT.ProductionService",
-            "ClientReleases",
-            "DeviceClientSoftwareStatusResolver.cs"));
-        var aiReadSource = File.ReadAllText(FindRepoFile(
-            "src",
-            "services",
-            "IIoT.ProductionService",
-            "Queries",
-            "AiRead",
-            "AiReadQueries.cs"));
-        var storeSource = File.ReadAllText(FindRepoFile(
-            "src",
-            "core",
-            "IIoT.Core.Production",
-            "Contracts",
-            "ClientReleases",
-            "IDeviceClientStateStore.cs"));
-        var runtimeSources = EnumerateSourceFiles("src", "*.cs")
-            .Where(file =>
-                !file.Contains($"{Path.DirectorySeparatorChar}src{Path.DirectorySeparatorChar}tests{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
-                && !file.Contains($"{Path.DirectorySeparatorChar}Migrations{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
-            .Select(file => new { file, source = File.ReadAllText(file) })
-            .ToList();
-        var genericRepositoryOffenders = runtimeSources
-            .Where(item =>
-                item.source.Contains("IRepository<DeviceClientState", StringComparison.Ordinal)
-                || item.source.Contains("IReadRepository<DeviceClientState", StringComparison.Ordinal)
-                || item.source.Contains("DeviceClientStateByIdentitySpec", StringComparison.Ordinal)
-                || item.source.Contains("DeviceClientStatesByDevicesSpec", StringComparison.Ordinal))
-            .Select(item => item.file)
-            .ToList();
-
-        storeSource.Should().Contain("Task<DeviceClientState?> GetStateByIdentityAsync");
-        storeSource.Should().Contain("Task<IReadOnlyList<DeviceClientState>> GetStatesByDevicesAsync");
-        storeSource.Should().Contain("void AddState(DeviceClientState state)");
-        versionReportSource.Should().Contain("IDeviceClientStateStore clientStateStore");
-        versionReportSource.Should().Contain("GetStateByIdentityAsync");
-        versionReportSource.Should().Contain("clientStateStore.AddState(state)");
-        versionReportSource.Should().Contain("state.ApplyVersionReport(snapshot)");
-        runtimeHeartbeatSource.Should().Contain("IDeviceClientStateStore clientStateStore");
-        runtimeHeartbeatSource.Should().Contain("GetStateByIdentityAsync");
-        runtimeHeartbeatSource.Should().Contain("clientStateStore.AddState(state)");
-        runtimeHeartbeatSource.Should().Contain("state.ApplyRuntimeHeartbeat(heartbeat)");
-        inventorySource.Should().Contain("IDeviceClientStateStore clientStateStore");
-        inventorySource.Should().Contain("GetStatesByDevicesAsync");
-        inventorySource.Should().Contain("DeviceClientState? state");
-        inventorySource.Should().Contain("DeviceClientSoftwareStatusResolver.Resolve(state, utcNow)");
-        edgeHostSource.Should().Contain("DeviceClientSoftwareStatusResolver.Resolve(clientState, utcNow)");
-        softwareStatusResolverSource.Should().Contain("LastRuntimeHeartbeatAtUtc");
-        softwareStatusResolverSource.Should().Contain("> RuntimeHeartbeatStaleThreshold");
-        softwareStatusResolverSource.Should().NotContain("DateTime.UtcNow");
-        softwareStatusResolverSource.Should().NotContain("VersionReceivedAtUtc");
-        softwareStatusResolverSource.Should().NotContain("UpdatedAtUtc");
-        aiReadSource.Should().Contain("[AuthorizeAiRead(AiReadPermissions.DeviceClientState)]");
-        aiReadSource.Should().Contain("GetAiReadDeviceClientStatesHandler");
-        aiReadSource.Should().Contain("IAiReadDeviceQueryService deviceQueryService");
-        aiReadSource.Should().Contain("IDeviceClientStateStore clientStateStore");
-        aiReadSource.Should().Contain("GetStatesByDevicesAsync");
-        aiReadSource.Should().Contain("string SoftwareStatus");
-        aiReadSource.Should().Contain("DateTime? UpdatedAtUtc");
-        aiReadSource.Should().Contain("totalCount > items.Count");
-        contractSource.Should().Contain("`DeviceClientState` 是客户端状态官方投影");
-        contractSource.Should().Contain("不得临时拼接");
-        genericRepositoryOffenders.Should().BeEmpty();
-    }
-
-    [Fact]
     public void CloudContainerNonRoot_ShouldHaveExplicitPermissionContractBeforeUserSwitch()
     {
-        var contractSource = File.ReadAllText(FindRepoFile("docs", "云端容器非Root权限契约.md"));
-        var governanceSource = File.ReadAllText(FindRepoFile("docs", "云端架构治理清单.md"));
-        var composeSource = File.ReadAllText(FindRepoFile("deploy", "docker-compose.prod.yml"));
-        var httpApiDockerfile = File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.HttpApi", "Dockerfile"));
-        var gatewayDockerfile = File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.Gateway", "Dockerfile"));
-        var dataWorkerDockerfile = File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.DataWorker", "Dockerfile"));
+        var contractSource = File.ReadAllText(CloudRepositoryPath.Find("docs", "云端容器非Root权限契约.md"));
+        var governanceSource = File.ReadAllText(CloudRepositoryPath.Find("docs", "云端架构治理清单.md"));
+        var composeSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "docker-compose.prod.yml"));
+        var httpApiDockerfile = File.ReadAllText(CloudRepositoryPath.Find("src", "hosts", "IIoT.HttpApi", "Dockerfile"));
+        var gatewayDockerfile = File.ReadAllText(CloudRepositoryPath.Find("src", "hosts", "IIoT.Gateway", "Dockerfile"));
+        var dataWorkerDockerfile = File.ReadAllText(CloudRepositoryPath.Find("src", "hosts", "IIoT.DataWorker", "Dockerfile"));
         var migrationDockerfile = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.MigrationWorkApp", "Dockerfile"));
-        var webDockerfile = File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.AppHost", "iiot-web.Dockerfile"));
-        var webNginxSource = File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.AppHost", "iiot-web.nginx.conf"));
-        var nginxSource = File.ReadAllText(FindRepoFile("deploy", "nginx", "nginx.conf"));
-        var readinessScriptSource = File.ReadAllText(FindRepoFile(
+            CloudRepositoryPath.Find("src", "hosts", "IIoT.MigrationWorkApp", "Dockerfile"));
+        var webDockerfile = File.ReadAllText(CloudRepositoryPath.Find("src", "hosts", "IIoT.AppHost", "iiot-web.Dockerfile"));
+        var webNginxSource = File.ReadAllText(CloudRepositoryPath.Find("src", "hosts", "IIoT.AppHost", "iiot-web.nginx.conf"));
+        var nginxSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "nginx", "nginx.conf"));
+        var readinessScriptSource = File.ReadAllText(CloudRepositoryPath.Find(
             "deploy",
             "scripts",
             "check-container-nonroot-readiness.sh"));
-        var oidcSigningCertScriptSource = File.ReadAllText(FindRepoFile(
+        var oidcSigningCertScriptSource = File.ReadAllText(CloudRepositoryPath.Find(
             "deploy",
             "scripts",
             "ensure-oidc-signing-cert.sh"));
-        var preDeploySource = File.ReadAllText(FindRepoFile("deploy", "scripts", "pre-deploy-check.sh"));
+        var preDeploySource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "pre-deploy-check.sh"));
 
         contractSource.Should().Contain("当前文档是 C-06 的执行契约");
         contractSource.Should().Contain("OIDC_PROVIDER_CERTS_DIR");
@@ -660,144 +241,11 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
-    public void AiReadProductionRecords_ShouldRemainOnlyReadOnlyProductionRecordEntryPoint()
-    {
-        var contractSource = File.ReadAllText(FindRepoFile("docs", "AI只读接口契约.md"));
-        var controllerSource = File.ReadAllText(FindRepoFile(
-            "src",
-            "hosts",
-            "IIoT.HttpApi",
-            "Controllers",
-            "AiRead",
-            "AiReadController.cs"));
-        var querySource = File.ReadAllText(FindRepoFile(
-            "src",
-            "services",
-            "IIoT.ProductionService",
-            "Queries",
-            "AiRead",
-            "AiReadQueries.cs"));
-        var queryRecords = Regex.Matches(querySource, @"(?m)^public sealed record GetAiRead\w+Query").Count;
-        var authorizedQueryRecords = Regex.Matches(
-            querySource,
-            @"\[AuthorizeAiRead\(AiReadPermissions\.[^\)]+\)\]\s*public sealed record GetAiRead\w+Query").Count;
-
-        controllerSource.Should().Contain("[Authorize(Policy = HttpApiPolicies.RequireAiReadToken)]");
-        controllerSource.Should().Contain("[EnableRateLimiting(HttpApiRateLimitPolicies.AiRead)]");
-        controllerSource.Should().Contain("[Route(\"api/v1/ai/read\")]");
-        controllerSource.Should().Contain("[HttpGet(\"production-records\")]");
-        controllerSource.Should().NotContain("[HttpPost");
-        controllerSource.Should().NotContain("[HttpPut");
-        controllerSource.Should().NotContain("[HttpPatch");
-        controllerSource.Should().NotContain("[HttpDelete");
-        controllerSource.Should().NotContain("pass-stations/{typeKey}");
-        queryRecords.Should().BeGreaterThan(0);
-        authorizedQueryRecords.Should().Be(queryRecords);
-        querySource.Should().Contain(": IAiReadQuery<");
-        querySource.Should().Contain("[AuthorizeAiRead(AiReadPermissions.ProductionRecord)]");
-        querySource.Should().Contain("public sealed record GetAiReadProductionRecordsQuery");
-        querySource.Should().Contain("GetAiReadProductionRecordsHandler");
-        querySource.Should().Contain("AiReadQueryGuard.NormalizeMaxRows");
-        querySource.Should().Contain("AiReadQueryGuard.ResolveTimeRange");
-        querySource.Should().Contain("AiReadQueryGuard.ValidateDeviceAllowed");
-        querySource.Should().Contain("productionRecordQueryService.GetAsync");
-        querySource.Should().Contain("SelectFieldDefinitions");
-        querySource.Should().Contain("IsProductionRecordCommonColumn");
-        querySource.Should().NotContain("[AuthorizeRequirement(");
-        querySource.Should().NotContain("AiReadPermissions.PassStation");
-        querySource.Contains("payload_jsonb", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
-        contractSource.Should().Contain("GET /api/v1/ai/read/production-records");
-        contractSource.Should().Contain("不得出现 `HttpPost`");
-        contractSource.Should().Contain("不返回 raw `payload_jsonb`");
-        contractSource.Should().Contain("不得用 MCP、Tool、Agent workflow、Text-to-SQL 或后台任务绕过本契约直连生产库");
-    }
-
-    [Fact]
-    public void AiReadMasterData_ShouldUseExactDatabaseFiltersAndRejectMisleadingDeviceParameters()
-    {
-        var contractSource = File.ReadAllText(FindRepoFile("docs", "AI只读接口契约.md"));
-        var controllerSource = File.ReadAllText(FindRepoFile(
-            "src", "hosts", "IIoT.HttpApi", "Controllers", "AiRead", "AiReadController.cs"));
-        var querySource = File.ReadAllText(FindRepoFile(
-            "src", "services", "IIoT.ProductionService", "Queries", "AiRead", "AiReadQueries.cs"));
-        var deviceQuerySource = File.ReadAllText(FindRepoFile(
-            "src", "infrastructure", "IIoT.EntityFrameworkCore", "QueryServices", "AiReadDeviceQueryService.cs"));
-        var processQuerySource = File.ReadAllText(FindRepoFile(
-            "src", "infrastructure", "IIoT.EntityFrameworkCore", "QueryServices", "ProcessReadQueryService.cs"));
-        var deviceDto = Regex.Match(
-            querySource,
-            @"public sealed record AiReadDeviceDto\((?<body>.*?)\);",
-            RegexOptions.Singleline).Groups["body"].Value;
-
-        controllerSource.Should().Contain("[FromQuery] Guid? deviceId = null");
-        controllerSource.Should().Contain("[FromQuery] string? deviceCode = null");
-        controllerSource.Should().Contain("[FromQuery] Guid? processId = null");
-        controllerSource.Should().Contain("GetKnownUnsupportedQueryParameters");
-        controllerSource.Should().Contain("\"status\"");
-        controllerSource.Should().Contain("\"lineName\"");
-        controllerSource.Should().Contain("\"processName\"");
-        controllerSource.Should().Contain("\"updatedAt\"");
-        querySource.Should().Contain("IAiReadDeviceQueryService deviceQueryService");
-        querySource.Should().Contain("new AiReadDeviceQueryRequest(");
-        querySource.Should().Contain("ValidateDeviceQueryParameters(");
-        querySource.Should().Contain("UnsupportedParameters");
-        querySource.Should().Contain("request.ProcessId == Guid.Empty");
-        deviceQuerySource.Should().Contain("allowedDeviceIds.Contains(device.Id)");
-        deviceQuerySource.Should().Contain("device.Id == request.DeviceId.Value");
-        deviceQuerySource.Should().Contain("device.Code == normalizedDeviceCode");
-        deviceQuerySource.Should().Contain("device.ProcessId == request.ProcessId.Value");
-        deviceQuerySource.Should().Contain("var totalCount = await query.CountAsync");
-        deviceQuerySource.Should().Contain(".ThenBy(device => device.Id)");
-        processQuerySource.Should().Contain("process.Id == processId.Value");
-        deviceDto.Should().Contain("Guid Id");
-        deviceDto.Should().Contain("string DeviceCode");
-        deviceDto.Should().Contain("string DeviceName");
-        deviceDto.Should().Contain("Guid ProcessId");
-        deviceDto.Should().NotContain("Status");
-        deviceDto.Should().NotContain("LineName");
-        deviceDto.Should().NotContain("ProcessName");
-        contractSource.Should().Contain("设备与工序主数据精确查询");
-        contractSource.Should().Contain("多个条件同时出现时必须按 AND 相交");
-        contractSource.Should().Contain("传入这些已知误导参数必须返回 400");
-    }
-
-    [Fact]
-    public void AiReadScopeAndFailureAudit_ShouldRedactUntrustedText()
-    {
-        var contractSource = File.ReadAllText(FindRepoFile("docs", "AI只读接口契约.md"));
-        var querySource = File.ReadAllText(FindRepoFile(
-            "src", "services", "IIoT.ProductionService", "Queries", "AiRead", "AiReadQueries.cs"));
-        var auditSource = File.ReadAllText(FindRepoFile(
-            "src", "services", "IIoT.Services.CrossCutting", "Requests", "Behaviors", "AiReadAuditBehavior.cs"));
-
-        querySource.Should().Contain("ScopeText(request.DeviceCode)");
-        querySource.Should().Contain("ScopeText(request.Keyword)");
-        querySource.Should().Contain("ScopeText(request.PlcName)");
-        querySource.Should().Contain("ScopeText(request.Channel)");
-        querySource.Should().Contain("ScopeText(request.TargetRuntime)");
-        querySource.Should().Contain("ScopeText(request.Status)");
-        querySource.Should().Contain("ScopeText(request.Result)");
-        querySource.Should().Contain("ScopeClosed(fieldMode, \"list\", \"full\")");
-        querySource.Should().Contain("BuildScope(params (string Key, AiReadScopeValue Value)[] values)");
-        querySource.Should().NotContain("(\"keyword\", request.Keyword)");
-        querySource.Should().NotContain("(\"plcName\", request.PlcName)");
-        auditSource.Should().Contain("$\"result:{result.Status}\"");
-        auditSource.Should().Contain("$\"exception:{ex.GetType().Name}\"");
-        auditSource.Should().Contain("delegatedUserId.ToString(\"D\")");
-        auditSource.Should().Contain(": \"invalid\"");
-        auditSource.Should().NotContain("ex.Message");
-        auditSource.Should().NotContain("string.Join(\"; \", result.Errors");
-        contractSource.Should().Contain("请求字符串只能记录固定 `present`");
-        contractSource.Should().Contain("FailureReason");
-        contractSource.Should().Contain("不保存 `Result.Errors`、`Exception.Message`");
-    }
-
-    [Fact]
     public void CloudDocs_ShouldPreserveChangeClosureRules()
     {
-        var agentsSource = File.ReadAllText(FindRepoFile("AGENTS.md"));
-        var cloudRulesSource = File.ReadAllText(FindRepoFile("docs", "云端规则.md"));
-        var retrospectiveSource = File.ReadAllText(FindRepoFile("docs", "改动复盘与规则沉淀.md"));
+        var agentsSource = File.ReadAllText(CloudRepositoryPath.Find("AGENTS.md"));
+        var cloudRulesSource = File.ReadAllText(CloudRepositoryPath.Find("docs", "云端规则.md"));
+        var retrospectiveSource = File.ReadAllText(CloudRepositoryPath.Find("docs", "改动复盘与规则沉淀.md"));
         var combinedDocs = string.Join(
             Environment.NewLine,
             agentsSource,
@@ -819,280 +267,16 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
-    public void CurrentUser_ShouldExposeAllRolesWithoutSingleRoleShortcut()
-    {
-        var currentUserInterfaceSource = File.ReadAllText(
-            FindRepoFile("src", "services", "IIoT.Services.Contracts", "Contracts", "Identity", "ICurrentUser.cs"));
-        var currentUserSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Infrastructure", "CurrentUser.cs"));
-        var authorizationBehaviorSource = File.ReadAllText(
-            FindRepoFile(
-                "src",
-                "services",
-                "IIoT.Services.CrossCutting",
-                "Requests",
-                "Behaviors",
-                "AuthorizationBehavior.cs"));
-
-        currentUserInterfaceSource.Should().Contain("IReadOnlyCollection<string> Roles");
-        currentUserInterfaceSource.Should().NotContain("string? Role");
-        currentUserSource.Should().Contain("FindAll(ClaimTypes.Role)");
-        currentUserSource.Should().NotContain("FindFirstValue(ClaimTypes.Role)");
-        authorizationBehaviorSource.Should().Contain("user.Roles.Contains(SystemRoles.Admin");
-        Regex.IsMatch(authorizationBehaviorSource, @"\buser\.Role\b").Should().BeFalse();
-    }
-
-    [Fact]
-    public void JwtAuthentication_ShouldValidateBearerTokensAndAvoidUnsignedClaimParsing()
-    {
-        var dependencyInjectionSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "DependencyInjection.cs"));
-        var jwtSecretResolverSource = File.ReadAllText(
-            FindRepoFile("src", "infrastructure", "IIoT.Infrastructure", "Authentication", "JwtSecretResolver.cs"));
-        var productionRuntimeRoots = new[]
-        {
-            FindRepoFile("src", "hosts"),
-            FindRepoFile("src", "services"),
-            FindRepoFile("src", "infrastructure"),
-            FindRepoFile("src", "shared")
-        };
-
-        dependencyInjectionSource.Should().Contain("AddAuthentication(JwtBearerDefaults.AuthenticationScheme)");
-        dependencyInjectionSource.Should().Contain("AddJwtBearer(options =>");
-        dependencyInjectionSource.Should().Contain("options.TokenValidationParameters = new TokenValidationParameters");
-        dependencyInjectionSource.Should().Contain("ValidateIssuer = true");
-        dependencyInjectionSource.Should().Contain("ValidateAudience = true");
-        dependencyInjectionSource.Should().Contain("ValidateLifetime = true");
-        dependencyInjectionSource.Should().Contain("ValidateIssuerSigningKey = true");
-        dependencyInjectionSource.Should().Contain("ValidIssuer = jwtSettings.Issuer");
-        dependencyInjectionSource.Should().Contain("ValidAudience = jwtSettings.Audience");
-        dependencyInjectionSource.Should().Contain("IssuerSigningKey = new SymmetricSecurityKey");
-        dependencyInjectionSource.Should().Contain("ClockSkew = TimeSpan.Zero");
-        jwtSecretResolverSource.Should().Contain("!environment.IsDevelopment()");
-        jwtSecretResolverSource.Should().Contain("JwtSettings:Secret is missing");
-
-        var unsignedClaimParsingOffenders = productionRuntimeRoots
-            .SelectMany(root => Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories))
-            .Where(file => !file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
-                           && !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
-            .SelectMany(file => File.ReadLines(file)
-                .Select((line, index) => new { file, line, index })
-                .Where(x => Regex.IsMatch(x.line, @"\bReadJwtToken\s*\(", RegexOptions.CultureInvariant))
-                .Select(x => $"{Path.GetRelativePath(FindRepoFile("src"), x.file)}:{x.index + 1}:{x.line.Trim()}"))
-            .ToList();
-
-        unsignedClaimParsingOffenders.Should().BeEmpty(
-            "production runtime code must not parse JWT claims without the JwtBearer signature/lifetime validation pipeline");
-    }
-
-    [Fact]
-    public void HttpApiControllers_ShouldOnlyExposeHumanAndEdgeRoutes()
-    {
-        var controllerDirectory = FindRepoDirectory("src", "hosts", "IIoT.HttpApi", "Controllers");
-        var invalidRoutes = new List<string>();
-
-        foreach (var file in Directory.GetFiles(controllerDirectory, "*.cs", SearchOption.AllDirectories))
-        {
-            var source = File.ReadAllText(file);
-            var matches = Regex.Matches(source, "\\[Route\\(\"([^\"]+)\"\\)\\]");
-
-            foreach (Match match in matches)
-            {
-                var route = match.Groups[1].Value;
-                if (!route.StartsWith("api/v1/human/", StringComparison.Ordinal)
-                    && !route.StartsWith("api/v1/edge/", StringComparison.Ordinal)
-                    && !route.StartsWith("api/v1/public/", StringComparison.Ordinal)
-                    && !route.StartsWith("api/v1/machine/", StringComparison.Ordinal)
-                    && !route.StartsWith("api/v1/ai/read", StringComparison.Ordinal)
-                    && !route.StartsWith("api/v1/ai/identity", StringComparison.Ordinal))
-                {
-                    invalidRoutes.Add($"{Path.GetFileName(file)}:{route}");
-                }
-            }
-        }
-
-        invalidRoutes.Should().BeEmpty();
-    }
-
-    [Fact]
-    public void HumanEdgeHostController_ShouldExposeOnlyHumanReadRoutes()
-    {
-        var source = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Human", "HumanEdgeHostController.cs"));
-
-        source.Should().Contain("[Route(\"api/v1/human/edge-hosts\")]");
-        source.Should().Contain("[HttpGet]");
-        source.Should().Contain("[HttpGet(\"{deviceId:guid}\")]");
-        source.Should().Contain("[HttpGet(\"{deviceId:guid}/plc-runtime-states\")]");
-        source.Should().NotContain("[HttpPost");
-        source.Should().NotContain("[HttpPut");
-        source.Should().NotContain("[HttpDelete");
-        source.Should().NotContain("plc-bindings");
-        source.Should().NotContain("plc-capacity-summary");
-        source.Should().Contain("HttpApiRateLimitPolicies.GeneralApi");
-        source.Should().NotContain("api/v1/edge/");
-        source.Should().NotContain("api/v1/ai/");
-        source.Should().NotContain("api/v1/public/");
-    }
-
-    [Fact]
-    public void EdgeHostPlcRuntimeStateController_ShouldExposeOnlyEdgeReportRoute()
-    {
-        var source = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Edge", "EdgeHostPlcRuntimeStateController.cs"));
-
-        source.Should().Contain("[Route(\"api/v1/edge/edge-hosts/plc-runtime-states\")]");
-        source.Should().Contain("HttpApiPolicies.RequireEdgeDeviceToken");
-        source.Should().Contain("[HttpPost]");
-        source.Should().Contain("HttpApiRateLimitPolicies.EdgeHostPlcStateUpload");
-        source.Should().NotContain("api/v1/human/");
-        source.Should().NotContain("api/v1/ai/");
-        source.Should().NotContain("api/v1/public/");
-    }
-
-    [Fact]
-    public void SecuritySensitiveIdentityAndAuthorizationReads_ShouldBypassValueCache()
-    {
-        var appSettingsPath = FindRepoFile("src", "hosts", "IIoT.HttpApi", "appsettings.json");
-        var configuration = new ConfigurationBuilder()
-            .AddJsonFile(appSettingsPath)
-            .Build();
-        var permissionProvider = File.ReadAllText(
-            FindRepoFile("src", "infrastructure", "IIoT.EntityFrameworkCore", "Identity", "PermissionProvider.cs"));
-        var devicePermissionService = File.ReadAllText(
-            FindRepoFile("src", "infrastructure", "IIoT.EntityFrameworkCore", "Identity", "DevicePermissionService.cs"));
-        var deviceIdentityQueryService = File.ReadAllText(
-            FindRepoFile("src", "infrastructure", "IIoT.Dapper", "Production", "QueryServices", "Device", "DeviceIdentityQueryService.cs"));
-
-        configuration.GetSection("PermissionCache").Exists().Should().BeFalse();
-        permissionProvider.Should().NotContain("ICacheService");
-        permissionProvider.Should().NotContain("CacheKeys");
-        devicePermissionService.Should().NotContain("ICacheService");
-        devicePermissionService.Should().NotContain("CacheKeys");
-        deviceIdentityQueryService.Should().NotContain("ICacheService");
-        deviceIdentityQueryService.Should().NotContain("CacheKeys");
-    }
-
-    [Fact]
-    public void InfrastructureDependencyInjection_ShouldConfigureFusionCacheBackplaneWithRedisConnectionString()
-    {
-        var infrastructureSource = File.ReadAllText(
-            FindRepoFile("src", "infrastructure", "IIoT.Infrastructure", "DependencyInjection.cs"));
-
-        infrastructureSource.Should().Contain("GetConnectionString(\"redis-cache\")");
-        infrastructureSource.Should().Contain("WithStackExchangeRedisBackplane(options =>");
-        infrastructureSource.Should().Contain("options.Configuration = redisConnectionString;");
-        infrastructureSource.Should().Contain("CacheSafetyOptions.SectionName");
-        infrastructureSource.Should().Contain("FailSafeMaxDuration = cacheSafetyOptions.ResolveFailSafeDuration()");
-    }
-
-    [Fact]
-    public void HttpApi_ShouldRegisterDeviceBindingAndRateLimiting()
-    {
-        var dependencyInjectionSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "DependencyInjection.cs"));
-        var programSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Program.cs"));
-        var forwardedHeadersIndex = programSource.IndexOf("app.UseForwardedHeaders();", StringComparison.Ordinal);
-        var authenticationIndex = programSource.IndexOf("app.UseAuthentication();", StringComparison.Ordinal);
-        var rateLimiterIndex = programSource.IndexOf("app.UseRateLimiter();", StringComparison.Ordinal);
-
-        dependencyInjectionSource.Should().Contain("AddOpenBehavior(typeof(DeviceBindingBehavior<,>))");
-        dependencyInjectionSource.Should().Contain("AddRateLimiter(options =>");
-        dependencyInjectionSource.Should().Contain("HttpApiForwardedHeadersOptions.SectionName");
-        dependencyInjectionSource.Should().Contain("GetRequiredValidatedOptions<HttpApiForwardedHeadersOptions>");
-        dependencyInjectionSource.Should().Contain("Configure<ForwardedHeadersOptions>");
-        forwardedHeadersIndex.Should().BeGreaterThanOrEqualTo(0);
-        forwardedHeadersIndex.Should().BeLessThan(authenticationIndex);
-        forwardedHeadersIndex.Should().BeLessThan(rateLimiterIndex);
-        programSource.Should().Contain("app.UseRateLimiter();");
-    }
-
-    [Fact]
-    public void UseCaseExceptionHandler_ShouldMapKnownRuntimeExceptions()
-    {
-        var source = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Infrastructure", "UseCaseExceptionHandler.cs"));
-
-        source.Should().Contain("TimeoutException");
-        source.Should().Contain("ArgumentException");
-        source.Should().Contain("InvalidOperationException");
-        source.Should().Contain("StatusCodes.Status500InternalServerError");
-        source.Should().Contain("服务器处理请求时发生未预期错误。");
-    }
-
-    [Fact]
-    public void HostAppSettings_ShouldDefineHardeningAndInfrastructureSections()
-    {
-        var httpApiAppSettingsPath = FindRepoFile("src", "hosts", "IIoT.HttpApi", "appsettings.json");
-        var httpApiConfiguration = new ConfigurationBuilder()
-            .AddJsonFile(httpApiAppSettingsPath)
-            .Build();
-        var dataWorkerAppSettingsPath = FindRepoFile("src", "hosts", "IIoT.DataWorker", "appsettings.json");
-        var dataWorkerConfiguration = new ConfigurationBuilder()
-            .AddJsonFile(dataWorkerAppSettingsPath)
-            .Build();
-        var migrationAppSettingsPath = FindRepoFile("src", "hosts", "IIoT.MigrationWorkApp", "appsettings.json");
-        var migrationConfiguration = new ConfigurationBuilder()
-            .AddJsonFile(migrationAppSettingsPath)
-            .Build();
-
-        httpApiConfiguration.GetValue<int>("DistributedLock:LeaseSeconds").Should().BeGreaterThan(0);
-        httpApiConfiguration.GetValue<int>("DistributedLock:RenewalCadenceSeconds").Should().BeGreaterThan(0);
-        httpApiConfiguration.GetValue<int>("DistributedLock:OperationTimeoutMilliseconds").Should().BeGreaterThan(0);
-        httpApiConfiguration.GetValue<int>("DistributedLock:RenewalShutdownTimeoutMilliseconds").Should().BeGreaterThan(0);
-        dataWorkerConfiguration.GetValue<int>("DistributedLock:OperationTimeoutMilliseconds").Should().BeGreaterThan(0);
-        dataWorkerConfiguration.GetValue<int>("DistributedLock:RenewalShutdownTimeoutMilliseconds").Should().BeGreaterThan(0);
-        migrationConfiguration.GetValue<int>("DistributedLock:OperationTimeoutMilliseconds").Should().BeGreaterThan(0);
-        migrationConfiguration.GetValue<int>("DistributedLock:RenewalShutdownTimeoutMilliseconds").Should().BeGreaterThan(0);
-        httpApiConfiguration.GetValue<int>("CacheSafety:FailSafeMinutes").Should().Be(30);
-        httpApiConfiguration.GetValue<bool>("ForwardedHeaders:Enabled").Should().BeFalse();
-        httpApiConfiguration.GetValue<int>("ForwardedHeaders:ForwardLimit").Should().BeGreaterThan(0);
-        httpApiConfiguration.GetValue<int>("RateLimiting:PasswordLogin:PermitLimit").Should().BeGreaterThan(0);
-        httpApiConfiguration.GetValue<int>("RateLimiting:PassStationUpload:TokenLimit").Should().BeGreaterThan(0);
-        httpApiConfiguration.GetSection("BootstrapAuth").Exists().Should().BeFalse();
-        httpApiConfiguration.GetValue<string>("EdgeInstallerArtifacts:RootPath").Should().Be("edge-updates/installers");
-        httpApiConfiguration.GetValue<string>("OidcProvider:Issuer").Should().NotBeNullOrWhiteSpace();
-        httpApiConfiguration.GetValue<string>("OidcProvider:AicopilotClientId").Should().Be("aicopilot");
-        var aicopilotRedirectUris = httpApiConfiguration.GetSection("OidcProvider:AicopilotRedirectUris")
-            .Get<string[]>() ?? [];
-        aicopilotRedirectUris.Should().NotBeEmpty();
-        aicopilotRedirectUris.Should().OnlyContain(
-            redirectUri => IsAicopilotBackendCallbackRedirectUri(redirectUri),
-            "Cloud OIDC redirect_uri must target the AICopilot backend callback endpoint.");
-        httpApiConfiguration.GetValue<int>("OidcProvider:AuthorizationCodeLifetimeMinutes").Should().BeGreaterThan(0);
-        httpApiConfiguration.GetValue<int>("OidcProvider:SessionIdleMinutes").Should().BeGreaterThan(0);
-        httpApiConfiguration.GetValue<int>("Infrastructure:Postgres:CommandTimeoutSeconds").Should().BeGreaterThan(0);
-        httpApiConfiguration.GetValue<int>("Infrastructure:EventBus:RetryLimit").Should().BeGreaterThanOrEqualTo(0);
-        httpApiConfiguration.GetValue<int>("Infrastructure:EventBus:PrefetchMultiplier").Should().BeGreaterThan(0);
-
-        dataWorkerConfiguration.GetValue<int>("Infrastructure:Postgres:CommandTimeoutSeconds").Should().BeGreaterThan(0);
-        dataWorkerConfiguration.GetValue<int>("Infrastructure:EventBus:Consumers:PassStationConcurrentMessageLimit").Should().BeGreaterThan(0);
-        dataWorkerConfiguration.GetValue<int>("Infrastructure:EventBus:Consumers:DeviceLogConcurrentMessageLimit").Should().BeGreaterThan(0);
-        dataWorkerConfiguration.GetValue<int>("Infrastructure:EventBus:Consumers:HourlyCapacityConcurrentMessageLimit").Should().BeGreaterThan(0);
-
-        migrationConfiguration.GetValue<int>("Infrastructure:Postgres:CommandTimeoutSeconds").Should().BeGreaterThan(0);
-        migrationConfiguration.GetValue<int>("Infrastructure:Postgres:MaxRetryCount").Should().BeGreaterThanOrEqualTo(0);
-        migrationConfiguration.GetValue<string>("OidcProvider:AicopilotClientId").Should().Be("aicopilot");
-        migrationConfiguration.GetSection("OidcProvider:AicopilotRedirectUris")
-            .Get<string[]>()!
-            .Should()
-            .OnlyContain(
-                redirectUri => IsAicopilotBackendCallbackRedirectUri(redirectUri),
-                "MigrationWorkApp seeds the same AICopilot backend callback redirect_uri whitelist.");
-    }
-
-    [Fact]
     public void DataWorkerDockerfile_ShouldUseHealthcheck_AndMigrationWorkAppShouldRemainOneShot()
     {
         var dataWorkerDockerfile = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.DataWorker", "Dockerfile"));
+            CloudRepositoryPath.Find("src", "hosts", "IIoT.DataWorker", "Dockerfile"));
         var dataWorkerProgram = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.DataWorker", "Program.cs"));
+            CloudRepositoryPath.Find("src", "hosts", "IIoT.DataWorker", "Program.cs"));
         var migrationDockerfile = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.MigrationWorkApp", "Dockerfile"));
+            CloudRepositoryPath.Find("src", "hosts", "IIoT.MigrationWorkApp", "Dockerfile"));
         var composeSource = File.ReadAllText(
-            FindRepoFile("deploy", "docker-compose.prod.yml"));
+            CloudRepositoryPath.Find("deploy", "docker-compose.prod.yml"));
 
         dataWorkerDockerfile.Should().Contain("HEALTHCHECK");
         dataWorkerDockerfile.Should().Contain("dotnet IIoT.DataWorker.dll --healthcheck");
@@ -1104,50 +288,18 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
-    public void EventContractsAndConsumers_ShouldDeclareSchemaVersionGuard()
-    {
-        var eventContractFiles = new[]
-        {
-            FindRepoFile("src", "services", "IIoT.Services.Contracts", "Events", "Capacities", "HourlyCapacityReceivedEvent.cs"),
-            FindRepoFile("src", "services", "IIoT.Services.Contracts", "Events", "DeviceLogs", "DeviceLogReceivedEvent.cs"),
-            FindRepoFile("src", "services", "IIoT.Services.Contracts", "Events", "PassStations", "PassStationBatchReceivedEvent.cs")
-        };
-        var consumerFiles = new[]
-        {
-            FindRepoFile("src", "hosts", "IIoT.DataWorker", "Consumers", "Production", "HourlyCapacityConsumer.cs"),
-            FindRepoFile("src", "hosts", "IIoT.DataWorker", "Consumers", "Production", "DeviceLogConsumer.cs"),
-            FindRepoFile("src", "hosts", "IIoT.DataWorker", "Consumers", "Production", "PassStationConsumer.cs")
-        };
-        var schemaVersionGuardSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.DataWorker", "Consumers", "Production", "EventSchemaVersionGuard.cs"));
-
-        foreach (var file in eventContractFiles)
-        {
-            File.ReadAllText(file).Should().Contain("SchemaVersion { get; init; } = 1");
-        }
-
-        foreach (var file in consumerFiles)
-        {
-            File.ReadAllText(file).Should().Contain("EventSchemaVersionGuard.EnsureSupported");
-        }
-
-        schemaVersionGuardSource.Should().Contain("schemaVersion == CurrentSchemaVersion");
-        schemaVersionGuardSource.Should().NotContain("schemaVersion is 0");
-    }
-
-    [Fact]
     public void DeploymentTemplates_ShouldExternalizeSecretsAndUseStandardDeployEntry()
     {
-        var gitIgnoreSource = File.ReadAllText(FindRepoFile(".gitignore"));
-        var envExampleSource = File.ReadAllText(FindRepoFile("deploy", ".env.example"));
-        var composeSource = File.ReadAllText(FindRepoFile("deploy", "docker-compose.prod.yml"));
-        var edgeInstallerPublicBaseUrlSource = File.ReadAllText(FindRepoFile(
+        var gitIgnoreSource = File.ReadAllText(CloudRepositoryPath.Find(".gitignore"));
+        var envExampleSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", ".env.example"));
+        var composeSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "docker-compose.prod.yml"));
+        var edgeInstallerPublicBaseUrlSource = File.ReadAllText(CloudRepositoryPath.Find(
             "src",
             "services",
             "IIoT.ProductionService",
             "ClientReleases",
             "EdgeInstallerPublicBaseUrl.cs"));
-        var edgeBindingDownloadPanelSource = File.ReadAllText(FindRepoFile(
+        var edgeBindingDownloadPanelSource = File.ReadAllText(CloudRepositoryPath.Find(
             "src",
             "ui",
             "iiot-web",
@@ -1204,7 +356,7 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void ProductionRuntimeDeployAndWorkflowFiles_ShouldNotUseSiteIpAsDefault()
     {
-        var repositoryRoot = Path.GetDirectoryName(FindRepoFile(".gitignore"))
+        var repositoryRoot = Path.GetDirectoryName(CloudRepositoryPath.Find(".gitignore"))
                              ?? throw new DirectoryNotFoundException("Could not resolve repository root.");
         var allowedHistoricalRecord = Path.Combine(repositoryRoot, "deploy", "README.md");
         var offenders = new List<string>();
@@ -1237,7 +389,7 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void RollingReview_ShouldNotKeepCopyableSiteIpDeployCommands()
     {
-        var rollingReviewSource = File.ReadAllText(FindRepoFile("docs", "改动复盘与规则沉淀.md"));
+        var rollingReviewSource = File.ReadAllText(CloudRepositoryPath.Find("docs", "改动复盘与规则沉淀.md"));
         var forbiddenCommandPatterns = new[]
         {
             @"root@10\.98\.90\.154",
@@ -1258,7 +410,7 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void DeployReadme_ShouldNotUseTemplateDomainsForProductionHttpOidcExample()
     {
-        var readmeSource = File.ReadAllText(FindRepoFile("deploy", "README.md"));
+        var readmeSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "README.md"));
 
         readmeSource.Should().Contain("HTTP OIDC");
         readmeSource.Should().Contain("loopback 或 RFC1918 私网 IPv4");
@@ -1282,7 +434,7 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void LegacyAspirateDeploymentArtifacts_ShouldBeRemovedFromRepository()
     {
-        var repositoryRoot = Path.GetDirectoryName(FindRepoFile(".gitignore"))
+        var repositoryRoot = Path.GetDirectoryName(CloudRepositoryPath.Find(".gitignore"))
                              ?? throw new DirectoryNotFoundException("Could not resolve repository root.");
         var legacyArtifacts = new[]
         {
@@ -1300,7 +452,7 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void GeneratedAspirateStateFiles_ShouldBeIgnoredAndRemovedFromRepository()
     {
-        var repositoryRoot = Path.GetDirectoryName(FindRepoFile(".gitignore"))
+        var repositoryRoot = Path.GetDirectoryName(CloudRepositoryPath.Find(".gitignore"))
                              ?? throw new DirectoryNotFoundException("Could not resolve repository root.");
         var rootStatePath = Path.Combine(repositoryRoot, "aspirate-state.json");
         var appHostStatePath = Path.Combine(repositoryRoot, "src", "hosts", "IIoT.AppHost", "aspirate-state.json");
@@ -1312,7 +464,7 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void DeploymentArtifacts_ShouldIgnoreGeneratedBackupOutputs()
     {
-        var gitIgnoreSource = File.ReadAllText(FindRepoFile(".gitignore"));
+        var gitIgnoreSource = File.ReadAllText(CloudRepositoryPath.Find(".gitignore"));
 
         gitIgnoreSource.Should().Contain("deploy/backups/");
         gitIgnoreSource.Should().Contain("deploy/releases/");
@@ -1321,24 +473,31 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void StandardDeploymentDocs_ShouldUseLocalBuildPushAndSshDeployPath()
     {
-        var readmeSource = File.ReadAllText(FindRepoFile("deploy", "README.md"));
-        var operationsSource = File.ReadAllText(FindRepoFile("deploy", "OPERATIONS.md"));
-        var edgeGoLiveSource = File.ReadAllText(FindRepoFile("deploy", "EDGE_INSTALLER_GO_LIVE.md"));
-        var runnerSource = File.ReadAllText(FindRepoFile("deploy", "RUNNER.md"));
-        var buildAndPushSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "build-and-push.sh"));
-        var localReleaseSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "local-release.sh"));
-        var imageWorkflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-image.yml"));
-        var deployWorkflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-deploy.yml"));
+        var readmeSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "README.md"));
+        var operationsSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "OPERATIONS.md"));
+        var edgeGoLiveSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "EDGE_INSTALLER_GO_LIVE.md"));
+        var runnerSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "RUNNER.md"));
+        var buildAndPushSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "build-and-push.sh"));
+        var localReleaseSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "local-release.sh"));
+        var imageWorkflowSource = File.ReadAllText(CloudRepositoryPath.Find(".github", "workflows", "cloud-image.yml"));
+        var deployWorkflowSource = File.ReadAllText(CloudRepositoryPath.Find(".github", "workflows", "cloud-deploy.yml"));
 
         readmeSource.Should().Contain("工作区外部日常入口是 `pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud`");
         readmeSource.Should().Contain("`cloud-image` / `cloud-deploy` 只保留灾备手动入口，必须输入确认词");
         readmeSource.Should().Contain("单个镜像 build/push 默认 15 分钟超时");
         readmeSource.Should().Contain("日常 `Deploy-Changed.ps1` 内部调用的 `Deploy.ps1` 不安装任何远端 support files");
         readmeSource.Should().Contain("服务器端 `deploy-release.sh` 不再是日常或手工入口");
+        readmeSource.Should().Contain("`cloud-ci / build-test`");
+        readmeSource.Should().Contain("16 个物理 runner / 609 case");
         operationsSource.Should().Contain("pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud");
         operationsSource.Should().Contain("project-local `local-release.sh` is a legacy maintenance implementation");
+        operationsSource.Should().Contain("`cloud-ci / build-test`");
+        operationsSource.Should().Contain("16 physical runners / 609 cases");
         edgeGoLiveSource.Should().Contain("pwsh ./deploy/Deploy-Changed.ps1 -Targets Edge");
         edgeGoLiveSource.Should().Contain("Windows 安装器/Velopack/插件构建");
+        edgeGoLiveSource.Should().Contain(
+            "scripts/tests/Invoke-CloudTestInventory.ps1 -Mode Required -Configuration Release -NoBuild");
+        edgeGoLiveSource.Should().Contain("16 个物理 runner / 609 case");
         runnerSource.Should().Contain("/data/github-runner/cloud");
         runnerSource.Should().Contain("github-runner");
         runnerSource.Should().Contain("self-hosted runner 仅用于 CI 辅助和历史运维");
@@ -1368,6 +527,24 @@ public sealed class ConfigurationGuardTests
         deployWorkflowSource.Should().Contain("EMERGENCY_CLOUD_DEPLOY");
         deployWorkflowSource.Should().Contain("Use deploy/Deploy-Changed.ps1 -Targets Cloud from the workspace root");
 
+        var retiredTestEntrypoints = new[]
+        {
+            "IIoT.ServiceLayer.Tests",
+            "IIoT.ProductionService.Tests",
+            "IIoT.EndToEndTests",
+            "ConfigurationGuardTests",
+            "--filter"
+        };
+        foreach (var documentationSource in new[] { readmeSource, operationsSource, edgeGoLiveSource })
+        {
+            foreach (var retiredTestEntrypoint in retiredTestEntrypoints)
+            {
+                documentationSource.Should().NotContain(
+                    retiredTestEntrypoint,
+                    "active deployment documentation must use the physical inventory runner instead of retired test buckets or filters");
+            }
+        }
+
         foreach (var source in new[] { readmeSource, runnerSource, imageWorkflowSource, deployWorkflowSource, buildAndPushSource, localReleaseSource })
         {
             source.Should().NotContain("appleboy/ssh-action");
@@ -1380,9 +557,9 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void DeployTemplates_ShouldDocumentSingleNodeSecretsAndSmokePolicy()
     {
-        var readmeSource = File.ReadAllText(FindRepoFile("deploy", "README.md"));
-        var envExampleSource = File.ReadAllText(FindRepoFile("deploy", ".env.example"));
-        var composeSource = File.ReadAllText(FindRepoFile("deploy", "docker-compose.prod.yml"));
+        var readmeSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "README.md"));
+        var envExampleSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", ".env.example"));
+        var composeSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "docker-compose.prod.yml"));
 
         readmeSource.Should().Contain("single-machine production starter");
         readmeSource.Should().Contain("`release_tag = sha-*`");
@@ -1482,8 +659,8 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void HarborDeployReadme_ShouldDocumentRegistryOwnershipAndPrivateServerFlow()
     {
-        var documentationSource = File.ReadAllText(FindRepoFile("deploy", "README.md"));
-        var envExampleSource = File.ReadAllText(FindRepoFile("deploy", ".env.example"));
+        var documentationSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "README.md"));
+        var envExampleSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", ".env.example"));
 
         documentationSource.Should().Contain("Harbor 变量");
         documentationSource.Should().Contain("OCI_REGISTRY");
@@ -1501,71 +678,11 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
-    public void CloudProjects_ShouldReferenceSplitServiceProjectsInsteadOfLegacyCommonProject()
-    {
-        var servicesRoot = FindRepoFile("src", "services");
-        foreach (var projectFile in Directory.GetFiles(servicesRoot, "*.csproj", SearchOption.AllDirectories))
-        {
-            var source = File.ReadAllText(projectFile);
-            source.Should().NotContain("IIoT.Services.Common\\IIoT.Services.Common.csproj");
-        }
-
-        var infrastructureRoot = FindRepoFile("src", "infrastructure");
-        foreach (var projectFile in Directory.GetFiles(infrastructureRoot, "*.csproj", SearchOption.AllDirectories))
-        {
-            var source = File.ReadAllText(projectFile);
-            source.Should().NotContain("IIoT.Services.Common\\IIoT.Services.Common.csproj");
-        }
-
-        var solutionSource = File.ReadAllText(FindRepoFile("IIoT.CloudPlatform.slnx"));
-        solutionSource.Should().Contain("src/services/IIoT.Services.Contracts/IIoT.Services.Contracts.csproj");
-        solutionSource.Should().Contain("src/services/IIoT.Services.CrossCutting/IIoT.Services.CrossCutting.csproj");
-        solutionSource.Should().NotContain("src/services/IIoT.Services.Common/IIoT.Services.Common.csproj");
-    }
-
-    [Fact]
-    public void CloudSource_ShouldNotUseLegacyServicesCommonNamespaces()
-    {
-        var offenders = EnumerateSourceFiles("src", "*.cs")
-            .SelectMany(file => File.ReadLines(file)
-                .Select((line, index) => new { line, index })
-                .Where(x => Regex.IsMatch(
-                    x.line,
-                    @"^\s*(global\s+using|using|namespace)\s+IIoT\.Services\.Common\.",
-                    RegexOptions.CultureInvariant))
-                .Select(x => $"{file}:{x.index + 1}:{x.line.Trim()}"))
-            .ToList();
-
-        offenders.Should().BeEmpty();
-    }
-
-    [Fact]
-    public void CloudSource_ShouldOnlyDeclareConnectionResourceNamesInDedicatedConstants()
-    {
-        var constantFile = FindRepoFile(
-            "src",
-            "shared",
-            "IIoT.SharedKernel",
-            "Configuration",
-            "ConnectionResourceNames.cs");
-
-        var offenders = EnumerateSourceFiles("src", "*.cs")
-            .Where(file => !string.Equals(file, constantFile, StringComparison.OrdinalIgnoreCase))
-            .SelectMany(file => File.ReadLines(file)
-                .Select((line, index) => new { line, index })
-                .Where(x => Regex.IsMatch(x.line, "\"(iiot-db|eventbus)\"", RegexOptions.CultureInvariant))
-                .Select(x => $"{file}:{x.index + 1}:{x.line.Trim()}"))
-            .ToList();
-
-        offenders.Should().BeEmpty();
-    }
-
-    [Fact]
     public void NginxTemplate_ShouldRouteApiTrafficThroughGatewayOverHttp()
     {
-        var source = File.ReadAllText(FindRepoFile("deploy", "nginx", "nginx.conf"));
-        var composeSource = File.ReadAllText(FindRepoFile("deploy", "docker-compose.prod.yml"));
-        var programSource = File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.HttpApi", "Program.cs"));
+        var source = File.ReadAllText(CloudRepositoryPath.Find("deploy", "nginx", "nginx.conf"));
+        var composeSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "docker-compose.prod.yml"));
+        var programSource = File.ReadAllText(CloudRepositoryPath.Find("src", "hosts", "IIoT.HttpApi", "Program.cs"));
 
         source.Should().Contain("listen 8080;");
         source.Should().NotContain("listen 80;");
@@ -1595,10 +712,10 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void NginxTemplate_ShouldCompressTextAndJsonWithoutHttpApiDoubleCompression()
     {
-        var source = File.ReadAllText(FindRepoFile("deploy", "nginx", "nginx.conf"));
-        var programSource = File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.HttpApi", "Program.cs"));
+        var source = File.ReadAllText(CloudRepositoryPath.Find("deploy", "nginx", "nginx.conf"));
+        var programSource = File.ReadAllText(CloudRepositoryPath.Find("src", "hosts", "IIoT.HttpApi", "Program.cs"));
         var dependencyInjectionSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "DependencyInjection.cs"));
+            CloudRepositoryPath.Find("src", "hosts", "IIoT.HttpApi", "DependencyInjection.cs"));
         var gzipTypes = Regex.Match(
             source,
             @"gzip_types(?<types>.*?);",
@@ -1623,7 +740,7 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void DeployNginxTemplate_ShouldUseGatewayPoolStructuredLogsAndRequestIdForwarding()
     {
-        var source = File.ReadAllText(FindRepoFile("deploy", "nginx", "nginx.conf"));
+        var source = File.ReadAllText(CloudRepositoryPath.Find("deploy", "nginx", "nginx.conf"));
 
         source.Should().Contain("upstream gateway_pool");
         source.Should().Contain("keepalive 32;");
@@ -1648,207 +765,41 @@ public sealed class ConfigurationGuardTests
     }
 
     [Fact]
-    public void GatewayHost_ShouldDefineYarpRoutesForHumanEdgeAndBootstrapSurfaces()
-    {
-        var gatewayProjectSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.Gateway", "IIoT.Gateway.csproj"));
-        var gatewayProgramSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.Gateway", "Program.cs"));
-        var gatewayAppSettingsSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.Gateway", "appsettings.json"));
-        var gatewayMiddlewareSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.Gateway", "Infrastructure", "GatewayObservabilityMiddleware.cs"));
-        var gatewayRouteCatalogSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.Gateway", "Infrastructure", "GatewayRouteCatalog.cs"));
-
-        gatewayProjectSource.Should().Contain("Yarp.ReverseProxy");
-        gatewayProjectSource.Should().Contain("IIoT.ServiceDefaults");
-
-        gatewayProgramSource.Should().Contain("AddProblemDetails()");
-        gatewayProgramSource.Should().Contain("UseExceptionHandler()");
-        gatewayProgramSource.Should().Contain("AddReverseProxy()");
-        gatewayProgramSource.Should().Contain("LoadFromConfig(builder.Configuration.GetSection(\"ReverseProxy\"))");
-        gatewayProgramSource.Should().Contain("AddSingleton<IGatewayRouteCatalog, GatewayRouteCatalog>()");
-        gatewayProgramSource.Should().Contain("UseMiddleware<GatewayObservabilityMiddleware>()");
-        gatewayProgramSource.Should().Contain("MapReverseProxy()");
-
-        gatewayAppSettingsSource.Should().Contain("\"GatewayRoutes\"");
-        gatewayAppSettingsSource.Should().Contain("\"BlockedAliases\"");
-        gatewayAppSettingsSource.Should().Contain("blocked-edge-bootstrap");
-        gatewayAppSettingsSource.Should().Contain("blocked-human-edge-login");
-        gatewayAppSettingsSource.Should().Contain("\"PathPrefix\": \"/api/v1/edge/bootstrap\"");
-        gatewayAppSettingsSource.Should().Contain("\"Path\": \"/api/v1/human/identity/edge-login\"");
-        gatewayAppSettingsSource.Should().Contain("/api/v1/human/{**catch-all}");
-        gatewayAppSettingsSource.Should().Contain("/api/v1/public/{**catch-all}");
-        gatewayAppSettingsSource.Should().Contain("/api/v1/machine/{**catch-all}");
-        gatewayAppSettingsSource.Should().Contain("/api/v1/edge/{**catch-all}");
-        gatewayAppSettingsSource.Should().Contain("/api/v1/ai/read/{**catch-all}");
-        gatewayAppSettingsSource.Should().Contain("/internal/healthz");
-        gatewayAppSettingsSource.Should().Contain("/api/v1/bootstrap/device-instance");
-        gatewayAppSettingsSource.Should().Contain("/api/v1/bootstrap/edge-login");
-        gatewayAppSettingsSource.Should().Contain("/api/v1/bootstrap/edge-refresh");
-        gatewayAppSettingsSource.Should().Contain("\"HealthCheck\"");
-        gatewayAppSettingsSource.Should().Contain("\"Active\"");
-        gatewayAppSettingsSource.Should().Contain("\"Path\": \"/internal/healthz\"");
-        gatewayAppSettingsSource.Should().NotContain("legacy-edge-bootstrap-device-instance");
-        gatewayAppSettingsSource.Should().NotContain("legacy-human-edge-login");
-        gatewayAppSettingsSource.Should().Contain("internal-health");
-        gatewayAppSettingsSource.Should().Contain("\"Set\": \"public\"");
-        gatewayAppSettingsSource.Should().Contain("\"Set\": \"machine\"");
-        gatewayRouteCatalogSource.Should().Contain("GatewayRoutes:BlockedAliases");
-        gatewayRouteCatalogSource.Should().Contain("ReverseProxy:Routes");
-        gatewayRouteCatalogSource.Should().Contain("PathPrefix");
-        gatewayRouteCatalogSource.Should().Contain("Match:Path");
-        gatewayRouteCatalogSource.Should().NotContain("/api/v1/");
-
-        gatewayMiddlewareSource.Should().Contain("route_surface={route_surface}");
-        gatewayMiddlewareSource.Should().Contain("is_blocked_alias={is_blocked_alias}");
-        gatewayMiddlewareSource.Should().Contain("matched_route={matched_route}");
-        gatewayMiddlewareSource.Should().Contain("upstream_cluster={upstream_cluster}");
-        gatewayMiddlewareSource.Should().Contain("status_code={status_code}");
-        gatewayMiddlewareSource.Should().Contain("elapsed_ms={elapsed_ms}");
-        gatewayMiddlewareSource.Should().Contain("StatusCodes.Status404NotFound");
-    }
-
-    [Fact]
-    public void CloudOidcProvider_ShouldUseAuthorizationCodePkceAndMinimalIdentityClaims()
-    {
-        var dependencyInjectionSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "DependencyInjection.cs"));
-        var controllerSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Oidc", "CloudOidcController.cs"));
-        var gatewayAppSettingsSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.Gateway", "appsettings.json"));
-        var humanIdentityControllerSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Human", "HumanIdentityController.cs"));
-
-        dependencyInjectionSource.Should().Contain("AddOpenIddict()");
-        dependencyInjectionSource.Should().Contain("AllowAuthorizationCodeFlow()");
-        dependencyInjectionSource.Should().Contain("RequireProofKeyForCodeExchange()");
-        dependencyInjectionSource.Should().Contain("SetAuthorizationEndpointUris(\"/connect/authorize\")");
-        dependencyInjectionSource.Should().Contain("SetTokenEndpointUris(\"/connect/token\")");
-        dependencyInjectionSource.Should().Contain("SetUserInfoEndpointUris(\"/connect/userinfo\")");
-        dependencyInjectionSource.Should().Contain("SetEndSessionEndpointUris(\"/connect/logout\")");
-        dependencyInjectionSource.Should().Contain("EnableAuthorizationEndpointPassthrough()");
-        dependencyInjectionSource.Should().Contain("EnableTokenEndpointPassthrough()");
-        dependencyInjectionSource.Should().Contain("EnableUserInfoEndpointPassthrough()");
-        dependencyInjectionSource.Should().Contain("EnableEndSessionEndpointPassthrough()");
-        dependencyInjectionSource.Should().NotContain("AllowRefreshTokenFlow");
-
-        controllerSource.Should().Contain("[HttpGet(\"~/connect/authorize\")]");
-        controllerSource.Should().Contain("[HttpPost(\"~/connect/token\")]");
-        controllerSource.Should().Contain("[HttpGet(\"~/connect/userinfo\")]");
-        controllerSource.Should().Contain("[HttpGet(\"~/connect/logout\")]");
-        controllerSource.Should().Contain("string.IsNullOrWhiteSpace(request.State)");
-        controllerSource.Should().Contain("string.IsNullOrWhiteSpace(request.Nonce)");
-        controllerSource.Should().Contain("\"employee_no\"");
-        controllerSource.Should().Contain("\"employee_id\"");
-        controllerSource.Should().Contain("\"account_enabled\"");
-        controllerSource.Should().Contain("\"employee_active\"");
-        controllerSource.Should().Contain("\"status_version\"");
-        controllerSource.Should().NotContain("cloud_roles");
-        controllerSource.Should().NotContain("permissions");
-        controllerSource.Should().NotContain("device_assignments");
-
-        gatewayAppSettingsSource.Should().Contain("\"oidc-discovery\"");
-        gatewayAppSettingsSource.Should().Contain("\"Path\": \"/.well-known/openid-configuration\"");
-        gatewayAppSettingsSource.Should().Contain("\"oidc-jwks\"");
-        gatewayAppSettingsSource.Should().Contain("\"Path\": \"/.well-known/jwks\"");
-        gatewayAppSettingsSource.Should().Contain("\"oidc-connect\"");
-        gatewayAppSettingsSource.Should().Contain("\"Path\": \"/connect/{**catch-all}\"");
-        gatewayAppSettingsSource.Should().Contain("\"ai-identity\"");
-        gatewayAppSettingsSource.Should().Contain("\"Path\": \"/api/v1/ai/identity/{**catch-all}\"");
-
-        humanIdentityControllerSource.Should().Contain("ICloudOidcSessionService");
-        humanIdentityControllerSource.Should().Contain("SignInAsync(");
-        humanIdentityControllerSource.Should().Contain("command.EmployeeNo");
-    }
-
-    [Fact]
-    public void HttpApi_ShouldReturnProblemDetailsForResultFailures()
-    {
-        var apiControllerBaseSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Infrastructure", "ApiControllerBase.cs"));
-
-        apiControllerBaseSource.Should().Contain("ProblemDetails");
-        apiControllerBaseSource.Should().Contain("application/problem+json");
-        apiControllerBaseSource.Should().Contain("Extensions[\"errors\"]");
-        apiControllerBaseSource.Should().NotContain("new { errors =");
-    }
-
-    [Fact]
-    public void EdgeUploadEndpoints_ShouldDeclareRequestSizeLimits()
-    {
-        var deviceLogControllerSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Edge", "EdgeDeviceLogController.cs"));
-        var capacityControllerSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Edge", "EdgeCapacityController.cs"));
-        var passStationControllerSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Controllers", "Edge", "EdgePassStationController.cs"));
-        var limitsSource = File.ReadAllText(
-            FindRepoFile("src", "services", "IIoT.ProductionService", "Commands", "Edge", "UploadValidationLimits.cs"));
-        var validatorsSource = File.ReadAllText(
-            FindRepoFile("src", "services", "IIoT.ProductionService", "Validators", "ProductionCommandValidators.cs"));
-
-        limitsSource.Should().Contain("MaxUploadRequestBodyBytes = 5 * 1024 * 1024");
-        limitsSource.Should().Contain("MaxDeviceLogItems = 1000");
-        limitsSource.Should().Contain("MaxPassStationItems = 1000");
-        deviceLogControllerSource.Should().Contain("[RequestSizeLimit(UploadValidationLimits.MaxUploadRequestBodyBytes)]");
-        capacityControllerSource.Should().Contain("[RequestSizeLimit(UploadValidationLimits.MaxUploadRequestBodyBytes)]");
-        passStationControllerSource.Should().Contain("[RequestSizeLimit(UploadValidationLimits.MaxUploadRequestBodyBytes)]");
-        passStationControllerSource.Should().Contain("/api/v1/edge/process-records");
-        passStationControllerSource.Should().Contain("{typeKey}/batch");
-        validatorsSource.Should().Contain("ReceiveDeviceLogCommandValidator");
-        validatorsSource.Should().Contain("ReceiveHourlyCapacityCommandValidator");
-        validatorsSource.Should().Contain("ReceivePassStationBatchCommandValidator");
-    }
-
-    [Fact]
-    public void GatewayConfigAndRequestLogging_ShouldKeepSingleDestinationTimeoutAndRequestCorrelation()
-    {
-        var gatewayAppSettingsSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.Gateway", "appsettings.json"));
-        var requestLoggingSource = File.ReadAllText(
-            FindRepoFile("src", "infrastructure", "IIoT.Infrastructure", "Logging", "IIoTRequestLoggingExtensions.cs"));
-        var gatewayMiddlewareSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.Gateway", "Infrastructure", "GatewayObservabilityMiddleware.cs"));
-
-        gatewayAppSettingsSource.Should().Contain("\"ActivityTimeout\": \"00:01:00\"");
-        gatewayAppSettingsSource.Should().Contain("\"primary\"");
-        gatewayAppSettingsSource.Should().NotContain("\"secondary\"");
-
-        requestLoggingSource.Should().Contain("request_id={RequestId}");
-        requestLoggingSource.Should().Contain("trace_id={TraceId}");
-        requestLoggingSource.Should().Contain("X-Request-Id");
-        gatewayMiddlewareSource.Should().Contain("request_id={request_id}");
-        gatewayMiddlewareSource.Should().Contain("trace_id={trace_id}");
-    }
-
-    [Fact]
     public void CloudCiWorkflow_ShouldRunDynamicRequiredInventoryAndKeepManualRunnersSeparated()
     {
-        var workflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-ci.yml"));
-        var repositoryRoot = Path.GetDirectoryName(FindRepoFile("IIoT.CloudPlatform.slnx"))
+        var workflowSource = File.ReadAllText(CloudRepositoryPath.Find(".github", "workflows", "cloud-ci.yml"));
+        var repositoryRoot = Path.GetDirectoryName(CloudRepositoryPath.Find("IIoT.CloudPlatform.slnx"))
             ?? throw new DirectoryNotFoundException("Could not resolve Cloud repository root.");
         var directoryBuildPropsSource = File.ReadAllText(Path.Combine(repositoryRoot, "Directory.Build.props"));
         var globalAnalyzerConfigSource = File.ReadAllText(Path.Combine(repositoryRoot, ".globalconfig"));
-        var solutionSource = File.ReadAllText(FindRepoFile("IIoT.CloudPlatform.slnx"));
+        var solutionSource = File.ReadAllText(CloudRepositoryPath.Find("IIoT.CloudPlatform.slnx"));
         var analyzerProjectSource = File.ReadAllText(
-            FindRepoFile("src", "analyzers", "IIoT.CloudPlatform.Analyzers", "IIoT.CloudPlatform.Analyzers.csproj"));
+            CloudRepositoryPath.Find("src", "analyzers", "IIoT.CloudPlatform.Analyzers", "IIoT.CloudPlatform.Analyzers.csproj"));
         var analyzerTestsProjectSource = File.ReadAllText(
-            FindRepoFile("src", "tests", "IIoT.CloudPlatform.AnalyzerTests", "IIoT.CloudPlatform.AnalyzerTests.csproj"));
+            CloudRepositoryPath.Find("src", "tests", "IIoT.CloudPlatform.AnalyzerTests", "IIoT.CloudPlatform.AnalyzerTests.csproj"));
         var fixtureScriptSource = File.ReadAllText(
-            FindRepoFile("scripts", "tests", "TestCloudArchitectureAnalyzerFixtures.sh"));
+            CloudRepositoryPath.Find("scripts", "tests", "TestCloudArchitectureAnalyzerFixtures.sh"));
+        var realWebE2eRunnerSource = File.ReadAllText(
+            CloudRepositoryPath.Find("src", "ui", "iiot-web", "e2e", "run-real-e2e.mjs"));
+        var realWebE2eHostSource = File.ReadAllText(
+            CloudRepositoryPath.Find("src", "testing", "IIoT.CloudPlatform.WebE2ETestKit", "Program.cs"));
         var inventoryScriptSource = File.ReadAllText(
-            FindRepoFile("scripts", "tests", "Invoke-CloudTestInventory.ps1"));
+            CloudRepositoryPath.Find("scripts", "tests", "Invoke-CloudTestInventory.ps1"));
+        var migrationScriptSource = File.ReadAllText(
+            CloudRepositoryPath.Find("scripts", "tests", "Test-CloudTestMigration.ps1"));
+        var migrationBaselineSource = File.ReadAllText(
+            CloudRepositoryPath.Find("scripts", "tests", "baselines", "cloud-test-migration.json"));
         var inventoryManifestSource = File.ReadAllText(
-            FindRepoFile("src", "tests", "cloud-test-inventory.json"));
+            CloudRepositoryPath.Find("src", "tests", "cloud-test-inventory.json"));
         var analyzerFixtureStep = GetNamedGitHubWorkflowStep(
             workflowSource,
             "Run architecture analyzer fixture gate");
         var requiredInventoryStep = GetNamedGitHubWorkflowStep(
             workflowSource,
             "Run and reconcile required test inventory");
+        var migrationLedgerStep = GetNamedGitHubWorkflowStep(
+            workflowSource,
+            "Enforce test declaration migration ledger");
         var fullEndToEndStep = GetNamedGitHubWorkflowStep(
             workflowSource,
             "Run end-to-end tests");
@@ -1856,6 +807,8 @@ public sealed class ConfigurationGuardTests
         workflowSource.Should().Contain("workflow_dispatch:");
         workflowSource.Should().Contain("include_end_to_end:");
         workflowSource.Should().NotContain("--filter");
+        workflowSource.Should().MatchRegex(@"(?ms)^  build-test:\n.*?^    timeout-minutes: 25$");
+        workflowSource.Should().MatchRegex(@"(?ms)^  full-end-to-end:\n.*?^    timeout-minutes: 90$");
         directoryBuildPropsSource.Should().Contain(
             "src/analyzers/IIoT.CloudPlatform.Analyzers/IIoT.CloudPlatform.Analyzers.csproj");
         directoryBuildPropsSource.Should().Contain("OutputItemType=\"Analyzer\"");
@@ -1863,7 +816,10 @@ public sealed class ConfigurationGuardTests
         directoryBuildPropsSource.Should().Contain("IsAspireProjectResource=\"false\"");
         directoryBuildPropsSource.Should().Contain("EndsWith('Tests')");
         directoryBuildPropsSource.Should().Contain("EndsWith('TestKit')");
+        directoryBuildPropsSource.Should().Contain(
+            "'$(MSBuildProjectName)' != 'IIoT.CloudPlatform.PortFakes'");
         directoryBuildPropsSource.Should().Contain("StartsWith('IIoT.CloudPlatform.Analyzer')");
+        fixtureScriptSource.Should().Contain("IIoT.CloudPlatform.PortFakes");
         globalAnalyzerConfigSource.Should().Contain(
             "dotnet_diagnostic.CLOUDARCH003.allowed_projects = IIoT.MigrationWorkApp");
         globalAnalyzerConfigSource.Should().NotContain(
@@ -1888,21 +844,53 @@ public sealed class ConfigurationGuardTests
         analyzerFixtureStep.Should().Contain("bash scripts/tests/TestCloudArchitectureAnalyzerFixtures.sh");
         analyzerFixtureStep.Should().NotContain("if:");
         analyzerFixtureStep.Should().NotContain("continue-on-error:");
-        fixtureScriptSource.Should().Contain("ARCHITECTURE_FIXTURES_OK valid=4 invalid=8");
+        fixtureScriptSource.Should().Contain("ARCHITECTURE_FIXTURES_OK valid=4 invalid=13");
         fixtureScriptSource.Should().Contain("build_valid");
         fixtureScriptSource.Should().Contain("build_invalid");
+        realWebE2eRunnerSource.Should().Contain("mkdtemp(join(tmpdir(), 'iiot-cloud-web-e2e-'))");
+        realWebE2eRunnerSource.Should().Contain("chmod(stateDirectory, 0o700)");
+        realWebE2eRunnerSource.Should().NotContain("artifacts/test-results/cloud-web-e2e-state.json");
+        realWebE2eHostSource.Should().Contain("Path.GetRelativePath(temporaryRoot, statePath)");
+        realWebE2eHostSource.Should().Contain("File.SetUnixFileMode");
+        workflowSource.Should().Contain("!artifacts/test-results/**/*state*.json");
+        workflowSource.Should().Contain("!artifacts/test-results/**/*credential*.json");
         requiredInventoryStep.Should().Contain(
             "./scripts/tests/Invoke-CloudTestInventory.ps1 -Mode Required -Configuration Release -NoBuild");
+        requiredInventoryStep.Should().Contain("timeout-minutes: 15");
         requiredInventoryStep.Should().NotContain("if:");
         requiredInventoryStep.Should().NotContain("continue-on-error:");
+        migrationLedgerStep.Should().Contain("./scripts/tests/Test-CloudTestMigration.ps1");
+        migrationLedgerStep.Should().NotContain("if:");
+        migrationLedgerStep.Should().NotContain("continue-on-error:");
+        migrationScriptSource.Should().Contain("CLOUD_TEST_MIGRATION_OK");
+        migrationScriptSource.Should().Contain("Unmapped base test declaration");
+        migrationScriptSource.Should().Contain("currentDeltaCount");
+        migrationScriptSource.Should().Contain("negativeFixtures");
+        migrationBaselineSource.Should().Contain("\"expectedBaseDeclarationCount\": 529");
+        migrationBaselineSource.Should().Contain("\"baseCommit\": \"88c41109fbcf0b87b18939a139e0bff751e03d07\"");
+        migrationBaselineSource.Should().Contain("\"baseSourcePath\": \"src/tests\"");
+        migrationBaselineSource.Should().Contain("\"baseTestsTreeObject\": \"604fc2c1f2b9e4746657f314191a4514ccf75530\"");
+        migrationBaselineSource.Should().Contain("\"baseDeclarationDigestSha256\": \"d75d5529e418be31819676abeb210a79550149e14896fbe1857c30a83149c77c\"");
         inventoryScriptSource.Should().Contain("CLOUD_TEST_RUNNER_OK");
-        inventoryScriptSource.Should().Contain("discovered=$total executed=$passed failed=0 skipped=0");
-        inventoryManifestSource.Should().Contain("\"baselineCases\": 665");
-        inventoryManifestSource.Should().Contain("\"requiredCases\": 603");
-        inventoryManifestSource.Should().Contain("\"runtime\": \"LiveExternal\"");
-        inventoryManifestSource.Should().Contain("\"cadence\": \"Manual\"");
+        inventoryScriptSource.Should().Contain(
+            "discovered=$discovered total=$total executed=$executed passed=$passed failed=0 skipped=0");
+        inventoryScriptSource.Should().Contain("Sync-over-async policy fixture was not rejected");
+        inventoryScriptSource.Should().Contain("Task.CompletedTask.GetAwaiter" + "().GetResult()");
+        inventoryScriptSource.Should().Contain("Task.WaitAll" + "(work)");
+        inventoryScriptSource.Should().Contain("response.Result");
+        inventoryManifestSource.Should().Contain("\"migrationBaselineCases\": 591");
+        inventoryManifestSource.Should().Contain("\"baselineCases\": 673");
+        inventoryManifestSource.Should().Contain("\"requiredCases\": 609");
+        inventoryManifestSource.Should().Contain("\"regressionBaselines\"");
+        inventoryManifestSource.Should().NotContain("\"regressionId\": null");
+        inventoryScriptSource.Should().Contain("RegressionId coverage fell below its non-zero floor");
+        inventoryScriptSource.Should().Contain("regressionZero=$regressionZeroCount");
+        inventoryManifestSource.Should().Contain("\"runtime\": \"Aspire\"");
+        inventoryManifestSource.Should().Contain("\"runtimeDependencies\": [\"Aspire\", \"AICopilotWorkspace\"]");
+        inventoryManifestSource.Should().Contain("\"cadence\": \"Release\"");
+        inventoryManifestSource.Should().Contain("\"profile\": \"WorkspaceAlignment\"");
         workflowSource.Should().Contain(
-            "ARCHITECTURE_FIXTURES_OK valid=4 invalid=8 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006");
+            "ARCHITECTURE_FIXTURES_OK valid=4 invalid=13 suppressionBypass=3 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010");
         workflowSource.Should().Contain("Validate deploy script syntax");
         workflowSource.Should().Contain("sh -n deploy/scripts/release-common.sh");
         workflowSource.Should().Contain("sh -n deploy/scripts/pre-deploy-check.sh");
@@ -1915,9 +903,11 @@ public sealed class ConfigurationGuardTests
         workflowSource.Should().Contain("bash -n deploy/scripts/post-release-cleanup.sh");
         workflowSource.Should().Contain("pwsh -NoProfile -Command");
         workflowSource.Should().Contain("Parser]::ParseFile(\"deploy/scripts/InvokeEdgeInstallerPackageDownload.ps1\"");
-        fullEndToEndStep.Should().Contain(
-            "if: github.event_name == 'workflow_dispatch' && inputs.include_end_to_end == true");
-        fullEndToEndStep.Should().Contain("timeout-minutes: 15");
+        workflowSource.Should().Contain(
+            "if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.include_end_to_end == true)");
+        workflowSource.Should().Contain(
+            "if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.include_mutation == true)");
+        fullEndToEndStep.Should().Contain("timeout-minutes: 60");
         fullEndToEndStep.Should().Contain(
             "./scripts/tests/Invoke-CloudTestInventory.ps1 -Mode EndToEnd -Configuration Release -NoBuild");
     }
@@ -1925,7 +915,7 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void CloudDeployWorkflow_ShouldUseReleaseTagInputAndSharedDeployScript()
     {
-        var workflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-deploy.yml"));
+        var workflowSource = File.ReadAllText(CloudRepositoryPath.Find(".github", "workflows", "cloud-deploy.yml"));
 
         workflowSource.Should().Contain("release_tag:");
         workflowSource.Should().Contain("Emergency release tag from local Harbor build or disaster-recovery cloud-image (sha-*)");
@@ -1966,7 +956,7 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void CloudAdminRepairWorkflow_ShouldProtectDeployEnvFileAndRequireExplicitRepair()
     {
-        var workflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-admin-repair.yml"));
+        var workflowSource = File.ReadAllText(CloudRepositoryPath.Find(".github", "workflows", "cloud-admin-repair.yml"));
 
         workflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
         workflowSource.Should().Contain("environment: production");
@@ -1991,15 +981,15 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void CloudImageWorkflow_ShouldUseIntranetRunnerAndHarborMirrorBaseImages()
     {
-        var workflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-image.yml"));
-        var harborRetentionScript = File.ReadAllText(FindRepoFile("deploy", "scripts", "harbor-retention.sh"));
-        var webDockerfileSource = File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.AppHost", "iiot-web.Dockerfile"));
+        var workflowSource = File.ReadAllText(CloudRepositoryPath.Find(".github", "workflows", "cloud-image.yml"));
+        var harborRetentionScript = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "harbor-retention.sh"));
+        var webDockerfileSource = File.ReadAllText(CloudRepositoryPath.Find("src", "hosts", "IIoT.AppHost", "iiot-web.Dockerfile"));
         var backendDockerfileSources = new[]
         {
-            File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.HttpApi", "Dockerfile")),
-            File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.Gateway", "Dockerfile")),
-            File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.DataWorker", "Dockerfile")),
-            File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.MigrationWorkApp", "Dockerfile")),
+            File.ReadAllText(CloudRepositoryPath.Find("src", "hosts", "IIoT.HttpApi", "Dockerfile")),
+            File.ReadAllText(CloudRepositoryPath.Find("src", "hosts", "IIoT.Gateway", "Dockerfile")),
+            File.ReadAllText(CloudRepositoryPath.Find("src", "hosts", "IIoT.DataWorker", "Dockerfile")),
+            File.ReadAllText(CloudRepositoryPath.Find("src", "hosts", "IIoT.MigrationWorkApp", "Dockerfile")),
         };
 
         workflowSource.Should().Contain("runs-on: [self-hosted, iiot-linux-prod]");
@@ -2059,7 +1049,7 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void WebNginxTemplate_ShouldAvoidStaleSpaChunkFallbacks()
     {
-        var source = File.ReadAllText(FindRepoFile("src", "hosts", "IIoT.AppHost", "iiot-web.nginx.conf"));
+        var source = File.ReadAllText(CloudRepositoryPath.Find("src", "hosts", "IIoT.AppHost", "iiot-web.nginx.conf"));
 
         source.Should().Contain("listen 8080;");
         source.Should().Contain("location = /index.html");
@@ -2073,17 +1063,17 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void DeployOperationsScripts_ShouldExistAndUseExpectedCommands()
     {
-        var backupSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "postgres-backup.sh"));
-        var restoreSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "postgres-restore.sh"));
-        var verifySource = File.ReadAllText(FindRepoFile("deploy", "scripts", "postgres-verify-backup.sh"));
-        var opsCheckSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "ops-check.sh"));
-        var releaseCommonSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "release-common.sh"));
-        var preDeploySource = File.ReadAllText(FindRepoFile("deploy", "scripts", "pre-deploy-check.sh"));
-        var mirrorImagesSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "mirror-third-party-images.sh"));
-        var deployReleaseSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "deploy-release.sh"));
-        var postDeploySource = File.ReadAllText(FindRepoFile("deploy", "scripts", "post-deploy-check.sh"));
-        var rollbackSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "rollback-release.sh"));
-        var configUpdateSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "update-deploy-env.sh"));
+        var backupSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "postgres-backup.sh"));
+        var restoreSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "postgres-restore.sh"));
+        var verifySource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "postgres-verify-backup.sh"));
+        var opsCheckSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "ops-check.sh"));
+        var releaseCommonSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "release-common.sh"));
+        var preDeploySource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "pre-deploy-check.sh"));
+        var mirrorImagesSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "mirror-third-party-images.sh"));
+        var deployReleaseSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "deploy-release.sh"));
+        var postDeploySource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "post-deploy-check.sh"));
+        var rollbackSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "rollback-release.sh"));
+        var configUpdateSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "update-deploy-env.sh"));
 
         backupSource.Should().Contain("pg_dump -h 127.0.0.1 -Fc -U postgres -d iiot-db");
         backupSource.Should().Contain("backups/postgres");
@@ -2198,12 +1188,12 @@ public sealed class ConfigurationGuardTests
         releaseCommonSource.Should().Contain("resolve_release_images_for_keys");
         releaseCommonSource.Should().Contain("apply_app_images_to_dotenv_for_keys");
 
-        var localReleaseSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "local-release.sh"));
-        var buildAndPushSource = File.ReadAllText(FindRepoFile("deploy", "scripts", "build-and-push.sh"));
+        var localReleaseSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "local-release.sh"));
+        var buildAndPushSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "build-and-push.sh"));
         var verifyInstallerCatalogSource = File.ReadAllText(
-            FindRepoFile("deploy", "scripts", "verify-edge-installer-catalog.sh"));
+            CloudRepositoryPath.Find("deploy", "scripts", "verify-edge-installer-catalog.sh"));
         var installerDownloadSource = File.ReadAllText(
-            FindRepoFile("deploy", "scripts", "InvokeEdgeInstallerPackageDownload.ps1"));
+            CloudRepositoryPath.Find("deploy", "scripts", "InvokeEdgeInstallerPackageDownload.ps1"));
 
         localReleaseSource.Should().Contain("refuses root SSH by default");
         localReleaseSource.Should().Contain("ALLOW_ROOT_SSH_DEPLOY=emergency");
@@ -2440,7 +1430,7 @@ public sealed class ConfigurationGuardTests
             AssertUnixUserExecutable(script);
         }
 
-        var releaseCommonMode = File.GetUnixFileMode(FindRepoFile("deploy", "scripts", "release-common.sh"));
+        var releaseCommonMode = File.GetUnixFileMode(CloudRepositoryPath.Find("deploy", "scripts", "release-common.sh"));
         (releaseCommonMode & UnixFileMode.UserExecute)
             .Should().Be(0, "release-common.sh is a sourced library, not an operator entrypoint");
     }
@@ -2448,7 +1438,7 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void OperationsManual_ShouldDocumentHealthBackupRestoreAndExitCodes()
     {
-        var operationsSource = File.ReadAllText(FindRepoFile("deploy", "OPERATIONS.md"));
+        var operationsSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "OPERATIONS.md"));
 
         operationsSource.Should().Contain("GET /internal/healthz");
         operationsSource.Should().Contain("127.0.0.1");
@@ -2505,9 +1495,9 @@ public sealed class ConfigurationGuardTests
     [Fact]
     public void DeployCronTemplates_ShouldUseFixedSchedulesForBackupAndRestoreVerification()
     {
-        var backupCronSource = File.ReadAllText(FindRepoFile("deploy", "cron", "iiot-backup.cron.example"));
-        var verifyCronSource = File.ReadAllText(FindRepoFile("deploy", "cron", "iiot-backup-verify.cron.example"));
-        var cleanupCronSource = File.ReadAllText(FindRepoFile("deploy", "cron", "iiot-post-release-cleanup.cron.example"));
+        var backupCronSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "cron", "iiot-backup.cron.example"));
+        var verifyCronSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "cron", "iiot-backup-verify.cron.example"));
+        var cleanupCronSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "cron", "iiot-post-release-cleanup.cron.example"));
 
         backupCronSource.Should().Contain("30 2 * * *");
         backupCronSource.Should().Contain("./scripts/postgres-backup.sh");
@@ -2525,123 +1515,12 @@ public sealed class ConfigurationGuardTests
         cleanupCronSource.Should().NotContain("/srv/iiot-cloud/deploy");
     }
 
-    [Fact]
-    public void RecipeDeviceIdIndexMigration_ShouldExist()
-    {
-        var migrationsDirectory = FindRepoFile("src", "infrastructure", "IIoT.EntityFrameworkCore", "Migrations");
-        var migrationFiles = Directory.GetFiles(migrationsDirectory, "*AddRecipeDeviceIdIndex*.cs", SearchOption.TopDirectoryOnly)
-            .Where(file => !file.EndsWith(".Designer.cs", StringComparison.Ordinal))
-            .ToList();
-
-        migrationFiles.Should().ContainSingle();
-        File.ReadAllText(migrationFiles[0]).Should().Contain("ix_recipes_device_id");
-    }
-
-    [Fact]
-    public void HttpApi_ShouldDefineHumanEdgeAndBootstrapSwaggerGroups()
-    {
-        var programSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Program.cs"));
-        var conventionSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "Infrastructure", "OpenApi", "RouteSurfaceApiExplorerConvention.cs"));
-
-        programSource.Should().Contain("AddSwaggerGen");
-        programSource.Should().Contain("SwaggerDoc(\"human\"");
-        programSource.Should().Contain("SwaggerDoc(\"edge\"");
-        programSource.Should().Contain("SwaggerDoc(\"bootstrap\"");
-        programSource.Should().Contain("SwaggerDoc(\"ai-read\"");
-        programSource.Should().Contain("SwaggerEndpoint(\"/swagger/human/swagger.json\", \"human\")");
-        programSource.Should().Contain("SwaggerEndpoint(\"/swagger/edge/swagger.json\", \"edge\")");
-        programSource.Should().Contain("SwaggerEndpoint(\"/swagger/bootstrap/swagger.json\", \"bootstrap\")");
-        programSource.Should().Contain("SwaggerEndpoint(\"/swagger/ai-read/swagger.json\", \"ai-read\")");
-        conventionSource.Should().Contain("return \"ai-read\";");
-        conventionSource.Should().Contain("return \"bootstrap\";");
-        conventionSource.Should().Contain("return \"edge\";");
-        conventionSource.Should().Contain("return \"machine\";");
-        conventionSource.Should().Contain("return \"human\";");
-    }
-
-    [Fact]
-    public void GatewayIntegrationSurface_ShouldDocumentFormalRoutesAndRejectedAliases()
-    {
-        var documentSource = File.ReadAllText(FindRepoFile("deploy", "README.md"));
-
-        documentSource.Should().Contain("/api/v1/human/*");
-        documentSource.Should().Contain("/api/v1/edge/*");
-        documentSource.Should().Contain("/api/v1/machine/*");
-        documentSource.Should().Contain("/api/v1/bootstrap/*");
-        documentSource.Should().Contain("/api/v1/bootstrap/device-instance");
-        documentSource.Should().Contain("/api/v1/bootstrap/edge-login");
-        documentSource.Should().Contain("X-IIoT-Bootstrap-Secret");
-        documentSource.Should().Contain("/api/v1/edge/bootstrap/device-instance");
-        documentSource.Should().Contain("/api/v1/human/identity/edge-login");
-        documentSource.Should().Contain("rejected");
-    }
-
-    [Fact]
-    public void PassStationRuntime_ShouldUseUnifiedSchemaAndRepository()
-    {
-        var schemaSource = File.ReadAllText(
-            FindRepoFile("src", "hosts", "IIoT.HttpApi", "config", "pass-station-types.json"));
-        var queryServiceSource = File.ReadAllText(
-            FindRepoFile("src", "infrastructure", "IIoT.Dapper", "Production", "QueryServices", "PassStation", "PassStationRecordQueryService.cs"));
-        var repositorySource = File.ReadAllText(
-            FindRepoFile("src", "infrastructure", "IIoT.Dapper", "Production", "Repositories", "PassStations", "PassStationRecordRepository.cs"));
-
-        schemaSource.Should().Contain("\"typeKey\": \"injection\"");
-        schemaSource.Should().Contain("\"typeKey\": \"stacking\"");
-        schemaSource.Should().Contain("\"typeKey\": \"homogenization\"");
-        queryServiceSource.Should().Contain("pass_station_records");
-        repositorySource.Should().Contain("payload_jsonb");
-        repositorySource.Should().NotContain("pass_data_injection");
-        repositorySource.Should().NotContain("pass_data_stacking");
-    }
-
-    [Fact]
-    public void HumanRequestFolders_ShouldOnlyContainHumanCommandsAndQueries()
-    {
-        AssertRequestFolderConvention("Commands", "Human", "IHumanCommand");
-        AssertRequestFolderConvention("Queries", "Human", "IHumanQuery");
-    }
-
-    [Fact]
-    public void EdgeRequestFolders_ShouldOnlyContainDeviceCommandsAndQueries()
-    {
-        AssertRequestFolderConvention("Commands", "Edge", "IDeviceCommand");
-        AssertRequestFolderConvention("Queries", "Edge", "IDeviceQuery");
-    }
-
-    [Fact]
-    public void BootstrapRequestFolders_ShouldOnlyContainAnonymousBootstrapQueries()
-    {
-        AssertRequestFolderConvention("Queries", "Bootstrap", "IAnonymousBootstrapQuery");
-    }
-
-    [Fact]
-    public void AiReadRequestFolders_ShouldOnlyContainAiReadQueries()
-    {
-        AssertRequestFolderConvention("Queries", "AiRead", "IAiReadQuery");
-    }
-
-    [Fact]
-    public void PublicRequestFolders_ShouldOnlyContainPublicQueries()
-    {
-        AssertRequestFolderConvention("Queries", "Public", "IPublicQuery");
-    }
-
-    [Fact]
-    public void InternalRequestFolders_ShouldOnlyContainBareCommandsAndQueries()
-    {
-        AssertRequestFolderConvention("Commands", "Internal", "ICommand");
-        AssertRequestFolderConvention("Queries", "Internal", "IQuery");
-    }
-
     private static void AssertRequestFolderConvention(
         string category,
         string audience,
         string expectedInterface)
     {
-        var servicesRoot = FindRepoFile("src", "services");
+        var servicesRoot = CloudRepositoryPath.Find("src", "services");
         var invalidDeclarations = new List<string>();
 
         foreach (var file in Directory.GetFiles(servicesRoot, "*.cs", SearchOption.AllDirectories)
@@ -2680,7 +1559,7 @@ public sealed class ConfigurationGuardTests
 
     private static IEnumerable<string> EnumerateSourceFiles(string rootSegment, string searchPattern)
     {
-        var root = FindRepoFile(rootSegment);
+        var root = CloudRepositoryPath.Find(rootSegment);
 
         return Directory.GetFiles(root, searchPattern, SearchOption.AllDirectories)
             .Where(path =>
@@ -2821,7 +1700,7 @@ public sealed class ConfigurationGuardTests
             return;
         }
 
-        var mode = File.GetUnixFileMode(FindRepoFile("deploy", "scripts", scriptName));
+        var mode = File.GetUnixFileMode(CloudRepositoryPath.Find("deploy", "scripts", scriptName));
         (mode & UnixFileMode.UserExecute)
             .Should().NotBe(0, $"{scriptName} is invoked directly by deployment docs or scripts");
     }
@@ -2835,28 +1714,4 @@ public sealed class ConfigurationGuardTests
                    StringComparison.Ordinal);
     }
 
-    private static string FindRepoFile(params string[] relativeSegments)
-    {
-        var current = new DirectoryInfo(AppContext.BaseDirectory);
-
-        while (current is not null)
-        {
-            var candidate = Path.Combine(current.FullName, relativeSegments[0]);
-            if (Directory.Exists(candidate) || File.Exists(candidate))
-            {
-                return Path.Combine(current.FullName, Path.Combine(relativeSegments));
-            }
-
-            current = current.Parent;
-        }
-
-        throw new DirectoryNotFoundException("Could not locate repository root for source inspection.");
-    }
-
-    private static string FindRepoDirectory(params string[] relativeSegments)
-    {
-        var filePath = FindRepoFile(relativeSegments);
-        return Path.GetDirectoryName(filePath)
-               ?? throw new DirectoryNotFoundException("Could not resolve repository directory.");
-    }
 }

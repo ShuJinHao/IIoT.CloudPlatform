@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 2,
+  "collector": "coverlet.collector",
+  "version": "6.0.4",
+  "requiredRunnerCount": 16,
+  "merged": {
+    "linesValid": 17962,
+    "linesCovered": 11006,
+    "branchesValid": 5513,
+    "branchesCovered": 2677,
+    "lineRate": 0.612738,
+    "branchRate": 0.48557954
+  },
+  "sourceUniverse": {
+    "fileCount": 372,
+    "linesValid": 17962,
+    "branchesValid": 5513,
+    "fileMetricsSha256": "eb96065dff5a99400c0fc2bcb95319090645accdece6735eab13a4908430e1bb"
+  },
+  "newP0Code": {
+    "roots": ["src/core", "src/services"],
+    "minimumLineRate": 0.9,
+    "minimumBranchRate": 0.85,
+    "nonExecutableFileAllowlist": [
+      {
+        "path": "src/services/IIoT.Services.Contracts/Contracts/Caching/ICacheService.cs",
+        "classification": "non-executable-source",
+        "reason": "The cache contract contains interface signatures and XML documentation only, so the compiler emits no executable sequence points."
+      },
+      {
+        "path": "src/services/IIoT.ProductionService/Properties/AssemblyInfo.cs",
+        "classification": "non-executable-source",
+        "reason": "Assembly-level InternalsVisibleTo metadata contains no executable sequence points."
+      }
+    ]
+  }
+}

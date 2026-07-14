@@ -10,11 +10,6 @@ using ZiggyCreatures.Caching.Fusion;
 
 namespace IIoT.CloudPlatform.WorkflowTests;
 
-[Trait("TestKind", "Workflow")]
-[Trait("Runtime", "Pure")]
-[Trait("Risk", "P0")]
-[Trait("Capability", "Caching")]
-[Trait("Owner", "Cloud.Infrastructure")]
 public sealed class RedisCacheServiceSemanticsTests
 {
     [Fact]
@@ -801,19 +796,17 @@ public sealed class RedisCacheServiceSemanticsTests
     public async Task RemoveByPatternAsync_CancellationAfterEndpointLookup_Propagates()
     {
         using var cancellation = new CancellationTokenSource();
-        EndPoint endpoint = new DnsEndPoint("redis.internal", 6379);
-        var server = new Mock<IServer>(MockBehavior.Strict);
         var redis = new Mock<IConnectionMultiplexer>(MockBehavior.Strict);
-        redis.Setup(connection => connection.GetEndPoints(It.IsAny<bool>())).Returns([endpoint]);
-        redis.Setup(connection => connection.GetServer(endpoint, It.IsAny<object?>()))
+        redis.Setup(connection => connection.GetEndPoints(It.IsAny<bool>()))
             .Callback(() => cancellation.Cancel())
-            .Returns(server.Object);
+            .Returns([]);
         var sut = Create(CreateFusionMock(), redis);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => sut.RemoveByPatternAsync("prefix:*", cancellation.Token));
 
-        server.VerifyNoOtherCalls();
+        redis.Verify(connection => connection.GetEndPoints(It.IsAny<bool>()), Times.Once);
+        redis.VerifyNoOtherCalls();
     }
 
     [Fact]

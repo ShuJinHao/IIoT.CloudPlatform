@@ -20,7 +20,7 @@ function Resolve-ExactGitRoot([string]$candidate, [string]$solutionFile, [string
         throw "$label repository is not a readable Git worktree: $resolved"
     }
     $canonicalGitRoot = (Resolve-Path $gitRoot).Path
-    if (-not [string]::Equals($resolved.TrimEnd('/', '\'), $canonicalGitRoot.TrimEnd('/', '\'), [StringComparison]::Ordinal)) {
+    if (-not [string]::Equals($resolved.TrimEnd('/', '\'), $canonicalGitRoot.TrimEnd('/', '\'), [StringComparison]::OrdinalIgnoreCase)) {
         throw "$label repository root must be the exact Git worktree root: candidate=$resolved actual=$canonicalGitRoot"
     }
     return $resolved
@@ -71,8 +71,9 @@ $cloudContractSources = @(
     'src/services/IIoT.Services.Contracts/Contracts/Identity/IIoTClaimTypes.cs'
 )
 $aiContractSources = @(
-    'src/infrastructure/AICopilot.Infrastructure/CloudRead/CloudAiReadClient.cs',
+    'src/infrastructure/AICopilot.CloudReadClient/CloudAiReadClient.cs',
     'src/services/AICopilot.Services.Contracts/Contracts/CloudAiReadContracts.cs',
+    'src/tests/AICopilot.ContractTests/CloudAiReadClientContractTests.cs',
     'src/tests/AICopilot.CloudAiReadLiveTests/CloudAiReadLiveContractTests.cs'
 )
 

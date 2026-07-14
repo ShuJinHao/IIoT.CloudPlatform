@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 2,
+  "vitest": {
+    "expectedFiles": 16,
+    "expectedCases": 67,
+    "files": [
+      { "path": "src/components/ui/UiDataTable.test.ts", "testKind": "Component", "expected": 3 },
+      { "path": "src/core/http/apiResult.test.ts", "testKind": "Contract", "expected": 2 },
+      { "path": "src/core/http/problemDetails.test.ts", "testKind": "Contract", "expected": 4 },
+      { "path": "src/core/list-page/useListPage.test.ts", "testKind": "Unit", "expected": 3 },
+      { "path": "src/features/auth/login.test.ts", "testKind": "Smoke", "expected": 6 },
+      { "path": "src/features/capacity/capacity.test.ts", "testKind": "Unit", "expected": 6 },
+      { "path": "src/features/client-releases/client-releases.test.ts", "testKind": "Unit", "expected": 4 },
+      { "path": "src/features/dashboard/dashboard.test.ts", "testKind": "Smoke", "expected": 11 },
+      { "path": "src/features/device-logs/device-logs.test.ts", "testKind": "Unit", "expected": 4 },
+      { "path": "src/features/devices/devices.test.ts", "testKind": "Unit", "expected": 2 },
+      { "path": "src/features/edge-hosts/edge-hosts.test.ts", "testKind": "Unit", "expected": 5 },
+      { "path": "src/features/employees/employees.test.ts", "testKind": "Unit", "expected": 2 },
+      { "path": "src/features/pass-station/pass-station.test.ts", "testKind": "Contract", "expected": 4 },
+      { "path": "src/features/processes/processes.test.ts", "testKind": "Unit", "expected": 3 },
+      { "path": "src/features/recipes/recipes.test.ts", "testKind": "Unit", "expected": 4 },
+      { "path": "src/features/roles/roles.test.ts", "testKind": "Unit", "expected": 4 }
+    ]
+  },
+  "browserSmoke": {
+    "expectedFiles": 1,
+    "expectedCases": 2,
+    "files": [
+      { "path": "browser-smoke/auth-flow.smoke.spec.ts", "testKind": "BrowserSmoke", "expected": 2 }
+    ]
+  },
+  "endToEnd": {
+    "expectedFiles": 1,
+    "expectedCases": 1,
+    "files": [
+      { "path": "e2e/real-auth.spec.ts", "testKind": "EndToEnd", "expected": 1 }
+    ]
+  }
+}
