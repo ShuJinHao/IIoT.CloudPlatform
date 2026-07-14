@@ -1,0 +1,7 @@
+is_global = true
+
+# CLOUDARCH003 project exceptions are reserved for a complete, dedicated database-owning host.
+# MigrationWorkApp exists only to run migration/compatibility checks and seed data.
+dotnet_diagnostic.CLOUDARCH003.allowed_projects = IIoT.MigrationWorkApp
+# All other host exceptions pair the exact assembly and type; adjacent types remain blocked.
+dotnet_diagnostic.CLOUDARCH003.allowed_types = IIoT.DataWorker::Program,IIoT.HttpApi::IIoT.HttpApi.DesignTimeDbContextFactory,IIoT.HttpApi::IIoT.HttpApi.Infrastructure.PostgresReadinessHealthCheck

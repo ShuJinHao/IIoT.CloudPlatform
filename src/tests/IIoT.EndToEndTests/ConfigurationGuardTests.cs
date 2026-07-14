@@ -1828,6 +1828,23 @@ public sealed class ConfigurationGuardTests
     public void CloudCiWorkflow_ShouldRunRequiredPostgresPersistenceGatesAndKeepFullEndToEndBehindManualDispatch()
     {
         var workflowSource = File.ReadAllText(FindRepoFile(".github", "workflows", "cloud-ci.yml"));
+        var repositoryRoot = Path.GetDirectoryName(FindRepoFile("IIoT.CloudPlatform.slnx"))
+            ?? throw new DirectoryNotFoundException("Could not resolve Cloud repository root.");
+        var directoryBuildPropsSource = File.ReadAllText(Path.Combine(repositoryRoot, "Directory.Build.props"));
+        var globalAnalyzerConfigSource = File.ReadAllText(Path.Combine(repositoryRoot, ".globalconfig"));
+        var solutionSource = File.ReadAllText(FindRepoFile("IIoT.CloudPlatform.slnx"));
+        var analyzerProjectSource = File.ReadAllText(
+            FindRepoFile("src", "analyzers", "IIoT.CloudPlatform.Analyzers", "IIoT.CloudPlatform.Analyzers.csproj"));
+        var analyzerTestsProjectSource = File.ReadAllText(
+            FindRepoFile("src", "tests", "IIoT.CloudPlatform.AnalyzerTests", "IIoT.CloudPlatform.AnalyzerTests.csproj"));
+        var fixtureScriptSource = File.ReadAllText(
+            FindRepoFile("scripts", "tests", "TestCloudArchitectureAnalyzerFixtures.sh"));
+        var analyzerFixtureStep = GetNamedGitHubWorkflowStep(
+            workflowSource,
+            "Run architecture analyzer fixture gate");
+        var analyzerTestsStep = GetNamedGitHubWorkflowStep(
+            workflowSource,
+            "Run architecture analyzer tests");
         var productionServiceStep = GetNamedGitHubWorkflowStep(
             workflowSource,
             "Run production service tests");
@@ -1842,6 +1859,46 @@ public sealed class ConfigurationGuardTests
         workflowSource.Should().Contain("include_end_to_end:");
         workflowSource.Should().Contain("Run configuration guard tests");
         workflowSource.Should().Contain("--filter ConfigurationGuardTests");
+        directoryBuildPropsSource.Should().Contain(
+            "src/analyzers/IIoT.CloudPlatform.Analyzers/IIoT.CloudPlatform.Analyzers.csproj");
+        directoryBuildPropsSource.Should().Contain("OutputItemType=\"Analyzer\"");
+        directoryBuildPropsSource.Should().Contain("ReferenceOutputAssembly=\"false\"");
+        directoryBuildPropsSource.Should().Contain("IsAspireProjectResource=\"false\"");
+        directoryBuildPropsSource.Should().Contain("EndsWith('Tests')");
+        directoryBuildPropsSource.Should().Contain("StartsWith('IIoT.CloudPlatform.Analyzer')");
+        globalAnalyzerConfigSource.Should().Contain(
+            "dotnet_diagnostic.CLOUDARCH003.allowed_projects = IIoT.MigrationWorkApp");
+        globalAnalyzerConfigSource.Should().NotContain(
+            "dotnet_diagnostic.CLOUDARCH003.allowed_projects = IIoT.DataWorker");
+        globalAnalyzerConfigSource.Should().Contain("IIoT.DataWorker::Program");
+        globalAnalyzerConfigSource.Should().Contain(
+            "IIoT.HttpApi::IIoT.HttpApi.DesignTimeDbContextFactory");
+        globalAnalyzerConfigSource.Should().Contain(
+            "IIoT.HttpApi::IIoT.HttpApi.Infrastructure.PostgresReadinessHealthCheck");
+        analyzerProjectSource.Should().Contain("<TargetFramework>netstandard2.0</TargetFramework>");
+        analyzerProjectSource.Should().Contain(
+            "<PackageReference Include=\"Microsoft.CodeAnalysis.CSharp\" Version=\"5.6.0\" PrivateAssets=\"all\" />");
+        analyzerTestsProjectSource.Should().Contain(
+            "<PackageReference Include=\"Microsoft.CodeAnalysis.CSharp\" Version=\"5.6.0\" PrivateAssets=\"all\" />");
+        solutionSource.Should().Contain(
+            "src/analyzers/IIoT.CloudPlatform.Analyzers/IIoT.CloudPlatform.Analyzers.csproj");
+        solutionSource.Should().Contain(
+            "src/tests/IIoT.CloudPlatform.AnalyzerTests/IIoT.CloudPlatform.AnalyzerTests.csproj");
+        analyzerFixtureStep.Should().Contain("shell: bash");
+        analyzerFixtureStep.Should().Contain("bash scripts/tests/TestCloudArchitectureAnalyzerFixtures.sh");
+        analyzerFixtureStep.Should().NotContain("if:");
+        analyzerFixtureStep.Should().NotContain("continue-on-error:");
+        fixtureScriptSource.Should().Contain("ARCHITECTURE_FIXTURES_OK valid=4 invalid=8");
+        fixtureScriptSource.Should().Contain("build_valid");
+        fixtureScriptSource.Should().Contain("build_invalid");
+        analyzerTestsStep.Should().Contain(
+            "run: dotnet test src/tests/IIoT.CloudPlatform.AnalyzerTests/IIoT.CloudPlatform.AnalyzerTests.csproj -c Release --no-build");
+        analyzerTestsStep.Should().Contain("cloud-architecture-analyzer.trx");
+        analyzerTestsStep.Should().NotContain("if:");
+        analyzerTestsStep.Should().NotContain("continue-on-error:");
+        workflowSource.Should().Contain("'cloud-architecture-analyzer.trx' = 35");
+        workflowSource.Should().Contain(
+            "ARCHITECTURE_FIXTURES_OK valid=4 invalid=8 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006");
         productionServiceStep.Should().Contain(
             "run: dotnet test src/tests/IIoT.ProductionService.Tests/IIoT.ProductionService.Tests.csproj -c Release --no-build");
         productionServiceStep.Should().NotContain("--filter");

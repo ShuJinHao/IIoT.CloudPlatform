@@ -1,5 +1,8 @@
 <Solution>
   <Folder Name="/src/" />
+  <Folder Name="/src/analyzers/">
+    <Project Path="src/analyzers/IIoT.CloudPlatform.Analyzers/IIoT.CloudPlatform.Analyzers.csproj" />
+  </Folder>
   <Folder Name="/src/core/">
     <Project Path="src/core/IIoT.Core.Identity/IIoT.Core.Identity.csproj" />
     <Project Path="src/core/IIoT.Core.MasterData/IIoT.Core.MasterData.csproj" />
@@ -32,6 +35,7 @@
     <Project Path="src/shared/IIoT.SharedKernel/IIoT.SharedKernel.csproj" />
   </Folder>
   <Folder Name="/src/tests/">
+    <Project Path="src/tests/IIoT.CloudPlatform.AnalyzerTests/IIoT.CloudPlatform.AnalyzerTests.csproj" />
     <Project Path="src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj" Id="69d80425-d1b5-4f1c-a542-4a339531f08a" />
     <Project Path="src/tests/IIoT.Infrastructure.Tests/IIoT.Infrastructure.Tests.csproj" />
     <Project Path="src/tests/IIoT.ProductionService.Tests/IIoT.ProductionService.Tests.csproj" />
