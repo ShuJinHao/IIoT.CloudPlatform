@@ -94,3 +94,107 @@ CLOUD_CONTAINER_UID=10001 CLOUD_CONTAINER_GID=10001 sh ./scripts/check-container
 - migration one-shot 若继承错误用户，可能启动失败但不易在 build 阶段发现。
 
 因此 C-06 的代码和发布前门禁可以视为已落地，但生产状态必须保持“待真实验收关闭”，直到生产 UID/GID、`iiot-httpapi` 证书/Edge 更新目录权限方案明确，并经过真实容器启动验证。
+
+## 8. Canonical 容器非 root 原子规则正文
+
+本节是 Cloud 容器 non-root Rule ID 的唯一原子正文区；前文保留权限模型、探针和生产验收细节，不生成第二份 Rule ID 正文。
+
+<a id="cloud-container-nonroot-001"></a>
+### CLOUD-CONTAINER-NONROOT-001
+
+Cloud 根的 root-owned 漂移不得被误写成整机通用故障。
+
+<a id="cloud-container-nonroot-002"></a>
+### CLOUD-CONTAINER-NONROOT-002
+
+root 应急路径写入的 release state / cert 文件必须恢复到标准 non-root + 容器可读口径。
+
+<a id="cloud-container-nonroot-003"></a>
+### CLOUD-CONTAINER-NONROOT-003
+
+部署文档必须拆成“长期模板/规则”和“当前生产现场口径”两层。
+
+<a id="cloud-container-nonroot-004"></a>
+### CLOUD-CONTAINER-NONROOT-004
+
+root 应急写入恢复 owner/mode 后必须重跑标准 non-root readiness，通过前不得收口。
+
+<a id="cloud-container-nonroot-005"></a>
+### CLOUD-CONTAINER-NONROOT-005
+
+改 deploy/默认值/当前现场目录时必须同步更新顶层入口、项目部署文档和项目规则。
+
+<a id="cloud-container-nonroot-006"></a>
+### CLOUD-CONTAINER-NONROOT-006
+
+非 root nginx 的 pid 和临时目录必须收敛到容器用户可写的 /tmp 路径。
+
+<a id="cloud-container-nonroot-007"></a>
+### CLOUD-CONTAINER-NONROOT-007
+
+pre-deploy 的兼容跳过只适用于更新前旧版本检查，不能作为 C-06 关闭证据。
+
+<a id="cloud-container-nonroot-008"></a>
+### CLOUD-CONTAINER-NONROOT-008
+
+Cloud post-deploy 必须严格要求 DataWorker Docker healthcheck 通过。
+
+<a id="cloud-container-nonroot-009"></a>
+### CLOUD-CONTAINER-NONROOT-009
+
+C-06 关闭和日常运维检查不得只看 DataWorker running，必须定义并通过 Docker healthcheck。
+
+<a id="cloud-container-nonroot-010"></a>
+### CLOUD-CONTAINER-NONROOT-010
+
+C-06 readiness 必须正向证明 nginx 内部端口保持 8080，并对任何容器内 80 回退 fail-fast。
+
+<a id="cloud-container-nonroot-011"></a>
+### CLOUD-CONTAINER-NONROOT-011
+
+Edge 上传限流变量不能为 0、非数字或超过 nginx edge_upload_limit 基线 12000/min。
+
+<a id="cloud-container-nonroot-012"></a>
+### CLOUD-CONTAINER-NONROOT-012
+
+如需更大值，必须同步调整 nginx 与应用限流契约，而不能只改 .env。
+
+<a id="cloud-container-nonroot-013"></a>
+### CLOUD-CONTAINER-NONROOT-013
+
+既有或新生成 OIDC PFX 必须按目标容器 UID/GID 满足最小可读权限。
+
+<a id="cloud-container-nonroot-014"></a>
+### CLOUD-CONTAINER-NONROOT-014
+
+Cloud non-root readiness 对不存在的 Edge updates 子目录必须输出可区分的空目录诊断。
+
+<a id="cloud-container-nonroot-015"></a>
+### CLOUD-CONTAINER-NONROOT-015
+
+nginx 容器必须使用非特权内部端口承载 HTTP，iiot-web / nginx-gateway 不得靠容器内 80 或 root 绑定低端口运行。
+
+<a id="cloud-container-nonroot-016"></a>
+### CLOUD-CONTAINER-NONROOT-016
+
+Cloud 生产发布前必须运行容器非 root readiness 探针。
+
+<a id="cloud-container-nonroot-017"></a>
+### CLOUD-CONTAINER-NONROOT-017
+
+Cloud MigrationWorkApp 的运行目录和持久化路径必须满足目标 non-root UID/GID 的最小读写权限。
+
+<a id="cloud-container-nonroot-018"></a>
+### CLOUD-CONTAINER-NONROOT-018
+
+Cloud non-root readiness 对已存在但 owner/mode 不满足的 Edge updates 子目录必须阻断发布。
+
+<a id="cloud-container-nonroot-020"></a>
+### CLOUD-CONTAINER-NONROOT-020
+
+Cloud EDGE_UPDATES_DIR 及其已有发布子目录不得 world-writable。
+
+<a id="cloud-container-nonroot-021"></a>
+### CLOUD-CONTAINER-NONROOT-021
+
+Cloud 日常 ops-check 必须严格要求 DataWorker Docker healthcheck 通过。

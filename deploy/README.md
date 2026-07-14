@@ -1,17 +1,17 @@
 # IIoT Cloud Harbor CICD And Private Server Deploy
 
-本目录是 `IIoT.CloudPlatform` 镜像构建和旧事务维护实现目录。Cloud 日常应用发布统一从工作区根 `deploy/Deploy-Changed.ps1` 发起：入口自动 push 已提交的 `main`，读取生产 SHA，按 Git 改动与项目依赖闭包只选择受影响镜像，再调用 `Deploy.ps1 -Services ...` 从 `origin/main` tip 创建隔离快照、推 Harbor 并把不可变请求交给稳定服务器 Runner。影响无法安全归属禁止退化全量。`Auto` 传输优先 SSH，SSH TCP 不可达时使用 `cloud-routine-request.yml` self-hosted Runner；旧 `cloud-image` / `cloud-deploy` 仍只是灾备入口。三项目口径见 [上传部署总览](../../docs/上传部署总览.md)。
+本目录是 `IIoT.CloudPlatform` 镜像构建和历史事务维护实现目录，不是操作员或 AI 的日常发布入口。Cloud 日常应用发布唯一只能从工作区根 `deploy/Deploy-Changed.ps1 -Targets Cloud` 发起：它检查已提交的 `main`、自动 push、读取生产 SHA，并按 Git 改动与项目依赖闭包只选择受影响镜像。工作区 `deploy/Deploy.ps1`、Harbor build/push、SSH/Runner 传输和项目脚本都只是该入口内部实现或显式恢复工具；不得向操作员或 AI 暴露成第二条日常路径。影响无法安全归属时必须停止，禁止退化全量。三项目口径见 [上传部署总览](../../docs/上传部署总览.md)。
 
 > 当前状态（2026-07-11）：Cloud 全量应用已完成真实 Harbor、生产 Runner、备份、migration、rollout 与健康检查；自动增量入口的编译门禁、依赖影响测试和生产 SHA 只读 inspect 已通过，但尚未用新的单服务业务变更执行生产发布，因此不得把全量成功冒充增量生产 E2E。
 
-日常标准入口示例：
+操作员/AI 日常只允许以下两种调用：
 
 ```powershell
-pwsh ./deploy/Deploy.ps1 -Target Cloud -InstallRunner # 仅首次或 Runner 升级
-pwsh ./deploy/Deploy.ps1 -Target Cloud -Doctor
 pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud -PlanOnly
 pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud
 ```
+
+`Deploy.ps1 -InstallRunner/-Doctor/-ResumeInvocation`、`Invoke-WorkspaceDeploy.ps1`、本目录脚本和旧 workflow 都不在日常列表中；它们只能在明确的 Runner 安装/升级维护窗口、基础设施维护或已取得授权的恢复场景由统一入口内部调用。
 
 ## 部署口径
 
@@ -20,7 +20,7 @@ pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud
 - 多 agent 并行部署只按 [上传部署总览](../../docs/上传部署总览.md) 的“多 agent 并行部署”执行；Cloud agent 只负责 Cloud 镜像、Cloud deploy 和 Cloud 验证。
 - Cloud 应用镜像不保留历史版本；Harbor 和服务器本机只保留当前生产正在运行的 `sha-*` 应用镜像。
 - 日常部署必须由 `Deploy-Changed.ps1` 确认 clean/main 并自动 push GitHub；未提交内容直接阻断，不会被偷带入镜像。
-- 工作区外部日常入口是 `pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud`；本目录 `build-and-push.sh` 只负责显式服务镜像，`local-release.sh` / `deploy-release.sh` 只保留给基础设施维护和旧链恢复。
+- 工作区对操作员/AI 的日常入口唯一为 `pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud`；工作区 `Deploy.ps1`、本目录 `build-and-push.sh`、`local-release.sh` / `deploy-release.sh` 只是内部执行器、基础设施维护或旧链恢复工具。
 - Compose、nginx 和服务器 scripts 不再随每次应用发布同步。它们属于部署基础设施，必须在独立维护窗口通过旧事务入口升级并重新运行 `Deploy.ps1 -InstallRunner/-Doctor`；不得让应用发布偷偷改变服务器执行代码。
 - 传入 `services` 时只拉取并重启指定服务；首次部署或需要全量时必须显式传 `--all`。
 - `cloud-image` / `cloud-deploy` 只保留灾备手动入口，必须输入确认词；不得在日常生产发布中等待这些 workflow。
@@ -29,23 +29,23 @@ pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud
 - Cloud release 和 post-release cleanup 都使用带 PID、进程启动标识、release 与 phase 的 managed lock；活锁或初始化中的锁立即失败，只有能证明进程已失效的 stale lock 才自动认领并移除，不再静默等待 15 分钟。
 - 操作员 `.env` 由独立严格配置锁保护；deploy、rollback 和受支持的 `scripts/update-deploy-env.sh` 从读取到最终状态晋升共用同一把锁。严格配置锁一旦存在一律 fail-closed，不得 stale 自动清理；必须先人工核对 owner/phase 证据。
 - deploy/rollback 不再替换 `.env`；五个应用镜像坐标是 release-owned state，原子写入 `releases/current-images.env`，compose 以 `.env` 为操作员配置基层、以 `current-images.env` 为镜像覆盖层。直接编辑 `.env` 绕过共享锁，属于不受支持操作；受支持更新必须传入 expected SHA-256。
-- self-hosted runner 仅作为灾备/历史 CI 设施时使用，仍必须是专用非 root 用户，不能用 root 跑 Actions 服务。
+- 稳定服务器 Runner 是 `Deploy-Changed` 内部交付链路的受控组件，必须由专用 `github-runner` 非 root 用户运行。日常应用发布不得安装、升级、同步或覆盖 Runner 文件；Runner 变更只允许独立维护窗口。
 - 当前服务器 Docker Root Dir 固定为 `/data/iiot-platform/runtime/docker`，runner 工作目录固定在 `/data/github-runner/*`，不要把构建缓存和 runner workdir 放回系统盘。
 - Docker Hub 不作为生产依赖源；compose 第三方镜像和 Web Dockerfile 的 Node/Nginx 基础镜像必须先同步到 Harbor mirror。
 - Edge 客户端安装素材不进 Harbor；Edge 部署是 Mac 构建 Windows 下载产物并经 Cloud HTTP 上传服务器。日常统一入口 `Deploy-Changed.ps1` 自动判断宿主或插件，再内部调度 `Invoke-WorkspaceDeploy.ps1`。生产 `stable` 不允许用 `rsync/scp` 绕过 Cloud DB、审计和保留策略。
 - 生产服务器只允许 Edge `stable` 渠道；发布脚本必须拒绝并清理 `ci`、`dev`、`test` 等非 `stable` 渠道目录。
 - Cloud catalog、首装、Edge 更新和公开下载的版本集合只来自 Cloud release 记录。文件系统只校验已登记 artifact 的存在性、完整性、受控路径、权限和真实下载；不得扫描目录补出未登记版本，残留文件也不得让 `Deleted` 版本重新可见。
-- 本机 Docker 构建和 SSH 触发服务器部署是标准 Cloud 发布流程。
-- 工作区 `deploy/server/iiot-release-runner.sh` 是日常服务器端入口；`deploy/scripts/deploy-release.sh` 和 `deploy/scripts/rollback-release.sh` 是旧事务维护/恢复入口。
+- 本机 Docker/Harbor、SSH 和 self-hosted Runner 都只是 `Deploy-Changed` 可选的内部执行细节，不是可单独选择的标准操作入口。
+- 工作区 `deploy/server/iiot-release-runner.sh`、本目录 `deploy/scripts/deploy-release.sh` 和 `deploy/scripts/rollback-release.sh` 只能被统一入口内部调度，或用于明确恢复；不得作为日常手工入口。
 - self-hosted runner 安装和权限要求见 [RUNNER.md](./RUNNER.md)。
 - 运维、备份、恢复和检查细节见 [OPERATIONS.md](./OPERATIONS.md)。
 - Cloud 下载中心生成 Edge 客户端 `.exe` 的上线顺序见 [EDGE_INSTALLER_GO_LIVE.md](./EDGE_INSTALLER_GO_LIVE.md)。
 
 当前部署文档按双层口径维护：
 
-- 长期模板/规则：描述标准 Harbor/SSH/non-root 发布链路、红线、应急条件和恢复动作，不写真实密码或真实 token。
+- 长期模板/规则：描述 `Deploy-Changed` 唯一操作入口、其 Harbor/SSH/Runner 内部链路、non-root 红线、应急条件和恢复动作，不写真实密码或真实 token。
 - 当前生产现场口径：当前 Cloud 部署目录是 `/data/iiot-platform/cloud/deploy`，标准部署用户是 `github-runner`，Docker Root Dir 是 `/data/iiot-platform/runtime/docker`，Edge 发布上传默认值是 `1000 Mbps`。
-- 当前与 `AICopilot` 共用同一台生产宿主机，但部署根独立：AICopilot 当前根目录是 `/srv/enterprise-ai/deploy`。两条日常 SSH 发布链路都走 `github-runner` 非 root 路径；这轮 root-owned 漂移已确认发生在 Cloud 根，不是整机通用故障。
+- 当前与 `AICopilot` 共用同一台生产宿主机，但部署根独立：AICopilot 当前根目录是 `/srv/enterprise-ai/deploy`。两个项目的统一入口内部交付均使用 `github-runner` 非 root 路径；这轮 root-owned 漂移已确认发生在 Cloud 根，不是整机通用故障。
 - `certs/` 与 `releases/current-release*`、`staged-release*`、`previous-release*` 都必须对标准 non-root 部署用户可读可写；root 应急路径一旦写入这些状态，关闭任务前必须恢复 owner/mode 并重新验证标准 non-root preflight。
 
 ## 运行拓扑
@@ -120,7 +120,7 @@ Cloud 发布成功且 `post-deploy-check.sh`、`ops-check.sh` 通过后，必须
 
 禁止清理基础镜像 mirror、Harbor 自身镜像、数据库卷、备份、配置和 secrets。Cloud 快速回滚不再依赖本机旧镜像；需要回滚时重新构建或重新拉取目标 git sha 后部署。
 
-禁止把 `cloud-image` 或 `cloud-deploy` 当成日常部署入口。它们只允许在本机 Docker/SSH 发布路径不可用且操作者明确选择灾备时使用，并必须带确认词。
+禁止把 `cloud-image` 或 `cloud-deploy` 当成日常部署入口。它们只允许在 `Deploy-Changed` 统一链路无法恢复、操作者取得明确灾备授权并提供确认词时使用。
 
 ## 第三方镜像 mirror
 
@@ -332,13 +332,13 @@ sudo find /data/iiot-platform/cloud/deploy/releases -type d -exec chmod 755 {} +
 sudo find /data/iiot-platform/cloud/deploy/releases -type f -exec chmod 600 {} +
 ```
 
-## 标准发布步骤
+## 统一入口内部实现与历史事务恢复
 
-标准路径：
+本节不定义新的操作员入口。日常仍只能运行 `Deploy-Changed.ps1 -Targets Cloud`；以下步骤仅用于审查统一入口的内部实现，或在已授权基础设施/旧事务恢复时执行：
 
 1. 合并或推送到 `main`，保证 GitHub 有本次源码留痕。
 2. `cloud-ci` 默认只跑快速验证：restore/build、ServiceLayer、ConfigurationGuard、部署脚本语法检查、前端 build、compose config；完整 EndToEnd 只在手动 `workflow_dispatch` 勾选时运行。
-3. 基础设施维护才运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud ...`；日常应用发布使用 `Deploy-Changed.ps1`，不进入本节 support transaction。旧入口仍要求 clean/pushed candidate 和显式 plan，用于 Compose/nginx/scripts 升级取证。
+3. 日常链路由 `Deploy-Changed.ps1` 内部调用 `Deploy.ps1`，不进入 support transaction；`Invoke-WorkspaceDeploy.ps1 -Target Cloud ...` 只能用于已授权 Compose/nginx/scripts 基础设施维护或旧事务恢复，不得作为日常替代入口。
 4. 根入口为正式运行注入 entrypoint marker、唯一 invocation id、完整 expected SHA 和 plan digest；`local-release.sh` 缺任一项即在 build/SSH 前失败，并强校验 expected SHA 等于 detached 固定快照 HEAD。
 5. 旧 `local-release.sh` 在基础设施维护窗口校验 support 白名单并完成 staging；日常 `Deploy-Changed.ps1` 内部调用的 `Deploy.ps1` 不安装任何远端 support files。
 6. 每次 invocation 独占 services 文件和 image manifest；manifest 绑定 invocation、expected SHA、plan digest、release tag、services 和每个已构建镜像的 OCI digest。dry-run 不得覆盖正式清单。
@@ -361,7 +361,7 @@ SEED_ADMIN_PASSWORD=<固定 Cloud 管理员密码>
 
 GitHub `cloud-image` / `cloud-deploy` 只作为灾备路径，且 workflow 已要求确认词。日常发布不得等待它们。
 
-服务器端 `deploy-release.sh` 不再是日常或手工入口；日常由稳定 `runner/iiot-release-runner.sh` 接收请求。基础设施维护仍不得手工伪造旧 invocation/plan/support digest。本机 SSH 触发不可用时，恢复连接后优先用 `Deploy.ps1 -ResumeInvocation` 重发已构建请求。
+服务器端 `deploy-release.sh` 不是日常或手工入口；统一日常链路由稳定 `runner/iiot-release-runner.sh` 接收不可变请求。日常请求必须只消费已安装的 pinned Runner，不得覆盖其任何文件。基础设施维护仍不得手工伪造旧 invocation/plan/support digest；`Deploy.ps1 -ResumeInvocation` 仅是统一入口在已授权恢复中重发已构建请求的内部能力。
 
 发布脚本会：
 
