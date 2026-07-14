@@ -1,0 +1,369 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://iiot.local/schemas/cloud-baseline-migration-receipt-v1.json",
+  "title": "Cloud baseline migration receipt v1",
+  "$comment": "Reference schema for authoring and review. ValidateCloudBaselineMigration.v1.ps1 is authoritative for byte limits, ordinal ordering, path portability, time windows, cross-field constraints, and state transitions.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "ruleId",
+    "migrationId",
+    "issuedAgainstRevision",
+    "issuedAtUtc",
+    "expiresAtUtc",
+    "owner",
+    "approvedBy",
+    "reason",
+    "ruleIds",
+    "source",
+    "target",
+    "projectChanges",
+    "changes"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "ruleId": {
+      "const": "CLOUD-BASELINE-MIG-001"
+    },
+    "migrationId": {
+      "type": "string",
+      "pattern": "^CLOUD-BASELINE-MIG-[A-Z0-9][A-Z0-9-]{2,80}$"
+    },
+    "issuedAgainstRevision": {
+      "$ref": "#/$defs/commitSha"
+    },
+    "issuedAtUtc": {
+      "$ref": "#/$defs/utcTimestamp"
+    },
+    "expiresAtUtc": {
+      "$ref": "#/$defs/utcTimestamp"
+    },
+    "owner": {
+      "enum": [
+        "Cloud.Architecture",
+        "Cloud.Deployment",
+        "Cloud.Infrastructure",
+        "Cloud.Persistence",
+        "Cloud.Security",
+        "Cloud.Tests"
+      ]
+    },
+    "approvedBy": {
+      "const": "ShuJinHao"
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 500
+    },
+    "ruleIds": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "CLOUD-TEST-GOV-001B",
+          "CLOUD-CACHE-001",
+          "CLOUD-ARCH-001",
+          "CLOUD-TEST-002",
+          "CLOUD-TEST-003",
+          "CLOUD-TEST-004",
+          "CLOUD-TEST-005",
+          "CLOUD-TEST-CLEANUP",
+          "CLOUD-BASELINE-TRUST-UPGRADE-001"
+        ]
+      }
+    },
+    "source": {
+      "$ref": "#/$defs/state"
+    },
+    "target": {
+      "$ref": "#/$defs/state"
+    },
+    "projectChanges": {
+      "$ref": "#/$defs/projectChanges"
+    },
+    "changes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5000,
+      "items": {
+        "$ref": "#/$defs/change"
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "commitSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "utcTimestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repositoryProjects",
+        "testProjects",
+        "testSourceFiles",
+        "frozenSourceFiles",
+        "declarations",
+        "executionTemplates",
+        "projectedCases",
+        "runnerCases",
+        "protectedAssets",
+        "workflowFiles",
+        "projectFiles",
+        "buildControlFiles",
+        "restoreControlFiles",
+        "frontendTestFiles",
+        "frontendRunnerCases",
+        "deploymentSourceDeclarations",
+        "deploymentRunnerCases"
+      ],
+      "properties": {
+        "repositoryProjects": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "testProjects": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "testSourceFiles": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "frozenSourceFiles": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "declarations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "executionTemplates": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "projectedCases": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "runnerCases": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "protectedAssets": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "workflowFiles": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "projectFiles": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "buildControlFiles": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "restoreControlFiles": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "frontendTestFiles": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "frontendRunnerCases": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deploymentSourceDeclarations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deploymentRunnerCases": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baselineSha256",
+        "protectedManifestSha256",
+        "manifests",
+        "counts"
+      ],
+      "properties": {
+        "baselineSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "protectedManifestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "manifests": {
+          "$ref": "#/$defs/manifests"
+        },
+        "counts": {
+          "$ref": "#/$defs/counts"
+        }
+      }
+    },
+    "pathArray": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "projectChanges": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "added",
+        "removed",
+        "addedTests",
+        "removedTests"
+      ],
+      "properties": {
+        "added": {
+          "$ref": "#/$defs/pathArray"
+        },
+        "removed": {
+          "$ref": "#/$defs/pathArray"
+        },
+        "addedTests": {
+          "$ref": "#/$defs/pathArray"
+        },
+        "removedTests": {
+          "$ref": "#/$defs/pathArray"
+        }
+      }
+    },
+    "gitMode": {
+      "enum": [
+        "100644",
+        "100755"
+      ]
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "status",
+        "beforeMode",
+        "beforeSha256",
+        "afterMode",
+        "afterSha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "A",
+            "M",
+            "D"
+          ]
+        },
+        "beforeMode": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/gitMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "beforeSha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "afterMode": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/gitMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "afterSha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "manifests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protectedAssetsSha256",
+        "workflowSha256",
+        "projectSha256",
+        "buildControlSha256",
+        "restoreControlSha256",
+        "frontendTestSha256",
+        "deploymentSourceSha256"
+      ],
+      "properties": {
+        "protectedAssetsSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "workflowSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "projectSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "buildControlSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "restoreControlSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "frontendTestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "deploymentSourceSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}
