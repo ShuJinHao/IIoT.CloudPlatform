@@ -290,7 +290,7 @@
     "preAuditBytesAvailable": false,
     "auditMode": "full-current-snapshot-reaudit",
     "reason": "Only the pre-audit SHA-256 and line count were retained before concurrent main-owned plan edits; exact pre-audit bytes are unavailable, so no byte diff or auditedDiffSha256 is claimed.",
-    "finalSha256": "432026d7c3f02ac511ec761ac30d4946f68ddf55dc38be650b8126d2b606e5a2",
+    "finalSha256": "505dc9fc60963cbf1cd0c4cd65d76ad4fa85c3ce99c11b117bfd35fa7744ba3b",
     "finalLineCount": 1418,
     "auditedDiffSha256": null,
     "topLevelSectionInventory": {
@@ -316,17 +316,17 @@
         { "ordinal": 17, "startLine": 1290, "endLine": 1328, "sha256": "8b12fc9d3ed2236cdea8c323b8f021d4c4b4356aace1db9588039bfb2a9af22e" },
         { "ordinal": 18, "startLine": 1329, "endLine": 1348, "sha256": "a8002c6627e048f668c5555cb21abe00313ac94eb20640dfa0f72ac1c930186b" },
         { "ordinal": 19, "startLine": 1349, "endLine": 1390, "sha256": "a599314dd3007661cc3760d845556a14e90ca60a5e95a61b7d3580029baade87" },
-        { "ordinal": 20, "startLine": 1391, "endLine": 1418, "sha256": "3d4db1aaffa94f9ccb26286989a459acfe177dea9219c6f43fbf058be5f4b450" }
+        { "ordinal": 20, "startLine": 1391, "endLine": 1418, "sha256": "7e78dc6691be6bb0e4dc55a3c2c62796058be5ba99435a9202d1a4a20f8134c5" }
       ]
     },
     "decisionMappings": [
-      { "planSection": "6.5", "decision": "local-candidate-audited-formal-closure-still-false", "batchIds": ["TEST-GOV-RULE-EXTRACTION-001-CLOUD"] },
+      { "planSection": "6.5", "decision": "rule-extraction-closed-by-independent-commit-entry-migration-candidate-uncommitted", "batchIds": ["TEST-GOV-RULE-EXTRACTION-001-CLOUD", "TEST-GOV-RULE-EXTRACTION-001-CLOUD-ENTRY"] },
       { "planSection": "8.3", "decision": "cache-resilience-rule-and-planned-gate-debt-reconciled", "batchIds": ["CLOUD-CACHE-001"] },
       { "planSection": "16.2", "decision": "multi-agent-and-receipt-trust-boundaries-retained", "batchIds": ["TEST-GOV-RULE-EXTRACTION-001-CLOUD"] },
       { "planSection": "20", "decision": "cloud-counts-review-debts-and-no-e0-claim-reconciled", "batchIds": ["TEST-GOV-RULE-EXTRACTION-001-CLOUD"] }
     ],
     "status": "complete-full-current-snapshot-reaudit",
-    "reviewer": "pending-final-nonauthor-review"
+    "reviewer": "local-nonauthor-final-review-pass-2026-07-14"
   },
   "keywordBaseline": {
     "matching": "case-insensitive unique source lines",
@@ -636,7 +636,7 @@
     "branchProtectionVerified": false,
     "requiredStatusSourceBindingVerified": false,
     "remoteRequiredContextsVerified": false,
-    "statement": "This docs-only audit is pending main review and does not activate or prove a remote trust root."
+    "statement": "The docs-only rule extraction has passed local non-author and main-agent review and is closed by commit 9b4d0dd85b2a10330231fbfce5e647948f128540. This does not activate or prove an independent GitHub reviewer, branch protection, E0, or a remote trust root."
   },
   "repositoryGateSummary": {
     "distinction": "ruleIsNormative preserves the authority of every active rule. normativelyRequired is only the narrower required-CI classification; implemented/verified/baseOwned/sourceBound are separate evidence dimensions.",
@@ -7684,7 +7684,7 @@
     "rollingReviewRole": "history-process-commands-results-incidents-and-rule-links",
     "cacheUniqueBody": "docs/contracts/caching-resilience.md#cloud-cache-001",
     "defaultReadRelaxationEffective": false,
-    "defaultReadRelaxationReason": "pending-main-review and independent follow-up commit are still required",
+    "defaultReadRelaxationReason": "The rule-extraction audit is closed by pushed commit 9b4d0dd85b2a10330231fbfce5e647948f128540. The separately authorized entry-migration candidate is prepared but remains uncommitted, so repository-history effectiveness is not yet claimed.",
     "pathBasis": "project-repository-root-logical-layout",
     "authorityPaths": [
       "docs/contracts/caching-resilience.md",
@@ -38020,13 +38020,91 @@
     "rootHistoryAllPropositionsMapped": true,
     "status": "complete"
   },
+  "entryMigrationEvidence": {
+    "batchId": "TEST-GOV-RULE-EXTRACTION-001-CLOUD-ENTRY",
+    "status": "candidate-prepared-uncommitted",
+    "ruleExtractionCommit": {
+      "sha": "9b4d0dd85b2a10330231fbfce5e647948f128540",
+      "parent": "88c41109fbcf0b87b18939a139e0bff751e03d07",
+      "tree": "d2a7d5e74f685ba7433569d551fb5341d9203b2b",
+      "directSingleParent": true,
+      "remoteRef": "origin/agent/cloud-rule-extraction-20260714",
+      "remoteRefVerifiedAtCandidatePreparation": "9b4d0dd85b2a10330231fbfce5e647948f128540",
+      "separateFromEntryMigration": true
+    },
+    "planAuthority": {
+      "path": "../docs/三项目测试架构治理总计划.md",
+      "pathBasis": "project-repository-root-logical-layout",
+      "snapshotSha256": "505dc9fc60963cbf1cd0c4cd65d76ad4fa85c3ce99c11b117bfd35fa7744ba3b",
+      "section": "6.5 规则权威与历史复盘提取审计",
+      "sectionStartLine": 418,
+      "sectionEndLine": 458,
+      "sectionSha256": "4a0bd58ab0c0d8c89befa581295c882e8abb04ce358a1aeb1670db654a8aaf01",
+      "fixedTextStartLine": 444,
+      "fixedTextEndLine": 455,
+      "fixedTextSha256": "eb488a6e006430b3b1e69553f677e85356ba7a509c03c327e316e944e94abb13"
+    },
+    "candidatePaths": [
+      "AGENTS.md",
+      "docs/云端规则.md",
+      "docs/云端长期规则索引.md",
+      "docs/云端架构治理清单.md",
+      "docs/改动复盘与规则沉淀.md",
+      "docs/testing/rule-extraction-ledger.json"
+    ],
+    "fixedTextTargets": [
+      "AGENTS.md#历史复盘读取",
+      "docs/云端规则.md#cloud-review-001"
+    ],
+    "ruleRevision": {
+      "ruleId": "CLOUD-REVIEW-001",
+      "extractionSnapshotSummary": "Cloud 规则提取审计尚未通过主 agent 终审和独立提交时，项目滚动复盘仍是默认必读材料。",
+      "candidateAuthoritySummary": "历史复盘不是默认必读材料；仅在六类追溯场景中精准检索，且代码改动完成前仍须新增本批复盘。",
+      "authority": "docs/云端规则.md#cloud-review-001",
+      "registry": "docs/云端长期规则索引.md#cloud-review-001",
+      "provenance": "workspace total plan section 6.5 fixed text plus the user's explicit three-project entry-migration authorization",
+      "oldSourceEntryIdsRemainExtractionSnapshot": true,
+      "currentAuthorityIsNotDerivedFromOppositePreClosureEntry": true,
+      "candidatePrepared": true,
+      "repositoryHistoryEffective": false,
+      "plannedGate": {
+        "kind": "planned-governance-lint",
+        "selector": "exact fixed text, both project entry points, retained workspace History Core entry, Rule ID links and zero stale default-read statements",
+        "implemented": false,
+        "baseOwned": false,
+        "sourceBound": false,
+        "debtId": "CLOUD-REVIEW-LINT-DEBT-001",
+        "debtStatus": "open"
+      }
+    },
+    "historicalEntriesRewritten": false,
+    "workspaceRootAgentsChanged": false,
+    "rootHistoryEntryChanged": false,
+    "defaultReviewRelaxationEffective": false,
+    "effectivenessCondition": "A separately reviewed entry-migration commit whose direct parent is 9b4d0dd85b2a10330231fbfce5e647948f128540 must land before repository-history effectiveness is claimed.",
+    "trustRootEffective": false,
+    "e0Effective": false
+  },
+  "localReviewEvidence": {
+    "scope": "TEST-GOV-RULE-EXTRACTION-001-CLOUD extraction bytes at 9b4d0dd85b2a10330231fbfce5e647948f128540",
+    "mainAgentFinalReview": "pass",
+    "nonAuthorLocalReview": "pass",
+    "reviewedAt": "2026-07-14",
+    "doesNotImplyIndependentGitHubReviewer": true,
+    "doesNotImplyBranchProtection": true,
+    "doesNotImplyE0OrRemoteTrustRoot": true
+  },
   "closure": {
-    "ruleExtractionClosureReadyForMainReview": true,
+    "ruleExtractionClosed": true,
+    "ruleExtractionCommit": "9b4d0dd85b2a10330231fbfce5e647948f128540",
+    "ruleExtractionClosureReadyForMainReview": false,
     "dependsOnE0": false,
     "dependsOnBranchProtection": false,
     "defaultReviewRelaxationEffective": false,
-    "sharedPlanFinalAuditPending": true,
-    "statement": "Cloud rule extraction evidence has been author-corrected and is ready for non-author re-review. It remains pending-main-review and does not activate E0, branch protection, a remote trust root, or the historical-review read relaxation."
+    "entryMigrationCandidatePrepared": true,
+    "entryMigrationCommitted": false,
+    "sharedPlanFinalAuditPending": false,
+    "statement": "Cloud rule extraction is closed by the separately pushed commit 9b4d0dd85b2a10330231fbfce5e647948f128540. The historical-review entry migration is a separate uncommitted candidate, so the default-read relaxation is not yet claimed effective in repository history. Neither closure nor this candidate activates E0, branch protection, an independent GitHub reviewer, or a remote trust root."
   },
   "counts": {
     "decisionEntryCount": 274,
