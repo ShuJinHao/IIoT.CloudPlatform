@@ -888,8 +888,11 @@ public sealed class DeploymentSourceGuardTests
         migrationLedgerStep.Should().NotContain("continue-on-error:");
         workflowSource.Should().Contain("Verify quality baseline behavior");
         workflowSource.Should().Contain("./scripts/tests/Test-CloudQualityBaselineProtectionBehavior.ps1");
-        qualityBaselineBehaviorSource.Should().Contain("CLOUD_QUALITY_BASELINE_PROTECTION_OK scenarios=6");
+        qualityBaselineBehaviorSource.Should().Contain("CLOUD_QUALITY_BASELINE_PROTECTION_OK scenarios=9");
         qualityBaselineBehaviorSource.Should().Contain("initialExactCandidate=1");
+        qualityBaselineBehaviorSource.Should().Contain("coverageImprovementAccepted=1");
+        qualityBaselineBehaviorSource.Should().Contain("coverageRegressionRejected=1");
+        qualityBaselineBehaviorSource.Should().Contain("coverageStructureRejected=1");
         migrationScriptSource.Should().Contain("CLOUD_TEST_MIGRATION_OK");
         migrationScriptSource.Should().Contain("Unmapped base test declaration");
         migrationScriptSource.Should().Contain("currentDeltaCount");
