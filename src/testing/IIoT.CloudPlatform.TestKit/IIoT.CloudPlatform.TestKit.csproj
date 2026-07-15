@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="IIoT.CloudPlatform.ApplicationTests" />
+    <InternalsVisibleTo Include="IIoT.CloudPlatform.ApplicationFilesystemTests" />
+    <InternalsVisibleTo Include="IIoT.CloudPlatform.ContractTests" />
+    <InternalsVisibleTo Include="IIoT.CloudPlatform.ContractFilesystemTests" />
+    <InternalsVisibleTo Include="IIoT.CloudPlatform.PersistenceTests" />
+    <InternalsVisibleTo Include="IIoT.CloudPlatform.Persistence.PostgresTests" />
+    <InternalsVisibleTo Include="IIoT.CloudPlatform.WorkflowTests" />
+    <InternalsVisibleTo Include="IIoT.CloudPlatform.WorkflowFilesystemTests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.9" />
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\IIoT.CloudPlatform.PortFakes\IIoT.CloudPlatform.PortFakes.csproj" />
+    <ProjectReference Include="..\..\core\IIoT.Core.Identity\IIoT.Core.Identity.csproj" />
+    <ProjectReference Include="..\..\core\IIoT.Core.Production\IIoT.Core.Production.csproj" />
+    <ProjectReference Include="..\..\infrastructure\IIoT.EntityFrameworkCore\IIoT.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="..\..\services\IIoT.Services.Contracts\IIoT.Services.Contracts.csproj" />
+    <ProjectReference Include="..\..\services\IIoT.Services.CrossCutting\IIoT.Services.CrossCutting.csproj" />
+    <ProjectReference Include="..\..\shared\IIoT.SharedKernel\IIoT.SharedKernel.csproj" />
+  </ItemGroup>
+</Project>

@@ -7,7 +7,8 @@ public sealed record RecipeCacheDescriptor(
 
 public interface IRecipeCacheInvalidationService
 {
-    Task InvalidateAfterChangeAsync(
+    Task InvalidateAfterChangeOnceAsync(
+        Guid domainEventId,
         RecipeCacheDescriptor recipe,
         CancellationToken cancellationToken = default);
 }

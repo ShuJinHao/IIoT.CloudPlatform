@@ -5,5 +5,17 @@
     <NuGetAuditMode>all</NuGetAuditMode>
     <NuGetAuditLevel>low</NuGetAuditLevel>
     <WarningsAsErrors>$(WarningsAsErrors);NU1900;NU1901;NU1902;NU1903;NU1904;NU1905</WarningsAsErrors>
+    <_IsCloudProductionProject Condition="$([System.String]::Copy('$(MSBuildProjectName)').StartsWith('IIoT.')) and
+                                          !$([System.String]::Copy('$(MSBuildProjectName)').EndsWith('Tests')) and
+                                          !$([System.String]::Copy('$(MSBuildProjectName)').EndsWith('TestKit')) and
+                                          '$(MSBuildProjectName)' != 'IIoT.CloudPlatform.PortFakes' and
+                                          !$([System.String]::Copy('$(MSBuildProjectName)').StartsWith('IIoT.CloudPlatform.Analyzer'))">true</_IsCloudProductionProject>
   </PropertyGroup>
+
+  <ItemGroup Condition="'$(_IsCloudProductionProject)' == 'true'">
+    <ProjectReference Include="$(MSBuildThisFileDirectory)src/analyzers/IIoT.CloudPlatform.Analyzers/IIoT.CloudPlatform.Analyzers.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false"
+                      IsAspireProjectResource="false" />
+  </ItemGroup>
 </Project>

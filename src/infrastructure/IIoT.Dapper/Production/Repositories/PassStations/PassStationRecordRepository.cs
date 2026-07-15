@@ -3,7 +3,7 @@ using IIoT.Core.Production.Contracts.PassStation;
 
 namespace IIoT.Dapper.Production.Repositories.PassStations;
 
-public sealed class PassStationRecordRepository(IDbConnectionFactory connectionFactory)
+internal sealed class PassStationRecordRepository(IDbConnectionFactory connectionFactory)
     : IPassStationRecordRepository
 {
     private const string InsertSql = """

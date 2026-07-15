@@ -4,7 +4,7 @@ using IIoT.Services.Contracts.RecordQueries;
 
 namespace IIoT.Dapper.Production.QueryServices.PassStation;
 
-public sealed class PassStationRecordQueryService(IDbConnectionFactory connectionFactory)
+internal sealed class PassStationRecordQueryService(IDbConnectionFactory connectionFactory)
     : IPassStationRecordQueryService
 {
     private const string SelectColumns = """

@@ -37,19 +37,6 @@ export function normalizeProcessPageResult(source: unknown) {
     };
   }
 
-  if (Array.isArray(source)) {
-    const items = source as ProcessListItemDto[];
-    return {
-      items,
-      metaData: {
-        totalCount: items.length,
-        pageSize: PROCESS_PAGE_SIZE,
-        currentPage: 1,
-        totalPages: 1,
-      },
-    };
-  }
-
   return { items: [], metaData: emptyProcessMetaData() };
 }
 

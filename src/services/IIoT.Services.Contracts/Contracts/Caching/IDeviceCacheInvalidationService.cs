@@ -2,21 +2,22 @@ namespace IIoT.Services.Contracts.Caching;
 
 public sealed record DeviceCacheDescriptor(
     Guid DeviceId,
-    Guid ProcessId,
-    string DeviceCode);
+    Guid ProcessId);
 
 public interface IDeviceCacheInvalidationService
 {
-    Task InvalidateListsAfterRegisterAsync(
+    Task InvalidateListsAfterRegisterOnceAsync(
+        Guid domainEventId,
         Guid processId,
         CancellationToken cancellationToken = default);
 
-    Task InvalidateAfterRenameAsync(
+    Task InvalidateAfterRenameOnceAsync(
+        Guid domainEventId,
         DeviceCacheDescriptor device,
         CancellationToken cancellationToken = default);
 
-    Task InvalidateAfterDeleteAsync(
+    Task InvalidateAfterDeleteOnceAsync(
+        Guid domainEventId,
         DeviceCacheDescriptor device,
-        IReadOnlyCollection<Guid>? affectedEmployeeIds = null,
         CancellationToken cancellationToken = default);
 }

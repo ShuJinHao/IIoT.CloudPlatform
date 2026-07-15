@@ -2,7 +2,6 @@ using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Identity;
 using IIoT.Services.CrossCutting.Attributes;
-using IIoT.Services.CrossCutting.Caching;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 
@@ -17,7 +16,6 @@ public record UpdateUserPermissionsCommand(
 
 public class UpdateUserPermissionsHandler(
     IRolePolicyService rolePolicyService,
-    ICacheService cacheService,
     ICurrentUser currentUser,
     IAuditTrailService auditTrailService
 ) : ICommandHandler<UpdateUserPermissionsCommand, Result<bool>>
@@ -28,7 +26,6 @@ public class UpdateUserPermissionsHandler(
 
         if (result.IsSuccess && result.Value)
         {
-            await cacheService.RemoveAsync(CacheKeys.PermissionByUser(request.UserId), cancellationToken);
             await auditTrailService.TryWriteAsync(
                 CreateAuditEntry(
                     request,

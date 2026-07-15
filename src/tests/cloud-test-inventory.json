@@ -1,0 +1,550 @@
+{
+  "schemaVersion": 2,
+  "migrationBaselineCases": 591,
+  "baselineCases": 725,
+  "requiredCases": 661,
+  "regressionBaselines": [
+    { "regressionId": "CLOUD-ARCH-SUITE", "minimumCases": 72 },
+    { "regressionId": "CLOUD-ARCH-FS", "minimumCases": 11 },
+    { "regressionId": "CLOUD-UNIT", "minimumCases": 54 },
+    { "regressionId": "CLOUD-UNIT-FS", "minimumCases": 1 },
+    { "regressionId": "CLOUD-DOMAIN", "minimumCases": 11 },
+    { "regressionId": "CLOUD-APPLICATION", "minimumCases": 147 },
+    { "regressionId": "CLOUD-APPLICATION-FS", "minimumCases": 5 },
+    { "regressionId": "CLOUD-CONTRACT", "minimumCases": 47 },
+    { "regressionId": "CLOUD-CONTRACT-FS", "minimumCases": 10 },
+    { "regressionId": "CLOUD-PERSISTENCE-SQLITE", "minimumCases": 33 },
+    { "regressionId": "CLOUD-PERSISTENCE-POSTGRES", "minimumCases": 19 },
+    { "regressionId": "CLOUD-CACHE-001", "minimumCases": 64 },
+    { "regressionId": "CLOUD-WORKFLOW", "minimumCases": 21 },
+    { "regressionId": "CLOUD-WORKFLOW-FS", "minimumCases": 88 },
+    { "regressionId": "CLOUD-HTTP", "minimumCases": 25 },
+    { "regressionId": "CLOUD-DEPLOYMENT", "minimumCases": 52 },
+    { "regressionId": "CLOUD-E2E", "minimumCases": 63 },
+    { "regressionId": "CLOUD-WORKSPACE-ALIGNMENT", "minimumCases": 1 }
+  ],
+  "boundedPollingAllowlist": [
+    {
+      "file": "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/OutboxDispatchPersistenceTests.cs",
+      "pattern": "await Task.Delay(100, cancellationToken);",
+      "expectedCount": 2,
+      "runtime": "Postgres",
+      "timeoutEvidence": "new CancellationTokenSource(TimeSpan.FromSeconds(60))",
+      "reason": "Real DataWorker receiver/inbox persistence and seven-day cleanup polling; both loops share the caller's 60-second cancellation budget and terminate only after exact PostgreSQL state assertions."
+    },
+    {
+      "file": "src/tests/IIoT.CloudPlatform.IntegrationTests/RealRedisCacheIntegrationTests.cs",
+      "pattern": "await Task.Delay(100);",
+      "expectedCount": 4,
+      "runtime": "Redis",
+      "timeoutEvidence": "DateTime.UtcNow + timeout",
+      "reason": "Real Docker/Redis readiness, disconnect and recovery polling; every loop has a caller-supplied total timeout and terminal state assertion."
+    },
+    {
+      "file": "src/tests/IIoT.CloudPlatform.IntegrationTests/RealRedisCacheIntegrationTests.cs",
+      "pattern": "await Task.Delay(25, observationTimeout.Token);",
+      "expectedCount": 1,
+      "runtime": "Redis",
+      "timeoutEvidence": "new CancellationTokenSource(TimeSpan.FromSeconds(2))",
+      "reason": "After caller cancellation or a Fusion synthetic timeout, the real Redis/L1/L2 fence stability window is bounded by a two-second cancellation budget and asserts the cache remains absent on every observation."
+    },
+    {
+      "file": "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DeviceIdentityQueryPostgresTests.cs",
+      "pattern": "await Task.Delay(TimeSpan.FromMilliseconds(25), readinessToken);",
+      "expectedCount": 1,
+      "runtime": "Postgres",
+      "timeoutEvidence": "readinessTimeout.CancelAfter(TimeSpan.FromSeconds(10))",
+      "reason": "Real Aspire/Postgres lock-readiness polling bounded by a 10-second cancellation token and followed by a terminal lock-state assertion."
+    },
+    {
+      "file": "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.cs",
+      "pattern": "await Task.Delay(EventuallyInterval);",
+      "expectedCount": 1,
+      "runtime": "Aspire",
+      "timeoutEvidence": "EventuallyTimeout",
+      "reason": "Real multi-service Aspire eventual-consistency polling bounded by EventuallyTimeout and a terminal assertion message."
+    },
+    {
+      "file": "src/testing/IIoT.CloudPlatform.WebE2ETestKit/Program.cs",
+      "pattern": "await Task.Delay(250, readinessTimeout.Token);",
+      "expectedCount": 1,
+      "runtime": "Aspire",
+      "timeoutEvidence": "new CancellationTokenSource(TimeSpan.FromMinutes(1))",
+      "reason": "The real browser host polls the Vite login endpoint inside a one-minute cancellation budget before publishing its process-private state file."
+    }
+  ],
+  "supportAllowlist": [
+    {
+      "assembly": "IIoT.CloudPlatform.FilesystemTestKit",
+      "project": "src/testing/IIoT.CloudPlatform.FilesystemTestKit/IIoT.CloudPlatform.FilesystemTestKit.csproj",
+      "profile": "Default"
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.TestKit",
+      "project": "src/testing/IIoT.CloudPlatform.TestKit/IIoT.CloudPlatform.TestKit.csproj",
+      "profile": "Default"
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.IntegrationTestKit",
+      "project": "src/testing/IIoT.CloudPlatform.IntegrationTestKit/IIoT.CloudPlatform.IntegrationTestKit.csproj",
+      "profile": "Default"
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.PortFakes",
+      "project": "src/testing/IIoT.CloudPlatform.PortFakes/IIoT.CloudPlatform.PortFakes.csproj",
+      "profile": "Default"
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.WebE2ETestKit",
+      "project": "src/testing/IIoT.CloudPlatform.WebE2ETestKit/IIoT.CloudPlatform.WebE2ETestKit.csproj",
+      "profile": "RealBrowserE2E",
+      "externalConsumers": [
+        {
+          "file": "src/ui/iiot-web/e2e/run-real-e2e.mjs",
+          "command": "dotnet",
+          "argument": "--project",
+          "projectPath": "src/testing/IIoT.CloudPlatform.WebE2ETestKit/IIoT.CloudPlatform.WebE2ETestKit.csproj"
+        }
+      ]
+    }
+  ],
+  "runners": [
+    {
+      "assembly": "IIoT.CloudPlatform.AnalyzerTests",
+      "project": "src/tests/IIoT.CloudPlatform.AnalyzerTests/IIoT.CloudPlatform.AnalyzerTests.csproj",
+      "testKind": "Architecture",
+      "capability": "Architecture",
+      "runtime": "Pure",
+      "runtimeDependencies": [],
+      "risk": "P0",
+      "concern": "Security",
+      "cadence": "PR",
+      "profile": "Default",
+      "regressionId": "CLOUD-ARCH-SUITE",
+      "ruleId": "CLOUD-ARCH-SUITE",
+      "owner": "Cloud.Architecture",
+      "executionGroup": "Pure",
+      "required": true,
+      "expected": 72,
+      "sources": [
+        { "class": "CloudArchitectureAnalyzerTests", "file": "src/tests/IIoT.CloudPlatform.AnalyzerTests/CloudArchitectureAnalyzerTests.cs", "expected": 72 }
+      ]
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.ArchitectureTests",
+      "project": "src/tests/IIoT.CloudPlatform.ArchitectureTests/IIoT.CloudPlatform.ArchitectureTests.csproj",
+      "testKind": "Architecture",
+      "capability": "ArchitectureConfiguration",
+      "runtime": "Filesystem",
+      "runtimeDependencies": ["Filesystem"],
+      "risk": "P0",
+      "concern": "Reliability",
+      "cadence": "PR",
+      "profile": "Default",
+      "regressionId": "CLOUD-ARCH-FS",
+      "ruleId": "CLOUD-ARCH-FS",
+      "owner": "Cloud.Architecture",
+      "executionGroup": "Filesystem",
+      "required": true,
+      "expected": 11,
+      "sources": [
+        { "class": "RepositoryConfigurationBoundaryTests", "file": "src/tests/IIoT.CloudPlatform.ArchitectureTests/RepositoryConfigurationBoundaryTests.cs", "expected": 3 },
+        { "class": "PersistenceBoundaryArchitectureTests", "file": "src/tests/IIoT.CloudPlatform.ArchitectureTests/PersistenceBoundaryArchitectureTests.cs", "expected": 6, "capability": "PersistenceBoundary" },
+        { "class": "RateLimitingConfigurationGuardTests", "file": "src/tests/IIoT.CloudPlatform.ArchitectureTests/RateLimitingConfigurationGuardTests.cs", "expected": 2, "capability": "RateLimiting", "concern": "Security" }
+      ]
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.UnitTests",
+      "project": "src/tests/IIoT.CloudPlatform.UnitTests/IIoT.CloudPlatform.UnitTests.csproj",
+      "testKind": "Unit",
+      "capability": "SharedPolicies",
+      "runtime": "Pure",
+      "runtimeDependencies": [],
+      "risk": "P1",
+      "concern": "Reliability",
+      "cadence": "PR",
+      "profile": "Default",
+      "regressionId": "CLOUD-UNIT",
+      "ruleId": "CLOUD-UNIT",
+      "owner": "Cloud.Core",
+      "executionGroup": "Pure",
+      "required": true,
+      "expected": 54,
+      "sources": [
+        { "class": "ClientReleaseFileFactsTests", "file": "src/tests/IIoT.CloudPlatform.UnitTests/ClientReleaseFileFactsTests.cs", "expected": 2, "capability": "ClientRelease" },
+        { "class": "ConfigurationValueBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.UnitTests/ConfigurationValueBehaviorTests.cs", "expected": 5, "capability": "Configuration" },
+        { "class": "DeviceClientSoftwareStatusResolverTests", "file": "src/tests/IIoT.CloudPlatform.UnitTests/DeviceClientSoftwareStatusResolverTests.cs", "expected": 9, "capability": "DeviceClientStatus" },
+        { "class": "DistributedLockOptionsTests", "file": "src/tests/IIoT.CloudPlatform.UnitTests/DistributedLockOptionsTests.cs", "expected": 7, "capability": "DistributedLock" },
+        { "class": "InfrastructureValueBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.UnitTests/InfrastructureValueBehaviorTests.cs", "expected": 9, "capability": "InfrastructureOptions" },
+        { "class": "InternalHealthProbeBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.UnitTests/InternalHealthProbeBehaviorTests.cs", "expected": 1, "capability": "Health" },
+        { "class": "RateLimitPartitionKeyResolverTests", "file": "src/tests/IIoT.CloudPlatform.UnitTests/RateLimitPartitionKeyResolverTests.cs", "expected": 4, "capability": "RateLimiting", "concern": "Security" },
+        { "class": "RedisDistributedLockPrimitiveTests", "file": "src/tests/IIoT.CloudPlatform.UnitTests/RedisDistributedLockPrimitiveTests.cs", "expected": 1, "capability": "DistributedLock" },
+        { "class": "SharedKernelGuardTests", "file": "src/tests/IIoT.CloudPlatform.UnitTests/SharedKernelGuardTests.cs", "expected": 16, "capability": "SharedKernel" }
+      ]
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.UnitFilesystemTests",
+      "project": "src/tests/IIoT.CloudPlatform.UnitFilesystemTests/IIoT.CloudPlatform.UnitFilesystemTests.csproj",
+      "testKind": "Unit",
+      "capability": "ClientReleaseFileFacts",
+      "runtime": "Filesystem",
+      "runtimeDependencies": ["Filesystem"],
+      "risk": "P1",
+      "concern": "Reliability",
+      "cadence": "PR",
+      "profile": "Default",
+      "regressionId": "CLOUD-UNIT-FS",
+      "ruleId": "CLOUD-UNIT-FS",
+      "owner": "Cloud.Core",
+      "executionGroup": "Filesystem",
+      "required": true,
+      "expected": 1,
+      "sources": [
+        { "class": "ClientReleaseFileFactsFilesystemTests", "file": "src/tests/IIoT.CloudPlatform.UnitFilesystemTests/ClientReleaseFileFactsFilesystemTests.cs", "expected": 1 }
+      ]
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.AggregateTests",
+      "project": "src/tests/IIoT.CloudPlatform.AggregateTests/IIoT.CloudPlatform.AggregateTests.csproj",
+      "testKind": "Aggregate",
+      "capability": "Domain",
+      "runtime": "Pure",
+      "runtimeDependencies": [],
+      "risk": "P0",
+      "concern": "Reliability",
+      "cadence": "PR",
+      "profile": "Default",
+      "regressionId": "CLOUD-DOMAIN",
+      "ruleId": "CLOUD-DOMAIN",
+      "owner": "Cloud.Domain",
+      "executionGroup": "Pure",
+      "required": true,
+      "expected": 11,
+      "sources": [
+        { "class": "AggregateBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.AggregateTests/AggregateBehaviorTests.cs", "expected": 11 }
+      ]
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.ApplicationTests",
+      "project": "src/tests/IIoT.CloudPlatform.ApplicationTests/IIoT.CloudPlatform.ApplicationTests.csproj",
+      "testKind": "Application",
+      "capability": "Application",
+      "runtime": "Pure",
+      "runtimeDependencies": [],
+      "risk": "P0",
+      "concern": "Reliability",
+      "cadence": "PR",
+      "profile": "Default",
+      "regressionId": "CLOUD-APPLICATION",
+      "ruleId": "CLOUD-APPLICATION",
+      "owner": "Cloud.Application",
+      "executionGroup": "Pure",
+      "required": true,
+      "expected": 157,
+      "sources": [
+        { "class": "AiReadBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.ApplicationTests/AiReadBehaviorTests.cs", "expected": 41, "capability": "AiRead", "concern": "Security" },
+        { "class": "ApplicationFlowGuardTests", "file": "src/tests/IIoT.CloudPlatform.ApplicationTests/ApplicationFlowGuardTests.cs", "expected": 61 },
+        { "class": "AuthorizationAndIdentityBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.ApplicationTests/AuthorizationAndIdentityBehaviorTests.cs", "expected": 28, "capability": "Identity", "concern": "Security" },
+        { "class": "CacheAsideQueryHandlerTests", "file": "src/tests/IIoT.CloudPlatform.ApplicationTests/CacheAsideQueryHandlerTests.cs", "expected": 10, "capability": "Caching", "regressionId": "CLOUD-CACHE-001", "ruleId": "CLOUD-CACHE-001" },
+        { "class": "EdgeHostBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.ApplicationTests/EdgeHostBehaviorTests.cs", "expected": 12, "capability": "EdgeHost" },
+        { "class": "ProductionCommandBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.ApplicationTests/ProductionCommandBehaviorTests.cs", "expected": 5, "capability": "Production" }
+      ]
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.ApplicationFilesystemTests",
+      "project": "src/tests/IIoT.CloudPlatform.ApplicationFilesystemTests/IIoT.CloudPlatform.ApplicationFilesystemTests.csproj",
+      "testKind": "Application",
+      "capability": "InstallerPackage",
+      "runtime": "Filesystem",
+      "runtimeDependencies": ["Filesystem"],
+      "risk": "P0",
+      "concern": "Reliability",
+      "cadence": "PR",
+      "profile": "Default",
+      "regressionId": "CLOUD-APPLICATION-FS",
+      "ruleId": "CLOUD-APPLICATION-FS",
+      "owner": "Cloud.Application",
+      "executionGroup": "Filesystem",
+      "required": true,
+      "expected": 5,
+      "sources": [
+        { "class": "InstallerPackageWorkflowTests", "file": "src/tests/IIoT.CloudPlatform.ApplicationFilesystemTests/InstallerPackageWorkflowTests.cs", "expected": 5 }
+      ]
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.ContractTests",
+      "project": "src/tests/IIoT.CloudPlatform.ContractTests/IIoT.CloudPlatform.ContractTests.csproj",
+      "testKind": "Contract",
+      "capability": "HTTPContracts",
+      "runtime": "Pure",
+      "runtimeDependencies": [],
+      "risk": "P0",
+      "concern": "Compatibility",
+      "cadence": "PR",
+      "profile": "Default",
+      "regressionId": "CLOUD-CONTRACT",
+      "ruleId": "CLOUD-CONTRACT",
+      "owner": "Cloud.Contracts",
+      "executionGroup": "Pure",
+      "required": true,
+      "expected": 47,
+      "sources": [
+        { "class": "AiReadHttpContractTests", "file": "src/tests/IIoT.CloudPlatform.ContractTests/AiReadHttpContractTests.cs", "expected": 3, "capability": "AiRead", "concern": "Security" },
+        { "class": "CloudOidcProviderBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.ContractTests/CloudOidcProviderBehaviorTests.cs", "expected": 21, "capability": "OIDC", "concern": "Security" },
+        { "class": "GatewayAndEventContractTests", "file": "src/tests/IIoT.CloudPlatform.ContractTests/GatewayAndEventContractTests.cs", "expected": 10, "capability": "GatewayEvents" },
+        { "class": "HttpControllerContractTests", "file": "src/tests/IIoT.CloudPlatform.ContractTests/HttpControllerContractTests.cs", "expected": 9, "capability": "HTTP" },
+        { "class": "InfrastructureContractTests", "file": "src/tests/IIoT.CloudPlatform.ContractTests/InfrastructureContractTests.cs", "expected": 1, "capability": "Outbox" },
+        { "class": "ProductionContractShapeTests", "file": "src/tests/IIoT.CloudPlatform.ContractTests/ProductionContractShapeTests.cs", "expected": 3, "capability": "Production" }
+      ]
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.ContractFilesystemTests",
+      "project": "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/IIoT.CloudPlatform.ContractFilesystemTests.csproj",
+      "testKind": "Contract",
+      "capability": "ConfigurationContracts",
+      "runtime": "Filesystem",
+      "runtimeDependencies": ["Filesystem"],
+      "risk": "P0",
+      "concern": "Compatibility",
+      "cadence": "PR",
+      "profile": "Default",
+      "regressionId": "CLOUD-CONTRACT-FS",
+      "ruleId": "CLOUD-CONTRACT-FS",
+      "owner": "Cloud.Contracts",
+      "executionGroup": "Filesystem",
+      "required": true,
+      "expected": 10,
+      "sources": [
+        { "class": "GatewayAndBootstrapConfigurationContractTests", "file": "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/GatewayAndBootstrapConfigurationContractTests.cs", "expected": 7, "capability": "GatewayBootstrap" },
+        { "class": "InfrastructureLoggingFilesystemTests", "file": "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/InfrastructureLoggingFilesystemTests.cs", "expected": 1, "capability": "Logging", "concern": "Reliability" },
+        { "class": "PassStationContractSnapshotTests", "file": "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/PassStationContractSnapshotTests.cs", "expected": 1, "capability": "PassStation" },
+        { "class": "PersistenceMigrationShapeContractTests", "file": "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/PersistenceMigrationShapeContractTests.cs", "expected": 1, "capability": "Migrations" }
+      ]
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.PersistenceTests",
+      "project": "src/tests/IIoT.CloudPlatform.PersistenceTests/IIoT.CloudPlatform.PersistenceTests.csproj",
+      "testKind": "Persistence",
+      "capability": "Persistence",
+      "runtime": "SQLite",
+      "runtimeDependencies": ["SQLite"],
+      "risk": "P0",
+      "concern": "Reliability",
+      "cadence": "PR",
+      "profile": "Default",
+      "regressionId": "CLOUD-PERSISTENCE-SQLITE",
+      "ruleId": "CLOUD-PERSISTENCE-SQLITE",
+      "owner": "Cloud.Persistence",
+      "executionGroup": "Database",
+      "required": true,
+      "expected": 35,
+      "sources": [
+        { "class": "AiReadDeviceQueryServiceTests", "file": "src/tests/IIoT.CloudPlatform.PersistenceTests/AiReadDeviceQueryServiceTests.cs", "expected": 3, "capability": "AiRead", "concern": "Security" },
+        { "class": "AiReadProcessQueryServiceTests", "file": "src/tests/IIoT.CloudPlatform.PersistenceTests/AiReadDeviceQueryServiceTests.cs", "expected": 1, "capability": "AiRead", "concern": "Security" },
+        { "class": "AuditTrailPersistenceIsolationTests", "file": "src/tests/IIoT.CloudPlatform.PersistenceTests/AuditTrailPersistenceIsolationTests.cs", "expected": 5, "capability": "Audit", "concern": "Security" },
+        { "class": "ClientReleaseVersionObservationReaderTests", "file": "src/tests/IIoT.CloudPlatform.PersistenceTests/ClientReleaseVersionObservationReaderTests.cs", "expected": 3, "capability": "ClientRelease" },
+        { "class": "CloudOidcPersistenceTests", "file": "src/tests/IIoT.CloudPlatform.PersistenceTests/CloudOidcPersistenceTests.cs", "expected": 2, "capability": "OIDC", "concern": "Security" },
+        { "class": "EdgeReleaseApiKeyPersistenceTests", "file": "src/tests/IIoT.CloudPlatform.PersistenceTests/EdgeReleaseApiKeyPersistenceTests.cs", "expected": 3, "capability": "ClientRelease", "concern": "Security" },
+        { "class": "EfPersistenceBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.PersistenceTests/EfPersistenceBehaviorTests.cs", "expected": 12 },
+        { "class": "IdentityProviderPersistenceTests", "file": "src/tests/IIoT.CloudPlatform.PersistenceTests/IdentityProviderPersistenceTests.cs", "expected": 2, "capability": "IdentityAuthorization", "concern": "Security", "regressionId": "CLOUD-CACHE-001", "ruleId": "CLOUD-CACHE-001" },
+        { "class": "IdentityPasswordPersistenceTests", "file": "src/tests/IIoT.CloudPlatform.PersistenceTests/IdentityPasswordPersistenceTests.cs", "expected": 3, "capability": "Identity", "concern": "Security" },
+        { "class": "PermissionProviderCancellationTests", "file": "src/tests/IIoT.CloudPlatform.PersistenceTests/PermissionProviderCancellationTests.cs", "expected": 1, "capability": "IdentityAuthorization", "concern": "Security" }
+      ]
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.Persistence.PostgresTests",
+      "project": "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/IIoT.CloudPlatform.Persistence.PostgresTests.csproj",
+      "testKind": "Persistence",
+      "capability": "PostgresPersistence",
+      "runtime": "Postgres",
+      "runtimeDependencies": ["Postgres", "Aspire"],
+      "risk": "P0",
+      "concern": "Reliability",
+      "cadence": "PR",
+      "profile": "Default",
+      "regressionId": "CLOUD-PERSISTENCE-POSTGRES",
+      "ruleId": "CLOUD-PERSISTENCE-POSTGRES",
+      "owner": "Cloud.Persistence",
+      "executionGroup": "Database",
+      "required": true,
+      "expected": 19,
+      "sources": [
+        { "class": "ClientReleaseCommitRecoveryPostgresTests", "file": "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseCommitRecoveryPostgresTests.cs", "expected": 2, "capability": "ClientRelease", "runtimeDependencies": ["Postgres", "Aspire", "Filesystem"] },
+        { "class": "DatabaseSchemaCompatibilityPostgresTests", "file": "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs", "expected": 1, "capability": "MigrationSchema", "concern": "Compatibility" },
+        { "class": "DeviceIdentityQueryPostgresTests", "file": "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DeviceIdentityQueryPostgresTests.cs", "expected": 3, "capability": "DeviceIdentity", "concern": "Security" },
+        { "class": "OutboxDispatchPersistenceTests", "file": "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/OutboxDispatchPersistenceTests.cs", "expected": 9, "capability": "Outbox" },
+        { "class": "RefreshTokenSessionLimitTests", "file": "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/RefreshTokenSessionLimitTests.cs", "expected": 4, "capability": "Identity", "concern": "Security" }
+      ]
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.IntegrationTests",
+      "project": "src/tests/IIoT.CloudPlatform.IntegrationTests/IIoT.CloudPlatform.IntegrationTests.csproj",
+      "testKind": "Integration",
+      "capability": "Caching",
+      "runtime": "Redis",
+      "runtimeDependencies": ["Redis", "Docker"],
+      "risk": "P0",
+      "concern": "Reliability",
+      "cadence": "PR",
+      "profile": "Default",
+      "regressionId": "CLOUD-CACHE-001",
+      "ruleId": "CLOUD-CACHE-001",
+      "owner": "Cloud.Infrastructure",
+      "executionGroup": "Container",
+      "required": true,
+      "expected": 5,
+      "sources": [
+        { "class": "RealRedisCacheIntegrationTests", "file": "src/tests/IIoT.CloudPlatform.IntegrationTests/RealRedisCacheIntegrationTests.cs", "expected": 5 }
+      ]
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.WorkflowTests",
+      "project": "src/tests/IIoT.CloudPlatform.WorkflowTests/IIoT.CloudPlatform.WorkflowTests.csproj",
+      "testKind": "Workflow",
+      "capability": "Workflow",
+      "runtime": "Pure",
+      "runtimeDependencies": [],
+      "risk": "P0",
+      "concern": "Reliability",
+      "cadence": "PR",
+      "profile": "Default",
+      "regressionId": "CLOUD-WORKFLOW",
+      "ruleId": "CLOUD-WORKFLOW",
+      "owner": "Cloud.Workflow",
+      "executionGroup": "Pure",
+      "required": true,
+      "expected": 68,
+      "sources": [
+        { "class": "DistributedLockBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.WorkflowTests/DistributedLockBehaviorTests.cs", "expected": 6, "capability": "DistributedLock" },
+        { "class": "RedisCacheServiceSemanticsTests", "file": "src/tests/IIoT.CloudPlatform.WorkflowTests/RedisCacheServiceSemanticsTests.cs", "expected": 47, "capability": "Caching", "regressionId": "CLOUD-CACHE-001", "ruleId": "CLOUD-CACHE-001" },
+        { "class": "RedisDistributedLockServiceTests", "file": "src/tests/IIoT.CloudPlatform.WorkflowTests/RedisDistributedLockServiceTests.cs", "expected": 15, "capability": "DistributedLock" }
+      ]
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.WorkflowFilesystemTests",
+      "project": "src/tests/IIoT.CloudPlatform.WorkflowFilesystemTests/IIoT.CloudPlatform.WorkflowFilesystemTests.csproj",
+      "testKind": "Workflow",
+      "capability": "ClientReleaseWorkflow",
+      "runtime": "Filesystem",
+      "runtimeDependencies": ["Filesystem"],
+      "risk": "P0",
+      "concern": "Reliability",
+      "cadence": "PR",
+      "profile": "Default",
+      "regressionId": "CLOUD-WORKFLOW-FS",
+      "ruleId": "CLOUD-WORKFLOW-FS",
+      "owner": "Cloud.Workflow",
+      "executionGroup": "Filesystem",
+      "required": true,
+      "expected": 88,
+      "sources": [
+        { "class": "ClientReleaseBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.WorkflowFilesystemTests/ClientReleaseBehaviorTests.cs", "expected": 56, "capability": "ClientRelease" },
+        { "class": "ClientReleasePublishLeaseTests", "file": "src/tests/IIoT.CloudPlatform.WorkflowFilesystemTests/ClientReleasePublishLeaseTests.cs", "expected": 5, "capability": "ClientRelease" },
+        { "class": "ClientReleaseUploadSessionTests", "file": "src/tests/IIoT.CloudPlatform.WorkflowFilesystemTests/ClientReleaseUploadSessionTests.cs", "expected": 7, "capability": "ClientRelease" },
+        { "class": "HostReleasePublishFileTransactionTests", "file": "src/tests/IIoT.CloudPlatform.WorkflowFilesystemTests/HostReleasePublishFileTransactionTests.cs", "expected": 12, "capability": "ClientReleaseTransactions" },
+        { "class": "PluginReleasePublishFileTransactionTests", "file": "src/tests/IIoT.CloudPlatform.WorkflowFilesystemTests/PluginReleasePublishFileTransactionTests.cs", "expected": 8, "capability": "ClientReleaseTransactions" }
+      ]
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.HttpTests",
+      "project": "src/tests/IIoT.CloudPlatform.HttpTests/IIoT.CloudPlatform.HttpTests.csproj",
+      "testKind": "Integration",
+      "capability": "HTTP",
+      "runtime": "Pure",
+      "runtimeDependencies": [],
+      "risk": "P0",
+      "concern": "Reliability",
+      "cadence": "PR",
+      "profile": "Default",
+      "regressionId": "CLOUD-HTTP",
+      "ruleId": "CLOUD-HTTP",
+      "owner": "Cloud.HttpApi",
+      "executionGroup": "Pure",
+      "required": true,
+      "expected": 26,
+      "sources": [
+        { "class": "ClientReleasePublishExceptionHandlerTests", "file": "src/tests/IIoT.CloudPlatform.HttpTests/ClientReleasePublishExceptionHandlerTests.cs", "expected": 3, "capability": "ClientRelease" },
+        { "class": "ClientReleaseUploadBoundaryTests", "file": "src/tests/IIoT.CloudPlatform.HttpTests/ClientReleaseUploadBoundaryTests.cs", "expected": 5, "capability": "ClientRelease" },
+        { "class": "DistributedLockExceptionHandlerTests", "file": "src/tests/IIoT.CloudPlatform.HttpTests/DistributedLockExceptionHandlerTests.cs", "expected": 3, "capability": "DistributedLock" },
+        { "class": "HttpAiReadScopeAccessorTests", "file": "src/tests/IIoT.CloudPlatform.HttpTests/HttpAiReadScopeAccessorTests.cs", "expected": 9, "capability": "AiRead", "concern": "Security" },
+        { "class": "RuntimeHeartbeatControllerTests", "file": "src/tests/IIoT.CloudPlatform.HttpTests/RuntimeHeartbeatControllerTests.cs", "expected": 1, "capability": "RuntimeHeartbeat" },
+        { "class": "UseCaseExceptionHandlerTests", "file": "src/tests/IIoT.CloudPlatform.HttpTests/UseCaseExceptionHandlerTests.cs", "expected": 5, "capability": "ExceptionMapping" }
+      ]
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.DeploymentTests",
+      "project": "src/tests/IIoT.CloudPlatform.DeploymentTests/IIoT.CloudPlatform.DeploymentTests.csproj",
+      "testKind": "Deployment",
+      "capability": "Deployment",
+      "runtime": "Filesystem",
+      "runtimeDependencies": ["Filesystem"],
+      "risk": "P0",
+      "concern": "Reliability",
+      "cadence": "PR",
+      "profile": "Default",
+      "regressionId": "CLOUD-DEPLOYMENT",
+      "ruleId": "CLOUD-DEPLOYMENT",
+      "owner": "Cloud.Deployment",
+      "executionGroup": "Filesystem",
+      "required": true,
+      "expected": 52,
+      "sources": [
+        { "class": "DeploymentGuardTests", "file": "src/tests/IIoT.CloudPlatform.DeploymentTests/DeploymentGuardTests.cs", "expected": 20 },
+        { "class": "DeploymentSourceGuardTests", "file": "src/tests/IIoT.CloudPlatform.DeploymentTests/DeploymentSourceGuardTests.cs", "expected": 32 }
+      ]
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.EndToEndTests",
+      "project": "src/tests/IIoT.CloudPlatform.EndToEndTests/IIoT.CloudPlatform.EndToEndTests.csproj",
+      "testKind": "EndToEnd",
+      "capability": "CloudProductionFlow",
+      "runtime": "Aspire",
+      "runtimeDependencies": ["Aspire", "Postgres", "Redis", "RabbitMQ"],
+      "risk": "P0",
+      "concern": "Reliability",
+      "cadence": "Release",
+      "profile": "Default",
+      "regressionId": "CLOUD-E2E",
+      "ruleId": "CLOUD-E2E",
+      "owner": "Cloud.EndToEnd",
+      "executionGroup": "Aspire",
+      "required": false,
+      "expected": 63,
+      "sources": [
+        {
+          "class": "CloudProductionFlowTests",
+          "file": "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.cs",
+          "additionalFiles": [
+            "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.AiRead.cs",
+            "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.AuthLifecycle.cs",
+            "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.Oidc.cs",
+            "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.RateLimiting.cs",
+            "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.SecurityAndOpenApi.cs"
+          ],
+          "expected": 63
+        }
+      ]
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.WorkspaceAlignmentTests",
+      "project": "src/tests/IIoT.CloudPlatform.WorkspaceAlignmentTests/IIoT.CloudPlatform.WorkspaceAlignmentTests.csproj",
+      "testKind": "EndToEnd",
+      "capability": "WorkspaceAlignment",
+      "runtime": "Aspire",
+      "runtimeDependencies": ["Aspire", "AICopilotWorkspace"],
+      "risk": "P0",
+      "concern": "Compatibility",
+      "cadence": "Release",
+      "profile": "WorkspaceAlignment",
+      "regressionId": "CLOUD-WORKSPACE-ALIGNMENT",
+      "ruleId": "CLOUD-WORKSPACE-ALIGNMENT",
+      "owner": "Cloud.Workspace",
+      "executionGroup": "Workspace",
+      "required": false,
+      "expected": 1,
+      "sources": [
+        { "class": "CloudWorkspaceAlignmentTests", "file": "src/tests/IIoT.CloudPlatform.WorkspaceAlignmentTests/CloudWorkspaceAlignmentTests.cs", "expected": 1 }
+      ]
+    }
+  ]
+}

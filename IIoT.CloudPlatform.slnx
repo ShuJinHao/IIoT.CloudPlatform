@@ -1,5 +1,8 @@
 <Solution>
   <Folder Name="/src/" />
+  <Folder Name="/src/analyzers/">
+    <Project Path="src/analyzers/IIoT.CloudPlatform.Analyzers/IIoT.CloudPlatform.Analyzers.csproj" />
+  </Folder>
   <Folder Name="/src/core/">
     <Project Path="src/core/IIoT.Core.Identity/IIoT.Core.Identity.csproj" />
     <Project Path="src/core/IIoT.Core.MasterData/IIoT.Core.MasterData.csproj" />
@@ -31,9 +34,31 @@
   <Folder Name="/src/shared/">
     <Project Path="src/shared/IIoT.SharedKernel/IIoT.SharedKernel.csproj" />
   </Folder>
+  <Folder Name="/src/testing/">
+    <Project Path="src/testing/IIoT.CloudPlatform.FilesystemTestKit/IIoT.CloudPlatform.FilesystemTestKit.csproj" />
+    <Project Path="src/testing/IIoT.CloudPlatform.IntegrationTestKit/IIoT.CloudPlatform.IntegrationTestKit.csproj" />
+    <Project Path="src/testing/IIoT.CloudPlatform.PortFakes/IIoT.CloudPlatform.PortFakes.csproj" />
+    <Project Path="src/testing/IIoT.CloudPlatform.TestKit/IIoT.CloudPlatform.TestKit.csproj" />
+    <Project Path="src/testing/IIoT.CloudPlatform.WebE2ETestKit/IIoT.CloudPlatform.WebE2ETestKit.csproj" />
+  </Folder>
   <Folder Name="/src/tests/">
-    <Project Path="src/tests/IIoT.EndToEndTests/IIoT.EndToEndTests.csproj" Id="69d80425-d1b5-4f1c-a542-4a339531f08a" />
-    <Project Path="src/tests/IIoT.ProductionService.Tests/IIoT.ProductionService.Tests.csproj" />
-    <Project Path="src/tests/IIoT.ServiceLayer.Tests/IIoT.ServiceLayer.Tests.csproj" />
+    <Project Path="src/tests/IIoT.CloudPlatform.AggregateTests/IIoT.CloudPlatform.AggregateTests.csproj" />
+    <Project Path="src/tests/IIoT.CloudPlatform.AnalyzerTests/IIoT.CloudPlatform.AnalyzerTests.csproj" />
+    <Project Path="src/tests/IIoT.CloudPlatform.ApplicationFilesystemTests/IIoT.CloudPlatform.ApplicationFilesystemTests.csproj" />
+    <Project Path="src/tests/IIoT.CloudPlatform.ApplicationTests/IIoT.CloudPlatform.ApplicationTests.csproj" />
+    <Project Path="src/tests/IIoT.CloudPlatform.ArchitectureTests/IIoT.CloudPlatform.ArchitectureTests.csproj" />
+    <Project Path="src/tests/IIoT.CloudPlatform.ContractFilesystemTests/IIoT.CloudPlatform.ContractFilesystemTests.csproj" />
+    <Project Path="src/tests/IIoT.CloudPlatform.ContractTests/IIoT.CloudPlatform.ContractTests.csproj" />
+    <Project Path="src/tests/IIoT.CloudPlatform.DeploymentTests/IIoT.CloudPlatform.DeploymentTests.csproj" />
+    <Project Path="src/tests/IIoT.CloudPlatform.EndToEndTests/IIoT.CloudPlatform.EndToEndTests.csproj" />
+    <Project Path="src/tests/IIoT.CloudPlatform.HttpTests/IIoT.CloudPlatform.HttpTests.csproj" />
+    <Project Path="src/tests/IIoT.CloudPlatform.IntegrationTests/IIoT.CloudPlatform.IntegrationTests.csproj" />
+    <Project Path="src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/IIoT.CloudPlatform.Persistence.PostgresTests.csproj" />
+    <Project Path="src/tests/IIoT.CloudPlatform.PersistenceTests/IIoT.CloudPlatform.PersistenceTests.csproj" />
+    <Project Path="src/tests/IIoT.CloudPlatform.UnitFilesystemTests/IIoT.CloudPlatform.UnitFilesystemTests.csproj" />
+    <Project Path="src/tests/IIoT.CloudPlatform.UnitTests/IIoT.CloudPlatform.UnitTests.csproj" />
+    <Project Path="src/tests/IIoT.CloudPlatform.WorkspaceAlignmentTests/IIoT.CloudPlatform.WorkspaceAlignmentTests.csproj" />
+    <Project Path="src/tests/IIoT.CloudPlatform.WorkflowFilesystemTests/IIoT.CloudPlatform.WorkflowFilesystemTests.csproj" />
+    <Project Path="src/tests/IIoT.CloudPlatform.WorkflowTests/IIoT.CloudPlatform.WorkflowTests.csproj" />
   </Folder>
 </Solution>

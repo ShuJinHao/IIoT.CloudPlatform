@@ -4,10 +4,6 @@ public interface IEventPublisher
 {
     Task PublishAsync(
         IIntegrationEvent @event,
+        Guid messageId,
         CancellationToken cancellationToken = default);
-
-    Task PublishAsync<TEvent>(
-        TEvent @event,
-        CancellationToken cancellationToken = default)
-        where TEvent : class, IIntegrationEvent;
 }

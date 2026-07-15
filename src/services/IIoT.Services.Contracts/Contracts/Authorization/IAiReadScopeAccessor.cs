@@ -1,3 +1,5 @@
+using IIoT.SharedKernel.Architecture;
+
 namespace IIoT.Services.Contracts.Authorization;
 
 public enum AiReadScopeKind
@@ -7,7 +9,7 @@ public enum AiReadScopeKind
     Invalid
 }
 
-public interface IAiReadScopeAccessor
+public interface IAiReadScopeAccessor : IReadOnlyQueryPort
 {
     string Caller { get; }
 

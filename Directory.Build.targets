@@ -1,36 +1,44 @@
 <Project>
+  <PropertyGroup>
+    <CloudArchitectureRepositoryRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)'))</CloudArchitectureRepositoryRoot>
+    <CloudArchitectureProjectIdentity>$([MSBuild]::MakeRelative('$(CloudArchitectureRepositoryRoot)', '$(MSBuildProjectFullPath)'))</CloudArchitectureProjectIdentity>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(_IsCloudProductionProject)' == 'true'">
+    <CompilerVisibleProperty Include="CloudArchitectureProjectIdentity" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(_IsCloudProductionProject)' == 'true'">
+    <RunAnalyzers>true</RunAnalyzers>
+    <RunAnalyzersDuringBuild>true</RunAnalyzersDuringBuild>
+  </PropertyGroup>
+
+  <Target Name="WriteCloudArchitectureManagedProjectReferences"
+          DependsOnTargets="ResolveProjectReferences"
+          BeforeTargets="CoreCompile"
+          Condition="'$(_IsCloudProductionProject)' == 'true'">
+    <PropertyGroup>
+      <_CloudArchitectureManagedReferencesFile>$(IntermediateOutputPath)CloudArchitectureManagedProjectReferences.txt</_CloudArchitectureManagedReferencesFile>
+    </PropertyGroup>
+    <ItemGroup>
+      <_CloudArchitectureManagedReference Include="@(_ResolvedProjectReferencePaths)"
+                                          Condition="'%(MSBuildSourceProjectFile)' != ''">
+        <StableProjectIdentity>$([MSBuild]::MakeRelative('$(CloudArchitectureRepositoryRoot)', '%(MSBuildSourceProjectFile)'))</StableProjectIdentity>
+      </_CloudArchitectureManagedReference>
+    </ItemGroup>
+    <WriteLinesToFile File="$(_CloudArchitectureManagedReferencesFile)"
+                      Lines="@(_CloudArchitectureManagedReference->'%(ReferenceAssembly)&#x9;%(FullPath)&#x9;%(StableProjectIdentity)')"
+                      Overwrite="true"
+                      WriteOnlyWhenDifferent="true" />
+    <ItemGroup>
+      <AdditionalFiles Include="$(_CloudArchitectureManagedReferencesFile)" />
+    </ItemGroup>
+  </Target>
+
   <Target Name="ValidateCloudDeploymentPolicy"
           BeforeTargets="PrepareForBuild"
           Condition="'$(DesignTimeBuild)' != 'true' and '$(MSBuildProjectName)' == 'IIoT.HttpApi'">
     <Exec Command="pwsh -NoProfile -File &quot;$(MSBuildThisFileDirectory)deploy/tests/TestDeploymentPolicy.ps1&quot;" />
   </Target>
 
-  <Target Name="ValidateCloudTestGovernanceStaticPolicy"
-          BeforeTargets="PrepareForBuild"
-          Condition="'$(DesignTimeBuild)' != 'true' and '$(MSBuildProjectName)' == 'IIoT.HttpApi'">
-    <Exec Command="pwsh -NoLogo -NoProfile -NonInteractive -File &quot;$(MSBuildThisFileDirectory)scripts/tests/TestCloudTestGovernancePolicy.ps1&quot; -Mode ValidateStatic -Configuration &quot;$(Configuration)&quot;" />
-  </Target>
-
-  <Target Name="ValidateCloudTestGovernanceAssembly"
-          AfterTargets="Compile"
-          Condition="'$(IsTestProject)' == 'true' and '$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(TargetFramework)' != ''">
-    <PropertyGroup>
-      <_CloudTestGovernanceDirectory>$(MSBuildProjectDirectory)/$(IntermediateOutputPath)test-governance</_CloudTestGovernanceDirectory>
-      <_CloudTestGovernanceReferencePathsFile>$(_CloudTestGovernanceDirectory)/reference-paths.rsp</_CloudTestGovernanceReferencePathsFile>
-    </PropertyGroup>
-    <Error Condition="'@(IntermediateAssembly)' == ''"
-           Text="CLOUD-TEST-GOV-001-SCAN compiled test assembly was not produced for $(MSBuildProjectName)." />
-    <MakeDir Directories="$(_CloudTestGovernanceDirectory)" />
-    <WriteLinesToFile File="$(_CloudTestGovernanceReferencePathsFile)"
-                      Lines="@(ReferencePath->'%(FullPath)')"
-                      Overwrite="true"
-                      Encoding="UTF-8" />
-    <Exec Command="pwsh -NoLogo -NoProfile -NonInteractive -File &quot;$(MSBuildThisFileDirectory)scripts/tests/TestCloudTestGovernancePolicy.ps1&quot; -Mode ValidateProject -Configuration &quot;$(Configuration)&quot; -ProjectPath &quot;$(MSBuildProjectFullPath)&quot; -ProjectName &quot;$(MSBuildProjectName)&quot; -AssemblyPath &quot;@(IntermediateAssembly->'%(FullPath)')&quot; -ReferencePathsFile &quot;$(_CloudTestGovernanceReferencePathsFile)&quot;" />
-  </Target>
-
-  <Target Name="ValidateCloudTestRunnerConfiguration"
-          AfterTargets="CopyFilesToOutputDirectory"
-          Condition="'$(IsTestProject)' == 'true' and '$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(TargetFramework)' != ''">
-    <Exec Command="pwsh -NoLogo -NoProfile -NonInteractive -File &quot;$(MSBuildThisFileDirectory)scripts/tests/TestCloudTestGovernancePolicy.ps1&quot; -Mode ValidateRunnerConfiguration -RunnerConfigPath &quot;$(TargetDir)xunit.runner.json&quot;" />
-  </Target>
 </Project>

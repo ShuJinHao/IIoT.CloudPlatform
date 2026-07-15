@@ -1,4 +1,5 @@
 using IIoT.Core.Production.Aggregates.ClientReleases;
+using IIoT.SharedKernel.Architecture;
 
 namespace IIoT.Core.Production.Contracts.ClientReleases;
 
@@ -6,7 +7,7 @@ namespace IIoT.Core.Production.Contracts.ClientReleases;
 /// 客户端版本快照、运行心跳和状态投影的专用持久化端口。
 /// 这些表不是业务聚合根，不通过通用 IRepository 暴露。
 /// </summary>
-public interface IDeviceClientStateStore
+public interface IDeviceClientStateQueryService : IReadOnlyQueryPort
 {
     Task<DeviceClientVersionSnapshot?> GetVersionSnapshotByDeviceAsync(
         Guid deviceId,
@@ -29,6 +30,10 @@ public interface IDeviceClientStateStore
     Task<IReadOnlyList<DeviceClientState>> GetStatesByDevicesAsync(
         IReadOnlyCollection<Guid>? deviceIds = null,
         CancellationToken cancellationToken = default);
+}
+
+public interface IDeviceClientStateStore : IDeviceClientStateQueryService
+{
 
     void AddVersionSnapshot(DeviceClientVersionSnapshot snapshot);
 

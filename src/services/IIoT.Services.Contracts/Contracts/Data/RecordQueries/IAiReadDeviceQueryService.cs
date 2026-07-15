@@ -1,3 +1,5 @@
+using IIoT.SharedKernel.Architecture;
+
 namespace IIoT.Services.Contracts.RecordQueries;
 
 public sealed record AiReadDeviceQueryItem(
@@ -19,7 +21,7 @@ public sealed record AiReadDeviceQueryRequest(
 /// AiRead 设备主数据专用读服务。
 /// 授权范围、精确条件、模糊条件、计数和分页必须在同一数据库查询中完成。
 /// </summary>
-public interface IAiReadDeviceQueryService
+public interface IAiReadDeviceQueryService : IReadOnlyQueryPort
 {
     Task<(IReadOnlyList<AiReadDeviceQueryItem> Items, int TotalCount)> GetPagedAsync(
         AiReadDeviceQueryRequest request,

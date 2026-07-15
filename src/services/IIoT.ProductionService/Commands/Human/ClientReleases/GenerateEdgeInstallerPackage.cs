@@ -12,7 +12,6 @@ using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.CrossCutting.Attributes;
-using IIoT.Services.CrossCutting.Caching;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -38,7 +37,6 @@ public sealed class GenerateEdgeInstallerPackageHandler(
     ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IRepository<Device> deviceRepository,
     IReadRepository<ClientReleaseComponent> componentRepository,
-    ICacheService cacheService,
     IAuditTrailService auditTrailService,
     IOptions<EdgeInstallerArtifactOptions> options)
     : ICommandHandler<GenerateEdgeInstallerPackageCommand, Result<EdgeInstallerPackageDto>>
@@ -427,7 +425,6 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         foreach (var binding in bindings)
         {
             var device = deviceById.Values.Single(item => item.Code == binding.ClientCode);
-            await cacheService.RemoveAsync(CacheKeys.DeviceCode(device.Code), cancellationToken);
             await auditTrailService.TryWriteAsync(
                 new AuditTrailEntry(
                     ClientReleaseAuditActor.ParseId(currentUser.Id),

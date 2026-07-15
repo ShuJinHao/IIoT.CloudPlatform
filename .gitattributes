@@ -1,4 +1,3 @@
-/.github/CODEOWNERS text eol=lf
 /.github/workflows/*.yml text eol=lf
 /.github/workflows/*.yaml text eol=lf
 /Directory.Build.props text eol=lf

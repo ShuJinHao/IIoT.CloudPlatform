@@ -1,0 +1,180 @@
+{
+  "schemaVersion": 3,
+  "ruleId": "TEST-COMPAT-001",
+  "externalConsumerEvidenceCount": 2,
+  "unclassifiedCompatibilitySignals": 0,
+  "activeCompatibilityItems": 2,
+  "retired": [
+    {
+      "id": "edge-process-record-upload-v1",
+      "disposition": "deleted",
+      "producer": "removed Cloud HTTP action and request/mapper chain",
+      "consumerEvidence": "Cross-repository scan found no Edge production invocation of GetProcessUploadPath; Cloud callers were tests only.",
+      "reason": "No production caller existed in Cloud or Edge; all remaining test callers were migrated to the typed pass-station batch contract.",
+      "replacement": "/api/v1/edge/pass-stations/{typeKey}/batch",
+      "deletionCondition": "Delete when producer-to-real-consumer scan is zero and canonical success, duplicate and authorization coverage is present; satisfied in this batch.",
+      "signals": [
+        { "segments": ["/api/v1/edge/", "process-records"] },
+        { "segments": ["ProcessRecord", "UploadRequest"] },
+        { "segments": ["Receive", "ProcessRecords"] }
+      ]
+    }
+  ],
+  "retainedOrdinaryAbstractions": [
+    {
+      "id": "human-process-select-api",
+      "classification": "current-ordinary-abstraction",
+      "disposition": "notCompatibility",
+      "decisionReason": "The endpoint is the current typed selector API consumed by Cloud Web dictionaries and forms; it does not adapt an older contract.",
+      "producer": {
+        "path": "src/hosts/IIoT.HttpApi/Controllers/Human/MasterData/HumanMasterDataProcessController.cs",
+        "pattern": "HttpGet(\"all\")"
+      },
+      "candidateEvidence": {
+        "path": "src/hosts/IIoT.HttpApi/Controllers/Human/MasterData/HumanMasterDataProcessController.cs",
+        "pattern": "HttpGet(\"all\")"
+      },
+      "consumers": [
+        { "path": "src/ui/iiot-web/src/features/processes/api.ts", "pattern": "http.get<ProcessSelectDto[]>(`${basePath}/all`);" },
+        { "path": "src/ui/iiot-web/src/features/recipes/useRecipes.ts", "pattern": "getAllProcessesApi()" }
+      ],
+      "tests": [
+        { "path": "src/tests/IIoT.CloudPlatform.ApplicationTests/CacheAsideQueryHandlerTests.cs", "pattern": "GetAllProcessesHandler_ValidEmptyListIsCached" }
+      ],
+      "replacement": "notApplicable: current typed selector contract",
+      "deletionCondition": "Delete only with a contract migration of every typed Web consumer."
+    },
+    {
+      "id": "human-device-select-api",
+      "classification": "current-ordinary-abstraction",
+      "disposition": "notCompatibility",
+      "decisionReason": "The endpoint is the current active-device selector consumed by recipes, employees and pass-station UI flows.",
+      "producer": {
+        "path": "src/hosts/IIoT.HttpApi/Controllers/Human/HumanDeviceController.cs",
+        "pattern": "HttpGet(\"all\")"
+      },
+      "candidateEvidence": {
+        "path": "src/hosts/IIoT.HttpApi/Controllers/Human/HumanDeviceController.cs",
+        "pattern": "HttpGet(\"all\")"
+      },
+      "consumers": [
+        { "path": "src/ui/iiot-web/src/features/devices/api.ts", "pattern": "return http.get<DeviceSelectDto[]>(`${basePath}/all`);" },
+        { "path": "src/ui/iiot-web/src/features/recipes/useRecipes.ts", "pattern": "getAllActiveDevicesApi" }
+      ],
+      "tests": [
+        { "path": "src/tests/IIoT.CloudPlatform.ApplicationTests/CacheAsideQueryHandlerTests.cs", "pattern": "GetAllDevicesHandler_AdminEmptyListIsCachedAndCallerTokenReachesRepository" }
+      ],
+      "replacement": "notApplicable: current typed selector contract",
+      "deletionCondition": "Delete only with a contract migration of every typed Web consumer."
+    },
+    {
+      "id": "gateway-blocked-route-catalog",
+      "classification": "current-ordinary-abstraction",
+      "disposition": "notCompatibility",
+      "decisionReason": "BlockedAliases is negative security configuration consumed by GatewayRouteCatalog; it exposes no alias route or compatibility producer.",
+      "producer": {
+        "path": "src/hosts/IIoT.Gateway/appsettings.json",
+        "pattern": "BlockedAliases"
+      },
+      "candidateEvidence": {
+        "path": "src/hosts/IIoT.Gateway/appsettings.json",
+        "pattern": "BlockedAliases"
+      },
+      "consumers": [
+        { "path": "src/hosts/IIoT.Gateway/Infrastructure/GatewayRouteCatalog.cs", "pattern": "configuration.GetSection(\"GatewayRoutes:BlockedAliases\").GetChildren()" },
+        { "path": "src/hosts/IIoT.Gateway/Program.cs", "pattern": "builder.Services.AddSingleton<IGatewayRouteCatalog, GatewayRouteCatalog>()" }
+      ],
+      "tests": [
+        { "path": "src/tests/IIoT.CloudPlatform.ContractTests/GatewayAndEventContractTests.cs", "pattern": "GatewayRouteCatalog_ShouldResolveConfiguredSurfacesAndRejectAliases" }
+      ],
+      "replacement": "notApplicable: current deny-list security control",
+      "deletionCondition": "Delete only when an equivalent mandatory route-denial control replaces the catalog."
+    },
+    {
+      "id": "client-release-host-compatibility",
+      "classification": "current-ordinary-abstraction",
+      "disposition": "notCompatibility",
+      "decisionReason": "HostApi and plugin-version compatibility is the current release-domain acceptance rule used by package generation and inventory diagnostics, not an adapter for a retired API.",
+      "producer": {
+        "path": "src/services/IIoT.ProductionService/ClientReleases/ClientReleaseContracts.cs",
+        "pattern": "IsCompatibleWithHost"
+      },
+      "candidateEvidence": {
+        "path": "src/services/IIoT.ProductionService/ClientReleases/ClientReleaseContracts.cs",
+        "pattern": "IsCompatibleWithHost"
+      },
+      "consumers": [
+        { "path": "src/services/IIoT.ProductionService/Commands/Human/ClientReleases/GenerateEdgeInstallerPackage.cs", "pattern": "ClientReleaseMapping.IsCompatibleWithHost" },
+        { "path": "src/services/IIoT.ProductionService/Queries/Human/ClientReleases/GetDeviceClientVersionInventory.cs", "pattern": "ClientReleaseMapping.IsCompatibleWithHost" }
+      ],
+      "tests": [
+        { "path": "src/tests/IIoT.CloudPlatform.ApplicationFilesystemTests/InstallerPackageWorkflowTests.cs", "pattern": "GenerateEdgeInstallerPackageHandler_ShouldPackageSelectedRuntimeAndInjectJsonConfigs" }
+      ],
+      "replacement": "notApplicable: current release-domain invariant",
+      "deletionCondition": "Delete only if the host/plugin version contract itself is retired and all release consumers migrate."
+    }
+  ],
+  "retainedCompatibility": [
+    {
+      "id": "upload-content-hash-idempotency",
+      "classification": "active-request-id-compatibility",
+      "disposition": "retainUntilDeletionCondition",
+      "decisionReason": "This is genuine compatibility logic for two current Edge producers, not an assumed older caller: CapacitySyncTask.CreatePayload and DeviceLogSyncTask.PostLogsAsync omit RequestId today. Pass-station upload sends RequestId and does not depend on this fallback. The legacy-prefixed content hash therefore preserves current capacity/device-log persisted DeduplicationKey semantics until those real producers and stored keys migrate.",
+      "producer": {
+        "path": "src/services/IIoT.ProductionService/Commands/Edge/UploadDeduplicationKeys.cs",
+        "pattern": "return Result.Success($\"legacy:{ComputeSha256(payload)}\")"
+      },
+      "candidateEvidence": {
+        "path": "src/services/IIoT.ProductionService/Commands/Edge/UploadDeduplicationKeys.cs",
+        "pattern": "legacy:"
+      },
+      "consumers": [
+        { "path": "src/services/IIoT.ProductionService/Commands/Edge/Capacities/ReceiveHourlyCapacity.cs", "pattern": "UploadDeduplicationKeys.ForHourlyCapacity" },
+        { "path": "src/services/IIoT.ProductionService/Commands/Edge/DeviceLogs/ReceiveDeviceLog.cs", "pattern": "UploadDeduplicationKeys.ForDeviceLog" },
+        { "path": "src/services/IIoT.ProductionService/Commands/Edge/PassStations/ReceivePassStationBatch.cs", "pattern": "UploadDeduplicationKeys.ForPassStationBatch" },
+        { "path": "src/infrastructure/IIoT.EntityFrameworkCore/Uploads/EfUploadReceiveRegistry.cs", "pattern": "x.DeduplicationKey == deduplicationKey" }
+      ],
+      "externalConsumers": [
+        {
+          "repository": "IIoT.EdgeClient",
+          "path": "src/Infrastructure/IIoT.Edge.Infrastructure.Integration/Capacity/CapacitySyncTask.cs",
+          "pattern": "_cloudHttp.PostAsync(\n                _endpointProvider.GetCapacityHourlyPath(),\n                payload,\n                cancellationToken: cancellationToken)",
+          "mustNotContain": "RequestId",
+          "sourceSha256": "5ae7cb807ac0015f8e44775966377296d8374d80fb07bcf7bba4c34aec557348"
+        },
+        {
+          "repository": "IIoT.EdgeClient",
+          "path": "src/Infrastructure/IIoT.Edge.Infrastructure.Integration/DeviceLog/DeviceLogSyncTask.cs",
+          "pattern": "_cloudHttp.PostAsync(\n                _endpointProvider.GetDeviceLogPath(),\n                payload,\n                cancellationToken: cancellationToken)",
+          "mustNotContain": "RequestId",
+          "sourceSha256": "1b8cbb3424c2f961edcd5cfb60bdf6403af417f110c5096577a433690af1469e"
+        }
+      ],
+      "externalEvidenceHead": "1d25f9a6945b0b73224cfc75250203ae35be17be",
+      "externalEvidenceSourceStateSha256": "7eedaa475125e3e6e59a66d3a98efe39f3889deb991fbabe03b675dd6d6b05f4",
+      "replacement": "RequestId-required capacity and device-log Edge upload contracts with a one-way persisted-key migration; pass-station already uses RequestId",
+      "deletionCondition": "Add mandatory RequestId/idempotency-key generation to the real Edge CapacitySyncTask and DeviceLogSyncTask producers, deploy that contract across the supported fleet, inventory and migrate persisted legacy-prefixed DeduplicationKey rows, and prove both transitional no-RequestId behavior and the final RequestId-only path before physical deletion."
+    },
+    {
+      "id": "migration-schema-upgrade",
+      "classification": "active-schema-compatibility",
+      "disposition": "retainUntilDeletionCondition",
+      "decisionReason": "This is genuine compatibility logic. MigrationWorkApp Worker resolves the orchestrator at startup, InitializeAsync invokes the schema checks, and the job runs before dependent services; removal without a fleet/database baseline would break upgrades.",
+      "producer": {
+        "path": "src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs",
+        "pattern": "EnsureRecordSchemaCompatibilityAsync"
+      },
+      "candidateEvidence": {
+        "path": "src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs",
+        "pattern": "SchemaCompatibilityAsync"
+      },
+      "consumers": [
+        { "path": "src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs", "pattern": "await EnsureRecordSchemaCompatibilityAsync" },
+        { "path": "src/hosts/IIoT.MigrationWorkApp/Worker.cs", "pattern": "await orchestrator.InitializeAsync" },
+        { "path": "src/hosts/IIoT.AppHost/AppHost.cs", "pattern": "IIoT_MigrationWorkApp" }
+      ],
+      "replacement": "EF migrations or a one-way schema migration covering all three compatibility checks",
+      "deletionCondition": "Inventory every deployed database at the post-normalization schema baseline, replace ad-hoc checks with irreversible migrations, and prove clean-install plus upgrade-path tests before physical deletion."
+    }
+  ]
+}

@@ -56,30 +56,32 @@ public class GetDailyCapacityPagedHandler(
 
         var canUseCache = currentUserDeviceAccessService.IsAdministrator || request.DeviceId.HasValue;
 
-        if (canUseCache)
+        async Task<PagedList<DailyCapacityPagedItemDto>?> LoadPageAsync(
+            CancellationToken factoryCancellationToken)
         {
-            var cached = await cacheService.GetAsync<PagedList<DailyCapacityPagedItemDto>>(
-                cacheKey, cancellationToken);
-            if (cached is not null)
-                return Result.Success(cached);
+            var (items, totalCount) = await queryService.GetDailyPagedAsync(
+                request.PaginationParams,
+                request.Date,
+                request.DeviceId,
+                request.DeviceId.HasValue ? null : allowedDeviceIds,
+                factoryCancellationToken);
+
+            return new PagedList<DailyCapacityPagedItemDto>(
+                items,
+                totalCount,
+                request.PaginationParams);
         }
 
-        var (items, totalCount) = await queryService.GetDailyPagedAsync(
-            request.PaginationParams,
-            request.Date,
-            request.DeviceId,
-            request.DeviceId.HasValue ? null : allowedDeviceIds,
-            cancellationToken);
+        var pagedList = canUseCache
+            ? await cacheService.GetOrSetAsync(
+                cacheKey,
+                LoadPageAsync,
+                static value => value is not null,
+                TimeSpan.FromMinutes(5),
+                cancellationToken)
+            : await LoadPageAsync(cancellationToken);
 
-        var pagedList = new PagedList<DailyCapacityPagedItemDto>(
-            items, totalCount, request.PaginationParams);
-
-        if (canUseCache)
-        {
-            await cacheService.SetAsync(
-                cacheKey, pagedList, TimeSpan.FromMinutes(5), cancellationToken);
-        }
-
-        return Result.Success(pagedList);
+        return Result.Success(pagedList
+            ?? throw new InvalidOperationException("Capacity page cache factory returned null."));
     }
 }

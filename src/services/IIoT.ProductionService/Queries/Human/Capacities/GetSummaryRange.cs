@@ -37,26 +37,8 @@ public class GetSummaryRangeHandler(
             return Result.Failure(deviceAccess.Errors?.ToArray() ?? ["无权查看该设备的区间汇总"]);
         }
 
-        var cacheKey = CacheKeys.CapacityRange(
-            request.DeviceId,
-            request.StartDate,
-            request.EndDate,
-            request.PlcName);
-
-        var cached = await cacheService.GetAsync<List<DailyRangeSummaryDto>>(cacheKey, cancellationToken);
-        if (cached is not null)
-            return Result.Success(cached);
-
-        var data = await queryService.GetSummaryRangeAsync(
-            request.DeviceId,
-            request.StartDate,
-            request.EndDate,
-            request.PlcName,
-            cancellationToken);
-
-        if (data.Count > 0)
-            await cacheService.SetAsync(cacheKey, data, TimeSpan.FromMinutes(5), cancellationToken);
-
-        return Result.Success(data);
+        return Result.Success(await CapacityQueryCache.GetSummaryRangeAsync(
+            queryService, cacheService, request.DeviceId, request.StartDate,
+            request.EndDate, request.PlcName, cancellationToken));
     }
 }

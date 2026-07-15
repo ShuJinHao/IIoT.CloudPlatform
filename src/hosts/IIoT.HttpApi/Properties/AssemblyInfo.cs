@@ -1,3 +1,3 @@
 using System.Runtime.CompilerServices;
 
-[assembly: InternalsVisibleTo("IIoT.EndToEndTests")]
+[assembly: InternalsVisibleTo("IIoT.CloudPlatform.HttpTests")]

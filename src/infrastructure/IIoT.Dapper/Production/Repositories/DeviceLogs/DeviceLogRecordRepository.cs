@@ -3,7 +3,7 @@ using IIoT.Core.Production.Contracts.RecordRepositories;
 
 namespace IIoT.Dapper.Production.Repositories.DeviceLogs;
 
-public sealed class DeviceLogRecordRepository(IDbConnectionFactory connectionFactory)
+internal sealed class DeviceLogRecordRepository(IDbConnectionFactory connectionFactory)
     : IDeviceLogRecordRepository
 {
     public async Task InsertBatchAsync(

@@ -3,7 +3,7 @@ using Npgsql;
 
 namespace IIoT.Dapper;
 
-public class NpgsqlConnectionFactory(string connectionString) : IDbConnectionFactory
+internal class NpgsqlConnectionFactory(string connectionString) : IDbConnectionFactory
 {
     public IDbConnection CreateConnection()
     {

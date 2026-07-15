@@ -13,22 +13,6 @@ namespace IIoT.HttpApi.Controllers;
 [Tags("Edge Pass Stations")]
 public class EdgePassStationController : ApiControllerBase
 {
-    [HttpPost("/api/v1/edge/process-records")]
-    [EnableRateLimiting(HttpApiRateLimitPolicies.PassStationUpload)]
-    [RequestSizeLimit(UploadValidationLimits.MaxUploadRequestBodyBytes)]
-    public async Task<IActionResult> ReceiveProcessRecords(
-        [FromBody] ProcessRecordUploadRequest? request,
-        CancellationToken cancellationToken)
-    {
-        var command = ProcessRecordUploadRequestMapper.ToPassStationCommand(request);
-        if (!command.IsSuccess)
-        {
-            return ReturnResult(command);
-        }
-
-        return ReturnResult(await Sender.Send(command.Value!, cancellationToken));
-    }
-
     [HttpPost("{typeKey}/batch")]
     [EnableRateLimiting(HttpApiRateLimitPolicies.PassStationUpload)]
     [RequestSizeLimit(UploadValidationLimits.MaxUploadRequestBodyBytes)]

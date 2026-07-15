@@ -5,31 +5,20 @@ namespace IIoT.Services.Contracts;
 /// </summary>
 /// <remarks>
 /// 架构意义：屏蔽底层具体的缓存中间件 (如 Redis、Memcached 或 MemoryCache)。
-/// 上层业务和 EF Core 数据层只依赖此接口进行缓存的读写，实现极度解耦。
+/// 仅用于允许缓存故障降级的普通值缓存。权限、设备访问范围、设备身份、
+/// 分布式租约、幂等登记和 Outbox 等安全/一致性敏感链路不得使用本接口。
 /// </remarks>
 public interface ICacheService
 {
     /// <summary>
-    /// 获取缓存数据并反序列化为指定类型
-    /// </summary>
-    Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// 原子地读取缓存；未命中时仅由单个调用者执行回源工厂并回填缓存。
+    /// 原子地读取缓存；未命中时仅由单个调用者执行回源工厂，并按调用方显式策略决定是否回填。
     /// </summary>
     Task<T?> GetOrSetAsync<T>(
         string key,
         Func<CancellationToken, Task<T?>> factory,
-        TimeSpan? absoluteExpireTime = null,
+        Func<T?, bool> shouldCache,
+        TimeSpan absoluteExpireTime,
         CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// 将对象序列化并写入缓存
-    /// </summary>
-    /// <param name="key">缓存键</param>
-    /// <param name="value">要缓存的对象</param>
-    /// <param name="absoluteExpireTime">绝对过期时间 (如果不传则使用底层默认策略)</param>
-    Task SetAsync<T>(string key, T value, TimeSpan? absoluteExpireTime = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// 移除指定缓存

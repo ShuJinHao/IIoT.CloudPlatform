@@ -4,7 +4,7 @@ using IIoT.Services.Contracts.RecordQueries;
 
 namespace IIoT.Dapper.Production.QueryServices.ProductionRecords;
 
-public sealed class AiProductionRecordQueryService(IDbConnectionFactory connectionFactory)
+internal sealed class AiProductionRecordQueryService(IDbConnectionFactory connectionFactory)
     : IAiProductionRecordQueryService
 {
     private const string SelectColumns = """

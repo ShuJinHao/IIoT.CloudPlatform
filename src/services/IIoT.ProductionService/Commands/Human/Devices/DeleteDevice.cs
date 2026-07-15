@@ -4,7 +4,6 @@ using IIoT.Core.Production.Specifications.Devices;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
-using IIoT.Services.Contracts.Caching;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.SharedKernel.Messaging;
@@ -22,7 +21,6 @@ public class DeleteDeviceHandler(
     IRepository<Device> deviceRepository,
     IDeviceDeletionDependencyQueryService dependencyQueryService,
     ICurrentUserDeviceAccessService currentUserDeviceAccessService,
-    IDeviceCacheInvalidationService deviceCacheInvalidationService,
     IAuditTrailService auditTrailService)
     : ICommandHandler<DeleteDeviceCommand, Result<bool>>
 {
@@ -64,14 +62,6 @@ public class DeleteDeviceHandler(
                 BuildDeletionAuditSummary(device, deletionResult.Impact),
                 deletionResult.DeviceDeleted ? null : "设备级联删除未删除设备主数据。"),
             cancellationToken);
-
-        if (deletionResult.DeviceDeleted)
-        {
-            await deviceCacheInvalidationService.InvalidateAfterDeleteAsync(
-                new DeviceCacheDescriptor(device.Id, device.ProcessId, device.Code),
-                deletionResult.AffectedEmployeeIds,
-                cancellationToken);
-        }
 
         return Result.Success(deletionResult.DeviceDeleted);
     }

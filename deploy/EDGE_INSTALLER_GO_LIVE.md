@@ -33,13 +33,15 @@ publish/edge-installer-artifacts/stable/1.2.0/
 Cloud 本地至少验证：
 
 ```bash
-dotnet test src/tests/IIoT.ServiceLayer.Tests -p:BuildInParallel=false --disable-build-servers
-dotnet build src/hosts/IIoT.AppHost -p:BuildInParallel=false --disable-build-servers
-dotnet test src/tests/IIoT.EndToEndTests -p:BuildInParallel=false --disable-build-servers --filter ConfigurationGuardTests
-cd src/ui/iiot-web && npm run build
+dotnet restore IIoT.CloudPlatform.slnx --disable-parallel
+dotnet build IIoT.CloudPlatform.slnx -c Release --no-restore --disable-build-servers --nologo -noAutoResponse
+bash scripts/tests/TestCloudArchitectureAnalyzerFixtures.sh
+pwsh -NoProfile -File scripts/tests/Test-CloudTestMigration.ps1
+pwsh -NoProfile -File scripts/tests/Invoke-CloudTestInventory.ps1 -Mode Required -Configuration Release -NoBuild
+cd src/ui/iiot-web && npm run test:unit && npm run build
 ```
 
-完整 EndToEnd 依赖 Aspire 基础设施，若 RabbitMQ/eventbus 无法启动，不得把它当成安装包链路通过；至少保留上面的服务层、配置和前端构建证据。
+上述 Required 入口会真实执行当前 16 个物理 runner / 661 case，并要求发现数 = 执行数 = 通过数、0 failed、0 skipped。完整后端 EndToEnd 63 case 是依赖 Aspire 的独立显式 lane，需要时使用 `pwsh -NoProfile -File scripts/tests/Invoke-CloudTestInventory.ps1 -Mode EndToEnd -Configuration Release -NoBuild`；若 RabbitMQ/eventbus 无法启动，不得把它冒充安装包链路通过。
 
 ## 2. 先部署 Cloud
 

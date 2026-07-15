@@ -1,47 +1,56 @@
-using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Caching;
 using IIoT.Services.CrossCutting.Caching;
 
 namespace IIoT.ProductionService.Caching;
 
 public sealed class DeviceCacheInvalidationService(
-    ICacheService cacheService) : IDeviceCacheInvalidationService
+    IIdempotentCacheInvalidationService idempotentInvalidation) : IDeviceCacheInvalidationService
 {
-    public async Task InvalidateListsAfterRegisterAsync(
+    public async Task InvalidateListsAfterRegisterOnceAsync(
+        Guid domainEventId,
         Guid processId,
         CancellationToken cancellationToken = default)
     {
-        await cacheService.RemoveAsync(CacheKeys.AllDevices(), cancellationToken);
-        await cacheService.RemoveAsync(CacheKeys.DevicesByProcess(processId), cancellationToken);
+        await idempotentInvalidation.InvalidateOnceAsync(
+            domainEventId,
+            "device-register",
+            [CacheKeys.AllDevices(), CacheKeys.DevicesByProcess(processId)],
+            [],
+            cancellationToken);
     }
 
-    public async Task InvalidateAfterRenameAsync(
+    public async Task InvalidateAfterRenameOnceAsync(
+        Guid domainEventId,
         DeviceCacheDescriptor device,
         CancellationToken cancellationToken = default)
     {
-        await cacheService.RemoveAsync(CacheKeys.AllDevices(), cancellationToken);
-        await cacheService.RemoveAsync(CacheKeys.DevicesByProcess(device.ProcessId), cancellationToken);
-        await cacheService.RemoveAsync(CacheKeys.DeviceCode(device.DeviceCode), cancellationToken);
-        await cacheService.RemoveAsync(CacheKeys.DeviceIdentity(device.DeviceId), cancellationToken);
+        await idempotentInvalidation.InvalidateOnceAsync(
+            domainEventId,
+            "device-rename",
+            [CacheKeys.AllDevices(), CacheKeys.DevicesByProcess(device.ProcessId)],
+            [],
+            cancellationToken);
     }
 
-    public async Task InvalidateAfterDeleteAsync(
+    public async Task InvalidateAfterDeleteOnceAsync(
+        Guid domainEventId,
         DeviceCacheDescriptor device,
-        IReadOnlyCollection<Guid>? affectedEmployeeIds = null,
         CancellationToken cancellationToken = default)
     {
-        await cacheService.RemoveAsync(CacheKeys.AllDevices(), cancellationToken);
-        await cacheService.RemoveAsync(CacheKeys.DevicesByProcess(device.ProcessId), cancellationToken);
-        await cacheService.RemoveAsync(CacheKeys.DeviceCode(device.DeviceCode), cancellationToken);
-        await cacheService.RemoveAsync(CacheKeys.DeviceIdentity(device.DeviceId), cancellationToken);
-        await cacheService.RemoveAsync(CacheKeys.RecipesByDevice(device.DeviceId), cancellationToken);
-        await cacheService.RemoveByPatternAsync(CacheKeys.CapacityHourlyPattern(device.DeviceId), cancellationToken);
-        await cacheService.RemoveByPatternAsync(CacheKeys.CapacitySummaryPattern(device.DeviceId), cancellationToken);
-        await cacheService.RemoveByPatternAsync(CacheKeys.CapacityRangePattern(device.DeviceId), cancellationToken);
-        await cacheService.RemoveByPatternAsync(CacheKeys.CapacityPagedByDevicePattern(device.DeviceId), cancellationToken);
-        foreach (var employeeId in affectedEmployeeIds ?? [])
-        {
-            await cacheService.RemoveAsync(CacheKeys.DeviceAccessesByUser(employeeId), cancellationToken);
-        }
+        await idempotentInvalidation.InvalidateOnceAsync(
+            domainEventId,
+            "device-delete",
+            [
+                CacheKeys.AllDevices(),
+                CacheKeys.DevicesByProcess(device.ProcessId),
+                CacheKeys.RecipesByDevice(device.DeviceId)
+            ],
+            [
+                CacheKeys.CapacityHourlyPattern(device.DeviceId),
+                CacheKeys.CapacitySummaryPattern(device.DeviceId),
+                CacheKeys.CapacityRangePattern(device.DeviceId),
+                CacheKeys.CapacityPagedByDevicePattern(device.DeviceId)
+            ],
+            cancellationToken);
     }
 }

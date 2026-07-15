@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <CloudTestKind>Aggregate</CloudTestKind>
+    <CloudTestRuntime>Pure</CloudTestRuntime>
+    <CloudTestExecutionGroup>Pure</CloudTestExecutionGroup>
+    <CloudTestRequired>true</CloudTestRequired>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\core\IIoT.Core.Employees\IIoT.Core.Employees.csproj" />
+    <ProjectReference Include="..\..\core\IIoT.Core.MasterData\IIoT.Core.MasterData.csproj" />
+    <ProjectReference Include="..\..\core\IIoT.Core.Production\IIoT.Core.Production.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\xunit.runner.json" Link="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

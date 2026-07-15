@@ -1,5 +1,7 @@
 using IIoT.SharedKernel.Paging;
 
+using IIoT.SharedKernel.Architecture;
+
 namespace IIoT.Services.Contracts.RecordQueries;
 
 public static class PassStationQueryModes
@@ -95,7 +97,7 @@ public sealed record PassStationQueryRequest(
     DateTime? StartTime = null,
     DateTime? EndTime = null);
 
-public interface IPassStationSchemaProvider
+public interface IPassStationSchemaProvider : IReadOnlyQueryPort
 {
     IReadOnlyList<PassStationTypeDefinitionDto> GetAll();
 

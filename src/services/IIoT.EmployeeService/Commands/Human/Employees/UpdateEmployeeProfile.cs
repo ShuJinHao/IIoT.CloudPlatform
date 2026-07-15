@@ -4,7 +4,6 @@ using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
-using IIoT.Services.CrossCutting.Caching;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -25,7 +24,6 @@ public class UpdateEmployeeProfileHandler(
     IIdentityAccountStore identityAccountStore,
     IUnitOfWork unitOfWork,
     IRefreshTokenService refreshTokenService,
-    ICacheService cacheService,
     ICurrentUser currentUser,
     IPermissionProvider permissionProvider)
     : ICommandHandler<UpdateEmployeeProfileCommand, Result<bool>>
@@ -103,9 +101,6 @@ public class UpdateEmployeeProfileHandler(
                     return Result.Failure(roleResult.Errors?.ToArray() ?? ["角色设置失败"]);
                 }
 
-                await cacheService.RemoveAsync(
-                    CacheKeys.PermissionByUser(request.EmployeeId),
-                    cancellationToken);
                 await refreshTokenService.RevokeSubjectTokensAsync(
                     IIoTClaimTypes.HumanActor,
                     request.EmployeeId,

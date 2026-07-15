@@ -36,21 +36,8 @@ public class GetSummaryByDeviceIdHandler(
             return Result.Failure(deviceAccess.Errors?.ToArray() ?? ["无权查看该设备的汇总报表"]);
         }
 
-        var cacheKey = CacheKeys.CapacitySummary(request.DeviceId, request.Date, request.PlcName);
-
-        var cached = await cacheService.GetAsync<DailySummaryDto>(cacheKey, cancellationToken);
-        if (cached is not null)
-            return Result.Success<DailySummaryDto?>(cached);
-
-        var data = await queryService.GetSummaryByDeviceIdAsync(
-            request.DeviceId,
-            request.Date,
-            request.PlcName,
-            cancellationToken);
-
-        if (data is not null)
-            await cacheService.SetAsync(cacheKey, data, TimeSpan.FromMinutes(5), cancellationToken);
-
-        return Result.Success<DailySummaryDto?>(data);
+        return Result.Success<DailySummaryDto?>(await CapacityQueryCache.GetSummaryAsync(
+            queryService, cacheService, request.DeviceId, request.Date,
+            request.PlcName, cancellationToken));
     }
 }

@@ -3,7 +3,7 @@ using IIoT.Core.Production.Contracts.RecordRepositories;
 
 namespace IIoT.Dapper.Production.Repositories.Capacities;
 
-public sealed class HourlyCapacityRecordRepository(IDbConnectionFactory connectionFactory)
+internal sealed class HourlyCapacityRecordRepository(IDbConnectionFactory connectionFactory)
     : IHourlyCapacityRecordRepository
 {
     public async Task UpsertAsync(

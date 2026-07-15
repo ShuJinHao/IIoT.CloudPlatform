@@ -1,5 +1,7 @@
 using IIoT.SharedKernel.Paging;
 
+using IIoT.SharedKernel.Architecture;
+
 namespace IIoT.Services.Contracts.RecordQueries;
 
 public sealed record AiProductionRecordQueryRequest(
@@ -23,7 +25,7 @@ public sealed record AiProductionRecordQueryItem(
     DateTime? ReceivedAt,
     Dictionary<string, object?> Fields);
 
-public interface IAiProductionRecordQueryService
+public interface IAiProductionRecordQueryService : IReadOnlyQueryPort
 {
     Task<(List<AiProductionRecordQueryItem> Items, int TotalCount)> GetAsync(
         AiProductionRecordQueryRequest request,

@@ -1,6 +1,8 @@
+using IIoT.SharedKernel.Architecture;
+
 namespace IIoT.Services.Contracts.Identity;
 
-public interface ICloudOidcUserProfileService
+public interface ICloudOidcUserProfileService : IReadOnlyQueryPort
 {
     Task<CloudOidcUserProfile?> GetByUserIdAsync(
         Guid userId,

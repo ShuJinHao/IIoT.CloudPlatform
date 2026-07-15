@@ -7,7 +7,6 @@ using IIoT.EntityFrameworkCore.Outbox;
 using IIoT.EntityFrameworkCore.Persistence;
 using IIoT.EntityFrameworkCore.Repository;
 using IIoT.EntityFrameworkCore.Uploads;
-using IIoT.Services.CrossCutting.Caching.Options;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
@@ -63,8 +62,6 @@ public static class DependencyInjection
                     .ReplaceDefaultEntities<Guid>();
             });
 
-        builder.Services.Configure<PermissionCacheOptions>(
-            builder.Configuration.GetSection("PermissionCache"));
         builder.Services.AddScoped<IPermissionProvider, PermissionProvider>();
 
         builder.Services.AddScoped(typeof(IReadRepository<>), typeof(EfReadRepository<>));
@@ -79,6 +76,9 @@ public static class DependencyInjection
         builder.Services.AddScoped<IRefreshTokenService, EfRefreshTokenService>();
         builder.Services.AddScoped<IEdgeReleaseApiKeyService, EdgeReleaseApiKeyService>();
         builder.Services.AddScoped<IIntegrationEventOutbox, EfIntegrationEventOutbox>();
+        builder.Services.AddScoped<DomainEventDispatchContext>();
+        builder.Services.AddScoped<IDomainEventDispatchContext>(provider =>
+            provider.GetRequiredService<DomainEventDispatchContext>());
         builder.Services.AddScoped<IUploadReceiveRegistry, EfUploadReceiveRegistry>();
         builder.Services.AddScoped<IClientReleaseVersionObservationReader, EfClientReleaseVersionObservationReader>();
         builder.Services.AddScoped<IRolePolicyService, RolePolicyService>();
@@ -92,6 +92,8 @@ public static class DependencyInjection
         builder.Services.AddScoped<IDeviceDeletionDependencyQueryService, QueryServices.EfDeviceDeletionDependencyService>();
         builder.Services.AddScoped<IEdgeHostOverviewQueryService, QueryServices.EdgeHostOverviewQueryService>();
         builder.Services.AddScoped<IDeviceClientStateStore, EfDeviceClientStateStore>();
+        builder.Services.AddScoped<IDeviceClientStateQueryService>(provider =>
+            provider.GetRequiredService<IDeviceClientStateStore>());
         builder.Services.AddScoped<IEdgeHostPlcRuntimeStateStore, EfEdgeHostPlcRuntimeStateStore>();
 
         builder.Services.AddIdentityCore<ApplicationUser>(options =>

@@ -1,0 +1,493 @@
+{
+  "schemaVersion": 1,
+  "baseCommit": "88c41109fbcf0b87b18939a139e0bff751e03d07",
+  "baseSourcePath": "src/tests",
+  "baseTestsTreeObject": "604fc2c1f2b9e4746657f314191a4514ccf75530",
+  "baseDeclarationDigestSha256": "d75d5529e418be31819676abeb210a79550149e14896fbe1857c30a83149c77c",
+  "expectedBaseDeclarationCount": 529,
+  "mappings": [
+    {
+      "source": "src/tests/IIoT.ServiceLayer.Tests/ApplicationFlowGuardTests.cs::DeleteDeviceHandler_ShouldCascadeDelete_InvalidateCache_AndWriteAudit",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ApplicationTests/ApplicationFlowGuardTests.cs::DeleteDeviceHandler_ShouldCascadeDelete_AndWriteAudit_WhileOutboxOwnsCacheInvalidation"
+      ],
+      "reason": "The renamed behavior test keeps cascade-delete and audit coverage while making the authoritative outbox-owned cache-invalidation path explicit after the command-side duplicate invalidation path was physically deleted."
+    },
+    {
+      "source": "src/tests/IIoT.ServiceLayer.Tests/ApplicationFlowGuardTests.cs::ProcessRecordUploadRequestMapper_ShouldMapTrueCellResultToOk",
+      "disposition": "retired-duplicate",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/PassStationContractSnapshotTests.cs::PassStationProviderContract_ShouldBindCanonicalSnapshotToControllerDtoValidatorAndLimits",
+        "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.AiRead.cs::PassStationBatchUpload_ShouldPersistOnceAndBeReadableByHumanAndAiRead"
+      ],
+      "reason": "The retired process-record alias mapper duplicated the canonical pass-station provider contract; the replacement verifies the OK/NG contract and the real canonical HTTP path."
+    },
+    {
+      "source": "src/tests/IIoT.ServiceLayer.Tests/ApplicationFlowGuardTests.cs::ProcessRecordUploadRequestMapper_ShouldMapFalseCellResultToNg",
+      "disposition": "retired-duplicate",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/PassStationContractSnapshotTests.cs::PassStationProviderContract_ShouldBindCanonicalSnapshotToControllerDtoValidatorAndLimits",
+        "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.AiRead.cs::PassStationBatchUpload_ShouldPersistOnceAndBeReadableByHumanAndAiRead"
+      ],
+      "reason": "The retired process-record alias mapper duplicated the canonical pass-station provider contract; the replacement verifies the OK/NG contract and the real canonical HTTP path."
+    },
+    {
+      "source": "src/tests/IIoT.ServiceLayer.Tests/ApplicationFlowGuardTests.cs::ProcessRecordUploadRequestMapper_ShouldRejectUnsupportedSchemaVersion",
+      "disposition": "retired-duplicate",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/PassStationContractSnapshotTests.cs::PassStationProviderContract_ShouldBindCanonicalSnapshotToControllerDtoValidatorAndLimits"
+      ],
+      "reason": "The alias mapper was physically deleted; the canonical provider snapshot now owns and executes the schema-version rejection contract."
+    },
+    {
+      "source": "src/tests/IIoT.ServiceLayer.Tests/ApplicationFlowGuardTests.cs::ProcessRecordUploadRequestMapper_ShouldRejectInconsistentRecordEnvelope",
+      "disposition": "retired-duplicate",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/PassStationContractSnapshotTests.cs::PassStationProviderContract_ShouldBindCanonicalSnapshotToControllerDtoValidatorAndLimits"
+      ],
+      "reason": "The duplicate alias envelope was removed; the canonical controller DTO and validator snapshot are the single executable contract."
+    },
+    {
+      "source": "src/tests/IIoT.ServiceLayer.Tests/ApplicationFlowGuardTests.cs::ProcessRecordUploadRequestMapper_ShouldRejectNullRequiredRecordFields",
+      "disposition": "retired-duplicate",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/PassStationContractSnapshotTests.cs::PassStationProviderContract_ShouldBindCanonicalSnapshotToControllerDtoValidatorAndLimits"
+      ],
+      "reason": "Nullability and required-field behavior now belong to the canonical pass-station DTO/validator contract after the alias mapper was deleted."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::MigrationWorkApp_ShouldNotSeedCloudSideEdgeHostConfiguration",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ArchitectureTests/RepositoryConfigurationBoundaryTests.cs::MigrationWorkApp_ShouldNotCarryCloudSideEdgeHostSeedFilesOrConfiguration"
+      ],
+      "reason": "The filesystem/configuration boundary was moved intact into the physical Architecture test unit."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::AppHost_ShouldWireSeedAdminParametersIntoMigrationProject",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/GatewayAndBootstrapConfigurationContractTests.cs::AppHost_ShouldWireSecretSeedParametersMigrationGatewayAndWebEndpoints"
+      ],
+      "reason": "The physical ContractFilesystem runner now binds the secret seed parameters, Migration environment mapping, Gateway reference/address and Web endpoint wiring to the production AppHost source."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::AppFixture_ShouldNormalizeProxyEnvironmentBeforeCreatingAspireBuilder",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/GatewayAndBootstrapConfigurationContractTests.cs::AspireFixture_ShouldNormalizeAllProxyVariablesBeforeCreatingTheDistributedApplication"
+      ],
+      "reason": "The replacement deterministically locks all eight proxy names, the local NO_PROXY value, normalization-before-builder ordering and the bounded Gateway health probe."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::MigrationWorkApp_ShouldPrecheckAndNormalizeLegacyDeviceCodesBeforeCreatingUniqueIndex",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs::LegacyDeviceAndIdentitySchemas_ShouldUpgradeAgainstRealPostgres"
+      ],
+      "reason": "The source-token guard is replaced by a real PostgreSQL legacy-schema upgrade that proves duplicate normalization blocks, successful client-code normalization rebuilds the unique index and drops mac_address, and drifted identity columns are repaired."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::EdgeBootstrapController_ShouldRequireClientCodeAndBootstrapSecret",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractTests/HttpControllerContractTests.cs::BootstrapLookup_ShouldExposeExactQueryHeaderRouteAndRatePolicy",
+        "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.cs::EdgeBootstrap_ShouldRequireSecret_AndResolveByCode"
+      ],
+      "reason": "Reflection verifies the exact transport contract and a real HTTP test verifies the mandatory secret behavior."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::BootstrapHardeningDesign_ShouldDocumentMandatorySecret",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/GatewayAndBootstrapConfigurationContractTests.cs::BootstrapDeploymentContract_ShouldRequireSecretWithoutOptionalBypass"
+      ],
+      "reason": "The deployment, configuration, documentation and handler boundary is consolidated into one executable contract test."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::IdentityPasswordChecks_ShouldUseLockoutAndUnifiedCredentialFailure",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.PersistenceTests/IdentityPasswordPersistenceTests.cs::IdentityPasswordService_ShouldLockUserAfterConsecutivePasswordFailures",
+        "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.cs::HumanIdentity_Login_ShouldReturnUnifiedValidationErrors"
+      ],
+      "reason": "Direct identity-provider behavior and real HTTP error behavior replace source-text checks."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::EdgeHostPlcRuntimeState_ShouldKeepDedicatedEdgeWriteAndHumanReadBoundary",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractTests/HttpControllerContractTests.cs::EdgeHostControllers_ShouldKeepHumanReadAndEdgeReportSurfacesSeparated",
+        "src/tests/IIoT.CloudPlatform.ApplicationTests/EdgeHostBehaviorTests.cs::EdgeHostPlcRuntimeStateReport_ShouldStayOnEdgeRequestSurface"
+      ],
+      "reason": "Controller reflection and request-marker behavior jointly enforce the former source guard."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::DeviceClientState_ShouldRemainOfficialProjectionForHumanAndAiRead",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ApplicationTests/AiReadBehaviorTests.cs::AiReadDeviceClientStates_ShouldReturnProjectedState",
+        "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.AiRead.cs::AiReadDeviceClientStates_ShouldProjectMissingHeartbeatAndKeepRuntimeFreshnessIndependent"
+      ],
+      "reason": "Projection ownership is verified through application behavior and the real HTTP/database path."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::AiReadProductionRecords_ShouldRemainOnlyReadOnlyProductionRecordEntryPoint",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractTests/AiReadHttpContractTests.cs::AiReadProductionRecords_ShouldExposeOnlyReadRouteAndProductionRecordPermission"
+      ],
+      "reason": "The exact route, read-only surface and permission contract moved to the physical Contract test unit."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::AiReadMasterData_ShouldUseExactDatabaseFiltersAndRejectMisleadingDeviceParameters",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ApplicationTests/AiReadBehaviorTests.cs::AiReadDeviceQueries_ShouldRejectUnsupportedParametersAndBlankDeviceCode",
+        "src/tests/IIoT.CloudPlatform.ApplicationTests/AiReadBehaviorTests.cs::AiReadDevices_ShouldApplyExactFiltersInsideDelegatedScope",
+        "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.AiRead.cs::AiReadDevices_ShouldSupportExactFiltersAndStrictFieldContract"
+      ],
+      "reason": "Executable application and real HTTP/database behavior replace source token inspection."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::AiReadScopeAndFailureAudit_ShouldRedactUntrustedText",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ApplicationTests/AiReadBehaviorTests.cs::AiReadMasterDataAndStateScopes_ShouldRedactFreeText",
+        "src/tests/IIoT.CloudPlatform.ApplicationTests/AiReadBehaviorTests.cs::AiReadAudit_ShouldNotPersistResultErrorsOrExceptionMessages"
+      ],
+      "reason": "Concrete redaction outputs and audit persistence behavior replace source-string expectations."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::CurrentUser_ShouldExposeAllRolesWithoutSingleRoleShortcut",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractTests/HttpControllerContractTests.cs::CurrentUser_ShouldPreserveEveryDistinctRoleAndExposeNoSingleRoleShortcut"
+      ],
+      "reason": "The same semantic contract moved to reflection-based Contract tests."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::JwtAuthentication_ShouldValidateBearerTokensAndAvoidUnsignedClaimParsing",
+      "disposition": "analyzer",
+      "diagnostics": ["CLOUDARCH008"],
+      "reason": "Unsigned JWT parsing is now a build-blocking semantic analyzer diagnostic across all production code."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::HttpApiControllers_ShouldOnlyExposeHumanAndEdgeRoutes",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractTests/HttpControllerContractTests.cs::ControllerRoutes_ShouldBelongToAnApprovedHttpSurface"
+      ],
+      "reason": "All controller attributes are enumerated by reflection rather than source text."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::HumanEdgeHostController_ShouldExposeOnlyHumanReadRoutes",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractTests/HttpControllerContractTests.cs::EdgeHostControllers_ShouldKeepHumanReadAndEdgeReportSurfacesSeparated"
+      ],
+      "reason": "The exact Human/Edge controller split is enforced by reflection."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::EdgeHostPlcRuntimeStateController_ShouldExposeOnlyEdgeReportRoute",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractTests/HttpControllerContractTests.cs::EdgeHostControllers_ShouldKeepHumanReadAndEdgeReportSurfacesSeparated"
+      ],
+      "reason": "The exact Human/Edge controller split is enforced by reflection."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::HttpApiAppSettings_ShouldDefinePermissionCacheExpirationMinutes",
+      "disposition": "analyzer",
+      "diagnostics": ["CLOUDARCH007"],
+      "reason": "Permission cache configuration was physically removed; the semantic call-graph analyzer now rejects every security-read path that reaches ICacheService."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::InfrastructureDependencyInjection_ShouldConfigureFusionCacheBackplaneWithRedisConnectionString",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.IntegrationTests/RealRedisCacheIntegrationTests.cs::RealRedis_DisconnectDegradesWithoutMaskingFactory_ThenRecovers"
+      ],
+      "reason": "The real Redis integration resolves ICacheService, IFusionCache and IConnectionMultiplexer through the production AddInfrastructures entry, asserts its fail-safe options, then proves disconnect degradation and distributed recovery."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::HttpApi_ShouldRegisterDeviceBindingAndRateLimiting",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/GatewayAndBootstrapConfigurationContractTests.cs::HttpApiSecurityPipeline_ShouldRegisterDeviceBindingAndApplyForwardedHeadersBeforeIdentityAndRateLimiting",
+        "src/tests/IIoT.CloudPlatform.ContractTests/HttpControllerContractTests.cs::BootstrapLookup_ShouldExposeExactQueryHeaderRouteAndRatePolicy",
+        "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.RateLimiting.cs::EdgeCapacity_Upload_ShouldUseSeparateDeviceBucketsForSameRemoteIp",
+        "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.SecurityAndOpenApi.cs::EdgeCapacity_DeviceBinding_ShouldRejectTokenIssuedForAnotherDevice"
+      ],
+      "reason": "The physical wiring contract locks DeviceBinding, ForwardedHeaders and middleware ordering, while live Aspire cases prove both token/device mismatch rejection and independent rate-limit partitions."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::UseCaseExceptionHandler_ShouldMapKnownRuntimeExceptions",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.HttpTests/UseCaseExceptionHandlerTests.cs::Handler_ShouldMapKnownAndUnknownRuntimeExceptions"
+      ],
+      "reason": "The handler is executed directly for known and unknown exception branches."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::HostAppSettings_ShouldDefineHardeningAndInfrastructureSections",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ArchitectureTests/RepositoryConfigurationBoundaryTests.cs::HostConfigurations_ShouldDefineRequiredHardeningAndInfrastructureSections"
+      ],
+      "reason": "Configuration shape checks moved to the physical Architecture test unit."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::EventContractsAndConsumers_ShouldDeclareSchemaVersionGuard",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractTests/ProductionContractShapeTests.cs::EventContracts_ShouldDefaultMissingSchemaVersionToV1",
+        "src/tests/IIoT.CloudPlatform.ContractTests/GatewayAndEventContractTests.cs::PassStationConsumer_ShouldRejectUnsupportedSchemaBeforeDispatch"
+      ],
+      "reason": "Contract reflection and executable consumer rejection cover schema defaults and runtime guards."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::CloudProjects_ShouldReferenceSplitServiceProjectsInsteadOfLegacyCommonProject",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ArchitectureTests/RepositoryConfigurationBoundaryTests.cs::CloudProjectGraph_ShouldNotReferenceRetiredServicesCommonProject"
+      ],
+      "reason": "The full evaluated project graph is checked in the physical Architecture test unit."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::CloudSource_ShouldNotUseLegacyServicesCommonNamespaces",
+      "disposition": "analyzer",
+      "diagnostics": ["CLOUDARCH009"],
+      "reason": "Every production type in the retired namespace is now rejected at compile time."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::CloudSource_ShouldOnlyDeclareConnectionResourceNamesInDedicatedConstants",
+      "disposition": "analyzer",
+      "diagnostics": ["CLOUDARCH010"],
+      "reason": "Semantic literal ownership is now enforced at compile time, including aliases and same-named adjacent types."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::GatewayHost_ShouldDefineYarpRoutesForHumanEdgeAndBootstrapSurfaces",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractTests/GatewayAndEventContractTests.cs::GatewayRouteCatalog_ShouldResolveConfiguredSurfacesAndRejectAliases",
+        "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/GatewayAndBootstrapConfigurationContractTests.cs::GatewayConfiguration_ShouldExposeOnlyCanonicalRoutesAndExplicitRejectedAliases"
+      ],
+      "reason": "Executable route-catalog resolution and configuration parsing replace source-token checks."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::CloudOidcProvider_ShouldUseAuthorizationCodePkceAndMinimalIdentityClaims",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.Oidc.cs::CloudOidc_Discovery_ShouldExposeCodeFlowPkceAndProviderEndpoints",
+        "src/tests/IIoT.CloudPlatform.ContractTests/CloudOidcProviderBehaviorTests.cs::CloudOidcUserProfile_ShouldKeepClaimsContractMinimal"
+      ],
+      "reason": "Real OIDC discovery plus reflected profile claims replace implementation-string assertions."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::HttpApi_ShouldReturnProblemDetailsForResultFailures",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractTests/HttpControllerContractTests.cs::ApiControllerBase_ShouldReturnProblemDetailsWithStableMediaTypeAndErrors"
+      ],
+      "reason": "The ProblemDetails result shape is executed through the controller base contract."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::EdgeUploadEndpoints_ShouldDeclareRequestSizeLimits",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractTests/HttpControllerContractTests.cs::EdgeUploadActions_ShouldExposeExactLimitsAndDedicatedPolicies"
+      ],
+      "reason": "Controller attributes and exact configured limits are verified by reflection."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::GatewayConfigAndRequestLogging_ShouldKeepSingleDestinationTimeoutAndRequestCorrelation",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/GatewayAndBootstrapConfigurationContractTests.cs::GatewayClusterConfiguration_ShouldKeepOneDestinationTimeoutAndHealthProbe",
+        "src/tests/IIoT.CloudPlatform.DeploymentTests/DeploymentSourceGuardTests.cs::DeployNginxTemplate_ShouldUseGatewayPoolStructuredLogsAndRequestIdForwarding"
+      ],
+      "reason": "Parsed gateway configuration and deployment logging contract replace a combined source-string guard."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::CloudCiWorkflow_ShouldRunRegularReleaseRecoveryGatesAndKeepFullEndToEndBehindManualDispatch",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.DeploymentTests/DeploymentSourceGuardTests.cs::CloudCiWorkflow_ShouldRunDynamicRequiredInventoryAndKeepManualRunnersSeparated"
+      ],
+      "reason": "The CI topology guard moved to the physical Deployment test unit and now verifies dynamic inventory plus separated manual runners."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::RecipeDeviceIdIndexMigration_ShouldExist",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/PersistenceMigrationShapeContractTests.cs::RecipeDeviceIdIndexMigration_ShouldExistExactlyOnce"
+      ],
+      "reason": "The migration shape contract moved intact and now also enforces uniqueness."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::HttpApi_ShouldDefineHumanEdgeAndBootstrapSwaggerGroups",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/GatewayAndBootstrapConfigurationContractTests.cs::HttpApiSecurityPipeline_ShouldRegisterDeviceBindingAndApplyForwardedHeadersBeforeIdentityAndRateLimiting",
+        "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.SecurityAndOpenApi.cs::OpenApi_ShouldGenerateSeparatedHumanEdgeBootstrapAndAiReadDocuments"
+      ],
+      "reason": "The required filesystem contract verifies the four Swagger documents, endpoints and document-inclusion convention without changing production route classification; a live HttpApi host generates all four documents with their titles, non-empty paths and separated route surfaces."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::GatewayIntegrationSurface_ShouldDocumentFormalRoutesAndRejectedAliases",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/GatewayAndBootstrapConfigurationContractTests.cs::GatewayDocumentation_ShouldNameFormalRoutesAndRejectedAliases"
+      ],
+      "reason": "The documentation contract moved to the physical ContractFilesystem test unit."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::PassStationRuntime_ShouldUseUnifiedSchemaAndRepository",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/PassStationContractSnapshotTests.cs::PassStationProviderContract_ShouldBindCanonicalSnapshotToControllerDtoValidatorAndLimits",
+        "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.AiRead.cs::PassStationBatchUpload_ShouldPersistOnceAndBeReadableByHumanAndAiRead"
+      ],
+      "reason": "The canonical provider snapshot and real persistence/read flow replace source file token checks."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::HumanRequestFolders_ShouldOnlyContainHumanCommandsAndQueries",
+      "disposition": "analyzer",
+      "diagnostics": ["CLOUDARCH005"],
+      "reason": "Request kind and authorization classification are enforced semantically regardless of physical filename."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::EdgeRequestFolders_ShouldOnlyContainDeviceCommandsAndQueries",
+      "disposition": "analyzer",
+      "diagnostics": ["CLOUDARCH005"],
+      "reason": "Request kind and authorization classification are enforced semantically regardless of physical filename."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::BootstrapRequestFolders_ShouldOnlyContainAnonymousBootstrapQueries",
+      "disposition": "analyzer",
+      "diagnostics": ["CLOUDARCH005"],
+      "reason": "Request kind and authorization classification are enforced semantically regardless of physical filename."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::AiReadRequestFolders_ShouldOnlyContainAiReadQueries",
+      "disposition": "analyzer",
+      "diagnostics": ["CLOUDARCH005"],
+      "reason": "Request kind and authorization classification are enforced semantically regardless of physical filename."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::PublicRequestFolders_ShouldOnlyContainPublicQueries",
+      "disposition": "analyzer",
+      "diagnostics": ["CLOUDARCH005"],
+      "reason": "Request kind and authorization classification are enforced semantically regardless of physical filename."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/ConfigurationGuardTests.cs::InternalRequestFolders_ShouldOnlyContainBareCommandsAndQueries",
+      "disposition": "analyzer",
+      "diagnostics": ["CLOUDARCH005"],
+      "reason": "Request kind and authorization classification are enforced semantically regardless of physical filename."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/RateLimitingConfigurationGuardTests.cs::HttpApiControllers_ShouldUseDedicatedRateLimitPolicies",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractTests/HttpControllerContractTests.cs::EdgeUploadActions_ShouldExposeExactLimitsAndDedicatedPolicies",
+        "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.RateLimiting.cs::HumanIdentity_Login_ShouldReturnTooManyRequestsAfterTenthRequestWithinWindow",
+        "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.RateLimiting.cs::EdgeCapacity_Upload_ShouldUseSeparateDeviceBucketsForSameRemoteIp"
+      ],
+      "reason": "Reflected policy metadata and real rate-limit behavior replace controller source scans."
+    },
+    {
+      "source": "src/tests/IIoT.EndToEndTests/CloudProductionFlowTests.AiRead.cs::ProcessRecordsUpload_ShouldPersistOnceAndBeReadableByHumanAndAiRead",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.EndToEndTests/CloudProductionFlowTests.AiRead.cs::PassStationBatchUpload_ShouldPersistOnceAndBeReadableByHumanAndAiRead"
+      ],
+      "reason": "The same real flow now uses the canonical pass-station route after the process-record alias was physically removed."
+    },
+    {
+      "source": "src/tests/IIoT.ServiceLayer.Tests/ApplicationFlowGuardTests.cs::UpdateEmployeeAccessHandler_ShouldClearDeviceAccessCacheWhenAccessChanges",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ApplicationTests/ApplicationFlowGuardTests.cs::UpdateEmployeeAccessHandler_ShouldPersistCurrentDeviceAssignmentsWithoutCacheDependency",
+        "src/tests/IIoT.CloudPlatform.PersistenceTests/IdentityProviderPersistenceTests.cs::DevicePermissionService_ShouldReadCurrentAssignmentsDirectly"
+      ],
+      "reason": "Security-sensitive access caches were physically removed; the replacement proves writes persist and the next authorization read uses the authoritative store directly."
+    },
+    {
+      "source": "src/tests/IIoT.ServiceLayer.Tests/AuthorizationAndIdentityBehaviorTests.cs::DevicePermissionService_ShouldUseResolvedCacheExpiration",
+      "disposition": "analyzer",
+      "diagnostics": ["CLOUDARCH007"],
+      "reason": "The permission-cache path and its expiration option were removed; CLOUDARCH007 prevents the security read from regaining any cache path."
+    },
+    {
+      "source": "src/tests/IIoT.ServiceLayer.Tests/AuthorizationAndIdentityBehaviorTests.cs::PermissionProvider_ShouldUseSharedCacheKeyForInvalidationCompatibility",
+      "disposition": "analyzer",
+      "diagnostics": ["CLOUDARCH007"],
+      "reason": "The invalidation-compatibility key was physically deleted with the permission cache; CLOUDARCH007 freezes authoritative direct reads."
+    },
+    {
+      "source": "src/tests/IIoT.ServiceLayer.Tests/InfrastructureBehaviorTests.cs::AiReadProductionRecords_ShouldReplaceAiPassStationRoute",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ContractTests/AiReadHttpContractTests.cs::AiReadProductionRecords_ShouldExposeOnlyReadRouteAndProductionRecordPermission"
+      ],
+      "reason": "The route replacement is enforced by reflection against the actual controller and authorization contract."
+    },
+    {
+      "source": "src/tests/IIoT.ServiceLayer.Tests/InfrastructureBehaviorTests.cs::EdgeReleaseApiKeyHandlers_ShouldAuditCreateAndRevoke",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.PersistenceTests/EdgeReleaseApiKeyPersistenceTests.cs::EdgeReleaseApiKeyHandlers_ShouldAuditCreateAndRevokeAfterCommit"
+      ],
+      "reason": "The behavior moved into the physical Persistence test unit and now verifies commit ordering."
+    },
+    {
+      "source": "src/tests/IIoT.ServiceLayer.Tests/InfrastructureBehaviorTests.cs::OutboxMessageDispatcher_ShouldPublishAndMarkMessagesProcessed",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/OutboxDispatchPersistenceTests.cs::OutboxMessageDispatcher_ShouldPublishOnceAcrossConcurrentPostgresWorkers"
+      ],
+      "reason": "The single-worker success case was strengthened into a real two-worker PostgreSQL transaction test that still proves exactly-once publish and processed-state persistence while adding SKIP LOCKED behavior."
+    },
+    {
+      "source": "src/tests/IIoT.ServiceLayer.Tests/InfrastructureBehaviorTests.cs::OutboxMessageDispatcher_ShouldUsePostgresSkipLockedForHorizontalWorkers",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/OutboxDispatchPersistenceTests.cs::OutboxMessageDispatcher_ShouldPublishOnceAcrossConcurrentPostgresWorkers"
+      ],
+      "reason": "The implementation-string guard is replaced by two concurrent real Postgres dispatchers synchronized inside publish; the second worker must skip the first worker's locked row while the first transaction is open."
+    },
+    {
+      "source": "src/tests/IIoT.ServiceLayer.Tests/InfrastructureBehaviorTests.cs::InfrastructureLogging_ShouldConfigureMaskingAndFileSizeRolling",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.UnitTests/InfrastructureValueBehaviorTests.cs::SensitiveDataDestructuringPolicy_ShouldRedactLoginSessionAndRefreshTokenValues",
+        "src/tests/IIoT.CloudPlatform.ContractFilesystemTests/InfrastructureLoggingFilesystemTests.cs::SerilogFileSink_ShouldRejectUnwritablePathAndRollAtTenMegabytes"
+      ],
+      "reason": "The combined guard is replaced by production AddSerilog entry behavior proving redaction and file wiring, plus real unwritable-directory warning and 10 MB file-roll behavior."
+    },
+    {
+      "source": "src/tests/IIoT.ServiceLayer.Tests/InfrastructureBehaviorTests.cs::ValidationBehavior_ShouldNotUseDynamicResultConversion",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.UnitTests/InfrastructureValueBehaviorTests.cs::ValidationBehavior_ShouldReturnInvalidGenericResult_AndSkipHandler",
+        "src/tests/IIoT.CloudPlatform.UnitTests/InfrastructureValueBehaviorTests.cs::ValidationBehavior_ShouldReturnInvalidResult_AndSkipHandler"
+      ],
+      "reason": "Both generic Result<T> and non-generic Result paths are executed directly, making an implementation-token assertion redundant."
+    },
+    {
+      "source": "src/tests/IIoT.ServiceLayer.Tests/SharedKernelGuardTests.cs::PermissionCacheOptions_ShouldPreferMinutes_ThenHours_ThenDefault",
+      "disposition": "analyzer",
+      "diagnostics": ["CLOUDARCH007"],
+      "reason": "PermissionCacheOptions was physically deleted after security reads became authoritative; CLOUDARCH007 prevents reintroducing the cached authorization path."
+    },
+    {
+      "source": "src/tests/IIoT.ServiceLayer.Tests/SharedKernelGuardTests.cs::PermissionCacheOptions_ShouldRespectLegacyHourOnlyConfiguration",
+      "disposition": "analyzer",
+      "diagnostics": ["CLOUDARCH007"],
+      "reason": "The legacy cache-hours compatibility option and fallback were physically deleted; CLOUDARCH007 prevents a replacement security cache path."
+    }
+  ]
+}

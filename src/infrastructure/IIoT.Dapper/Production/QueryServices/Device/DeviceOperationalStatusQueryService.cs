@@ -3,7 +3,7 @@ using IIoT.Services.Contracts.RecordQueries;
 
 namespace IIoT.Dapper.Production.QueryServices.Device;
 
-public sealed class DeviceOperationalStatusQueryService(IDbConnectionFactory connectionFactory)
+internal sealed class DeviceOperationalStatusQueryService(IDbConnectionFactory connectionFactory)
     : IDeviceOperationalStatusQueryService
 {
     public async Task<DeviceStatusSummaryDto> GetStatusSummaryAsync(

@@ -1,4 +1,3 @@
-using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Services.Contracts.Identity;
 using Microsoft.EntityFrameworkCore;
 
@@ -67,12 +66,6 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
         try
         {
             var impact = await GetImpactAsync(deviceId, cancellationToken);
-            var affectedEmployeeIds = await dbContext.Set<EmployeeDeviceAccess>()
-                .Where(access => access.DeviceId == deviceId)
-                .Select(access => access.EmployeeId)
-                .Distinct()
-                .ToListAsync(cancellationToken);
-
             await DeleteAssociatedRowsAsync(deviceId, cancellationToken);
 
             var device = await dbContext.Devices.SingleOrDefaultAsync(device => device.Id == deviceId, cancellationToken);
@@ -84,7 +77,7 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
 
             var affectedRows = await dbContext.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
-            return new DeviceCascadeDeletionResult(affectedRows > 0 || device is not null, impact, affectedEmployeeIds);
+            return new DeviceCascadeDeletionResult(affectedRows > 0 || device is not null, impact);
         }
         catch
         {

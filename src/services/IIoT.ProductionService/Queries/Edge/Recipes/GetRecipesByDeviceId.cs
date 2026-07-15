@@ -39,30 +39,34 @@ public class GetRecipesByDeviceIdHandler(
     {
         var cacheKey = CacheKeys.RecipesByDevice(request.DeviceId);
 
-        var cached = await cacheService.GetAsync<List<RecipeForDeviceDto>>(cacheKey, cancellationToken);
-        if (cached != null) return Result.Success(cached);
+        var dtos = await cacheService.GetOrSetAsync<List<RecipeForDeviceDto>>(
+            cacheKey,
+            async factoryCancellationToken =>
+            {
+                var deviceExists = await deviceReadQueryService.ExistsAsync(
+                    request.DeviceId,
+                    factoryCancellationToken);
+                if (!deviceExists)
+                    return null;
 
-        var deviceExists = await deviceReadQueryService.ExistsAsync(
-            request.DeviceId,
+                var spec = new RecipeByDeviceIdSpec(request.DeviceId);
+                var recipes = await recipeRepository.GetListAsync(spec, factoryCancellationToken);
+                return recipes.Select(recipe => new RecipeForDeviceDto(
+                    recipe.Id,
+                    recipe.RecipeName,
+                    recipe.Version,
+                    recipe.ProcessId,
+                    recipe.DeviceId,
+                    recipe.ParametersJsonb,
+                    recipe.Status.ToString()
+                )).ToList();
+            },
+            static value => value is not null,
+            TimeSpan.FromHours(2),
             cancellationToken);
 
-        if (!deviceExists)
+        if (dtos is null)
             return Result.Failure("查询失败: 设备不存在或已停用");
-
-        var spec = new RecipeByDeviceIdSpec(request.DeviceId);
-        var recipes = await recipeRepository.GetListAsync(spec, cancellationToken);
-
-        var dtos = recipes.Select(r => new RecipeForDeviceDto(
-            r.Id,
-            r.RecipeName,
-            r.Version,
-            r.ProcessId,
-            r.DeviceId,
-            r.ParametersJsonb,
-            r.Status.ToString()
-        )).ToList();
-
-        await cacheService.SetAsync(cacheKey, dtos, TimeSpan.FromHours(2), cancellationToken);
 
         return Result.Success(dtos);
     }

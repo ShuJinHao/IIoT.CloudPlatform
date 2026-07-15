@@ -4,7 +4,7 @@ using IIoT.SharedKernel.Paging;
 
 namespace IIoT.Dapper.Production.QueryServices.Capacity;
 
-public class CapacityQueryService(IDbConnectionFactory connectionFactory) : ICapacityQueryService
+internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : ICapacityQueryService
 {
     private sealed class DailySummaryRow
     {

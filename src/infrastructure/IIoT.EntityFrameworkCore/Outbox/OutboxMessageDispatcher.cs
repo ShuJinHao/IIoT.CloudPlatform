@@ -10,6 +10,7 @@ public sealed class OutboxMessageDispatcher(
     IIoTDbContext dbContext,
     IMediator mediator,
     IEventPublisher eventPublisher,
+    DomainEventDispatchContext domainEventDispatchContext,
     IOptions<OutboxDispatcherOptions> options,
     ILogger<OutboxMessageDispatcher> logger) : IOutboxMessageDispatcher
 {
@@ -52,12 +53,16 @@ public sealed class OutboxMessageDispatcher(
                 if (message.MessageKind == OutboxMessageKind.DomainEvent)
                 {
                     var domainEvent = message.DeserializeDomainEvent();
+                    using var dispatchScope = domainEventDispatchContext.Enter(message.Id);
                     await mediator.Publish((object)domainEvent, cancellationToken);
                 }
                 else if (message.MessageKind == OutboxMessageKind.IntegrationEvent)
                 {
                     var integrationEvent = message.DeserializeIntegrationEvent();
-                    await eventPublisher.PublishAsync(integrationEvent, cancellationToken);
+                    // The persisted outbox id is the transport identity.  Execution-strategy
+                    // retries after an ACK-lost/commit-transient boundary must republish the
+                    // same identity so the receiver-side inbox/dedup boundary can collapse it.
+                    await eventPublisher.PublishAsync(integrationEvent, message.Id, cancellationToken);
                 }
                 else
                 {
@@ -67,6 +72,10 @@ public sealed class OutboxMessageDispatcher(
 
                 message.MarkProcessed();
                 succeededCount++;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {

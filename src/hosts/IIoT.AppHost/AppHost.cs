@@ -1,6 +1,7 @@
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using IIoT.SharedKernel.Configuration;
+using Microsoft.Extensions.Configuration;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
@@ -13,6 +14,11 @@ var seedAdminNo = builder.AddParameter("seed-admin-no");
 var seedAdminPassword = builder.AddParameter("seed-admin-password", secret: true);
 var postgresVolumeName = builder.Configuration["AppHost:PostgresVolumeName"] ?? "postgres-iiot";
 var rabbitMqVolumeName = builder.Configuration["AppHost:RabbitMqVolumeName"] ?? "rabbitmq-iiot";
+var disableDataWorkerOutboxDispatcher = builder.Configuration.GetValue<bool>(
+    "AppHost:Testing:DisableDataWorkerOutboxDispatcher");
+AppHostTestingGuard.EnsureAllowed(
+    disableDataWorkerOutboxDispatcher,
+    builder.Environment.EnvironmentName);
 
 var postgres = builder.AddPostgres("postgres", password: password)
     .WithImage("timescale/timescaledb", "latest-pg17")
@@ -45,11 +51,18 @@ var gatewayService = builder.AddProject<Projects.IIoT_Gateway>("iiot-gateway")
         apiService.GetEndpoint("http"))
     .WaitFor(apiService);
 
-builder.AddProject<Projects.IIoT_DataWorker>("iiot-dataworker")
+var dataWorker = builder.AddProject<Projects.IIoT_DataWorker>("iiot-dataworker")
     .WithReference(postgres)
     .WithReference(redis)
     .WithReference(rabbitmq)
     .WaitForCompletion(migration);
+
+if (disableDataWorkerOutboxDispatcher)
+{
+    dataWorker
+        .WithEnvironment("DOTNET_ENVIRONMENT", builder.Environment.EnvironmentName)
+        .WithEnvironment("DataWorker__Testing__DisableOutboxDispatcher", "true");
+}
 
 var web = builder.AddViteApp("iiot-web", "../../ui/iiot-web")
     .WithReference(gatewayService)
@@ -69,4 +82,17 @@ internal class CleanRedisResource(string name) : ContainerResource(name), IResou
 {
     public ReferenceExpression ConnectionStringExpression =>
         ReferenceExpression.Create($"{this.GetEndpoint("tcp").Property(EndpointProperty.Host)}:{this.GetEndpoint("tcp").Property(EndpointProperty.Port)}");
+}
+
+internal static class AppHostTestingGuard
+{
+    public static void EnsureAllowed(bool disableDataWorkerOutboxDispatcher, string environmentName)
+    {
+        if (disableDataWorkerOutboxDispatcher &&
+            !string.Equals(environmentName, "Testing", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "AppHost:Testing:DisableDataWorkerOutboxDispatcher is restricted to the Testing environment.");
+        }
+    }
 }

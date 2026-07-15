@@ -1,5 +1,4 @@
 using Dapper;
-using IIoT.Services.CrossCutting.Caching;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.RecordQueries;
 
@@ -9,23 +8,15 @@ namespace IIoT.Dapper.Production.QueryServices.Device;
 /// 设备身份读服务。
 /// 按 DeviceId 读取设备的基础身份快照，供 edge 鉴别、worker 校验和内部事件处理复用。
 /// </summary>
-public class DeviceIdentityQueryService(
-    IDbConnectionFactory connectionFactory,
-    ICacheService cacheService) : IDeviceIdentityQueryService
+internal class DeviceIdentityQueryService(
+    IDbConnectionFactory connectionFactory) : IDeviceIdentityQueryService
 {
-    private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(2);
-
     public async Task<DeviceIdentitySnapshot?> GetByDeviceIdAsync(
         Guid deviceId,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (deviceId == Guid.Empty) return null;
-
-        var cacheKey = CacheKeys.DeviceIdentity(deviceId);
-
-        var cached = await cacheService.GetAsync<DeviceIdentitySnapshot>(
-            cacheKey, cancellationToken);
-        if (cached is not null) return cached;
 
         const string sql = @"
             SELECT
@@ -42,13 +33,7 @@ public class DeviceIdentityQueryService(
             new { DeviceId = deviceId },
             cancellationToken: cancellationToken);
 
-        var snapshot = await connection
-            .QuerySingleOrDefaultAsync<DeviceIdentitySnapshot>(cmd);
-
-        if (snapshot is not null)
-            await cacheService.SetAsync(cacheKey, snapshot, CacheTtl, cancellationToken);
-
-        return snapshot;
+        return await connection.QuerySingleOrDefaultAsync<DeviceIdentitySnapshot>(cmd);
     }
 
     public async Task<bool> ExistsAsync(

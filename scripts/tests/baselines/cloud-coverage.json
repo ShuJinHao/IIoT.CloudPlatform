@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 3,
+  "collector": "coverlet.collector",
+  "version": "6.0.4",
+  "requiredRunnerCount": 16,
+  "merged": {
+    "linesValid": 18488,
+    "linesCovered": 11677,
+    "branchesValid": 5619,
+    "branchesCovered": 2816,
+    "lineRate": 0.63159887,
+    "branchRate": 0.50115679
+  },
+  "sourceUniverse": {
+    "fileCount": 376,
+    "linesValid": 18488,
+    "branchesValid": 5619,
+    "fileMetricsSha256": "1be74f33fdb87d89130f2be7fb9cd1c434c3ca864bc3ada13c580b0bf1cdffd8"
+  },
+  "productionAssemblies": {
+    "assemblyCount": 21,
+    "assemblySha256": "5779022a85870b52b13640f9ddc638e7dfa9c164edb456c7a1eb5ccb5e6626ab"
+  },
+  "newP0Code": {
+    "roots": ["src/core", "src/hosts", "src/infrastructure", "src/services", "src/shared"],
+    "minimumLineRate": 0.9,
+    "minimumBranchRate": 0.85,
+    "nonExecutableFileAllowlist": [
+      {
+        "path": "src/services/IIoT.Services.Contracts/Contracts/Caching/ICacheService.cs",
+        "classification": "non-executable-source",
+        "reason": "The cache contract contains interface signatures and XML documentation only, so the compiler emits no executable sequence points."
+      },
+      {
+        "path": "src/core/IIoT.Core.Production/Contracts/ClientReleases/IDeviceClientStateStore.cs",
+        "classification": "non-executable-source",
+        "reason": "The split device-client state query/store contracts contain interface signatures and XML documentation only, so the compiler emits no executable sequence points."
+      },
+      {
+        "path": "src/shared/IIoT.SharedKernel/Architecture/IReadOnlyQueryPort.cs",
+        "classification": "non-executable-source",
+        "reason": "The read-only query port marker is an empty interface contract, so the compiler emits no executable sequence points."
+      },
+      {
+        "path": "src/shared/IIoT.SharedKernel/Repository/IReadRepository.cs",
+        "classification": "non-executable-source",
+        "reason": "The read repository contract contains interface signatures and XML documentation only, so the compiler emits no executable sequence points."
+      },
+      {
+        "path": "src/services/IIoT.ProductionService/Properties/AssemblyInfo.cs",
+        "classification": "non-executable-source",
+        "reason": "Assembly-level InternalsVisibleTo metadata contains no executable sequence points."
+      },
+      {
+        "path": "src/hosts/IIoT.DataWorker/Properties/AssemblyInfo.cs",
+        "classification": "non-executable-source",
+        "reason": "Assembly-level InternalsVisibleTo metadata for the physical Contract test assembly contains no executable sequence points."
+      },
+      {
+        "path": "src/hosts/IIoT.AppHost/Properties/AssemblyInfo.cs",
+        "classification": "non-executable-source",
+        "reason": "Assembly-level InternalsVisibleTo metadata for the physical Contract test assembly contains no executable sequence points."
+      },
+      {
+        "path": "src/hosts/IIoT.Gateway/Properties/AssemblyInfo.cs",
+        "classification": "non-executable-source",
+        "reason": "Assembly-level InternalsVisibleTo metadata for the physical Contract test assembly contains no executable sequence points."
+      },
+      {
+        "path": "src/hosts/IIoT.HttpApi/Properties/AssemblyInfo.cs",
+        "classification": "non-executable-source",
+        "reason": "Assembly-level InternalsVisibleTo metadata for the physical HTTP test assembly contains no executable sequence points."
+      },
+      {
+        "path": "src/hosts/IIoT.MigrationWorkApp/Properties/AssemblyInfo.cs",
+        "classification": "non-executable-source",
+        "reason": "Assembly-level InternalsVisibleTo metadata for the physical PostgreSQL test assembly contains no executable sequence points."
+      },
+      {
+        "path": "src/infrastructure/IIoT.EntityFrameworkCore/Properties/AssemblyInfo.cs",
+        "classification": "non-executable-source",
+        "reason": "Assembly-level InternalsVisibleTo metadata for the physical SQLite persistence test assembly contains no executable sequence points."
+      },
+      {
+        "path": "src/infrastructure/IIoT.Infrastructure/Properties/AssemblyInfo.cs",
+        "classification": "non-executable-source",
+        "reason": "Assembly-level InternalsVisibleTo metadata for the physical ContractFilesystem, Unit and Workflow test assemblies contains no executable sequence points."
+      },
+      {
+        "path": "src/infrastructure/IIoT.Dapper/IDbConnectionFactory.cs",
+        "classification": "non-executable-source",
+        "reason": "The database connection factory contract contains an interface signature only, so the compiler emits no executable sequence points."
+      },
+      {
+        "path": "src/infrastructure/IIoT.Dapper/Properties/AssemblyInfo.cs",
+        "classification": "non-executable-source",
+        "reason": "Assembly-level InternalsVisibleTo metadata exposes the internal Dapper implementation only to the physical PostgreSQL test assembly and contains no executable sequence points."
+      },
+      {
+        "path": "src/services/IIoT.Services.Contracts/Contracts/Authorization/IAiReadScopeAccessor.cs",
+        "classification": "non-executable-source",
+        "reason": "The AI read scope accessor contract contains interface properties and an enum declaration only, so the compiler emits no executable sequence points."
+      },
+      {
+        "path": "src/services/IIoT.Services.Contracts/Contracts/Messaging/IEventPublisher.cs",
+        "classification": "non-executable-source",
+        "reason": "The event publisher contract contains interface signatures only, so the compiler emits no executable sequence points."
+      },
+      {
+        "path": "src/services/IIoT.Services.Contracts/Contracts/Caching/IIdempotentCacheInvalidationService.cs",
+        "classification": "non-executable-source",
+        "reason": "The idempotent cache invalidation contract contains interface signatures and XML documentation only, so the compiler emits no executable sequence points."
+      },
+      {
+        "path": "src/services/IIoT.Services.Contracts/Contracts/Messaging/IDomainEventDispatchContext.cs",
+        "classification": "non-executable-source",
+        "reason": "The domain-event dispatch context contract contains an interface property and XML documentation only, so the compiler emits no executable sequence points."
+      },
+      {
+        "path": "src/infrastructure/IIoT.EntityFrameworkCore/Migrations/20260714224929_AddIntegrationEventConsumerInbox.cs",
+        "classification": "generated-migration-source",
+        "reason": "EF migration source is generated persistence history, excluded from production behavior coverage and verified by the migration-shape contract plus real PostgreSQL application test."
+      },
+      {
+        "path": "src/infrastructure/IIoT.EntityFrameworkCore/Migrations/20260714224929_AddIntegrationEventConsumerInbox.Designer.cs",
+        "classification": "generated-migration-source",
+        "reason": "EF migration designer metadata is generated persistence history, excluded from production behavior coverage and verified by the migration-shape contract plus real PostgreSQL application test."
+      },
+      {
+        "path": "src/infrastructure/IIoT.EntityFrameworkCore/Migrations/IIoTDbContextModelSnapshot.cs",
+        "classification": "generated-migration-source",
+        "reason": "The EF model snapshot is generated persistence history, excluded from production behavior coverage and verified by the migration-shape contract plus real PostgreSQL application test."
+      }
+    ]
+  }
+}

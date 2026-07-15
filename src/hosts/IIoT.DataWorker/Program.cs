@@ -94,6 +94,7 @@ builder.Services.AddMassTransit(x =>
     x.AddConsumer<PassStationConsumer>();
     x.AddConsumer<DeviceLogConsumer>();
     x.AddConsumer<HourlyCapacityConsumer>();
+    x.AddEntityFrameworkOutbox<IIoTDbContext>(IntegrationEventInboxDefaults.ConfigurePostgres);
 
     x.UsingRabbitMq((context, cfg) =>
     {
@@ -106,6 +107,7 @@ builder.Services.AddMassTransit(x =>
             endpoint.ApplyIIoTEndpointDefaults(
                 eventBusOptions,
                 eventBusOptions.Consumers.PassStationConcurrentMessageLimit);
+            endpoint.UseEntityFrameworkOutbox<IIoTDbContext>(context);
             endpoint.ConfigureConsumer<PassStationConsumer>(context);
         });
 
@@ -114,6 +116,7 @@ builder.Services.AddMassTransit(x =>
             endpoint.ApplyIIoTEndpointDefaults(
                 eventBusOptions,
                 eventBusOptions.Consumers.DeviceLogConcurrentMessageLimit);
+            endpoint.UseEntityFrameworkOutbox<IIoTDbContext>(context);
             endpoint.ConfigureConsumer<DeviceLogConsumer>(context);
         });
 
@@ -122,12 +125,17 @@ builder.Services.AddMassTransit(x =>
             endpoint.ApplyIIoTEndpointDefaults(
                 eventBusOptions,
                 eventBusOptions.Consumers.HourlyCapacityConcurrentMessageLimit);
+            endpoint.UseEntityFrameworkOutbox<IIoTDbContext>(context);
             endpoint.ConfigureConsumer<HourlyCapacityConsumer>(context);
         });
     });
 });
 
-builder.Services.AddHostedService<OutboxDispatcherWorker>();
+var disableOutboxDispatcherForTesting =
+    OutboxDispatcherWorker.RegisterUnlessExplicitlyDisabledForTesting(
+        builder.Services,
+        builder.Configuration,
+        builder.Environment);
 
 var host = builder.Build();
 
@@ -146,6 +154,12 @@ startupLogger.LogInformation(
     configuredQueues,
     "_error",
     "_skipped");
+
+if (disableOutboxDispatcherForTesting)
+{
+    startupLogger.LogWarning(
+        "Outbound OutboxDispatcherWorker is disabled by the explicit test-only configuration; MassTransit receivers remain active.");
+}
 
 host.Run();
 

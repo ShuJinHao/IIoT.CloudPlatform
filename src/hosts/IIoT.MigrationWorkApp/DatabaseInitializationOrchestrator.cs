@@ -101,7 +101,7 @@ public sealed class DatabaseInitializationOrchestrator(
         logger.LogInformation("EF Core 迁移完成。");
     }
 
-    private async Task EnsureDeviceCodeSchemaCompatibilityAsync(CancellationToken cancellationToken)
+    internal async Task EnsureDeviceCodeSchemaCompatibilityAsync(CancellationToken cancellationToken)
     {
         logger.LogInformation("Checking legacy device code compatibility before rebuilding the unique index.");
 
@@ -165,7 +165,7 @@ public sealed class DatabaseInitializationOrchestrator(
         return builder.ToString();
     }
 
-    private async Task EnsureIdentitySchemaCompatibilityAsync(CancellationToken cancellationToken)
+    internal async Task EnsureIdentitySchemaCompatibilityAsync(CancellationToken cancellationToken)
     {
         // Repair drifted dev databases whose migration history is ahead of the actual schema.
         await dbContext.Database.ExecuteSqlRawAsync(

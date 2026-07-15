@@ -4,6 +4,10 @@
     <WarningsAsErrors>$(WarningsAsErrors);xUnit1051</WarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="coverlet.collector"
+                      Version="6.0.4"
+                      PrivateAssets="all"
+                      IncludeAssets="runtime; build; native; contentfiles; analyzers; buildtransitive" />
     <None Include="$(MSBuildThisFileDirectory)xunit.runner.json"
           Link="xunit.runner.json"
           CopyToOutputDirectory="PreserveNewest"

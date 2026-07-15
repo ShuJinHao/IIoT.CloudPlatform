@@ -4,7 +4,7 @@ using IIoT.SharedKernel.Paging;
 
 namespace IIoT.Dapper.Production.QueryServices.DeviceLog;
 
-public class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : IDeviceLogQueryService
+internal class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : IDeviceLogQueryService
 {
     public async Task<(List<DeviceLogListItemDto> Items, int TotalCount)> GetLogsByConditionAsync(
         Pagination pagination,
