@@ -1,8 +1,9 @@
 using IIoT.SharedKernel.Paging;
+using IIoT.SharedKernel.Architecture;
 
 namespace IIoT.Services.Contracts.RecordQueries;
 
-public interface IDeviceLogQueryService
+public interface IDeviceLogQueryService : IReadOnlyQueryPort
 {
     Task<(List<DeviceLogListItemDto> Items, int TotalCount)> GetLogsByConditionAsync(
         Pagination pagination,

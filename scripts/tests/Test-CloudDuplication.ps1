@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$ReportDirectory = 'artifacts/test-results/quality/duplication',
+    [string]$BaseRef = $env:CLOUD_QUALITY_BASE_REF,
     [switch]$UpdateFingerprintBaseline,
     [switch]$AuditGrowth
 )
@@ -9,9 +10,79 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+. (Join-Path $PSScriptRoot 'CloudQualityBaselineProtection.ps1')
+$baseCommit = Resolve-CloudQualityBaseCommit -RepoRoot $repoRoot -BaseRef $BaseRef
 $baselinePath = Join-Path $PSScriptRoot 'baselines/cloud-duplication.json'
 $baseline = Get-Content $baselinePath -Raw | ConvertFrom-Json -Depth 100
 $fingerprintBaselinePath = Join-Path (Split-Path $baselinePath -Parent) ([string]$baseline.strictFingerprintBaseline)
+$fingerprintBaseline = Get-Content $fingerprintBaselinePath -Raw | ConvertFrom-Json -Depth 100
+$baseBaseline = Get-CloudQualityBaseJson `
+    -RepoRoot $repoRoot `
+    -BaseCommit $baseCommit `
+    -RelativePath 'scripts/tests/baselines/cloud-duplication.json'
+$baseFingerprintRelativePath = "scripts/tests/baselines/$([string]$baseBaseline.strictFingerprintBaseline)"
+$baseFingerprintBaseline = Get-CloudQualityBaseJson `
+    -RepoRoot $repoRoot `
+    -BaseCommit $baseCommit `
+    -RelativePath $baseFingerprintRelativePath
+if ([int]$baseline.schemaVersion -lt [int]$baseBaseline.schemaVersion -or
+    [string]$baseline.tool -cne [string]$baseBaseline.tool -or
+    [string]$baseline.version -cne [string]$baseBaseline.version -or
+    [string]$baseline.strictFingerprintBaseline -cne [string]$baseBaseline.strictFingerprintBaseline) {
+    throw 'Cloud duplication tool, schema or fingerprint-baseline pin changed outside an independent tool-upgrade batch.'
+}
+foreach ($mode in @($baseBaseline.modes.PSObject.Properties.Name)) {
+    if ($null -eq $baseline.modes.PSObject.Properties[$mode]) {
+        throw "Cloud duplication candidate removes immutable-base scan mode: $mode"
+    }
+    Assert-CloudQualityAtMost ([int]$baseline.modes.$mode.minimumLines) ([int]$baseBaseline.modes.$mode.minimumLines) "duplication $mode minimumLines"
+    Assert-CloudQualityAtMost ([int]$baseline.modes.$mode.minimumTokens) ([int]$baseBaseline.modes.$mode.minimumTokens) "duplication $mode minimumTokens"
+}
+foreach ($baseScan in @($baseBaseline.scans)) {
+    $candidateScans = @($baseline.scans | Where-Object {
+        [string]$_.category -ceq [string]$baseScan.category -and
+        [string]$_.mode -ceq [string]$baseScan.mode
+    })
+    if ($candidateScans.Count -ne 1) {
+        throw "Cloud duplication candidate must retain exactly one immutable-base scan: $($baseScan.category)/$($baseScan.mode)"
+    }
+    foreach ($metric in @('clones', 'duplicatedLines', 'duplicatedTokens')) {
+        Assert-CloudQualityAtMost ([int]$candidateScans[0].$metric) ([int]$baseScan.$metric) "duplication $($baseScan.category)/$($baseScan.mode)/$metric"
+    }
+}
+
+function Assert-FingerprintBaselineMonotonic($candidateFingerprint, [string]$label) {
+    if ([int]$candidateFingerprint.schemaVersion -lt [int]$baseFingerprintBaseline.schemaVersion) {
+        throw "$label strict fingerprint schema is downgraded."
+    }
+    foreach ($category in @('production', 'support', 'test-cases')) {
+        $baseCategory = $baseFingerprintBaseline.categories.$category
+        $candidateCategory = $candidateFingerprint.categories.$category
+        if ($null -eq $candidateCategory) {
+            throw "$label strict fingerprint baseline is missing category $category."
+        }
+        Assert-CloudQualityAtMost ([int]$candidateCategory.groupCount) ([int]$baseCategory.groupCount) "$label $category strict group count"
+        Assert-CloudQualityAtMost ([int]$candidateCategory.instanceCount) ([int]$baseCategory.instanceCount) "$label $category strict instance count"
+        $baseGroups = @{}
+        foreach ($group in @($baseCategory.groups)) {
+            $baseGroups[[string]$group.fingerprint] = [int]$group.instances
+        }
+        $newGroups = @($candidateCategory.groups | Where-Object {
+            -not $baseGroups.ContainsKey([string]$_.fingerprint)
+        })
+        if ($newGroups.Count -gt 0 -and
+            [int]$candidateCategory.groupCount -ge [int]$baseCategory.groupCount) {
+            throw "$label adds $($newGroups.Count) new $category fingerprints without a strict net group reduction."
+        }
+        foreach ($group in @($candidateCategory.groups | Where-Object {
+            $baseGroups.ContainsKey([string]$_.fingerprint)
+        })) {
+            Assert-CloudQualityAtMost ([int]$group.instances) ([int]$baseGroups[[string]$group.fingerprint]) "$label $category fingerprint $([string]$group.fingerprint) instances"
+        }
+    }
+}
+
+Assert-FingerprintBaselineMonotonic $fingerprintBaseline 'candidate'
 $reportRoot = if ([System.IO.Path]::IsPathRooted($ReportDirectory)) {
     $ReportDirectory
 } else {
@@ -238,17 +309,18 @@ foreach ($category in @('production', 'support', 'test-cases')) {
     }
 }
 if ($UpdateFingerprintBaseline) {
-    [ordered]@{
+    $updatedFingerprintBaseline = [ordered]@{
         schemaVersion = 2
         mode = 'strict'
         normalization = 'source fragment whitespace collapsed; SHA-256 over format and ordered side hashes'
         categories = $strictCategorySummaries
-    } | ConvertTo-Json -Depth 10 | Set-Content $fingerprintBaselinePath -Encoding utf8
+    }
+    Assert-FingerprintBaselineMonotonic $updatedFingerprintBaseline 'generated candidate'
+    $updatedFingerprintBaseline | ConvertTo-Json -Depth 10 | Set-Content $fingerprintBaselinePath -Encoding utf8
 } else {
     if (-not (Test-Path $fingerprintBaselinePath -PathType Leaf)) {
         throw "Missing strict clone fingerprint baseline: $fingerprintBaselinePath"
     }
-    $fingerprintBaseline = Get-Content $fingerprintBaselinePath -Raw | ConvertFrom-Json -Depth 100
     if ([int]$fingerprintBaseline.schemaVersion -ne 2) {
         throw 'Strict clone fingerprint baseline must use schemaVersion 2 with all categories.'
     }

@@ -1,4 +1,5 @@
 ﻿using System.Linq.Expressions;
+using IIoT.SharedKernel.Architecture;
 using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Specification;
 
@@ -12,7 +13,7 @@ namespace IIoT.SharedKernel.Repository;
 /// 2. Expression 重载    - 仅用于命令端的退化查询(存在性检查、计数),
 ///                         返回类型限定为 bool/int/T?,不暴露 IQueryable
 /// </summary>
-public interface IReadRepository<T> where T : class, IAggregateRoot
+public interface IReadRepository<T> : IReadOnlyQueryPort where T : class, IAggregateRoot
 {
     // ── Specification 路径(取出实体)─────────────────────────────
 

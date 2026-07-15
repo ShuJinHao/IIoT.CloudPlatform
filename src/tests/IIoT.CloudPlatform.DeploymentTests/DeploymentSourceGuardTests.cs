@@ -285,6 +285,8 @@ public sealed class DeploymentSourceGuardTests
         migrationDockerfile.Should().NotContain("HEALTHCHECK");
         composeSource.Should().Contain("iiot-migration:");
         composeSource.Should().Contain("restart: \"no\"");
+        composeSource.Should().Contain("DOTNET_ENVIRONMENT: Production");
+        composeSource.Should().NotContain("DataWorker__Testing__DisableOutboxDispatcher");
     }
 
     [Fact]
@@ -488,16 +490,16 @@ public sealed class DeploymentSourceGuardTests
         readmeSource.Should().Contain("日常 `Deploy-Changed.ps1` 内部调用的 `Deploy.ps1` 不安装任何远端 support files");
         readmeSource.Should().Contain("服务器端 `deploy-release.sh` 不再是日常或手工入口");
         readmeSource.Should().Contain("`cloud-ci / build-test`");
-        readmeSource.Should().Contain("16 个物理 runner / 609 case");
+        readmeSource.Should().Contain("16 个物理 runner / 646 case");
         operationsSource.Should().Contain("pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud");
         operationsSource.Should().Contain("project-local `local-release.sh` is a legacy maintenance implementation");
         operationsSource.Should().Contain("`cloud-ci / build-test`");
-        operationsSource.Should().Contain("16 physical runners / 609 cases");
+        operationsSource.Should().Contain("16 physical runners / 646 cases");
         edgeGoLiveSource.Should().Contain("pwsh ./deploy/Deploy-Changed.ps1 -Targets Edge");
         edgeGoLiveSource.Should().Contain("Windows 安装器/Velopack/插件构建");
         edgeGoLiveSource.Should().Contain(
             "scripts/tests/Invoke-CloudTestInventory.ps1 -Mode Required -Configuration Release -NoBuild");
-        edgeGoLiveSource.Should().Contain("16 个物理 runner / 609 case");
+        edgeGoLiveSource.Should().Contain("16 个物理 runner / 646 case");
         runnerSource.Should().Contain("/data/github-runner/cloud");
         runnerSource.Should().Contain("github-runner");
         runnerSource.Should().Contain("self-hosted runner 仅用于 CI 辅助和历史运维");
@@ -844,7 +846,7 @@ public sealed class DeploymentSourceGuardTests
         analyzerFixtureStep.Should().Contain("bash scripts/tests/TestCloudArchitectureAnalyzerFixtures.sh");
         analyzerFixtureStep.Should().NotContain("if:");
         analyzerFixtureStep.Should().NotContain("continue-on-error:");
-        fixtureScriptSource.Should().Contain("ARCHITECTURE_FIXTURES_OK valid=4 invalid=13");
+        fixtureScriptSource.Should().Contain("ARCHITECTURE_FIXTURES_OK valid=6 invalid=15");
         fixtureScriptSource.Should().Contain("build_valid");
         fixtureScriptSource.Should().Contain("build_invalid");
         realWebE2eRunnerSource.Should().Contain("mkdtemp(join(tmpdir(), 'iiot-cloud-web-e2e-'))");
@@ -879,8 +881,8 @@ public sealed class DeploymentSourceGuardTests
         inventoryScriptSource.Should().Contain("Task.WaitAll" + "(work)");
         inventoryScriptSource.Should().Contain("response.Result");
         inventoryManifestSource.Should().Contain("\"migrationBaselineCases\": 591");
-        inventoryManifestSource.Should().Contain("\"baselineCases\": 673");
-        inventoryManifestSource.Should().Contain("\"requiredCases\": 609");
+        inventoryManifestSource.Should().Contain("\"baselineCases\": 710");
+        inventoryManifestSource.Should().Contain("\"requiredCases\": 646");
         inventoryManifestSource.Should().Contain("\"regressionBaselines\"");
         inventoryManifestSource.Should().NotContain("\"regressionId\": null");
         inventoryScriptSource.Should().Contain("RegressionId coverage fell below its non-zero floor");
@@ -890,7 +892,7 @@ public sealed class DeploymentSourceGuardTests
         inventoryManifestSource.Should().Contain("\"cadence\": \"Release\"");
         inventoryManifestSource.Should().Contain("\"profile\": \"WorkspaceAlignment\"");
         workflowSource.Should().Contain(
-            "ARCHITECTURE_FIXTURES_OK valid=4 invalid=13 suppressionBypass=3 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010");
+            "ARCHITECTURE_FIXTURES_OK valid=6 invalid=15 suppressionBypass=3 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010");
         workflowSource.Should().Contain("Validate deploy script syntax");
         workflowSource.Should().Contain("sh -n deploy/scripts/release-common.sh");
         workflowSource.Should().Contain("sh -n deploy/scripts/pre-deploy-check.sh");

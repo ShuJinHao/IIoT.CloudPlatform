@@ -65,37 +65,40 @@ public class GetAllDefinedPermissionsHandler(
         GetAllDefinedPermissionsQuery request,
         CancellationToken cancellationToken)
     {
-        var cached = await cacheService.GetAsync<List<PermissionGroupDto>>(
-            CacheKeys.AllDefinedPermissions(), cancellationToken);
-        if (cached != null) return Result.Success(cached);
-
-        var allRoles = await rolePolicyService.GetAllRolesAsync();
-        var discoveredPermissions = new HashSet<string>();
-
-        foreach (var roleName in allRoles)
-        {
-            var perms = await rolePolicyService.GetRolePermissionsAsync(roleName);
-            if (perms != null)
-                foreach (var p in perms)
-                    discoveredPermissions.Add(p);
-        }
-
-        foreach (var p in BuiltInPermissions)
-            discoveredPermissions.Add(p);
-
-        var grouped = discoveredPermissions
-            .OrderBy(p => p)
-            .GroupBy(p => p.Contains('.') ? p.Split('.')[0] : "Other")
-            .Select(g => new PermissionGroupDto(g.Key, g.ToList()))
-            .OrderBy(g => g.GroupName)
-            .ToList();
-
-        await cacheService.SetAsync(
+        var grouped = await cacheService.GetOrSetAsync<List<PermissionGroupDto>>(
             CacheKeys.AllDefinedPermissions(),
-            grouped,
+            async factoryCancellationToken =>
+            {
+                factoryCancellationToken.ThrowIfCancellationRequested();
+                var allRoles = await rolePolicyService.GetAllRolesAsync();
+                var discoveredPermissions = new HashSet<string>();
+
+                foreach (var roleName in allRoles)
+                {
+                    factoryCancellationToken.ThrowIfCancellationRequested();
+                    var permissions = await rolePolicyService.GetRolePermissionsAsync(roleName);
+                    if (permissions is not null)
+                    {
+                        foreach (var permission in permissions)
+                            discoveredPermissions.Add(permission);
+                    }
+                }
+
+                foreach (var permission in BuiltInPermissions)
+                    discoveredPermissions.Add(permission);
+
+                return discoveredPermissions
+                    .OrderBy(permission => permission)
+                    .GroupBy(permission => permission.Contains('.') ? permission.Split('.')[0] : "Other")
+                    .Select(group => new PermissionGroupDto(group.Key, group.ToList()))
+                    .OrderBy(group => group.GroupName)
+                    .ToList();
+            },
+            static value => value is not null,
             TimeSpan.FromHours(4),
             cancellationToken);
 
-        return Result.Success(grouped);
+        return Result.Success(grouped
+            ?? throw new InvalidOperationException("Permission cache factory returned null."));
     }
 }

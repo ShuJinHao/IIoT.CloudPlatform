@@ -113,12 +113,17 @@ namespace IIoT.SharedKernel.Messaging
     }
 }
 
+namespace IIoT.SharedKernel.Architecture
+{
+    public interface IReadOnlyQueryPort { }
+}
+
 namespace Fixture
 {
     [IIoT.Services.CrossCutting.Attributes.AuthorizeAiRead("AiRead.Device")]
     public sealed class Query : IIoT.Services.Contracts.IAiReadQuery<int> { }
 
-    public interface IReadPort
+    public interface IReadPort : IIoT.SharedKernel.Architecture.IReadOnlyQueryPort
     {
         Task<int> CountAsync(CancellationToken cancellationToken);
     }
@@ -160,6 +165,7 @@ namespace Dapper;
 public static class SqlMapper
 {
     public static int Execute(object connection, string sql) => 0;
+    public static object Query(object connection, string sql) => new();
 }
 EOF
 
@@ -172,6 +178,37 @@ cat > "$fixture_root/ValidDataWorker/Program.cs" <<'EOF'
 public static class Program
 {
     public static int Check(object connection) => Dapper.SqlMapper.Execute(connection, "select 1");
+}
+EOF
+
+write_project \
+    "ValidReadOnlySql" \
+    "IIoT.Dapper.FixtureValidReadOnlySql" \
+    "true" \
+    '<ItemGroup><ProjectReference Include="../DapperStub/DapperStub.csproj" /></ItemGroup>'
+cat > "$fixture_root/ValidReadOnlySql/ReadOnlyHandler.cs" <<'EOF'
+namespace IIoT.Services.Contracts
+{
+    public interface IAiReadRequest<out T> { }
+}
+
+namespace IIoT.SharedKernel.Messaging
+{
+    public interface IQueryHandler<in TQuery, TResponse>
+    {
+        System.Threading.Tasks.Task<TResponse> Handle(TQuery request, System.Threading.CancellationToken cancellationToken);
+    }
+}
+
+public sealed class ReadOnlyHandler<TQuery>(object connection)
+    : IIoT.SharedKernel.Messaging.IQueryHandler<TQuery, int>
+    where TQuery : IIoT.Services.Contracts.IAiReadRequest<int>
+{
+    public System.Threading.Tasks.Task<int> Handle(TQuery request, System.Threading.CancellationToken cancellationToken)
+    {
+        _ = Dapper.SqlMapper.Query(connection, "/* DELETE */ WITH source AS (SELECT 1) SELECT * FROM source;");
+        return System.Threading.Tasks.Task.FromResult(1);
+    }
 }
 EOF
 
@@ -240,7 +277,11 @@ public sealed class DirectDatabaseAccess
 }
 EOF
 
-write_project "Invalid004" "IIoT.ProductionService.FixtureInvalid004" "true"
+write_project \
+    "Invalid004" \
+    "IIoT.Dapper.FixtureInvalid004" \
+    "true" \
+    '<ItemGroup><ProjectReference Include="../DapperStub/DapperStub.csproj" /></ItemGroup>'
 cat > "$fixture_root/Invalid004/Contracts.cs" <<'EOF'
 using System;
 using System.Threading;
@@ -286,8 +327,31 @@ public sealed class Handler(
     IIoT.SharedKernel.Repository.IRepository<object> repository)
     : IIoT.SharedKernel.Messaging.IQueryHandler<Query, int>
 {
-    public Task<int> Handle(Query request, CancellationToken cancellationToken)
-        => helper.Persist(repository);
+    private readonly System.Func<Task<int>> fieldWrite = () => helper.Persist(repository);
+    private System.Func<Task<int>> PropertyWrite { get; } = () => helper.Persist(repository);
+
+    public async Task<int> Handle(Query request, CancellationToken cancellationToken)
+    {
+        _ = await fieldWrite();
+        _ = await PropertyWrite();
+        System.Func<Task<int>> localWrite = () => helper.Persist(repository);
+        _ = await localWrite();
+        _ = await Task.Run(() => helper.Persist(repository));
+        System.Delegate dynamicWrite = new System.Func<Task<int>>(
+            () => helper.Persist(repository));
+        _ = dynamicWrite.DynamicInvoke();
+        _ = helper.RawWrite(new object());
+        _ = helper.QuotedFunctionWrite(new object());
+        return 1;
+    }
+}
+
+public sealed class GenericHandler<TQuery>(IIoT.SharedKernel.Repository.IRepository<object> repository)
+    : IIoT.SharedKernel.Messaging.IQueryHandler<TQuery, int>
+    where TQuery : IIoT.Services.Contracts.IAiReadRequest<int>
+{
+    public Task<int> Handle(TQuery request, CancellationToken cancellationToken)
+        => repository.SaveChangesAsync();
 }
 EOF
 cat > "$fixture_root/Invalid004/WriterHelper.cs" <<'EOF'
@@ -296,6 +360,82 @@ public sealed class WriterHelper
 {
     public Task<int> Persist(IIoT.SharedKernel.Repository.IRepository<object> repository)
         => repository.SaveChangesAsync();
+
+    public object RawWrite(object connection)
+        => Dapper.SqlMapper.Query(connection, "WITH changed AS (DELETE FROM device RETURNING id) SELECT * FROM changed");
+
+    public object QuotedFunctionWrite(object connection)
+        => Dapper.SqlMapper.Query(connection, "SELECT \"custom_schema\".\"mutate_business_state\"()");
+}
+EOF
+
+write_project "CrossProjectAiReadContracts" "IIoT.ProductionService.FixtureCrossProjectContracts" "true"
+cat > "$fixture_root/CrossProjectAiReadContracts/Contracts.cs" <<'EOF'
+namespace IIoT.SharedKernel.Architecture
+{
+    public interface IReadOnlyQueryPort { }
+}
+
+namespace IIoT.Services.Contracts
+{
+    public interface IAiReadRequest<out T> { }
+    public interface IAiReadQuery<out T> : IAiReadRequest<T> { }
+}
+
+namespace IIoT.Services.CrossCutting.Attributes
+{
+    [System.AttributeUsage(System.AttributeTargets.Class, AllowMultiple = true, Inherited = true)]
+    public sealed class AuthorizeAiReadAttribute(string permission) : System.Attribute;
+}
+
+namespace IIoT.SharedKernel.Messaging
+{
+    public interface IQueryHandler<in TQuery, TResponse>
+    {
+        System.Threading.Tasks.Task<TResponse> Handle(
+            TQuery request,
+            System.Threading.CancellationToken cancellationToken);
+    }
+}
+
+namespace Fixture
+{
+    public interface IExternalReadPort : IIoT.SharedKernel.Architecture.IReadOnlyQueryPort
+    {
+        System.Threading.Tasks.Task<int> ReadAsync(
+            System.Threading.CancellationToken cancellationToken);
+    }
+
+    [IIoT.Services.CrossCutting.Attributes.AuthorizeAiRead("AiRead.Device")]
+    public sealed class Query : IIoT.Services.Contracts.IAiReadQuery<int> { }
+
+    public sealed class Handler(IExternalReadPort port)
+        : IIoT.SharedKernel.Messaging.IQueryHandler<Query, int>
+    {
+        public System.Threading.Tasks.Task<int> Handle(
+            Query request,
+            System.Threading.CancellationToken cancellationToken)
+            => port.ReadAsync(cancellationToken);
+    }
+}
+EOF
+
+write_project \
+    "InvalidCrossProjectAiRead" \
+    "IIoT.Dapper.FixtureCrossProjectInvalid" \
+    "true" \
+    '<ItemGroup><ProjectReference Include="../CrossProjectAiReadContracts/CrossProjectAiReadContracts.csproj" /><ProjectReference Include="../DapperStub/DapperStub.csproj" /></ItemGroup>'
+cat > "$fixture_root/InvalidCrossProjectAiRead/ExternalReadPort.cs" <<'EOF'
+namespace Fixture;
+
+public sealed class ExternalReadPort(object connection) : IExternalReadPort
+{
+    public System.Threading.Tasks.Task<int> ReadAsync(
+        System.Threading.CancellationToken cancellationToken)
+    {
+        var affected = Dapper.SqlMapper.Execute(connection, "delete from devices");
+        return System.Threading.Tasks.Task.FromResult(affected);
+    }
 }
 EOF
 
@@ -347,8 +487,117 @@ public sealed class CachedPermissionProvider(
     IIoT.Services.Contracts.ICacheService cache)
     : IIoT.Services.Contracts.Authorization.IPermissionProvider
 {
-    public System.Threading.Tasks.Task<int> ReadAsync() => cache.GetAsync("permissions");
+    private readonly System.Func<System.Threading.Tasks.Task<int>> fieldRead =
+        () => cache.GetAsync("permissions-field");
+    private System.Func<System.Threading.Tasks.Task<int>> PropertyRead { get; } =
+        () => cache.GetAsync("permissions-property");
+
+    public async System.Threading.Tasks.Task<int> ReadAsync()
+    {
+        _ = await fieldRead();
+        _ = await PropertyRead();
+        System.Func<System.Threading.Tasks.Task<int>> localRead =
+            () => cache.GetAsync("permissions-local");
+        _ = await localRead();
+        _ = await System.Threading.Tasks.Task.Run(() => cache.GetAsync("permissions-external"));
+        System.Delegate dynamicRead =
+            new System.Func<System.Threading.Tasks.Task<int>>(() => cache.GetAsync("permissions-dynamic"));
+        _ = dynamicRead.DynamicInvoke();
+        return 1;
+    }
 }
+EOF
+
+write_project "ValidDelegateContext" "IIoT.ProductionService.FixtureDelegateContext" "true"
+cat > "$fixture_root/ValidDelegateContext/DelegateContext.cs" <<'EOF'
+namespace IIoT.Services.Contracts
+{
+    public interface IAiReadRequest<out T> { }
+    public interface IAiReadQuery<out T> : IAiReadRequest<T> { }
+    public interface ICacheService
+    {
+        System.Threading.Tasks.Task<int> GetAsync(string key);
+    }
+}
+
+namespace IIoT.Services.CrossCutting.Attributes
+{
+    [System.AttributeUsage(System.AttributeTargets.Class, AllowMultiple = true, Inherited = true)]
+    public sealed class AuthorizeAiReadAttribute(string permission) : System.Attribute;
+}
+
+namespace IIoT.SharedKernel.Messaging
+{
+    public interface IQueryHandler<in TQuery, TResponse>
+    {
+        System.Threading.Tasks.Task<TResponse> Handle(
+            TQuery request,
+            System.Threading.CancellationToken cancellationToken);
+    }
+}
+
+namespace IIoT.SharedKernel.Repository
+{
+    public interface IRepository<T>
+    {
+        System.Threading.Tasks.Task<int> SaveChangesAsync();
+    }
+}
+
+namespace IIoT.Services.Contracts.Authorization
+{
+    public interface IPermissionProvider
+    {
+        System.Threading.Tasks.Task<int> ReadAsync();
+    }
+}
+
+[IIoT.Services.CrossCutting.Attributes.AuthorizeAiRead("AiRead.Device")]
+public sealed class ContextQuery : IIoT.Services.Contracts.IAiReadQuery<int> { }
+
+public sealed class ContextHandler
+    : IIoT.SharedKernel.Messaging.IQueryHandler<ContextQuery, int>
+{
+    public System.Threading.Tasks.Task<int> Handle(
+        ContextQuery request,
+        System.Threading.CancellationToken cancellationToken) => Invoke(Safe);
+
+    internal static System.Threading.Tasks.Task<int> Invoke(
+        System.Func<System.Threading.Tasks.Task<int>> callback) => callback();
+
+    private static System.Threading.Tasks.Task<int> Safe()
+        => System.Threading.Tasks.Task.FromResult(1);
+}
+
+public sealed class NonAiWriter(IIoT.SharedKernel.Repository.IRepository<object> repository)
+{
+    public System.Threading.Tasks.Task<int> WriteAsync()
+        => ContextHandler.Invoke(() => repository.SaveChangesAsync());
+}
+
+public sealed class ContextPermissionProvider
+    : IIoT.Services.Contracts.Authorization.IPermissionProvider
+{
+    public System.Threading.Tasks.Task<int> ReadAsync() => Invoke(Safe);
+
+    internal static System.Threading.Tasks.Task<int> Invoke(
+        System.Func<System.Threading.Tasks.Task<int>> callback) => callback();
+
+    private static System.Threading.Tasks.Task<int> Safe()
+        => System.Threading.Tasks.Task.FromResult(1);
+}
+
+public sealed class NonSecurityReader(IIoT.Services.Contracts.ICacheService cache)
+{
+    public System.Threading.Tasks.Task<int> ReadAsync()
+        => ContextPermissionProvider.Invoke(() => cache.GetAsync("non-security"));
+}
+EOF
+
+write_project "InvalidUnclassified" "IIoT.FutureProductionComponent" "true"
+cat > "$fixture_root/InvalidUnclassified/FutureProductionType.cs" <<'EOF'
+namespace Fixture;
+public sealed class FutureProductionType { }
 EOF
 
 write_project "Invalid010" "IIoT.HttpApi.FixtureInvalid010" "true"
@@ -428,12 +677,15 @@ EOF
 
 build_valid "$fixture_root/Valid/Valid.csproj"
 build_valid "$fixture_root/ValidDataWorker/ValidDataWorker.csproj"
+build_valid "$fixture_root/ValidReadOnlySql/ValidReadOnlySql.csproj"
 build_valid "$fixture_root/ValidMigrationHost/ValidMigrationHost.csproj"
 build_valid "$fixture_root/ValidHttpApiAdapter/ValidHttpApiAdapter.csproj"
+build_valid "$fixture_root/ValidDelegateContext/ValidDelegateContext.csproj"
 build_invalid "$fixture_root/Invalid001/Invalid001.csproj" "CLOUDARCH001"
 build_invalid "$fixture_root/Invalid002/Invalid002.csproj" "CLOUDARCH002"
 build_invalid "$fixture_root/Invalid003/Invalid003.csproj" "CLOUDARCH003"
 build_invalid "$fixture_root/Invalid004/Invalid004.csproj" "CLOUDARCH004"
+build_invalid "$fixture_root/InvalidCrossProjectAiRead/InvalidCrossProjectAiRead.csproj" "CLOUDARCH004"
 build_invalid "$fixture_root/Invalid005/Invalid005.csproj" "CLOUDARCH005"
 build_invalid "$fixture_root/Invalid006/Invalid006.csproj" "CLOUDARCH006"
 build_invalid "$fixture_root/Invalid007/Invalid007.csproj" "CLOUDARCH003"
@@ -442,10 +694,11 @@ build_invalid "$fixture_root/Invalid009/Invalid009.csproj" "CLOUDARCH007"
 build_invalid "$fixture_root/Invalid010/Invalid010.csproj" "CLOUDARCH008"
 build_invalid "$fixture_root/Invalid011/Invalid011.csproj" "CLOUDARCH009"
 build_invalid "$fixture_root/Invalid012/Invalid012.csproj" "CLOUDARCH010"
+build_invalid "$fixture_root/InvalidUnclassified/InvalidUnclassified.csproj" "CLOUDARCH001"
 build_invalid "$fixture_root/InvalidGenerated/InvalidGenerated.csproj" "CLOUDARCH009"
 build_invalid "$fixture_root/SuppressedPragma/SuppressedPragma.csproj" "CLOUDARCH009"
 build_invalid "$fixture_root/SuppressedNoWarn/SuppressedNoWarn.csproj" "CLOUDARCH009"
 build_invalid "$fixture_root/SuppressedEditorConfig/SuppressedEditorConfig.csproj" "CLOUDARCH009"
 
 printf '%s\n' \
-    'ARCHITECTURE_FIXTURES_OK valid=4 invalid=13 suppressionBypass=3 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010'
+    'ARCHITECTURE_FIXTURES_OK valid=6 invalid=15 suppressionBypass=3 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010'

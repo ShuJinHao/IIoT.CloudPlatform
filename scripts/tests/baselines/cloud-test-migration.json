@@ -7,6 +7,14 @@
   "expectedBaseDeclarationCount": 529,
   "mappings": [
     {
+      "source": "src/tests/IIoT.ServiceLayer.Tests/ApplicationFlowGuardTests.cs::DeleteDeviceHandler_ShouldCascadeDelete_InvalidateCache_AndWriteAudit",
+      "disposition": "replacement",
+      "targets": [
+        "src/tests/IIoT.CloudPlatform.ApplicationTests/ApplicationFlowGuardTests.cs::DeleteDeviceHandler_ShouldCascadeDelete_AndWriteAudit_WhileOutboxOwnsCacheInvalidation"
+      ],
+      "reason": "The renamed behavior test keeps cascade-delete and audit coverage while making the authoritative outbox-owned cache-invalidation path explicit after the command-side duplicate invalidation path was physically deleted."
+    },
+    {
       "source": "src/tests/IIoT.ServiceLayer.Tests/ApplicationFlowGuardTests.cs::ProcessRecordUploadRequestMapper_ShouldMapTrueCellResultToOk",
       "disposition": "retired-duplicate",
       "targets": [

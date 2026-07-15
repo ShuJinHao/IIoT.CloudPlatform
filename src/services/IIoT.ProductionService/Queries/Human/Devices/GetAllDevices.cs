@@ -32,17 +32,24 @@ public class GetAllDevicesHandler(
 
         var cacheKey = CacheKeys.AllDevices();
 
-        var cached = await cacheService.GetAsync<List<DeviceSelectDto>>(cacheKey, cancellationToken);
-        if (cached != null) return Result.Success(cached);
+        var dtos = await cacheService.GetOrSetAsync<List<DeviceSelectDto>>(
+            cacheKey,
+            async factoryCancellationToken =>
+            {
+                var list = await deviceRepository.GetListAsync(
+                    cancellationToken: factoryCancellationToken);
+                return list.Select(device => new DeviceSelectDto(
+                    device.Id,
+                    device.DeviceName,
+                    device.Code,
+                    device.ProcessId
+                )).ToList();
+            },
+            static value => value is not null,
+            TimeSpan.FromHours(2),
+            cancellationToken);
 
-        var list = await deviceRepository.GetListAsync(cancellationToken: cancellationToken);
-
-        var dtos = list.Select(d => new DeviceSelectDto(
-            d.Id, d.DeviceName, d.Code, d.ProcessId
-        )).ToList();
-
-        await cacheService.SetAsync(cacheKey, dtos, TimeSpan.FromHours(2), cancellationToken);
-
-        return Result.Success(dtos);
+        return Result.Success(dtos
+            ?? throw new InvalidOperationException("Device cache factory returned null."));
     }
 }

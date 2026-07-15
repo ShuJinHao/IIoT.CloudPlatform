@@ -95,22 +95,13 @@ public sealed class IdentityProviderPersistenceTests
     {
         public int CallCount { get; private set; }
 
-        public Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default)
-            => Fail<T>();
-
         public Task<T?> GetOrSetAsync<T>(
             string key,
             Func<CancellationToken, Task<T?>> factory,
-            TimeSpan? absoluteExpireTime = null,
+            Func<T?, bool> shouldCache,
+            TimeSpan absoluteExpireTime,
             CancellationToken cancellationToken = default)
             => Fail<T>();
-
-        public Task SetAsync<T>(
-            string key,
-            T value,
-            TimeSpan? absoluteExpireTime = null,
-            CancellationToken cancellationToken = default)
-            => Fail();
 
         public Task RemoveAsync(string key, CancellationToken cancellationToken = default)
             => Fail();

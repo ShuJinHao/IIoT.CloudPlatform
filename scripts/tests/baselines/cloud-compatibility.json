@@ -1,6 +1,7 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "ruleId": "TEST-COMPAT-001",
+  "externalConsumerEvidenceCount": 2,
   "unclassifiedCompatibilitySignals": 0,
   "activeCompatibilityItems": 2,
   "retired": [
@@ -114,20 +115,20 @@
         {
           "repository": "IIoT.EdgeClient",
           "path": "src/Infrastructure/IIoT.Edge.Infrastructure.Integration/Capacity/CapacitySyncTask.cs",
-          "pattern": "_cloudHttp.PostAsync(_endpointProvider.GetCapacityHourlyPath(), payload)",
+          "pattern": "_cloudHttp.PostAsync(\n                _endpointProvider.GetCapacityHourlyPath(),\n                payload,\n                cancellationToken: cancellationToken)",
           "mustNotContain": "RequestId",
-          "sourceSha256": "85562a3fe4ab10001e03431c7d411c4747ebc2b2dd9c5a2035954f5e17c353c7"
+          "sourceSha256": "5ae7cb807ac0015f8e44775966377296d8374d80fb07bcf7bba4c34aec557348"
         },
         {
           "repository": "IIoT.EdgeClient",
           "path": "src/Infrastructure/IIoT.Edge.Infrastructure.Integration/DeviceLog/DeviceLogSyncTask.cs",
-          "pattern": "_cloudHttp.PostAsync(_endpointProvider.GetDeviceLogPath(), payload)",
+          "pattern": "_cloudHttp.PostAsync(\n                _endpointProvider.GetDeviceLogPath(),\n                payload,\n                cancellationToken: cancellationToken)",
           "mustNotContain": "RequestId",
-          "sourceSha256": "91488adf86598d97bb5b8b055947ad19d2deefe6bbb6214327af0931233904af"
+          "sourceSha256": "1b8cbb3424c2f961edcd5cfb60bdf6403af417f110c5096577a433690af1469e"
         }
       ],
-      "externalEvidenceHead": "0330880b18acb411a79fa1b01056c241d196d900",
-      "externalEvidenceSourceStateSha256": "d4851e485ca794f01e5ccd57be5142a8272585cd477b5fc4700740e87b736485",
+      "externalEvidenceHead": "caf5004420d02e714f66df6679dabb97edc255b8",
+      "externalEvidenceSourceStateSha256": "7eedaa475125e3e6e59a66d3a98efe39f3889deb991fbabe03b675dd6d6b05f4",
       "replacement": "RequestId-required capacity and device-log Edge upload contracts with a one-way persisted-key migration; pass-station already uses RequestId",
       "deletionCondition": "Add mandatory RequestId/idempotency-key generation to the real Edge CapacitySyncTask and DeviceLogSyncTask producers, deploy that contract across the supported fleet, inventory and migrate persisted legacy-prefixed DeduplicationKey rows, and prove both transitional no-RequestId behavior and the final RequestId-only path before physical deletion.",
       "latestRemovalBatch": "CLOUD-UPLOAD-IDEMPOTENCY-COMPAT-RETIRE (independent future batch after producer and persisted-key inventory)"

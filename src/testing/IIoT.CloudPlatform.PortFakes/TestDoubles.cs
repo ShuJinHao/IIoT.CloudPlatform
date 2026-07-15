@@ -31,6 +31,14 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
 
     public ISpecification<T>? LastAnySpecification { get; private set; }
 
+    public int GetListCalls { get; private set; }
+
+    public int GetSingleOrDefaultCalls { get; private set; }
+
+    public CancellationToken LastGetListCancellationToken { get; private set; }
+
+    public CancellationToken LastGetSingleOrDefaultCancellationToken { get; private set; }
+
     public T? AddedEntity { get; private set; }
 
     public List<T> UpdatedEntities { get; } = [];
@@ -67,6 +75,9 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
         ISpecification<T>? specification = null,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        GetListCalls++;
+        LastGetListCancellationToken = cancellationToken;
         LastGetListSpecification = specification;
         return Task.FromResult(ApplySpecification(specification).ToList());
     }
@@ -75,6 +86,9 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
         ISpecification<T>? specification = null,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        GetSingleOrDefaultCalls++;
+        LastGetSingleOrDefaultCancellationToken = cancellationToken;
         LastGetSingleOrDefaultSpecification = specification;
         return Task.FromResult(SingleOrDefaultResult ?? ApplySpecification(specification).SingleOrDefault());
     }
@@ -144,50 +158,36 @@ internal sealed class RecordingCacheService(List<string>? callOrder = null) : IC
     public List<string> RemovedKeys { get; } = [];
     public List<string> RemovedPatterns { get; } = [];
     public string? LastSetKey { get; private set; }
+    public string? LastGetOrSetKey { get; private set; }
     public TimeSpan? LastAbsoluteExpireTime { get; private set; }
     public Dictionary<string, object?> Values { get; } = [];
     public int GetOrSetCalls { get; private set; }
-
-    public Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken = default)
-    {
-        if (Values.TryGetValue(key, out var value) && value is T typedValue)
-        {
-            return Task.FromResult<T?>(typedValue);
-        }
-
-        return Task.FromResult(default(T));
-    }
+    public int FactoryCalls { get; private set; }
 
     public async Task<T?> GetOrSetAsync<T>(
         string key,
         Func<CancellationToken, Task<T?>> factory,
-        TimeSpan? absoluteExpireTime = null,
+        Func<T?, bool> shouldCache,
+        TimeSpan absoluteExpireTime,
         CancellationToken cancellationToken = default)
     {
         GetOrSetCalls++;
+        LastGetOrSetKey = key;
 
         if (Values.TryGetValue(key, out var value) && value is T typedValue)
         {
             return typedValue;
         }
 
+        FactoryCalls++;
         var created = await factory(cancellationToken);
-        LastSetKey = key;
-        LastAbsoluteExpireTime = absoluteExpireTime;
-        Values[key] = created;
+        if (shouldCache(created))
+        {
+            LastSetKey = key;
+            LastAbsoluteExpireTime = absoluteExpireTime;
+            Values[key] = created;
+        }
         return created;
-    }
-
-    public Task SetAsync<T>(
-        string key,
-        T value,
-        TimeSpan? absoluteExpireTime = null,
-        CancellationToken cancellationToken = default)
-    {
-        LastSetKey = key;
-        LastAbsoluteExpireTime = absoluteExpireTime;
-        Values[key] = value;
-        return Task.CompletedTask;
     }
 
     public Task RemoveAsync(string key, CancellationToken cancellationToken = default)
@@ -345,6 +345,10 @@ internal sealed class StubDeviceReadQueryService : IDeviceReadQueryService
 {
     public bool Exists { get; set; }
 
+    public int ExistsCalls { get; private set; }
+
+    public CancellationToken LastExistsCancellationToken { get; private set; }
+
     public bool ExistsInProcess { get; set; }
 
     public bool CodeExists { get; set; }
@@ -353,6 +357,9 @@ internal sealed class StubDeviceReadQueryService : IDeviceReadQueryService
 
     public Task<bool> ExistsAsync(Guid deviceId, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        ExistsCalls++;
+        LastExistsCancellationToken = cancellationToken;
         return Task.FromResult(Exists);
     }
 
@@ -391,6 +398,8 @@ internal sealed class StubCapacityQueryService : ICapacityQueryService
 
     public List<DailyRangeSummaryDto> SummaryRangeResult { get; set; } = [];
 
+    public DailySummaryDto? SummaryResult { get; set; }
+
     public List<DailyCapacityPagedItemDto> DailyPagedResult { get; set; } = [];
 
     public int DailyPagedTotalCount { get; set; }
@@ -406,6 +415,16 @@ internal sealed class StubCapacityQueryService : ICapacityQueryService
     public int HourlyAggregateCalls { get; private set; }
 
     public int DailyPagedCalls { get; private set; }
+
+    public int SummaryCalls { get; private set; }
+
+    public int SummaryRangeCalls { get; private set; }
+
+    public CancellationToken LastSummaryCancellationToken { get; private set; }
+
+    public CancellationToken LastSummaryRangeCancellationToken { get; private set; }
+
+    public CancellationToken LastDailyPagedCancellationToken { get; private set; }
 
     public IReadOnlyCollection<Guid>? LastAggregateDeviceIds { get; private set; }
 
@@ -478,7 +497,10 @@ internal sealed class StubCapacityQueryService : ICapacityQueryService
         string? plcName = null,
         CancellationToken cancellationToken = default)
     {
-        throw new NotSupportedException();
+        cancellationToken.ThrowIfCancellationRequested();
+        SummaryCalls++;
+        LastSummaryCancellationToken = cancellationToken;
+        return Task.FromResult(SummaryResult);
     }
 
     public Task<List<DailyRangeSummaryDto>> GetSummaryRangeAsync(
@@ -488,6 +510,9 @@ internal sealed class StubCapacityQueryService : ICapacityQueryService
         string? plcName = null,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        SummaryRangeCalls++;
+        LastSummaryRangeCancellationToken = cancellationToken;
         return Task.FromResult(SummaryRangeResult);
     }
 
@@ -498,7 +523,9 @@ internal sealed class StubCapacityQueryService : ICapacityQueryService
         IReadOnlyCollection<Guid>? deviceIds = null,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         DailyPagedCalls++;
+        LastDailyPagedCancellationToken = cancellationToken;
         LastDailyPagination = pagination;
         LastDailyDate = date;
         LastDailyDeviceId = deviceId;
@@ -848,34 +875,71 @@ internal sealed class RecordingAuditTrailService : IAuditTrailService
     }
 }
 
+internal sealed class RecordingIdempotentCacheInvalidationService
+    : IIdempotentCacheInvalidationService
+{
+    public List<CacheInvalidationOperation> Operations { get; } = [];
+
+    public Task<bool> InvalidateOnceAsync(
+        Guid operationId,
+        string operationScope,
+        IReadOnlyCollection<string> keys,
+        IReadOnlyCollection<string> patterns,
+        CancellationToken cancellationToken = default)
+    {
+        Operations.Add(new CacheInvalidationOperation(
+            operationId,
+            operationScope,
+            [.. keys],
+            [.. patterns],
+            cancellationToken));
+        return Task.FromResult(true);
+    }
+}
+
+internal sealed record CacheInvalidationOperation(
+    Guid OperationId,
+    string OperationScope,
+    IReadOnlyCollection<string> Keys,
+    IReadOnlyCollection<string> Patterns,
+    CancellationToken CancellationToken);
+
 internal sealed class RecordingDeviceCacheInvalidationService : IDeviceCacheInvalidationService
 {
+    public List<Guid> DomainEventIds { get; } = [];
+
     public List<Guid> RegisteredProcessIds { get; } = [];
 
     public List<DeviceCacheDescriptor> RenamedDevices { get; } = [];
 
     public List<DeviceCacheDescriptor> DeletedDevices { get; } = [];
 
-    public Task InvalidateListsAfterRegisterAsync(
+    public Task InvalidateListsAfterRegisterOnceAsync(
+        Guid domainEventId,
         Guid processId,
         CancellationToken cancellationToken = default)
     {
+        DomainEventIds.Add(domainEventId);
         RegisteredProcessIds.Add(processId);
         return Task.CompletedTask;
     }
 
-    public Task InvalidateAfterRenameAsync(
+    public Task InvalidateAfterRenameOnceAsync(
+        Guid domainEventId,
         DeviceCacheDescriptor device,
         CancellationToken cancellationToken = default)
     {
+        DomainEventIds.Add(domainEventId);
         RenamedDevices.Add(device);
         return Task.CompletedTask;
     }
 
-    public Task InvalidateAfterDeleteAsync(
+    public Task InvalidateAfterDeleteOnceAsync(
+        Guid domainEventId,
         DeviceCacheDescriptor device,
         CancellationToken cancellationToken = default)
     {
+        DomainEventIds.Add(domainEventId);
         DeletedDevices.Add(device);
         return Task.CompletedTask;
     }
@@ -883,15 +947,24 @@ internal sealed class RecordingDeviceCacheInvalidationService : IDeviceCacheInva
 
 internal sealed class RecordingRecipeCacheInvalidationService : IRecipeCacheInvalidationService
 {
+    public List<Guid> DomainEventIds { get; } = [];
+
     public List<RecipeCacheDescriptor> ChangedRecipes { get; } = [];
 
-    public Task InvalidateAfterChangeAsync(
+    public Task InvalidateAfterChangeOnceAsync(
+        Guid domainEventId,
         RecipeCacheDescriptor recipe,
         CancellationToken cancellationToken = default)
     {
+        DomainEventIds.Add(domainEventId);
         ChangedRecipes.Add(recipe);
         return Task.CompletedTask;
     }
+}
+
+internal sealed class StaticDomainEventDispatchContext(Guid messageId) : IDomainEventDispatchContext
+{
+    public Guid MessageId { get; } = messageId;
 }
 
 internal sealed class StubIdentityPasswordService : IIdentityPasswordService
@@ -1106,10 +1179,16 @@ internal sealed class StubCurrentUserDeviceAccessService : ICurrentUserDeviceAcc
 
     public Guid? LastCheckedDeviceId { get; private set; }
 
+    public CancellationToken LastGetAccessibleDeviceIdsCancellationToken { get; private set; }
+
+    public CancellationToken LastEnsureCanAccessDeviceCancellationToken { get; private set; }
+
     public Task<Result<IReadOnlyList<Guid>?>> GetAccessibleDeviceIdsAsync(
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         GetAccessibleDeviceIdsCalls++;
+        LastGetAccessibleDeviceIdsCancellationToken = cancellationToken;
         if (FailureMessage is not null)
         {
             return Task.FromResult<Result<IReadOnlyList<Guid>?>>(Result.Failure(FailureMessage));
@@ -1123,7 +1202,9 @@ internal sealed class StubCurrentUserDeviceAccessService : ICurrentUserDeviceAcc
         Guid deviceId,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         EnsureCanAccessDeviceCalls++;
+        LastEnsureCanAccessDeviceCancellationToken = cancellationToken;
         LastCheckedDeviceId = deviceId;
         if (FailureMessage is not null)
         {
@@ -1155,8 +1236,13 @@ internal sealed class StubRolePolicyService : IRolePolicyService
 
     public string? DeletedRoleName { get; private set; }
 
+    public int GetAllRolesCalls { get; private set; }
+
+    public int GetRolePermissionsCalls { get; private set; }
+
     public Task<IList<string>> GetAllRolesAsync()
     {
+        GetAllRolesCalls++;
         return Task.FromResult(Roles);
     }
 
@@ -1183,6 +1269,7 @@ internal sealed class StubRolePolicyService : IRolePolicyService
 
     public Task<List<string>?> GetRolePermissionsAsync(string roleName)
     {
+        GetRolePermissionsCalls++;
         return Task.FromResult<List<string>?>([]);
     }
 
@@ -1210,6 +1297,7 @@ internal sealed class RecordingEventPublisher(
 
     public Task PublishAsync(
         IIntegrationEvent @event,
+        Guid messageId,
         CancellationToken cancellationToken = default)
     {
         callOrder?.Add("publish");
@@ -1222,13 +1310,6 @@ internal sealed class RecordingEventPublisher(
         return Task.CompletedTask;
     }
 
-    public Task PublishAsync<TEvent>(
-        TEvent @event,
-        CancellationToken cancellationToken = default)
-        where TEvent : class, IIntegrationEvent
-    {
-        return PublishAsync((IIntegrationEvent)@event, cancellationToken);
-    }
 }
 
 internal sealed class RecordingIntegrationEventOutbox(

@@ -1,15 +1,109 @@
 [CmdletBinding()]
 param(
     [string]$ReportDirectory = 'artifacts/test-results/quality',
-    [string]$EdgeRepositoryRoot = $env:EDGECLIENT_REPOSITORY_ROOT
+    [string]$EdgeRepositoryRoot = $env:EDGECLIENT_REPOSITORY_ROOT,
+    [string]$BaseRef = $env:CLOUD_QUALITY_BASE_REF
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+. (Join-Path $PSScriptRoot 'CloudQualityBaselineProtection.ps1')
+$baseCommit = Resolve-CloudQualityBaseCommit -RepoRoot $repoRoot -BaseRef $BaseRef
 $baselinePath = Join-Path $PSScriptRoot 'baselines/cloud-compatibility.json'
 $baseline = Get-Content $baselinePath -Raw | ConvertFrom-Json -Depth 100
+if ([int]$baseline.schemaVersion -ne 3 -or [int]$baseline.externalConsumerEvidenceCount -le 0) {
+    throw 'Cloud compatibility baseline must use schemaVersion=3 and declare a positive externalConsumerEvidenceCount.'
+}
+$baseBaseline = Get-CloudQualityBaseJson `
+    -RepoRoot $repoRoot `
+    -BaseCommit $baseCommit `
+    -RelativePath 'scripts/tests/baselines/cloud-compatibility.json'
+if ([int]$baseBaseline.schemaVersion -lt 2 -or [int]$baseline.schemaVersion -lt [int]$baseBaseline.schemaVersion) {
+    throw "Cloud compatibility baseline schema cannot be downgraded: base=$($baseBaseline.schemaVersion) candidate=$($baseline.schemaVersion)."
+}
+Assert-CloudQualityAtMost ([int]$baseline.activeCompatibilityItems) ([int]$baseBaseline.activeCompatibilityItems) 'active compatibility item count'
+Assert-CloudQualityAtMost ([int]$baseline.unclassifiedCompatibilitySignals) ([int]$baseBaseline.unclassifiedCompatibilitySignals) 'unclassified compatibility signal count'
+
+function Get-InventoryEntryById($entries, [string]$id, [string]$label) {
+    $matches = @($entries | Where-Object { [string]$_.id -ceq $id })
+    if ($matches.Count -gt 1) {
+        throw "$label contains duplicate id '$id'."
+    }
+    if ($matches.Count -eq 1) {
+        return $matches[0]
+    }
+    return $null
+}
+
+function Assert-InventoryInvariant([string]$id, $baseEntry, $candidateEntry, [string[]]$properties) {
+    foreach ($propertyPath in $properties) {
+        $baseValue = $baseEntry
+        $candidateValue = $candidateEntry
+        foreach ($segment in $propertyPath.Split('.')) {
+            $baseValue = $baseValue.$segment
+            $candidateValue = $candidateValue.$segment
+        }
+        if ([string]$candidateValue -cne [string]$baseValue) {
+            throw "Compatibility inventory '$id' rewrites immutable field '$propertyPath': base='$baseValue' candidate='$candidateValue'."
+        }
+    }
+}
+
+$candidateRetainedIds = @($baseline.retainedCompatibility | ForEach-Object { [string]$_.id })
+$candidateRetiredIds = @($baseline.retired | ForEach-Object { [string]$_.id })
+foreach ($baseEntry in @($baseBaseline.retainedCompatibility)) {
+    $id = [string]$baseEntry.id
+    $candidateEntry = Get-InventoryEntryById $baseline.retainedCompatibility $id 'candidate retainedCompatibility'
+    if ($null -eq $candidateEntry) {
+        if ($id -notin $candidateRetiredIds) {
+            throw "Immutable-base compatibility item '$id' disappeared without a physical-retirement inventory record."
+        }
+        continue
+    }
+    Assert-InventoryInvariant $id $baseEntry $candidateEntry @(
+        'classification',
+        'disposition',
+        'producer.path',
+        'producer.pattern',
+        'candidateEvidence.path',
+        'candidateEvidence.pattern'
+    )
+}
+$newRetainedIds = @($candidateRetainedIds | Where-Object {
+    $id = $_
+    $null -eq (Get-InventoryEntryById $baseBaseline.retainedCompatibility $id 'immutable retainedCompatibility')
+})
+if ($newRetainedIds.Count -gt 0) {
+    throw "New retained compatibility items cannot be self-authorized by this baseline: $($newRetainedIds -join ', ')."
+}
+foreach ($baseRetired in @($baseBaseline.retired)) {
+    if ([string]$baseRetired.id -notin $candidateRetiredIds) {
+        throw "Retired compatibility item was resurrected or removed from inventory: $($baseRetired.id)"
+    }
+}
+$baseOrdinaryIds = @($baseBaseline.retainedOrdinaryAbstractions | ForEach-Object { [string]$_.id })
+$candidateOrdinaryIds = @($baseline.retainedOrdinaryAbstractions | ForEach-Object { [string]$_.id })
+$newOrdinaryIds = @($candidateOrdinaryIds | Where-Object { $_ -notin $baseOrdinaryIds })
+if ($newOrdinaryIds.Count -gt 0) {
+    throw "New ordinary-abstraction classifications cannot self-authorize compatibility candidates: $($newOrdinaryIds -join ', ')."
+}
+foreach ($baseEntry in @($baseBaseline.retainedOrdinaryAbstractions)) {
+    $candidateEntry = Get-InventoryEntryById $baseline.retainedOrdinaryAbstractions ([string]$baseEntry.id) 'candidate retainedOrdinaryAbstractions'
+    if ($null -eq $candidateEntry) {
+        throw "Immutable-base ordinary abstraction disappeared without an independent contract-retirement batch: $($baseEntry.id)"
+    }
+    Assert-InventoryInvariant ([string]$baseEntry.id) $baseEntry $candidateEntry @(
+        'classification',
+        'disposition',
+        'producer.path',
+        'producer.pattern'
+    )
+}
+if ($null -ne $baseBaseline.PSObject.Properties['externalConsumerEvidenceCount']) {
+    Assert-CloudQualityAtLeast ([int]$baseline.externalConsumerEvidenceCount) ([int]$baseBaseline.externalConsumerEvidenceCount) 'external compatibility consumer evidence count'
+}
 $reportRoot = if ([System.IO.Path]::IsPathRooted($ReportDirectory)) {
     $ReportDirectory
 } else {
@@ -188,38 +282,28 @@ function Get-TextSha256([string]$value) {
     return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
 }
 
-$edgeRoot = $null
 if ([string]::IsNullOrWhiteSpace($EdgeRepositoryRoot)) {
-    $edgeCandidates = @(
-        (Join-Path (Split-Path $repoRoot -Parent) 'IIoT.EdgeClient'),
-        (Join-Path (Split-Path (Split-Path $repoRoot -Parent) -Parent) 'IIoT.EdgeClient')
-    )
-    $EdgeRepositoryRoot = @($edgeCandidates | Where-Object {
-        Test-Path (Join-Path $_ 'IIoT.EdgeClient.slnx') -PathType Leaf
-    } | Select-Object -First 1)
+    throw 'EdgeRepositoryRoot is required. Compatibility evidence cannot be verified from a missing or inferred external worktree.'
 }
-if (-not [string]::IsNullOrWhiteSpace($EdgeRepositoryRoot)) {
-    $edgeRoot = (Resolve-Path $EdgeRepositoryRoot).Path
-    if (-not (Test-Path (Join-Path $edgeRoot 'IIoT.EdgeClient.slnx') -PathType Leaf)) {
-        throw "Edge evidence root does not contain IIoT.EdgeClient.slnx: $edgeRoot"
-    }
+$edgeRoot = (Resolve-Path $EdgeRepositoryRoot).Path
+if (-not (Test-Path (Join-Path $edgeRoot 'IIoT.EdgeClient.slnx') -PathType Leaf)) {
+    throw "Edge evidence root does not contain IIoT.EdgeClient.slnx: $edgeRoot"
 }
 
-$edgeHead = $null
-$edgeRepositoryClean = $null
-if ($null -ne $edgeRoot) {
-    $edgeHeadOutput = @(& git -C $edgeRoot rev-parse HEAD 2>&1)
-    if ($LASTEXITCODE -ne 0 -or ($edgeHeadOutput -join '').Trim() -notmatch '^[0-9a-f]{40}$') {
-        throw "Unable to resolve the Edge evidence HEAD: $($edgeHeadOutput -join ' ')"
-    }
-    $edgeHead = ($edgeHeadOutput -join '').Trim()
-
-    $edgeStatus = @(& git -C $edgeRoot status --porcelain --untracked-files=all 2>&1)
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to resolve the Edge evidence worktree state: $($edgeStatus -join ' ')"
-    }
-    $edgeRepositoryClean = $edgeStatus.Count -eq 0
+$edgeHeadOutput = @(& git -C $edgeRoot rev-parse HEAD 2>&1)
+if ($LASTEXITCODE -ne 0 -or ($edgeHeadOutput -join '').Trim() -notmatch '^[0-9a-f]{40}$') {
+    throw "Unable to resolve the Edge evidence HEAD: $($edgeHeadOutput -join ' ')"
 }
+$edgeHead = ($edgeHeadOutput -join '').Trim()
+
+$edgeStatus = @(& git -C $edgeRoot status --porcelain --untracked-files=all 2>&1)
+if ($LASTEXITCODE -ne 0) {
+    throw "Unable to resolve the Edge evidence worktree state: $($edgeStatus -join ' ')"
+}
+if ($edgeStatus.Count -ne 0) {
+    throw "Edge evidence worktree must be clean; external HEAD/source hashes cannot describe dirty sources: $($edgeStatus -join ', ')"
+}
+$edgeRepositoryClean = $true
 
 $scanRoots = @(
     'src/core',
@@ -343,7 +427,7 @@ foreach ($entry in $retainedEntries) {
             [string]$entry.externalEvidenceSourceStateSha256 -notmatch '^[0-9a-f]{64}$') {
             throw "External consumer evidence is incomplete: $($entry.id)"
         }
-        if ($null -ne $edgeRoot -and $edgeHead -ne [string]$entry.externalEvidenceHead) {
+        if ($edgeHead -ne [string]$entry.externalEvidenceHead) {
             throw "External consumer evidence HEAD changed: baseline=$($entry.externalEvidenceHead) actual=$edgeHead item=$($entry.id)"
         }
         $externalSourceState = [System.Collections.Generic.List[string]]::new()
@@ -359,28 +443,24 @@ foreach ($entry in $retainedEntries) {
                 [string]$externalConsumer.sourceSha256 -notmatch '^[0-9a-f]{64}$') {
                 throw "External consumer evidence has an invalid shape: $($entry.id)"
             }
-            if ($null -ne $edgeRoot) {
-                $externalPath = Join-Path $edgeRoot (([string]$externalConsumer.path) -replace '/', [System.IO.Path]::DirectorySeparatorChar)
-                if (-not (Test-Path $externalPath -PathType Leaf)) {
-                    throw "External consumer path does not exist: $externalPath"
-                }
-                $externalSource = Get-Content $externalPath -Raw
-                if ((Get-CodePatternCount $externalSource ([string]$externalConsumer.pattern)) -eq 0 -or
-                    (Get-CodePatternCount $externalSource ([string]$externalConsumer.mustNotContain)) -ne 0) {
-                    throw "External consumer contract evidence changed: $($externalConsumer.path)"
-                }
-                $externalHash = (Get-FileHash $externalPath -Algorithm SHA256).Hash.ToLowerInvariant()
-                if ($externalHash -ne [string]$externalConsumer.sourceSha256) {
-                    throw "External consumer source digest changed: $($externalConsumer.path)"
-                }
-                $externalSourceState.Add("$([string]$externalConsumer.path)`n$externalHash")
+            $externalPath = Join-Path $edgeRoot (([string]$externalConsumer.path) -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+            if (-not (Test-Path $externalPath -PathType Leaf)) {
+                throw "External consumer path does not exist: $externalPath"
             }
+            $externalSource = Get-Content $externalPath -Raw
+            if ((Get-CodePatternCount $externalSource ([string]$externalConsumer.pattern)) -ne 1 -or
+                (Get-CodePatternCount $externalSource ([string]$externalConsumer.mustNotContain)) -ne 0) {
+                throw "External consumer contract evidence changed: $($externalConsumer.path)"
+            }
+            $externalHash = (Get-FileHash $externalPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($externalHash -ne [string]$externalConsumer.sourceSha256) {
+                throw "External consumer source digest changed: $($externalConsumer.path)"
+            }
+            $externalSourceState.Add("$([string]$externalConsumer.path)`n$externalHash")
         }
-        if ($null -ne $edgeRoot) {
-            $actualSourceStateSha256 = Get-TextSha256 (@($externalSourceState | Sort-Object) -join "`n")
-            if ($actualSourceStateSha256 -ne [string]$entry.externalEvidenceSourceStateSha256) {
-                throw "External consumer candidate source-state digest changed: baseline=$($entry.externalEvidenceSourceStateSha256) actual=$actualSourceStateSha256 item=$($entry.id)"
-            }
+        $actualSourceStateSha256 = Get-TextSha256 (@($externalSourceState | Sort-Object) -join "`n")
+        if ($actualSourceStateSha256 -ne [string]$entry.externalEvidenceSourceStateSha256) {
+            throw "External consumer candidate source-state digest changed: baseline=$($entry.externalEvidenceSourceStateSha256) actual=$actualSourceStateSha256 item=$($entry.id)"
         }
     }
 }
@@ -400,8 +480,8 @@ $reportPath = Join-Path $reportRoot 'cloud-compatibility.json'
                     compatibilityId = [string]$_.id
                     repository = [string]$externalConsumer.repository
                     path = [string]$externalConsumer.path
-                    verified = $null -ne $edgeRoot
-                    evidenceHead = if ($null -eq $edgeRoot) { [string]$_.externalEvidenceHead } else { $edgeHead }
+                    verified = $true
+                    evidenceHead = $edgeHead
                     repositoryClean = $edgeRepositoryClean
                     sourceStateSha256 = [string]$_.externalEvidenceSourceStateSha256
                 }
@@ -423,5 +503,12 @@ $externalEvidenceCount = @($baseline.retainedCompatibility | ForEach-Object {
         @($_.externalConsumers)
     }
 }).Count
-$externalVerifiedCount = if ($null -eq $edgeRoot) { 0 } else { $externalEvidenceCount }
+if ($externalEvidenceCount -ne [int]$baseline.externalConsumerEvidenceCount) {
+    throw "External consumer evidence count changed: baseline=$($baseline.externalConsumerEvidenceCount) actual=$externalEvidenceCount"
+}
+$externalVerifiedCount = @((Get-Content $reportPath -Raw | ConvertFrom-Json -Depth 100).externalConsumerEvidence |
+    Where-Object { $_.verified -eq $true -and $_.repositoryClean -eq $true }).Count
+if ($externalVerifiedCount -ne $externalEvidenceCount) {
+    throw "External consumer verification did not reconcile: expected=$externalEvidenceCount verified=$externalVerifiedCount"
+}
 Write-Host "CLOUD_COMPATIBILITY_OK active=$($baseline.activeCompatibilityItems) unclassified=0 classifiedSignals=$classifiedSignalCount retired=$retiredCount retained=$($retainedEntries.Count) externalConsumers=$externalEvidenceCount externalVerified=$externalVerifiedCount output=$reportPath"

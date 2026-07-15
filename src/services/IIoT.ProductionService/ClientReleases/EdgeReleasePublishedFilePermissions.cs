@@ -20,9 +20,25 @@ internal static class EdgeReleasePublishedFilePermissions
     public static void EnsureGatewayReadable(
         string edgeRoot,
         IEnumerable<string> publishedDirectories,
-        IEnumerable<string> publishedFiles)
+        IEnumerable<string> publishedFiles) =>
+        EnsureGatewayReadable(
+            edgeRoot,
+            publishedDirectories,
+            publishedFiles,
+            OperatingSystem.IsWindows);
+
+    internal static void EnsureGatewayReadable(
+        string edgeRoot,
+        IEnumerable<string> publishedDirectories,
+        IEnumerable<string> publishedFiles,
+        Func<bool> isWindows)
     {
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+        // File.SetUnixFileMode is available on every non-Windows runtime supported by
+        // this service.  A single Windows probe keeps the production branch and its
+        // coverage evidence identical on Linux and macOS (short-circuiting separate
+        // IsLinux/IsMacOS probes used to make one branch platform-dependent).
+        ArgumentNullException.ThrowIfNull(isWindows);
+        if (isWindows())
         {
             return;
         }
@@ -245,7 +261,7 @@ internal static class EdgeReleasePublishedFilePermissions
         => Path.GetRelativePath(edgeRoot, path).Replace('\\', '/');
 
     private static bool RequiresUnixGatewayMode()
-        => OperatingSystem.IsLinux() || OperatingSystem.IsMacOS();
+        => !OperatingSystem.IsWindows();
 
 #pragma warning disable CA1416
     private static void SetDirectoryMode(string directory)

@@ -51,8 +51,7 @@ var state = new
     webUrl = webEndpoint.AbsoluteUri.TrimEnd('/'),
     gatewayUrl = gatewayEndpoint.AbsoluteUri.TrimEnd('/'),
     employeeNo = IIoTAppFixture.SeedAdminEmployeeNo,
-    password = IIoTAppFixture.SeedAdminPassword,
-    dependencyChain = new[] { "Browser", "Vite", "Gateway", "HttpApi", "AuthMiddleware", "PostgreSQL" }
+    password = IIoTAppFixture.SeedAdminPassword
 };
 var temporaryPath = statePath + ".tmp";
 await File.WriteAllTextAsync(temporaryPath, JsonSerializer.Serialize(state));

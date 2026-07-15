@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$ResultsDirectory = 'artifacts/test-results',
-    [string]$BaseRef,
+    [string]$BaseRef = $env:CLOUD_QUALITY_BASE_REF,
     [switch]$EstablishBaseline
 )
 
@@ -9,10 +9,33 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+. (Join-Path $PSScriptRoot 'CloudQualityBaselineProtection.ps1')
+$baseCommit = Resolve-CloudQualityBaseCommit -RepoRoot $repoRoot -BaseRef $BaseRef
 $baselinePath = Join-Path $PSScriptRoot 'baselines/cloud-coverage.json'
 $baseline = Get-Content $baselinePath -Raw | ConvertFrom-Json -Depth 100
-if ([int]$baseline.schemaVersion -ne 2) {
-    throw "Cloud coverage baseline schemaVersion must be 2, actual=$($baseline.schemaVersion)."
+if ([int]$baseline.schemaVersion -ne 3) {
+    throw "Cloud coverage baseline schemaVersion must be 3, actual=$($baseline.schemaVersion)."
+}
+$baseBaseline = Get-CloudQualityBaseJson `
+    -RepoRoot $repoRoot `
+    -BaseCommit $baseCommit `
+    -RelativePath 'scripts/tests/baselines/cloud-coverage.json'
+if ([int]$baseBaseline.schemaVersion -lt 2 -or [int]$baseline.schemaVersion -lt [int]$baseBaseline.schemaVersion) {
+    throw "Cloud coverage baseline schema cannot be downgraded: base=$($baseBaseline.schemaVersion) candidate=$($baseline.schemaVersion)."
+}
+if ([string]$baseline.collector -cne [string]$baseBaseline.collector -or
+    [string]$baseline.version -cne [string]$baseBaseline.version) {
+    throw "Cloud coverage collector pin changed outside an independent tool-upgrade batch: base=$($baseBaseline.collector)@$($baseBaseline.version) candidate=$($baseline.collector)@$($baseline.version)."
+}
+Assert-CloudQualityAtLeast ([int]$baseline.requiredRunnerCount) ([int]$baseBaseline.requiredRunnerCount) 'coverage required runner count'
+Assert-CloudQualityAtLeast ([double]$baseline.merged.lineRate) ([double]$baseBaseline.merged.lineRate) 'merged line-rate threshold'
+Assert-CloudQualityAtLeast ([double]$baseline.merged.branchRate) ([double]$baseBaseline.merged.branchRate) 'merged branch-rate threshold'
+Assert-CloudQualityAtLeast ([double]$baseline.newP0Code.minimumLineRate) ([double]$baseBaseline.newP0Code.minimumLineRate) 'new-P0 line-rate threshold'
+Assert-CloudQualityAtLeast ([double]$baseline.newP0Code.minimumBranchRate) ([double]$baseBaseline.newP0Code.minimumBranchRate) 'new-P0 branch-rate threshold'
+$candidateP0Roots = @($baseline.newP0Code.roots | ForEach-Object { [string]$_ })
+$removedP0Roots = @($baseBaseline.newP0Code.roots | Where-Object { [string]$_ -notin $candidateP0Roots })
+if ($removedP0Roots.Count -gt 0) {
+    throw "Cloud coverage baseline removes immutable-base P0 roots: $($removedP0Roots -join ', ')."
 }
 $resultsRoot = if ([System.IO.Path]::IsPathRooted($ResultsDirectory)) {
     $ResultsDirectory
@@ -24,6 +47,9 @@ if (-not (Test-Path $indexPath -PathType Leaf)) {
     throw "Missing coverage index: $indexPath"
 }
 $index = Get-Content $indexPath -Raw | ConvertFrom-Json -Depth 100
+if ([int]$index.schemaVersion -ne 2) {
+    throw "Cloud coverage index schemaVersion must be 2, actual=$($index.schemaVersion)."
+}
 
 $propsSource = Get-Content (Join-Path $repoRoot 'src/tests/Directory.Build.props') -Raw
 if (-not $propsSource.Contains("Include=`"$($baseline.collector)`"", [StringComparison]::Ordinal) -or
@@ -34,6 +60,7 @@ if (-not $propsSource.Contains("Include=`"$($baseline.collector)`"", [StringComp
 $testManifest = Get-Content (Join-Path $repoRoot 'src/tests/cloud-test-inventory.json') -Raw | ConvertFrom-Json -Depth 100
 $requiredAssemblies = @($testManifest.runners | Where-Object required | ForEach-Object { [string]$_.assembly } | Sort-Object)
 $reportAssemblies = @($index.reports | ForEach-Object { [string]$_.assembly } | Sort-Object)
+$evaluatedProductionAssemblies = @($index.productionAssemblies | ForEach-Object { [string]$_.assembly } | Sort-Object)
 if ($requiredAssemblies.Count -ne [int]$baseline.requiredRunnerCount -or
     [int]$index.expectedReports -ne [int]$baseline.requiredRunnerCount -or
     $reportAssemblies.Count -ne [int]$baseline.requiredRunnerCount -or
@@ -41,9 +68,10 @@ if ($requiredAssemblies.Count -ne [int]$baseline.requiredRunnerCount -or
     throw "Coverage aggregation must contain exactly the required $($baseline.requiredRunnerCount) runners."
 }
 
-function Get-CoverageMap([string]$reportPath) {
+function Get-CoverageReport([string]$reportPath) {
     [xml]$coverage = Get-Content $reportPath -Raw
     $map = @{}
+    $observedProductionAssemblies = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $packagesNode = $coverage.coverage.packages
     $packageNodes = if ($null -eq $packagesNode -or $null -eq $packagesNode.PSObject.Properties['package']) {
         @()
@@ -52,12 +80,14 @@ function Get-CoverageMap([string]$reportPath) {
     }
     foreach ($package in $packageNodes) {
         $packageName = [string]$package.name
-        if ($packageName -match '(?i)(Tests|TestKit|Analyzers)$') {
+        if ($packageName -notmatch '^IIoT\.' -or
+            $packageName -match '(?i)(Tests?|Testing|TestKit|Fakes?|Mocks?|Analyzers)$') {
             continue
         }
         if ($null -eq $package.classes -or $null -eq $package.classes.PSObject.Properties['class']) {
             continue
         }
+        $packageHasExecutableSource = $false
         foreach ($class in @($package.classes.class)) {
             $filename = ([string]$class.filename).Replace('\', '/')
             if ($filename -notmatch '^(core|hosts|infrastructure|services|shared)/' -or
@@ -68,6 +98,7 @@ function Get-CoverageMap([string]$reportPath) {
                 continue
             }
             foreach ($line in @($class.lines.line)) {
+                $packageHasExecutableSource = $true
                 $number = [int]$line.number
                 $key = "${filename}:$number"
                 $hits = [int]$line.hits
@@ -94,8 +125,39 @@ function Get-CoverageMap([string]$reportPath) {
                 }
             }
         }
+        if ($packageHasExecutableSource) {
+            $null = $observedProductionAssemblies.Add($packageName)
+        }
     }
-    return $map
+    return [pscustomobject]@{
+        Map = $map
+        ProductionAssemblies = @($observedProductionAssemblies | Sort-Object)
+    }
+}
+
+function Assert-ProductionAssemblyObservation($expectedAssemblies, $observedAssemblies) {
+    $expected = @($expectedAssemblies | Sort-Object -Unique)
+    $observed = @($observedAssemblies | Sort-Object -Unique)
+    $missing = @($expected | Where-Object { $_ -notin $observed })
+    $unexpected = @($observed | Where-Object { $_ -notin $expected })
+    if ($expected.Count -eq 0 -or
+        $expected.Count -ne @($expectedAssemblies).Count -or
+        $observed.Count -ne @($observedAssemblies).Count -or
+        $missing.Count -gt 0 -or
+        $unexpected.Count -gt 0) {
+        throw "Coverage production-assembly observation mismatch: expected=$($expected.Count) observed=$($observed.Count) missing=$($missing -join ',') unexpected=$($unexpected -join ',')."
+    }
+}
+
+$assemblyOmissionFixture = $null
+try {
+    Assert-ProductionAssemblyObservation @('IIoT.A', 'IIoT.B') @('IIoT.A')
+}
+catch {
+    $assemblyOmissionFixture = $_.Exception.Message
+}
+if ($assemblyOmissionFixture -notmatch 'missing=IIoT.B') {
+    throw "Coverage production-assembly omission fixture did not fail closed: $assemblyOmissionFixture"
 }
 
 function Get-Metrics($map) {
@@ -119,6 +181,112 @@ function Get-Metrics($map) {
         lineRate = if ($linesValid -eq 0) { 1.0 } else { [Math]::Round($linesCovered / $linesValid, 8) }
         branchRate = if ($branchesValid -eq 0) { 1.0 } else { [Math]::Round($branchesCovered / $branchesValid, 8) }
     }
+}
+
+function Get-PortablePdbUniverse($assemblyEntries) {
+    $universe = @{}
+    $assemblyEvidence = [System.Collections.Generic.List[object]]::new()
+    $canonicalAssemblies = [System.Collections.Generic.List[string]]::new()
+    foreach ($entry in @($assemblyEntries | Sort-Object assembly)) {
+        foreach ($property in @('project', 'assembly', 'targetFramework', 'assemblyPath', 'pdbPath')) {
+            if ($null -eq $entry.PSObject.Properties[$property] -or
+                [string]::IsNullOrWhiteSpace([string]$entry.$property)) {
+                throw "Production coverage assembly evidence is missing '$property'."
+            }
+        }
+        if ([string]$entry.project -notmatch '^src/(core|hosts|infrastructure|services|shared)/.+\.csproj$' -or
+            [string]$entry.assemblyPath -notmatch '^src/(core|hosts|infrastructure|services|shared)/.+\.dll$' -or
+            [string]$entry.pdbPath -notmatch '^src/(core|hosts|infrastructure|services|shared)/.+\.pdb$') {
+            throw "Production coverage assembly evidence escapes the authoritative source roots: $($entry.project)"
+        }
+        $assemblyPath = Join-Path $repoRoot (([string]$entry.assemblyPath) -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        $pdbPath = Join-Path $repoRoot (([string]$entry.pdbPath) -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        if (-not (Test-Path $assemblyPath -PathType Leaf) -or -not (Test-Path $pdbPath -PathType Leaf)) {
+            throw "Production assembly/PDB is missing: assembly=$assemblyPath pdb=$pdbPath"
+        }
+
+        $assemblyLines = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        $stream = [System.IO.File]::OpenRead($pdbPath)
+        try {
+            $provider = [System.Reflection.Metadata.MetadataReaderProvider]::FromPortablePdbStream($stream)
+            try {
+                $reader = $provider.GetMetadataReader()
+                foreach ($methodHandle in $reader.MethodDebugInformation) {
+                    $method = $reader.GetMethodDebugInformation($methodHandle)
+                    foreach ($sequencePoint in $method.GetSequencePoints()) {
+                        if ($sequencePoint.IsHidden) {
+                            continue
+                        }
+                        $documentHandle = if (-not $sequencePoint.Document.IsNil) {
+                            $sequencePoint.Document
+                        } else {
+                            $method.Document
+                        }
+                        if ($documentHandle.IsNil) {
+                            throw "Portable PDB contains a visible sequence point without a document: $pdbPath"
+                        }
+                        $document = $reader.GetDocument($documentHandle)
+                        $documentPath = $reader.GetString($document.Name).Replace('\', '/')
+                        $relativePath = if ([System.IO.Path]::IsPathRooted($documentPath)) {
+                            [System.IO.Path]::GetRelativePath($repoRoot, $documentPath).Replace('\', '/')
+                        } else {
+                            $documentPath.TrimStart([char[]]@('.', '/'))
+                        }
+                        if ($relativePath -notmatch '^src/(core|hosts|infrastructure|services|shared)/' -or
+                            $relativePath -match '(?i)/Migrations/' -or
+                            $relativePath -match '(?i)/(?:bin|obj)/') {
+                            continue
+                        }
+                        $coveragePath = $relativePath.Substring(4)
+                        $key = "${coveragePath}:$([int]$sequencePoint.StartLine)"
+                        $null = $assemblyLines.Add($key)
+                        if (-not $universe.ContainsKey($key)) {
+                            $universe[$key] = [ordered]@{
+                                filename = $coveragePath
+                                number = [int]$sequencePoint.StartLine
+                                hits = 0
+                                branchValid = 0
+                                branchCovered = 0
+                            }
+                        }
+                    }
+                }
+            }
+            finally {
+                $provider.Dispose()
+            }
+        }
+        finally {
+            $stream.Dispose()
+        }
+        if ($assemblyLines.Count -eq 0) {
+            throw "Production assembly has no authoritative in-scope portable-PDB sequence points: $($entry.assembly)"
+        }
+        $assemblyLineDigest = Get-TextSha256 (@($assemblyLines | Sort-Object) -join "`n")
+        $assemblyEvidence.Add([ordered]@{
+            project = [string]$entry.project
+            assembly = [string]$entry.assembly
+            targetFramework = [string]$entry.targetFramework
+            sequencePointLines = $assemblyLines.Count
+            sequencePointSha256 = $assemblyLineDigest
+        })
+        $canonicalAssemblies.Add("$([string]$entry.project)`n$([string]$entry.assembly)`n$([string]$entry.targetFramework)`n$assemblyLineDigest")
+    }
+    if ($assemblyEvidence.Count -eq 0) {
+        throw 'Coverage index contains no evaluated production assemblies.'
+    }
+    return [ordered]@{
+        map = $universe
+        assemblies = $assemblyEvidence
+        assemblyCount = $assemblyEvidence.Count
+        assemblySha256 = Get-TextSha256 (@($canonicalAssemblies | Sort-Object) -join "`n")
+    }
+}
+
+function Get-TextSha256([string]$value) {
+    return [Convert]::ToHexString(
+        [System.Security.Cryptography.SHA256]::HashData(
+            [System.Text.Encoding]::UTF8.GetBytes($value))).ToLowerInvariant()
 }
 
 function Get-SourceUniverse($map) {
@@ -172,14 +340,21 @@ function Test-SourceUniverseFingerprint {
 
 Test-SourceUniverseFingerprint
 
+$pdbUniverse = Get-PortablePdbUniverse @($index.productionAssemblies)
+
 $mergedMap = @{}
 $runnerMetrics = [System.Collections.Generic.List[object]]::new()
+$observedProductionAssemblies = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 foreach ($reportEntry in @($index.reports | Sort-Object assembly)) {
     $reportPath = Join-Path $resultsRoot (([string]$reportEntry.path) -replace '/', [System.IO.Path]::DirectorySeparatorChar)
     if (-not (Test-Path $reportPath -PathType Leaf)) {
         throw "Coverage report is missing for $($reportEntry.assembly): $reportPath"
     }
-    $runnerMap = Get-CoverageMap $reportPath
+    $coverageReport = Get-CoverageReport $reportPath
+    $runnerMap = $coverageReport.Map
+    foreach ($assembly in @($coverageReport.ProductionAssemblies)) {
+        $null = $observedProductionAssemblies.Add([string]$assembly)
+    }
     $metrics = Get-Metrics $runnerMap
     $runnerMetrics.Add([ordered]@{ assembly = [string]$reportEntry.assembly; metrics = $metrics })
     foreach ($key in $runnerMap.Keys) {
@@ -200,8 +375,21 @@ foreach ($reportEntry in @($index.reports | Sort-Object assembly)) {
         }
     }
 }
+Assert-ProductionAssemblyObservation `
+    $evaluatedProductionAssemblies `
+    @($observedProductionAssemblies)
+# Coverage metrics use the complete evaluated production/PDB universe.  A project
+# that no required runner loads remains visible with zero-hit sequence points; it
+# cannot disappear merely because Coverlet omitted its assembly from every report.
+foreach ($key in $pdbUniverse.map.Keys) {
+    if (-not $mergedMap.ContainsKey($key)) {
+        $mergedMap[$key] = $pdbUniverse.map[$key]
+    }
+}
 $mergedMetrics = Get-Metrics $mergedMap
 $sourceUniverse = Get-SourceUniverse $mergedMap
+
+Write-Host "CLOUD_COVERAGE_OBSERVED lines=$($mergedMetrics.linesCovered)/$($mergedMetrics.linesValid) branches=$($mergedMetrics.branchesCovered)/$($mergedMetrics.branchesValid) lineRate=$($mergedMetrics.lineRate) branchRate=$($mergedMetrics.branchRate) files=$($sourceUniverse.fileCount) sourceDigest=$($sourceUniverse.fileMetricsSha256) productionAssemblies=$($pdbUniverse.assemblyCount) assemblyDigest=$($pdbUniverse.assemblySha256) observedAssemblies=$($observedProductionAssemblies.Count)"
 
 if (-not $EstablishBaseline) {
     if ([double]$mergedMetrics.lineRate + 0.000000001 -lt [double]$baseline.merged.lineRate -or
@@ -214,10 +402,14 @@ if (-not $EstablishBaseline) {
         [string]$sourceUniverse.fileMetricsSha256 -cne [string]$baseline.sourceUniverse.fileMetricsSha256) {
         throw "Coverage source universe changed without an explicit baseline update: baseline files=$($baseline.sourceUniverse.fileCount) lines=$($baseline.sourceUniverse.linesValid) branches=$($baseline.sourceUniverse.branchesValid) digest=$($baseline.sourceUniverse.fileMetricsSha256); actual files=$($sourceUniverse.fileCount) lines=$($sourceUniverse.linesValid) branches=$($sourceUniverse.branchesValid) digest=$($sourceUniverse.fileMetricsSha256)."
     }
+    if ([int]$pdbUniverse.assemblyCount -ne [int]$baseline.productionAssemblies.assemblyCount -or
+        [string]$pdbUniverse.assemblySha256 -cne [string]$baseline.productionAssemblies.assemblySha256) {
+        throw "Evaluated production assembly/PDB universe changed without an explicit baseline update: baseline count=$($baseline.productionAssemblies.assemblyCount) digest=$($baseline.productionAssemblies.assemblySha256); actual count=$($pdbUniverse.assemblyCount) digest=$($pdbUniverse.assemblySha256)."
+    }
 }
 
 $newCodeMetrics = [ordered]@{
-    baseRef = $BaseRef
+    baseRef = $baseCommit
     comparison = $null
     changedFiles = 0
     filesPresentInCoverage = 0
@@ -231,12 +423,13 @@ $newCodeMetrics = [ordered]@{
     branchRate = $null
     status = 'BaseRefRequired'
 }
-if (-not [string]::IsNullOrWhiteSpace($BaseRef)) {
+if (-not [string]::IsNullOrWhiteSpace($baseCommit)) {
     # A clean CI checkout compares PR base to committed HEAD. A local dirty checkout compares
     # the same base to the complete tracked working tree so uncommitted P0 additions cannot leak.
-    $diffOutput = @(& git -C $repoRoot diff --unified=0 --no-color $BaseRef -- src/core src/services 2>&1)
+    $diffOutput = @(& git -C $repoRoot diff --unified=0 --no-color $baseCommit -- `
+        src/core src/hosts src/infrastructure src/services src/shared 2>&1)
     if ($LASTEXITCODE -ne 0) {
-        throw "Unable to calculate P0 new-code diff from '$BaseRef': $($diffOutput -join [Environment]::NewLine)"
+        throw "Unable to calculate P0 new-code diff from '$baseCommit': $($diffOutput -join [Environment]::NewLine)"
     }
     $addedKeys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $changedFiles = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -247,7 +440,7 @@ if (-not [string]::IsNullOrWhiteSpace($BaseRef)) {
             $currentFile = $null
             continue
         }
-        if ($text -match '^\+\+\+ b/(src/(core|services)/.+\.cs)$') {
+        if ($text -match '^\+\+\+ b/(src/(core|hosts|infrastructure|services|shared)/.+\.cs)$') {
             $currentFile = $Matches[1].Substring(4).Replace('\', '/')
             $null = $changedFiles.Add($Matches[1].Replace('\', '/'))
             continue
@@ -260,8 +453,9 @@ if (-not [string]::IsNullOrWhiteSpace($BaseRef)) {
             }
         }
     }
-    $untrackedFiles = @(& git -C $repoRoot ls-files --others --exclude-standard -- src/core src/services |
-        Where-Object { $_ -match '^src/(core|services)/.+\.cs$' })
+    $untrackedFiles = @(& git -C $repoRoot ls-files --others --exclude-standard -- `
+        src/core src/hosts src/infrastructure src/services src/shared |
+        Where-Object { $_ -match '^src/(core|hosts|infrastructure|services|shared)/.+\.cs$' })
     foreach ($untrackedFile in $untrackedFiles) {
         $relativeFile = ([string]$untrackedFile).Substring(4).Replace('\', '/')
         $null = $changedFiles.Add(([string]$untrackedFile).Replace('\', '/'))
@@ -281,12 +475,20 @@ if (-not [string]::IsNullOrWhiteSpace($BaseRef)) {
     $nonExecutableAllowlist = @{}
     foreach ($allowlistEntry in @($baseline.newP0Code.nonExecutableFileAllowlist)) {
         $allowlistPath = ([string]$allowlistEntry.path).Replace('\', '/')
-        if ($allowlistPath -notmatch '^src/(core|services)/.+\.cs$' -or
-            [string]$allowlistEntry.classification -ne 'non-executable-source' -or
+        $allowlistClassification = [string]$allowlistEntry.classification
+        if ($allowlistPath -notmatch '^src/(core|hosts|infrastructure|services|shared)/.+\.cs$' -or
+            $allowlistClassification -notin @('non-executable-source', 'generated-migration-source') -or
             [string]::IsNullOrWhiteSpace([string]$allowlistEntry.reason)) {
             throw "Invalid P0 non-executable source allowlist entry: $allowlistPath"
         }
-        $nonExecutableAllowlist[$allowlistPath] = [string]$allowlistEntry.reason
+        if ($allowlistClassification -eq 'generated-migration-source' -and
+            $allowlistPath -notmatch '^src/infrastructure/IIoT\.EntityFrameworkCore/Migrations/.+\.cs$') {
+            throw "Generated-migration coverage classification is outside the EF migration directory: $allowlistPath"
+        }
+        $nonExecutableAllowlist[$allowlistPath] = [ordered]@{
+            classification = $allowlistClassification
+            reason = [string]$allowlistEntry.reason
+        }
     }
     $missingCoverageFiles = [System.Collections.Generic.List[string]]::new()
     $allowlistedMissingFiles = [System.Collections.Generic.List[object]]::new()
@@ -296,8 +498,8 @@ if (-not [string]::IsNullOrWhiteSpace($BaseRef)) {
         } elseif ($nonExecutableAllowlist.ContainsKey($changedFile)) {
             $allowlistedMissingFiles.Add([ordered]@{
                 path = $changedFile
-                classification = 'non-executable-source'
-                reason = $nonExecutableAllowlist[$changedFile]
+                classification = [string]$nonExecutableAllowlist[$changedFile].classification
+                reason = [string]$nonExecutableAllowlist[$changedFile].reason
             })
         } else {
             $missingCoverageFiles.Add($changedFile)
@@ -323,12 +525,33 @@ if (-not [string]::IsNullOrWhiteSpace($BaseRef)) {
         }
         if ([double]$newCodeMetrics.lineRate -lt [double]$baseline.newP0Code.minimumLineRate -or
             [double]$newCodeMetrics.branchRate -lt [double]$baseline.newP0Code.minimumBranchRate) {
-            throw "P0 new-code coverage failed: line=$($newCodeMetrics.lineRate) branch=$($newCodeMetrics.branchRate)."
+            $uncoveredNewLines = @($newLines |
+                Where-Object { [int]$_.hits -le 0 } |
+                Sort-Object filename, number |
+                ForEach-Object { "$([string]$_.filename):$([int]$_.number)" })
+            $uncoveredNewBranches = @($newLines |
+                Where-Object { [int]$_.branchCovered -lt [int]$_.branchValid } |
+                Sort-Object filename, number |
+                ForEach-Object { "$([string]$_.filename):$([int]$_.number)=$([int]$_.branchCovered)/$([int]$_.branchValid)" })
+            throw "P0 new-code coverage failed: line=$($newCodeMetrics.lineRate) branch=$($newCodeMetrics.branchRate); uncoveredLines=$($uncoveredNewLines -join ','); uncoveredBranches=$($uncoveredNewBranches -join ',')."
         }
         $newCodeMetrics.status = 'Passed'
     }
-} elseif (-not $EstablishBaseline) {
-    throw 'BaseRef is required for the P0 new-code coverage gate.'
+}
+
+$unloadedInfrastructureFixture = @{
+    'infrastructure/IIoT.Fixture/NewWorker.cs:10' = [ordered]@{
+        filename = 'infrastructure/IIoT.Fixture/NewWorker.cs'
+        number = 10
+        hits = 0
+        branchValid = 2
+        branchCovered = 0
+    }
+}
+$unloadedInfrastructureMetrics = Get-Metrics $unloadedInfrastructureFixture
+if ([double]$unloadedInfrastructureMetrics.lineRate -ge [double]$baseline.newP0Code.minimumLineRate -or
+    [double]$unloadedInfrastructureMetrics.branchRate -ge [double]$baseline.newP0Code.minimumBranchRate) {
+    throw 'Unloaded infrastructure new-code fixture did not fail the production coverage thresholds.'
 }
 
 $summaryPath = Join-Path $resultsRoot 'coverage/cloud-coverage-summary.json'
@@ -340,6 +563,13 @@ $summaryPath = Join-Path $resultsRoot 'coverage/cloud-coverage-summary.json'
     reports = $reportAssemblies.Count
     merged = $mergedMetrics
     sourceUniverse = $sourceUniverse
+    productionAssemblies = [ordered]@{
+        assemblyCount = $pdbUniverse.assemblyCount
+        assemblySha256 = $pdbUniverse.assemblySha256
+        observedAssemblyCount = $observedProductionAssemblies.Count
+        observedAssemblies = @($observedProductionAssemblies | Sort-Object)
+        evidence = $pdbUniverse.assemblies
+    }
     runners = $runnerMetrics
     newP0Code = $newCodeMetrics
 } | ConvertTo-Json -Depth 20 | Set-Content $summaryPath -Encoding utf8

@@ -9,7 +9,7 @@ on:
         type: boolean
         default: false
       include_mutation:
-        description: "Run the pinned report-only mutation lane"
+        description: "Run the pinned immutable-base mutation ratchet lane"
         required: false
         type: boolean
         default: false
@@ -24,6 +24,7 @@ permissions:
 
 env:
   DOTNET_NOLOGO: true
+  CLOUD_QUALITY_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
 
 jobs:
   build-test:
@@ -79,13 +80,26 @@ jobs:
         shell: pwsh
         run: ./scripts/tests/Test-CloudTestMigration.ps1
 
+      - name: Checkout pinned public Edge compatibility evidence
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          repository: ShuJinHao/IIoT.EdgeClient
+          ref: caf5004420d02e714f66df6679dabb97edc255b8
+          fetch-depth: 1
+          persist-credentials: false
+          path: .external/IIoT.EdgeClient
+
       - name: Enforce compatibility retirement inventory
         shell: pwsh
-        run: ./scripts/tests/Test-CloudCompatibility.ps1
+        run: ./scripts/tests/Test-CloudCompatibility.ps1 -EdgeRepositoryRoot .external/IIoT.EdgeClient -BaseRef $env:CLOUD_QUALITY_BASE_REF
+
+      - name: Remove pinned external evidence checkout
+        if: always()
+        run: rm -rf .external
 
       - name: Enforce duplication ratchets
         shell: pwsh
-        run: ./scripts/tests/Test-CloudDuplication.ps1
+        run: ./scripts/tests/Test-CloudDuplication.ps1 -BaseRef $env:CLOUD_QUALITY_BASE_REF
 
       - name: Run and reconcile required test inventory
         shell: pwsh
@@ -94,9 +108,7 @@ jobs:
 
       - name: Enforce merged and changed P0 coverage
         shell: pwsh
-        env:
-          CLOUD_COVERAGE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
-        run: ./scripts/tests/Test-CloudCoverage.ps1 -BaseRef $env:CLOUD_COVERAGE_BASE_REF
+        run: ./scripts/tests/Test-CloudCoverage.ps1 -BaseRef $env:CLOUD_QUALITY_BASE_REF
 
       - name: Validate deploy script syntax
         run: |
@@ -166,16 +178,16 @@ jobs:
           })
           if ([int]$inventory.schemaVersion -ne 2 -or
               [int]$inventory.migrationBaselineCases -ne 591 -or
-              [int]$inventory.baselineCases -ne 673 -or
-              [int]$inventory.requiredCases -ne 609 -or
-              $requiredCases.Count -ne 609 -or
+              [int]$inventory.baselineCases -ne 710 -or
+              [int]$inventory.requiredCases -ne 646 -or
+              $requiredCases.Count -ne 646 -or
               $runnerEvidence.Count -ne 18 -or
               $selectedRunnerEvidence.Count -ne 16 -or
               $invalidSelectedEvidence.Count -ne 0 -or
-              [int](($selectedRunnerEvidence | Measure-Object expected -Sum).Sum) -ne 609 -or
+              [int](($selectedRunnerEvidence | Measure-Object expected -Sum).Sum) -ne 646 -or
               [int]$inventory.regressionZeroCount -ne 0 -or
               $regressionEvidence.Count -ne 18 -or
-              [int](($regressionEvidence | Measure-Object actualCases -Sum).Sum) -ne 673 -or
+              [int](($regressionEvidence | Measure-Object actualCases -Sum).Sum) -ne 710 -or
               @($regressionEvidence | Where-Object {
                 [string]::IsNullOrWhiteSpace([string]$_.regressionId) -or
                 [int]$_.minimumCases -le 0 -or
@@ -220,7 +232,7 @@ jobs:
             throw "Missing required architecture fixture result: $architectureFixturePath"
           }
           $architectureFixtureLines = @(Get-Content $architectureFixturePath)
-          $expectedArchitectureFixtureSummary = 'ARCHITECTURE_FIXTURES_OK valid=4 invalid=13 suppressionBypass=3 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010'
+          $expectedArchitectureFixtureSummary = 'ARCHITECTURE_FIXTURES_OK valid=6 invalid=15 suppressionBypass=3 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010'
           if (@($architectureFixtureLines | Where-Object { $_ -eq $expectedArchitectureFixtureSummary }).Count -ne 1) {
             throw "Architecture fixture reconciliation failed"
           }
@@ -241,11 +253,11 @@ jobs:
               [string]$migration.baseTestsTreeObject -ne '604fc2c1f2b9e4746657f314191a4514ccf75530' -or
               [string]$migration.baseDeclarationDigestSha256 -ne 'd75d5529e418be31819676abeb210a79550149e14896fbe1857c30a83149c77c' -or
               [int]$migration.baseDeclarationCount -ne 529 -or
-              [int]$migration.currentDeclarationCount -ne 605 -or
-              [int]$migration.currentDeltaCount -ne 136 -or
-              @($migration.currentDelta).Count -ne 136 -or
-              @($migration.currentDelta | Where-Object path -like '*IIoT.CloudPlatform.AnalyzerTests/*').Count -ne 52 -or
-              @($migration.currentDelta | Where-Object path -like '*RedisCacheServiceSemanticsTests.cs').Count -ne 37 -or
+              [int]$migration.currentDeclarationCount -ne 641 -or
+              [int]$migration.currentDeltaCount -ne 173 -or
+              @($migration.currentDelta).Count -ne 173 -or
+              @($migration.currentDelta | Where-Object path -like '*IIoT.CloudPlatform.AnalyzerTests/*').Count -ne 61 -or
+              @($migration.currentDelta | Where-Object path -like '*RedisCacheServiceSemanticsTests.cs').Count -ne 46 -or
               [int]$migration.negativeFixtureCount -ne 7 -or
               [int]$migration.unresolvedCount -ne 0 -or
               @($migration.entries).Count -ne 529 -or
@@ -364,13 +376,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Setup .NET
         uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           global-json-file: global.json
-      - name: Run pinned report-only mutation analysis
+      - name: Run pinned immutable-base mutation ratchet
         shell: pwsh
-        run: ./scripts/tests/Invoke-CloudMutation.ps1
+        run: ./scripts/tests/Invoke-CloudMutation.ps1 -BaseRef $env:CLOUD_QUALITY_BASE_REF
       - name: Upload mutation report
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

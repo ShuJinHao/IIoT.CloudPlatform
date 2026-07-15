@@ -76,6 +76,9 @@ public static class DependencyInjection
         builder.Services.AddScoped<IRefreshTokenService, EfRefreshTokenService>();
         builder.Services.AddScoped<IEdgeReleaseApiKeyService, EdgeReleaseApiKeyService>();
         builder.Services.AddScoped<IIntegrationEventOutbox, EfIntegrationEventOutbox>();
+        builder.Services.AddScoped<DomainEventDispatchContext>();
+        builder.Services.AddScoped<IDomainEventDispatchContext>(provider =>
+            provider.GetRequiredService<DomainEventDispatchContext>());
         builder.Services.AddScoped<IUploadReceiveRegistry, EfUploadReceiveRegistry>();
         builder.Services.AddScoped<IClientReleaseVersionObservationReader, EfClientReleaseVersionObservationReader>();
         builder.Services.AddScoped<IRolePolicyService, RolePolicyService>();
@@ -89,6 +92,8 @@ public static class DependencyInjection
         builder.Services.AddScoped<IDeviceDeletionDependencyQueryService, QueryServices.EfDeviceDeletionDependencyService>();
         builder.Services.AddScoped<IEdgeHostOverviewQueryService, QueryServices.EdgeHostOverviewQueryService>();
         builder.Services.AddScoped<IDeviceClientStateStore, EfDeviceClientStateStore>();
+        builder.Services.AddScoped<IDeviceClientStateQueryService>(provider =>
+            provider.GetRequiredService<IDeviceClientStateStore>());
         builder.Services.AddScoped<IEdgeHostPlcRuntimeStateStore, EfEdgeHostPlcRuntimeStateStore>();
 
         builder.Services.AddIdentityCore<ApplicationUser>(options =>

@@ -75,6 +75,10 @@ function Get-EvaluatedProject {
         '-getProperty:RunAnalyzers',
         '-getProperty:RunAnalyzersDuringBuild',
         '-getProperty:NoWarn',
+        '-getProperty:MSBuildAllProjects',
+        '-getProperty:TargetPath',
+        '-getProperty:TargetDir',
+        '-getProperty:DebugType',
         '-noAutoResponse'
     )
     $output = @(& dotnet @arguments 2>&1)
@@ -135,6 +139,7 @@ function Get-EvaluatedProject {
     )
     $evaluation = [pscustomobject]@{
         ProjectPath = $fullPath
+        Configuration = $ProjectConfiguration
         References = $references
         ProjectReferences = $projectReferences
         Packages = $packages
@@ -208,6 +213,115 @@ function Assert-ProductionPackageBoundary {
     if ($testPackages.Count -gt 0) {
         throw "$Label imports test-only packages through the evaluated graph: $($testPackages -join ',')"
     }
+}
+
+$dynamicBuildGraphXPath = '//*[local-name()="Target"]//*[local-name()="Compile" or local-name()="Reference" or local-name()="ProjectReference" or local-name()="PackageReference" or local-name()="Analyzer" or local-name()="MSBuild" or local-name()="Csc"]'
+$evaluatedImportCache = @{}
+
+function Get-EvaluatedImportPaths {
+    param([Parameter(Mandatory)]$Evaluation)
+
+    $cacheKey = "$($Evaluation.Configuration)|$($Evaluation.ProjectPath)"
+    if ($evaluatedImportCache.ContainsKey($cacheKey)) {
+        return @($evaluatedImportCache[$cacheKey])
+    }
+
+    $preprocessedPath = Join-Path (
+        [System.IO.Path]::GetTempPath()) "cloud-msbuild-preprocessed-$([Guid]::NewGuid().ToString('N')).xml"
+    try {
+        $arguments = @(
+            'msbuild', [string]$Evaluation.ProjectPath,
+            '-nologo',
+            "-property:Configuration=$($Evaluation.Configuration)",
+            "-preprocess:$preprocessedPath",
+            '-noAutoResponse'
+        )
+        $output = @(& dotnet @arguments 2>&1)
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $preprocessedPath -PathType Leaf)) {
+            throw "Evaluated MSBuild preprocess query failed for $($Evaluation.ProjectPath):`n$($output -join [Environment]::NewLine)"
+        }
+
+        $preprocessed = Get-Content $preprocessedPath -Raw
+        $segments = [regex]::Split($preprocessed, '(?m)^\s*={40,}\s*$')
+        $paths = @($segments | ForEach-Object {
+            $match = [regex]::Match($_, '(?m)^\s*(?<path>(?:[A-Za-z]:\\|/)[^\r\n<>]+?)\s*$')
+            if ($match.Success) {
+                [System.IO.Path]::GetFullPath($match.Groups['path'].Value)
+            }
+        } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+        if ($paths.Count -eq 0) {
+            throw "Evaluated MSBuild preprocess query returned no import provenance for $($Evaluation.ProjectPath)."
+        }
+        $evaluatedImportCache[$cacheKey] = $paths
+        return $paths
+    }
+    finally {
+        Remove-Item $preprocessedPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-EvaluatedRepositoryImportClosure {
+    param(
+        [Parameter(Mandatory)]$Evaluation,
+        [Parameter(Mandatory)][string]$BoundaryRoot
+    )
+
+    $normalizedBoundary = [System.IO.Path]::GetFullPath($BoundaryRoot).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar)
+    $boundaryPrefix = $normalizedBoundary + [System.IO.Path]::DirectorySeparatorChar
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    $candidates.Add([string]$Evaluation.ProjectPath)
+    foreach ($candidate in ([string]$Evaluation.Properties.MSBuildAllProjects).Split(
+                 [char]';',
+                 [StringSplitOptions]::RemoveEmptyEntries)) {
+        $candidates.Add($candidate.Trim())
+    }
+    foreach ($candidate in @(Get-EvaluatedImportPaths -Evaluation $Evaluation)) {
+        $candidates.Add($candidate)
+    }
+    foreach ($wellKnown in @('Directory.Build.props', 'Directory.Build.targets')) {
+        $candidate = Join-Path $normalizedBoundary $wellKnown
+        if (Test-Path $candidate -PathType Leaf) {
+            $candidates.Add($candidate)
+        }
+    }
+
+    return @($candidates |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        ForEach-Object { [System.IO.Path]::GetFullPath($_) } |
+        Where-Object {
+            ($_ -ceq $normalizedBoundary -or $_.StartsWith($boundaryPrefix, [StringComparison]::Ordinal)) -and
+            $_ -notmatch '[\\/](?:bin|obj)[\\/]' -and
+            (Test-Path $_ -PathType Leaf)
+        } |
+        Sort-Object -Unique)
+}
+
+function Assert-NoTargetTimeBuildGraphMutation {
+    param(
+        [Parameter(Mandatory)]$Evaluation,
+        [Parameter(Mandatory)][string]$BoundaryRoot,
+        [Parameter(Mandatory)][string]$Label
+    )
+
+    $imports = @(Get-EvaluatedRepositoryImportClosure -Evaluation $Evaluation -BoundaryRoot $BoundaryRoot)
+    if ($imports.Count -eq 0) {
+        throw "$Label has an empty evaluated repository import closure."
+    }
+    foreach ($import in $imports) {
+        try {
+            [xml]$document = Get-Content $import -Raw
+        }
+        catch {
+            throw "$Label evaluated import is not valid MSBuild XML: file=$import error=$($_.Exception.Message)"
+        }
+        $dynamicNodes = @($document.SelectNodes($dynamicBuildGraphXPath))
+        if ($dynamicNodes.Count -gt 0) {
+            throw "$Label evaluated import mutates the compile/dependency graph at target execution time: file=$import nodes=$($dynamicNodes.Count)"
+        }
+    }
+    return $imports
 }
 
 function Assert-CompatibleTestSupportClosure {
@@ -306,6 +420,14 @@ function Test-EvaluatedProjectGraphQuery {
 '@,
             [System.Text.UTF8Encoding]::new($false))
         [System.IO.File]::WriteAllText(
+            (Join-Path $fixtureRoot 'hidden.xml'),
+            '<Project><Target Name="Hidden"><ItemGroup><Compile Include="hidden.cs" /></ItemGroup></Target></Project>',
+            [System.Text.UTF8Encoding]::new($false))
+        $nestedPropsPath = Join-Path $fixtureRoot 'nested.props'
+        $nestedProps = Get-Content $nestedPropsPath -Raw
+        $nestedProps = $nestedProps.Replace('<Project>', '<Project><Import Project="hidden.xml" />')
+        [System.IO.File]::WriteAllText($nestedPropsPath, $nestedProps, [System.Text.UTF8Encoding]::new($false))
+        [System.IO.File]::WriteAllText(
             (Join-Path $fixtureRoot 'Runner.csproj'),
             "<Project Sdk=`"Microsoft.NET.Sdk`"><PropertyGroup><TargetFramework>net10.0</TargetFramework><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup></Project>`n",
             [System.Text.UTF8Encoding]::new($false))
@@ -343,6 +465,20 @@ function Test-EvaluatedProjectGraphQuery {
         }
         if ($compileFailure -notmatch 'compiles linked or cross-project source') {
             throw "Evaluated Compile Link fixture was not rejected: $compileFailure"
+        }
+        $importClosureFailure = $null
+        try {
+            Assert-NoTargetTimeBuildGraphMutation `
+                -Evaluation $active `
+                -BoundaryRoot $fixtureRoot `
+                -Label 'Fixture.HiddenImport' | Out-Null
+        }
+        catch {
+            $importClosureFailure = $_.Exception.Message
+        }
+        if ($importClosureFailure -notmatch 'hidden\.xml' -or
+            $importClosureFailure -notmatch 'target execution time') {
+            throw "Arbitrary-extension evaluated import fixture was not rejected: $importClosureFailure"
         }
         $multiTargetFailure = $null
         try {
@@ -672,6 +808,10 @@ foreach ($runner in $manifest.runners) {
         throw "Runner evaluated identity mismatch: manifest=$($runner.assembly) project=$($runner.project) evaluatedAssembly=$($projectEvaluation.Properties.AssemblyName) evaluatedName=$($projectEvaluation.Properties.MSBuildProjectName) isTest=$($projectEvaluation.Properties.IsTestProject)"
     }
     Assert-ProjectCompileOwnership -Evaluation $projectEvaluation -Label "Runner $($runner.assembly)"
+    Assert-NoTargetTimeBuildGraphMutation `
+        -Evaluation $projectEvaluation `
+        -BoundaryRoot $repoRoot `
+        -Label "Runner $($runner.assembly)" | Out-Null
 
     $metadata = @{
         CloudTestKind = [string]$runner.testKind
@@ -785,6 +925,11 @@ foreach ($support in $manifest.supportAllowlist) {
         throw "Support project has an invalid evaluated role/identity: project=$($support.project) assembly=$($supportEvaluation.Properties.AssemblyName) name=$($supportEvaluation.Properties.MSBuildProjectName) isTest=$($supportEvaluation.Properties.IsTestProject)"
     }
     Assert-ProjectCompileOwnership -Evaluation $supportEvaluation -Label "Support $($support.assembly)"
+    Assert-ProductionPackageBoundary -Evaluation $supportEvaluation -Label "Support $($support.assembly)"
+    Assert-NoTargetTimeBuildGraphMutation `
+        -Evaluation $supportEvaluation `
+        -BoundaryRoot $repoRoot `
+        -Label "Support $($support.assembly)" | Out-Null
     $supportRunnerReferences = @($supportEvaluation.References | Where-Object {
         [System.IO.Path]::GetRelativePath($repoRoot, $_).Replace('\', '/') -match '^src/tests/'
     })
@@ -798,6 +943,177 @@ foreach ($support in $manifest.supportAllowlist) {
     if ($supportCaseMatches.Count -gt 0) {
         throw "Support project contains test cases: $($support.project)"
     }
+    $supportDiscoveryOutput = @(& dotnet test $supportProject `
+        -c $Configuration `
+        --no-build `
+        --no-restore `
+        --disable-build-servers `
+        --nologo `
+        -noAutoResponse `
+        --list-tests 2>&1)
+    if ($LASTEXITCODE -ne 0 -or
+        @($supportDiscoveryOutput | Where-Object {
+            [string]$_ -match '^\s+(?:[A-Za-z_][A-Za-z0-9_`+]*\.)+[A-Za-z_][A-Za-z0-9_`+]*(?:\(.+\))?\s*$'
+        }).Count -ne 0) {
+        throw "Support project must execute real zero-case discovery: project=$($support.project) exit=$LASTEXITCODE output=$($supportDiscoveryOutput -join ' | ')"
+    }
+}
+
+function Test-JavaScriptSpawnProjectConsumer {
+    param(
+        [Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][string]$Command,
+        [Parameter(Mandatory)][string]$Argument,
+        [Parameter(Mandatory)][string]$ProjectPath
+    )
+
+    $astGate = Join-Path $PSScriptRoot 'Assert-JavaScriptSpawnProjectConsumer.mjs'
+    $typescriptModule = Join-Path $repoRoot 'src/ui/iiot-web/node_modules/typescript/lib/typescript.js'
+    if (-not (Test-Path $astGate -PathType Leaf) -or
+        -not (Test-Path $typescriptModule -PathType Leaf)) {
+        throw "JavaScript AST support-consumer gate is unavailable: gate=$astGate typescript=$typescriptModule"
+    }
+
+    $output = @($Source | & node $astGate $typescriptModule $Command $Argument $ProjectPath 2>&1)
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -eq 0) {
+        return $true
+    }
+    if ($exitCode -eq 1) {
+        return $false
+    }
+    throw "JavaScript AST support-consumer analysis failed: exit=$exitCode output=$($output -join ' | ')"
+}
+
+$externalSpawnDecoy = @'
+// spawn('dotnet', ['--project', resolve(repoRoot, 'src/testing/Decoy/Decoy.csproj')], {});
+const message = "spawn('dotnet', ['--project', resolve(repoRoot, 'src/testing/Decoy/Decoy.csproj')], {})";
+const template = `spawn('dotnet', ['--project', resolve(repoRoot, 'src/testing/Decoy/Decoy.csproj')], {})`;
+'@
+if (Test-JavaScriptSpawnProjectConsumer `
+        -Source $externalSpawnDecoy `
+        -Command 'dotnet' `
+        -Argument '--project' `
+        -ProjectPath 'src/testing/Decoy/Decoy.csproj') {
+    throw 'External support consumer fixture accepted a comment/string literal without a real spawn argument.'
+}
+
+$externalSpawnNegativeFixtures = @(
+    @'
+import { spawn } from 'node:child_process';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+{
+  const spawn = () => undefined;
+  spawn('dotnet', ['--project', resolve(repoRoot, 'src/testing/Decoy/Decoy.csproj')], {});
+}
+'@,
+    @'
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+spawn('dotnet', ['--project', resolve(repoRoot, 'src/testing/Decoy/Decoy.csproj')], {});
+'@,
+    @'
+import { spawn } from 'node:child_process';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+if (false) {
+  spawn('dotnet', ['--project', resolve(repoRoot, 'src/testing/Decoy/Decoy.csproj')], {});
+}
+'@,
+    @'
+import { spawn } from 'node:child_process';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+function neverCalled() {
+  spawn('dotnet', ['--project', resolve(repoRoot, 'src/testing/Decoy/Decoy.csproj')], {});
+}
+'@,
+    @'
+import { spawn } from 'node:child_process';
+import { dirname, resolve as pathResolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const repoRoot = pathResolve(dirname(fileURLToPath(import.meta.url)), '..');
+{
+  const resolve = (...parts) => parts.join('/');
+  spawn('dotnet', ['--project', resolve(repoRoot, 'src/testing/Decoy/Decoy.csproj')], {});
+}
+'@,
+    @'
+import { spawn } from 'node:child_process';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const repoRoot = '/tmp/not-the-repository';
+spawn('dotnet', ['--project', resolve(repoRoot, 'src/testing/Decoy/Decoy.csproj')], {});
+'@,
+    @'
+import { spawn } from 'node:child_process';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const repoRoot = resolve('/tmp', '..');
+spawn('dotnet', ['--project', resolve(repoRoot, 'src/testing/Decoy/Decoy.csproj')], {});
+'@,
+    @'
+import { spawn } from 'node:child_process';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+function noop(callback) { return callback; }
+noop(() => spawn('dotnet', ['--project', resolve(repoRoot, 'src/testing/Decoy/Decoy.csproj')], {}));
+'@,
+    @'
+import { spawn } from 'node:child_process';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+function returnsBeforeSpawn() {
+  return;
+  spawn('dotnet', ['--project', resolve(repoRoot, 'src/testing/Decoy/Decoy.csproj')], {});
+}
+returnsBeforeSpawn();
+'@,
+    @'
+import { spawn } from 'node:child_process';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+function throwsBeforeSpawn() {
+  throw new Error('stop');
+  spawn('dotnet', ['--project', resolve(repoRoot, 'src/testing/Decoy/Decoy.csproj')], {});
+}
+throwsBeforeSpawn();
+'@
+)
+foreach ($fixtureSource in $externalSpawnNegativeFixtures) {
+    if (Test-JavaScriptSpawnProjectConsumer `
+            -Source $fixtureSource `
+            -Command 'dotnet' `
+            -Argument '--project' `
+            -ProjectPath 'src/testing/Decoy/Decoy.csproj') {
+    throw 'JavaScript AST support-consumer gate accepted an unbound symbol, invalid root, callback decoy, or unreachable spawn fixture.'
+    }
+}
+
+$externalSpawnPositiveFixture = @'
+import { spawn } from 'node:child_process';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+new Promise((ready) => {
+  spawn('dotnet', ['--project', resolve(repoRoot, 'src/testing/Decoy/Decoy.csproj')], {});
+  ready();
+});
+'@
+if (-not (Test-JavaScriptSpawnProjectConsumer `
+        -Source $externalSpawnPositiveFixture `
+        -Command 'dotnet' `
+        -Argument '--project' `
+        -ProjectPath 'src/testing/Decoy/Decoy.csproj')) {
+    throw 'JavaScript AST support-consumer gate rejected a symbol-bound reachable Promise executor.'
 }
 
 foreach ($support in $manifest.supportAllowlist) {
@@ -813,9 +1129,14 @@ foreach ($support in $manifest.supportAllowlist) {
     }
     foreach ($externalConsumer in $externalConsumers) {
         $consumerFile = [string]$externalConsumer.file
-        $consumerLiteral = [string]$externalConsumer.literal
+        $consumerCommand = [string]$externalConsumer.command
+        $consumerArgument = [string]$externalConsumer.argument
+        $consumerProjectPath = [string]$externalConsumer.projectPath
         if ($consumerFile -notmatch '^src/' -or
-            [string]::IsNullOrWhiteSpace($consumerLiteral)) {
+            [string]::IsNullOrWhiteSpace($consumerCommand) -or
+            [string]::IsNullOrWhiteSpace($consumerArgument) -or
+            [string]::IsNullOrWhiteSpace($consumerProjectPath) -or
+            $consumerProjectPath -cne [string]$support.project) {
             throw "Support external consumer evidence is invalid: project=$($support.project) file=$consumerFile"
         }
         $consumerPath = Resolve-RepoPath $consumerFile
@@ -823,9 +1144,12 @@ foreach ($support in $manifest.supportAllowlist) {
             throw "Support external consumer file is missing: project=$($support.project) file=$consumerFile"
         }
         $consumerSource = Get-Content $consumerPath -Raw
-        $literalMatches = [regex]::Matches($consumerSource, [regex]::Escape($consumerLiteral))
-        if ($literalMatches.Count -ne 1) {
-            throw "Support external consumer literal must appear exactly once: project=$($support.project) file=$consumerFile literal=$consumerLiteral count=$($literalMatches.Count)"
+        if (-not (Test-JavaScriptSpawnProjectConsumer `
+                -Source $consumerSource `
+                -Command $consumerCommand `
+                -Argument $consumerArgument `
+                -ProjectPath $consumerProjectPath)) {
+            throw "Support external consumer is not a real spawn command/project argument: project=$($support.project) file=$consumerFile"
         }
     }
     if ($consumers.Count -eq 0 -and $externalConsumers.Count -eq 0) {
@@ -852,7 +1176,10 @@ if ($activeText -match '<Compile[^>]+Link\s*=') {
     throw 'Linked Compile source is forbidden in the Cloud test architecture.'
 }
 $msbuildAnalyzerDisablePattern = '(?is)<RunAnalyzers(?:DuringBuild)?\s*>\s*false\s*</RunAnalyzers(?:DuringBuild)?>|<NoWarn\s*>[^<]*CLOUDARCH\d{3}[^<]*</NoWarn>'
-$sourceAnalyzerSuppressionPattern = '(?im)^\s*#pragma\s+warning\s+disable[^\r\n]*CLOUDARCH\d{3}|(?:Unconditional)?SuppressMessage\s*\([^\)]*CLOUDARCH\d{3}'
+# SuppressMessage attributes are rejected by type identity rather than by a literal
+# diagnostic-id argument. This fails closed for qualified names, Attribute suffixes,
+# aliases and const-composed CLOUDARCH ids.
+$sourceAnalyzerSuppressionPattern = '(?im)^\s*#pragma\s+warning\s+disable[^\r\n]*CLOUDARCH\d{3}|\b(?:Unconditional)?SuppressMessage(?:Attribute)?\b'
 $configAnalyzerSuppressionPattern = '(?im)^\s*dotnet_diagnostic\.CLOUDARCH\d{3}\.severity\s*='
 $workflowAnalyzerDisablePattern = '(?im)RunAnalyzers(?:DuringBuild)?\s*(?:=|:)\s*false\b'
 foreach ($fixture in @(
@@ -860,6 +1187,8 @@ foreach ($fixture in @(
     [pscustomobject]@{ text = '<NoWarn>$(NoWarn);CLOUDARCH009</NoWarn>'; pattern = $msbuildAnalyzerDisablePattern; label = 'MSBuild NoWarn' },
     [pscustomobject]@{ text = '#pragma warning disable CLOUDARCH009'; pattern = $sourceAnalyzerSuppressionPattern; label = 'source pragma' },
     [pscustomobject]@{ text = '[SuppressMessage("Architecture", "CLOUDARCH009")]'; pattern = $sourceAnalyzerSuppressionPattern; label = 'source suppression attribute' },
+    [pscustomobject]@{ text = '[global::System.Diagnostics.CodeAnalysis.SuppressMessageAttribute("Architecture", "CLOUDARCH009")]'; pattern = $sourceAnalyzerSuppressionPattern; label = 'fully-qualified suppression attribute' },
+    [pscustomobject]@{ text = 'using Silence = global::System.Diagnostics.CodeAnalysis.SuppressMessageAttribute; const string ArchitectureId = "CLOUDARCH009"; [assembly: Silence("Architecture", ArchitectureId)]'; pattern = $sourceAnalyzerSuppressionPattern; label = 'aliased suppression attribute with const diagnostic id' },
     [pscustomobject]@{ text = 'dotnet_diagnostic.CLOUDARCH009.severity = none'; pattern = $configAnalyzerSuppressionPattern; label = 'AnalyzerConfig severity' },
     [pscustomobject]@{ text = '-property:RunAnalyzers=false'; pattern = $workflowAnalyzerDisablePattern; label = 'workflow property' }
 )) {
@@ -874,7 +1203,6 @@ foreach ($file in $msbuildSuppressionFiles) {
         throw "MSBuild file suppresses required Cloud architecture diagnostics or analyzer execution: $($file.FullName)"
     }
 }
-$dynamicBuildGraphXPath = '//*[local-name()="Target"]//*[local-name()="Compile" or local-name()="ProjectReference" or local-name()="PackageReference" or local-name()="Analyzer" or local-name()="MSBuild" or local-name()="Csc"]'
 [xml]$dynamicBuildGraphFixture = '<Project><Target Name="Hidden"><ItemGroup><Compile Include="../hidden.cs" /></ItemGroup></Target></Project>'
 if (@($dynamicBuildGraphFixture.SelectNodes($dynamicBuildGraphXPath)).Count -ne 1) {
     throw 'Dynamic MSBuild graph mutation fixture was not rejected.'
@@ -965,6 +1293,7 @@ foreach ($allow in $manifest.boundedPollingAllowlist) {
 
 $productionProjects = @(Get-ChildItem (Join-Path $repoRoot 'src') -Filter '*.csproj' -Recurse |
     Where-Object { $_.FullName -notmatch '[\\/]src[\\/](tests|testing)[\\/]' })
+$productionCoverageAssemblies = [System.Collections.Generic.List[object]]::new()
 foreach ($project in $productionProjects) {
     $productionEvaluation = Get-EvaluatedProject -ProjectPath $project.FullName
     $expectedProjectName = [System.IO.Path]::GetFileNameWithoutExtension($project.FullName)
@@ -975,6 +1304,10 @@ foreach ($project in $productionProjects) {
         throw "Production project has a test-like or mismatched evaluated identity: project=$($project.FullName) assembly=$($productionEvaluation.Properties.AssemblyName) name=$($productionEvaluation.Properties.MSBuildProjectName) isTest=$($productionEvaluation.Properties.IsTestProject)"
     }
     Assert-ProjectCompileOwnership -Evaluation $productionEvaluation -Label "Production $expectedProjectName"
+    Assert-NoTargetTimeBuildGraphMutation `
+        -Evaluation $productionEvaluation `
+        -BoundaryRoot $repoRoot `
+        -Label "Production $expectedProjectName" | Out-Null
     Assert-ProductionPackageBoundary `
         -Evaluation $productionEvaluation `
         -Label "Production $expectedProjectName"
@@ -991,6 +1324,46 @@ foreach ($project in $productionProjects) {
     if ($testReferences.Count -gt 0) {
         throw "Production project references tests/TestKit through the evaluated graph: project=$($project.FullName) refs=$($testReferences -join ',')"
     }
+
+    $relativeProject = [System.IO.Path]::GetRelativePath($repoRoot, $project.FullName).Replace('\', '/')
+    if ($relativeProject -match '^src/(core|hosts|infrastructure|services|shared)/') {
+        $targetPath = [System.IO.Path]::GetFullPath([string]$productionEvaluation.Properties.TargetPath)
+        $pdbPath = [System.IO.Path]::ChangeExtension($targetPath, '.pdb')
+        if (-not (Test-Path $targetPath -PathType Leaf) -or -not (Test-Path $pdbPath -PathType Leaf) -or
+            [string]$productionEvaluation.Properties.DebugType -cne 'portable') {
+            throw "Production coverage requires a built assembly and portable PDB: project=$relativeProject target=$targetPath pdb=$pdbPath debugType=$($productionEvaluation.Properties.DebugType)"
+        }
+        $productionCoverageAssemblies.Add([ordered]@{
+            project = $relativeProject
+            assembly = [string]$productionEvaluation.Properties.AssemblyName
+            targetFramework = [string]$productionEvaluation.Properties.TargetFramework
+            assemblyPath = [System.IO.Path]::GetRelativePath($repoRoot, $targetPath).Replace('\', '/')
+            pdbPath = [System.IO.Path]::GetRelativePath($repoRoot, $pdbPath).Replace('\', '/')
+        })
+    }
+}
+
+function Assert-ProductionCoverageAssemblyReconciliation($expectedProjects, $assemblyEvidence) {
+    $expected = @($expectedProjects | Sort-Object -Unique)
+    $actual = @($assemblyEvidence | ForEach-Object { [string]$_.project } | Sort-Object -Unique)
+    if ($expected.Count -ne $actual.Count -or ($expected -join "`n") -cne ($actual -join "`n")) {
+        throw "Production coverage assembly evidence omitted an evaluated project: expected=$($expected -join ',') actual=$($actual -join ',')"
+    }
+}
+$coverageProjectPaths = @($productionProjects |
+    ForEach-Object { [System.IO.Path]::GetRelativePath($repoRoot, $_.FullName).Replace('\', '/') } |
+    Where-Object { $_ -match '^src/(core|hosts|infrastructure|services|shared)/' })
+Assert-ProductionCoverageAssemblyReconciliation $coverageProjectPaths $productionCoverageAssemblies
+$coverageOmissionFixture = $null
+try {
+    Assert-ProductionCoverageAssemblyReconciliation @('src/core/A/A.csproj', 'src/hosts/B/B.csproj') @(
+        [pscustomobject]@{ project = 'src/core/A/A.csproj' })
+}
+catch {
+    $coverageOmissionFixture = $_.Exception.Message
+}
+if ($coverageOmissionFixture -notmatch 'omitted an evaluated project') {
+    throw "Unloaded production-project coverage fixture did not fail closed: $coverageOmissionFixture"
 }
 
 $expectedTotal = [int](($manifest.runners | Measure-Object -Property expected -Sum).Sum)
@@ -1346,10 +1719,11 @@ if ($CollectCoverage) {
     $coverageIndexPath = Join-Path $resultsRoot 'coverage/cloud-coverage-index.json'
     New-Item -ItemType Directory -Path (Split-Path $coverageIndexPath -Parent) -Force | Out-Null
     [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
         mode = $Mode
         expectedReports = $selectedRunners.Count
         reports = $coverageReports
+        productionAssemblies = @($productionCoverageAssemblies | Sort-Object assembly)
     } | ConvertTo-Json -Depth 10 | Set-Content $coverageIndexPath -Encoding utf8
     Write-Host "CLOUD_COVERAGE_COLLECTION_OK runners=$($selectedRunners.Count) reports=$($coverageReports.Count) output=$coverageIndexPath"
 }

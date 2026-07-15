@@ -27,19 +27,25 @@ public class GetAllProcessesHandler(
         GetAllProcessesQuery request,
         CancellationToken cancellationToken)
     {
-        var cached = await cacheService.GetAsync<List<ProcessSelectDto>>(
-            CacheKeys.ProcessesAll(), cancellationToken);
-        if (cached != null) return Result.Success(cached);
-
-        var list = await processRepository.GetListAsync(new MfgProcessAllSpec(), cancellationToken);
-        var dtos = list.Select(p => new ProcessSelectDto(p.Id, p.ProcessCode, p.ProcessName)).ToList();
-
-        await cacheService.SetAsync(
+        var dtos = await cacheService.GetOrSetAsync<List<ProcessSelectDto>>(
             CacheKeys.ProcessesAll(),
-            dtos,
+            async factoryCancellationToken =>
+            {
+                var list = await processRepository.GetListAsync(
+                    new MfgProcessAllSpec(),
+                    factoryCancellationToken);
+                return list
+                    .Select(process => new ProcessSelectDto(
+                        process.Id,
+                        process.ProcessCode,
+                        process.ProcessName))
+                    .ToList();
+            },
+            static value => value is not null,
             TimeSpan.FromHours(4),
             cancellationToken);
 
-        return Result.Success(dtos);
+        return Result.Success(dtos
+            ?? throw new InvalidOperationException("Process cache factory returned null."));
     }
 }

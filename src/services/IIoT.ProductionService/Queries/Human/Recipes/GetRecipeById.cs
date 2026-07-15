@@ -41,28 +41,32 @@ public class GetRecipeByIdHandler(
     {
         var cacheKey = CacheKeys.Recipe(request.RecipeId);
 
-        // Cache-Aside:先查缓存,未命中再走 Spec 查库并回填
-        var dto = await cacheService.GetAsync<RecipeDetailDto>(cacheKey, cancellationToken);
+        var dto = await cacheService.GetOrSetAsync<RecipeDetailDto>(
+            cacheKey,
+            async factoryCancellationToken =>
+            {
+                var spec = new RecipeByIdSpec(request.RecipeId);
+                var recipe = await recipeRepository.GetSingleOrDefaultAsync(
+                    spec,
+                    factoryCancellationToken);
+                if (recipe is null)
+                    return null;
 
-        if (dto == null)
-        {
-            var spec = new RecipeByIdSpec(request.RecipeId);
-            var recipe = await recipeRepository.GetSingleOrDefaultAsync(spec, cancellationToken);
+                return new RecipeDetailDto(
+                    recipe.Id,
+                    recipe.RecipeName,
+                    recipe.Version,
+                    recipe.ProcessId,
+                    recipe.DeviceId,
+                    recipe.ParametersJsonb,
+                    recipe.Status.ToString());
+            },
+            static value => value is not null,
+            TimeSpan.FromHours(2),
+            cancellationToken);
 
-            if (recipe == null) return Result.Failure("获取失败:未找到该配方档案或已被停用");
-
-            dto = new RecipeDetailDto(
-                recipe.Id,
-                recipe.RecipeName,
-                recipe.Version,
-                recipe.ProcessId,
-                recipe.DeviceId,
-                recipe.ParametersJsonb,
-                recipe.Status.ToString()
-            );
-
-            await cacheService.SetAsync(cacheKey, dto, TimeSpan.FromHours(2), cancellationToken);
-        }
+        if (dto is null)
+            return Result.Failure("获取失败:未找到该配方档案或已被停用");
 
         var deviceAccess = await currentUserDeviceAccessService.EnsureCanAccessDeviceAsync(
             dto.DeviceId,

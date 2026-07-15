@@ -380,12 +380,20 @@ public sealed class PostgresPersistenceIntegrationCollection
 
 public sealed class ClientReleaseCommitRecoveryPostgresFixture : IAsyncLifetime
 {
-    private readonly IIoTAppFixture fixture = new();
+    private readonly IIoTAppFixture fixture = new(disableDataWorkerOutboxDispatcher: true);
 
     public Task InitializeAsync() => fixture.StartAsync();
 
     public Task DisposeAsync() => fixture.DisposeAsync().AsTask();
 
+    public bool DataWorkerOutboxDispatcherDisabled => fixture.DataWorkerOutboxDispatcherDisabled;
+
     public Task<string> GetConnectionStringAsync()
         => fixture.GetConnectionStringAsync(ConnectionResourceNames.IiotDatabase);
+
+    public Task<string> GetConnectionStringAsync(string resourceName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(resourceName);
+        return fixture.GetConnectionStringAsync(resourceName);
+    }
 }

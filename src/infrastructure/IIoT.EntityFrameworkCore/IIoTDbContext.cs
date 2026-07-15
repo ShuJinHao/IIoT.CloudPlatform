@@ -12,6 +12,7 @@ using IIoT.SharedKernel.Domain;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
+using MassTransit;
 using OpenIddict.EntityFrameworkCore.Models;
 
 namespace IIoT.EntityFrameworkCore;
@@ -71,5 +72,8 @@ public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)
     {
         base.OnModelCreating(modelBuilder);
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(IIoTDbContext).Assembly);
+        modelBuilder.AddInboxStateEntity(entity => entity.ToTable("integration_event_inbox_states"));
+        modelBuilder.AddOutboxStateEntity(entity => entity.ToTable("consumer_outbox_states"));
+        modelBuilder.AddOutboxMessageEntity(entity => entity.ToTable("consumer_outbox_messages"));
     }
 }

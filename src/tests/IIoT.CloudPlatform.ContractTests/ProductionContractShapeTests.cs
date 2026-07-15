@@ -51,15 +51,12 @@ public sealed class ProductionContractShapeTests
 
         Assert.True(typeof(IIntegrationEvent).IsAssignableFrom(typeof(IPassStationEvent)));
 
-        var publishMethod = typeof(IEventPublisher)
-            .GetMethods()
-            .Single(method =>
-                string.Equals(method.Name, nameof(IEventPublisher.PublishAsync), StringComparison.Ordinal)
-                && method.IsGenericMethodDefinition);
-        var genericParameter = Assert.Single(publishMethod.GetGenericArguments());
-        Assert.Contains(
-            typeof(IIntegrationEvent),
-            genericParameter.GetGenericParameterConstraints());
+        var publishMethod = Assert.Single(typeof(IEventPublisher).GetMethods());
+        Assert.Equal(nameof(IEventPublisher.PublishAsync), publishMethod.Name);
+        Assert.False(publishMethod.IsGenericMethodDefinition);
+        var publishParameters = publishMethod.GetParameters();
+        Assert.Equal(typeof(IIntegrationEvent), publishParameters[0].ParameterType);
+        Assert.Equal(typeof(Guid), publishParameters[1].ParameterType);
 
         IIntegrationEvent[] events =
         [

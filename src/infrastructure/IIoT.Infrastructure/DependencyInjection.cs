@@ -2,6 +2,7 @@ using IIoT.Infrastructure.Authentication;
 using IIoT.Infrastructure.Caching;
 using IIoT.Infrastructure.Locking;
 using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Caching;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -60,12 +61,30 @@ public static class DependencyInjection
             .ValidateOnStart();
         builder.Services.Configure<CacheSafetyOptions>(
             builder.Configuration.GetSection(CacheSafetyOptions.SectionName));
+        builder.Services.AddOptions<DomainEventCacheInvalidationOptions>()
+            .Bind(builder.Configuration.GetSection(DomainEventCacheInvalidationOptions.SectionName))
+            .Validate(
+                static options =>
+                {
+                    try
+                    {
+                        options.Validate();
+                        return true;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        return false;
+                    }
+                },
+                "Domain-event cache invalidation idempotency configuration is invalid.");
         builder.Services.PostConfigure<JwtSettings>(options =>
         {
             options.Secret = JwtSecretResolver.Resolve(builder.Environment, options.Secret);
         });
 
         builder.Services.AddSingleton<ICacheService, RedisCacheService>();
+        builder.Services.AddSingleton<IIdempotentCacheInvalidationService>(provider =>
+            (RedisCacheService)provider.GetRequiredService<ICacheService>());
         builder.Services.AddSingleton<IDistributedLockService, RedisDistributedLockService>();
         builder.Services.AddSingleton<IJwtTokenGenerator, JwtTokenGenerator>();
     }

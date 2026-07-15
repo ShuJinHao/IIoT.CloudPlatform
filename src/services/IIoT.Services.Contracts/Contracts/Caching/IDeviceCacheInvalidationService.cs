@@ -6,15 +6,18 @@ public sealed record DeviceCacheDescriptor(
 
 public interface IDeviceCacheInvalidationService
 {
-    Task InvalidateListsAfterRegisterAsync(
+    Task InvalidateListsAfterRegisterOnceAsync(
+        Guid domainEventId,
         Guid processId,
         CancellationToken cancellationToken = default);
 
-    Task InvalidateAfterRenameAsync(
+    Task InvalidateAfterRenameOnceAsync(
+        Guid domainEventId,
         DeviceCacheDescriptor device,
         CancellationToken cancellationToken = default);
 
-    Task InvalidateAfterDeleteAsync(
+    Task InvalidateAfterDeleteOnceAsync(
+        Guid domainEventId,
         DeviceCacheDescriptor device,
         CancellationToken cancellationToken = default);
 }

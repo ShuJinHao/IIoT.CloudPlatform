@@ -1,3 +1,5 @@
+using IIoT.SharedKernel.Architecture;
+
 namespace IIoT.Services.Contracts.RecordQueries;
 
 public sealed record ProcessReadItem(
@@ -5,7 +7,7 @@ public sealed record ProcessReadItem(
     string ProcessCode,
     string ProcessName);
 
-public interface IProcessReadQueryService
+public interface IProcessReadQueryService : IReadOnlyQueryPort
 {
     Task<(IReadOnlyList<ProcessReadItem> Items, int TotalCount)> GetPagedAsync(
         Guid? processId,

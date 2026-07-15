@@ -39,8 +39,16 @@ public sealed class IIoTAppFixture : IAsyncDisposable
     private readonly Dictionary<string, string?> _originalEnvironment = new(StringComparer.Ordinal);
     private readonly string _postgresVolumeName = $"postgres-iiot-e2e-{Guid.NewGuid():N}";
     private readonly string _rabbitMqVolumeName = $"rabbitmq-iiot-e2e-{Guid.NewGuid():N}";
+    private readonly bool _disableDataWorkerOutboxDispatcher;
+
+    public IIoTAppFixture(bool disableDataWorkerOutboxDispatcher = false)
+    {
+        _disableDataWorkerOutboxDispatcher = disableDataWorkerOutboxDispatcher;
+    }
 
     public HttpClient HttpClient => _httpClient ?? throw new InvalidOperationException("环境未启动。");
+
+    public bool DataWorkerOutboxDispatcherDisabled => _disableDataWorkerOutboxDispatcher;
 
     public async Task StartAsync()
     {
@@ -155,6 +163,9 @@ public sealed class IIoTAppFixture : IAsyncDisposable
         SetEnvironmentVariable("Parameters__seed-admin-password", SeedAdminPassword);
         SetEnvironmentVariable("AppHost__PostgresVolumeName", _postgresVolumeName);
         SetEnvironmentVariable("AppHost__RabbitMqVolumeName", _rabbitMqVolumeName);
+        SetEnvironmentVariable(
+            "AppHost__Testing__DisableDataWorkerOutboxDispatcher",
+            _disableDataWorkerOutboxDispatcher ? "true" : null);
         SetEnvironmentVariable("JwtSettings__Secret", TestJwtSecret);
         SetEnvironmentVariable("JWTSETTINGS__SECRET", TestJwtSecret);
         SetEnvironmentVariable("SEED_ADMIN_NO", SeedAdminEmployeeNo);

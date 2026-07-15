@@ -1,4 +1,6 @@
 using IIoT.DataWorker.Consumers;
+using IIoT.DataWorker.Outbox;
+using IIoT.EntityFrameworkCore.Outbox;
 using IIoT.Gateway.Infrastructure;
 using IIoT.Services.Contracts.Events.Capacities;
 using IIoT.Services.Contracts.Events.DeviceLogs;
@@ -6,6 +8,8 @@ using IIoT.Services.Contracts.Events.PassStations;
 using MassTransit;
 using MediatR;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Moq;
 using Xunit;
 
@@ -13,6 +17,73 @@ namespace IIoT.CloudPlatform.ContractTests;
 
 public sealed class GatewayAndEventContractTests
 {
+    [Fact]
+    public void OutboxDispatcherRegistration_TestOnlyDisableKeepsProductionFailClosed()
+    {
+        static IConfiguration Configuration(bool disabled) =>
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["DataWorker:Testing:DisableOutboxDispatcher"] = disabled.ToString()
+                })
+                .Build();
+
+        var production = Mock.Of<IHostEnvironment>(environment =>
+            environment.EnvironmentName == Environments.Production);
+        var invalidServices = new ServiceCollection();
+        Assert.Throws<InvalidOperationException>(() =>
+            OutboxDispatcherWorker.RegisterUnlessExplicitlyDisabledForTesting(
+                invalidServices,
+                Configuration(disabled: true),
+                production));
+        Assert.DoesNotContain(invalidServices, descriptor =>
+            descriptor.ServiceType == typeof(IHostedService));
+
+        var testing = Mock.Of<IHostEnvironment>(environment =>
+            environment.EnvironmentName == "Testing");
+        var receiverOnlyServices = new ServiceCollection();
+        Assert.True(OutboxDispatcherWorker.RegisterUnlessExplicitlyDisabledForTesting(
+            receiverOnlyServices,
+            Configuration(disabled: true),
+            testing));
+        Assert.DoesNotContain(receiverOnlyServices, descriptor =>
+            descriptor.ServiceType == typeof(IHostedService));
+
+        var normalServices = new ServiceCollection();
+        Assert.False(OutboxDispatcherWorker.RegisterUnlessExplicitlyDisabledForTesting(
+            normalServices,
+            Configuration(disabled: false),
+            production));
+        Assert.Contains(normalServices, descriptor =>
+            descriptor.ServiceType == typeof(IHostedService));
+    }
+
+    [Fact]
+    public void OutboxIdentityAndInboxDefaults_ShouldFailClosedAndUsePostgresRetention()
+    {
+        var context = new DomainEventDispatchContext();
+        Assert.Throws<InvalidOperationException>(() => context.MessageId);
+        Assert.Throws<ArgumentException>(() => context.Enter(Guid.Empty));
+
+        var messageId = Guid.NewGuid();
+        var scope = context.Enter(messageId);
+        Assert.Equal(messageId, context.MessageId);
+        Assert.Throws<InvalidOperationException>(() => context.Enter(Guid.NewGuid()));
+        scope.Dispose();
+        scope.Dispose();
+        Assert.Throws<InvalidOperationException>(() => context.MessageId);
+
+        Assert.Throws<ArgumentNullException>(() =>
+            IntegrationEventInboxDefaults.ConfigurePostgres(null!));
+        var configurator = new Mock<IEntityFrameworkOutboxConfigurator>();
+        configurator.SetupAllProperties();
+        IntegrationEventInboxDefaults.ConfigurePostgres(configurator.Object);
+        configurator.VerifySet(value =>
+            value.DuplicateDetectionWindow = IntegrationEventInboxDefaults.DuplicateDetectionWindow);
+        configurator.VerifySet(value =>
+            value.QueryDelay = IntegrationEventInboxDefaults.QueryDelay);
+    }
+
     [Theory]
     [InlineData("/api/v1/human/devices", "human", "human", false)]
     [InlineData("/api/v1/edge/device-logs", "edge", "edge", false)]

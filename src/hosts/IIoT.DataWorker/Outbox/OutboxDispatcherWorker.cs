@@ -10,6 +10,29 @@ public sealed class OutboxDispatcherWorker(
 {
     private readonly OutboxDispatcherOptions _options = options.Value;
 
+    internal static bool RegisterUnlessExplicitlyDisabledForTesting(
+        IServiceCollection services,
+        IConfiguration configuration,
+        IHostEnvironment environment)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(environment);
+
+        var disabled = configuration.GetValue<bool>(
+            "DataWorker:Testing:DisableOutboxDispatcher");
+        if (disabled && !environment.IsEnvironment("Testing"))
+        {
+            throw new InvalidOperationException(
+                "DataWorker:Testing:DisableOutboxDispatcher is restricted to the Testing environment.");
+        }
+
+        if (!disabled)
+            services.AddHostedService<OutboxDispatcherWorker>();
+
+        return disabled;
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _options.Validate();

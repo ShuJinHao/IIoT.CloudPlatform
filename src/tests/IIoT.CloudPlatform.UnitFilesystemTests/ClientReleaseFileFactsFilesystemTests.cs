@@ -9,9 +9,11 @@ public sealed class ClientReleaseFileFactsFilesystemTests
     public void FileHashAndExactFact_ShouldUseLowercaseShaAndRejectWrongSize()
     {
         var path = Path.Combine(Path.GetTempPath(), $"iiot-file-facts-{Guid.NewGuid():N}.bin");
+        var gatewayRoot = Path.Combine(Path.GetTempPath(), $"iiot-gateway-mode-{Guid.NewGuid():N}");
         try
         {
             File.WriteAllText(path, "abc");
+            Directory.CreateDirectory(gatewayRoot);
 
             const string expectedSha = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
             Assert.Equal(expectedSha, ClientReleaseFileFacts.ComputeSha256(path));
@@ -23,10 +25,28 @@ public sealed class ClientReleaseFileFactsFilesystemTests
                 path,
                 expectedSha,
                 new FileInfo(path).Length + 1));
+
+            var platformProbeCalls = 0;
+            EdgeReleasePublishedFilePermissions.EnsureGatewayReadable(
+                path,
+                [],
+                [],
+                () =>
+                {
+                    platformProbeCalls++;
+                    return true;
+                });
+            Assert.Equal(1, platformProbeCalls);
+            EdgeReleasePublishedFilePermissions.EnsureGatewayReadable(
+                gatewayRoot,
+                [],
+                [],
+                static () => false);
         }
         finally
         {
             File.Delete(path);
+            Directory.Delete(gatewayRoot, recursive: true);
         }
     }
 }

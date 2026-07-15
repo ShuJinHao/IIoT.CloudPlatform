@@ -301,7 +301,7 @@ public sealed record GetAiReadDeviceClientStatesQuery(
 
 public sealed class GetAiReadDeviceClientStatesHandler(
     IAiReadDeviceQueryService deviceQueryService,
-    IDeviceClientStateStore clientStateStore,
+    IDeviceClientStateQueryService clientStateStore,
     IAiReadScopeAccessor scopeAccessor,
     IOptions<AiReadOptions> options)
     : IQueryHandler<GetAiReadDeviceClientStatesQuery, Result<AiReadListResponse<AiReadDeviceClientStateDto>>>

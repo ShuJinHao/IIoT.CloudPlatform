@@ -7,15 +7,14 @@ public sealed class MassTransitEventPublisher(IPublishEndpoint publishEndpoint) 
 {
     public Task PublishAsync(
         IIntegrationEvent @event,
+        Guid messageId,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(@event);
-        return publishEndpoint.Publish((object)@event, cancellationToken);
+        ArgumentOutOfRangeException.ThrowIfEqual(messageId, Guid.Empty);
+        return publishEndpoint.Publish(
+            (object)@event,
+            context => context.MessageId = messageId,
+            cancellationToken);
     }
-
-    public Task PublishAsync<TEvent>(
-        TEvent @event,
-        CancellationToken cancellationToken = default)
-        where TEvent : class, IIntegrationEvent
-        => publishEndpoint.Publish(@event, cancellationToken);
 }

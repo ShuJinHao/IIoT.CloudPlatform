@@ -8,11 +8,11 @@
     "mild": { "minimumLines": 8, "minimumTokens": 70 }
   },
   "scans": [
-    { "category": "production", "mode": "strict", "clones": 295, "duplicatedLines": 2902, "duplicatedTokens": 21485 },
-    { "category": "production", "mode": "mild", "clones": 52, "duplicatedLines": 915, "duplicatedTokens": 5340 },
+    { "category": "production", "mode": "strict", "clones": 294, "duplicatedLines": 2876, "duplicatedTokens": 21250 },
+    { "category": "production", "mode": "mild", "clones": 50, "duplicatedLines": 876, "duplicatedTokens": 5100 },
     { "category": "support", "mode": "strict", "clones": 4, "duplicatedLines": 79, "duplicatedTokens": 605 },
     { "category": "support", "mode": "mild", "clones": 2, "duplicatedLines": 60, "duplicatedTokens": 295 },
-    { "category": "test-cases", "mode": "strict", "clones": 285, "duplicatedLines": 2816, "duplicatedTokens": 24479 },
-    { "category": "test-cases", "mode": "mild", "clones": 67, "duplicatedLines": 1105, "duplicatedTokens": 7829 }
+    { "category": "test-cases", "mode": "strict", "clones": 282, "duplicatedLines": 2665, "duplicatedTokens": 22962 },
+    { "category": "test-cases", "mode": "mild", "clones": 53, "duplicatedLines": 893, "duplicatedTokens": 5971 }
   ]
 }

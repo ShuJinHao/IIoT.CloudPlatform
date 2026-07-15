@@ -1,8 +1,9 @@
 using IIoT.SharedKernel.Paging;
+using IIoT.SharedKernel.Architecture;
 
 namespace IIoT.Services.Contracts.RecordQueries;
 
-public interface ICapacityQueryService
+public interface ICapacityQueryService : IReadOnlyQueryPort
 {
     Task<List<HourlyCapacityDto>> GetHourlyByDeviceIdAsync(
         Guid deviceId,

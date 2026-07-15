@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Operations;
@@ -36,10 +38,90 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             "Execute",
             "ExecuteAsync",
             "ExecuteNonQuery",
-            "ExecuteNonQueryAsync");
+            "ExecuteNonQueryAsync",
+            "ExecuteSqlRaw",
+            "ExecuteSqlRawAsync",
+            "ExecuteSqlInterpolated",
+            "ExecuteSqlInterpolatedAsync");
+
+    private static readonly ImmutableHashSet<string> RawDatabaseAccessMethods =
+        ImmutableHashSet.Create(
+            StringComparer.Ordinal,
+            "ExecuteReader",
+            "ExecuteReaderAsync",
+            "ExecuteScalar",
+            "ExecuteScalarAsync",
+            "Query",
+            "QueryAsync",
+            "QueryFirst",
+            "QueryFirstAsync",
+            "QueryFirstOrDefault",
+            "QueryFirstOrDefaultAsync",
+            "QuerySingle",
+            "QuerySingleAsync",
+            "QuerySingleOrDefault",
+            "QuerySingleOrDefaultAsync",
+            "QueryMultiple",
+            "QueryMultipleAsync");
 
     private static readonly ImmutableHashSet<string> ConnectionResourceLiterals =
         ImmutableHashSet.Create(StringComparer.Ordinal, "iiot-db", "eventbus");
+
+    private static readonly Regex ReadOnlySqlStart = new(
+        @"^(SELECT|WITH)\b",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    private static readonly Regex SqlSelectKeyword = new(
+        @"\bSELECT\b",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    private static readonly Regex SqlWriteOrDdlKeyword = new(
+        @"\b(INSERT|UPDATE|DELETE|MERGE|UPSERT|REPLACE|INTO|CREATE|ALTER|DROP|TRUNCATE|GRANT|REVOKE|CALL|EXEC|EXECUTE|COPY|VACUUM|ANALYZE|LOCK|COMMENT|REINDEX|CLUSTER|REFRESH)\b",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    private static readonly Regex SqlFunctionCall = new(
+        "(?<![\\w$\\\"])(?<name>(?:[A-Za-z_][A-Za-z0-9_$]*|\\\"[^\\\"]*\\\")(?:\\s*\\.\\s*(?:[A-Za-z_][A-Za-z0-9_$]*|\\\"[^\\\"]*\\\"))?)\\s*\\(",
+        RegexOptions.CultureInvariant);
+
+    private static readonly ImmutableHashSet<string> ProvenReadOnlySqlFunctions =
+        ImmutableHashSet.Create(
+            StringComparer.OrdinalIgnoreCase,
+            "abs",
+            "avg",
+            "ceil",
+            "ceiling",
+            "char_length",
+            "coalesce",
+            "concat",
+            "count",
+            "date_part",
+            "date_trunc",
+            "extract",
+            "floor",
+            "greatest",
+            "json_array_length",
+            "jsonb_array_length",
+            "least",
+            "length",
+            "lower",
+            "max",
+            "min",
+            "nullif",
+            "round",
+            "row_number",
+            "sum",
+            "trim",
+            "upper");
+
+    private static readonly ImmutableHashSet<string> SqlStructuralParentheses =
+        ImmutableHashSet.Create(
+            StringComparer.OrdinalIgnoreCase,
+            "as",
+            "exists",
+            "filter",
+            "in",
+            "over",
+            "values");
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
         ImmutableArray.Create(
@@ -72,7 +154,11 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
         context.RegisterSymbolAction(state.AnalyzeProperty, SymbolKind.Property);
         context.RegisterSymbolAction(state.AnalyzeMethod, SymbolKind.Method);
         context.RegisterOperationAction(state.AnalyzeInvocation, OperationKind.Invocation);
-        context.RegisterOperationAction(state.AnalyzeDelegateCreation, OperationKind.DelegateCreation);
+        context.RegisterOperationAction(state.AnalyzeVariableDeclarator, OperationKind.VariableDeclarator);
+        context.RegisterOperationAction(state.AnalyzeSimpleAssignment, OperationKind.SimpleAssignment);
+        context.RegisterOperationAction(state.AnalyzeFieldInitializer, OperationKind.FieldInitializer);
+        context.RegisterOperationAction(state.AnalyzePropertyInitializer, OperationKind.PropertyInitializer);
+        context.RegisterOperationAction(state.AnalyzeReturn, OperationKind.Return);
         context.RegisterOperationAction(state.AnalyzeDynamicInvocation, OperationKind.DynamicInvocation);
         context.RegisterOperationAction(state.AnalyzeObjectCreation, OperationKind.ObjectCreation);
         context.RegisterOperationAction(state.AnalyzeLiteral, OperationKind.Literal);
@@ -107,6 +193,7 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
         private readonly INamedTypeSymbol? _adminOnlyAttribute;
         private readonly INamedTypeSymbol? _command;
         private readonly INamedTypeSymbol? _cacheService;
+        private readonly INamedTypeSymbol? _readOnlyQueryPort;
         private readonly INamedTypeSymbol? _jwtSecurityTokenHandler;
         private readonly ImmutableArray<INamedTypeSymbol> _securityReadInterfaces;
         private readonly ImmutableHashSet<string> _databaseAllowedProjects;
@@ -115,8 +202,14 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             new(SymbolEqualityComparer.Default);
         private readonly ConcurrentDictionary<IMethodSymbol, byte> _aiReadHandlerRoots =
             new(SymbolEqualityComparer.Default);
+        private readonly ConcurrentDictionary<IMethodSymbol, byte> _readOnlyQueryPortRoots =
+            new(SymbolEqualityComparer.Default);
         private readonly ConcurrentDictionary<IMethodSymbol, byte> _securityReadRoots =
             new(SymbolEqualityComparer.Default);
+        private readonly ConcurrentDictionary<ISymbol, ConcurrentBag<DelegateBinding>> _delegateBindings =
+            new(SymbolEqualityComparer.Default);
+        private readonly ConcurrentBag<StoredDelegateInvocation> _storedDelegateInvocations = new();
+        private readonly ConcurrentBag<DelegateArgumentFlow> _delegateArgumentFlows = new();
 
         internal CompilationState(
             Compilation compilation,
@@ -142,6 +235,8 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
                 "IIoT.Services.CrossCutting.Attributes.AdminOnlyAttribute");
             _command = compilation.GetTypeByMetadataName("IIoT.SharedKernel.Messaging.ICommand`1");
             _cacheService = compilation.GetTypeByMetadataName("IIoT.Services.Contracts.ICacheService");
+            _readOnlyQueryPort = compilation.GetTypeByMetadataName(
+                "IIoT.SharedKernel.Architecture.IReadOnlyQueryPort");
             _jwtSecurityTokenHandler = compilation.GetTypeByMetadataName(
                 "System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler");
             _securityReadInterfaces = new[]
@@ -177,6 +272,7 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             CaptureAiReadHandlerRoots(type);
             CaptureSecurityReadRoots(type);
             CaptureInterfaceDispatch(type);
+            CaptureReadOnlyQueryPortRoots(type);
         }
 
         internal void AnalyzeParameter(SymbolAnalysisContext context)
@@ -213,19 +309,42 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             AnalyzeRepositoryOperationResult(context, invocation);
             AnalyzeUnsignedJwtParsing(context, invocation);
 
-            var caller = NormalizeMethod(context.ContainingSymbol as IMethodSymbol);
+            var caller = GetOperationCaller(invocation, context.ContainingSymbol);
             var target = NormalizeMethod(invocation.TargetMethod);
             if (caller is not null && target is not null)
             {
-                var edge = new InvocationEdge(
-                    target,
-                    invocation.Syntax.GetLocation(),
-                    IsDirectWriteSink(invocation, target),
-                    target.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat));
-                _callGraph.GetOrAdd(caller, static _ => new ConcurrentBag<InvocationEdge>()).Add(edge);
+                if (invocation.TargetMethod.MethodKind == MethodKind.DelegateInvoke ||
+                    IsSystemDelegateDynamicInvoke(invocation.TargetMethod))
+                {
+                    CaptureInvokedDelegate(
+                        caller,
+                        invocation.Instance,
+                        invocation.Syntax.GetLocation());
+                }
+                else
+                {
+                    var edge = new InvocationEdge(
+                        target,
+                        invocation.Syntax.GetLocation(),
+                        IsDirectWriteSink(invocation, caller, target),
+                        target.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat));
+                    _callGraph.GetOrAdd(caller, static _ => new ConcurrentBag<InvocationEdge>()).Add(edge);
+                }
 
                 foreach (var argument in invocation.Arguments)
-                    CaptureDelegateTargets(caller, argument.Value, argument.Syntax.GetLocation());
+                {
+                    if (argument.Parameter is not null &&
+                        argument.Parameter.Type.TypeKind == TypeKind.Delegate)
+                    {
+                        _delegateArgumentFlows.Add(new DelegateArgumentFlow(
+                            caller,
+                            target,
+                            NormalizeParameter(argument.Parameter),
+                            argument.Value,
+                            invocation.Syntax.GetLocation(),
+                            !HasExecutableSource(target)));
+                    }
+                }
             }
 
             if (ShouldEnforceDatabaseOwner(context.ContainingSymbol) &&
@@ -239,21 +358,53 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             }
         }
 
-        internal void AnalyzeDelegateCreation(OperationAnalysisContext context)
+        internal void AnalyzeVariableDeclarator(OperationAnalysisContext context)
         {
-            var caller = NormalizeMethod(context.ContainingSymbol as IMethodSymbol);
-            if (caller is null)
-                return;
+            var declarator = (IVariableDeclaratorOperation)context.Operation;
+            if (declarator.Initializer is not null)
+                CaptureStoredDelegateBinding(declarator.Symbol, declarator.Initializer.Value);
+        }
 
-            CaptureDelegateTargets(
-                caller,
-                ((IDelegateCreationOperation)context.Operation).Target,
-                context.Operation.Syntax.GetLocation());
+        internal void AnalyzeSimpleAssignment(OperationAnalysisContext context)
+        {
+            var assignment = (ISimpleAssignmentOperation)context.Operation;
+            var storage = TryGetDelegateStorage(assignment.Target);
+            if (storage is not null)
+                CaptureStoredDelegateBinding(storage, assignment.Value);
+        }
+
+        internal void AnalyzeFieldInitializer(OperationAnalysisContext context)
+        {
+            var initializer = (IFieldInitializerOperation)context.Operation;
+            foreach (var field in initializer.InitializedFields)
+                CaptureStoredDelegateBinding(field, initializer.Value);
+        }
+
+        internal void AnalyzePropertyInitializer(OperationAnalysisContext context)
+        {
+            var initializer = (IPropertyInitializerOperation)context.Operation;
+            foreach (var property in initializer.InitializedProperties)
+                CaptureStoredDelegateBinding(property, initializer.Value);
+        }
+
+        internal void AnalyzeReturn(OperationAnalysisContext context)
+        {
+            var returned = (IReturnOperation)context.Operation;
+            if (returned.ReturnedValue is null ||
+                context.ContainingSymbol is not IMethodSymbol containingMethod ||
+                containingMethod.ReturnType.TypeKind != TypeKind.Delegate)
+            {
+                return;
+            }
+
+            var factory = NormalizeMethod(containingMethod);
+            if (factory is not null)
+                CaptureStoredDelegateBinding(factory, returned.ReturnedValue);
         }
 
         internal void AnalyzeDynamicInvocation(OperationAnalysisContext context)
         {
-            var caller = NormalizeMethod(context.ContainingSymbol as IMethodSymbol);
+            var caller = GetOperationCaller(context.Operation, context.ContainingSymbol);
             if (caller is null)
                 return;
 
@@ -266,15 +417,24 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
                     isUnresolvedDynamic: true));
         }
 
-        private void CaptureDelegateTargets(IMethodSymbol caller, IOperation operation, Location location)
+        private void CaptureInvokedDelegate(
+            IMethodSymbol caller,
+            IOperation? operation,
+            Location location)
         {
+            if (operation is null)
+            {
+                AddUnresolvedDelegateEdge(caller, location);
+                return;
+            }
+
             switch (operation)
             {
                 case IConversionOperation conversion:
-                    CaptureDelegateTargets(caller, conversion.Operand, location);
+                    CaptureInvokedDelegate(caller, conversion.Operand, location);
                     return;
                 case IDelegateCreationOperation delegateCreation:
-                    CaptureDelegateTargets(caller, delegateCreation.Target, location);
+                    CaptureInvokedDelegate(caller, delegateCreation.Target, location);
                     return;
                 case IAnonymousFunctionOperation anonymousFunction:
                     AddDelegateEdge(caller, anonymousFunction.Symbol, location);
@@ -282,7 +442,156 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
                 case IMethodReferenceOperation methodReference:
                     AddDelegateEdge(caller, methodReference.Method, location);
                     return;
+                case IConditionalOperation conditional:
+                    CaptureInvokedDelegate(caller, conditional.WhenTrue, location);
+                    CaptureInvokedDelegate(caller, conditional.WhenFalse, location);
+                    return;
+                case ICoalesceOperation coalesce:
+                    if (!IsConstantNull(coalesce.Value))
+                        CaptureInvokedDelegate(caller, coalesce.Value, location);
+                    CaptureInvokedDelegate(caller, coalesce.WhenNull, location);
+                    return;
             }
+
+            var storage = TryGetDelegateStorage(operation) ?? TryGetDelegateFactory(operation);
+            if (storage is not null)
+            {
+                _storedDelegateInvocations.Add(new StoredDelegateInvocation(caller, storage, location));
+                return;
+            }
+
+            AddUnresolvedDelegateEdge(caller, location);
+        }
+
+        private void CaptureStoredDelegateBinding(ISymbol storage, IOperation operation)
+        {
+            switch (operation)
+            {
+                case IConversionOperation conversion:
+                    CaptureStoredDelegateBinding(storage, conversion.Operand);
+                    return;
+                case IDelegateCreationOperation delegateCreation:
+                    CaptureStoredDelegateBinding(storage, delegateCreation.Target);
+                    return;
+                case IAnonymousFunctionOperation anonymousFunction:
+                    AddDelegateBinding(storage, anonymousFunction.Symbol);
+                    return;
+                case IMethodReferenceOperation methodReference:
+                    AddDelegateBinding(storage, methodReference.Method);
+                    return;
+                case IConditionalOperation conditional:
+                    CaptureStoredDelegateBinding(storage, conditional.WhenTrue);
+                    if (conditional.WhenFalse is not null)
+                    {
+                        CaptureStoredDelegateBinding(storage, conditional.WhenFalse);
+                    }
+                    else
+                    {
+                        _delegateBindings.GetOrAdd(storage, static _ => new ConcurrentBag<DelegateBinding>())
+                            .Add(DelegateBinding.Unresolved);
+                    }
+                    return;
+                case ICoalesceOperation coalesce:
+                    if (!IsConstantNull(coalesce.Value))
+                        CaptureStoredDelegateBinding(storage, coalesce.Value);
+                    CaptureStoredDelegateBinding(storage, coalesce.WhenNull);
+                    return;
+            }
+
+            var sourceStorage = TryGetDelegateStorage(operation) ?? TryGetDelegateFactory(operation);
+            if (sourceStorage is not null && !SymbolEqualityComparer.Default.Equals(storage, sourceStorage))
+            {
+                _delegateBindings.GetOrAdd(storage, static _ => new ConcurrentBag<DelegateBinding>())
+                    .Add(DelegateBinding.ForStorage(sourceStorage));
+                return;
+            }
+
+            _delegateBindings.GetOrAdd(storage, static _ => new ConcurrentBag<DelegateBinding>())
+                .Add(DelegateBinding.Unresolved);
+        }
+
+        private void AddDelegateBinding(ISymbol storage, IMethodSymbol method)
+        {
+            var target = NormalizeMethod(method);
+            if (target is null)
+                return;
+
+            _delegateBindings.GetOrAdd(storage, static _ => new ConcurrentBag<DelegateBinding>())
+                .Add(DelegateBinding.ForTarget(target));
+        }
+
+        private static ISymbol? TryGetDelegateStorage(IOperation? operation)
+        {
+            while (operation is IConversionOperation conversion)
+                operation = conversion.Operand;
+
+            return operation switch
+            {
+                ILocalReferenceOperation local => local.Local,
+                IFieldReferenceOperation field => field.Field,
+                IPropertyReferenceOperation property => property.Property,
+                IParameterReferenceOperation parameter => parameter.Parameter,
+                _ => null
+            };
+        }
+
+        private static ISymbol? TryGetDelegateFactory(IOperation operation)
+        {
+            operation = UnwrapConversion(operation);
+            if (operation is not IInvocationOperation invocation ||
+                invocation.Type?.TypeKind != TypeKind.Delegate)
+            {
+                return null;
+            }
+
+            return NormalizeMethod(invocation.TargetMethod);
+        }
+
+        private static IParameterSymbol NormalizeParameter(IParameterSymbol parameter)
+        {
+            if (parameter.ContainingSymbol is not IMethodSymbol method)
+                return parameter;
+
+            var normalizedMethod = NormalizeMethod(method);
+            return normalizedMethod is not null && parameter.Ordinal < normalizedMethod.Parameters.Length
+                ? normalizedMethod.Parameters[parameter.Ordinal]
+                : parameter;
+        }
+
+        private static bool HasExecutableSource(IMethodSymbol method)
+        {
+            foreach (var syntaxReference in method.DeclaringSyntaxReferences)
+            {
+                var syntax = syntaxReference.GetSyntax();
+                if (syntax is Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax declaration &&
+                    (declaration.Body is not null || declaration.ExpressionBody is not null))
+                {
+                    return true;
+                }
+
+                if (syntax is Microsoft.CodeAnalysis.CSharp.Syntax.LocalFunctionStatementSyntax localFunction &&
+                    (localFunction.Body is not null || localFunction.ExpressionBody is not null))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsSystemDelegateDynamicInvoke(IMethodSymbol method)
+        {
+            return string.Equals(method.Name, "DynamicInvoke", StringComparison.Ordinal) &&
+                   string.Equals(
+                       method.ContainingType.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
+                       "System.Delegate",
+                       StringComparison.Ordinal);
+        }
+
+        private static bool IsConstantNull(IOperation operation)
+        {
+            operation = UnwrapConversion(operation);
+            return operation.ConstantValue.HasValue && operation.ConstantValue.Value is null;
         }
 
         private void AddDelegateEdge(IMethodSymbol caller, IMethodSymbol targetMethod, Location location)
@@ -297,6 +606,17 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
                     location,
                     isDirectWriteSink: false,
                     target.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat)));
+        }
+
+        private void AddUnresolvedDelegateEdge(IMethodSymbol caller, Location location)
+        {
+            _callGraph.GetOrAdd(caller, static _ => new ConcurrentBag<InvocationEdge>()).Add(
+                new InvocationEdge(
+                    caller,
+                    location,
+                    isDirectWriteSink: true,
+                    targetDisplay: "unresolved invoked delegate",
+                    isUnresolvedDynamic: true));
         }
 
         private void AnalyzeUnsignedJwtParsing(
@@ -392,10 +712,217 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
 
         internal void AnalyzeCompilationEnd(CompilationAnalysisContext context)
         {
+            MaterializeStoredDelegateInvocations();
             AnalyzeLayerDependencies(context);
             AnalyzeProductionTestReferences(context);
             AnalyzeAiReadWritePaths(context);
             AnalyzeSecurityReadCachePaths(context);
+        }
+
+        private void MaterializeStoredDelegateInvocations()
+        {
+            var consumedParameters = new HashSet<IParameterSymbol>(SymbolEqualityComparer.Default);
+            foreach (var invocation in _storedDelegateInvocations)
+            {
+                var targets = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+                var contextParameters = new HashSet<IParameterSymbol>(SymbolEqualityComparer.Default);
+                var fullyResolved = ResolveStoredDelegateTargets(
+                    invocation.Storage,
+                    new HashSet<ISymbol>(SymbolEqualityComparer.Default),
+                    targets,
+                    contextParameters);
+                foreach (var target in targets)
+                {
+                    AddDelegateEdge(invocation.Caller, target, invocation.Location);
+                }
+
+                foreach (var parameter in contextParameters)
+                    consumedParameters.Add(parameter);
+
+                if (!fullyResolved || contextParameters.Any(parameter => !HasInvocationBinding(parameter)))
+                {
+                    AddUnresolvedDelegateEdge(invocation.Caller, invocation.Location);
+                }
+            }
+
+            foreach (var flow in _delegateArgumentFlows)
+            {
+                if (flow.ExternalConsumer)
+                    consumedParameters.Add(flow.Parameter);
+            }
+
+            bool changed;
+            do
+            {
+                changed = false;
+                foreach (var flow in _delegateArgumentFlows)
+                {
+                    if (!consumedParameters.Contains(flow.Parameter))
+                        continue;
+
+                    var contextParameters = new HashSet<IParameterSymbol>(SymbolEqualityComparer.Default);
+                    ResolveDelegateOperation(
+                        flow.Actual,
+                        new HashSet<ISymbol>(SymbolEqualityComparer.Default),
+                        new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default),
+                        contextParameters);
+                    foreach (var parameter in contextParameters)
+                        changed |= consumedParameters.Add(parameter);
+                }
+            } while (changed);
+
+            foreach (var flow in _delegateArgumentFlows)
+            {
+                if (!consumedParameters.Contains(flow.Parameter))
+                    continue;
+
+                var targets = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+                var contextParameters = new HashSet<IParameterSymbol>(SymbolEqualityComparer.Default);
+                var fullyResolved = ResolveDelegateOperation(
+                    flow.Actual,
+                    new HashSet<ISymbol>(SymbolEqualityComparer.Default),
+                    targets,
+                    contextParameters);
+                foreach (var target in targets)
+                    AddDelegateEdge(flow.Caller, target, flow.Location);
+
+                if (!fullyResolved || contextParameters.Any(parameter => !HasInvocationBinding(parameter)))
+                    AddUnresolvedDelegateEdge(flow.Caller, flow.Location);
+            }
+
+            foreach (var parameter in consumedParameters)
+            {
+                var owner = NormalizeMethod(parameter.ContainingSymbol as IMethodSymbol);
+                if (owner is not null &&
+                    (_aiReadHandlerRoots.ContainsKey(owner) || _securityReadRoots.ContainsKey(owner)))
+                {
+                    AddUnresolvedDelegateEdge(owner, GetSourceLocation(parameter));
+                }
+            }
+        }
+
+        private bool HasInvocationBinding(IParameterSymbol parameter)
+        {
+            return _delegateArgumentFlows.Any(flow =>
+                SymbolEqualityComparer.Default.Equals(flow.Parameter, parameter));
+        }
+
+        private bool ResolveDelegateOperation(
+            IOperation operation,
+            HashSet<ISymbol> visited,
+            HashSet<IMethodSymbol> targets,
+            HashSet<IParameterSymbol> contextParameters)
+        {
+            switch (operation)
+            {
+                case IConversionOperation conversion:
+                    return ResolveDelegateOperation(
+                        conversion.Operand,
+                        visited,
+                        targets,
+                        contextParameters);
+                case IDelegateCreationOperation delegateCreation:
+                    return ResolveDelegateOperation(
+                        delegateCreation.Target,
+                        visited,
+                        targets,
+                        contextParameters);
+                case IAnonymousFunctionOperation anonymousFunction:
+                    var anonymousTarget = NormalizeMethod(anonymousFunction.Symbol);
+                    if (anonymousTarget is null)
+                        return false;
+                    targets.Add(anonymousTarget);
+                    return true;
+                case IMethodReferenceOperation methodReference:
+                    var methodTarget = NormalizeMethod(methodReference.Method);
+                    if (methodTarget is null)
+                        return false;
+                    targets.Add(methodTarget);
+                    return true;
+                case IConditionalOperation conditional:
+                    return ResolveDelegateOperation(
+                               conditional.WhenTrue,
+                               visited,
+                               targets,
+                               contextParameters) &
+                           (conditional.WhenFalse is not null && ResolveDelegateOperation(
+                               conditional.WhenFalse,
+                               visited,
+                               targets,
+                               contextParameters));
+                case ICoalesceOperation coalesce:
+                    var valueResolved = IsConstantNull(coalesce.Value) || ResolveDelegateOperation(
+                        coalesce.Value,
+                        visited,
+                        targets,
+                        contextParameters);
+                    return valueResolved & ResolveDelegateOperation(
+                        coalesce.WhenNull,
+                        visited,
+                        targets,
+                        contextParameters);
+            }
+
+            var storage = TryGetDelegateStorage(operation) ?? TryGetDelegateFactory(operation);
+            return storage is not null && ResolveStoredDelegateTargets(
+                storage,
+                visited,
+                targets,
+                contextParameters);
+        }
+
+        private bool ResolveStoredDelegateTargets(
+            ISymbol storage,
+            HashSet<ISymbol> visited,
+            HashSet<IMethodSymbol> targets,
+            HashSet<IParameterSymbol> contextParameters)
+        {
+            if (!visited.Add(storage))
+                return false;
+
+            if (!_delegateBindings.TryGetValue(storage, out var bindings))
+            {
+                visited.Remove(storage);
+                if (storage is IParameterSymbol parameter)
+                {
+                    contextParameters.Add(NormalizeParameter(parameter));
+                    return true;
+                }
+
+                return false;
+            }
+
+            try
+            {
+                var hasBinding = false;
+                var fullyResolved = true;
+                foreach (var binding in bindings)
+                {
+                    hasBinding = true;
+                    if (binding.Target is not null)
+                    {
+                        targets.Add(binding.Target);
+                    }
+                    else if (binding.Storage is not null)
+                    {
+                        fullyResolved &= ResolveStoredDelegateTargets(
+                            binding.Storage,
+                            visited,
+                            targets,
+                            contextParameters);
+                    }
+                    else
+                    {
+                        fullyResolved = false;
+                    }
+                }
+
+                return hasBinding && fullyResolved;
+            }
+            finally
+            {
+                visited.Remove(storage);
+            }
         }
 
         private void AnalyzeAggregateOwner(SymbolAnalysisContext context, INamedTypeSymbol type)
@@ -655,6 +1182,34 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             }
         }
 
+        private void CaptureReadOnlyQueryPortRoots(INamedTypeSymbol type)
+        {
+            if (type.TypeKind is TypeKind.Interface or TypeKind.Delegate || _readOnlyQueryPort is null)
+                return;
+
+            foreach (var @interface in type.AllInterfaces)
+            {
+                if (!IsReadOnlyQueryPortType(@interface) ||
+                    SymbolEqualityComparer.Default.Equals(@interface, _readOnlyQueryPort))
+                {
+                    continue;
+                }
+
+                foreach (var interfaceMethod in @interface.GetMembers().OfType<IMethodSymbol>())
+                {
+                    if (type.FindImplementationForInterfaceMember(interfaceMethod) is not IMethodSymbol implementation ||
+                        !implementation.Locations.Any(static location => location.IsInSource))
+                    {
+                        continue;
+                    }
+
+                    var normalized = NormalizeMethod(implementation);
+                    if (normalized is not null)
+                        _readOnlyQueryPortRoots.TryAdd(normalized, 0);
+                }
+            }
+        }
+
         private void CaptureSecurityReadRoots(INamedTypeSymbol type)
         {
             if (type.TypeKind is TypeKind.Interface or TypeKind.Delegate || _securityReadInterfaces.IsDefaultOrEmpty)
@@ -731,6 +1286,15 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             if (type is IArrayTypeSymbol array)
                 return TryFindDatabaseApiType(array.ElementType, out databaseType);
 
+            if (type is ITypeParameterSymbol parameter)
+            {
+                foreach (var constraint in parameter.ConstraintTypes)
+                {
+                    if (TryFindDatabaseApiType(constraint, out databaseType))
+                        return true;
+                }
+            }
+
             if (type is INamedTypeSymbol namedType)
             {
                 foreach (var argument in namedType.TypeArguments)
@@ -744,13 +1308,23 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        private bool IsDirectWriteSink(IInvocationOperation invocation, IMethodSymbol method)
+        private bool IsDirectWriteSink(
+            IInvocationOperation invocation,
+            IMethodSymbol caller,
+            IMethodSymbol method)
         {
             if (RepositoryWriteMethods.Contains(method.Name) && IsRepositoryType(method.ContainingType))
                 return true;
 
-            if (DatabaseWriteMethods.Contains(method.Name) && IsDatabaseApiType(method.ContainingType))
+            if (DatabaseWriteMethods.Contains(method.Name) &&
+                IsDatabaseApiType(method.ContainingType) &&
+                !IsDapperParameterBagMutation(method))
                 return true;
+
+            if (RawDatabaseAccessMethods.Contains(method.Name) && IsDatabaseApiType(method.ContainingType))
+                return !(IsDapperCommandDefinitionInvocation(invocation) &&
+                         IsDirectReadOnlyQueryPortImplementation(caller)) &&
+                       !HasCompileTimeReadOnlySql(invocation);
 
             if ((method.Name == "SaveChanges" || method.Name == "SaveChangesAsync") &&
                 method.ContainingAssembly.Name.StartsWith("IIoT.", StringComparison.Ordinal))
@@ -768,6 +1342,245 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             }
 
             return false;
+        }
+
+        private bool IsDirectReadOnlyQueryPortImplementation(IMethodSymbol method)
+        {
+            var containingType = method.ContainingType;
+            if (containingType is null)
+                return false;
+
+            foreach (var @interface in containingType.AllInterfaces)
+            {
+                if (!IsReadOnlyQueryPortType(@interface))
+                    continue;
+
+                foreach (var interfaceMethod in @interface.GetMembers().OfType<IMethodSymbol>())
+                {
+                    if (containingType.FindImplementationForInterfaceMember(interfaceMethod) is IMethodSymbol implementation &&
+                        SymbolEqualityComparer.Default.Equals(NormalizeMethod(implementation), NormalizeMethod(method)))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsDapperParameterBagMutation(IMethodSymbol method)
+        {
+            return string.Equals(method.Name, "Add", StringComparison.Ordinal) &&
+                   string.Equals(method.ContainingAssembly.Name, "Dapper", StringComparison.Ordinal) &&
+                   string.Equals(
+                       method.ContainingType.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
+                       "Dapper.DynamicParameters",
+                       StringComparison.Ordinal);
+        }
+
+        private static bool IsDapperCommandDefinitionInvocation(IInvocationOperation invocation)
+        {
+            return invocation.Arguments.Any(static argument =>
+                string.Equals(
+                    UnwrapConversion(argument.Value).Type?
+                        .ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
+                    "Dapper.CommandDefinition",
+                    StringComparison.Ordinal));
+        }
+
+        private static bool HasCompileTimeReadOnlySql(IInvocationOperation invocation)
+        {
+            var sqlArgument = invocation.Arguments.FirstOrDefault(static argument =>
+                string.Equals(argument.Parameter?.Name, "sql", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(argument.Parameter?.Name, "commandText", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(argument.Parameter?.Name, "query", StringComparison.OrdinalIgnoreCase));
+            sqlArgument ??= invocation.Arguments.FirstOrDefault(static argument =>
+                UnwrapConversion(argument.Value).Type?.SpecialType == SpecialType.System_String);
+
+            if (sqlArgument is null ||
+                !TryGetConstantString(sqlArgument.Value, out var sql) ||
+                !TryGetSqlCode(sql, out var code))
+            {
+                return false;
+            }
+
+            code = code.Trim();
+            if (code.Length == 0)
+                return false;
+
+            var semicolon = code.IndexOf(';');
+            if (semicolon >= 0)
+            {
+                if (semicolon != code.Length - 1 || code.IndexOf(';', semicolon + 1) >= 0)
+                    return false;
+                code = code.Substring(0, semicolon).TrimEnd();
+            }
+
+            if (!ReadOnlySqlStart.IsMatch(code) ||
+                SqlWriteOrDdlKeyword.IsMatch(code) ||
+                ContainsUnprovenSqlFunction(code))
+                return false;
+
+            return !code.StartsWith("WITH", StringComparison.OrdinalIgnoreCase) ||
+                   SqlSelectKeyword.IsMatch(code);
+        }
+
+        private static bool ContainsUnprovenSqlFunction(string code)
+        {
+            foreach (Match match in SqlFunctionCall.Matches(code))
+            {
+                var name = Regex.Replace(match.Groups["name"].Value, @"\s+", string.Empty);
+                if (SqlStructuralParentheses.Contains(name))
+                    continue;
+
+                // Schema-qualified functions and every unrecognised function fail closed:
+                // PostgreSQL permits user-defined functions to mutate state even in SELECT.
+                if (name.IndexOf('.') >= 0 ||
+                    name.IndexOf('"') >= 0 ||
+                    !ProvenReadOnlySqlFunctions.Contains(name))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static IOperation UnwrapConversion(IOperation operation)
+        {
+            while (operation is IConversionOperation conversion)
+                operation = conversion.Operand;
+            return operation;
+        }
+
+        private static bool TryGetConstantString(IOperation operation, out string value)
+        {
+            operation = UnwrapConversion(operation);
+            if (operation.ConstantValue.HasValue && operation.ConstantValue.Value is string constant)
+            {
+                value = constant;
+                return true;
+            }
+
+            value = string.Empty;
+            return false;
+        }
+
+        private static bool TryGetSqlCode(string sql, out string code)
+        {
+            var builder = new StringBuilder(sql.Length);
+            var state = SqlLexicalState.Code;
+            for (var index = 0; index < sql.Length; index++)
+            {
+                var current = sql[index];
+                var next = index + 1 < sql.Length ? sql[index + 1] : '\0';
+                switch (state)
+                {
+                    case SqlLexicalState.Code:
+                        if (current == '-' && next == '-')
+                        {
+                            builder.Append("  ");
+                            index++;
+                            state = SqlLexicalState.LineComment;
+                        }
+                        else if (current == '/' && next == '*')
+                        {
+                            builder.Append("  ");
+                            index++;
+                            state = SqlLexicalState.BlockComment;
+                        }
+                        else if (current == '\'')
+                        {
+                            builder.Append(' ');
+                            state = SqlLexicalState.StringLiteral;
+                        }
+                        else if (current == '"')
+                        {
+                            builder.Append('"');
+                            state = SqlLexicalState.QuotedIdentifier;
+                        }
+                        else if (current == '[')
+                        {
+                            builder.Append(' ');
+                            state = SqlLexicalState.BracketIdentifier;
+                        }
+                        else
+                        {
+                            builder.Append(current);
+                        }
+                        break;
+                    case SqlLexicalState.LineComment:
+                        builder.Append(current is '\r' or '\n' ? current : ' ');
+                        if (current is '\r' or '\n')
+                            state = SqlLexicalState.Code;
+                        break;
+                    case SqlLexicalState.BlockComment:
+                        if (current == '*' && next == '/')
+                        {
+                            builder.Append("  ");
+                            index++;
+                            state = SqlLexicalState.Code;
+                        }
+                        else
+                        {
+                            builder.Append(current is '\r' or '\n' ? current : ' ');
+                        }
+                        break;
+                    case SqlLexicalState.StringLiteral:
+                        builder.Append(' ');
+                        if (current == '\'' && next == '\'')
+                        {
+                            builder.Append(' ');
+                            index++;
+                        }
+                        else if (current == '\'')
+                        {
+                            state = SqlLexicalState.Code;
+                        }
+                        break;
+                    case SqlLexicalState.QuotedIdentifier:
+                        if (current == '"' && next == '"')
+                        {
+                            builder.Append("qq");
+                            index++;
+                        }
+                        else if (current == '"')
+                        {
+                            builder.Append('"');
+                            state = SqlLexicalState.Code;
+                        }
+                        else
+                        {
+                            builder.Append(current is '\r' or '\n' ? current : 'q');
+                        }
+                        break;
+                    case SqlLexicalState.BracketIdentifier:
+                        builder.Append(' ');
+                        if (current == ']' && next == ']')
+                        {
+                            builder.Append(' ');
+                            index++;
+                        }
+                        else if (current == ']')
+                        {
+                            state = SqlLexicalState.Code;
+                        }
+                        break;
+                }
+            }
+
+            code = builder.ToString();
+            return state is SqlLexicalState.Code or SqlLexicalState.LineComment;
+        }
+
+        private enum SqlLexicalState
+        {
+            Code,
+            LineComment,
+            BlockComment,
+            StringLiteral,
+            QuotedIdentifier,
+            BracketIdentifier
         }
 
         private bool IsRepositoryType(INamedTypeSymbol? type)
@@ -788,6 +1601,11 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
                 _aiReadHandlerRoots.Keys,
                 CloudArchitectureDiagnostics.AiReadWritePath,
                 TryResolveSink);
+            AnalyzeCallPaths(
+                context,
+                _readOnlyQueryPortRoots.Keys,
+                CloudArchitectureDiagnostics.AiReadWritePath,
+                TryResolveSink);
         }
 
         private bool TryResolveSink(
@@ -795,7 +1613,43 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             HashSet<IMethodSymbol> visited,
             out string sink)
         {
+            if (IsUnclassifiedCrossProjectInterfaceDispatch(edge))
+            {
+                sink = "unclassified cross-project interface dispatch: " + edge.TargetDisplay;
+                return true;
+            }
+
             return TryResolvePathSink(edge, visited, static item => item.IsDirectWriteSink, out sink);
+        }
+
+        private bool IsUnclassifiedCrossProjectInterfaceDispatch(InvocationEdge edge)
+        {
+            var targetType = edge.Target.ContainingType;
+            return !edge.IsDirectWriteSink &&
+                   targetType?.TypeKind == TypeKind.Interface &&
+                   targetType.ContainingAssembly.Name.StartsWith("IIoT.", StringComparison.Ordinal) &&
+                   !_callGraph.ContainsKey(edge.Target) &&
+                   !IsReadOnlyQueryPortType(targetType);
+        }
+
+        private bool IsReadOnlyQueryPortType(INamedTypeSymbol? type)
+        {
+            if (type is null || _readOnlyQueryPort is null)
+                return false;
+
+            var directlyMarked = SymbolEqualityComparer.Default.Equals(type, _readOnlyQueryPort) ||
+                                 SymbolEqualityComparer.Default.Equals(type.OriginalDefinition, _readOnlyQueryPort) ||
+                                 type.Interfaces.Any(@interface =>
+                                     SymbolEqualityComparer.Default.Equals(@interface, _readOnlyQueryPort));
+            if (!directlyMarked)
+                return false;
+
+            // A mixed read/write port must never inherit read-only trust through a read base.
+            return !type.GetMembers()
+                .OfType<IMethodSymbol>()
+                .Any(static method =>
+                    RepositoryWriteMethods.Contains(method.Name) ||
+                    DatabaseWriteMethods.Contains(method.Name));
         }
 
         private void AnalyzeSecurityReadCachePaths(CompilationAnalysisContext context)
@@ -902,7 +1756,19 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
 
         private void AnalyzeLayerDependencies(CompilationAnalysisContext context)
         {
-            if (_layer == CloudLayer.Unknown || _layer == CloudLayer.Host)
+            if (_layer == CloudLayer.Unknown)
+            {
+                if (IsUnclassifiedCloudProductionAssembly(_assemblyName))
+                {
+                    context.ReportDiagnostic(Diagnostic.Create(
+                        CloudArchitectureDiagnostics.LayerDependency,
+                        Location.None,
+                        _assemblyName,
+                        "<unclassified IIoT production layer>"));
+                }
+                return;
+            }
+            if (_layer == CloudLayer.Host)
                 return;
 
             foreach (var reference in _compilation.ReferencedAssemblyNames
@@ -1113,7 +1979,13 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
 
         private static bool ImplementsOpenGeneric(ITypeSymbol type, INamedTypeSymbol? openGeneric)
         {
-            if (openGeneric is null || type is not INamedTypeSymbol namedType)
+            if (openGeneric is null)
+                return false;
+
+            if (type is ITypeParameterSymbol parameter)
+                return parameter.ConstraintTypes.Any(constraint => ImplementsOpenGeneric(constraint, openGeneric));
+
+            if (type is not INamedTypeSymbol namedType)
                 return false;
 
             if (SymbolEqualityComparer.Default.Equals(namedType.OriginalDefinition, openGeneric))
@@ -1129,6 +2001,17 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
                 return null;
 
             return method.ReducedFrom?.OriginalDefinition ?? method.OriginalDefinition;
+        }
+
+        private static IMethodSymbol? GetOperationCaller(IOperation operation, ISymbol? containingSymbol)
+        {
+            for (var current = operation.Parent; current is not null; current = current.Parent)
+            {
+                if (current is IAnonymousFunctionOperation anonymousFunction)
+                    return NormalizeMethod(anonymousFunction.Symbol);
+            }
+
+            return NormalizeMethod(containingSymbol as IMethodSymbol);
         }
 
         private static Location GetSourceLocation(ISymbol symbol)
@@ -1157,6 +2040,68 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             internal bool IsDirectWriteSink { get; }
             internal string TargetDisplay { get; }
             internal bool IsUnresolvedDynamic { get; }
+        }
+
+        private sealed class DelegateBinding
+        {
+            private DelegateBinding(IMethodSymbol? target, ISymbol? storage)
+            {
+                Target = target;
+                Storage = storage;
+            }
+
+            internal IMethodSymbol? Target { get; }
+            internal ISymbol? Storage { get; }
+            internal static DelegateBinding ForTarget(IMethodSymbol target) => new(target, null);
+            internal static DelegateBinding ForStorage(ISymbol storage) => new(null, storage);
+            internal static DelegateBinding Unresolved { get; } = new(null, null);
+        }
+
+        private sealed class StoredDelegateInvocation
+        {
+            internal StoredDelegateInvocation(IMethodSymbol caller, ISymbol storage, Location location)
+            {
+                Caller = caller;
+                Storage = storage;
+                Location = location;
+            }
+
+            internal IMethodSymbol Caller { get; }
+            internal ISymbol Storage { get; }
+            internal Location Location { get; }
+        }
+
+        private sealed class DelegateArgumentFlow
+        {
+            internal DelegateArgumentFlow(
+                IMethodSymbol caller,
+                IMethodSymbol target,
+                IParameterSymbol parameter,
+                IOperation actual,
+                Location location,
+                bool externalConsumer)
+            {
+                Caller = caller;
+                Target = target;
+                Parameter = parameter;
+                Actual = actual;
+                Location = location;
+                ExternalConsumer = externalConsumer;
+            }
+
+            internal IMethodSymbol Caller { get; }
+            internal IMethodSymbol Target { get; }
+            internal IParameterSymbol Parameter { get; }
+            internal IOperation Actual { get; }
+            internal Location Location { get; }
+            internal bool ExternalConsumer { get; }
+        }
+
+        private static bool IsUnclassifiedCloudProductionAssembly(string assemblyName)
+        {
+            return assemblyName.StartsWith("IIoT.", StringComparison.Ordinal) &&
+                   !IsTestOnlyAssembly(assemblyName) &&
+                   !assemblyName.StartsWith("IIoT.CloudPlatform.Analyzer", StringComparison.Ordinal);
         }
 
         private delegate bool SinkResolver(

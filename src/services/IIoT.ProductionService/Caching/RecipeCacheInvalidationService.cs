@@ -1,18 +1,25 @@
-using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Caching;
 using IIoT.Services.CrossCutting.Caching;
 
 namespace IIoT.ProductionService.Caching;
 
 public sealed class RecipeCacheInvalidationService(
-    ICacheService cacheService) : IRecipeCacheInvalidationService
+    IIdempotentCacheInvalidationService idempotentInvalidation) : IRecipeCacheInvalidationService
 {
-    public async Task InvalidateAfterChangeAsync(
+    public async Task InvalidateAfterChangeOnceAsync(
+        Guid domainEventId,
         RecipeCacheDescriptor recipe,
         CancellationToken cancellationToken = default)
     {
-        await cacheService.RemoveAsync(CacheKeys.Recipe(recipe.RecipeId), cancellationToken);
-        await cacheService.RemoveAsync(CacheKeys.RecipesByProcess(recipe.ProcessId), cancellationToken);
-        await cacheService.RemoveAsync(CacheKeys.RecipesByDevice(recipe.DeviceId), cancellationToken);
+        await idempotentInvalidation.InvalidateOnceAsync(
+            domainEventId,
+            "recipe-change",
+            [
+                CacheKeys.Recipe(recipe.RecipeId),
+                CacheKeys.RecipesByProcess(recipe.ProcessId),
+                CacheKeys.RecipesByDevice(recipe.DeviceId)
+            ],
+            [],
+            cancellationToken);
     }
 }
