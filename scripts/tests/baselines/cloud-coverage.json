@@ -7,9 +7,9 @@
     "linesValid": 18488,
     "linesCovered": 11677,
     "branchesValid": 5619,
-    "branchesCovered": 2816,
+    "branchesCovered": 2815,
     "lineRate": 0.63159887,
-    "branchRate": 0.50115679
+    "branchRate": 0.50097882
   },
   "sourceUniverse": {
     "fileCount": 376,

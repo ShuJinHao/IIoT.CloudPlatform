@@ -112,11 +112,60 @@ try {
         'candidate baseline is missing' `
         'missing candidate baseline fixture'
 
+    $coverageFloor = [pscustomobject]@{
+        linesValid = 100
+        linesCovered = 60
+        branchesValid = 40
+        branchesCovered = 20
+        lineRate = 0.6
+        branchRate = 0.5
+    }
+    Assert-CloudCoverageObservation `
+        -Floor $coverageFloor `
+        -Actual ([pscustomobject]@{
+            linesValid = 100
+            linesCovered = 61
+            branchesValid = 40
+            branchesCovered = 21
+            lineRate = 0.61
+            branchRate = 0.525
+        })
+    Assert-FailsWith `
+        {
+            Assert-CloudCoverageObservation `
+                -Floor $coverageFloor `
+                -Actual ([pscustomobject]@{
+                    linesValid = 100
+                    linesCovered = 60
+                    branchesValid = 40
+                    branchesCovered = 19
+                    lineRate = 0.6
+                    branchRate = 0.475
+                })
+        } `
+        'weakens observed merged branch coverage floor' `
+        'coverage floor regression fixture'
+    Assert-FailsWith `
+        {
+            Assert-CloudCoverageObservation `
+                -Floor $coverageFloor `
+                -Actual ([pscustomobject]@{
+                    linesValid = 101
+                    linesCovered = 60
+                    branchesValid = 40
+                    branchesCovered = 20
+                    lineRate = 0.59405941
+                    branchRate = 0.5
+                })
+        } `
+        'Coverage structural universe mismatch' `
+        'coverage structural identity fixture'
+
     if ($LASTEXITCODE -ne 0) {
         throw "Handled fixture git failures leaked native exit code: $LASTEXITCODE"
     }
 
-    Write-Host 'CLOUD_QUALITY_BASELINE_PROTECTION_OK scenarios=6 basePresent=1 initialExactCandidate=1 sameHeadRejected=1 zeroRejected=1 nonAncestorRejected=1 candidateMissingRejected=1'
+    Write-Host 'CLOUD_QUALITY_BASELINE_PROTECTION_OK scenarios=9 basePresent=1 initialExactCandidate=1 sameHeadRejected=1 zeroRejected=1 nonAncestorRejected=1 candidateMissingRejected=1 coverageImprovementAccepted=1 coverageRegressionRejected=1 coverageStructureRejected=1'
 }
 finally {
     Remove-Item $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue

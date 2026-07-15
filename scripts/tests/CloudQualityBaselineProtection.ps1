@@ -97,6 +97,23 @@ function Assert-CloudQualityAtMost {
     }
 }
 
+function Assert-CloudCoverageObservation {
+    param(
+        [Parameter(Mandatory)][object]$Actual,
+        [Parameter(Mandatory)][object]$Floor
+    )
+
+    if ([int]$Actual.linesValid -ne [int]$Floor.linesValid -or
+        [int]$Actual.branchesValid -ne [int]$Floor.branchesValid) {
+        throw "Coverage structural universe mismatch: floor lines=$($Floor.linesValid) branches=$($Floor.branchesValid); actual lines=$($Actual.linesValid) branches=$($Actual.branchesValid)."
+    }
+
+    Assert-CloudQualityAtLeast ([int]$Actual.linesCovered) ([int]$Floor.linesCovered) 'observed merged line coverage floor'
+    Assert-CloudQualityAtLeast ([int]$Actual.branchesCovered) ([int]$Floor.branchesCovered) 'observed merged branch coverage floor'
+    Assert-CloudQualityAtLeast ([double]$Actual.lineRate) ([double]$Floor.lineRate) 'observed merged line-rate floor'
+    Assert-CloudQualityAtLeast ([double]$Actual.branchRate) ([double]$Floor.branchRate) 'observed merged branch-rate floor'
+}
+
 function Assert-CloudQualityExactSet {
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Candidate,

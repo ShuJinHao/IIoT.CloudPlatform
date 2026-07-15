@@ -589,14 +589,7 @@ $sourceUniverse = Get-SourceUniverse $mergedMap
 
 Write-Host "CLOUD_COVERAGE_OBSERVED lines=$($mergedMetrics.linesCovered)/$($mergedMetrics.linesValid) branches=$($mergedMetrics.branchesCovered)/$($mergedMetrics.branchesValid) lineRate=$($mergedMetrics.lineRate) branchRate=$($mergedMetrics.branchRate) files=$($sourceUniverse.fileCount) sourceDigest=$($sourceUniverse.fileMetricsSha256) productionAssemblies=$($pdbUniverse.assemblyCount) assemblyDigest=$($pdbUniverse.assemblySha256) observedAssemblies=$($observedProductionAssemblies.Count)"
 
-if ([int]$mergedMetrics.linesValid -ne [int]$baseline.merged.linesValid -or
-    [int]$mergedMetrics.linesCovered -ne [int]$baseline.merged.linesCovered -or
-    [int]$mergedMetrics.branchesValid -ne [int]$baseline.merged.branchesValid -or
-    [int]$mergedMetrics.branchesCovered -ne [int]$baseline.merged.branchesCovered -or
-    [double]$mergedMetrics.lineRate -ne [double]$baseline.merged.lineRate -or
-    [double]$mergedMetrics.branchRate -ne [double]$baseline.merged.branchRate) {
-    throw "Coverage candidate baseline must exactly match the current report: baseline=$($baseline.merged | ConvertTo-Json -Compress) actual=$($mergedMetrics | ConvertTo-Json -Compress)"
-}
+Assert-CloudCoverageObservation -Actual $mergedMetrics -Floor $baseline.merged
 if ([int]$sourceUniverse.fileCount -ne [int]$baseline.sourceUniverse.fileCount -or
     [int]$sourceUniverse.linesValid -ne [int]$baseline.sourceUniverse.linesValid -or
     [int]$sourceUniverse.branchesValid -ne [int]$baseline.sourceUniverse.branchesValid -or
