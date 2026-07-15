@@ -112,6 +112,10 @@ try {
         'candidate baseline is missing' `
         'missing candidate baseline fixture'
 
+    if ($LASTEXITCODE -ne 0) {
+        throw "Handled fixture git failures leaked native exit code: $LASTEXITCODE"
+    }
+
     Write-Host 'CLOUD_QUALITY_BASELINE_PROTECTION_OK scenarios=6 basePresent=1 initialExactCandidate=1 sameHeadRejected=1 zeroRejected=1 nonAncestorRejected=1 candidateMissingRejected=1'
 }
 finally {

@@ -14,13 +14,17 @@ function Resolve-CloudQualityBaseCommit {
 
     $resolvedOutput = @(& git -C $RepoRoot rev-parse --verify "$BaseRef`^{commit}" 2>&1)
     $resolved = ($resolvedOutput -join '').Trim()
-    if ($LASTEXITCODE -ne 0 -or $resolved -notmatch '^[0-9a-f]{40}$') {
+    $resolveExitCode = $LASTEXITCODE
+    if ($resolveExitCode -ne 0 -or $resolved -notmatch '^[0-9a-f]{40}$') {
+        $global:LASTEXITCODE = 0
         throw "Unable to resolve quality BaseRef '$BaseRef' to a commit: $($resolvedOutput -join ' ')"
     }
 
     $headOutput = @(& git -C $RepoRoot rev-parse --verify 'HEAD^{commit}' 2>&1)
     $head = ($headOutput -join '').Trim()
-    if ($LASTEXITCODE -ne 0 -or $head -notmatch '^[0-9a-f]{40}$') {
+    $headExitCode = $LASTEXITCODE
+    if ($headExitCode -ne 0 -or $head -notmatch '^[0-9a-f]{40}$') {
+        $global:LASTEXITCODE = 0
         throw "Unable to resolve candidate HEAD: $($headOutput -join ' ')"
     }
     if ([string]::Equals($resolved, $head, [StringComparison]::Ordinal)) {
@@ -28,7 +32,9 @@ function Resolve-CloudQualityBaseCommit {
     }
 
     & git -C $RepoRoot merge-base --is-ancestor $resolved $head 2>$null
-    if ($LASTEXITCODE -ne 0) {
+    $mergeBaseExitCode = $LASTEXITCODE
+    if ($mergeBaseExitCode -ne 0) {
+        $global:LASTEXITCODE = 0
         throw "Quality BaseRef must be an ancestor of candidate HEAD: base=$resolved head=$head"
     }
 
@@ -47,7 +53,9 @@ function Get-CloudQualityBaseJson {
     }
 
     $content = @(& git -C $RepoRoot show "$BaseCommit`:$RelativePath" 2>&1)
-    if ($LASTEXITCODE -ne 0) {
+    $showExitCode = $LASTEXITCODE
+    if ($showExitCode -ne 0) {
+        $global:LASTEXITCODE = 0
         $candidatePath = Join-Path $RepoRoot $RelativePath
         if (-not (Test-Path $candidatePath -PathType Leaf)) {
             throw "Base commit has no '$RelativePath' and candidate baseline is missing: $candidatePath"
