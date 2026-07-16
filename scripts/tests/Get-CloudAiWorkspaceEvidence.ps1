@@ -71,9 +71,9 @@ $cloudContractSources = @(
     'src/services/IIoT.Services.Contracts/Contracts/Identity/IIoTClaimTypes.cs'
 )
 $aiContractSources = @(
-    'src/infrastructure/AICopilot.CloudReadClient/CloudAiReadClient.cs',
+    'src/infrastructure/AICopilot.Infrastructure/CloudRead/CloudAiReadClient.cs',
     'src/services/AICopilot.Services.Contracts/Contracts/CloudAiReadContracts.cs',
-    'src/tests/AICopilot.ContractTests/CloudAiReadClientContractTests.cs',
+    'src/tests/AICopilot.InProcessTests/CloudAiReadClientContractTests.cs',
     'src/tests/AICopilot.CloudAiReadLiveTests/CloudAiReadLiveContractTests.cs'
 )
 

@@ -805,6 +805,8 @@ public sealed class DeploymentSourceGuardTests
             CloudRepositoryPath.Find("src", "testing", "IIoT.CloudPlatform.WebE2ETestKit", "Program.cs"));
         var inventoryScriptSource = File.ReadAllText(
             CloudRepositoryPath.Find("scripts", "tests", "Invoke-CloudTestInventory.ps1"));
+        var workspaceEvidenceSource = File.ReadAllText(
+            CloudRepositoryPath.Find("scripts", "tests", "Get-CloudAiWorkspaceEvidence.ps1"));
         var migrationScriptSource = File.ReadAllText(
             CloudRepositoryPath.Find("scripts", "tests", "Test-CloudTestMigration.ps1"));
         var migrationBaselineSource = File.ReadAllText(
@@ -920,6 +922,14 @@ public sealed class DeploymentSourceGuardTests
         inventoryManifestSource.Should().Contain("\"runtimeDependencies\": [\"Aspire\", \"AICopilotWorkspace\"]");
         inventoryManifestSource.Should().Contain("\"cadence\": \"Release\"");
         inventoryManifestSource.Should().Contain("\"profile\": \"WorkspaceAlignment\"");
+        workspaceEvidenceSource.Should().Contain(
+            "src/infrastructure/AICopilot.Infrastructure/CloudRead/CloudAiReadClient.cs");
+        workspaceEvidenceSource.Should().Contain(
+            "src/tests/AICopilot.InProcessTests/CloudAiReadClientContractTests.cs");
+        workspaceEvidenceSource.Should().NotContain(
+            "src/infrastructure/AICopilot.CloudReadClient/CloudAiReadClient.cs");
+        workspaceEvidenceSource.Should().NotContain(
+            "src/tests/AICopilot.ContractTests/CloudAiReadClientContractTests.cs");
         workflowSource.Should().Contain(
             "ARCHITECTURE_FIXTURES_OK valid=8 invalid=15 callGraphBypass=20 suppressionBypass=3 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010");
         workflowSource.Should().Contain("Validate deploy script syntax");
