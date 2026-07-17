@@ -1,5 +1,6 @@
 39e54da716dac01346be08e2b442d2db3e4529deeaea8c64112d167077603263  ./README.md
 5f28c4aa81c0ee95313e755655dd79519cc008eaf020861a59c285fb1ea83c3b  ./audit/execution-handoff.md
+aaec74c2024ecada1fd89414b3bc9a5978f20a00859e44cde8a15b92431f54f4  ./audit/final-strict-review.md
 976957a999d1265d16043298c7584c58cd9cb0a3c75490793e0951c44bbc7b0b  ./audit/initial-reopening-audit.md
 9166833db2f3e10d8b69cb8d0a7f82badeb53d8fd7baffce55a47d37c2a2cfe0  ./closure/final-ci-bindings.json
 a2bb71de666285feefd3b52d92b92e334daf34c7d595414445cee3f2d5933cb7  ./closure/final-static-audit.json
@@ -20,6 +21,7 @@ f173a0b9000638ac974acd2c02a9d24d6985048d9dd7dd16ff8f1ca6c6f8206e  ./closure/sour
 83b5a9e4ffc2c5c15d5578beceac0c60cc35d317b02e7b6fa5adf4f7c4cb713d  ./closure/source-reports/edge/discovered-test-inventory.json
 c38d19ab9d9d068b713fa9ea10cff2348274e000992494df38c1625ad4a322df  ./closure/source-reports/edge/required-summary.json
 c92a7b7a96c8f1b72cd0175e33af1e52c02f1aa06ec8f2ac224fb25a12caaa6c  ./closure/three-repository-closure-result.json
+6f4f2998470e57daa408db1b5a61b18b2ff8f4bd63ee5df5f3befb3f8e708bf6  ./commit-a-metadata.json
 f6bc8b68e247fdb27380d69d5263e3978ef74c23eba527b4e2e0b79500727056  ./cross-repository-contract-digest.json
 a9d3d81106930f2ad375346a15a89724d9c52ff3aab4fc2a9b4218ff826550ef  ./cross-repository-duplication/cross-repository-duplication.json
 796cd70e0e853dd04f8548d96c7d31be5db8ae256e121389107f8858fa387774  ./cross-repository-duplication/production-mild/jscpd-report.json
@@ -35,6 +37,7 @@ e31bfdbc295a1791d7f86e0dae1d1c4055b36c4f0cd3646942116b1991770ec6  ./non-producti
 1ad81672eef01a362efdb0f3d76c0beddfb62e7b6422401dbe758d28c3796f12  ./non-production-joint-acceptance/non-production-joint-acceptance.json
 b0bf279d9c9033fa9eb8c0312150f6a8aa9d13cb01993b97b78a6b573662db04  ./non-production-joint-acceptance/provider/cloud-pass-station-provider.trx
 0157528da864e96247c359376c7b5d6a3ad377d1d00e60f332aab5bfed10695a  ./root-docs/testing-README.md
+a9543f7bf3e6376c31006304c06503814cf0fb84b63f12699fc07d912f807b5d  ./root-docs/三项目测试架构治理总计划-CLOSED-snapshot.md
 a2bbcf5cef20310647ceafe40ece4b4093ee729b6ff8b68348e10105772b8ab0  ./root-docs/三项目测试架构治理总计划-REOPENED-snapshot.md
 cccd107782cdbb03e780f96fa3fbf1bc2c3a7ac97d8028628e3ef4e26abd5ea2  ./root-scripts/Test-ThreeRepositoryClosurePredicates.ps1
 7d17cb533189e9eca7bc3769e1c96e3dd857e6da11b0085be81bc55dd30fd7d8  ./root-scripts/Test-ThreeRepositoryClosurePredicatesBehavior.ps1

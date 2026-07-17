@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "purpose": "evidence-only / do not merge / no production",
+  "repository": "ShuJinHao/IIoT.CloudPlatform",
+  "branch": "evidence/test-architecture-closeout-20260717",
+  "pullRequest": {
+    "number": 37,
+    "url": "https://github.com/ShuJinHao/IIoT.CloudPlatform/pull/37",
+    "state": "OPEN",
+    "draft": true,
+    "merged": false,
+    "base": "main"
+  },
+  "commitA": {
+    "commit": "ba54735afedee843064dce739a3e1e1acd9c85a6",
+    "tree": "53f04364ca2994fac0163caebedae0e1d81d4a19",
+    "manifestSha256": "761fb7b494d7bdc67a17ab126cb44311cb43b78f511811d501993c37297eaa1f",
+    "remoteRefVerified": true
+  },
+  "commitACi": {
+    "run": 29566054879,
+    "attempt": 1,
+    "event": "pull_request",
+    "headSha": "ba54735afedee843064dce739a3e1e1acd9c85a6",
+    "status": "completed",
+    "conclusion": "success",
+    "job": {
+      "id": 87838814284,
+      "name": "build-test",
+      "conclusion": "success",
+      "annotations": 0
+    },
+    "artifact": {
+      "id": 8401321166,
+      "name": "cloud-required-test-results",
+      "digest": "sha256:80fb381b43efa50a88dbd4190033ba6cb45485cbe4e1bdf4f635c105545c8c60"
+    },
+    "note": "This evidence-only CI proves the artifact commit did not break the Cloud required gate; it does not replace the three candidate final CI runs."
+  },
+  "strictReview": {
+    "status": "PASS",
+    "blocking": 14,
+    "passed": 14,
+    "failed": 0,
+    "notRun": 0,
+    "report": "audit/final-strict-review.md"
+  },
+  "candidateRuns": {
+    "Edge": 29558380849,
+    "Cloud": 29562419923,
+    "AI": 29562903935
+  },
+  "forbiddenOperationsPerformed": false
+}
