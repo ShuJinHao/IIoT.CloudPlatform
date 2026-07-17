@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Post-review fail-closed hardening; ordinary append-only evidence commit",
+  "intermediateCommitB": {
+    "commit": "84e7d12f922fd74b0714cd53262509aa42960c46",
+    "tree": "dc174d0d9a5188c234a10c290fbe675e43336d9d",
+    "manifestSha256": "ac2a494f0fbbba0f9a23ea50d6265518b52eb45fa927a1baca20a6d2279f6aa6",
+    "ci": {
+      "run": 29566679055,
+      "attempt": 1,
+      "headSha": "84e7d12f922fd74b0714cd53262509aa42960c46",
+      "conclusion": "success",
+      "job": 87840746985,
+      "annotations": 0,
+      "artifact": 8401541567,
+      "artifactDigest": "sha256:49181acbb9effa21c1fd408fa96b14a7c04708f0972adc9368e3865b6adeb826"
+    }
+  },
+  "findings": [
+    {
+      "id": "CATALOG-COMMAND-EXECUTABILITY",
+      "disposition": "fixed",
+      "reason": "Several catalog command entries described an already executed gate but were not directly executable command lines. Every entry is now an exact command; non-build commands were executed and pwsh entrypoints were resolved."
+    },
+    {
+      "id": "AI-COVERAGE-DIRECT-EVIDENCE",
+      "disposition": "fixed",
+      "reason": "CLOSURE-10 now directly binds the immutable AI coverage report and records exact baseline/actual line and branch rates."
+    }
+  ],
+  "verification": {
+    "catalogSha256": "a9f340d464389df5c2f1d36514949feefa0a30c6131d7e87d3bb06d2b4b35805",
+    "resultSha256": "edb0f44f4d502d49ec9847dc4a3b91b9694aaa4bc49a9c074328cff1d1598047",
+    "closure": { "blocking": 14, "passed": 14, "failed": 0, "notRun": 0, "status": "PASS" },
+    "behavior": { "positive": 1, "negative": 10, "status": "PASS" },
+    "executableNonBuildCommands": { "count": 26, "status": "PASS" },
+    "pwshEntrypoints": { "allResolve": true, "status": "PASS" }
+  },
+  "selfReferencePolicy": "The final append commit SHA/tree and final manifest SHA are recorded only after push in the root strict review and final delivery, not inside this commit."
+}

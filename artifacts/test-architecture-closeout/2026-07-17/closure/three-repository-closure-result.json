@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "generatedAtUtc": "2026-07-17T08:16:32.8265880+00:00",
+  "generatedAtUtc": "2026-07-17T08:40:10.1834490+00:00",
   "catalogPath": "scripts/testing/baselines/three-repository-closure-predicates.json",
-  "catalogSha256": "ebf86c061de97b6dcdcb65945a9316e69cbc3710746a1a689d5c500ea17971e9",
+  "catalogSha256": "a9f340d464389df5c2f1d36514949feefa0a30c6131d7e87d3bb06d2b4b35805",
   "blocking": 14,
   "passed": 14,
   "failed": 0,

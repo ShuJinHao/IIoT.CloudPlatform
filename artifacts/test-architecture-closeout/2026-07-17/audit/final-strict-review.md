@@ -2,7 +2,7 @@
 
 日期：2026-07-17  
 审核口径：只允许 `PASS / FAIL / NOT-RUN / N/A`；任一 blocking 非 `PASS` 即不得关单。  
-审核输入：evidence commit A `ba54735afedee843064dce739a3e1e1acd9c85a6`，tree `53f04364ca2994fac0163caebedae0e1d81d4a19`，manifest SHA-256 `761fb7b494d7bdc67a17ab126cb44311cb43b78f511811d501993c37297eaa1f`，Draft PR [CloudPlatform #37](https://github.com/ShuJinHao/IIoT.CloudPlatform/pull/37)。
+审核输入：evidence commit A `ba54735afedee843064dce739a3e1e1acd9c85a6`，tree `53f04364ca2994fac0163caebedae0e1d81d4a19`，manifest SHA-256 `761fb7b494d7bdc67a17ab126cb44311cb43b78f511811d501993c37297eaa1f`，Draft PR [CloudPlatform #37](https://github.com/ShuJinHao/IIoT.CloudPlatform/pull/37)；以及严格复审后追加的 catalog command/AI coverage 绑定加固。最终加固内容只允许以普通追加 commit 固化，不覆盖 A/B。
 
 该审核只使用 commit A 中的 reopened 计划快照、机器 catalog/result、三仓候选与 GitHub 绑定、原始报告和跨仓证据；不使用待写的关单计划快照反向证明自身。
 
@@ -37,7 +37,7 @@ evidence commit A 自身的非生产 Cloud PR 检查也在首次运行成功：r
 | CLOSURE-13 | `PASS` | `FORMAL_RULE_TO_GATE_CATALOG_COMPLETE` | 唯一 14 项 catalog；每项 formal rule path 可解析且 gate 非空；行为 gate 拒绝历史/复盘唯一规则和九类结构错误。 |
 | CLOSURE-14 | `PASS` | `EXTERNAL_AND_PRODUCTION_BOUNDARIES_PRESERVED` | 三候选 PR 均 Draft/Open/未 merge；Cloud 生产 workflow 仅 workflow_dispatch；未执行 merge、部署、stable、生产 schema/data、服务器、现场或 LiveExternal。 |
 
-机器结果：`blocking=14`、`passed=14`、`failed=0`、`notRun=0`、`status=PASS`。catalog SHA-256 为 `ebf86c061de97b6dcdcb65945a9316e69cbc3710746a1a689d5c500ea17971e9`，result SHA-256 为 `c92a7b7a96c8f1b72cd0175e33af1e52c02f1aa06ec8f2ac224fb25a12caaa6c`。
+机器结果：`blocking=14`、`passed=14`、`failed=0`、`notRun=0`、`status=PASS`。catalog SHA-256 为 `a9f340d464389df5c2f1d36514949feefa0a30c6131d7e87d3bb06d2b4b35805`，result SHA-256 为 `edb0f44f4d502d49ec9847dc4a3b91b9694aaa4bc49a9c074328cff1d1598047`。26 条非构建 command 已逐条实际执行且退出 0，所有 `pwsh -File` 入口均解析到现存脚本；会重建 Edge 产物的既有 analyzer/behavior gate 不在清理后重跑，而由相同候选 HEAD 的 final CI artifact 绑定。
 
 ## 3. 主动推翻检查
 
@@ -48,7 +48,7 @@ evidence commit A 自身的非生产 Cloud PR 检查也在首次运行成功：r
 | Cloud Analyzer fixture 仍是自造 Contracts，不会对真实 Contracts 漂移 fail-closed | 复核 fixture script 对真实 `IIoT.Services.Contracts.csproj` ProjectReference、真实 build output metadata probe 和 9 个 exact identity；检查 missing/rename 时无法解析恰好一次；与 artifact 日志交叉对账 | `CONTRACTS_METADATA_BINDING_OK identities=9`，全部正反/bypass fixture 进入 final build-test | `PASS` |
 | Edge 未知异常/OCE 仍被翻译；模切在 allowlist 外回流 | 检查 startup integration 中 unknown `IOException` 与 `OperationCanceledException` 的 `Assert.Same`，以及批准异常的诊断非阻断路径；复核 source guard 禁止 bare/unfiltered broad catch；重新检查 retirement evidence=1、declarations=41、allowed=2、unexpected=0、negative=8 | 未知/OCE 保持同实例传播；活动模切零回流 | `PASS` |
 | Cloud compatibility 只看 HEAD，doc-only 或任意 src 漂移都可能误判 | 检查 schema v3 report 中 reference/evidence HEAD、clean tracked-source digest、逐 consumer aggregate digest；检查内建 doc-only HEAD 正例以及 tracked-src drift、consumer drift、dirty repo 三个反例 | doc-only HEAD 变化可通过；任意 tracked src/consumer/dirty 变化 fail-closed | `PASS` |
-| 14 项 catalog 未封闭或未绑定最终证据 | 对 commit A catalog 独立执行 jq：ID 精确 CLOSURE-01..14、每项 blocking/PASS/closed、每项 3 repo+3 GitHub bindings；逐条重算所有去重 evidence SHA，并核对 result.catalogSha256 | `STRICT_CATALOG_RECOMPUTE_OK predicates=14 bindingsPerPredicate=3 evidenceHashes=all` | `PASS` |
+| 14 项 catalog 未封闭、命令只是描述句，或未绑定最终证据 | 独立执行 jq：ID 精确 CLOSURE-01..14、每项 blocking/PASS/closed、每项 3 repo+3 GitHub bindings；逐条重算所有去重 evidence SHA，并核对 result.catalogSha256；逐条执行 26 条非构建 command；解析所有 pwsh entrypoint；将 AI coverage JSON 直接加入 CLOSURE-10 evidence | `STRICT_CATALOG_RECOMPUTE_OK predicates=14 bindingsPerPredicate=3 evidenceHashes=all`；`EXECUTABLE_CATALOG_COMMANDS_OK nonBuildCommands=26`；`CATALOG_PWSH_ENTRYPOINTS_OK` | `PASS` |
 | 根证据只是本地文件，远端无法复算 | `git ls-remote` 复核 evidence branch 指向 commit A；本地 tree 与 PR #37 head OID 对账；从 manifest 所在目录重算 41 个被列文件 | remote head、tree 和 manifest 全部一致；41/41 hash OK | `PASS` |
 
 manifest 初次复算曾从仓根执行，因清单采用证据目录相对路径而报告文件不存在；切换到 manifest 所在目录后 41/41 全部 `OK`。这是复算命令工作目录纠正，不是证据 hash 漂移。

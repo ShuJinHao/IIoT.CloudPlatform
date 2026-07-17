@@ -14,7 +14,7 @@
         "allowlist": [{"value": "formal rules, negative fixtures, retrospective prose", "reason": "These locations may name a retired asset only to reject or audit it; they do not authorize changes."}],
         "denylist": ["CODEOWNERS", ".github/CODEOWNERS", "docs/governance-authorization.md", "docs/test-governance-authorization.md", "docs/测试治理授权.md", "artifacts/governance-authorization.json"]
       },
-      "commands": ["for each frozen candidate: git ls-files | rg '(^|/)(CODEOWNERS|governance-authorization\\.md|test-governance-authorization\\.md|测试治理授权\\.md|governance-authorization\\.json)$'"],
+      "commands": ["! (for repo in .codex-worktrees/edge-startup-exception-retirement-closure .codex-worktrees/cloud-cache-001 .codex-worktrees/ai-phase0-closeout; do git -C \"$repo\" ls-files; done | rg '(^|/)(CODEOWNERS|governance-authorization\\.md|test-governance-authorization\\.md|测试治理授权\\.md|governance-authorization\\.json)$')"],
       "expectation": {"exitCode": 0, "threshold": "activeTrackedMatches=0"},
       "actual": {"status": "PASS", "exitCode": 0, "reasonCode": "RETIRED_GOVERNANCE_ASSET_DENYLIST_ZERO"},
       "bindings": {
@@ -51,8 +51,8 @@
       },
       "commands": [
         "pwsh -NoProfile -File .codex-worktrees/edge-startup-exception-retirement-closure/scripts/tests/Test-EdgeRetiredFeatureEvidence.ps1",
-        "pwsh -NoProfile -File .codex-worktrees/edge-startup-exception-retirement-closure/scripts/tests/Test-EdgeRetiredFeatureEvidenceBehavior.ps1",
-        "find .codex-worktrees/edge-startup-exception-retirement-closure -type d -name '.vs|bin|obj|artifacts|.artifacts|publish|staging'"
+        "pwsh -NoProfile -File .codex-worktrees/edge-startup-exception-retirement-closure/scripts/tests/Test-EdgeRetiredFeatureEvidenceFixtures.ps1",
+        "test \"$(find .codex-worktrees/edge-startup-exception-retirement-closure -type d \\( -name .vs -o -name bin -o -name obj -o -name artifacts -o -name .artifacts -o -name publish -o -name staging \\) -prune -print | wc -l | tr -d ' ')\" = 0"
       ],
       "expectation": {"exitCode": 0, "threshold": "evidence=1 declarations=41 allowedMatches=2 unexpected=0 behavior positive=1 negative=8 generatedDirectoryCount=0"},
       "actual": {"status": "PASS", "exitCode": 0, "reasonCode": "EDGE_RETIRED_FEATURE_AND_GENERATED_OUTPUT_ZERO"},
@@ -88,7 +88,7 @@
         "allowlist": [{"value":"Homogenization production module tests", "reason":"Production-module-specific behavior remains in its own module runner and is not the host/SDK neutral seam."}],
         "denylist": ["host-global process-specific test plugin", "SDK hard-coded production module identity", "cancellation translated to success"]
       },
-      "commands": ["Edge smoke-build required run executes IIoT.Edge.Module.ConformanceTests including TestPluginRuntimeContractTests"],
+      "commands": ["jq -e '[.projects[] | select(.project == \"IIoT.Edge.Module.ConformanceTests\")][0] | .discovered == 77 and .executed == 77 and .passed == 77 and .failed == 0 and .skipped == 0' artifacts/testing/closure/source-reports/edge/required-summary.json", "rg -n 'class TestPluginRuntimeContractTests' .codex-worktrees/edge-startup-exception-retirement-closure/src/Tests/IIoT.Edge.Module.ConformanceTests/TestPluginRuntimeContractTests.cs"],
       "expectation": {"exitCode": 0, "threshold": "neutral lifecycle/completion/cancellation contract passes"},
       "actual": {"status": "PASS", "exitCode": 0, "reasonCode": "EDGE_NEUTRAL_TESTPLUGIN_SEAM_VERIFIED"},
       "bindings": {
@@ -120,7 +120,7 @@
         "allowlist": [{"value":"manual and LiveExternal cases", "reason":"They remain classified and inventoried but are excluded from required execution by explicit cadence/runtime policy."}],
         "denylist": ["duplicate case identity", "missing classification", "unregistered runner", "required/manual reconciliation mismatch"]
       },
-      "commands": ["repository-native inventory and required reconciliation gates in the three final required runs"],
+      "commands": ["jq -e '.projectCount == 32 and .caseCount == 1332' artifacts/testing/closure/source-reports/edge/discovered-test-inventory.json", "jq -e '(.runnerEvidence | length) == 18 and .baselineCases == 725 and .requiredCases == 661' artifacts/testing/closure/source-reports/cloud/test-inventory.json", "jq -e '(.projects | length) == 25 and (.cases | length) == 1026 and ([.cases[] | select(.required == true)] | length) == 1012 and ([.cases[] | select(.required != true)] | length) == 14' artifacts/testing/closure/source-reports/ai/test-inventory.json"],
       "expectation": {"exitCode": 0, "threshold": "unique case identity; complete metadata; declared=discovered; required+manual=all"},
       "actual": {"status": "PASS", "exitCode": 0, "reasonCode": "NATIVE_INVENTORY_CLASSIFICATION_RECONCILED"},
       "bindings": {
@@ -161,7 +161,7 @@
         "denylist": ["IIoT.ServiceLayer.Tests", "IIoT.ProductionService.Tests", "IIoT.Infrastructure.Tests", "IIoT.RedisIntegrationTests", "IIoT.EndToEndTests", "required case hiding filter", "required source Skip", "required-to-manual downgrade", "Compile Link test source reuse", "support project containing test cases", "orphan support project"]
       },
       "details": {"duplicateHelperDefinition":"Equivalent test-only behavior copied into at least two active files in one repository, unless class-local/private or governed by the production/support/test-case duplication baseline and ratchet."},
-      "commands": ["three repository-native inventory behavior gates", "three repository duplication ratchets", "pwsh -NoProfile -File scripts/testing/Report-CrossRepositoryDuplication.ps1"],
+      "commands": ["jq -e '.closedUniverses.legacyTestArchitecture.result == \"PASS\" and (.closedUniverses.legacyTestArchitecture.denylist.buckets | length) == 6 and (.closedUniverses.legacyTestArchitecture.denylist.filters | length) == 3 and (.closedUniverses.legacyTestArchitecture.denylist.helpers | length) == 3' artifacts/testing/closure/final-static-audit.json", "jq -e '.scans | length == 6' artifacts/testing/cross-repository-duplication/cross-repository-duplication.json", "pwsh -NoProfile -File .codex-worktrees/ai-phase0-closeout/scripts/tests/Test-AICopilotTestInfrastructureBehavior.ps1"],
       "expectation": {"exitCode": 0, "threshold": "denylist zero in active graph; each injected forbidden fixture exits non-zero; no ratchet regression"},
       "actual": {"status": "PASS", "exitCode": 0, "reasonCode": "LEGACY_BUCKET_FILTER_HELPER_DENYLIST_CLOSED"},
       "bindings": {
@@ -196,7 +196,7 @@
         "allowlist": [{"value":"Cloud optional full-end-to-end and mutation jobs", "reason":"Workflow job SKIPPED is distinct from required test-case skip and is not part of the final PR required lane."}],
         "denylist": ["failed test", "skipped required case", "discovery/execution mismatch", "same-SHA rerun used to overwrite first failure", "run head different from candidate"]
       },
-      "commands": ["Confirm-EdgeRequiredTestResults.ps1", "Invoke-CloudTestInventory.ps1 required reconciliation", "Confirm-AICopilotRequiredTestResults.ps1", "GitHub API PR/run binding checks"],
+      "commands": ["jq -e '([.projects[].discovered] | add) == 1332 and ([.projects[].executed] | add) == 1332 and ([.projects[].passed] | add) == 1332 and ([.projects[].failed] | add) == 0 and ([.projects[].skipped] | add) == 0' artifacts/testing/closure/source-reports/edge/required-summary.json", "jq -e '.requiredCases == 661' artifacts/testing/closure/source-reports/cloud/test-inventory.json", "jq -e '.dotnet.discovered == 1012 and .dotnet.executed == 1012 and .dotnet.passed == 1012 and .dotnet.failed == 0 and .dotnet.skipped == 0' artifacts/testing/closure/source-reports/ai/required-summary.json", "jq -e 'all(.repositories[]; .clean == true and .pullRequest.state == \"OPEN\" and .pullRequest.draft == true and .pullRequest.headOid == .head and .run.attempt == 1 and .run.headSha == .head and .run.conclusion == \"success\")' artifacts/testing/closure/final-ci-bindings.json"],
       "expectation": {"exitCode": 0, "threshold": "Edge 1332/1332; Cloud 661/661; AI 1012/1012; failed=skipped=0; attempt=1"},
       "actual": {"status": "PASS", "exitCode": 0, "reasonCode": "FINAL_REQUIRED_RUNS_EXACT_AND_HEAD_BOUND"},
       "bindings": {
@@ -233,7 +233,7 @@
         "allowlist": [{"value":"negative fixture source", "reason":"A negative fixture intentionally contains the forbidden dependency or suppression form and must fail only under the expected reason."}],
         "denylist": ["missing metadata identity", "Analyzer disabled", "suppression bypass", "call-graph wrapper bypass", "invalid fixture accepted", "positive fixture rejected"]
       },
-      "commands": ["Edge Test-EdgeArchitectureAnalyzerFixtures.ps1 and project-graph behavior", "Cloud TestCloudArchitectureAnalyzerFixtures.sh", "AI Test-AICopilotTestInfrastructureBehavior.ps1"],
+      "commands": ["pwsh -NoProfile -File .codex-worktrees/edge-startup-exception-retirement-closure/scripts/tests/Test-EdgeArchitectureAnalyzerFixtures.ps1", "rg -x 'ARCHITECTURE_FIXTURES_OK valid=8 invalid=15 callGraphBypass=20 suppressionBypass=3 contractsMetadataIdentities=9 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010' artifacts/testing/closure/source-reports/cloud/architecture-fixtures.log", "pwsh -NoProfile -File .codex-worktrees/ai-phase0-closeout/scripts/tests/Test-AICopilotTestInfrastructureBehavior.ps1"],
       "expectation": {"exitCode": 0, "threshold": "Cloud identities=9 valid=8 invalid=15 callGraphBypass=20 suppressionBypass=3; all repository-native fixture gates pass"},
       "actual": {"status": "PASS", "exitCode": 0, "reasonCode": "ANALYZER_POSITIVE_NEGATIVE_FIXTURES_FAIL_CLOSED"},
       "bindings": {
@@ -271,7 +271,7 @@
         "denylist": ["matrix identity without test", "identity without runner", "identity without PASS result", "identity without exact run and HEAD"]
       },
       "details": {"identityCount":10, "requiredFields":["repository","identity","test","runner","run","head","result"]},
-      "commands": ["jq verifies ten unique high-risk identity records and exact repository run/head bindings in final-static-audit.json"],
+      "commands": ["jq -e '(.highRiskIdentityMatrix | length) == 10 and ([.highRiskIdentityMatrix[].identity] | unique | length) == 10 and all(.highRiskIdentityMatrix[]; (.test | length) > 0 and (.runner | length) > 0 and .result == \"PASS\" and (.run == 29558380849 or .run == 29562419923 or .run == 29562903935) and (.head | length) == 40)' artifacts/testing/closure/final-static-audit.json"],
       "expectation": {"exitCode": 0, "threshold": "10/10 identities have test+runner+PASS+run+HEAD"},
       "actual": {"status": "PASS", "exitCode": 0, "reasonCode": "HIGH_RISK_IDENTITY_MATRIX_FULLY_BOUND"},
       "bindings": {
@@ -312,7 +312,7 @@
         "capability":"exactly one registered runner capability per case",
         "projectReference":"evaluated transitive project/package graph is checked against runtime and TestKind"
       },
-      "commands": ["Edge architecture project graph behavior gate", "Cloud Invoke-CloudTestInventory.ps1 behavior fixtures", "AI Get-AICopilotTestInventory.ps1 plus infrastructure behavior fixtures"],
+      "commands": ["jq -e '.failureLayerMatrix.result == \"PASS\" and (.failureLayerMatrix.testKinds | length) == 12 and (.failureLayerMatrix.runtimes | length) == 13 and (.failureLayerMatrix.projectReferenceRules | length) == 5 and (.failureLayerMatrix.negativeFixtureGates | length) == 3' artifacts/testing/closure/final-static-audit.json", "pwsh -NoProfile -File .codex-worktrees/edge-startup-exception-retirement-closure/scripts/tests/Test-EdgeArchitectureProjectGraph.ps1", "pwsh -NoProfile -File .codex-worktrees/ai-phase0-closeout/scripts/tests/Test-AICopilotTestInfrastructureBehavior.ps1"],
       "expectation": {"exitCode": 0, "threshold": "all inventory cases classified; every injected illegal graph exits non-zero"},
       "actual": {"status": "PASS", "exitCode": 0, "reasonCode": "REAL_FAILURE_LAYER_MATRIX_ENFORCED"},
       "bindings": {
@@ -356,10 +356,10 @@
       "details": {
         "Edge":{"coverageBaseline":{"lineRate":0.644749,"branchRate":0.496278},"actual":{"lineRate":0.658909,"branchRate":0.514546},"mutationMode":"report-only","head":"7474b3a919d8e0058ac529fdda6e2d0cd720390d","run":29558380849},
         "Cloud":{"coverageActual":{"lineRate":0.63159887,"branchRate":0.50097882},"newP0Minimum":{"lineRate":0.9,"branchRate":0.85},"mutationCadence":{"killed":21,"tested":21,"score":100.0},"compatibilityEdgeHead":"7474b3a919d8e0058ac529fdda6e2d0cd720390d","head":"c06c238516470f0efb81464b9e3b83bb20811191","run":29562419923},
-        "AI":{"mutationMinimumScore":100.0,"mutationActual":{"killed":58,"evaluated":58,"score":100.0},"compatibilityEncv1Callers":2,"head":"59b93f7145fbe2dc908aa35970566d25875b473c","run":29562903935},
+        "AI":{"coverageBaseline":{"lineRate":0.81262722,"branchRate":0.53918234},"coverageActual":{"lineRate":0.81262722,"branchRate":0.53918234},"mutationMinimumScore":100.0,"mutationActual":{"killed":58,"evaluated":58,"score":100.0},"compatibilityEncv1Callers":2,"head":"59b93f7145fbe2dc908aa35970566d25875b473c","run":29562903935},
         "crossRepository":{"jscpdVersion":"5.0.12","scans":6,"crossRepositoryGroups":82,"policy":"report-only"}
       },
-      "commands": ["repository-native coverage/duplication/compatibility gates in final required runs", "AI mutation-gate job 87829027181", "pwsh -NoProfile -File scripts/testing/Report-CrossRepositoryDuplication.ps1"],
+      "commands": ["jq -e '.merged.lineRate == 0.63159887 and .merged.branchRate == 0.50097882' artifacts/testing/closure/source-reports/cloud/coverage-summary.json", "jq -e '.metrics.lineRate == 0.81262722 and .metrics.branchRate == 0.53918234 and .metrics.reportCount == 17' artifacts/testing/closure/source-reports/ai/coverage.json", "jq -e '.metrics.killed == 58 and .metrics.evaluatedMutants == 58 and .metrics.survived == 0 and .metrics.noCoverage == 0' artifacts/testing/closure/source-reports/ai/mutation.json", "jq -e '(.externalConsumerEvidence | length) == 2 and all(.externalConsumerEvidence[]; .verified == true and .repositoryClean == true and .evidenceHead == \"7474b3a919d8e0058ac529fdda6e2d0cd720390d\")' artifacts/testing/closure/source-reports/cloud/compatibility.json", "jq -e '(.scans | length) == 6' artifacts/testing/cross-repository-duplication/cross-repository-duplication.json"],
       "expectation": {"exitCode": 0, "threshold": "all repository ratchets pass; no baseline relaxation; Cloud compatibility bound to final clean Edge source state"},
       "actual": {"status": "PASS", "exitCode": 0, "reasonCode": "QUALITY_BASELINES_THRESHOLDS_FINAL_HEAD_BOUND"},
       "bindings": {
@@ -378,6 +378,7 @@
         {"path":"artifacts/testing/closure/final-static-audit.json","sha256":"a2bb71de666285feefd3b52d92b92e334daf34c7d595414445cee3f2d5933cb7"},
         {"path":"artifacts/testing/closure/source-reports/cloud/coverage-summary.json","sha256":"737a0d0037108036bd4bffb50f82b4f53af1d94ebf13dce9b8e0d915dbe45729"},
         {"path":"artifacts/testing/closure/source-reports/cloud/compatibility.json","sha256":"f173a0b9000638ac974acd2c02a9d24d6985048d9dd7dd16ff8f1ca6c6f8206e"},
+        {"path":"artifacts/testing/closure/source-reports/ai/coverage.json","sha256":"8e94ed93678657684d09ebfcd39293581d84cf221dcef9c8007ab99db1794bd5"},
         {"path":"artifacts/testing/closure/source-reports/ai/mutation.json","sha256":"dd33485c0ae5fa4d13b35347f46ffa0fa3edcae371e61da91fb9862b2e6d0d40"},
         {"path":"artifacts/testing/cross-repository-duplication/cross-repository-duplication.json","sha256":"a9d3d81106930f2ad375346a15a89724d9c52ff3aab4fc2a9b4218ff826550ef"}
       ],
@@ -397,7 +398,7 @@
         "allowlist": [{"value":"one final candidate sample per repository", "reason":"The small sample limits statistical extrapolation but not the exact nearest-rank calculation over the explicitly listed final runs."}],
         "denylist": ["duration above 1500 seconds", "required count reduction", "required skip increase", "test deletion/filtering to meet latency"]
       },
-      "commands": ["calculate nearest-rank p95 over runs 29558380849, 29562419923, 29562903935 and compare final required counts with prior lower bounds"],
+      "commands": ["jq -e '.latency.p95Seconds == 1372 and .latency.thresholdSeconds == 1500 and .latency.passed == true and all(.latency.testCountRegression[]; .reduced == false)' artifacts/testing/closure/final-ci-bindings.json"],
       "expectation": {"exitCode": 0, "threshold": "p95<=1500 seconds; Edge>=1280; Cloud>=661; AI>=1011; required skipped=0"},
       "actual": {"status": "PASS", "exitCode": 0, "reasonCode": "FINAL_P95_WITHIN_BUDGET_NO_TEST_REDUCTION"},
       "bindings": {
@@ -426,7 +427,7 @@
         "allowlist": [{"value":"local Aspire/test resources", "reason":"WorkspaceAlignment may start isolated local test resources but cannot access production or LiveExternal."}],
         "denylist": ["-NoBuild", "failed or skipped stage", "candidate mismatch", "dirty candidate", "production operation", "Deploy-Changed.ps1"]
       },
-      "commands": ["pwsh -NoProfile -File scripts/testing/Test-CrossRepositoryContractDigest.ps1", "pwsh -NoProfile -File scripts/testing/Invoke-ThreeRepositoryNonProductionAcceptance.ps1 -Configuration Release"],
+      "commands": ["jq -e '.digestSha256 == \"86cc7ca5399d6af3524ce34f2cace3ea926625b808b72f30f83b3118b8fa6d81\" and .provider.head == \"c06c238516470f0efb81464b9e3b83bb20811191\" and .consumer.head == \"7474b3a919d8e0058ac529fdda6e2d0cd720390d\"' artifacts/testing/cross-repository-contract-digest.json", "jq -e '.authoritative == true and .configuration == \"Release\" and .noBuild == false and .productionOperations == false and .deployChangedInvoked == false and all(.repositories[]; .clean == true) and ([.stages[] | select(.failed != null) | .failed] | add) == 0 and ([.stages[] | select(.skipped != null) | .skipped] | add) == 0' artifacts/testing/non-production-joint-acceptance/non-production-joint-acceptance.json"],
       "expectation": {"exitCode": 0, "threshold": "Release; noBuild=false; provider=47 consumer=87 workspace=1; failed=skipped=0; productionOperations=deployChangedInvoked=false"},
       "actual": {"status": "PASS", "exitCode": 0, "reasonCode": "RELEASE_NON_PRODUCTION_JOINT_ACCEPTANCE_BOUND"},
       "bindings": {
@@ -467,7 +468,7 @@
         "behaviorGate":"scripts/testing/Test-ThreeRepositoryClosurePredicatesBehavior.ps1",
         "actualGate":"scripts/testing/Test-ThreeRepositoryClosurePredicates.ps1"
       },
-      "commands": ["pwsh -NoProfile -File scripts/testing/Test-ThreeRepositoryClosurePredicatesBehavior.ps1", "pwsh -NoProfile -File scripts/testing/Test-ThreeRepositoryClosurePredicates.ps1"],
+      "commands": ["pwsh -NoProfile -File scripts/testing/Test-ThreeRepositoryClosurePredicatesBehavior.ps1", "pwsh -NoProfile -File scripts/testing/Test-ThreeRepositoryClosurePredicates.ps1 -CatalogPath scripts/testing/baselines/three-repository-closure-predicates.json -OutputPath /private/tmp/three-repository-closure-recheck.json -EdgeRepositoryRoot .codex-worktrees/edge-startup-exception-retirement-closure -CloudRepositoryRoot .codex-worktrees/cloud-cache-001 -AiRepositoryRoot .codex-worktrees/ai-phase0-closeout"],
       "expectation": {"exitCode": 0, "threshold": "exactly one catalog; 14 unique predicates; every rule resolves to formal non-history path and nonempty gate"},
       "actual": {"status": "PASS", "exitCode": 0, "reasonCode": "FORMAL_RULE_TO_GATE_CATALOG_COMPLETE"},
       "bindings": {
@@ -503,7 +504,7 @@
         "allowlist": [{"value":"required CI and local non-production acceptance", "reason":"Automated test and local isolated acceptance are within authorization and are explicitly marked non-production."}],
         "denylist": ["PR merge", "force push", "tag/stable", "production deployment", "Deploy-Changed.ps1", "production schema/data", "server/Harbor/SSH", "field device", "real PLC/MES/Cloud/model", "LiveExternal"]
       },
-      "commands": ["GitHub API checks PRs 53/36/60 are OPEN draft merged=false", "audit Cloud cloud-ci pull_request trigger and dispatch-only production workflows", "verify joint acceptance productionOperations=false and deployChangedInvoked=false"],
+      "commands": ["jq -e 'all(.repositories[]; .pullRequest.state == \"OPEN\" and .pullRequest.draft == true and .pullRequest.merged == false) and .workflowAudit.productionTriggeredByEvidencePullRequest == false and (.excludedOperations | length) == 10' artifacts/testing/closure/final-ci-bindings.json", "jq -e '.externalBoundaries.pullRequestsMerged == false and .externalBoundaries.productionOperationsPerformed == false and .externalBoundaries.deployChangedInvoked == false and .externalBoundaries.result == \"PASS\"' artifacts/testing/closure/final-static-audit.json"],
       "expectation": {"exitCode": 0, "threshold": "all exclusions explicit; all three candidate PRs open Draft and unmerged; evidence PR cannot trigger production workflow"},
       "actual": {"status": "PASS", "exitCode": 0, "reasonCode": "EXTERNAL_AND_PRODUCTION_BOUNDARIES_PRESERVED"},
       "bindings": {
