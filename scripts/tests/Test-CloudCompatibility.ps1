@@ -13,8 +13,8 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
 $baseCommit = Resolve-CloudQualityBaseCommit -RepoRoot $repoRoot -BaseRef $BaseRef
 $baselinePath = Join-Path $PSScriptRoot 'baselines/cloud-compatibility.json'
 $baseline = Get-Content $baselinePath -Raw | ConvertFrom-Json -Depth 100
-if ([int]$baseline.schemaVersion -ne 3 -or [int]$baseline.externalConsumerEvidenceCount -lt 0) {
-    throw 'Cloud compatibility baseline must use schemaVersion=3 and declare a non-negative current externalConsumerEvidenceCount.'
+if ([int]$baseline.schemaVersion -ne 4 -or [int]$baseline.externalConsumerEvidenceCount -lt 0) {
+    throw 'Cloud compatibility baseline must use schemaVersion=4 and declare a non-negative current externalConsumerEvidenceCount.'
 }
 $baseBaseline = Get-CloudQualityBaseJson `
     -RepoRoot $repoRoot `
@@ -369,6 +369,131 @@ function Get-TextSha256([string]$value) {
     return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
 }
 
+function Assert-ExternalBindingState(
+    [string]$expectedTrackedSourceStateSha256,
+    [string]$actualTrackedSourceStateSha256,
+    [string]$expectedConsumerStateSha256,
+    [string]$actualConsumerStateSha256,
+    [bool]$repositoryClean,
+    [string]$referenceHead,
+    [string]$actualHead,
+    [string]$label) {
+    if (-not $repositoryClean) {
+        throw "$label repository must be clean."
+    }
+    if ($actualTrackedSourceStateSha256 -cne $expectedTrackedSourceStateSha256) {
+        throw "$label tracked src source-state digest changed: baseline=$expectedTrackedSourceStateSha256 actual=$actualTrackedSourceStateSha256"
+    }
+    if ($actualConsumerStateSha256 -cne $expectedConsumerStateSha256) {
+        throw "$label declared consumer aggregate digest changed: baseline=$expectedConsumerStateSha256 actual=$actualConsumerStateSha256"
+    }
+    return [ordered]@{
+        referenceHead = $referenceHead
+        actualHead = $actualHead
+        headMatchesReference = $actualHead -ceq $referenceHead
+    }
+}
+
+function Assert-ExternalConsumerContract(
+    $evidence,
+    [string]$source,
+    [string]$actualSourceSha256,
+    [string]$label) {
+    foreach ($property in @(
+        'repository',
+        'path',
+        'pattern',
+        'expectedPatternCount',
+        'mustNotContain',
+        'expectedMustNotContainCount',
+        'sourceSha256')) {
+        if ($null -eq $evidence.PSObject.Properties[$property] -or
+            [string]::IsNullOrWhiteSpace([string]$evidence.$property)) {
+            throw "$label is missing '$property'."
+        }
+    }
+    if ([string]$evidence.repository -cne 'IIoT.EdgeClient' -or
+        [string]$evidence.path -notmatch '^src/.+\.cs$' -or
+        [string]$evidence.sourceSha256 -notmatch '^[0-9a-f]{64}$' -or
+        [int]$evidence.expectedPatternCount -lt 0 -or
+        [int]$evidence.expectedMustNotContainCount -lt 0) {
+        throw "$label has an invalid shape."
+    }
+    if ((Get-CodePatternCount $source ([string]$evidence.pattern)) -ne
+            [int]$evidence.expectedPatternCount -or
+        (Get-CodePatternCount $source ([string]$evidence.mustNotContain)) -ne
+            [int]$evidence.expectedMustNotContainCount) {
+        throw "$label executable contract evidence changed."
+    }
+    if ($actualSourceSha256 -cne [string]$evidence.sourceSha256) {
+        throw "$label source digest changed."
+    }
+}
+
+$fixtureSourceHash = 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+$validExternalConsumerFixture = [pscustomobject]@{
+    repository = 'IIoT.EdgeClient'
+    path = 'src/Fixture.cs'
+    pattern = 'Execute()'
+    expectedPatternCount = 1
+    mustNotContain = 'RequestId'
+    expectedMustNotContainCount = 0
+    sourceSha256 = $fixtureSourceHash
+}
+Assert-ExternalConsumerContract `
+    $validExternalConsumerFixture 'await Execute();' $fixtureSourceHash 'valid external consumer fixture'
+$externalConsumerNegativeFixtures = @(
+    [pscustomobject]@{ label = 'external consumer path fixture'; property = 'path'; value = 'docs/Fixture.cs' },
+    [pscustomobject]@{ label = 'external consumer SHA fixture'; property = 'sourceSha256'; value = ('e' * 64) },
+    [pscustomobject]@{ label = 'external consumer pattern fixture'; property = 'pattern'; value = 'Missing()' },
+    [pscustomobject]@{ label = 'external consumer must-not-contain fixture'; property = 'mustNotContain'; value = 'Execute()' }
+)
+foreach ($fixture in $externalConsumerNegativeFixtures) {
+    $invalidEvidence = ($validExternalConsumerFixture | ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 10)
+    $invalidEvidence.([string]$fixture.property) = [string]$fixture.value
+    $failure = $null
+    try {
+        Assert-ExternalConsumerContract `
+            $invalidEvidence 'await Execute();' $fixtureSourceHash ([string]$fixture.label)
+    }
+    catch {
+        $failure = $_.Exception.Message
+    }
+    if ([string]::IsNullOrWhiteSpace($failure)) {
+        throw "$($fixture.label) did not fail closed."
+    }
+}
+
+$fixtureDigest = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+$fixtureReferenceHead = '1111111111111111111111111111111111111111'
+$fixtureDocOnlyHead = '2222222222222222222222222222222222222222'
+$docOnlyFixture = Assert-ExternalBindingState `
+    $fixtureDigest $fixtureDigest $fixtureDigest $fixtureDigest $true `
+    $fixtureReferenceHead $fixtureDocOnlyHead 'doc-only HEAD fixture'
+if ($docOnlyFixture.headMatchesReference) {
+    throw 'Doc-only HEAD fixture failed to report a non-matching informational reference HEAD.'
+}
+$externalBindingNegativeFixtures = @(
+    [pscustomobject]@{ label = 'tracked src drift fixture'; source = ('b' * 64); consumer = $fixtureDigest; clean = $true },
+    [pscustomobject]@{ label = 'consumer aggregate drift fixture'; source = $fixtureDigest; consumer = ('c' * 64); clean = $true },
+    [pscustomobject]@{ label = 'dirty repository fixture'; source = $fixtureDigest; consumer = $fixtureDigest; clean = $false }
+)
+foreach ($fixture in $externalBindingNegativeFixtures) {
+    $failure = $null
+    try {
+        $null = Assert-ExternalBindingState `
+            $fixtureDigest ([string]$fixture.source) `
+            $fixtureDigest ([string]$fixture.consumer) `
+            ([bool]$fixture.clean) $fixtureReferenceHead $fixtureReferenceHead ([string]$fixture.label)
+    }
+    catch {
+        $failure = $_.Exception.Message
+    }
+    if ([string]::IsNullOrWhiteSpace($failure)) {
+        throw "$($fixture.label) did not fail closed."
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($EdgeRepositoryRoot)) {
     throw 'EdgeRepositoryRoot is required. Compatibility evidence cannot be verified from a missing or inferred external worktree.'
 }
@@ -391,6 +516,11 @@ if ($edgeStatus.Count -ne 0) {
     throw "Edge evidence worktree must be clean; external HEAD/source hashes cannot describe dirty sources: $($edgeStatus -join ', ')"
 }
 $edgeRepositoryClean = $true
+$edgeTrackedSourceStateLines = @(& git -C $edgeRoot ls-files --stage -- src 2>&1)
+if ($LASTEXITCODE -ne 0 -or $edgeTrackedSourceStateLines.Count -eq 0) {
+    throw "Unable to resolve the complete tracked Edge src source-state: $($edgeTrackedSourceStateLines -join ' ')"
+}
+$edgeTrackedSourceStateSha256 = Get-TextSha256 ($edgeTrackedSourceStateLines -join "`n")
 
 $scanRoots = @(
     'src/core',
@@ -513,53 +643,48 @@ foreach ($entry in $retainedEntries) {
     }
     if ($null -ne $entry.PSObject.Properties['externalConsumers']) {
         if (@($entry.externalConsumers).Count -eq 0 -or
-            $null -eq $entry.PSObject.Properties['externalEvidenceHead'] -or
-            [string]$entry.externalEvidenceHead -notmatch '^[0-9a-f]{40}$' -or
-            $null -eq $entry.PSObject.Properties['externalEvidenceSourceStateSha256'] -or
-            [string]$entry.externalEvidenceSourceStateSha256 -notmatch '^[0-9a-f]{64}$') {
+            [string]$entry.externalEvidenceBinding -cne 'clean-tracked-src-v1' -or
+            $null -eq $entry.PSObject.Properties['externalEvidenceReferenceHead'] -or
+            [string]$entry.externalEvidenceReferenceHead -notmatch '^[0-9a-f]{40}$' -or
+            $null -eq $entry.PSObject.Properties['externalEvidenceTrackedSourceStateSha256'] -or
+            [string]$entry.externalEvidenceTrackedSourceStateSha256 -notmatch '^[0-9a-f]{64}$' -or
+            $null -eq $entry.PSObject.Properties['externalEvidenceConsumerStateSha256'] -or
+            [string]$entry.externalEvidenceConsumerStateSha256 -notmatch '^[0-9a-f]{64}$') {
             throw "External consumer evidence is incomplete: $($entry.id)"
-        }
-        if ($edgeHead -ne [string]$entry.externalEvidenceHead) {
-            throw "External consumer evidence HEAD changed: baseline=$($entry.externalEvidenceHead) actual=$edgeHead item=$($entry.id)"
         }
         $externalSourceState = [System.Collections.Generic.List[string]]::new()
         foreach ($externalConsumer in $entry.externalConsumers) {
-            foreach ($property in @('repository', 'path', 'pattern', 'mustNotContain', 'sourceSha256')) {
-                if ($null -eq $externalConsumer.PSObject.Properties[$property] -or
-                    [string]::IsNullOrWhiteSpace([string]$externalConsumer.$property)) {
-                    throw "External consumer '$($entry.id)' is missing '$property'."
-                }
-            }
-            if ([string]$externalConsumer.repository -ne 'IIoT.EdgeClient' -or
-                [string]$externalConsumer.path -notmatch '^src/.+\.cs$' -or
-                [string]$externalConsumer.sourceSha256 -notmatch '^[0-9a-f]{64}$') {
-                throw "External consumer evidence has an invalid shape: $($entry.id)"
-            }
             $externalPath = Join-Path $edgeRoot (([string]$externalConsumer.path) -replace '/', [System.IO.Path]::DirectorySeparatorChar)
             if (-not (Test-Path $externalPath -PathType Leaf)) {
                 throw "External consumer path does not exist: $externalPath"
             }
             $externalSource = Get-Content $externalPath -Raw
-            if ((Get-CodePatternCount $externalSource ([string]$externalConsumer.pattern)) -ne 1 -or
-                (Get-CodePatternCount $externalSource ([string]$externalConsumer.mustNotContain)) -ne 0) {
-                throw "External consumer contract evidence changed: $($externalConsumer.path)"
-            }
             $externalHash = (Get-FileHash $externalPath -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($externalHash -ne [string]$externalConsumer.sourceSha256) {
-                throw "External consumer source digest changed: $($externalConsumer.path)"
-            }
+            Assert-ExternalConsumerContract `
+                $externalConsumer `
+                $externalSource `
+                $externalHash `
+                "External consumer '$($entry.id)/$($externalConsumer.path)'"
             $externalSourceState.Add("$([string]$externalConsumer.path)`n$externalHash")
         }
         $actualSourceStateSha256 = Get-TextSha256 (@($externalSourceState | Sort-Object) -join "`n")
-        if ($actualSourceStateSha256 -ne [string]$entry.externalEvidenceSourceStateSha256) {
-            throw "External consumer candidate source-state digest changed: baseline=$($entry.externalEvidenceSourceStateSha256) actual=$actualSourceStateSha256 item=$($entry.id)"
-        }
+        $entry | Add-Member -NotePropertyName externalEvidenceActualState -NotePropertyValue (
+            Assert-ExternalBindingState `
+                ([string]$entry.externalEvidenceTrackedSourceStateSha256) `
+                $edgeTrackedSourceStateSha256 `
+                ([string]$entry.externalEvidenceConsumerStateSha256) `
+                $actualSourceStateSha256 `
+                $edgeRepositoryClean `
+                ([string]$entry.externalEvidenceReferenceHead) `
+                $edgeHead `
+                "External consumer '$($entry.id)'"
+        ) -Force
     }
 }
 
 $reportPath = Join-Path $reportRoot 'cloud-compatibility.json'
 [ordered]@{
-    schemaVersion = 2
+    schemaVersion = 3
     ruleId = [string]$baseline.ruleId
     activeCompatibilityItems = [int]$baseline.activeCompatibilityItems
     classifiedCandidateSignals = $classifiedSignalCount
@@ -573,9 +698,12 @@ $reportPath = Join-Path $reportRoot 'cloud-compatibility.json'
                     repository = [string]$externalConsumer.repository
                     path = [string]$externalConsumer.path
                     verified = $true
-                    evidenceHead = $edgeHead
+                    referenceHead = [string]$_.externalEvidenceReferenceHead
+                    evidenceHead = [string]$_.externalEvidenceActualState.actualHead
+                    headMatchesReference = [bool]$_.externalEvidenceActualState.headMatchesReference
                     repositoryClean = $edgeRepositoryClean
-                    sourceStateSha256 = [string]$_.externalEvidenceSourceStateSha256
+                    trackedSourceStateSha256 = $edgeTrackedSourceStateSha256
+                    consumerStateSha256 = [string]$_.externalEvidenceConsumerStateSha256
                 }
             }
         }

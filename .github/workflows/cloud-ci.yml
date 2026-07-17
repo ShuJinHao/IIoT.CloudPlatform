@@ -90,7 +90,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           repository: ShuJinHao/IIoT.EdgeClient
-          ref: 1d25f9a6945b0b73224cfc75250203ae35be17be
+          ref: 7474b3a919d8e0058ac529fdda6e2d0cd720390d
           fetch-depth: 1
           persist-credentials: false
           path: .external/IIoT.EdgeClient
@@ -238,7 +238,7 @@ jobs:
             throw "Missing required architecture fixture result: $architectureFixturePath"
           }
           $architectureFixtureLines = @(Get-Content $architectureFixturePath)
-          $expectedArchitectureFixtureSummary = 'ARCHITECTURE_FIXTURES_OK valid=8 invalid=15 callGraphBypass=20 suppressionBypass=3 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010'
+          $expectedArchitectureFixtureSummary = 'ARCHITECTURE_FIXTURES_OK valid=8 invalid=15 callGraphBypass=20 suppressionBypass=3 contractsMetadataIdentities=9 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010'
           if (@($architectureFixtureLines | Where-Object { $_ -eq $expectedArchitectureFixtureSummary }).Count -ne 1) {
             throw "Architecture fixture reconciliation failed"
           }

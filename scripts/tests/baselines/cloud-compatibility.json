@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "ruleId": "TEST-COMPAT-001",
   "externalConsumerEvidenceCount": 2,
   "unclassifiedCompatibilitySignals": 0,
@@ -139,19 +139,25 @@
           "repository": "IIoT.EdgeClient",
           "path": "src/Infrastructure/IIoT.Edge.Infrastructure.Integration/Capacity/CapacitySyncTask.cs",
           "pattern": "_cloudHttp.PostAsync(\n                _endpointProvider.GetCapacityHourlyPath(),\n                payload,\n                cancellationToken: cancellationToken)",
+          "expectedPatternCount": 1,
           "mustNotContain": "RequestId",
+          "expectedMustNotContainCount": 0,
           "sourceSha256": "5ae7cb807ac0015f8e44775966377296d8374d80fb07bcf7bba4c34aec557348"
         },
         {
           "repository": "IIoT.EdgeClient",
           "path": "src/Infrastructure/IIoT.Edge.Infrastructure.Integration/DeviceLog/DeviceLogSyncTask.cs",
           "pattern": "_cloudHttp.PostAsync(\n                _endpointProvider.GetDeviceLogPath(),\n                payload,\n                cancellationToken: cancellationToken)",
+          "expectedPatternCount": 1,
           "mustNotContain": "RequestId",
+          "expectedMustNotContainCount": 0,
           "sourceSha256": "1b8cbb3424c2f961edcd5cfb60bdf6403af417f110c5096577a433690af1469e"
         }
       ],
-      "externalEvidenceHead": "1d25f9a6945b0b73224cfc75250203ae35be17be",
-      "externalEvidenceSourceStateSha256": "7eedaa475125e3e6e59a66d3a98efe39f3889deb991fbabe03b675dd6d6b05f4",
+      "externalEvidenceBinding": "clean-tracked-src-v1",
+      "externalEvidenceReferenceHead": "7474b3a919d8e0058ac529fdda6e2d0cd720390d",
+      "externalEvidenceTrackedSourceStateSha256": "4f04f99809aad794f491bb41ae1b185b2571d7ab51aa6f73f9b05f4fd964d6b1",
+      "externalEvidenceConsumerStateSha256": "7eedaa475125e3e6e59a66d3a98efe39f3889deb991fbabe03b675dd6d6b05f4",
       "replacement": "RequestId-required capacity and device-log Edge upload contracts with a one-way persisted-key migration; pass-station already uses RequestId",
       "deletionCondition": "Add mandatory RequestId/idempotency-key generation to the real Edge CapacitySyncTask and DeviceLogSyncTask producers, deploy that contract across the supported fleet, inventory and migrate persisted legacy-prefixed DeduplicationKey rows, and prove both transitional no-RequestId behavior and the final RequestId-only path before physical deletion."
     },

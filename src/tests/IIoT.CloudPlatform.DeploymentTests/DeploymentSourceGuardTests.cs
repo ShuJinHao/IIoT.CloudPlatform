@@ -795,6 +795,8 @@ public sealed class DeploymentSourceGuardTests
         var solutionSource = File.ReadAllText(CloudRepositoryPath.Find("IIoT.CloudPlatform.slnx"));
         var analyzerProjectSource = File.ReadAllText(
             CloudRepositoryPath.Find("src", "analyzers", "IIoT.CloudPlatform.Analyzers", "IIoT.CloudPlatform.Analyzers.csproj"));
+        var analyzerSource = File.ReadAllText(
+            CloudRepositoryPath.Find("src", "analyzers", "IIoT.CloudPlatform.Analyzers", "CloudArchitectureAnalyzer.cs"));
         var analyzerTestsProjectSource = File.ReadAllText(
             CloudRepositoryPath.Find("src", "tests", "IIoT.CloudPlatform.AnalyzerTests", "IIoT.CloudPlatform.AnalyzerTests.csproj"));
         var fixtureScriptSource = File.ReadAllText(
@@ -815,6 +817,10 @@ public sealed class DeploymentSourceGuardTests
             CloudRepositoryPath.Find("scripts", "tests", "Test-CloudQualityBaselineProtectionBehavior.ps1"));
         var coverageScriptSource = File.ReadAllText(
             CloudRepositoryPath.Find("scripts", "tests", "Test-CloudCoverage.ps1"));
+        var compatibilityScriptSource = File.ReadAllText(
+            CloudRepositoryPath.Find("scripts", "tests", "Test-CloudCompatibility.ps1"));
+        var compatibilityBaselineSource = File.ReadAllText(
+            CloudRepositoryPath.Find("scripts", "tests", "baselines", "cloud-compatibility.json"));
         var inventoryManifestSource = File.ReadAllText(
             CloudRepositoryPath.Find("src", "tests", "cloud-test-inventory.json"));
         var analyzerFixtureStep = GetNamedGitHubWorkflowStep(
@@ -860,6 +866,37 @@ public sealed class DeploymentSourceGuardTests
             "<PackageReference Include=\"Microsoft.CodeAnalysis.CSharp\" Version=\"5.6.0\" PrivateAssets=\"all\" />");
         analyzerTestsProjectSource.Should().Contain(
             "<PackageReference Include=\"Microsoft.CodeAnalysis.CSharp\" Version=\"5.6.0\" PrivateAssets=\"all\" />");
+        var expectedContractsMetadataIdentities = new[]
+        {
+            "IIoT.Services.Contracts.IHumanRequest`1",
+            "IIoT.Services.Contracts.IDeviceRequest`1",
+            "IIoT.Services.Contracts.IAnonymousBootstrapRequest`1",
+            "IIoT.Services.Contracts.IPublicRequest`1",
+            "IIoT.Services.Contracts.IAiReadRequest`1",
+            "IIoT.Services.Contracts.ICacheService",
+            "IIoT.Services.Contracts.Authorization.IPermissionProvider",
+            "IIoT.Services.Contracts.Authorization.IDevicePermissionService",
+            "IIoT.Services.Contracts.RecordQueries.IDeviceIdentityQueryService"
+        };
+        var analyzerContractsMetadataIdentities = Regex.Matches(
+                analyzerSource,
+                "GetTypeByMetadataName\\s*\\(\\s*\\\"(IIoT\\.Services\\.Contracts[^\\\"]+)\\\"\\s*\\)")
+            .Select(match => match.Groups[1].Value)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        analyzerContractsMetadataIdentities.Should().Equal(
+            expectedContractsMetadataIdentities.Order(StringComparer.Ordinal));
+        fixtureScriptSource.Should().Contain(
+            "contracts_project=\"$repo_root/src/services/IIoT.Services.Contracts/IIoT.Services.Contracts.csproj\"");
+        fixtureScriptSource.Should().Contain(
+            "<ProjectReference Include=\\\"$contracts_project\\\" />");
+        fixtureScriptSource.Should().Contain("ContractsBindingProbe");
+        fixtureScriptSource.Should().Contain("CONTRACTS_METADATA_BINDING_OK identities={expected.Length}");
+        foreach (var identity in expectedContractsMetadataIdentities)
+        {
+            fixtureScriptSource.Should().Contain($"\"{identity}\"");
+        }
         solutionSource.Should().Contain(
             "src/analyzers/IIoT.CloudPlatform.Analyzers/IIoT.CloudPlatform.Analyzers.csproj");
         solutionSource.Should().Contain(
@@ -870,7 +907,8 @@ public sealed class DeploymentSourceGuardTests
         analyzerFixtureStep.Should().Contain("bash scripts/tests/TestCloudArchitectureAnalyzerFixtures.sh");
         analyzerFixtureStep.Should().NotContain("if:");
         analyzerFixtureStep.Should().NotContain("continue-on-error:");
-        fixtureScriptSource.Should().Contain("ARCHITECTURE_FIXTURES_OK valid=8 invalid=15 callGraphBypass=20");
+        fixtureScriptSource.Should().Contain(
+            "ARCHITECTURE_FIXTURES_OK valid=8 invalid=15 callGraphBypass=20 suppressionBypass=3 contractsMetadataIdentities=9");
         fixtureScriptSource.Should().Contain("build_valid");
         fixtureScriptSource.Should().Contain("build_invalid");
         realWebE2eRunnerSource.Should().Contain("mkdtemp(join(tmpdir(), 'iiot-cloud-web-e2e-'))");
@@ -931,7 +969,21 @@ public sealed class DeploymentSourceGuardTests
         workspaceEvidenceSource.Should().NotContain(
             "src/tests/AICopilot.ContractTests/CloudAiReadClientContractTests.cs");
         workflowSource.Should().Contain(
-            "ARCHITECTURE_FIXTURES_OK valid=8 invalid=15 callGraphBypass=20 suppressionBypass=3 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010");
+            "ARCHITECTURE_FIXTURES_OK valid=8 invalid=15 callGraphBypass=20 suppressionBypass=3 contractsMetadataIdentities=9 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010");
+        workflowSource.Should().Contain("ref: 7474b3a919d8e0058ac529fdda6e2d0cd720390d");
+        compatibilityBaselineSource.Should().Contain("\"schemaVersion\": 4");
+        compatibilityBaselineSource.Should().Contain("\"externalEvidenceBinding\": \"clean-tracked-src-v1\"");
+        compatibilityBaselineSource.Should().Contain("\"externalEvidenceTrackedSourceStateSha256\"");
+        compatibilityBaselineSource.Should().Contain("\"externalEvidenceConsumerStateSha256\"");
+        compatibilityScriptSource.Should().Contain("headMatchesReference");
+        compatibilityScriptSource.Should().Contain("doc-only HEAD fixture");
+        compatibilityScriptSource.Should().Contain("tracked src drift fixture");
+        compatibilityScriptSource.Should().Contain("consumer aggregate drift fixture");
+        compatibilityScriptSource.Should().Contain("dirty repository fixture");
+        compatibilityScriptSource.Should().Contain("external consumer path fixture");
+        compatibilityScriptSource.Should().Contain("external consumer SHA fixture");
+        compatibilityScriptSource.Should().Contain("external consumer pattern fixture");
+        compatibilityScriptSource.Should().Contain("external consumer must-not-contain fixture");
         workflowSource.Should().Contain("Validate deploy script syntax");
         workflowSource.Should().Contain("sh -n deploy/scripts/release-common.sh");
         workflowSource.Should().Contain("sh -n deploy/scripts/pre-deploy-check.sh");
