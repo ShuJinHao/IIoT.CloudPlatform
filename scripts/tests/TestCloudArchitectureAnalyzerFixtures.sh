@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 analyzer_project="$repo_root/src/analyzers/IIoT.CloudPlatform.Analyzers/IIoT.CloudPlatform.Analyzers.csproj"
+contracts_project="$repo_root/src/services/IIoT.Services.Contracts/IIoT.Services.Contracts.csproj"
 if [[ -n "${CLOUD_ARCH_FIXTURE_ROOT:-}" ]]; then
     fixture_root="$CLOUD_ARCH_FIXTURE_ROOT"
     rm -rf "$fixture_root"
@@ -14,6 +15,20 @@ fi
 fixture_root="$(cd "$fixture_root" && pwd -P)"
 
 cp "$repo_root/.globalconfig" "$fixture_root/.globalconfig"
+
+contracts_build_output=''
+if ! contracts_build_output="$(
+    dotnet build "$contracts_project" \
+        -c Release \
+        --no-restore \
+        --disable-build-servers \
+        --nologo \
+        -noAutoResponse 2>&1
+)"; then
+    printf '%s\n' "$contracts_build_output" >&2
+    printf 'real Services.Contracts build output is unavailable\n' >&2
+    exit 1
+fi
 
 cat > "$fixture_root/Directory.Build.props" <<EOF
 <Project>
@@ -1124,91 +1139,60 @@ write_project \
     '<ItemGroup><ProjectReference Include="../PortFakesStub/PortFakesStub.csproj" /></ItemGroup>'
 printf '%s\n' 'namespace Fixture; public sealed class ProductionType { }' > "$fixture_root/Invalid006/ProductionType.cs"
 
-write_project "Invalid009" "IIoT.EntityFrameworkCore.FixtureInvalid009" "true"
+write_project \
+    "Invalid009" \
+    "IIoT.EntityFrameworkCore.FixtureInvalid009" \
+    "true" \
+    "<ItemGroup><ProjectReference Include=\"$contracts_project\" /></ItemGroup>"
 cat > "$fixture_root/Invalid009/CachedPermissionProvider.cs" <<'EOF'
-namespace IIoT.Services.Contracts
-{
-    public interface ICacheService
-    {
-        System.Threading.Tasks.Task<int> GetAsync(string key);
-    }
-}
-
-namespace IIoT.Services.Contracts.Authorization
-{
-    public interface IPermissionProvider
-    {
-        System.Threading.Tasks.Task<int> ReadAsync();
-    }
-}
-
 public sealed class CachedPermissionProvider(
     IIoT.Services.Contracts.ICacheService cache)
     : IIoT.Services.Contracts.Authorization.IPermissionProvider
 {
     private readonly System.Func<System.Threading.Tasks.Task<int>> fieldRead =
-        () => cache.GetAsync("permissions-field");
+        () => ReadCacheAsync(cache, "permissions-field");
     private System.Func<System.Threading.Tasks.Task<int>> PropertyRead { get; } =
-        () => cache.GetAsync("permissions-property");
+        () => ReadCacheAsync(cache, "permissions-property");
 
-    public async System.Threading.Tasks.Task<int> ReadAsync()
+    public async System.Threading.Tasks.Task<System.Collections.Generic.IList<string>> GetPermissionsAsync(
+        System.Guid userId,
+        System.Threading.CancellationToken cancellationToken = default)
     {
         _ = await fieldRead();
         _ = await PropertyRead();
         System.Func<System.Threading.Tasks.Task<int>> localRead =
-            () => cache.GetAsync("permissions-local");
+            () => ReadCacheAsync(cache, "permissions-local");
         _ = await localRead();
-        _ = await System.Threading.Tasks.Task.Run(() => cache.GetAsync("permissions-external"));
+        _ = await System.Threading.Tasks.Task.Run(
+            () => ReadCacheAsync(cache, "permissions-external"),
+            cancellationToken);
         System.Delegate dynamicRead =
-            new System.Func<System.Threading.Tasks.Task<int>>(() => cache.GetAsync("permissions-dynamic"));
+            new System.Func<System.Threading.Tasks.Task<int>>(
+                () => ReadCacheAsync(cache, "permissions-dynamic"));
         _ = dynamicRead.DynamicInvoke();
-        return 1;
+        return new[] { "read" };
     }
+
+    private static System.Threading.Tasks.Task<int> ReadCacheAsync(
+        IIoT.Services.Contracts.ICacheService cache,
+        string key) => cache.GetOrSetAsync<int>(
+            key,
+            static _ => System.Threading.Tasks.Task.FromResult(1),
+            static _ => true,
+            System.TimeSpan.FromMinutes(1));
 }
 EOF
 
-write_project "ValidDelegateContext" "IIoT.ProductionService.FixtureDelegateContext" "true"
+write_project \
+    "ValidDelegateContext" \
+    "IIoT.ProductionService.FixtureDelegateContext" \
+    "true" \
+    "<ItemGroup><ProjectReference Include=\"$contracts_project\" /></ItemGroup>"
 cat > "$fixture_root/ValidDelegateContext/DelegateContext.cs" <<'EOF'
-namespace IIoT.Services.Contracts
-{
-    public interface IAiReadRequest<out T> { }
-    public interface IAiReadQuery<out T> : IAiReadRequest<T> { }
-    public interface ICacheService
-    {
-        System.Threading.Tasks.Task<int> GetAsync(string key);
-    }
-}
-
 namespace IIoT.Services.CrossCutting.Attributes
 {
     [System.AttributeUsage(System.AttributeTargets.Class, AllowMultiple = true, Inherited = true)]
     public sealed class AuthorizeAiReadAttribute(string permission) : System.Attribute;
-}
-
-namespace IIoT.SharedKernel.Messaging
-{
-    public interface IQueryHandler<in TQuery, TResponse>
-    {
-        System.Threading.Tasks.Task<TResponse> Handle(
-            TQuery request,
-            System.Threading.CancellationToken cancellationToken);
-    }
-}
-
-namespace IIoT.SharedKernel.Repository
-{
-    public interface IRepository<T>
-    {
-        System.Threading.Tasks.Task<int> SaveChangesAsync();
-    }
-}
-
-namespace IIoT.Services.Contracts.Authorization
-{
-    public interface IPermissionProvider
-    {
-        System.Threading.Tasks.Task<int> ReadAsync();
-    }
 }
 
 [IIoT.Services.CrossCutting.Attributes.AuthorizeAiRead("AiRead.Device")]
@@ -1228,7 +1212,9 @@ public sealed class ContextHandler
         => System.Threading.Tasks.Task.FromResult(1);
 }
 
-public sealed class NonAiWriter(IIoT.SharedKernel.Repository.IRepository<object> repository)
+public sealed class NonAiWriter(
+    IIoT.SharedKernel.Repository.IRepository<
+        IIoT.Core.Identity.Aggregates.IdentityAccounts.IdentityAccount> repository)
 {
     public System.Threading.Tasks.Task<int> WriteAsync()
         => ContextHandler.Invoke(() => repository.SaveChangesAsync());
@@ -1237,20 +1223,62 @@ public sealed class NonAiWriter(IIoT.SharedKernel.Repository.IRepository<object>
 public sealed class ContextPermissionProvider
     : IIoT.Services.Contracts.Authorization.IPermissionProvider
 {
-    public System.Threading.Tasks.Task<int> ReadAsync() => Invoke(Safe);
+    public System.Threading.Tasks.Task<System.Collections.Generic.IList<string>> GetPermissionsAsync(
+        System.Guid userId,
+        System.Threading.CancellationToken cancellationToken = default) => Invoke(Safe);
 
-    internal static System.Threading.Tasks.Task<int> Invoke(
-        System.Func<System.Threading.Tasks.Task<int>> callback) => callback();
+    internal static System.Threading.Tasks.Task<System.Collections.Generic.IList<string>> Invoke(
+        System.Func<System.Threading.Tasks.Task<System.Collections.Generic.IList<string>>> callback) => callback();
 
-    private static System.Threading.Tasks.Task<int> Safe()
-        => System.Threading.Tasks.Task.FromResult(1);
+    private static System.Threading.Tasks.Task<System.Collections.Generic.IList<string>> Safe()
+        => System.Threading.Tasks.Task.FromResult<System.Collections.Generic.IList<string>>(
+            new[] { "read" });
 }
 
 public sealed class NonSecurityReader(IIoT.Services.Contracts.ICacheService cache)
 {
     public System.Threading.Tasks.Task<int> ReadAsync()
-        => ContextPermissionProvider.Invoke(() => cache.GetAsync("non-security"));
+        => cache.GetOrSetAsync<int>(
+            "non-security",
+            static _ => System.Threading.Tasks.Task.FromResult(1),
+            static _ => true,
+            System.TimeSpan.FromMinutes(1));
 }
+EOF
+
+write_project \
+    "ContractsBindingProbe" \
+    "IIoT.CloudPlatform.ContractsBindingProbe" \
+    "false" \
+    "<ItemGroup><ProjectReference Include=\"$contracts_project\" /></ItemGroup>" \
+    '<OutputType>Exe</OutputType>'
+cat > "$fixture_root/ContractsBindingProbe/Program.cs" <<'EOF'
+using System.Reflection;
+
+var expected = new[]
+{
+    "IIoT.Services.Contracts.IHumanRequest`1",
+    "IIoT.Services.Contracts.IDeviceRequest`1",
+    "IIoT.Services.Contracts.IAnonymousBootstrapRequest`1",
+    "IIoT.Services.Contracts.IPublicRequest`1",
+    "IIoT.Services.Contracts.IAiReadRequest`1",
+    "IIoT.Services.Contracts.ICacheService",
+    "IIoT.Services.Contracts.Authorization.IPermissionProvider",
+    "IIoT.Services.Contracts.Authorization.IDevicePermissionService",
+    "IIoT.Services.Contracts.RecordQueries.IDeviceIdentityQueryService"
+};
+var contracts = Assembly.Load("IIoT.Services.Contracts");
+var types = contracts.GetTypes();
+foreach (var identity in expected)
+{
+    var matches = types.Count(type => string.Equals(type.FullName, identity, StringComparison.Ordinal));
+    if (matches != 1)
+    {
+        throw new InvalidOperationException(
+            $"Contracts metadata identity must resolve exactly once: identity={identity} count={matches}");
+    }
+}
+Console.WriteLine($"CONTRACTS_METADATA_BINDING_OK identities={expected.Length}");
 EOF
 
 write_project "InvalidUnclassified" "IIoT.FutureProductionComponent" "true"
@@ -1334,6 +1362,13 @@ root = true
 dotnet_diagnostic.CLOUDARCH009.severity = none
 EOF
 
+dotnet run \
+    --project "$fixture_root/ContractsBindingProbe/ContractsBindingProbe.csproj" \
+    -c Release \
+    --disable-build-servers \
+    --nologo \
+    -noAutoResponse
+
 build_valid "$fixture_root/Valid/Valid.csproj"
 build_valid "$fixture_root/ValidDataWorker/ValidDataWorker.csproj"
 build_valid "$fixture_root/ValidReadOnlySql/ValidReadOnlySql.csproj"
@@ -1383,4 +1418,4 @@ build_invalid "$fixture_root/SuppressedNoWarn/SuppressedNoWarn.csproj" "CLOUDARC
 build_invalid "$fixture_root/SuppressedEditorConfig/SuppressedEditorConfig.csproj" "CLOUDARCH009"
 
 printf '%s\n' \
-    'ARCHITECTURE_FIXTURES_OK valid=8 invalid=15 callGraphBypass=20 suppressionBypass=3 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010'
+    'ARCHITECTURE_FIXTURES_OK valid=8 invalid=15 callGraphBypass=20 suppressionBypass=3 contractsMetadataIdentities=9 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010'
