@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "generatedAtUtc": "2026-07-17T08:16:32.8265880+00:00",
+  "catalogPath": "scripts/testing/baselines/three-repository-closure-predicates.json",
+  "catalogSha256": "ebf86c061de97b6dcdcb65945a9316e69cbc3710746a1a689d5c500ea17971e9",
+  "blocking": 14,
+  "passed": 14,
+  "failed": 0,
+  "notRun": 0,
+  "status": "PASS",
+  "results": [
+    {
+      "id": "CLOSURE-01",
+      "status": "PASS",
+      "reasonCode": "RETIRED_GOVERNANCE_ASSET_DENYLIST_ZERO"
+    },
+    {
+      "id": "CLOSURE-02",
+      "status": "PASS",
+      "reasonCode": "EDGE_RETIRED_FEATURE_AND_GENERATED_OUTPUT_ZERO"
+    },
+    {
+      "id": "CLOSURE-03",
+      "status": "PASS",
+      "reasonCode": "EDGE_NEUTRAL_TESTPLUGIN_SEAM_VERIFIED"
+    },
+    {
+      "id": "CLOSURE-04",
+      "status": "PASS",
+      "reasonCode": "NATIVE_INVENTORY_CLASSIFICATION_RECONCILED"
+    },
+    {
+      "id": "CLOSURE-05",
+      "status": "PASS",
+      "reasonCode": "LEGACY_BUCKET_FILTER_HELPER_DENYLIST_CLOSED"
+    },
+    {
+      "id": "CLOSURE-06",
+      "status": "PASS",
+      "reasonCode": "FINAL_REQUIRED_RUNS_EXACT_AND_HEAD_BOUND"
+    },
+    {
+      "id": "CLOSURE-07",
+      "status": "PASS",
+      "reasonCode": "ANALYZER_POSITIVE_NEGATIVE_FIXTURES_FAIL_CLOSED"
+    },
+    {
+      "id": "CLOSURE-08",
+      "status": "PASS",
+      "reasonCode": "HIGH_RISK_IDENTITY_MATRIX_FULLY_BOUND"
+    },
+    {
+      "id": "CLOSURE-09",
+      "status": "PASS",
+      "reasonCode": "REAL_FAILURE_LAYER_MATRIX_ENFORCED"
+    },
+    {
+      "id": "CLOSURE-10",
+      "status": "PASS",
+      "reasonCode": "QUALITY_BASELINES_THRESHOLDS_FINAL_HEAD_BOUND"
+    },
+    {
+      "id": "CLOSURE-11",
+      "status": "PASS",
+      "reasonCode": "FINAL_P95_WITHIN_BUDGET_NO_TEST_REDUCTION"
+    },
+    {
+      "id": "CLOSURE-12",
+      "status": "PASS",
+      "reasonCode": "RELEASE_NON_PRODUCTION_JOINT_ACCEPTANCE_BOUND"
+    },
+    {
+      "id": "CLOSURE-13",
+      "status": "PASS",
+      "reasonCode": "FORMAL_RULE_TO_GATE_CATALOG_COMPLETE"
+    },
+    {
+      "id": "CLOSURE-14",
+      "status": "PASS",
+      "reasonCode": "EXTERNAL_AND_PRODUCTION_BOUNDARIES_PRESERVED"
+    }
+  ]
+}

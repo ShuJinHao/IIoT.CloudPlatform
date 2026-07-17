@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "generatedAtUtc": "2026-07-17T08:02:07.8896300+00:00",
+  "authoritative": true,
+  "configuration": "Release",
+  "noBuild": false,
+  "productionOperations": false,
+  "deployChangedInvoked": false,
+  "repositories": [
+    {
+      "repository": "EdgeClient",
+      "root": "/Users/shushu/Developer/产线系统架构升级/1/.codex-worktrees/edge-startup-exception-retirement-closure",
+      "head": "7474b3a919d8e0058ac529fdda6e2d0cd720390d",
+      "tree": "7dffa8b378d37865f86599deac8ed8f88a55a42a",
+      "clean": true
+    },
+    {
+      "repository": "CloudPlatform",
+      "root": "/Users/shushu/Developer/产线系统架构升级/1/.codex-worktrees/cloud-cache-001",
+      "head": "c06c238516470f0efb81464b9e3b83bb20811191",
+      "tree": "eff4ce0c0fa009f8868a89bd1dfc63ea24f861d9",
+      "clean": true
+    },
+    {
+      "repository": "AICopilot",
+      "root": "/Users/shushu/Developer/产线系统架构升级/1/.codex-worktrees/ai-phase0-closeout",
+      "head": "59b93f7145fbe2dc908aa35970566d25875b473c",
+      "tree": "009187b40bf2052d1bd9c268629cc52410f2eb76",
+      "clean": true
+    }
+  ],
+  "stages": [
+    {
+      "label": "cloud-pass-station-provider",
+      "project": "src/tests/IIoT.CloudPlatform.ContractTests/IIoT.CloudPlatform.ContractTests.csproj",
+      "discovered": 47,
+      "executed": 47,
+      "passed": 47,
+      "failed": 0,
+      "skipped": 0,
+      "durationMilliseconds": 5853,
+      "trx": "provider/cloud-pass-station-provider.trx",
+      "trxSha256": "b0bf279d9c9033fa9eb8c0312150f6a8aa9d13cb01993b97b78a6b573662db04"
+    },
+    {
+      "label": "edge-pass-station-consumer",
+      "project": "src/Tests/IIoT.Edge.Cloud.ContractTests/IIoT.Edge.Cloud.ContractTests.csproj",
+      "discovered": 87,
+      "executed": 87,
+      "passed": 87,
+      "failed": 0,
+      "skipped": 0,
+      "durationMilliseconds": 5176,
+      "trx": "consumer/edge-pass-station-consumer.trx",
+      "trxSha256": "4d79e01d282c5d2f5d2883d77ef00f6014d5aa0df5537df3c94ca9306d51ba23"
+    },
+    {
+      "label": "edge-cloud-contract-digest",
+      "digestSha256": "86cc7ca5399d6af3524ce34f2cace3ea926625b808b72f30f83b3118b8fa6d81",
+      "providerHead": "c06c238516470f0efb81464b9e3b83bb20811191",
+      "consumerHead": "7474b3a919d8e0058ac529fdda6e2d0cd720390d",
+      "durationMilliseconds": 1281
+    },
+    {
+      "label": "cloud-ai-workspace-alignment",
+      "discovered": 1,
+      "executed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "identityMarkerSha256": "5a6211d45dce81cc15f47299bd1509346c6352e8bfac4a85fe12a4627f919813",
+      "durationMilliseconds": 282264
+    }
+  ],
+  "scriptSha256": "e4dd4593f15879dcaa4faeacfc50a30ba8f684e09a2454ce712e92dbdb173da5"
+}

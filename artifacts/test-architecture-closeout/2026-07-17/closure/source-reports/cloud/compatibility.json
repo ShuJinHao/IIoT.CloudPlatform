@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 3,
+  "ruleId": "TEST-COMPAT-001",
+  "activeCompatibilityItems": 2,
+  "classifiedCandidateSignals": 7,
+  "unclassifiedCompatibilitySignals": 0,
+  "retired": 1,
+  "externalConsumerEvidence": [
+    {
+      "compatibilityId": "upload-content-hash-idempotency",
+      "repository": "IIoT.EdgeClient",
+      "path": "src/Infrastructure/IIoT.Edge.Infrastructure.Integration/Capacity/CapacitySyncTask.cs",
+      "verified": true,
+      "referenceHead": "7474b3a919d8e0058ac529fdda6e2d0cd720390d",
+      "evidenceHead": "7474b3a919d8e0058ac529fdda6e2d0cd720390d",
+      "headMatchesReference": true,
+      "repositoryClean": true,
+      "trackedSourceStateSha256": "4f04f99809aad794f491bb41ae1b185b2571d7ab51aa6f73f9b05f4fd964d6b1",
+      "consumerStateSha256": "7eedaa475125e3e6e59a66d3a98efe39f3889deb991fbabe03b675dd6d6b05f4"
+    },
+    {
+      "compatibilityId": "upload-content-hash-idempotency",
+      "repository": "IIoT.EdgeClient",
+      "path": "src/Infrastructure/IIoT.Edge.Infrastructure.Integration/DeviceLog/DeviceLogSyncTask.cs",
+      "verified": true,
+      "referenceHead": "7474b3a919d8e0058ac529fdda6e2d0cd720390d",
+      "evidenceHead": "7474b3a919d8e0058ac529fdda6e2d0cd720390d",
+      "headMatchesReference": true,
+      "repositoryClean": true,
+      "trackedSourceStateSha256": "4f04f99809aad794f491bb41ae1b185b2571d7ab51aa6f73f9b05f4fd964d6b1",
+      "consumerStateSha256": "7eedaa475125e3e6e59a66d3a98efe39f3889deb991fbabe03b675dd6d6b05f4"
+    }
+  ],
+  "retained": [
+    {
+      "id": "human-process-select-api",
+      "classification": "current-ordinary-abstraction",
+      "producer": "src/hosts/IIoT.HttpApi/Controllers/Human/MasterData/HumanMasterDataProcessController.cs",
+      "consumers": [
+        "src/ui/iiot-web/src/features/processes/api.ts",
+        "src/ui/iiot-web/src/features/recipes/useRecipes.ts"
+      ]
+    },
+    {
+      "id": "human-device-select-api",
+      "classification": "current-ordinary-abstraction",
+      "producer": "src/hosts/IIoT.HttpApi/Controllers/Human/HumanDeviceController.cs",
+      "consumers": [
+        "src/ui/iiot-web/src/features/devices/api.ts",
+        "src/ui/iiot-web/src/features/recipes/useRecipes.ts"
+      ]
+    },
+    {
+      "id": "gateway-blocked-route-catalog",
+      "classification": "current-ordinary-abstraction",
+      "producer": "src/hosts/IIoT.Gateway/appsettings.json",
+      "consumers": [
+        "src/hosts/IIoT.Gateway/Infrastructure/GatewayRouteCatalog.cs",
+        "src/hosts/IIoT.Gateway/Program.cs"
+      ]
+    },
+    {
+      "id": "client-release-host-compatibility",
+      "classification": "current-ordinary-abstraction",
+      "producer": "src/services/IIoT.ProductionService/ClientReleases/ClientReleaseContracts.cs",
+      "consumers": [
+        "src/services/IIoT.ProductionService/Commands/Human/ClientReleases/GenerateEdgeInstallerPackage.cs",
+        "src/services/IIoT.ProductionService/Queries/Human/ClientReleases/GetDeviceClientVersionInventory.cs"
+      ]
+    },
+    {
+      "id": "upload-content-hash-idempotency",
+      "classification": "active-request-id-compatibility",
+      "producer": "src/services/IIoT.ProductionService/Commands/Edge/UploadDeduplicationKeys.cs",
+      "consumers": [
+        "src/services/IIoT.ProductionService/Commands/Edge/Capacities/ReceiveHourlyCapacity.cs",
+        "src/services/IIoT.ProductionService/Commands/Edge/DeviceLogs/ReceiveDeviceLog.cs",
+        "src/services/IIoT.ProductionService/Commands/Edge/PassStations/ReceivePassStationBatch.cs",
+        "src/infrastructure/IIoT.EntityFrameworkCore/Uploads/EfUploadReceiveRegistry.cs"
+      ]
+    },
+    {
+      "id": "migration-schema-upgrade",
+      "classification": "active-schema-compatibility",
+      "producer": "src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs",
+      "consumers": [
+        "src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs",
+        "src/hosts/IIoT.MigrationWorkApp/Worker.cs",
+        "src/hosts/IIoT.AppHost/AppHost.cs"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,326 @@
+{
+  "schemaVersion": 1,
+  "tool": "jscpd",
+  "version": "5.0.12",
+  "scans": [
+    {
+      "category": "production",
+      "mode": "strict",
+      "clones": 293,
+      "duplicatedLines": 2873,
+      "duplicatedTokens": 21191,
+      "lines": 68611,
+      "tokens": 415921
+    },
+    {
+      "category": "production",
+      "mode": "mild",
+      "clones": 50,
+      "duplicatedLines": 876,
+      "duplicatedTokens": 5100,
+      "lines": 66587,
+      "tokens": 314496
+    },
+    {
+      "category": "support",
+      "mode": "strict",
+      "clones": 4,
+      "duplicatedLines": 79,
+      "duplicatedTokens": 605,
+      "lines": 2418,
+      "tokens": 18185
+    },
+    {
+      "category": "support",
+      "mode": "mild",
+      "clones": 2,
+      "duplicatedLines": 60,
+      "duplicatedTokens": 295,
+      "lines": 2418,
+      "tokens": 12360
+    },
+    {
+      "category": "test-cases",
+      "mode": "strict",
+      "clones": 282,
+      "duplicatedLines": 2664,
+      "duplicatedTokens": 22964,
+      "lines": 28142,
+      "tokens": 236178
+    },
+    {
+      "category": "test-cases",
+      "mode": "mild",
+      "clones": 53,
+      "duplicatedLines": 893,
+      "duplicatedTokens": 5971,
+      "lines": 28142,
+      "tokens": 177974
+    }
+  ],
+  "strictFingerprints": {
+    "categories": [
+      {
+        "category": "production",
+        "groupFingerprints": 293,
+        "instances": 293
+      },
+      {
+        "category": "support",
+        "groupFingerprints": 4,
+        "instances": 4
+      },
+      {
+        "category": "test-cases",
+        "groupFingerprints": 282,
+        "instances": 282
+      }
+    ],
+    "fingerprintBaseline": "scripts/tests/baselines/cloud-duplication-strict-fingerprints.json"
+  },
+  "crossBoundedContextGroups": [
+    {
+      "mode": "strict",
+      "firstContext": "IIoT.Core.Production",
+      "firstFile": "IIoT.Core.Production/Aggregates/ClientReleases/ClientReleaseComponent.cs",
+      "firstStart": 322,
+      "secondContext": "IIoT.ProductionService",
+      "secondFile": "IIoT.ProductionService/ClientReleases/ClientReleaseText.cs",
+      "secondStart": 8,
+      "lines": 6,
+      "tokens": 50
+    },
+    {
+      "mode": "strict",
+      "firstContext": "IIoT.Core.Production",
+      "firstFile": "IIoT.Core.Production/Aggregates/ClientReleases/DeviceClientState.cs",
+      "firstStart": 120,
+      "secondContext": "IIoT.ProductionService",
+      "secondFile": "IIoT.ProductionService/Commands/Edge/EdgeHosts/ReportEdgeHostPlcRuntimeStates.cs",
+      "secondStart": 162,
+      "lines": 9,
+      "tokens": 56
+    },
+    {
+      "mode": "strict",
+      "firstContext": "IIoT.Core.Production",
+      "firstFile": "IIoT.Core.Production/Aggregates/ClientReleases/EdgeDeviceRuntimeHeartbeat.cs",
+      "firstStart": 183,
+      "secondContext": "IIoT.ProductionService",
+      "secondFile": "IIoT.ProductionService/Commands/Edge/ClientVersions/ReportDeviceRuntimeHeartbeat.cs",
+      "secondStart": 126,
+      "lines": 9,
+      "tokens": 55
+    },
+    {
+      "mode": "strict",
+      "firstContext": "IIoT.Core.Production",
+      "firstFile": "IIoT.Core.Production/Contracts/ClientReleases/IClientReleaseVersionObservationReader.cs",
+      "firstStart": 29,
+      "secondContext": "IIoT.ProductionService",
+      "secondFile": "IIoT.ProductionService/ClientReleases/ClientReleaseExpectedVersionState.cs",
+      "secondStart": 11,
+      "lines": 11,
+      "tokens": 51
+    },
+    {
+      "mode": "strict",
+      "firstContext": "IIoT.Dapper",
+      "firstFile": "IIoT.Dapper/Production/QueryServices/Capacity/CapacityQueryService.cs",
+      "firstStart": 112,
+      "secondContext": "IIoT.EntityFrameworkCore",
+      "secondFile": "IIoT.EntityFrameworkCore/EdgeHosts/EfEdgeHostPlcRuntimeStateStore.cs",
+      "secondStart": 22,
+      "lines": 9,
+      "tokens": 52
+    },
+    {
+      "mode": "strict",
+      "firstContext": "IIoT.Dapper",
+      "firstFile": "IIoT.Dapper/Production/QueryServices/Capacity/CapacityQueryService.cs",
+      "firstStart": 272,
+      "secondContext": "IIoT.Services.Contracts",
+      "secondFile": "IIoT.Services.Contracts/Contracts/Data/RecordQueries/ICapacityQueryService.cs",
+      "secondStart": 40,
+      "lines": 6,
+      "tokens": 66
+    },
+    {
+      "mode": "strict",
+      "firstContext": "IIoT.Dapper",
+      "firstFile": "IIoT.Dapper/Production/QueryServices/DeviceLog/DeviceLogQueryService.cs",
+      "firstStart": 9,
+      "secondContext": "IIoT.Services.Contracts",
+      "secondFile": "IIoT.Services.Contracts/Contracts/Data/RecordQueries/IDeviceLogQueryService.cs",
+      "secondStart": 8,
+      "lines": 9,
+      "tokens": 91
+    },
+    {
+      "mode": "strict",
+      "firstContext": "IIoT.Dapper",
+      "firstFile": "IIoT.Dapper/Production/QueryServices/DeviceLog/DeviceLogQueryService.cs",
+      "firstStart": 88,
+      "secondContext": "IIoT.Services.Contracts",
+      "secondFile": "IIoT.Services.Contracts/Contracts/Data/RecordQueries/IDeviceLogQueryService.cs",
+      "secondStart": 18,
+      "lines": 6,
+      "tokens": 55
+    },
+    {
+      "mode": "strict",
+      "firstContext": "IIoT.Dapper",
+      "firstFile": "IIoT.Dapper/Production/QueryServices/DeviceLog/DeviceLogQueryService.cs",
+      "firstStart": 138,
+      "secondContext": "IIoT.Services.Contracts",
+      "secondFile": "IIoT.Services.Contracts/Contracts/Data/RecordQueries/IDeviceLogQueryService.cs",
+      "secondStart": 25,
+      "lines": 6,
+      "tokens": 52
+    },
+    {
+      "mode": "strict",
+      "firstContext": "IIoT.Dapper",
+      "firstFile": "IIoT.Dapper/Production/QueryServices/PassStation/PassStationRecordQueryService.cs",
+      "firstStart": 178,
+      "secondContext": "IIoT.ProductionService",
+      "secondFile": "IIoT.ProductionService/Commands/Edge/PassStations/ReceivePassStationBatch.cs",
+      "secondStart": 155,
+      "lines": 8,
+      "tokens": 81
+    },
+    {
+      "mode": "strict",
+      "firstContext": "IIoT.EntityFrameworkCore",
+      "firstFile": "IIoT.EntityFrameworkCore/QueryServices/ProcessReadQueryService.cs",
+      "firstStart": 8,
+      "secondContext": "IIoT.Services.Contracts",
+      "secondFile": "IIoT.Services.Contracts/Contracts/Data/RecordQueries/IProcessReadQueryService.cs",
+      "secondStart": 12,
+      "lines": 6,
+      "tokens": 50
+    },
+    {
+      "mode": "strict",
+      "firstContext": "IIoT.EntityFrameworkCore",
+      "firstFile": "IIoT.EntityFrameworkCore/Uploads/EfUploadReceiveRegistry.cs",
+      "firstStart": 89,
+      "secondContext": "IIoT.ProductionService",
+      "secondFile": "IIoT.ProductionService/Commands/Edge/UploadDeduplicationKeys.cs",
+      "secondStart": 111,
+      "lines": 7,
+      "tokens": 52
+    },
+    {
+      "mode": "strict",
+      "firstContext": "IIoT.EmployeeService",
+      "firstFile": "IIoT.EmployeeService/Queries/Human/Employees/GetEmployeePagedList.cs",
+      "firstStart": 2,
+      "secondContext": "IIoT.MasterDataService",
+      "secondFile": "IIoT.MasterDataService/Queries/Human/Processes/GetProcessPagedList.cs",
+      "secondStart": 2,
+      "lines": 9,
+      "tokens": 57
+    },
+    {
+      "mode": "strict",
+      "firstContext": "IIoT.EmployeeService",
+      "firstFile": "IIoT.EmployeeService/Queries/Human/Employees/GetEmployeePagedList.cs",
+      "firstStart": 34,
+      "secondContext": "IIoT.MasterDataService",
+      "secondFile": "IIoT.MasterDataService/Queries/Human/Processes/GetProcessPagedList.cs",
+      "secondStart": 27,
+      "lines": 7,
+      "tokens": 51
+    },
+    {
+      "mode": "strict",
+      "firstContext": "IIoT.IdentityService",
+      "firstFile": "IIoT.IdentityService/Commands/Human/RefreshHumanIdentity.cs",
+      "firstStart": 22,
+      "secondContext": "IIoT.ProductionService",
+      "secondFile": "IIoT.ProductionService/Commands/Bootstrap/Devices/RefreshEdgeDeviceIdentity.cs",
+      "secondStart": 26,
+      "lines": 10,
+      "tokens": 50
+    },
+    {
+      "mode": "strict",
+      "firstContext": "IIoT.IdentityService",
+      "firstFile": "IIoT.IdentityService/Commands/Human/UpdateRolePermissions.cs",
+      "firstStart": 1,
+      "secondContext": "IIoT.ProductionService",
+      "secondFile": "IIoT.ProductionService/Commands/Human/ClientReleases/DeleteClientReleasePackage.cs",
+      "secondStart": 6,
+      "lines": 6,
+      "tokens": 52
+    },
+    {
+      "mode": "strict",
+      "firstContext": "IIoT.IdentityService",
+      "firstFile": "IIoT.IdentityService/Queries/Human/GetAllDefinedPermissions.cs",
+      "firstStart": 1,
+      "secondContext": "IIoT.ProductionService",
+      "secondFile": "IIoT.ProductionService/Queries/Human/Recipes/GetRecipeById.cs",
+      "secondStart": 3,
+      "lines": 6,
+      "tokens": 52
+    },
+    {
+      "mode": "strict",
+      "firstContext": "IIoT.MasterDataService",
+      "firstFile": "IIoT.MasterDataService/Commands/Human/Processes/CreateProcess.cs",
+      "firstStart": 2,
+      "secondContext": "IIoT.ProductionService",
+      "secondFile": "IIoT.ProductionService/Queries/Edge/Recipes/GetRecipesByDeviceId.cs",
+      "secondStart": 2,
+      "lines": 9,
+      "tokens": 57
+    },
+    {
+      "mode": "strict",
+      "firstContext": "api",
+      "firstFile": "api/auth.ts",
+      "firstStart": 64,
+      "secondContext": "core",
+      "secondFile": "core/http/problemDetails.ts",
+      "secondStart": 22,
+      "lines": 13,
+      "tokens": 128
+    },
+    {
+      "mode": "strict",
+      "firstContext": "features",
+      "firstFile": "features/dashboard/useDashboard.ts",
+      "firstStart": 50,
+      "secondContext": "layout",
+      "secondFile": "layout/MainLayout.vue:typescript",
+      "secondStart": 244,
+      "lines": 7,
+      "tokens": 50
+    },
+    {
+      "mode": "mild",
+      "firstContext": "api",
+      "firstFile": "api/auth.ts",
+      "firstStart": 64,
+      "secondContext": "core",
+      "secondFile": "core/http/problemDetails.ts",
+      "secondStart": 22,
+      "lines": 13,
+      "tokens": 128
+    },
+    {
+      "mode": "mild",
+      "firstContext": "features",
+      "firstFile": "features/auth/LoginAccessPanel.vue:html",
+      "firstStart": 13,
+      "secondContext": "views",
+      "secondFile": "views/Login.vue:html",
+      "secondStart": 5,
+      "lines": 11,
+      "tokens": 73
+    }
+  ],
+  "refactoringPolicy": "report-only; no automatic shared package extraction"
+}

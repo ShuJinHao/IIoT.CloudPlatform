@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 1,
+  "generatedAtUtc": "2026-07-17T08:06:16Z",
+  "status": "PASS",
+  "closedUniverses": {
+    "retiredGovernanceAssets": {
+      "roots": ["Edge", "Cloud", "AI"],
+      "trackedFileUniverse": "git ls-files at the three frozen candidate HEADs",
+      "denylist": [
+        "CODEOWNERS",
+        ".github/CODEOWNERS",
+        "docs/governance-authorization.md",
+        "docs/test-governance-authorization.md",
+        "docs/测试治理授权.md",
+        "artifacts/governance-authorization.json"
+      ],
+      "allowlist": [
+        { "scope": "formal rules, test fixtures and retrospective prose", "reason": "Negative assertions and historical trace may name retired assets; they do not restore an active authorization mechanism." }
+      ],
+      "activeTrackedMatches": 0,
+      "result": "PASS"
+    },
+    "edgeRetiredDiecut": {
+      "activeRoots": ["src", "scripts", ".github", "IIoT.EdgeClient.slnx"],
+      "activeGlobs": ["**/*.cs", "**/*.axaml", "**/*.json", "**/*.yml", "**/*.yaml", "**/*.ps1", "**/*.sh", "**/*.csproj", "**/*.props", "**/*.targets", "**/*.slnx"],
+      "allowlist": [
+        { "scope": "scripts/tests/edge-retired-feature-evidence.json", "reason": "Single formal retirement ledger containing exactly 41 immutable declarations." },
+        { "scope": "scripts/tests/Test-EdgeRetiredFeatureEvidence.ps1", "reason": "Executable gate that must name the retired feature to reject its return." }
+      ],
+      "evidenceFiles": 1,
+      "declarations": 41,
+      "activeFiles": 1404,
+      "allowedMatches": 2,
+      "unexpectedMatches": 0,
+      "behaviorFixtures": { "positive": 1, "negative": 8 },
+      "generatedDirectoryNames": [".vs", "bin", "obj", "artifacts", ".artifacts", "publish", "staging"],
+      "generatedDirectoryCount": 0,
+      "result": "PASS"
+    },
+    "legacyTestArchitecture": {
+      "roots": ["Edge/src", "Edge/scripts/tests", "Cloud/src", "Cloud/scripts/tests", "AI/src", "AI/scripts/tests", "Edge/.github/workflows", "Cloud/.github/workflows", "AI/.github/workflows"],
+      "denylist": {
+        "buckets": [
+          "IIoT.ServiceLayer.Tests",
+          "IIoT.ProductionService.Tests",
+          "IIoT.Infrastructure.Tests",
+          "IIoT.RedisIntegrationTests",
+          "IIoT.EndToEndTests",
+          "new aggregate/mixed test runner not present in the frozen inventory"
+        ],
+        "filters": ["--filter used to hide a required case", "Skip attribute in required test source", "required-to-manual downgrade"],
+        "helpers": ["Compile Link test-source reuse", "support project containing test cases", "orphan support project without a real runner consumer"]
+      },
+      "duplicateHelperDefinition": "A test helper is duplicate when equivalent test-only behavior is copied into two or more active files within a repository and is neither class-local/private nor covered by the repository production/support/test-case duplication baseline and ratchet.",
+      "allowlist": [
+        { "scope": "class-local/private helper", "reason": "Single-test-class helpers are intentionally local under the formal test architecture rule." },
+        { "scope": "registered support project with evaluated runner consumers", "reason": "Shared infrastructure is allowed only when inventory proves real consumers and no test cases live in support." },
+        { "scope": "historical or negative fixture text", "reason": "Fail-closed behavior fixtures must contain the forbidden form they prove is rejected." }
+      ],
+      "gates": [
+        "Edge required inventory/project-graph/duplication gates in run 29558380849",
+        "Cloud Invoke-CloudTestInventory and duplication gates in run 29562419923",
+        "AI Get-AICopilotTestInventory, infrastructure behavior and duplication gates in run 29562903935"
+      ],
+      "result": "PASS"
+    }
+  },
+  "highRiskIdentityMatrix": [
+    { "repository": "Edge", "identity": "startup-exception-propagation", "test": "StartupExceptionAllowlistSourceGuardTests plus startup integration matrix", "runner": "IIoT.Edge.Startup.IntegrationTests / IIoT.Edge.Shell.FilesystemTests", "run": 29558380849, "head": "7474b3a919d8e0058ac529fdda6e2d0cd720390d", "result": "PASS" },
+    { "repository": "Edge", "identity": "neutral-test-plugin-lifecycle", "test": "TestPluginRuntimeContractTests", "runner": "IIoT.Edge.Module.ConformanceTests", "run": 29558380849, "head": "7474b3a919d8e0058ac529fdda6e2d0cd720390d", "result": "PASS" },
+    { "repository": "Edge", "identity": "plc-mes-cloud-probe-gate-retry-fallback-deadletter-separation", "test": "RetryTaskCloudMesBehaviorTests / PlcOperationGateBehaviorTests / CloudConsumerBehaviorTests", "runner": "IIoT.Edge.Runtime.WorkflowTests", "run": 29558380849, "head": "7474b3a919d8e0058ac529fdda6e2d0cd720390d", "result": "PASS" },
+    { "repository": "Cloud", "identity": "cache-cancellation-and-factory-semantics", "test": "RedisCacheServiceSemanticsTests / CacheAsideQueryHandlerTests", "runner": "IIoT.CloudPlatform.WorkflowTests / ApplicationTests", "run": 29562419923, "head": "c06c238516470f0efb81464b9e3b83bb20811191", "result": "PASS" },
+    { "repository": "Cloud", "identity": "permission-cancellation", "test": "PermissionProviderCancellationTests", "runner": "IIoT.CloudPlatform.PersistenceTests", "run": 29562419923, "head": "c06c238516470f0efb81464b9e3b83bb20811191", "result": "PASS" },
+    { "repository": "Cloud", "identity": "transaction-outbox-http-event-contract", "test": "OutboxDispatchPersistenceTests / HttpControllerContractTests / GatewayAndEventContractTests", "runner": "PostgresTests / ContractTests", "run": 29562419923, "head": "c06c238516470f0efb81464b9e3b83bb20811191", "result": "PASS" },
+    { "repository": "AI", "identity": "authorization-before-side-effect", "test": "AuthorizationPipelineBehaviorTests / DataSourceAuthorizationTests", "runner": "AICopilot.ApplicationTests", "run": 29562903935, "head": "59b93f7145fbe2dc908aa35970566d25875b473c", "result": "PASS" },
+    { "repository": "AI", "identity": "cloud-read-only-boundary", "test": "TextToSqlReadOnlyTests / DataAnalysisReadOnlyGuardrailTests", "runner": "AICopilot.ApplicationTests / UnitTests", "run": 29562903935, "head": "59b93f7145fbe2dc908aa35970566d25875b473c", "result": "PASS" },
+    { "repository": "AI", "identity": "agent-cancellation-and-rag-compensation", "test": "AgentCallerCancellationTests / RagUploadOutboxAtomicityTests / RagFileDeletionWorkflowTests", "runner": "WorkflowTests / PersistenceTests / PersistenceFilesystemTests", "run": 29562903935, "head": "59b93f7145fbe2dc908aa35970566d25875b473c", "result": "PASS" },
+    { "repository": "AI", "identity": "rag-upload-index-search-mcp-e2e", "test": "RagMcpEndToEndTests", "runner": "AICopilot.EndToEndTests", "run": 29562903935, "head": "59b93f7145fbe2dc908aa35970566d25875b473c", "result": "PASS" }
+  ],
+  "failureLayerMatrix": {
+    "testKinds": ["Unit", "Aggregate", "Contract", "Conformance", "Persistence", "Workflow", "HttpIntegration", "Ui", "EndToEnd", "GoldenEval", "Architecture", "Deployment"],
+    "runtimes": ["Pure", "InProcess", "Filesystem", "SQLite", "Postgres", "Redis", "RabbitMQ", "Docker", "Aspire", "Avalonia", "Browser", "Windows", "LiveExternal"],
+    "capabilityRule": "Every case inherits exactly one registered runner capability; source-level classification overrides and unresolved capability values are rejected.",
+    "projectReferenceRules": [
+      "Pure cannot reach persistence, hosts, Aspire, external-resource packages or integration test kits.",
+      "InProcess cannot reach AppHost, RagWorker, AspireIntegrationTestKit or PersistenceTestKit unless its registered runtime requires that boundary.",
+      "Contract and Conformance bind public DTO/protocol/plugin seams rather than implementation-only helpers.",
+      "Persistence, Workflow, HTTP/UI, EndToEnd and GoldenEval live in the runner whose runtime can reproduce the claimed failure layer.",
+      "Compile Link source reuse, support projects containing test cases and unregistered runners are forbidden."
+    ],
+    "negativeFixtureGates": [
+      "Edge architecture analyzer/project graph fixtures in smoke-build job 87815364050",
+      "Cloud valid=8 invalid=15 callGraphBypass=20 suppressionBypass=3 in build-test job 87827547117",
+      "AI analyzer and test-infrastructure behavior fixtures in governance-gates job 87829027221"
+    ],
+    "inventoryEvidence": [
+      "artifacts/testing/closure/source-reports/edge/discovered-test-inventory.json",
+      "artifacts/testing/closure/source-reports/cloud/test-inventory.json",
+      "artifacts/testing/closure/source-reports/ai/test-inventory.json"
+    ],
+    "result": "PASS"
+  },
+  "qualityBinding": {
+    "Edge": { "head": "7474b3a919d8e0058ac529fdda6e2d0cd720390d", "run": 29558380849, "coverageLine": 0.658909, "coverageBranch": 0.514546, "baselineRelaxed": false },
+    "Cloud": { "head": "c06c238516470f0efb81464b9e3b83bb20811191", "run": 29562419923, "coverageLine": 0.63159887, "coverageBranch": 0.50097882, "compatibilityEdgeHead": "7474b3a919d8e0058ac529fdda6e2d0cd720390d", "baselineRelaxed": false },
+    "AI": { "head": "59b93f7145fbe2dc908aa35970566d25875b473c", "run": 29562903935, "mutationKilled": 58, "mutationEvaluated": 58, "compatibilityEncv1Callers": 2, "baselineRelaxed": false },
+    "crossRepositoryDuplication": { "tool": "jscpd", "version": "5.0.12", "scans": 6, "crossRepositoryGroups": 82, "policy": "report-only; repository ratchets remain blocking" },
+    "result": "PASS"
+  },
+  "externalBoundaries": {
+    "notRun": ["Windows physical-machine acceptance", "field-device acceptance", "real PLC/MES/Cloud/model interaction", "LiveExternal", "production deployment/schema/data"],
+    "pullRequestsMerged": false,
+    "productionOperationsPerformed": false,
+    "deployChangedInvoked": false,
+    "result": "PASS"
+  }
+}

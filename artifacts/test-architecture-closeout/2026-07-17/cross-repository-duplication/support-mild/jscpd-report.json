@@ -1,0 +1,537 @@
+{
+  "duplicates": [
+    {
+      "firstFile": {
+        "end": 158,
+        "endLoc": {
+          "column": 65,
+          "line": 158,
+          "position": 6870
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 145,
+        "startLoc": {
+          "column": 125,
+          "line": 145,
+          "position": 6385
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 14,
+      "secondFile": {
+        "end": 184,
+        "endLoc": {
+          "column": 65,
+          "line": 184,
+          "position": 7883
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 171,
+        "startLoc": {
+          "column": 119,
+          "line": 171,
+          "position": 7398
+        }
+      },
+      "tokens": 80
+    },
+    {
+      "firstFile": {
+        "end": 184,
+        "endLoc": {
+          "column": 19,
+          "line": 184,
+          "position": 7837
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 171,
+        "startLoc": {
+          "column": 114,
+          "line": 171,
+          "position": 7393
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 14,
+      "secondFile": {
+        "end": 211,
+        "endLoc": {
+          "column": 19,
+          "line": 211,
+          "position": 9010
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 198,
+        "startLoc": {
+          "column": 151,
+          "line": 198,
+          "position": 8566
+        }
+      },
+      "tokens": 74
+    },
+    {
+      "firstFile": {
+        "end": 1433,
+        "endLoc": {
+          "column": 9,
+          "line": 1433,
+          "position": 53442
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 1372,
+        "startLoc": {
+          "column": 38,
+          "line": 1372,
+          "position": 51236
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 62,
+      "secondFile": {
+        "end": 1503,
+        "endLoc": {
+          "column": 9,
+          "line": 1503,
+          "position": 55934
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 1442,
+        "startLoc": {
+          "column": 37,
+          "line": 1442,
+          "position": 53728
+        }
+      },
+      "tokens": 228
+    },
+    {
+      "firstFile": {
+        "end": 41,
+        "endLoc": {
+          "column": 5,
+          "line": 41,
+          "position": 1308
+        },
+        "name": "Cloud/src/testing/IIoT.CloudPlatform.PortFakes/TestInfrastructure.cs",
+        "start": 12,
+        "startLoc": {
+          "column": 4,
+          "line": 12,
+          "position": 318
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 30,
+      "secondFile": {
+        "end": 84,
+        "endLoc": {
+          "column": 5,
+          "line": 84,
+          "position": 2683
+        },
+        "name": "Cloud/src/testing/IIoT.CloudPlatform.PortFakes/TestInfrastructure.cs",
+        "start": 55,
+        "startLoc": {
+          "column": 4,
+          "line": 55,
+          "position": 1693
+        }
+      },
+      "tokens": 146
+    },
+    {
+      "firstFile": {
+        "end": 84,
+        "endLoc": {
+          "column": 5,
+          "line": 84,
+          "position": 2683
+        },
+        "name": "Cloud/src/testing/IIoT.CloudPlatform.PortFakes/TestInfrastructure.cs",
+        "start": 53,
+        "startLoc": {
+          "column": 35,
+          "line": 53,
+          "position": 1675
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 32,
+      "secondFile": {
+        "end": 126,
+        "endLoc": {
+          "column": 5,
+          "line": 126,
+          "position": 3997
+        },
+        "name": "Cloud/src/testing/IIoT.CloudPlatform.PortFakes/TestInfrastructure.cs",
+        "start": 95,
+        "startLoc": {
+          "column": 55,
+          "line": 95,
+          "position": 2989
+        }
+      },
+      "tokens": 149
+    },
+    {
+      "firstFile": {
+        "end": 414,
+        "endLoc": {
+          "column": 25,
+          "line": 414,
+          "position": 14695
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 394,
+        "startLoc": {
+          "column": 52,
+          "line": 394,
+          "position": 14127
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 21,
+      "secondFile": {
+        "end": 450,
+        "endLoc": {
+          "column": 25,
+          "line": 450,
+          "position": 15914
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 430,
+        "startLoc": {
+          "column": 68,
+          "line": 430,
+          "position": 15346
+        }
+      },
+      "tokens": 90
+    },
+    {
+      "firstFile": {
+        "end": 722,
+        "endLoc": {
+          "column": 23,
+          "line": 722,
+          "position": 23763
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 698,
+        "startLoc": {
+          "column": 33,
+          "line": 698,
+          "position": 23094
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 25,
+      "secondFile": {
+        "end": 833,
+        "endLoc": {
+          "column": 23,
+          "line": 833,
+          "position": 27642
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 809,
+        "startLoc": {
+          "column": 26,
+          "line": 809,
+          "position": 26973
+        }
+      },
+      "tokens": 93
+    },
+    {
+      "firstFile": {
+        "end": 737,
+        "endLoc": {
+          "column": 11,
+          "line": 737,
+          "position": 24433
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 723,
+        "startLoc": {
+          "column": 8,
+          "line": 723,
+          "position": 23792
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 15,
+      "secondFile": {
+        "end": 848,
+        "endLoc": {
+          "column": 11,
+          "line": 848,
+          "position": 28310
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 834,
+        "startLoc": {
+          "column": 8,
+          "line": 834,
+          "position": 27669
+        }
+      },
+      "tokens": 100
+    },
+    {
+      "firstFile": {
+        "end": 763,
+        "endLoc": {
+          "column": 25,
+          "line": 763,
+          "position": 25298
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 749,
+        "startLoc": {
+          "column": 105,
+          "line": 749,
+          "position": 24852
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 15,
+      "secondFile": {
+        "end": 873,
+        "endLoc": {
+          "column": 25,
+          "line": 873,
+          "position": 29138
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 859,
+        "startLoc": {
+          "column": 103,
+          "line": 859,
+          "position": 28692
+        }
+      },
+      "tokens": 98
+    },
+    {
+      "firstFile": {
+        "end": 801,
+        "endLoc": {
+          "column": 19,
+          "line": 801,
+          "position": 26568
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 763,
+        "startLoc": {
+          "column": 33,
+          "line": 763,
+          "position": 25306
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 39,
+      "secondFile": {
+        "end": 911,
+        "endLoc": {
+          "column": 19,
+          "line": 911,
+          "position": 30406
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 873,
+        "startLoc": {
+          "column": 31,
+          "line": 873,
+          "position": 29144
+        }
+      },
+      "tokens": 214
+    },
+    {
+      "firstFile": {
+        "end": 966,
+        "endLoc": {
+          "column": 6,
+          "line": 966,
+          "position": 32218
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 912,
+        "startLoc": {
+          "column": 0,
+          "line": 912,
+          "position": 30456
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 55,
+      "secondFile": {
+        "end": 1021,
+        "endLoc": {
+          "column": 6,
+          "line": 1021,
+          "position": 34039
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 967,
+        "startLoc": {
+          "column": 0,
+          "line": 967,
+          "position": 32277
+        }
+      },
+      "tokens": 320
+    },
+    {
+      "firstFile": {
+        "end": 1751,
+        "endLoc": {
+          "column": 5,
+          "line": 1751,
+          "position": 57963
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1720,
+        "startLoc": {
+          "column": 55,
+          "line": 1720,
+          "position": 57213
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 32,
+      "secondFile": {
+        "end": 1800,
+        "endLoc": {
+          "column": 5,
+          "line": 1800,
+          "position": 59404
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1769,
+        "startLoc": {
+          "column": 53,
+          "line": 1769,
+          "position": 58654
+        }
+      },
+      "tokens": 90
+    },
+    {
+      "firstFile": {
+        "end": 1845,
+        "endLoc": {
+          "column": 14,
+          "line": 1845,
+          "position": 61117
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1827,
+        "startLoc": {
+          "column": 61,
+          "line": 1827,
+          "position": 60608
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 19,
+      "secondFile": {
+        "end": 1880,
+        "endLoc": {
+          "column": 14,
+          "line": 1880,
+          "position": 62344
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1864,
+        "startLoc": {
+          "column": 40,
+          "line": 1864,
+          "position": 61852
+        }
+      },
+      "tokens": 74
+    },
+    {
+      "firstFile": {
+        "end": 1900,
+        "endLoc": {
+          "column": 19,
+          "line": 1900,
+          "position": 62811
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1885,
+        "startLoc": {
+          "column": 0,
+          "line": 1885,
+          "position": 62423
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 16,
+      "secondFile": {
+        "end": 1916,
+        "endLoc": {
+          "column": 19,
+          "line": 1916,
+          "position": 63241
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1901,
+        "startLoc": {
+          "column": 0,
+          "line": 1901,
+          "position": 62853
+        }
+      },
+      "tokens": 73
+    }
+  ],
+  "statistics": {
+    "detectionDate": "2026-07-17T07:50:56.688Z",
+    "formats": {
+      "csharp": {
+        "clones": 14,
+        "duplicatedLines": 375,
+        "duplicatedTokens": 1829,
+        "lines": 11700,
+        "newClones": 0,
+        "newDuplicatedLines": 0,
+        "percentage": 3.205128205128205,
+        "percentageTokens": 3.120787619226372,
+        "sources": 45,
+        "tokens": 58607
+      }
+    },
+    "total": {
+      "clones": 14,
+      "duplicatedLines": 375,
+      "duplicatedTokens": 1829,
+      "lines": 11700,
+      "newClones": 0,
+      "newDuplicatedLines": 0,
+      "percentage": 3.205128205128205,
+      "percentageTokens": 3.120787619226372,
+      "sources": 45,
+      "tokens": 58607
+    }
+  }
+}

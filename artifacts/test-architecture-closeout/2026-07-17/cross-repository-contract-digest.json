@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "generatedAtUtc": "2026-07-17T07:49:05.3977140+00:00",
+  "contractId": "edge-pass-station-batch-v1",
+  "digestSha256": "86cc7ca5399d6af3524ce34f2cace3ea926625b808b72f30f83b3118b8fa6d81",
+  "scriptSha256": "4928ad9278a8de710814f65fe9432cc65273545ff25b63baa140a8d2c40077f3",
+  "provider": {
+    "repository": "CloudPlatform",
+    "head": "c06c238516470f0efb81464b9e3b83bb20811191",
+    "snapshot": "scripts/tests/baselines/cloud-pass-station-contract.json"
+  },
+  "consumer": {
+    "repository": "EdgeClient",
+    "head": "7474b3a919d8e0058ac529fdda6e2d0cd720390d",
+    "snapshot": "src/Tests/IIoT.Edge.Cloud.ContractFilesystemTests/ContractSnapshots/pass-station-batch-v1.json"
+  }
+}

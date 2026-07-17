@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 2,
+  "generatedAtUtc": "2026-07-17T07:28:56.2832930Z",
+  "activeCompatibilityItems": 4,
+  "ordinaryAbstractions": 15,
+  "classifiedCandidateSignals": 53,
+  "unclassifiedCompatibilitySignals": 0,
+  "compatibilityCallSites": [
+    "AI-COMPAT-EF-HISTORY-SPLIT=1",
+    "AI-COMPAT-OBSOLETE-TOOL-CATALOG=1",
+    "AI-COMPAT-SECRET-ENCV1=2",
+    "AI-COMPAT-WIDGET-PAYLOAD-V1=2"
+  ]
+}

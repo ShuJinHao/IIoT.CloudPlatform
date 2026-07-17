@@ -1,0 +1,497 @@
+{
+  "schemaVersion": 1,
+  "collector": "coverlet.collector",
+  "version": "6.0.4",
+  "requiredRunners": 16,
+  "reports": 16,
+  "merged": {
+    "linesValid": 18488,
+    "linesCovered": 11677,
+    "branchesValid": 5619,
+    "branchesCovered": 2815,
+    "lineRate": 0.63159887,
+    "branchRate": 0.50097882
+  },
+  "sourceUniverse": {
+    "fileCount": 376,
+    "linesValid": 18488,
+    "branchesValid": 5619,
+    "fileMetricsSha256": "1be74f33fdb87d89130f2be7fb9cd1c434c3ca864bc3ada13c580b0bf1cdffd8"
+  },
+  "productionAssemblies": {
+    "assemblyCount": 21,
+    "assemblySha256": "5779022a85870b52b13640f9ddc638e7dfa9c164edb456c7a1eb5ccb5e6626ab",
+    "observedAssemblyCount": 21,
+    "observedAssemblies": [
+      "IIoT.AppHost",
+      "IIoT.Core.Employees",
+      "IIoT.Core.Identity",
+      "IIoT.Core.MasterData",
+      "IIoT.Core.Production",
+      "IIoT.Dapper",
+      "IIoT.DataWorker",
+      "IIoT.EmployeeService",
+      "IIoT.EntityFrameworkCore",
+      "IIoT.EventBus",
+      "IIoT.Gateway",
+      "IIoT.HttpApi",
+      "IIoT.IdentityService",
+      "IIoT.Infrastructure",
+      "IIoT.MasterDataService",
+      "IIoT.MigrationWorkApp",
+      "IIoT.ProductionService",
+      "IIoT.ServiceDefaults",
+      "IIoT.Services.Contracts",
+      "IIoT.Services.CrossCutting",
+      "IIoT.SharedKernel"
+    ],
+    "evidence": [
+      {
+        "project": "src/hosts/IIoT.AppHost/IIoT.AppHost.csproj",
+        "assembly": "IIoT.AppHost",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 28,
+        "sequencePointSha256": "f50d0fa002407ecb4ea1d0b692c2db814f6208397d49719f7fb1276dd08e7d59"
+      },
+      {
+        "project": "src/core/IIoT.Core.Employees/IIoT.Core.Employees.csproj",
+        "assembly": "IIoT.Core.Employees",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 98,
+        "sequencePointSha256": "b5a058a32cf1bd2d7bdfaa5b951efa623c11dfb4ae6741a56687b5e4b9ffb567"
+      },
+      {
+        "project": "src/core/IIoT.Core.Identity/IIoT.Core.Identity.csproj",
+        "assembly": "IIoT.Core.Identity",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 14,
+        "sequencePointSha256": "b904827b0ca19850e51a0e475ecb99209b975a53c9526d1bf05dfd71c688f280"
+      },
+      {
+        "project": "src/core/IIoT.Core.MasterData/IIoT.Core.MasterData.csproj",
+        "assembly": "IIoT.Core.MasterData",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 42,
+        "sequencePointSha256": "ab3c4e7f08745577f9320147ec47d66163c3346cd9113e6387c19e6f650b020c"
+      },
+      {
+        "project": "src/core/IIoT.Core.Production/IIoT.Core.Production.csproj",
+        "assembly": "IIoT.Core.Production",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 797,
+        "sequencePointSha256": "7a463e31d76d49404e28daed50391f92182fc3b1ec2077e1af5a22e96b39a400"
+      },
+      {
+        "project": "src/infrastructure/IIoT.Dapper/IIoT.Dapper.csproj",
+        "assembly": "IIoT.Dapper",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 395,
+        "sequencePointSha256": "54c767a4838d142648183f65aeb77549fb0097a2381dbce3c93c839d8e187005"
+      },
+      {
+        "project": "src/hosts/IIoT.DataWorker/IIoT.DataWorker.csproj",
+        "assembly": "IIoT.DataWorker",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 153,
+        "sequencePointSha256": "8ebbf8094d212fd4913000e51d3cac972f1f208f31560c398abda010b5b4d754"
+      },
+      {
+        "project": "src/services/IIoT.EmployeeService/IIoT.EmployeeService.csproj",
+        "assembly": "IIoT.EmployeeService",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 228,
+        "sequencePointSha256": "e0d42d078f8f5b416b19299e00d2ab14ba2a94953cb5b24f5a655c936b9ecf8b"
+      },
+      {
+        "project": "src/infrastructure/IIoT.EntityFrameworkCore/IIoT.EntityFrameworkCore.csproj",
+        "assembly": "IIoT.EntityFrameworkCore",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 1206,
+        "sequencePointSha256": "c439c1e1d93affb210f77eb01f094c52d3cccbd0c8db324a1f4cb833fa19db70"
+      },
+      {
+        "project": "src/infrastructure/IIoT.EventBus/IIoT.EventBus.csproj",
+        "assembly": "IIoT.EventBus",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 76,
+        "sequencePointSha256": "6c3357bafe388cf66b522980a342f6c81f173d32d1c62767bee0c1f71fbd80ee"
+      },
+      {
+        "project": "src/hosts/IIoT.Gateway/IIoT.Gateway.csproj",
+        "assembly": "IIoT.Gateway",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 96,
+        "sequencePointSha256": "d196ba1aa0bbbff13429a34998f39414570ab9ebcd8122d405b2356365b28230"
+      },
+      {
+        "project": "src/hosts/IIoT.HttpApi/IIoT.HttpApi.csproj",
+        "assembly": "IIoT.HttpApi",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 873,
+        "sequencePointSha256": "0ba204c35dbb30518893249b151c9aa657b98dd8c7653b22957e6f1acb1743b6"
+      },
+      {
+        "project": "src/services/IIoT.IdentityService/IIoT.IdentityService.csproj",
+        "assembly": "IIoT.IdentityService",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 260,
+        "sequencePointSha256": "1781945a85abaa1e0fcc80c5e7b16c1886c4f91d1790cb84c33131f116153e22"
+      },
+      {
+        "project": "src/infrastructure/IIoT.Infrastructure/IIoT.Infrastructure.csproj",
+        "assembly": "IIoT.Infrastructure",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 774,
+        "sequencePointSha256": "2e3c4a519d88a194220cdf19e630a325856b9c59eb6686ed149233c77f620f33"
+      },
+      {
+        "project": "src/services/IIoT.MasterDataService/IIoT.MasterDataService.csproj",
+        "assembly": "IIoT.MasterDataService",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 92,
+        "sequencePointSha256": "5b505aa11f199dd902e685cb1022c312c748872591956f6d6c9c89a6c70a94f3"
+      },
+      {
+        "project": "src/hosts/IIoT.MigrationWorkApp/IIoT.MigrationWorkApp.csproj",
+        "assembly": "IIoT.MigrationWorkApp",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 228,
+        "sequencePointSha256": "9724e456ab696497120dc9feda7d0f012400d3338d17c6c23f0db7ccb4054b88"
+      },
+      {
+        "project": "src/services/IIoT.ProductionService/IIoT.ProductionService.csproj",
+        "assembly": "IIoT.ProductionService",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 4664,
+        "sequencePointSha256": "1fde156a9e431ccac2fbeb8a1df632cc5cb37b481c947a6a86a95ea71231cda3"
+      },
+      {
+        "project": "src/hosts/IIoT.ServiceDefaults/IIoT.ServiceDefaults.csproj",
+        "assembly": "IIoT.ServiceDefaults",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 33,
+        "sequencePointSha256": "afa450a5703d4187d444fbaba66602888876713bbb1ea402b1fa3c55cfab86b1"
+      },
+      {
+        "project": "src/services/IIoT.Services.Contracts/IIoT.Services.Contracts.csproj",
+        "assembly": "IIoT.Services.Contracts",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 425,
+        "sequencePointSha256": "4d091728917c2c666ace43fb586045c9ad9cfc46cdeee601f60bea8e1d8cb88e"
+      },
+      {
+        "project": "src/services/IIoT.Services.CrossCutting/IIoT.Services.CrossCutting.csproj",
+        "assembly": "IIoT.Services.CrossCutting",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 263,
+        "sequencePointSha256": "781e9fb91dc60f67e5fc06c68d55ff63872c5c484c61197370cd9d2bb5b45839"
+      },
+      {
+        "project": "src/shared/IIoT.SharedKernel/IIoT.SharedKernel.csproj",
+        "assembly": "IIoT.SharedKernel",
+        "targetFramework": "net10.0",
+        "sequencePointLines": 133,
+        "sequencePointSha256": "6f82eeb2c2b0763dff5bbd429afa2ef537d4cab9298793ca75c4fb635fe5b9da"
+      }
+    ]
+  },
+  "runners": [
+    {
+      "assembly": "IIoT.CloudPlatform.AggregateTests",
+      "metrics": {
+        "linesValid": 1480,
+        "linesCovered": 208,
+        "branchesValid": 302,
+        "branchesCovered": 18,
+        "lineRate": 0.14054054,
+        "branchRate": 0.05960265
+      }
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.AnalyzerTests",
+      "metrics": {
+        "linesValid": 0,
+        "linesCovered": 0,
+        "branchesValid": 0,
+        "branchesCovered": 0,
+        "lineRate": 1.0,
+        "branchRate": 1.0
+      }
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.ApplicationFilesystemTests",
+      "metrics": {
+        "linesValid": 11637,
+        "linesCovered": 909,
+        "branchesValid": 3782,
+        "branchesCovered": 191,
+        "lineRate": 0.07811292,
+        "branchRate": 0.05050238
+      }
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.ApplicationTests",
+      "metrics": {
+        "linesValid": 11637,
+        "linesCovered": 4401,
+        "branchesValid": 3782,
+        "branchesCovered": 993,
+        "lineRate": 0.37819026,
+        "branchRate": 0.26255949
+      }
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.ArchitectureTests",
+      "metrics": {
+        "linesValid": 18019,
+        "linesCovered": 0,
+        "branchesValid": 5499,
+        "branchesCovered": 0,
+        "lineRate": 0.0,
+        "branchRate": 0.0
+      }
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.ContractFilesystemTests",
+      "metrics": {
+        "linesValid": 17596,
+        "linesCovered": 320,
+        "branchesValid": 5405,
+        "branchesCovered": 117,
+        "lineRate": 0.01818595,
+        "branchRate": 0.02164662
+      }
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.ContractTests",
+      "metrics": {
+        "linesValid": 18038,
+        "linesCovered": 325,
+        "branchesValid": 5525,
+        "branchesCovered": 132,
+        "lineRate": 0.01801752,
+        "branchRate": 0.0238914
+      }
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.DeploymentTests",
+      "metrics": {
+        "linesValid": 0,
+        "linesCovered": 0,
+        "branchesValid": 0,
+        "branchesCovered": 0,
+        "lineRate": 1.0,
+        "branchRate": 1.0
+      }
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.HttpTests",
+      "metrics": {
+        "linesValid": 17596,
+        "linesCovered": 205,
+        "branchesValid": 5405,
+        "branchesCovered": 75,
+        "lineRate": 0.01165038,
+        "branchRate": 0.01387604
+      }
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.IntegrationTests",
+      "metrics": {
+        "linesValid": 11631,
+        "linesCovered": 457,
+        "branchesValid": 3818,
+        "branchesCovered": 106,
+        "lineRate": 0.03929155,
+        "branchRate": 0.02776323
+      }
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.Persistence.PostgresTests",
+      "metrics": {
+        "linesValid": 15543,
+        "linesCovered": 2434,
+        "branchesValid": 4578,
+        "branchesCovered": 311,
+        "lineRate": 0.15659783,
+        "branchRate": 0.0679336
+      }
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.PersistenceTests",
+      "metrics": {
+        "linesValid": 15334,
+        "linesCovered": 1897,
+        "branchesValid": 4534,
+        "branchesCovered": 160,
+        "lineRate": 0.12371201,
+        "branchRate": 0.03528893
+      }
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.UnitFilesystemTests",
+      "metrics": {
+        "linesValid": 10459,
+        "linesCovered": 10,
+        "branchesValid": 3470,
+        "branchesCovered": 6,
+        "lineRate": 0.00095611,
+        "branchRate": 0.00172911
+      }
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.UnitTests",
+      "metrics": {
+        "linesValid": 18019,
+        "linesCovered": 634,
+        "branchesValid": 5499,
+        "branchesCovered": 212,
+        "lineRate": 0.03518508,
+        "branchRate": 0.03855246
+      }
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.WorkflowFilesystemTests",
+      "metrics": {
+        "linesValid": 11631,
+        "linesCovered": 3992,
+        "branchesValid": 3818,
+        "branchesCovered": 1027,
+        "lineRate": 0.3432207,
+        "branchRate": 0.268989
+      }
+    },
+    {
+      "assembly": "IIoT.CloudPlatform.WorkflowTests",
+      "metrics": {
+        "linesValid": 2256,
+        "linesCovered": 777,
+        "branchesValid": 726,
+        "branchesCovered": 206,
+        "lineRate": 0.34441489,
+        "branchRate": 0.28374656
+      }
+    }
+  ],
+  "newP0Code": {
+    "baseRef": "88c41109fbcf0b87b18939a139e0bff751e03d07",
+    "comparison": "base-ref-to-working-tree (clean CI equals base-ref-to-HEAD)",
+    "changedFiles": 90,
+    "filesPresentInCoverage": 69,
+    "allowlistedNonExecutableFiles": [
+      {
+        "path": "src/core/IIoT.Core.Production/Contracts/ClientReleases/IDeviceClientStateStore.cs",
+        "classification": "non-executable-source",
+        "reason": "The split device-client state query/store contracts contain interface signatures and XML documentation only, so the compiler emits no executable sequence points."
+      },
+      {
+        "path": "src/hosts/IIoT.AppHost/Properties/AssemblyInfo.cs",
+        "classification": "non-executable-source",
+        "reason": "Assembly-level InternalsVisibleTo metadata for the physical Contract test assembly contains no executable sequence points."
+      },
+      {
+        "path": "src/hosts/IIoT.DataWorker/Properties/AssemblyInfo.cs",
+        "classification": "non-executable-source",
+        "reason": "Assembly-level InternalsVisibleTo metadata for the physical Contract test assembly contains no executable sequence points."
+      },
+      {
+        "path": "src/hosts/IIoT.Gateway/Properties/AssemblyInfo.cs",
+        "classification": "non-executable-source",
+        "reason": "Assembly-level InternalsVisibleTo metadata for the physical Contract test assembly contains no executable sequence points."
+      },
+      {
+        "path": "src/hosts/IIoT.HttpApi/Properties/AssemblyInfo.cs",
+        "classification": "non-executable-source",
+        "reason": "Assembly-level InternalsVisibleTo metadata for the physical HTTP test assembly contains no executable sequence points."
+      },
+      {
+        "path": "src/hosts/IIoT.MigrationWorkApp/Properties/AssemblyInfo.cs",
+        "classification": "non-executable-source",
+        "reason": "Assembly-level InternalsVisibleTo metadata for the physical PostgreSQL test assembly contains no executable sequence points."
+      },
+      {
+        "path": "src/infrastructure/IIoT.Dapper/IDbConnectionFactory.cs",
+        "classification": "non-executable-source",
+        "reason": "The database connection factory contract contains an interface signature only, so the compiler emits no executable sequence points."
+      },
+      {
+        "path": "src/infrastructure/IIoT.Dapper/Properties/AssemblyInfo.cs",
+        "classification": "non-executable-source",
+        "reason": "Assembly-level InternalsVisibleTo metadata exposes the internal Dapper implementation only to the physical PostgreSQL test assembly and contains no executable sequence points."
+      },
+      {
+        "path": "src/infrastructure/IIoT.EntityFrameworkCore/Migrations/20260714224929_AddIntegrationEventConsumerInbox.cs",
+        "classification": "generated-migration-source",
+        "reason": "EF migration source is generated persistence history, excluded from production behavior coverage and verified by the migration-shape contract plus real PostgreSQL application test."
+      },
+      {
+        "path": "src/infrastructure/IIoT.EntityFrameworkCore/Migrations/20260714224929_AddIntegrationEventConsumerInbox.Designer.cs",
+        "classification": "generated-migration-source",
+        "reason": "EF migration designer metadata is generated persistence history, excluded from production behavior coverage and verified by the migration-shape contract plus real PostgreSQL application test."
+      },
+      {
+        "path": "src/infrastructure/IIoT.EntityFrameworkCore/Migrations/IIoTDbContextModelSnapshot.cs",
+        "classification": "generated-migration-source",
+        "reason": "The EF model snapshot is generated persistence history, excluded from production behavior coverage and verified by the migration-shape contract plus real PostgreSQL application test."
+      },
+      {
+        "path": "src/infrastructure/IIoT.EntityFrameworkCore/Properties/AssemblyInfo.cs",
+        "classification": "non-executable-source",
+        "reason": "Assembly-level InternalsVisibleTo metadata for the physical SQLite persistence test assembly contains no executable sequence points."
+      },
+      {
+        "path": "src/infrastructure/IIoT.Infrastructure/Properties/AssemblyInfo.cs",
+        "classification": "non-executable-source",
+        "reason": "Assembly-level InternalsVisibleTo metadata for the physical ContractFilesystem, Unit and Workflow test assemblies contains no executable sequence points."
+      },
+      {
+        "path": "src/services/IIoT.ProductionService/Properties/AssemblyInfo.cs",
+        "classification": "non-executable-source",
+        "reason": "Assembly-level InternalsVisibleTo metadata contains no executable sequence points."
+      },
+      {
+        "path": "src/services/IIoT.Services.Contracts/Contracts/Authorization/IAiReadScopeAccessor.cs",
+        "classification": "non-executable-source",
+        "reason": "The AI read scope accessor contract contains interface properties and an enum declaration only, so the compiler emits no executable sequence points."
+      },
+      {
+        "path": "src/services/IIoT.Services.Contracts/Contracts/Caching/ICacheService.cs",
+        "classification": "non-executable-source",
+        "reason": "The cache contract contains interface signatures and XML documentation only, so the compiler emits no executable sequence points."
+      },
+      {
+        "path": "src/services/IIoT.Services.Contracts/Contracts/Caching/IIdempotentCacheInvalidationService.cs",
+        "classification": "non-executable-source",
+        "reason": "The idempotent cache invalidation contract contains interface signatures and XML documentation only, so the compiler emits no executable sequence points."
+      },
+      {
+        "path": "src/services/IIoT.Services.Contracts/Contracts/Messaging/IDomainEventDispatchContext.cs",
+        "classification": "non-executable-source",
+        "reason": "The domain-event dispatch context contract contains an interface property and XML documentation only, so the compiler emits no executable sequence points."
+      },
+      {
+        "path": "src/services/IIoT.Services.Contracts/Contracts/Messaging/IEventPublisher.cs",
+        "classification": "non-executable-source",
+        "reason": "The event publisher contract contains interface signatures only, so the compiler emits no executable sequence points."
+      },
+      {
+        "path": "src/shared/IIoT.SharedKernel/Architecture/IReadOnlyQueryPort.cs",
+        "classification": "non-executable-source",
+        "reason": "The read-only query port marker is an empty interface contract, so the compiler emits no executable sequence points."
+      },
+      {
+        "path": "src/shared/IIoT.SharedKernel/Repository/IReadRepository.cs",
+        "classification": "non-executable-source",
+        "reason": "The read repository contract contains interface signatures and XML documentation only, so the compiler emits no executable sequence points."
+      }
+    ],
+    "addedLines": 3786,
+    "executableLines": 899,
+    "coveredLines": 834,
+    "lineRate": 0.92769744,
+    "branchesValid": 230,
+    "branchesCovered": 205,
+    "branchRate": 0.89130435,
+    "status": "Passed"
+  }
+}

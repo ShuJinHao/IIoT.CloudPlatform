@@ -1,0 +1,189 @@
+{
+  "generatedAtUtc": "2026-07-17T07:45:45.1390023+00:00",
+  "requiredProjects": [
+    {
+      "projectName": "AICopilot.AggregateTests",
+      "expected": 21,
+      "discovered": 21,
+      "executed": 21,
+      "passed": 21,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "projectName": "AICopilot.AnalyzerFixtureTests",
+      "expected": 28,
+      "discovered": 28,
+      "executed": 28,
+      "passed": 28,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "projectName": "AICopilot.ApplicationTests",
+      "expected": 211,
+      "discovered": 211,
+      "executed": 211,
+      "passed": 211,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "projectName": "AICopilot.Architecture.AnalyzerTests",
+      "expected": 30,
+      "discovered": 30,
+      "executed": 30,
+      "passed": 30,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "projectName": "AICopilot.ArchitectureTests",
+      "expected": 46,
+      "discovered": 46,
+      "executed": 46,
+      "passed": 46,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "projectName": "AICopilot.ContractFilesystemTests",
+      "expected": 1,
+      "discovered": 1,
+      "executed": 1,
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "projectName": "AICopilot.ContractTests",
+      "expected": 24,
+      "discovered": 24,
+      "executed": 24,
+      "passed": 24,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "projectName": "AICopilot.DeploymentTests",
+      "expected": 12,
+      "discovered": 12,
+      "executed": 12,
+      "passed": 12,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "projectName": "AICopilot.EndToEndTests",
+      "expected": 25,
+      "discovered": 25,
+      "executed": 25,
+      "passed": 25,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "projectName": "AICopilot.GoldenEvalTests",
+      "expected": 4,
+      "discovered": 4,
+      "executed": 4,
+      "passed": 4,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "projectName": "AICopilot.HttpIntegrationTests",
+      "expected": 29,
+      "discovered": 29,
+      "executed": 29,
+      "passed": 29,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "projectName": "AICopilot.InProcessTests",
+      "expected": 167,
+      "discovered": 167,
+      "executed": 167,
+      "passed": 167,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "projectName": "AICopilot.PersistenceFilesystemTests",
+      "expected": 15,
+      "discovered": 15,
+      "executed": 15,
+      "passed": 15,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "projectName": "AICopilot.PersistenceTests",
+      "expected": 64,
+      "discovered": 64,
+      "executed": 64,
+      "passed": 64,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "projectName": "AICopilot.ToolPlugin.ConformanceTests",
+      "expected": 22,
+      "discovered": 22,
+      "executed": 22,
+      "passed": 22,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "projectName": "AICopilot.UnitTests",
+      "expected": 245,
+      "discovered": 245,
+      "executed": 245,
+      "passed": 245,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "projectName": "AICopilot.WorkflowTests",
+      "expected": 68,
+      "discovered": 68,
+      "executed": 68,
+      "passed": 68,
+      "failed": 0,
+      "skipped": 0
+    }
+  ],
+  "dotnet": {
+    "discovered": 1012,
+    "executed": 1012,
+    "passed": 1012,
+    "failed": 0,
+    "skipped": 0
+  },
+  "vitest": {
+    "expected": 165,
+    "files": 28,
+    "discovered": 165,
+    "executed": 165,
+    "failed": 0,
+    "skipped": 0
+  },
+  "playwright": {
+    "expected": 43,
+    "discovered": 43,
+    "executed": 43,
+    "passed": 43,
+    "failed": 0,
+    "flaky": 0,
+    "skipped": 0
+  },
+  "deployment": {
+    "expected": 33,
+    "discovered": 33,
+    "executed": 33,
+    "failed": 0,
+    "skipped": 0
+  }
+}

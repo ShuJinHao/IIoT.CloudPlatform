@@ -1,0 +1,213 @@
+{
+  "schemaVersion": 1,
+  "generatedAtUtc": "2026-07-17T08:06:16Z",
+  "status": "PASS",
+  "candidatePolicy": {
+    "requireCleanWorktree": true,
+    "requireDraftOpenPr": true,
+    "requireAttemptOne": true,
+    "requireRequiredJobsSuccess": true,
+    "requireAnnotationsZero": true,
+    "requireDiscoveredExecutedPassedEqual": true,
+    "requireFailedSkippedZero": true
+  },
+  "repositories": [
+    {
+      "name": "Edge",
+      "repository": "ShuJinHao/IIoT.EdgeClient",
+      "head": "7474b3a919d8e0058ac529fdda6e2d0cd720390d",
+      "tree": "7dffa8b378d37865f86599deac8ed8f88a55a42a",
+      "clean": true,
+      "pullRequest": {
+        "number": 53,
+        "url": "https://github.com/ShuJinHao/IIoT.EdgeClient/pull/53",
+        "state": "OPEN",
+        "draft": true,
+        "merged": false,
+        "base": "main",
+        "headRef": "agent/edge-startup-exception-retirement-closure-20260717",
+        "headOid": "7474b3a919d8e0058ac529fdda6e2d0cd720390d"
+      },
+      "run": {
+        "id": 29558380849,
+        "attempt": 1,
+        "event": "pull_request",
+        "headSha": "7474b3a919d8e0058ac529fdda6e2d0cd720390d",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAtUtc": "2026-07-17T05:50:40Z",
+        "completedAtUtc": "2026-07-17T06:12:04Z",
+        "durationSeconds": 1284,
+        "jobs": [
+          { "id": 87815364050, "name": "smoke-build", "conclusion": "success", "annotations": 0 },
+          { "id": 87815364032, "name": "mutation-report", "conclusion": "success", "annotations": 0 }
+        ]
+      },
+      "artifacts": [
+        { "id": 8398630880, "name": "edge-required-test-evidence", "sha256": "91cb3284c663d8fc2f416c2317e2487666c143891206c7227109e4606735c856" },
+        { "id": 8398324131, "name": "edge-mutation-report", "sha256": "4ab2ee58091956c9bdda2cf7c3e3b590a62dad08ae2d5693f9b70a65c15e472c" }
+      ],
+      "required": { "discovered": 1332, "executed": 1332, "passed": 1332, "failed": 0, "skipped": 0 },
+      "coverage": { "lineRate": 0.658909, "branchRate": 0.514546 },
+      "quality": {
+        "retiredFeatureEvidence": { "evidenceFiles": 1, "declarations": 41, "activeFiles": 1404, "allowedMatches": 2, "unexpected": 0 },
+        "retiredFeatureBehaviorFixtures": { "positive": 1, "negative": 8 },
+        "generatedDirectoryCountAfterEvidence": 0
+      }
+    },
+    {
+      "name": "Cloud",
+      "repository": "ShuJinHao/IIoT.CloudPlatform",
+      "head": "c06c238516470f0efb81464b9e3b83bb20811191",
+      "tree": "eff4ce0c0fa009f8868a89bd1dfc63ea24f861d9",
+      "clean": true,
+      "pullRequest": {
+        "number": 36,
+        "url": "https://github.com/ShuJinHao/IIoT.CloudPlatform/pull/36",
+        "state": "OPEN",
+        "draft": true,
+        "merged": false,
+        "base": "main",
+        "headRef": "agent/cloud-test-architecture-20260714",
+        "headOid": "c06c238516470f0efb81464b9e3b83bb20811191"
+      },
+      "run": {
+        "id": 29562419923,
+        "attempt": 1,
+        "event": "pull_request",
+        "headSha": "c06c238516470f0efb81464b9e3b83bb20811191",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAtUtc": "2026-07-17T07:13:33Z",
+        "completedAtUtc": "2026-07-17T07:26:41Z",
+        "durationSeconds": 788,
+        "jobs": [
+          { "id": 87827547117, "name": "build-test", "conclusion": "success", "annotations": 0 }
+        ],
+        "optionalJobs": [
+          { "name": "full-end-to-end", "conclusion": "skipped", "testCaseSkip": false },
+          { "name": "mutation", "conclusion": "skipped", "testCaseSkip": false }
+        ]
+      },
+      "artifacts": [
+        { "id": 8400023617, "name": "cloud-required-test-results", "sha256": "26c2485761fd71f48cf5ccb9f0bf242918477b113e9328c190813020155661fd" }
+      ],
+      "required": { "discovered": 661, "executed": 661, "passed": 661, "failed": 0, "skipped": 0 },
+      "coverage": {
+        "linesCovered": 11677,
+        "linesValid": 18488,
+        "lineRate": 0.63159887,
+        "branchesCovered": 2815,
+        "branchesValid": 5619,
+        "branchRate": 0.50097882
+      },
+      "quality": {
+        "analyzerMetadataIdentities": 9,
+        "analyzerFixtures": { "valid": 8, "invalid": 15, "callGraphBypass": 20, "suppressionBypass": 3 },
+        "compatibilitySchemaVersion": 3,
+        "compatibilityEdgeHead": "7474b3a919d8e0058ac529fdda6e2d0cd720390d",
+        "compatibilityEdgeSourceStateClean": true
+      }
+    },
+    {
+      "name": "AI",
+      "repository": "ShuJinHao/AICopilot",
+      "head": "59b93f7145fbe2dc908aa35970566d25875b473c",
+      "tree": "009187b40bf2052d1bd9c268629cc52410f2eb76",
+      "clean": true,
+      "pullRequest": {
+        "number": 60,
+        "url": "https://github.com/ShuJinHao/AICopilot/pull/60",
+        "state": "OPEN",
+        "draft": true,
+        "merged": false,
+        "base": "agent/ai-workflow-branch-failures",
+        "headRef": "agent/ai-test-architecture-20260714",
+        "headOid": "59b93f7145fbe2dc908aa35970566d25875b473c"
+      },
+      "run": {
+        "id": 29562903935,
+        "attempt": 1,
+        "event": "pull_request",
+        "headSha": "59b93f7145fbe2dc908aa35970566d25875b473c",
+        "status": "completed",
+        "conclusion": "success",
+        "startedAtUtc": "2026-07-17T07:22:58Z",
+        "completedAtUtc": "2026-07-17T07:45:50Z",
+        "durationSeconds": 1372,
+        "checkout": {
+          "commit": "15f9e94d2ef44bd7e70711ffef198776c9699171",
+          "tree": "009187b40bf2052d1bd9c268629cc52410f2eb76",
+          "candidateTreeIdentical": true,
+          "reason": "Default pull_request checkout used the synthetic merge ref; its tree is byte-identical to the candidate tree."
+        },
+        "jobs": [
+          { "id": 87829027124, "name": "dotnet-tests", "conclusion": "success", "annotations": 0 },
+          { "id": 87829027181, "name": "mutation-gate", "conclusion": "success", "annotations": 0 },
+          { "id": 87829027208, "name": "web-deployment-tests", "conclusion": "success", "annotations": 0 },
+          { "id": 87829027221, "name": "governance-gates", "conclusion": "success", "annotations": 0 },
+          { "id": 87832727964, "name": "build-test", "conclusion": "success", "annotations": 0 }
+        ]
+      },
+      "artifacts": [
+        { "id": 8400414741, "name": "unified-required-test-results", "sha256": "d71a22f9054d1a7037a9fbdb2a7d9da39688961698ad673bfa4f87c4912000a7" },
+        { "id": 8400405655, "name": "dotnet-required-test-results", "sha256": "f0c7a6e5609ea42fb2675ebff724b1aa7a6248e862fc39a20d36f8fa974e0b5d" },
+        { "id": 8400097448, "name": "mutation-gate-results", "sha256": "bb4d00a8ad6c4da3715cce68168f8f21c6a76a461f74e9b7468c1d484e23ed2a" },
+        { "id": 8400088853, "name": "governance-gate-results", "sha256": "a350587b91556f9874e8ebef6a6de719fe1418652f6f3b4de3c551134e0d99f1" },
+        { "id": 8400047479, "name": "web-deployment-test-results", "sha256": "635ee888e444797e82f8396570c9a8ba58d777dfa3faa7fac8a2bc51828b9045" }
+      ],
+      "required": { "discovered": 1012, "executed": 1012, "passed": 1012, "failed": 0, "skipped": 0 },
+      "additionalSuites": {
+        "endToEnd": { "discovered": 25, "executed": 25, "passed": 25, "failed": 0, "skipped": 0 },
+        "vitest": { "discovered": 165, "executed": 165, "failed": 0, "skipped": 0 },
+        "playwright": { "discovered": 43, "executed": 43, "passed": 43, "failed": 0, "skipped": 0, "flaky": 0 },
+        "deploymentBehavior": { "discovered": 33, "executed": 33, "failed": 0, "skipped": 0 }
+      },
+      "quality": {
+        "compatibilityActiveSecretEncv1Callers": 2,
+        "mutation": { "active": 58, "evaluated": 58, "killed": 58, "survived": 0, "noCoverage": 0, "scopeScore": 1.0 }
+      }
+    }
+  ],
+  "latency": {
+    "method": "nearest-rank p95 over the listed final candidate runs",
+    "thresholdSeconds": 1500,
+    "samples": [
+      { "repository": "Edge", "run": 29558380849, "seconds": 1284 },
+      { "repository": "Cloud", "run": 29562419923, "seconds": 788 },
+      { "repository": "AI", "run": 29562903935, "seconds": 1372 }
+    ],
+    "p95Seconds": 1372,
+    "passed": true,
+    "testCountRegression": {
+      "Edge": { "priorRequired": 1280, "currentRequired": 1332, "reduced": false },
+      "Cloud": { "priorRequired": 661, "currentRequired": 661, "reduced": false },
+      "AI": { "priorRequired": 1011, "currentRequired": 1012, "reduced": false }
+    }
+  },
+  "workflowAudit": {
+    "evidenceRepository": "ShuJinHao/IIoT.CloudPlatform",
+    "pullRequestWorkflow": ".github/workflows/cloud-ci.yml",
+    "pullRequestJob": "build-test",
+    "permissions": "contents:read",
+    "productionWorkflows": [
+      { "path": ".github/workflows/cloud-admin-repair.yml", "trigger": "workflow_dispatch" },
+      { "path": ".github/workflows/cloud-routine-request.yml", "trigger": "workflow_dispatch" },
+      { "path": ".github/workflows/cloud-image.yml", "trigger": "workflow_dispatch" },
+      { "path": ".github/workflows/cloud-deploy.yml", "trigger": "workflow_dispatch" }
+    ],
+    "productionTriggeredByEvidencePullRequest": false
+  },
+  "excludedOperations": [
+    "merge",
+    "force-push",
+    "tag",
+    "stable",
+    "Deploy-Changed.ps1",
+    "production deployment",
+    "production schema/data",
+    "server/Harbor/SSH",
+    "field device",
+    "LiveExternal"
+  ]
+}

@@ -1,0 +1,2805 @@
+{
+  "duplicates": [
+    {
+      "firstFile": {
+        "end": 80,
+        "endLoc": {
+          "column": 8,
+          "line": 80,
+          "position": 3171
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/AgentWorkflowPipelineFixture.cs",
+        "start": 73,
+        "startLoc": {
+          "column": 65,
+          "line": 73,
+          "position": 2887
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 8,
+      "secondFile": {
+        "end": 132,
+        "endLoc": {
+          "column": 8,
+          "line": 132,
+          "position": 5398
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/AgentWorkflowPipelineFixture.cs",
+        "start": 126,
+        "startLoc": {
+          "column": 26,
+          "line": 126,
+          "position": 5115
+        }
+      },
+      "tokens": 50
+    },
+    {
+      "firstFile": {
+        "end": 171,
+        "endLoc": {
+          "column": 4,
+          "line": 171,
+          "position": 6219
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/FakeRuntimeAgentFactory.cs",
+        "start": 161,
+        "startLoc": {
+          "column": 84,
+          "line": 161,
+          "position": 5950
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 11,
+      "secondFile": {
+        "end": 187,
+        "endLoc": {
+          "column": 4,
+          "line": 187,
+          "position": 6843
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/FakeRuntimeAgentFactory.cs",
+        "start": 177,
+        "startLoc": {
+          "column": 92,
+          "line": 177,
+          "position": 6574
+        }
+      },
+      "tokens": 57
+    },
+    {
+      "firstFile": {
+        "end": 57,
+        "endLoc": {
+          "column": 51,
+          "line": 57,
+          "position": 2280
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/InMemoryReadRepository.cs",
+        "start": 52,
+        "startLoc": {
+          "column": 28,
+          "line": 52,
+          "position": 2064
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 6,
+      "secondFile": {
+        "end": 65,
+        "endLoc": {
+          "column": 51,
+          "line": 65,
+          "position": 2569
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/InMemoryReadRepository.cs",
+        "start": 60,
+        "startLoc": {
+          "column": 37,
+          "line": 60,
+          "position": 2353
+        }
+      },
+      "tokens": 60
+    },
+    {
+      "firstFile": {
+        "end": 56,
+        "endLoc": {
+          "column": 21,
+          "line": 56,
+          "position": 2892
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/SemanticTestMappings.cs",
+        "start": 49,
+        "startLoc": {
+          "column": 31,
+          "line": 49,
+          "position": 2568
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 8,
+      "secondFile": {
+        "end": 76,
+        "endLoc": {
+          "column": 21,
+          "line": 76,
+          "position": 4153
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/SemanticTestMappings.cs",
+        "start": 69,
+        "startLoc": {
+          "column": 38,
+          "line": 69,
+          "position": 3829
+        }
+      },
+      "tokens": 56
+    },
+    {
+      "firstFile": {
+        "end": 158,
+        "endLoc": {
+          "column": 66,
+          "line": 158,
+          "position": 6871
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 145,
+        "startLoc": {
+          "column": 125,
+          "line": 145,
+          "position": 6385
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 14,
+      "secondFile": {
+        "end": 184,
+        "endLoc": {
+          "column": 66,
+          "line": 184,
+          "position": 7884
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 171,
+        "startLoc": {
+          "column": 119,
+          "line": 171,
+          "position": 7398
+        }
+      },
+      "tokens": 108
+    },
+    {
+      "firstFile": {
+        "end": 184,
+        "endLoc": {
+          "column": 20,
+          "line": 184,
+          "position": 7838
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 171,
+        "startLoc": {
+          "column": 113,
+          "line": 171,
+          "position": 7392
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 14,
+      "secondFile": {
+        "end": 211,
+        "endLoc": {
+          "column": 20,
+          "line": 211,
+          "position": 9011
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 198,
+        "startLoc": {
+          "column": 150,
+          "line": 198,
+          "position": 8565
+        }
+      },
+      "tokens": 99
+    },
+    {
+      "firstFile": {
+        "end": 275,
+        "endLoc": {
+          "column": 20,
+          "line": 275,
+          "position": 11090
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 262,
+        "startLoc": {
+          "column": 43,
+          "line": 262,
+          "position": 10746
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 14,
+      "secondFile": {
+        "end": 323,
+        "endLoc": {
+          "column": 20,
+          "line": 323,
+          "position": 12829
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 310,
+        "startLoc": {
+          "column": 57,
+          "line": 310,
+          "position": 12485
+        }
+      },
+      "tokens": 60
+    },
+    {
+      "firstFile": {
+        "end": 637,
+        "endLoc": {
+          "column": 17,
+          "line": 637,
+          "position": 25215
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 630,
+        "startLoc": {
+          "column": 66,
+          "line": 630,
+          "position": 24923
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 8,
+      "secondFile": {
+        "end": 654,
+        "endLoc": {
+          "column": 17,
+          "line": 654,
+          "position": 25868
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 647,
+        "startLoc": {
+          "column": 70,
+          "line": 647,
+          "position": 25576
+        }
+      },
+      "tokens": 66
+    },
+    {
+      "firstFile": {
+        "end": 813,
+        "endLoc": {
+          "column": 55,
+          "line": 813,
+          "position": 31203
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 808,
+        "startLoc": {
+          "column": 32,
+          "line": 808,
+          "position": 30967
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 6,
+      "secondFile": {
+        "end": 821,
+        "endLoc": {
+          "column": 55,
+          "line": 821,
+          "position": 31520
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 816,
+        "startLoc": {
+          "column": 41,
+          "line": 816,
+          "position": 31284
+        }
+      },
+      "tokens": 60
+    },
+    {
+      "firstFile": {
+        "end": 1137,
+        "endLoc": {
+          "column": 9,
+          "line": 1137,
+          "position": 42418
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 1127,
+        "startLoc": {
+          "column": 0,
+          "line": 1127,
+          "position": 42046
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 11,
+      "secondFile": {
+        "end": 1160,
+        "endLoc": {
+          "column": 9,
+          "line": 1160,
+          "position": 43192
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 1150,
+        "startLoc": {
+          "column": 0,
+          "line": 1150,
+          "position": 42820
+        }
+      },
+      "tokens": 57
+    },
+    {
+      "firstFile": {
+        "end": 1140,
+        "endLoc": {
+          "column": 30,
+          "line": 1140,
+          "position": 42511
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 1127,
+        "startLoc": {
+          "column": 36,
+          "line": 1127,
+          "position": 42082
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 14,
+      "secondFile": {
+        "end": 1200,
+        "endLoc": {
+          "column": 30,
+          "line": 1200,
+          "position": 44596
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 1187,
+        "startLoc": {
+          "column": 44,
+          "line": 1187,
+          "position": 44167
+        }
+      },
+      "tokens": 62
+    },
+    {
+      "firstFile": {
+        "end": 1150,
+        "endLoc": {
+          "column": 27,
+          "line": 1150,
+          "position": 42847
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 1140,
+        "startLoc": {
+          "column": 39,
+          "line": 1140,
+          "position": 42520
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 11,
+      "secondFile": {
+        "end": 1210,
+        "endLoc": {
+          "column": 27,
+          "line": 1210,
+          "position": 44940
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 1200,
+        "startLoc": {
+          "column": 47,
+          "line": 1200,
+          "position": 44613
+        }
+      },
+      "tokens": 54
+    },
+    {
+      "firstFile": {
+        "end": 1199,
+        "endLoc": {
+          "column": 59,
+          "line": 1199,
+          "position": 44564
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 1187,
+        "startLoc": {
+          "column": 0,
+          "line": 1187,
+          "position": 44123
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 13,
+      "secondFile": {
+        "end": 1223,
+        "endLoc": {
+          "column": 26,
+          "line": 1223,
+          "position": 45327
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 1210,
+        "startLoc": {
+          "column": 0,
+          "line": 1210,
+          "position": 44913
+        }
+      },
+      "tokens": 66
+    },
+    {
+      "firstFile": {
+        "end": 1434,
+        "endLoc": {
+          "column": 12,
+          "line": 1434,
+          "position": 53455
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 1372,
+        "startLoc": {
+          "column": 38,
+          "line": 1372,
+          "position": 51236
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 63,
+      "secondFile": {
+        "end": 1504,
+        "endLoc": {
+          "column": 12,
+          "line": 1504,
+          "position": 55947
+        },
+        "name": "AICopilot/src/testing/AICopilot.AgentWorkflowTestKit/ToolRegistryGovernanceTestBase.cs",
+        "start": 1442,
+        "startLoc": {
+          "column": 37,
+          "line": 1442,
+          "position": 53728
+        }
+      },
+      "tokens": 351
+    },
+    {
+      "firstFile": {
+        "end": 137,
+        "endLoc": {
+          "column": 11,
+          "line": 137,
+          "position": 4792
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/AICopilotAppEnvironment.cs",
+        "start": 125,
+        "startLoc": {
+          "column": 0,
+          "line": 125,
+          "position": 4504
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 13,
+      "secondFile": {
+        "end": 113,
+        "endLoc": {
+          "column": 11,
+          "line": 113,
+          "position": 4739
+        },
+        "name": "Cloud/src/testing/IIoT.CloudPlatform.IntegrationTestKit/IIoTAppFixture.cs",
+        "start": 101,
+        "startLoc": {
+          "column": 0,
+          "line": 101,
+          "position": 4451
+        }
+      },
+      "tokens": 62
+    },
+    {
+      "firstFile": {
+        "end": 270,
+        "endLoc": {
+          "column": 4,
+          "line": 270,
+          "position": 11209
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/AICopilotAppEnvironment.cs",
+        "start": 260,
+        "startLoc": {
+          "column": 13,
+          "line": 260,
+          "position": 10921
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 11,
+      "secondFile": {
+        "end": 187,
+        "endLoc": {
+          "column": 4,
+          "line": 187,
+          "position": 7568
+        },
+        "name": "Cloud/src/testing/IIoT.CloudPlatform.IntegrationTestKit/IIoTAppFixture.cs",
+        "start": 177,
+        "startLoc": {
+          "column": 11,
+          "line": 177,
+          "position": 7280
+        }
+      },
+      "tokens": 62
+    },
+    {
+      "firstFile": {
+        "end": 153,
+        "endLoc": {
+          "column": 30,
+          "line": 153,
+          "position": 5525
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 145,
+        "startLoc": {
+          "column": 0,
+          "line": 145,
+          "position": 5236
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 9,
+      "secondFile": {
+        "end": 188,
+        "endLoc": {
+          "column": 30,
+          "line": 188,
+          "position": 6752
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 180,
+        "startLoc": {
+          "column": 0,
+          "line": 180,
+          "position": 6463
+        }
+      },
+      "tokens": 64
+    },
+    {
+      "firstFile": {
+        "end": 228,
+        "endLoc": {
+          "column": 31,
+          "line": 228,
+          "position": 8069
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 217,
+        "startLoc": {
+          "column": 0,
+          "line": 217,
+          "position": 7676
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 12,
+      "secondFile": {
+        "end": 253,
+        "endLoc": {
+          "column": 31,
+          "line": 253,
+          "position": 8814
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 242,
+        "startLoc": {
+          "column": 0,
+          "line": 242,
+          "position": 8421
+        }
+      },
+      "tokens": 74
+    },
+    {
+      "firstFile": {
+        "end": 255,
+        "endLoc": {
+          "column": 42,
+          "line": 255,
+          "position": 8879
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 240,
+        "startLoc": {
+          "column": 59,
+          "line": 240,
+          "position": 8416
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 16,
+      "secondFile": {
+        "end": 287,
+        "endLoc": {
+          "column": 36,
+          "line": 287,
+          "position": 9946
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 273,
+        "startLoc": {
+          "column": 8,
+          "line": 273,
+          "position": 9506
+        }
+      },
+      "tokens": 87
+    },
+    {
+      "firstFile": {
+        "end": 592,
+        "endLoc": {
+          "column": 12,
+          "line": 592,
+          "position": 22304
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 585,
+        "startLoc": {
+          "column": 0,
+          "line": 585,
+          "position": 22094
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 8,
+      "secondFile": {
+        "end": 691,
+        "endLoc": {
+          "column": 12,
+          "line": 691,
+          "position": 26274
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 684,
+        "startLoc": {
+          "column": 0,
+          "line": 684,
+          "position": 26064
+        }
+      },
+      "tokens": 50
+    },
+    {
+      "firstFile": {
+        "end": 592,
+        "endLoc": {
+          "column": 12,
+          "line": 592,
+          "position": 22304
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 585,
+        "startLoc": {
+          "column": 0,
+          "line": 585,
+          "position": 22094
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 8,
+      "secondFile": {
+        "end": 706,
+        "endLoc": {
+          "column": 12,
+          "line": 706,
+          "position": 26853
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 699,
+        "startLoc": {
+          "column": 0,
+          "line": 699,
+          "position": 26643
+        }
+      },
+      "tokens": 50
+    },
+    {
+      "firstFile": {
+        "end": 592,
+        "endLoc": {
+          "column": 12,
+          "line": 592,
+          "position": 22304
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 585,
+        "startLoc": {
+          "column": 0,
+          "line": 585,
+          "position": 22094
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 8,
+      "secondFile": {
+        "end": 742,
+        "endLoc": {
+          "column": 12,
+          "line": 742,
+          "position": 28327
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 735,
+        "startLoc": {
+          "column": 0,
+          "line": 735,
+          "position": 28117
+        }
+      },
+      "tokens": 50
+    },
+    {
+      "firstFile": {
+        "end": 608,
+        "endLoc": {
+          "column": 12,
+          "line": 608,
+          "position": 22981
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 600,
+        "startLoc": {
+          "column": 74,
+          "line": 600,
+          "position": 22768
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 9,
+      "secondFile": {
+        "end": 757,
+        "endLoc": {
+          "column": 12,
+          "line": 757,
+          "position": 28940
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 749,
+        "startLoc": {
+          "column": 100,
+          "line": 749,
+          "position": 28727
+        }
+      },
+      "tokens": 52
+    },
+    {
+      "firstFile": {
+        "end": 706,
+        "endLoc": {
+          "column": 12,
+          "line": 706,
+          "position": 26853
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 698,
+        "startLoc": {
+          "column": 86,
+          "line": 698,
+          "position": 26640
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 9,
+      "secondFile": {
+        "end": 721,
+        "endLoc": {
+          "column": 12,
+          "line": 721,
+          "position": 27442
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 713,
+        "startLoc": {
+          "column": 92,
+          "line": 713,
+          "position": 27229
+        }
+      },
+      "tokens": 52
+    },
+    {
+      "firstFile": {
+        "end": 854,
+        "endLoc": {
+          "column": 13,
+          "line": 854,
+          "position": 31997
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 844,
+        "startLoc": {
+          "column": 63,
+          "line": 844,
+          "position": 31746
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 11,
+      "secondFile": {
+        "end": 881,
+        "endLoc": {
+          "column": 13,
+          "line": 881,
+          "position": 32773
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 871,
+        "startLoc": {
+          "column": 62,
+          "line": 871,
+          "position": 32522
+        }
+      },
+      "tokens": 54
+    },
+    {
+      "firstFile": {
+        "end": 854,
+        "endLoc": {
+          "column": 13,
+          "line": 854,
+          "position": 31997
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 844,
+        "startLoc": {
+          "column": 63,
+          "line": 844,
+          "position": 31746
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 11,
+      "secondFile": {
+        "end": 971,
+        "endLoc": {
+          "column": 13,
+          "line": 971,
+          "position": 35774
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 961,
+        "startLoc": {
+          "column": 71,
+          "line": 961,
+          "position": 35523
+        }
+      },
+      "tokens": 54
+    },
+    {
+      "firstFile": {
+        "end": 854,
+        "endLoc": {
+          "column": 13,
+          "line": 854,
+          "position": 31997
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 844,
+        "startLoc": {
+          "column": 63,
+          "line": 844,
+          "position": 31746
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 11,
+      "secondFile": {
+        "end": 1010,
+        "endLoc": {
+          "column": 13,
+          "line": 1010,
+          "position": 37004
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1000,
+        "startLoc": {
+          "column": 76,
+          "line": 1000,
+          "position": 36753
+        }
+      },
+      "tokens": 54
+    },
+    {
+      "firstFile": {
+        "end": 854,
+        "endLoc": {
+          "column": 13,
+          "line": 854,
+          "position": 31997
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 844,
+        "startLoc": {
+          "column": 63,
+          "line": 844,
+          "position": 31746
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 11,
+      "secondFile": {
+        "end": 1228,
+        "endLoc": {
+          "column": 13,
+          "line": 1228,
+          "position": 44692
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1218,
+        "startLoc": {
+          "column": 101,
+          "line": 1218,
+          "position": 44441
+        }
+      },
+      "tokens": 54
+    },
+    {
+      "firstFile": {
+        "end": 865,
+        "endLoc": {
+          "column": 24,
+          "line": 865,
+          "position": 32303
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 854,
+        "startLoc": {
+          "column": 86,
+          "line": 854,
+          "position": 32070
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 12,
+      "secondFile": {
+        "end": 892,
+        "endLoc": {
+          "column": 24,
+          "line": 892,
+          "position": 33068
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 881,
+        "startLoc": {
+          "column": 75,
+          "line": 881,
+          "position": 32835
+        }
+      },
+      "tokens": 52
+    },
+    {
+      "firstFile": {
+        "end": 865,
+        "endLoc": {
+          "column": 24,
+          "line": 865,
+          "position": 32303
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 854,
+        "startLoc": {
+          "column": 86,
+          "line": 854,
+          "position": 32070
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 12,
+      "secondFile": {
+        "end": 982,
+        "endLoc": {
+          "column": 24,
+          "line": 982,
+          "position": 36071
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 971,
+        "startLoc": {
+          "column": 77,
+          "line": 971,
+          "position": 35838
+        }
+      },
+      "tokens": 52
+    },
+    {
+      "firstFile": {
+        "end": 865,
+        "endLoc": {
+          "column": 24,
+          "line": 865,
+          "position": 32303
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 854,
+        "startLoc": {
+          "column": 86,
+          "line": 854,
+          "position": 32070
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 12,
+      "secondFile": {
+        "end": 1021,
+        "endLoc": {
+          "column": 24,
+          "line": 1021,
+          "position": 37315
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1010,
+        "startLoc": {
+          "column": 91,
+          "line": 1010,
+          "position": 37082
+        }
+      },
+      "tokens": 52
+    },
+    {
+      "firstFile": {
+        "end": 865,
+        "endLoc": {
+          "column": 24,
+          "line": 865,
+          "position": 32303
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 854,
+        "startLoc": {
+          "column": 86,
+          "line": 854,
+          "position": 32070
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 12,
+      "secondFile": {
+        "end": 1239,
+        "endLoc": {
+          "column": 24,
+          "line": 1239,
+          "position": 45039
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1228,
+        "startLoc": {
+          "column": 127,
+          "line": 1228,
+          "position": 44806
+        }
+      },
+      "tokens": 52
+    },
+    {
+      "firstFile": {
+        "end": 898,
+        "endLoc": {
+          "column": 8,
+          "line": 898,
+          "position": 33269
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 892,
+        "startLoc": {
+          "column": 46,
+          "line": 892,
+          "position": 33090
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 7,
+      "secondFile": {
+        "end": 1100,
+        "endLoc": {
+          "column": 8,
+          "line": 1100,
+          "position": 40115
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1094,
+        "startLoc": {
+          "column": 45,
+          "line": 1094,
+          "position": 39936
+        }
+      },
+      "tokens": 56
+    },
+    {
+      "firstFile": {
+        "end": 898,
+        "endLoc": {
+          "column": 24,
+          "line": 898,
+          "position": 33285
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 892,
+        "startLoc": {
+          "column": 46,
+          "line": 892,
+          "position": 33090
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 7,
+      "secondFile": {
+        "end": 1245,
+        "endLoc": {
+          "column": 12,
+          "line": 1245,
+          "position": 45245
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1239,
+        "startLoc": {
+          "column": 47,
+          "line": 1239,
+          "position": 45062
+        }
+      },
+      "tokens": 59
+    },
+    {
+      "firstFile": {
+        "end": 912,
+        "endLoc": {
+          "column": 13,
+          "line": 912,
+          "position": 33782
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 900,
+        "startLoc": {
+          "column": 104,
+          "line": 900,
+          "position": 33423
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 13,
+      "secondFile": {
+        "end": 1122,
+        "endLoc": {
+          "column": 13,
+          "line": 1122,
+          "position": 40953
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1110,
+        "startLoc": {
+          "column": 112,
+          "line": 1110,
+          "position": 40594
+        }
+      },
+      "tokens": 82
+    },
+    {
+      "firstFile": {
+        "end": 912,
+        "endLoc": {
+          "column": 13,
+          "line": 912,
+          "position": 33782
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 900,
+        "startLoc": {
+          "column": 104,
+          "line": 900,
+          "position": 33423
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 13,
+      "secondFile": {
+        "end": 1266,
+        "endLoc": {
+          "column": 13,
+          "line": 1266,
+          "position": 46059
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1254,
+        "startLoc": {
+          "column": 134,
+          "line": 1254,
+          "position": 45700
+        }
+      },
+      "tokens": 82
+    },
+    {
+      "firstFile": {
+        "end": 925,
+        "endLoc": {
+          "column": 24,
+          "line": 925,
+          "position": 34251
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 912,
+        "startLoc": {
+          "column": 141,
+          "line": 912,
+          "position": 33910
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 14,
+      "secondFile": {
+        "end": 1135,
+        "endLoc": {
+          "column": 24,
+          "line": 1135,
+          "position": 41436
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1122,
+        "startLoc": {
+          "column": 155,
+          "line": 1122,
+          "position": 41095
+        }
+      },
+      "tokens": 80
+    },
+    {
+      "firstFile": {
+        "end": 925,
+        "endLoc": {
+          "column": 24,
+          "line": 925,
+          "position": 34251
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 912,
+        "startLoc": {
+          "column": 141,
+          "line": 912,
+          "position": 33910
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 14,
+      "secondFile": {
+        "end": 1279,
+        "endLoc": {
+          "column": 24,
+          "line": 1279,
+          "position": 46574
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1266,
+        "startLoc": {
+          "column": 187,
+          "line": 1266,
+          "position": 46233
+        }
+      },
+      "tokens": 80
+    },
+    {
+      "firstFile": {
+        "end": 1027,
+        "endLoc": {
+          "column": 30,
+          "line": 1027,
+          "position": 37594
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1021,
+        "startLoc": {
+          "column": 44,
+          "line": 1021,
+          "position": 37335
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 7,
+      "secondFile": {
+        "end": 1063,
+        "endLoc": {
+          "column": 30,
+          "line": 1063,
+          "position": 38864
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1057,
+        "startLoc": {
+          "column": 52,
+          "line": 1057,
+          "position": 38605
+        }
+      },
+      "tokens": 64
+    },
+    {
+      "firstFile": {
+        "end": 1057,
+        "endLoc": {
+          "column": 24,
+          "line": 1057,
+          "position": 38577
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1046,
+        "startLoc": {
+          "column": 79,
+          "line": 1046,
+          "position": 38344
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 12,
+      "secondFile": {
+        "end": 1094,
+        "endLoc": {
+          "column": 24,
+          "line": 1094,
+          "position": 39915
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1083,
+        "startLoc": {
+          "column": 102,
+          "line": 1083,
+          "position": 39682
+        }
+      },
+      "tokens": 52
+    },
+    {
+      "firstFile": {
+        "end": 1110,
+        "endLoc": {
+          "column": 13,
+          "line": 1110,
+          "position": 40495
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1101,
+        "startLoc": {
+          "column": 75,
+          "line": 1101,
+          "position": 40257
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 10,
+      "secondFile": {
+        "end": 1254,
+        "endLoc": {
+          "column": 13,
+          "line": 1254,
+          "position": 45579
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1245,
+        "startLoc": {
+          "column": 108,
+          "line": 1245,
+          "position": 45341
+        }
+      },
+      "tokens": 58
+    },
+    {
+      "firstFile": {
+        "end": 1149,
+        "endLoc": {
+          "column": 13,
+          "line": 1149,
+          "position": 41951
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1140,
+        "startLoc": {
+          "column": 75,
+          "line": 1140,
+          "position": 41689
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 10,
+      "secondFile": {
+        "end": 1292,
+        "endLoc": {
+          "column": 13,
+          "line": 1292,
+          "position": 47049
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1283,
+        "startLoc": {
+          "column": 108,
+          "line": 1283,
+          "position": 46787
+        }
+      },
+      "tokens": 60
+    },
+    {
+      "firstFile": {
+        "end": 1159,
+        "endLoc": {
+          "column": 13,
+          "line": 1159,
+          "position": 42321
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1149,
+        "startLoc": {
+          "column": 70,
+          "line": 1149,
+          "position": 42008
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 11,
+      "secondFile": {
+        "end": 1302,
+        "endLoc": {
+          "column": 13,
+          "line": 1302,
+          "position": 47441
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1292,
+        "startLoc": {
+          "column": 92,
+          "line": 1292,
+          "position": 47128
+        }
+      },
+      "tokens": 70
+    },
+    {
+      "firstFile": {
+        "end": 1170,
+        "endLoc": {
+          "column": 19,
+          "line": 1170,
+          "position": 42691
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1159,
+        "startLoc": {
+          "column": 83,
+          "line": 1159,
+          "position": 42391
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 12,
+      "secondFile": {
+        "end": 1313,
+        "endLoc": {
+          "column": 19,
+          "line": 1313,
+          "position": 47843
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1302,
+        "startLoc": {
+          "column": 115,
+          "line": 1302,
+          "position": 47543
+        }
+      },
+      "tokens": 70
+    },
+    {
+      "firstFile": {
+        "end": 1733,
+        "endLoc": {
+          "column": 8,
+          "line": 1733,
+          "position": 62103
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1723,
+        "startLoc": {
+          "column": 51,
+          "line": 1723,
+          "position": 61845
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 11,
+      "secondFile": {
+        "end": 1965,
+        "endLoc": {
+          "column": 8,
+          "line": 1965,
+          "position": 70832
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1955,
+        "startLoc": {
+          "column": 54,
+          "line": 1955,
+          "position": 70574
+        }
+      },
+      "tokens": 66
+    },
+    {
+      "firstFile": {
+        "end": 1851,
+        "endLoc": {
+          "column": 12,
+          "line": 1851,
+          "position": 66406
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1842,
+        "startLoc": {
+          "column": 54,
+          "line": 1842,
+          "position": 66111
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 10,
+      "secondFile": {
+        "end": 2004,
+        "endLoc": {
+          "column": 12,
+          "line": 2004,
+          "position": 72244
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 1995,
+        "startLoc": {
+          "column": 57,
+          "line": 1995,
+          "position": 71949
+        }
+      },
+      "tokens": 69
+    },
+    {
+      "firstFile": {
+        "end": 2109,
+        "endLoc": {
+          "column": 19,
+          "line": 2109,
+          "position": 75904
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 2098,
+        "startLoc": {
+          "column": 142,
+          "line": 2098,
+          "position": 75329
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 12,
+      "secondFile": {
+        "end": 2139,
+        "endLoc": {
+          "column": 19,
+          "line": 2139,
+          "position": 77807
+        },
+        "name": "AICopilot/src/testing/AICopilot.AspireIntegrationTestKit/FakeAiProviderHost.cs",
+        "start": 2128,
+        "startLoc": {
+          "column": 235,
+          "line": 2128,
+          "position": 77232
+        }
+      },
+      "tokens": 55
+    },
+    {
+      "firstFile": {
+        "end": 18,
+        "endLoc": {
+          "column": 12,
+          "line": 18,
+          "position": 564
+        },
+        "name": "AICopilot/src/testing/AICopilot.PersistenceTestKit/PersistenceCommitFaultInterceptors.cs",
+        "start": 11,
+        "startLoc": {
+          "column": 0,
+          "line": 11,
+          "position": 261
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 8,
+      "secondFile": {
+        "end": 51,
+        "endLoc": {
+          "column": 12,
+          "line": 51,
+          "position": 1650
+        },
+        "name": "AICopilot/src/testing/AICopilot.PersistenceTestKit/PersistenceCommitFaultInterceptors.cs",
+        "start": 44,
+        "startLoc": {
+          "column": 0,
+          "line": 44,
+          "position": 1347
+        }
+      },
+      "tokens": 62
+    },
+    {
+      "firstFile": {
+        "end": 44,
+        "endLoc": {
+          "column": 8,
+          "line": 44,
+          "position": 1684
+        },
+        "name": "Cloud/src/testing/IIoT.CloudPlatform.IntegrationTestKit/CloudTestDriver.cs",
+        "start": 35,
+        "startLoc": {
+          "column": 45,
+          "line": 35,
+          "position": 1185
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 10,
+      "secondFile": {
+        "end": 58,
+        "endLoc": {
+          "column": 8,
+          "line": 58,
+          "position": 2511
+        },
+        "name": "Cloud/src/testing/IIoT.CloudPlatform.IntegrationTestKit/CloudTestDriver.cs",
+        "start": 50,
+        "startLoc": {
+          "column": 61,
+          "line": 50,
+          "position": 2013
+        }
+      },
+      "tokens": 94
+    },
+    {
+      "firstFile": {
+        "end": 42,
+        "endLoc": {
+          "column": 8,
+          "line": 42,
+          "position": 1317
+        },
+        "name": "Cloud/src/testing/IIoT.CloudPlatform.PortFakes/TestInfrastructure.cs",
+        "start": 12,
+        "startLoc": {
+          "column": 0,
+          "line": 12,
+          "position": 314
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 31,
+      "secondFile": {
+        "end": 85,
+        "endLoc": {
+          "column": 8,
+          "line": 85,
+          "position": 2692
+        },
+        "name": "Cloud/src/testing/IIoT.CloudPlatform.PortFakes/TestInfrastructure.cs",
+        "start": 55,
+        "startLoc": {
+          "column": 0,
+          "line": 55,
+          "position": 1689
+        }
+      },
+      "tokens": 226
+    },
+    {
+      "firstFile": {
+        "end": 51,
+        "endLoc": {
+          "column": 1,
+          "line": 51,
+          "position": 1638
+        },
+        "name": "Cloud/src/testing/IIoT.CloudPlatform.PortFakes/TestInfrastructure.cs",
+        "start": 43,
+        "startLoc": {
+          "column": 33,
+          "line": 43,
+          "position": 1392
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 9,
+      "secondFile": {
+        "end": 135,
+        "endLoc": {
+          "column": 1,
+          "line": 135,
+          "position": 4296
+        },
+        "name": "Cloud/src/testing/IIoT.CloudPlatform.PortFakes/TestInfrastructure.cs",
+        "start": 127,
+        "startLoc": {
+          "column": 52,
+          "line": 127,
+          "position": 4050
+        }
+      },
+      "tokens": 54
+    },
+    {
+      "firstFile": {
+        "end": 85,
+        "endLoc": {
+          "column": 8,
+          "line": 85,
+          "position": 2692
+        },
+        "name": "Cloud/src/testing/IIoT.CloudPlatform.PortFakes/TestInfrastructure.cs",
+        "start": 53,
+        "startLoc": {
+          "column": 34,
+          "line": 53,
+          "position": 1674
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 33,
+      "secondFile": {
+        "end": 127,
+        "endLoc": {
+          "column": 8,
+          "line": 127,
+          "position": 4006
+        },
+        "name": "Cloud/src/testing/IIoT.CloudPlatform.PortFakes/TestInfrastructure.cs",
+        "start": 95,
+        "startLoc": {
+          "column": 54,
+          "line": 95,
+          "position": 2988
+        }
+      },
+      "tokens": 231
+    },
+    {
+      "firstFile": {
+        "end": 13,
+        "endLoc": {
+          "column": 18,
+          "line": 13,
+          "position": 371
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestCellData.cs",
+        "start": 7,
+        "startLoc": {
+          "column": 56,
+          "line": 7,
+          "position": 189
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 7,
+      "secondFile": {
+        "end": 15,
+        "endLoc": {
+          "column": 18,
+          "line": 15,
+          "position": 435
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestProcessCellData.cs",
+        "start": 9,
+        "startLoc": {
+          "column": 56,
+          "line": 9,
+          "position": 253
+        }
+      },
+      "tokens": 56
+    },
+    {
+      "firstFile": {
+        "end": 302,
+        "endLoc": {
+          "column": 43,
+          "line": 302,
+          "position": 10314
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 296,
+        "startLoc": {
+          "column": 23,
+          "line": 296,
+          "position": 10110
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 7,
+      "secondFile": {
+        "end": 321,
+        "endLoc": {
+          "column": 43,
+          "line": 321,
+          "position": 10883
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 315,
+        "startLoc": {
+          "column": 31,
+          "line": 315,
+          "position": 10679
+        }
+      },
+      "tokens": 56
+    },
+    {
+      "firstFile": {
+        "end": 379,
+        "endLoc": {
+          "column": 8,
+          "line": 379,
+          "position": 13409
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 363,
+        "startLoc": {
+          "column": 43,
+          "line": 363,
+          "position": 12932
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 17,
+      "secondFile": {
+        "end": 715,
+        "endLoc": {
+          "column": 8,
+          "line": 715,
+          "position": 23629
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 699,
+        "startLoc": {
+          "column": 44,
+          "line": 699,
+          "position": 23152
+        }
+      },
+      "tokens": 94
+    },
+    {
+      "firstFile": {
+        "end": 382,
+        "endLoc": {
+          "column": 49,
+          "line": 382,
+          "position": 13532
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 368,
+        "startLoc": {
+          "column": 27,
+          "line": 368,
+          "position": 13073
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 15,
+      "secondFile": {
+        "end": 939,
+        "endLoc": {
+          "column": 20,
+          "line": 939,
+          "position": 31348
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 922,
+        "startLoc": {
+          "column": 31,
+          "line": 922,
+          "position": 30882
+        }
+      },
+      "tokens": 91
+    },
+    {
+      "firstFile": {
+        "end": 414,
+        "endLoc": {
+          "column": 26,
+          "line": 414,
+          "position": 14696
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 394,
+        "startLoc": {
+          "column": 52,
+          "line": 394,
+          "position": 14127
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 21,
+      "secondFile": {
+        "end": 450,
+        "endLoc": {
+          "column": 26,
+          "line": 450,
+          "position": 15915
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 430,
+        "startLoc": {
+          "column": 68,
+          "line": 430,
+          "position": 15346
+        }
+      },
+      "tokens": 143
+    },
+    {
+      "firstFile": {
+        "end": 426,
+        "endLoc": {
+          "column": 32,
+          "line": 426,
+          "position": 15235
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 416,
+        "startLoc": {
+          "column": 43,
+          "line": 416,
+          "position": 14801
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 11,
+      "secondFile": {
+        "end": 738,
+        "endLoc": {
+          "column": 32,
+          "line": 738,
+          "position": 24466
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 728,
+        "startLoc": {
+          "column": 39,
+          "line": 728,
+          "position": 24032
+        }
+      },
+      "tokens": 88
+    },
+    {
+      "firstFile": {
+        "end": 493,
+        "endLoc": {
+          "column": 24,
+          "line": 493,
+          "position": 17250
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 481,
+        "startLoc": {
+          "column": 57,
+          "line": 481,
+          "position": 16971
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 13,
+      "secondFile": {
+        "end": 1149,
+        "endLoc": {
+          "column": 24,
+          "line": 1149,
+          "position": 38354
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1138,
+        "startLoc": {
+          "column": 56,
+          "line": 1138,
+          "position": 38076
+        }
+      },
+      "tokens": 94
+    },
+    {
+      "firstFile": {
+        "end": 555,
+        "endLoc": {
+          "column": 35,
+          "line": 555,
+          "position": 19161
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 546,
+        "startLoc": {
+          "column": 41,
+          "line": 546,
+          "position": 18940
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 10,
+      "secondFile": {
+        "end": 591,
+        "endLoc": {
+          "column": 35,
+          "line": 591,
+          "position": 20141
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 582,
+        "startLoc": {
+          "column": 73,
+          "line": 582,
+          "position": 19920
+        }
+      },
+      "tokens": 52
+    },
+    {
+      "firstFile": {
+        "end": 698,
+        "endLoc": {
+          "column": 11,
+          "line": 698,
+          "position": 23072
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 691,
+        "startLoc": {
+          "column": 35,
+          "line": 691,
+          "position": 22731
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 8,
+      "secondFile": {
+        "end": 810,
+        "endLoc": {
+          "column": 11,
+          "line": 810,
+          "position": 26998
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 803,
+        "startLoc": {
+          "column": 33,
+          "line": 803,
+          "position": 26657
+        }
+      },
+      "tokens": 129
+    },
+    {
+      "firstFile": {
+        "end": 722,
+        "endLoc": {
+          "column": 24,
+          "line": 722,
+          "position": 23764
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 698,
+        "startLoc": {
+          "column": 32,
+          "line": 698,
+          "position": 23093
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 25,
+      "secondFile": {
+        "end": 833,
+        "endLoc": {
+          "column": 24,
+          "line": 833,
+          "position": 27643
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 809,
+        "startLoc": {
+          "column": 25,
+          "line": 809,
+          "position": 26972
+        }
+      },
+      "tokens": 143
+    },
+    {
+      "firstFile": {
+        "end": 737,
+        "endLoc": {
+          "column": 11,
+          "line": 737,
+          "position": 24433
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 723,
+        "startLoc": {
+          "column": 0,
+          "line": 723,
+          "position": 23784
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 15,
+      "secondFile": {
+        "end": 848,
+        "endLoc": {
+          "column": 11,
+          "line": 848,
+          "position": 28310
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 834,
+        "startLoc": {
+          "column": 0,
+          "line": 834,
+          "position": 27661
+        }
+      },
+      "tokens": 151
+    },
+    {
+      "firstFile": {
+        "end": 749,
+        "endLoc": {
+          "column": 48,
+          "line": 749,
+          "position": 24795
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 742,
+        "startLoc": {
+          "column": 40,
+          "line": 742,
+          "position": 24515
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 8,
+      "secondFile": {
+        "end": 859,
+        "endLoc": {
+          "column": 48,
+          "line": 859,
+          "position": 28637
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 852,
+        "startLoc": {
+          "column": 38,
+          "line": 852,
+          "position": 28357
+        }
+      },
+      "tokens": 80
+    },
+    {
+      "firstFile": {
+        "end": 763,
+        "endLoc": {
+          "column": 26,
+          "line": 763,
+          "position": 25299
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 749,
+        "startLoc": {
+          "column": 105,
+          "line": 749,
+          "position": 24852
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 15,
+      "secondFile": {
+        "end": 873,
+        "endLoc": {
+          "column": 26,
+          "line": 873,
+          "position": 29139
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 859,
+        "startLoc": {
+          "column": 103,
+          "line": 859,
+          "position": 28692
+        }
+      },
+      "tokens": 139
+    },
+    {
+      "firstFile": {
+        "end": 801,
+        "endLoc": {
+          "column": 20,
+          "line": 801,
+          "position": 26569
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 763,
+        "startLoc": {
+          "column": 33,
+          "line": 763,
+          "position": 25306
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 39,
+      "secondFile": {
+        "end": 911,
+        "endLoc": {
+          "column": 20,
+          "line": 911,
+          "position": 30407
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 873,
+        "startLoc": {
+          "column": 31,
+          "line": 873,
+          "position": 29144
+        }
+      },
+      "tokens": 298
+    },
+    {
+      "firstFile": {
+        "end": 794,
+        "endLoc": {
+          "column": 11,
+          "line": 794,
+          "position": 26381
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 782,
+        "startLoc": {
+          "column": 52,
+          "line": 782,
+          "position": 26094
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 13,
+      "secondFile": {
+        "end": 1209,
+        "endLoc": {
+          "column": 11,
+          "line": 1209,
+          "position": 39919
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1197,
+        "startLoc": {
+          "column": 38,
+          "line": 1197,
+          "position": 39632
+        }
+      },
+      "tokens": 80
+    },
+    {
+      "firstFile": {
+        "end": 966,
+        "endLoc": {
+          "column": 7,
+          "line": 966,
+          "position": 32219
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 912,
+        "startLoc": {
+          "column": 0,
+          "line": 912,
+          "position": 30456
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 55,
+      "secondFile": {
+        "end": 1021,
+        "endLoc": {
+          "column": 7,
+          "line": 1021,
+          "position": 34040
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 967,
+        "startLoc": {
+          "column": 0,
+          "line": 967,
+          "position": 32277
+        }
+      },
+      "tokens": 459
+    },
+    {
+      "firstFile": {
+        "end": 1225,
+        "endLoc": {
+          "column": 19,
+          "line": 1225,
+          "position": 40231
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1205,
+        "startLoc": {
+          "column": 52,
+          "line": 1205,
+          "position": 39863
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 21,
+      "secondFile": {
+        "end": 1564,
+        "endLoc": {
+          "column": 19,
+          "line": 1564,
+          "position": 51564
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1544,
+        "startLoc": {
+          "column": 22,
+          "line": 1544,
+          "position": 51196
+        }
+      },
+      "tokens": 90
+    },
+    {
+      "firstFile": {
+        "end": 1299,
+        "endLoc": {
+          "column": 8,
+          "line": 1299,
+          "position": 43476
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1290,
+        "startLoc": {
+          "column": 81,
+          "line": 1290,
+          "position": 43172
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 10,
+      "secondFile": {
+        "end": 1342,
+        "endLoc": {
+          "column": 8,
+          "line": 1342,
+          "position": 44700
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1332,
+        "startLoc": {
+          "column": 55,
+          "line": 1332,
+          "position": 44395
+        }
+      },
+      "tokens": 64
+    },
+    {
+      "firstFile": {
+        "end": 1696,
+        "endLoc": {
+          "column": 16,
+          "line": 1696,
+          "position": 56278
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1687,
+        "startLoc": {
+          "column": 71,
+          "line": 1687,
+          "position": 56014
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 10,
+      "secondFile": {
+        "end": 1720,
+        "endLoc": {
+          "column": 16,
+          "line": 1720,
+          "position": 57174
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1711,
+        "startLoc": {
+          "column": 48,
+          "line": 1711,
+          "position": 56910
+        }
+      },
+      "tokens": 57
+    },
+    {
+      "firstFile": {
+        "end": 1751,
+        "endLoc": {
+          "column": 5,
+          "line": 1751,
+          "position": 57963
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1720,
+        "startLoc": {
+          "column": 54,
+          "line": 1720,
+          "position": 57212
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 32,
+      "secondFile": {
+        "end": 1800,
+        "endLoc": {
+          "column": 5,
+          "line": 1800,
+          "position": 59404
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1769,
+        "startLoc": {
+          "column": 52,
+          "line": 1769,
+          "position": 58653
+        }
+      },
+      "tokens": 159
+    },
+    {
+      "firstFile": {
+        "end": 1816,
+        "endLoc": {
+          "column": 43,
+          "line": 1816,
+          "position": 60053
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1810,
+        "startLoc": {
+          "column": 82,
+          "line": 1810,
+          "position": 59776
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 7,
+      "secondFile": {
+        "end": 1862,
+        "endLoc": {
+          "column": 43,
+          "line": 1862,
+          "position": 61780
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1856,
+        "startLoc": {
+          "column": 80,
+          "line": 1856,
+          "position": 61503
+        }
+      },
+      "tokens": 87
+    },
+    {
+      "firstFile": {
+        "end": 1845,
+        "endLoc": {
+          "column": 15,
+          "line": 1845,
+          "position": 61118
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1829,
+        "startLoc": {
+          "column": 8,
+          "line": 1829,
+          "position": 60654
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 17,
+      "secondFile": {
+        "end": 1880,
+        "endLoc": {
+          "column": 15,
+          "line": 1880,
+          "position": 62345
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1864,
+        "startLoc": {
+          "column": 69,
+          "line": 1864,
+          "position": 61881
+        }
+      },
+      "tokens": 97
+    },
+    {
+      "firstFile": {
+        "end": 1900,
+        "endLoc": {
+          "column": 20,
+          "line": 1900,
+          "position": 62812
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1885,
+        "startLoc": {
+          "column": 0,
+          "line": 1885,
+          "position": 62423
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 16,
+      "secondFile": {
+        "end": 1916,
+        "endLoc": {
+          "column": 20,
+          "line": 1916,
+          "position": 63242
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1901,
+        "startLoc": {
+          "column": 0,
+          "line": 1901,
+          "position": 62853
+        }
+      },
+      "tokens": 112
+    },
+    {
+      "firstFile": {
+        "end": 1961,
+        "endLoc": {
+          "column": 12,
+          "line": 1961,
+          "position": 64806
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1949,
+        "startLoc": {
+          "column": 70,
+          "line": 1949,
+          "position": 64414
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 13,
+      "secondFile": {
+        "end": 1978,
+        "endLoc": {
+          "column": 12,
+          "line": 1978,
+          "position": 65334
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Core/TestDoubles.cs",
+        "start": 1966,
+        "startLoc": {
+          "column": 70,
+          "line": 1966,
+          "position": 64942
+        }
+      },
+      "tokens": 90
+    },
+    {
+      "firstFile": {
+        "end": 126,
+        "endLoc": {
+          "column": 4,
+          "line": 126,
+          "position": 4598
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Modules/ModuleContractFixture.cs",
+        "start": 118,
+        "startLoc": {
+          "column": 37,
+          "line": 118,
+          "position": 4330
+        }
+      },
+      "format": "csharp",
+      "fragment": "",
+      "lines": 9,
+      "secondFile": {
+        "end": 141,
+        "endLoc": {
+          "column": 4,
+          "line": 141,
+          "position": 5117
+        },
+        "name": "Edge/src/Testing/IIoT.Edge.Testing.Modules/ModuleContractFixture.cs",
+        "start": 133,
+        "startLoc": {
+          "column": 33,
+          "line": 133,
+          "position": 4849
+        }
+      },
+      "tokens": 58
+    }
+  ],
+  "statistics": {
+    "detectionDate": "2026-07-17T07:50:56.109Z",
+    "formats": {
+      "csharp": {
+        "clones": 77,
+        "duplicatedLines": 987,
+        "duplicatedTokens": 6870,
+        "lines": 11709,
+        "newClones": 0,
+        "newDuplicatedLines": 0,
+        "percentage": 8.429413271842174,
+        "percentageTokens": 8.010727611940299,
+        "sources": 46,
+        "tokens": 85760
+      }
+    },
+    "total": {
+      "clones": 77,
+      "duplicatedLines": 987,
+      "duplicatedTokens": 6870,
+      "lines": 11709,
+      "newClones": 0,
+      "newDuplicatedLines": 0,
+      "percentage": 8.429413271842174,
+      "percentageTokens": 8.010727611940299,
+      "sources": 46,
+      "tokens": 85760
+    }
+  }
+}

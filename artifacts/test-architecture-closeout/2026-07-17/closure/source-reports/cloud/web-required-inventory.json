@@ -1,0 +1,521 @@
+{
+  "schemaVersion": 2,
+  "mode": "Required",
+  "runners": 2,
+  "files": 17,
+  "cases": 69,
+  "failed": 0,
+  "skipped": 0,
+  "testKinds": [
+    {
+      "testKind": "BrowserSmoke",
+      "cases": 2,
+      "files": 1
+    },
+    {
+      "testKind": "Component",
+      "cases": 3,
+      "files": 1
+    },
+    {
+      "testKind": "Contract",
+      "cases": 10,
+      "files": 3
+    },
+    {
+      "testKind": "Smoke",
+      "cases": 17,
+      "files": 2
+    },
+    {
+      "testKind": "Unit",
+      "cases": 37,
+      "files": 10
+    }
+  ],
+  "evidence": [
+    {
+      "runner": "Vitest",
+      "file": "src/components/ui/UiDataTable.test.ts",
+      "testKind": "Component",
+      "case": "UiDataTable renders default cells and formatter cells",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/components/ui/UiDataTable.test.ts",
+      "testKind": "Component",
+      "case": "UiDataTable renders component cells with context props",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/components/ui/UiDataTable.test.ts",
+      "testKind": "Component",
+      "case": "UiDataTable renders named slots with row context",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/core/http/apiResult.test.ts",
+      "testKind": "Contract",
+      "case": "apiResult keeps backend business errors visible",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/core/http/apiResult.test.ts",
+      "testKind": "Contract",
+      "case": "apiResult uses a permission-specific title for forbidden results",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/core/http/problemDetails.test.ts",
+      "testKind": "Contract",
+      "case": "problemDetails normalizes validation error arrays and records",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/core/http/problemDetails.test.ts",
+      "testKind": "Contract",
+      "case": "problemDetails uses detail before validation errors and title",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/core/http/problemDetails.test.ts",
+      "testKind": "Contract",
+      "case": "problemDetails falls back to validation error then status message",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/core/http/problemDetails.test.ts",
+      "testKind": "Contract",
+      "case": "problemDetails reads json and plain text blobs",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/core/list-page/useListPage.test.ts",
+      "testKind": "Unit",
+      "case": "useListPage fetches data and derives pagination state",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/core/list-page/useListPage.test.ts",
+      "testKind": "Unit",
+      "case": "useListPage clamps page navigation and resets filters",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/core/list-page/useListPage.test.ts",
+      "testKind": "Unit",
+      "case": "useListPage stores errors and clears stale rows when fetch fails",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/auth/login.test.ts",
+      "testKind": "Smoke",
+      "case": "login feature describes product capabilities without unauthenticated runtime data",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/auth/login.test.ts",
+      "testKind": "Smoke",
+      "case": "login feature keeps the English public screen free of live production claims",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/auth/login.test.ts",
+      "testKind": "Smoke",
+      "case": "login feature keeps required-field validation in the extracted access panel",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/auth/login.test.ts",
+      "testKind": "Smoke",
+      "case": "login feature submits to the real login boundary and honors a safe local return URL",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/auth/login.test.ts",
+      "testKind": "Smoke",
+      "case": "login feature shows a safe classified authentication error without raw details",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/auth/login.test.ts",
+      "testKind": "Smoke",
+      "case": "login feature rejects external return URLs and preserves the OIDC connect redirect branch",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/capacity/capacity.test.ts",
+      "testKind": "Unit",
+      "case": "capacity feature guards capacity routes with device read permission",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/capacity/capacity.test.ts",
+      "testKind": "Unit",
+      "case": "capacity feature keeps rate accent thresholds explicit",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/capacity/capacity.test.ts",
+      "testKind": "Unit",
+      "case": "capacity feature maps hourly payloads across backend naming variants",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/capacity/capacity.test.ts",
+      "testKind": "Unit",
+      "case": "capacity feature falls back to shift summary without inventing rows",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/capacity/capacity.test.ts",
+      "testKind": "Unit",
+      "case": "capacity feature derives month and year ranges for API calls",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/capacity/capacity.test.ts",
+      "testKind": "Unit",
+      "case": "capacity feature maps month and year rows from real summaries",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/client-releases/client-releases.test.ts",
+      "testKind": "Unit",
+      "case": "client release feature guards keeps installer and publish route permissions separated",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/client-releases/client-releases.test.ts",
+      "testKind": "Unit",
+      "case": "client release feature guards accepts only http/https or edge release download paths",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/client-releases/client-releases.test.ts",
+      "testKind": "Unit",
+      "case": "client release feature guards rejects placeholder release metadata",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/client-releases/client-releases.test.ts",
+      "testKind": "Unit",
+      "case": "client release feature guards returns concrete validation messages and parsed package size",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/dashboard/dashboard.test.ts",
+      "testKind": "Smoke",
+      "case": "dashboard feature keeps the dashboard route as the default authenticated child route",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/dashboard/dashboard.test.ts",
+      "testKind": "Smoke",
+      "case": "dashboard feature formats current day for capacity aggregate API calls",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/dashboard/dashboard.test.ts",
+      "testKind": "Smoke",
+      "case": "dashboard feature normalizes alert labels and severities",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/dashboard/dashboard.test.ts",
+      "testKind": "Smoke",
+      "case": "dashboard feature maps recent logs without inventing data",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/dashboard/dashboard.test.ts",
+      "testKind": "Smoke",
+      "case": "dashboard feature distinguishes real data presence from an empty dashboard",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/dashboard/dashboard.test.ts",
+      "testKind": "Smoke",
+      "case": "dashboard feature renders loading before the required scoped APIs finish",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/dashboard/dashboard.test.ts",
+      "testKind": "Smoke",
+      "case": "dashboard feature renders a true empty state when all scoped sources are empty",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/dashboard/dashboard.test.ts",
+      "testKind": "Smoke",
+      "case": "dashboard feature renders a safe retryable error and clears failed data",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/dashboard/dashboard.test.ts",
+      "testKind": "Smoke",
+      "case": "dashboard feature renders only values returned by the scoped APIs",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/dashboard/dashboard.test.ts",
+      "testKind": "Smoke",
+      "case": "dashboard feature uses a trend empty state instead of fabricated bars when only device data exists",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/dashboard/dashboard.test.ts",
+      "testKind": "Smoke",
+      "case": "dashboard feature shows true zero production only when the API returns an hourly slot",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/device-logs/device-logs.test.ts",
+      "testKind": "Unit",
+      "case": "device logs feature guards the route by device read permission",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/device-logs/device-logs.test.ts",
+      "testKind": "Unit",
+      "case": "device logs feature starts searches from empty criteria and pagination",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/device-logs/device-logs.test.ts",
+      "testKind": "Unit",
+      "case": "device logs feature maps log levels to severity badges",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/device-logs/device-logs.test.ts",
+      "testKind": "Unit",
+      "case": "device logs feature validates mode-specific search inputs before API calls",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/devices/devices.test.ts",
+      "testKind": "Unit",
+      "case": "devices feature guards requires device read permission on the device route",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/devices/devices.test.ts",
+      "testKind": "Unit",
+      "case": "devices feature guards does not require retyping device name before cascade delete confirmation",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/edge-hosts/edge-hosts.test.ts",
+      "testKind": "Unit",
+      "case": "edge host feature guards edge host page with dedicated read permission",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/edge-hosts/edge-hosts.test.ts",
+      "testKind": "Unit",
+      "case": "edge host feature only exposes read permission for edge host plc states",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/edge-hosts/edge-hosts.test.ts",
+      "testKind": "Unit",
+      "case": "edge host feature defines host status columns without cloud write actions",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/edge-hosts/edge-hosts.test.ts",
+      "testKind": "Unit",
+      "case": "edge host feature defines runtime state columns without binding configuration fields",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/edge-hosts/edge-hosts.test.ts",
+      "testKind": "Unit",
+      "case": "edge host feature keeps pagination defaults stable",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/employees/employees.test.ts",
+      "testKind": "Unit",
+      "case": "employees feature guards requires employee read permission on the route",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/employees/employees.test.ts",
+      "testKind": "Unit",
+      "case": "employees feature guards validates reset password confirmation",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/pass-station/pass-station.test.ts",
+      "testKind": "Contract",
+      "case": "pass station feature schema keeps the route guarded by device read permission",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/pass-station/pass-station.test.ts",
+      "testKind": "Contract",
+      "case": "pass station feature schema normalizes process code to schema type key",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/pass-station/pass-station.test.ts",
+      "testKind": "Contract",
+      "case": "pass station feature schema builds columns and detail sections from server schema",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/pass-station/pass-station.test.ts",
+      "testKind": "Contract",
+      "case": "pass station feature schema creates UI columns from schema without fixed process pages",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/processes/processes.test.ts",
+      "testKind": "Unit",
+      "case": "processes feature guards process management with process read permission",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/processes/processes.test.ts",
+      "testKind": "Unit",
+      "case": "processes feature normalizes the paged process response",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/processes/processes.test.ts",
+      "testKind": "Unit",
+      "case": "processes feature validates required process code and name",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/recipes/recipes.test.ts",
+      "testKind": "Unit",
+      "case": "recipes feature guards requires recipe read permission on the route",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/recipes/recipes.test.ts",
+      "testKind": "Unit",
+      "case": "recipes feature guards keeps unbound recipe device id semantics",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/recipes/recipes.test.ts",
+      "testKind": "Unit",
+      "case": "recipes feature guards validates recipe parameters before create or upgrade",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/recipes/recipes.test.ts",
+      "testKind": "Unit",
+      "case": "recipes feature guards serializes and parses parameter json without losing ranges",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/roles/roles.test.ts",
+      "testKind": "Unit",
+      "case": "roles feature keeps roles management behind role definition permission",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/roles/roles.test.ts",
+      "testKind": "Unit",
+      "case": "roles feature summarizes permission loading status",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/roles/roles.test.ts",
+      "testKind": "Unit",
+      "case": "roles feature toggles permissions without duplicates",
+      "status": "Passed"
+    },
+    {
+      "runner": "Vitest",
+      "file": "src/features/roles/roles.test.ts",
+      "testKind": "Unit",
+      "case": "roles feature requires role name before creating role policy",
+      "status": "Passed"
+    },
+    {
+      "runner": "PlaywrightBrowserSmoke",
+      "file": "browser-smoke/auth-flow.smoke.spec.ts",
+      "testKind": "BrowserSmoke",
+      "case": "redirects an unauthenticated protected route to login with a local return URL",
+      "status": "Passed"
+    },
+    {
+      "runner": "PlaywrightBrowserSmoke",
+      "file": "browser-smoke/auth-flow.smoke.spec.ts",
+      "testKind": "BrowserSmoke",
+      "case": "submits the login request shape and remains unauthenticated on rejection",
+      "status": "Passed"
+    }
+  ]
+}
