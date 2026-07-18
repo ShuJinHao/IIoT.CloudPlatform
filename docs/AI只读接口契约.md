@@ -11,6 +11,12 @@
 - AI Read 不使用 Human 权限属性、Human Controller 或 Edge 设备身份写入口绕路。
 - AI 返回值只允许业务需要的字段、范围摘要和结构化数据，不返回 SQL、prompt、原始请求参数、内部异常栈或生产表 raw payload。
 
+### 1.1 Canonical owner
+
+- `IIoT.CloudPlatform` 是八个 `/api/v1/ai/read/*` provider 端点、权限点、过滤语义、响应 DTO、限流与审计口径的 canonical owner。
+- `AICopilot` 是 typed client、consumer 映射和独立 live-test 的 owner；不得在 consumer 端重新定义 Cloud 字段、权限、状态或过滤语义。
+- 契约改动固定按 Cloud provider 测试 → AICopilot consumer 测试 → 双仓候选源码原字节 digest → 非生产真实 Gateway 联合验收的顺序闭合，并绑定双方 clean HEAD。
+
 ## 2. 允许域
 
 当前 AI Read 允许读取以下 Cloud 只读域：
@@ -24,7 +30,7 @@
 - 设备日志：`GET /api/v1/ai/read/device-logs`
 - 通用生产数据：`GET /api/v1/ai/read/production-records`
 
-新增允许域前必须先补本文档、权限点、行为测试和 ConfigurationGuardTests。
+新增允许域前必须先补本文档、权限点、行为测试和 `AiReadHttpContractTests`。
 
 ## 3. 设备与工序主数据精确查询
 
@@ -84,7 +90,7 @@ GET /api/v1/ai/read/production-records
 - 返回给调用方的 `queryScope` 与 `AiRead.Query` 审计摘要必须使用同一脱敏口径。prompt、token、Authorization、日志 message、请求 body、SQL 和其它自由文本不得进入范围摘要。
 - AiRead 失败审计的 `FailureReason` 只记录稳定 `ResultStatus` 或异常类型，不保存 `Result.Errors`、`Exception.Message`、stack trace 或其它原始错误文本。
 - 行为测试必须覆盖权限点、行数限制、时间窗、delegated device scope、生产数据字段过滤和旧 pass-station AI 入口禁用。
-- ConfigurationGuardTests 必须守卫 `AiReadController` 的 GET-only 表面、`production-records` 唯一生产数据入口、`AuthorizeAiRead` 权限声明和 raw `payload_jsonb` 禁止暴露。
+- `AiReadHttpContractTests` 必须守卫 `AiReadController` 的 GET-only 表面、`production-records` 唯一生产数据入口、`AuthorizeAiRead` 权限声明和 raw `payload_jsonb` 禁止暴露。
 - AICopilot 如需新增读取域，必须先在 Cloud 增加正式 AI Read API；不得用 MCP、Tool、Agent workflow、Text-to-SQL 或后台任务绕过本契约直连生产库。
 
 ## 7. 跨仓 live 验收
