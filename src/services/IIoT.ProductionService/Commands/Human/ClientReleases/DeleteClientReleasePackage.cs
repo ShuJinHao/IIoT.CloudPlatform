@@ -11,11 +11,16 @@ using IIoT.Services.CrossCutting.Attributes;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace IIoT.ProductionService.Commands.ClientReleases;
 
-[AuthorizeRequirement(ClientReleasePermissions.Manage)]
+[AdminOnly]
+[AuthorizeRequirement(ClientReleasePermissions.HardDelete)]
+[DistributedLock(
+    ClientReleasePublishLock.Resource,
+    TimeoutSeconds = ClientReleasePublishLock.AcquireTimeoutSeconds)]
 public sealed record DeleteClientReleasePackageCommand(Guid ReleaseId, string? Reason = null)
     : IHumanCommand<Result<ClientReleaseFileDeletionResultDto>>;
 
@@ -35,9 +40,12 @@ public sealed class DeleteClientReleasePackageHandler(
     IRepository<ClientReleaseComponent> componentRepository,
     IDeviceClientStateStore clientStateStore,
     ICurrentUser currentUser,
-    IAuditTrailService auditTrailService)
+    IAuditTrailService auditTrailService,
+    ILogger<DeleteClientReleasePackageHandler> logger)
     : ICommandHandler<DeleteClientReleasePackageCommand, Result<ClientReleaseFileDeletionResultDto>>
 {
+    private const string AuditAction = "ClientRelease.DeletePackage";
+
     public async Task<Result<ClientReleaseFileDeletionResultDto>> Handle(
         DeleteClientReleasePackageCommand request,
         CancellationToken cancellationToken)
@@ -95,6 +103,7 @@ public sealed class DeleteClientReleasePackageHandler(
             "Host",
             "Edge Host",
             plan,
+            () => component.MarkVersionDeleteRequested(release.Id),
             deleteReason => component.MarkVersionDeleted(release.Id, reason ?? deleteReason),
             failure => component.MarkVersionDeleteFailed(release.Id, failure),
             () => componentRepository.SaveChangesAsync(cancellationToken),
@@ -136,6 +145,7 @@ public sealed class DeleteClientReleasePackageHandler(
             "Plugin",
             component.ComponentKey,
             plan,
+            () => component.MarkVersionDeleteRequested(release.Id),
             deleteReason => component.MarkVersionDeleted(release.Id, reason ?? deleteReason),
             failure => component.MarkVersionDeleteFailed(release.Id, failure),
             () => componentRepository.SaveChangesAsync(cancellationToken),
@@ -148,6 +158,7 @@ public sealed class DeleteClientReleasePackageHandler(
         string componentKind,
         string componentName,
         ClientReleaseFileDeletionPlan plan,
+        Action markDeleteRequested,
         Action<string?> markDeleted,
         Action<string> markDeleteFailed,
         Func<Task> saveStatusAsync,
@@ -159,6 +170,7 @@ public sealed class DeleteClientReleasePackageHandler(
             componentName,
             component.Channel,
             release.Version,
+            markDeleteRequested,
             markDeleted,
             markDeleteFailed,
             plan,
@@ -172,6 +184,7 @@ public sealed class DeleteClientReleasePackageHandler(
         string componentName,
         string channel,
         string version,
+        Action markDeleteRequested,
         Action<string?> markDeleted,
         Action<string> markDeleteFailed,
         ClientReleaseFileDeletionPlan plan,
@@ -205,6 +218,10 @@ public sealed class DeleteClientReleasePackageHandler(
                 plan.SkippedPaths,
                 reason));
         }
+
+        // 先把目标版本置为 DeleteRequested 并持久化，使其立即退出活动 catalog，再执行物理删除。
+        markDeleteRequested();
+        await saveStatusAsync();
 
         var deletedPaths = new List<string>();
         try
@@ -250,6 +267,12 @@ public sealed class DeleteClientReleasePackageHandler(
         {
             markDeleteFailed(ex.Message);
             await saveStatusAsync();
+            logger.LogError(
+                new EventId(4603, "ClientReleaseDeletePackageFailure"),
+                "Delete release package files failed. ComponentKind={ComponentKind} Channel={Channel} ErrorType={ErrorType}.",
+                componentKind,
+                channel,
+                ex.GetType().Name);
             await WriteAuditAsync(
                 releaseId,
                 componentKind,
@@ -279,7 +302,7 @@ public sealed class DeleteClientReleasePackageHandler(
     {
         var summary = JsonSerializer.Serialize(new
         {
-            action = "ClientRelease.DeletePackage",
+            action = AuditAction,
             componentKind,
             componentName,
             channel,
@@ -292,7 +315,7 @@ public sealed class DeleteClientReleasePackageHandler(
             new AuditTrailEntry(
                 ClientReleaseAuditActor.ParseId(currentUser.Id),
                 currentUser.UserName,
-                "ClientRelease.DeletePackage",
+                AuditAction,
                 "ClientRelease",
                 releaseId.ToString(),
                 DateTime.UtcNow,
@@ -301,7 +324,6 @@ public sealed class DeleteClientReleasePackageHandler(
                 succeeded ? null : failureOrWarning),
             cancellationToken);
     }
-
 }
 
 internal sealed class ClientReleaseFileDeletionPlan
