@@ -210,7 +210,6 @@ public sealed class ClientReleaseBehaviorTests
             [typeof(UpsertClientHostReleaseCommand)] = ClientReleasePermissions.Manage,
             [typeof(UpsertClientPluginReleaseCommand)] = ClientReleasePermissions.Manage,
             [typeof(ArchiveClientReleaseCommand)] = ClientReleasePermissions.Manage,
-            [typeof(DeleteClientReleasePackageCommand)] = ClientReleasePermissions.Manage,
             [typeof(UpdateClientReleaseStatusCommand)] = ClientReleasePermissions.Manage,
             [typeof(UpdateClientReleaseRetentionPolicyCommand)] = ClientReleasePermissions.Manage
         };
@@ -1972,7 +1971,8 @@ public sealed class ClientReleaseBehaviorTests
                 componentRepository,
                 clientStateStore,
                 new TestCurrentUser(),
-                auditTrail);
+                auditTrail,
+                NullLogger<DeleteClientReleasePackageHandler>.Instance);
 
             var result = await handler.Handle(
                 new DeleteClientReleasePackageCommand(hostRelease.Id),
@@ -1983,6 +1983,120 @@ public sealed class ClientReleaseBehaviorTests
             Assert.True(Directory.Exists(hostDirectory));
             Assert.Contains(auditTrail.Entries, entry =>
                 entry.OperationType == "ClientRelease.DeletePackage"
+                && !entry.Succeeded);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task HardDeleteClientReleaseComponentHandler_ShouldDeletePluginMetadataAndFiles()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-hard-delete-plugin-root");
+        try
+        {
+            const string moduleId = "DieCutting";
+            var moduleDirectory = Path.Combine(edgeRoot, "plugins", "stable", moduleId);
+            var packagePath = Path.Combine(moduleDirectory, "1.0.0", "die-cutting.zip");
+            WriteFile(packagePath, "plugin-package");
+            var component = CreatePluginComponent(
+                moduleId,
+                "模切",
+                "stable",
+                "1.0.0",
+                "1.0.0",
+                "1.0.0",
+                "2.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/plugins/stable/DieCutting/1.0.0/die-cutting.zip",
+                new string('a', 64),
+                1024,
+                "错误工序，管理员永久删除",
+                ClientReleaseStatus.Published);
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(component);
+            var auditTrail = new RecordingAuditTrailService();
+            var handler = new HardDeleteClientReleaseComponentHandler(
+                Options.Create(new EdgeInstallerArtifactOptions { RootPath = Path.Combine(edgeRoot, "installers") }),
+                componentRepository,
+                new InMemoryDeviceClientStateStore(),
+                new TestCurrentUser(),
+                auditTrail,
+                NullLogger<HardDeleteClientReleaseComponentHandler>.Instance);
+
+            var result = await handler.Handle(
+                new HardDeleteClientReleaseComponentCommand(component.Id, "错误工序"),
+                CancellationToken.None);
+
+            Assert.True(result.IsSuccess);
+            Assert.Empty(componentRepository.Items);
+            Assert.False(Directory.Exists(moduleDirectory));
+            Assert.Contains(auditTrail.Entries, entry =>
+                entry.OperationType == "ClientRelease.HardDeleteComponent"
+                && entry.Succeeded);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task HardDeleteClientReleaseComponentHandler_ShouldRejectPluginStillInUse()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-hard-delete-in-use-root");
+        try
+        {
+            const string moduleId = "DieCutting";
+            var moduleDirectory = Path.Combine(edgeRoot, "plugins", "stable", moduleId, "1.0.0");
+            WriteFile(Path.Combine(moduleDirectory, "die-cutting.zip"), "plugin-package");
+            var component = CreatePluginComponent(
+                moduleId,
+                "模切",
+                "stable",
+                "1.0.0",
+                "1.0.0",
+                "1.0.0",
+                "2.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/plugins/stable/DieCutting/1.0.0/die-cutting.zip",
+                new string('a', 64),
+                1024,
+                "仍在使用",
+                ClientReleaseStatus.Published);
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(component);
+            var clientStateStore = new InMemoryDeviceClientStateStore();
+            clientStateStore.VersionSnapshots.Add(new DeviceClientVersionSnapshot(
+                Guid.NewGuid(),
+                "DEV-001",
+                "1.0.0",
+                "1.0.0",
+                "stable",
+                DateTime.UtcNow,
+                [new DeviceClientPluginVersion(moduleId, "模切", "1.0.0", "1.0.0", true)]));
+            var auditTrail = new RecordingAuditTrailService();
+            var handler = new HardDeleteClientReleaseComponentHandler(
+                Options.Create(new EdgeInstallerArtifactOptions { RootPath = Path.Combine(edgeRoot, "installers") }),
+                componentRepository,
+                clientStateStore,
+                new TestCurrentUser(),
+                auditTrail,
+                NullLogger<HardDeleteClientReleaseComponentHandler>.Instance);
+
+            var result = await handler.Handle(
+                new HardDeleteClientReleaseComponentCommand(component.Id),
+                CancellationToken.None);
+
+            Assert.False(result.IsSuccess);
+            Assert.Single(componentRepository.Items);
+            Assert.True(Directory.Exists(moduleDirectory));
+            Assert.Contains(auditTrail.Entries, entry =>
+                entry.OperationType == "ClientRelease.HardDeleteComponent"
                 && !entry.Succeeded);
         }
         finally

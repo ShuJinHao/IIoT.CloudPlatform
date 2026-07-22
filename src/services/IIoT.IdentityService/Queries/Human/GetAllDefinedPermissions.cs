@@ -47,6 +47,7 @@ public class GetAllDefinedPermissionsHandler(
         ClientReleasePermissions.GenerateInstaller,
         ClientReleasePermissions.Publish,
         ClientReleasePermissions.Manage,
+        ClientReleasePermissions.HardDelete,
 
         // AI 只读接口
         AiReadPermissions.Device, AiReadPermissions.Process, AiReadPermissions.ClientRelease, AiReadPermissions.DeviceClientState,

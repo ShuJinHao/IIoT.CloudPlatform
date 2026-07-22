@@ -78,10 +78,6 @@ jobs:
           set -euo pipefail
           bash scripts/tests/TestCloudArchitectureAnalyzerFixtures.sh 2>&1 | tee artifacts/test-results/cloud-architecture-fixtures.log
 
-      - name: Enforce test declaration migration ledger
-        shell: pwsh
-        run: ./scripts/tests/Test-CloudTestMigration.ps1
-
       - name: Verify quality baseline behavior
         shell: pwsh
         run: ./scripts/tests/Test-CloudQualityBaselineProtectionBehavior.ps1
@@ -183,17 +179,16 @@ jobs:
             [int]$_.failed -ne 0 -or [int]$_.notExecuted -ne 0
           })
           if ([int]$inventory.schemaVersion -ne 2 -or
-              [int]$inventory.migrationBaselineCases -ne 591 -or
-              [int]$inventory.baselineCases -ne 725 -or
-              [int]$inventory.requiredCases -ne 661 -or
-              $requiredCases.Count -ne 661 -or
+              [int]$inventory.baselineCases -ne 729 -or
+              [int]$inventory.requiredCases -ne 665 -or
+              $requiredCases.Count -ne 665 -or
               $runnerEvidence.Count -ne 18 -or
               $selectedRunnerEvidence.Count -ne 16 -or
               $invalidSelectedEvidence.Count -ne 0 -or
-              [int](($selectedRunnerEvidence | Measure-Object expected -Sum).Sum) -ne 661 -or
+              [int](($selectedRunnerEvidence | Measure-Object expected -Sum).Sum) -ne 665 -or
               [int]$inventory.regressionZeroCount -ne 0 -or
               $regressionEvidence.Count -ne 18 -or
-              [int](($regressionEvidence | Measure-Object actualCases -Sum).Sum) -ne 725 -or
+              [int](($regressionEvidence | Measure-Object actualCases -Sum).Sum) -ne 729 -or
               @($regressionEvidence | Where-Object {
                 [string]::IsNullOrWhiteSpace([string]$_.regressionId) -or
                 [int]$_.minimumCases -le 0 -or
@@ -241,34 +236,6 @@ jobs:
           $expectedArchitectureFixtureSummary = 'ARCHITECTURE_FIXTURES_OK valid=8 invalid=15 callGraphBypass=20 suppressionBypass=3 contractsMetadataIdentities=9 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010'
           if (@($architectureFixtureLines | Where-Object { $_ -eq $expectedArchitectureFixtureSummary }).Count -ne 1) {
             throw "Architecture fixture reconciliation failed"
-          }
-
-          $migrationPath = 'artifacts/test-results/cloud-test-migration.json'
-          if (-not (Test-Path $migrationPath -PathType Leaf)) {
-            throw "Missing test declaration migration ledger: $migrationPath"
-          }
-          $migration = Get-Content $migrationPath -Raw | ConvertFrom-Json
-          $migrationCountSum = [int]$migration.counts.retained +
-            [int]$migration.counts.moved +
-            [int]$migration.counts.replacement +
-            [int]$migration.counts.analyzer +
-            [int]$migration.counts.'retired-duplicate'
-          if ([int]$migration.schemaVersion -ne 1 -or
-              [string]$migration.baseCommit -ne '88c41109fbcf0b87b18939a139e0bff751e03d07' -or
-              [string]$migration.baseSourcePath -ne 'src/tests' -or
-              [string]$migration.baseTestsTreeObject -ne '604fc2c1f2b9e4746657f314191a4514ccf75530' -or
-              [string]$migration.baseDeclarationDigestSha256 -ne 'd75d5529e418be31819676abeb210a79550149e14896fbe1857c30a83149c77c' -or
-              [int]$migration.baseDeclarationCount -ne 529 -or
-              [int]$migration.currentDeclarationCount -ne 656 -or
-              [int]$migration.currentDeltaCount -ne 188 -or
-              @($migration.currentDelta).Count -ne 188 -or
-              @($migration.currentDelta | Where-Object path -like '*IIoT.CloudPlatform.AnalyzerTests/*').Count -ne 72 -or
-              @($migration.currentDelta | Where-Object path -like '*RedisCacheServiceSemanticsTests.cs').Count -ne 46 -or
-              [int]$migration.negativeFixtureCount -ne 7 -or
-              [int]$migration.unresolvedCount -ne 0 -or
-              @($migration.entries).Count -ne 529 -or
-              $migrationCountSum -ne 529) {
-            throw "Test declaration migration ledger reconciliation failed"
           }
 
           $vitestPath = 'artifacts/test-results/vitest.json'

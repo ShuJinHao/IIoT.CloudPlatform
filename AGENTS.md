@@ -28,6 +28,7 @@
 
 ## Validation
 
+- Cloud 架构边界由 Analyzer、ArchitectureTests 和项目图严格阻断；领域、Application、Workflow、Contract、Persistence、HTTP、UI 等业务测试可随功能同批新增、修改、迁移或删除。inventory/baseline 只防止静默丢失和漏跑，不得恢复 Phase 0 冻结、transition、waiver、receipt 或额外审批。
 - 后端改动运行匹配 build/test。
 - 前端改动运行 `npm run build`。
 - 涉及部署变量时同步模板和示例。

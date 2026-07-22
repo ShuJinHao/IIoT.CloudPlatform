@@ -337,7 +337,7 @@ sudo find /data/iiot-platform/cloud/deploy/releases -type f -exec chmod 600 {} +
 标准路径：
 
 1. 合并或推送到 `main`，保证 GitHub 有本次源码留痕。
-2. `cloud-ci / build-test` 默认执行当前 required 门禁：solution restore/build、AnalyzerTests 72 与 valid 8 / invalid 15 真实 csproj fixture、529 条 pre-task 旧声明迁移账本、兼容性与重复度棘轮、16 个物理 runner / 661 case 发现-执行-通过对账和 16 份 coverage、deployment behavior/策略/脚本语法、Cloud Web Vitest 67 + browser smoke 2 + build 以及 production compose；完整后端 EndToEnd 63 和真实浏览器 EndToEnd 1 保持 nightly/manual 独立 lane，WorkspaceAlignment 1 保持独立跨仓 lane。
+2. `cloud-ci / build-test` 默认执行当前 required 门禁：solution restore/build、AnalyzerTests 72 与 valid 8 / invalid 15 真实 csproj fixture、兼容性与重复度棘轮、16 个物理 runner / 665 case 发现-执行-通过对账和 16 份 coverage、deployment behavior/策略/脚本语法、Cloud Web Vitest 67 + browser smoke 2 + build 以及 production compose；完整后端 EndToEnd 63 和真实浏览器 EndToEnd 1 保持 nightly/manual 独立 lane，WorkspaceAlignment 1 保持独立跨仓 lane。
 3. 基础设施维护才运行 `pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 -Target Cloud ...`；日常应用发布使用 `Deploy-Changed.ps1`，不进入本节 support transaction。旧入口仍要求 clean/pushed candidate 和显式 plan，用于 Compose/nginx/scripts 升级取证。
 4. 根入口为正式运行注入 entrypoint marker、唯一 invocation id、完整 expected SHA 和 plan digest；`local-release.sh` 缺任一项即在 build/SSH 前失败，并强校验 expected SHA 等于 detached 固定快照 HEAD。
 5. 旧 `local-release.sh` 在基础设施维护窗口校验 support 白名单并完成 staging；日常 `Deploy-Changed.ps1` 内部调用的 `Deploy.ps1` 不安装任何远端 support files。

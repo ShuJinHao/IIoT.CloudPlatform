@@ -508,16 +508,16 @@ public sealed class DeploymentSourceGuardTests
         readmeSource.Should().Contain("日常 `Deploy-Changed.ps1` 内部调用的 `Deploy.ps1` 不安装任何远端 support files");
         readmeSource.Should().Contain("服务器端 `deploy-release.sh` 不再是日常或手工入口");
         readmeSource.Should().Contain("`cloud-ci / build-test`");
-        readmeSource.Should().Contain("16 个物理 runner / 661 case");
+        readmeSource.Should().Contain("16 个物理 runner / 665 case");
         operationsSource.Should().Contain("pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud");
         operationsSource.Should().Contain("project-local `local-release.sh` is a legacy maintenance implementation");
         operationsSource.Should().Contain("`cloud-ci / build-test`");
-        operationsSource.Should().Contain("16 physical runners / 661 cases");
+        operationsSource.Should().Contain("16 physical runners / 665 cases");
         edgeGoLiveSource.Should().Contain("pwsh ./deploy/Deploy-Changed.ps1 -Targets Edge");
         edgeGoLiveSource.Should().Contain("Windows 安装器/Velopack/插件构建");
         edgeGoLiveSource.Should().Contain(
             "scripts/tests/Invoke-CloudTestInventory.ps1 -Mode Required -Configuration Release -NoBuild");
-        edgeGoLiveSource.Should().Contain("16 个物理 runner / 661 case");
+        edgeGoLiveSource.Should().Contain("16 个物理 runner / 665 case");
         runnerSource.Should().Contain("/data/github-runner/cloud");
         runnerSource.Should().Contain("github-runner");
         runnerSource.Should().Contain("self-hosted runner 仅用于 CI 辅助和历史运维");
@@ -809,10 +809,6 @@ public sealed class DeploymentSourceGuardTests
             CloudRepositoryPath.Find("scripts", "tests", "Invoke-CloudTestInventory.ps1"));
         var workspaceEvidenceSource = File.ReadAllText(
             CloudRepositoryPath.Find("scripts", "tests", "Get-CloudAiWorkspaceEvidence.ps1"));
-        var migrationScriptSource = File.ReadAllText(
-            CloudRepositoryPath.Find("scripts", "tests", "Test-CloudTestMigration.ps1"));
-        var migrationBaselineSource = File.ReadAllText(
-            CloudRepositoryPath.Find("scripts", "tests", "baselines", "cloud-test-migration.json"));
         var qualityBaselineBehaviorSource = File.ReadAllText(
             CloudRepositoryPath.Find("scripts", "tests", "Test-CloudQualityBaselineProtectionBehavior.ps1"));
         var coverageScriptSource = File.ReadAllText(
@@ -829,9 +825,6 @@ public sealed class DeploymentSourceGuardTests
         var requiredInventoryStep = GetNamedGitHubWorkflowStep(
             workflowSource,
             "Run and reconcile required test inventory");
-        var migrationLedgerStep = GetNamedGitHubWorkflowStep(
-            workflowSource,
-            "Enforce test declaration migration ledger");
         var fullEndToEndStep = GetNamedGitHubWorkflowStep(
             workflowSource,
             "Run end-to-end tests");
@@ -923,9 +916,6 @@ public sealed class DeploymentSourceGuardTests
         requiredInventoryStep.Should().Contain("timeout-minutes: 15");
         requiredInventoryStep.Should().NotContain("if:");
         requiredInventoryStep.Should().NotContain("continue-on-error:");
-        migrationLedgerStep.Should().Contain("./scripts/tests/Test-CloudTestMigration.ps1");
-        migrationLedgerStep.Should().NotContain("if:");
-        migrationLedgerStep.Should().NotContain("continue-on-error:");
         workflowSource.Should().Contain("Verify quality baseline behavior");
         workflowSource.Should().Contain("./scripts/tests/Test-CloudQualityBaselineProtectionBehavior.ps1");
         qualityBaselineBehaviorSource.Should().Contain("CLOUD_QUALITY_BASELINE_PROTECTION_OK scenarios=9");
@@ -933,15 +923,6 @@ public sealed class DeploymentSourceGuardTests
         qualityBaselineBehaviorSource.Should().Contain("coverageImprovementAccepted=1");
         qualityBaselineBehaviorSource.Should().Contain("coverageRegressionRejected=1");
         qualityBaselineBehaviorSource.Should().Contain("coverageStructureRejected=1");
-        migrationScriptSource.Should().Contain("CLOUD_TEST_MIGRATION_OK");
-        migrationScriptSource.Should().Contain("Unmapped base test declaration");
-        migrationScriptSource.Should().Contain("currentDeltaCount");
-        migrationScriptSource.Should().Contain("negativeFixtures");
-        migrationBaselineSource.Should().Contain("\"expectedBaseDeclarationCount\": 529");
-        migrationBaselineSource.Should().Contain("\"baseCommit\": \"88c41109fbcf0b87b18939a139e0bff751e03d07\"");
-        migrationBaselineSource.Should().Contain("\"baseSourcePath\": \"src/tests\"");
-        migrationBaselineSource.Should().Contain("\"baseTestsTreeObject\": \"604fc2c1f2b9e4746657f314191a4514ccf75530\"");
-        migrationBaselineSource.Should().Contain("\"baseDeclarationDigestSha256\": \"d75d5529e418be31819676abeb210a79550149e14896fbe1857c30a83149c77c\"");
         inventoryScriptSource.Should().Contain("CLOUD_TEST_RUNNER_OK");
         inventoryScriptSource.Should().Contain(
             "discovered=$discovered total=$total executed=$executed passed=$passed failed=0 skipped=0");
@@ -949,9 +930,8 @@ public sealed class DeploymentSourceGuardTests
         inventoryScriptSource.Should().Contain("Task.CompletedTask.GetAwaiter" + "().GetResult()");
         inventoryScriptSource.Should().Contain("Task.WaitAll" + "(work)");
         inventoryScriptSource.Should().Contain("response.Result");
-        inventoryManifestSource.Should().Contain("\"migrationBaselineCases\": 591");
-        inventoryManifestSource.Should().Contain("\"baselineCases\": 725");
-        inventoryManifestSource.Should().Contain("\"requiredCases\": 661");
+        inventoryManifestSource.Should().Contain("\"baselineCases\": 729");
+        inventoryManifestSource.Should().Contain("\"requiredCases\": 665");
         inventoryManifestSource.Should().Contain("\"regressionBaselines\"");
         inventoryManifestSource.Should().NotContain("\"regressionId\": null");
         inventoryScriptSource.Should().Contain("RegressionId coverage fell below its non-zero floor");

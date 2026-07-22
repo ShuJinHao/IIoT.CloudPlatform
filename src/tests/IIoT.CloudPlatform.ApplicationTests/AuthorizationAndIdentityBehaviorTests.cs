@@ -2,6 +2,7 @@ using IIoT.Core.Identity.Aggregates.IdentityAccounts;
 using IIoT.IdentityService.Commands;
 using IIoT.IdentityService.Queries;
 using IIoT.ProductionService.Commands.Bootstrap.Devices;
+using IIoT.ProductionService.Commands.ClientReleases;
 using IIoT.ProductionService.Commands.Devices;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.CrossCutting.Authorization;
@@ -316,6 +317,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         Assert.Contains(ClientReleasePermissions.GenerateInstaller, permissions);
         Assert.Contains(ClientReleasePermissions.Publish, permissions);
         Assert.Contains(ClientReleasePermissions.Manage, permissions);
+        Assert.Contains(ClientReleasePermissions.HardDelete, permissions);
         Assert.Contains(EdgeHostPermissions.Read, permissions);
         Assert.DoesNotContain("EdgeHost.Manage", permissions);
         Assert.Contains("Role.Read", permissions);
@@ -329,6 +331,46 @@ public sealed class AuthorizationAndIdentityBehaviorTests
 
         Assert.Contains(EdgeHostPermissions.Read, permissions);
         Assert.DoesNotContain("EdgeHost.Manage", permissions);
+    }
+
+    [Fact]
+    public void ClientReleaseDeletionRequests_ShouldRequireAdminOnlyHardDeleteAndPublishLock()
+    {
+        var publishLock = typeof(PublishEdgeReleaseBundleCommand)
+            .GetCustomAttributes(typeof(DistributedLockAttribute), inherit: false)
+            .Cast<DistributedLockAttribute>()
+            .Single();
+        var destructiveRequests = new[]
+        {
+            typeof(DeleteClientReleasePackageCommand),
+            typeof(HardDeleteClientReleaseComponentCommand)
+        };
+
+        foreach (var requestType in destructiveRequests)
+        {
+            var permission = requestType
+                .GetCustomAttributes(typeof(AuthorizeRequirementAttribute), inherit: false)
+                .Cast<AuthorizeRequirementAttribute>()
+                .Single();
+            Assert.Equal(ClientReleasePermissions.HardDelete, permission.Permission);
+            Assert.NotEmpty(requestType.GetCustomAttributes(typeof(AdminOnlyAttribute), inherit: false));
+
+            var distributedLock = requestType
+                .GetCustomAttributes(typeof(DistributedLockAttribute), inherit: false)
+                .Cast<DistributedLockAttribute>()
+                .Single();
+            Assert.Equal(publishLock.KeyTemplate, distributedLock.KeyTemplate);
+            Assert.Equal(publishLock.TimeoutSeconds, distributedLock.TimeoutSeconds);
+        }
+    }
+
+    [Fact]
+    public void ClientReleaseHardDeletePermission_ShouldNotBeGrantedToNonAdminRoleTemplates()
+    {
+        foreach (var permissions in SystemRolePermissionTemplates.Templates.Values)
+        {
+            Assert.DoesNotContain(ClientReleasePermissions.HardDelete, permissions);
+        }
     }
 
     [Fact]

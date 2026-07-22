@@ -650,11 +650,6 @@ $allowedDependencyTokens = @($allowedRuntimes + 'AICopilotWorkspace')
 $requiredMetadata = @('testKind', 'capability', 'runtime', 'risk', 'concern', 'cadence', 'profile', 'regressionId', 'ruleId', 'owner')
 $sourceOverrideProperties = @('capability', 'risk', 'concern', 'regressionId', 'ruleId', 'runtimeDependencies')
 
-if ($null -eq $manifest.PSObject.Properties['migrationBaselineCases'] -or
-    [int]$manifest.migrationBaselineCases -le 0 -or
-    [int]$manifest.baselineCases -lt [int]$manifest.migrationBaselineCases) {
-    throw 'Cloud test inventory must retain a positive migrationBaselineCases floor that does not exceed baselineCases.'
-}
 $regressionBaselines = @($manifest.regressionBaselines)
 if ($regressionBaselines.Count -eq 0 -or
     @($regressionBaselines | Group-Object { [string]$_.regressionId } | Where-Object Count -ne 1).Count -gt 0) {
@@ -665,10 +660,6 @@ foreach ($baseline in $regressionBaselines) {
         throw 'Every regression baseline must declare a non-blank regressionId and a positive minimumCases floor.'
     }
 }
-if ([int](($regressionBaselines | Measure-Object -Property minimumCases -Sum).Sum) -lt [int]$manifest.migrationBaselineCases) {
-    throw 'Regression baseline floors do not preserve the migration case floor.'
-}
-
 foreach ($runner in $manifest.runners) {
     foreach ($propertyName in $requiredMetadata) {
         if ($null -eq $runner.PSObject.Properties[$propertyName]) {
@@ -1787,7 +1778,6 @@ $inventoryOutput = Join-Path $resultsRoot 'cloud-test-inventory.json'
     schemaVersion = 2
     generatedAtUtc = [DateTime]::UtcNow.ToString('O')
     mode = $Mode
-    migrationBaselineCases = [int]$manifest.migrationBaselineCases
     baselineCases = [int]$manifest.baselineCases
     requiredCases = [int]$manifest.requiredCases
     regressionZeroCount = $regressionZeroCount
@@ -1817,4 +1807,4 @@ $executed = if ($selectedRunners.Count -eq 0) {
 } else {
     [int](($selectedRunners | Measure-Object -Property expected -Sum).Sum)
 }
-Write-Host "CLOUD_TEST_INVENTORY_OK migrationBaseline=$($manifest.migrationBaselineCases) baseline=$($manifest.baselineCases) required=$($manifest.requiredCases) selected=$executed regressionIds=$($regressionEvidence.Count) regressionZero=$regressionZeroCount support=$(@($manifest.supportAllowlist).Count) skipped=0 output=$inventoryOutput"
+Write-Host "CLOUD_TEST_INVENTORY_OK baseline=$($manifest.baselineCases) required=$($manifest.requiredCases) selected=$executed regressionIds=$($regressionEvidence.Count) regressionZero=$regressionZeroCount support=$(@($manifest.supportAllowlist).Count) skipped=0 output=$inventoryOutput"
