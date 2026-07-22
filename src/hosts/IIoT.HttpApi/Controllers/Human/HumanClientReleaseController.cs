@@ -88,6 +88,16 @@ public sealed class HumanClientReleaseController : ApiControllerBase
             cancellationToken));
     }
 
+    [HttpPost("component-deletions/{deletionId:guid}/retry")]
+    public async Task<IActionResult> RetryComponentDeletion(
+        [FromRoute] Guid deletionId,
+        CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(
+            new RetryClientReleaseComponentDeletionCommand(deletionId),
+            cancellationToken));
+    }
+
     [HttpPut("{releaseId:guid}/status")]
     public async Task<IActionResult> UpdateReleaseStatus(
         [FromRoute] Guid releaseId,

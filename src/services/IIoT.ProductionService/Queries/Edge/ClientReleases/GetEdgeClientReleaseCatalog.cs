@@ -1,4 +1,5 @@
 using IIoT.Core.Production.Aggregates.ClientReleases;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Core.Production.Specifications.ClientReleases;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.Services.Contracts;
@@ -18,6 +19,7 @@ public sealed class GetEdgeClientReleaseCatalogHandler(
     IDeviceIdentityQueryService deviceIdentityQueryService,
     IReadRepository<ClientReleaseComponent> componentRepository,
     IClientReleaseRetentionPolicyReader retentionPolicyReader,
+    IClientReleaseComponentDeletionStore deletionStore,
     IOptions<EdgeInstallerArtifactOptions> artifactOptions)
     : IQueryHandler<GetEdgeClientReleaseCatalogQuery, Result<ClientReleaseCatalogDto>>
 {
@@ -40,6 +42,13 @@ public sealed class GetEdgeClientReleaseCatalogHandler(
         var maxVersions = await retentionPolicyReader.GetMaxVersionsPerComponentAsync(cancellationToken);
         var edgeRoot = artifactOptions.Value.ResolveEdgeUpdatesRoot();
         var missingPaths = ClientReleaseMissingFiles.Collect(edgeRoot, components);
+        foreach (var deletion in await deletionStore.GetByChannelAsync(channel, cancellationToken))
+        {
+            foreach (var file in deletion.Files)
+            {
+                missingPaths.Add(file.RelativePath);
+            }
+        }
 
         return Result.Success(new ClientReleaseCatalogDto(
             ClientReleaseCatalogSchema.Version,

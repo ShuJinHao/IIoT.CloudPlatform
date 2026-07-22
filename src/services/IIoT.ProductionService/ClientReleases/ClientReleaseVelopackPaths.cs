@@ -40,15 +40,16 @@ internal static class ClientReleaseVelopackPaths
     }
 
     /// <summary>
-    /// 重建 channel manifests，供物理删除后调用。
-    /// 移除引用已不存在 .nupkg 的条目，也移除 removeFileNames 中显式指定的文件名；
-    /// 存活版本已写入的其它内容原样保留。manifest 不是合法 JSON 对象时 fail closed（返回 false），绝不猜测内容重写。
+    /// 以存活 Host 版本的 VelopackFile artifact 为白名单重建 channel manifests。
+    /// manifest 中只允许保留白名单内且文件仍存在的 .nupkg 引用；其它内容原样保留。
+    /// manifest 不是合法 JSON 对象时 fail closed（返回 false），绝不猜测内容重写。
     /// </summary>
-    public static bool TryRebuildChannelManifests(
+    public static bool TryRebuildChannelManifestsFromWhitelist(
         string velopackChannelRoot,
-        ILogger logger,
-        IReadOnlyCollection<string>? removeFileNames = null)
+        IReadOnlyCollection<string> survivingNupkgFileNames,
+        ILogger logger)
     {
+        var whitelist = new HashSet<string>(survivingNupkgFileNames, StringComparer.OrdinalIgnoreCase);
         var succeeded = true;
         foreach (var manifestName in StableManifestNames)
         {
@@ -58,19 +59,19 @@ internal static class ClientReleaseVelopackPaths
                 continue;
             }
 
-            if (!TryRebuildStableManifest(manifestPath, logger, removeFileNames))
+            if (!TryRebuildStableManifest(manifestPath, whitelist, logger))
             {
                 succeeded = false;
             }
         }
 
-        return succeeded && TryRebuildReleasesFile(velopackChannelRoot, logger, removeFileNames);
+        return succeeded && TryRebuildReleasesFile(velopackChannelRoot, whitelist, logger);
     }
 
     private static bool TryRebuildStableManifest(
         string manifestPath,
-        ILogger logger,
-        IReadOnlyCollection<string>? removeFileNames)
+        ISet<string> whitelist,
+        ILogger logger)
     {
         JsonObject? root;
         try
@@ -104,7 +105,8 @@ internal static class ClientReleaseVelopackPaths
                     continue;
                 }
 
-                if (ShouldRemove(fileName, manifestPath, removeFileNames))
+                if (!whitelist.Contains(fileName)
+                    || !File.Exists(Path.Combine(Path.GetDirectoryName(manifestPath)!, fileName)))
                 {
                     entries.RemoveAt(index);
                     removed = true;
@@ -122,8 +124,8 @@ internal static class ClientReleaseVelopackPaths
 
     private static bool TryRebuildReleasesFile(
         string velopackChannelRoot,
-        ILogger logger,
-        IReadOnlyCollection<string>? removeFileNames)
+        ISet<string> whitelist,
+        ILogger logger)
     {
         var releasesPath = Path.Combine(velopackChannelRoot, "RELEASES");
         if (!File.Exists(releasesPath))
@@ -138,7 +140,9 @@ internal static class ClientReleaseVelopackPaths
         {
             var segments = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             var fileName = segments.FirstOrDefault(IsNugetPackage);
-            if (fileName is not null && ShouldRemove(fileName, releasesPath, removeFileNames))
+            if (fileName is not null
+                && (!whitelist.Contains(fileName)
+                    || !File.Exists(Path.Combine(velopackChannelRoot, fileName))))
             {
                 removed = true;
                 continue;
@@ -227,19 +231,6 @@ internal static class ClientReleaseVelopackPaths
             "velopack-manifest-rebuild",
             condition,
             Path.GetFileName(manifestPath));
-    }
-
-    private static bool ShouldRemove(
-        string fileName,
-        string manifestPath,
-        IReadOnlyCollection<string>? removeFileNames)
-    {
-        if (removeFileNames?.Contains(fileName, StringComparer.OrdinalIgnoreCase) == true)
-        {
-            return true;
-        }
-
-        return !File.Exists(Path.Combine(Path.GetDirectoryName(manifestPath)!, fileName));
     }
 
     private static bool IsStableJsonManifest(string fileName)

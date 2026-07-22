@@ -1,4 +1,5 @@
 using IIoT.Core.Production.Aggregates.ClientReleases;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Core.Production.Specifications.ClientReleases;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.Services.Contracts;
@@ -20,6 +21,7 @@ public sealed record GetClientReleaseCatalogQuery(
 
 public sealed class GetClientReleaseCatalogHandler(
     IReadRepository<ClientReleaseComponent> componentRepository,
+    IClientReleaseComponentDeletionStore deletionStore,
     IOptions<EdgeInstallerArtifactOptions> artifactOptions)
     : IQueryHandler<GetClientReleaseCatalogQuery, Result<ClientReleaseCatalogDto>>
 {
@@ -38,6 +40,14 @@ public sealed class GetClientReleaseCatalogHandler(
 
         var edgeRoot = artifactOptions.Value.ResolveEdgeUpdatesRoot();
         var missingPaths = ClientReleaseMissingFiles.Collect(edgeRoot, components);
+        // 待清理的永久删除操作仍持有精确文件目标；同 channel 版本在这些路径收敛前不得当作可分发。
+        foreach (var deletion in await deletionStore.GetByChannelAsync(channel, cancellationToken))
+        {
+            foreach (var file in deletion.Files)
+            {
+                missingPaths.Add(file.RelativePath);
+            }
+        }
 
         return Result.Success(new ClientReleaseCatalogDto(
             ClientReleaseCatalogSchema.Version,

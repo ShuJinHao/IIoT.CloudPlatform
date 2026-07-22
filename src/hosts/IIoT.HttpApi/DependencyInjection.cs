@@ -79,6 +79,7 @@ public static class DependencyInjection
         builder.Services.AddScoped<IClientReleaseRetentionService, ClientReleaseRetentionService>();
         builder.Services.AddScoped<IClientReleaseRetentionPolicyReader>(sp =>
             sp.GetRequiredService<IClientReleaseRetentionService>());
+        builder.Services.AddScoped<IClientReleaseComponentDeletionProcessor, ClientReleaseComponentDeletionProcessor>();
         builder.Services.AddScoped<ClientReleaseUploadCoordinator>();
         builder.Services.AddPassStationRuntime();
 

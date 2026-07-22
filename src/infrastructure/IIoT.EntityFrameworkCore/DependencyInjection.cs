@@ -94,6 +94,7 @@ public static class DependencyInjection
         builder.Services.AddScoped<IDeviceClientStateStore, EfDeviceClientStateStore>();
         builder.Services.AddScoped<IDeviceClientStateQueryService>(provider =>
             provider.GetRequiredService<IDeviceClientStateStore>());
+        builder.Services.AddScoped<IClientReleaseComponentDeletionStore, EfClientReleaseComponentDeletionStore>();
         builder.Services.AddScoped<IEdgeHostPlcRuntimeStateStore, EfEdgeHostPlcRuntimeStateStore>();
 
         builder.Services.AddIdentityCore<ApplicationUser>(options =>

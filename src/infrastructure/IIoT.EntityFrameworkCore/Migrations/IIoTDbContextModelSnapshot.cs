@@ -1935,6 +1935,121 @@ namespace IIoT.EntityFrameworkCore.Migrations
                     b.Navigation("Tokens");
                 });
 #pragma warning restore 612, 618
+
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.ClientReleaseComponentDeletion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("channel");
+
+                    b.Property<Guid>("ComponentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("component_id");
+
+                    b.Property<string>("ComponentKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("component_key");
+
+                    b.Property<string>("ComponentKind")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("component_kind");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<string>("FailureCode")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("failure_code");
+
+                    b.Property<string>("Reason")
+                        .HasColumnType("text")
+                        .HasColumnName("reason");
+
+                    b.Property<int>("RetryCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("retry_count");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("TargetRuntime")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("target_runtime");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<string>("VersionsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("versions_json");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ComponentId")
+                        .HasDatabaseName("ix_edge_client_release_component_deletions_component");
+
+                    b.HasIndex("Status")
+                        .HasDatabaseName("ix_edge_client_release_component_deletions_status");
+
+                    b.ToTable("edge_client_release_component_deletions", (string)null);
+                });
+
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.ClientReleaseComponentDeletionFile", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("ClientReleaseComponentDeletionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("deletion_id");
+
+                    b.Property<string>("RelativePath")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)")
+                        .HasColumnName("relative_path");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ClientReleaseComponentDeletionId")
+                        .HasDatabaseName("ix_edge_client_release_component_deletion_files_deletion");
+
+                    b.ToTable("edge_client_release_component_deletion_files", (string)null);
+                });
+
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.ClientReleaseComponentDeletionFile", b =>
+                {
+                    b.HasOne("IIoT.Core.Production.Aggregates.ClientReleases.ClientReleaseComponentDeletion", null)
+                        .WithMany("Files")
+                        .HasForeignKey("ClientReleaseComponentDeletionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.ClientReleaseComponentDeletion", b =>
+                {
+                    b.Navigation("Files");
+                });
         }
     }
 }

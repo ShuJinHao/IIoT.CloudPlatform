@@ -343,7 +343,8 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         var destructiveRequests = new[]
         {
             typeof(DeleteClientReleasePackageCommand),
-            typeof(HardDeleteClientReleaseComponentCommand)
+            typeof(HardDeleteClientReleaseComponentCommand),
+            typeof(RetryClientReleaseComponentDeletionCommand)
         };
 
         foreach (var requestType in destructiveRequests)

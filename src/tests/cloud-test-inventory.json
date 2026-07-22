@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "baselineCases": 736,
-  "requiredCases": 672,
+  "baselineCases": 741,
+  "requiredCases": 677,
   "regressionBaselines": [
     { "regressionId": "CLOUD-ARCH-SUITE", "minimumCases": 72 },
     { "regressionId": "CLOUD-ARCH-FS", "minimumCases": 11 },
@@ -435,9 +435,9 @@
       "owner": "Cloud.Workflow",
       "executionGroup": "Filesystem",
       "required": true,
-      "expected": 97,
+      "expected": 102,
       "sources": [
-        { "class": "ClientReleaseBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.WorkflowFilesystemTests/ClientReleaseBehaviorTests.cs", "expected": 65, "capability": "ClientRelease" },
+        { "class": "ClientReleaseBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.WorkflowFilesystemTests/ClientReleaseBehaviorTests.cs", "expected": 70, "capability": "ClientRelease" },
         { "class": "ClientReleasePublishLeaseTests", "file": "src/tests/IIoT.CloudPlatform.WorkflowFilesystemTests/ClientReleasePublishLeaseTests.cs", "expected": 5, "capability": "ClientRelease" },
         { "class": "ClientReleaseUploadSessionTests", "file": "src/tests/IIoT.CloudPlatform.WorkflowFilesystemTests/ClientReleaseUploadSessionTests.cs", "expected": 7, "capability": "ClientRelease" },
         { "class": "HostReleasePublishFileTransactionTests", "file": "src/tests/IIoT.CloudPlatform.WorkflowFilesystemTests/HostReleasePublishFileTransactionTests.cs", "expected": 12, "capability": "ClientReleaseTransactions" },

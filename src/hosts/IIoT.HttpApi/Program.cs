@@ -22,6 +22,10 @@ builder.AddSerilog("httpapi");
 builder.AddServiceDefaults();
 builder.AddApplicationService();
 builder.AddWebServices();
+ClientReleaseComponentDeletionRecoveryService.RegisterUnlessExplicitlyDisabledForTesting(
+    builder.Services,
+    builder.Configuration,
+    builder.Environment);
 
 builder.Services.AddControllers()
     .AddMvcOptions(options =>

@@ -26,6 +26,7 @@ public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)
     public DbSet<EdgeHostPlcRuntimeState> EdgeHostPlcRuntimeStates => Set<EdgeHostPlcRuntimeState>();
     public DbSet<Recipe> Recipes => Set<Recipe>();
     public DbSet<ClientReleaseComponent> ClientReleaseComponents => Set<ClientReleaseComponent>();
+    public DbSet<ClientReleaseComponentDeletion> ClientReleaseComponentDeletions => Set<ClientReleaseComponentDeletion>();
     public DbSet<ClientReleaseRetentionPolicy> ClientReleaseRetentionPolicies => Set<ClientReleaseRetentionPolicy>();
     public DbSet<DeviceClientVersionSnapshot> DeviceClientVersionSnapshots => Set<DeviceClientVersionSnapshot>();
     public DbSet<EdgeDeviceRuntimeHeartbeat> EdgeDeviceRuntimeHeartbeats => Set<EdgeDeviceRuntimeHeartbeat>();
