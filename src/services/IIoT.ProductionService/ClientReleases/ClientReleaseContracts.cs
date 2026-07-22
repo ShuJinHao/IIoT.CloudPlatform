@@ -49,7 +49,8 @@ public sealed record ClientHostVersionEntryDto(
     DateTime? PublishedAtUtc,
     DateTime? DeletedAtUtc,
     string? DeletionReason,
-    string? DeletionFailure);
+    string? DeletionFailure,
+    bool FilesPresent = true);
 
 public sealed record ClientPluginVersionEntryDto(
     Guid Id,
@@ -72,7 +73,8 @@ public sealed record ClientPluginVersionEntryDto(
     DateTime? PublishedAtUtc,
     DateTime? DeletedAtUtc,
     string? DeletionReason,
-    string? DeletionFailure);
+    string? DeletionFailure,
+    bool FilesPresent = true);
 
 public sealed record UpsertClientHostReleaseResultDto(Guid Id);
 
@@ -225,6 +227,75 @@ internal static class ClientReleaseMapping
             .ToList();
     }
 
+    // 硬删除数据库先行后，文件由幂等任务清理；清理未完成期间 catalog 不得把已删文件的版本继续当作可用。
+    // 历史/详情读取不传 excludedRelativePaths，行为不变。
+    public static ClientHostReleaseComponentDto ToHostComponentExcludingMissingFiles(
+        IEnumerable<ClientReleaseComponent> components,
+        ISet<string> excludedRelativePaths,
+        int? maxVersions = null,
+        bool onlyPublished = false,
+        bool includeArchived = false)
+    {
+        var versions = components
+            .Where(component => component.ComponentKind == ClientReleaseComponentKind.Host)
+            .SelectMany(component => component.Versions
+                .Where(version => ShouldExposeVersion(version, onlyPublished, includeArchived))
+                .Select(version => (
+                    Component: component,
+                    Version: version,
+                    FilesPresent: VersionFilesPresent(version, excludedRelativePaths)))
+                .Where(item => item.FilesPresent))
+            .OrderByDescending(item => item.Version.Version, VersionComparer)
+            .ThenByDescending(item => item.Version.PublishedAtUtc ?? item.Version.CreatedAtUtc)
+            .Take(maxVersions ?? int.MaxValue)
+            .Select(item => ToHostVersion(item.Component, item.Version, item.FilesPresent))
+            .ToList();
+
+        return new ClientHostReleaseComponentDto("Host", "Edge Host", versions);
+    }
+
+    public static IReadOnlyList<ClientPluginReleaseComponentDto> ToPluginComponentsExcludingMissingFiles(
+        IEnumerable<ClientReleaseComponent> components,
+        ISet<string> excludedRelativePaths,
+        int? maxVersions = null,
+        bool onlyPublished = false,
+        bool includeArchived = false)
+    {
+        return components
+            .Where(component => component.ComponentKind == ClientReleaseComponentKind.Plugin)
+            .OrderBy(component => component.ComponentKey, StringComparer.OrdinalIgnoreCase)
+            .Select(component =>
+            {
+                var ordered = component.Versions
+                    .Where(version => ShouldExposeVersion(version, onlyPublished, includeArchived))
+                    .Select(version => (
+                        Component: component,
+                        Version: version,
+                        FilesPresent: VersionFilesPresent(version, excludedRelativePaths)))
+                    .Where(item => item.FilesPresent)
+                    .OrderByDescending(item => item.Version.Version, VersionComparer)
+                    .ThenByDescending(item => item.Version.PublishedAtUtc ?? item.Version.CreatedAtUtc)
+                    .Take(maxVersions ?? int.MaxValue)
+                    .ToList();
+                return new ClientPluginReleaseComponentDto(
+                    "Plugin",
+                    component.ComponentKey,
+                    component.DisplayName,
+                    component.Description,
+                    component.IconKind,
+                    component.AccentColor,
+                    ordered.Select(item => ToPluginVersion(item.Component, item.Version, item.FilesPresent)).ToList());
+            })
+            .ToList();
+    }
+
+    private static bool VersionFilesPresent(
+        ClientReleaseVersion version,
+        ISet<string> excludedRelativePaths)
+    {
+        return !version.Artifacts.Any(artifact => excludedRelativePaths.Contains(artifact.RelativePath));
+    }
+
     public static PublicClientHostDownloadComponentDto ToPublicHostComponent(
         IEnumerable<ClientReleaseComponent> components,
         int? maxVersions = null)
@@ -271,7 +342,8 @@ internal static class ClientReleaseMapping
 
     public static ClientHostVersionEntryDto ToHostVersion(
         ClientReleaseComponent component,
-        ClientReleaseVersion release)
+        ClientReleaseVersion release,
+        bool filesPresent = true)
     {
         return new ClientHostVersionEntryDto(
             release.Id,
@@ -291,12 +363,14 @@ internal static class ClientReleaseMapping
             release.PublishedAtUtc,
             release.DeletedAtUtc,
             release.DeletionReason,
-            release.DeletionFailure);
+            release.DeletionFailure,
+            filesPresent);
     }
 
     public static ClientPluginVersionEntryDto ToPluginVersion(
         ClientReleaseComponent component,
-        ClientReleaseVersion release)
+        ClientReleaseVersion release,
+        bool filesPresent = true)
     {
         return new ClientPluginVersionEntryDto(
             release.Id,
@@ -319,7 +393,8 @@ internal static class ClientReleaseMapping
             release.PublishedAtUtc,
             release.DeletedAtUtc,
             release.DeletionReason,
-            release.DeletionFailure);
+            release.DeletionFailure,
+            filesPresent);
     }
 
     public static PublicClientHostVersionDto ToPublicHostVersion(

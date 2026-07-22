@@ -84,50 +84,36 @@ public sealed class HardDeleteClientReleaseComponentHandler(
             return Result.Invalid(inUseReason);
         }
 
+        // 先删数据库元数据并记录组件的受控相对路径；文件清理在下面用同一份路径幂等重放。
+        // 数据库不长期保存删除任务状态：成功只有本条审计，失败响应只携带稳定失败码，
+        // 管理员用同一命令重试即可（组件元数据还在时重放文件删除，不在时按已删元数据处理）。
         var edgeRoot = artifactOptions.Value.ResolveEdgeUpdatesRoot();
-        var plan = ClientReleaseComponentDeletionPlan.ForComponent(edgeRoot, component);
-
-        var deletedPaths = new List<string>();
-        Exception? deletionFailure = null;
-        foreach (var target in plan.Targets)
+        var relativePaths = ClientReleaseComponentRelativePaths.Collect(edgeRoot, component);
+        var sharedNupkgNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (component.ComponentKind == ClientReleaseComponentKind.Host)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                target.AssertSafe();
-                deletedPaths.AddRange(target.RelativeFiles);
-                target.Delete();
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
-            {
-                deletionFailure = ex;
-                break;
-            }
-        }
-
-        if (deletionFailure is not null)
-        {
-            logger.LogError(
-                new EventId(4601, "ClientReleaseHardDeleteFileFailure"),
-                "Hard delete release component files failed. ComponentKind={ComponentKind} Channel={Channel} ErrorType={ErrorType}.",
-                componentKind,
-                channel,
-                deletionFailure.GetType().Name);
-            await WriteAuditAsync(
-                component.Id,
-                componentKind,
-                componentName,
-                channel,
-                versions,
-                succeeded: false,
-                deletedPaths,
-                plan.SkippedPaths,
-                "部分发布文件删除失败，发布组件已保留，请修复文件状态后重试永久删除。",
+            var survivingComponents = await componentRepository.GetListAsync(
+                new ClientReleaseComponentsByChannelSpec(
+                    component.Channel,
+                    component.TargetRuntime,
+                    onlyPublished: false),
                 cancellationToken);
-            return Result.Invalid("部分发布文件删除失败，发布组件未删除，可修复后重试。");
+            foreach (var surviving in survivingComponents.Where(item => item.Id != component.Id))
+            {
+                foreach (var version in surviving.Versions)
+                {
+                    foreach (var artifact in version.Artifacts)
+                    {
+                        if (artifact.ArtifactKind == ClientReleaseArtifactKind.VelopackFile
+                            && artifact.RelativePath.EndsWith(".nupkg", StringComparison.OrdinalIgnoreCase))
+                        {
+                            sharedNupkgNames.Add(Path.GetFileName(artifact.RelativePath));
+                        }
+                    }
+                }
+            }
         }
 
-        // 文件全部清理成功后，显式编排聚合删除并借助既有 cascade 移除 versions/artifacts。
         componentRepository.Delete(component);
         try
         {
@@ -148,16 +134,35 @@ public sealed class HardDeleteClientReleaseComponentHandler(
                 channel,
                 versions,
                 succeeded: false,
-                deletedPaths,
-                plan.SkippedPaths,
-                "发布文件已清理，但发布元数据删除提交失败，请重试永久删除以完成元数据清理。",
+                [],
+                [],
+                "发布组件元数据删除提交失败，未清理任何文件，请重试永久删除。",
                 CancellationToken.None);
             throw;
         }
 
-        var warning = plan.SkippedPaths.Count == 0
+        var cleanup = new ClientReleaseComponentDeletionExecutor(artifactOptions, logger)
+            .Execute(component, cancellationToken, sharedNupkgNames);
+        if (!cleanup.Succeeded)
+        {
+            await WriteAuditAsync(
+                component.Id,
+                componentKind,
+                componentName,
+                channel,
+                versions,
+                succeeded: false,
+                cleanup.DeletedPaths,
+                cleanup.SkippedPaths,
+                cleanup.FailureCode,
+                CancellationToken.None);
+            return Result.Invalid(
+                $"发布组件元数据已删除，但发布文件清理未完成（{cleanup.FailureCode}）。请修复文件状态后重试永久删除命令以完成文件清理。");
+        }
+
+        var warning = cleanup.SkippedPaths.Count == 0
             ? null
-            : $"部分文件仍被存活版本 manifest 引用或不在受控范围，已跳过 {plan.SkippedPaths.Count} 项。";
+            : $"部分文件仍被存活版本 manifest 引用或不在受控范围，已跳过 {cleanup.SkippedPaths.Count} 项。";
         await WriteAuditAsync(
             component.Id,
             componentKind,
@@ -165,8 +170,8 @@ public sealed class HardDeleteClientReleaseComponentHandler(
             channel,
             versions,
             succeeded: true,
-            deletedPaths,
-            plan.SkippedPaths,
+            cleanup.DeletedPaths,
+            cleanup.SkippedPaths,
             warning,
             cancellationToken);
 
@@ -176,9 +181,9 @@ public sealed class HardDeleteClientReleaseComponentHandler(
             componentName,
             channel,
             versions,
-            deletedPaths.Count > 0,
-            deletedPaths,
-            plan.SkippedPaths,
+            cleanup.DeletedPaths.Count > 0,
+            cleanup.DeletedPaths,
+            cleanup.SkippedPaths,
             warning));
     }
 

@@ -38,13 +38,23 @@ public sealed class GetEdgeClientReleaseCatalogHandler(
             new ClientReleaseComponentsByChannelSpec(channel, request.TargetRuntime, onlyPublished: true),
             cancellationToken);
         var maxVersions = await retentionPolicyReader.GetMaxVersionsPerComponentAsync(cancellationToken);
+        var edgeRoot = artifactOptions.Value.ResolveEdgeUpdatesRoot();
+        var missingPaths = ClientReleaseMissingFiles.Collect(edgeRoot, components);
 
         return Result.Success(new ClientReleaseCatalogDto(
             ClientReleaseCatalogSchema.Version,
             channel,
             ClientReleaseText.NormalizeOptional(request.TargetRuntime),
-            ClientReleaseMapping.ToHostComponent(components, maxVersions, onlyPublished: true),
-            ClientReleaseMapping.ToPluginComponents(components, maxVersions, onlyPublished: true),
+            ClientReleaseMapping.ToHostComponentExcludingMissingFiles(
+                components,
+                missingPaths,
+                maxVersions,
+                onlyPublished: true),
+            ClientReleaseMapping.ToPluginComponentsExcludingMissingFiles(
+                components,
+                missingPaths,
+                maxVersions,
+                onlyPublished: true),
             DateTime.UtcNow,
             artifactOptions.Value.BuildVelopackUpdateSource(channel)));
     }
