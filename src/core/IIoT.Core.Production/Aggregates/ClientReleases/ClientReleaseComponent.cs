@@ -279,6 +279,13 @@ public sealed class ClientReleaseComponent : BaseEntity<Guid>, IAggregateRoot<Gu
         Touch();
     }
 
+    public void MarkVersionDeleteRequested(Guid versionId)
+    {
+        var version = FindRequiredVersion(versionId);
+        version.MarkDeleteRequested();
+        Touch();
+    }
+
     public void MarkVersionDeleteFailed(Guid versionId, string failure)
     {
         var version = FindRequiredVersion(versionId);
@@ -574,6 +581,12 @@ public sealed class ClientReleaseVersion : BaseEntity<Guid>
         Status = ClientReleaseStatus.Deleted;
         DeletedAtUtc = DateTime.UtcNow;
         DeletionReason = ClientReleaseComponent.NormalizeOptional(reason);
+        DeletionFailure = null;
+    }
+
+    public void MarkDeleteRequested()
+    {
+        Status = ClientReleaseStatus.DeleteRequested;
         DeletionFailure = null;
     }
 

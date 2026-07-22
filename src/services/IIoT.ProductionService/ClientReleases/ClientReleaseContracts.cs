@@ -453,7 +453,8 @@ internal static class ClientReleaseMapping
         var archiveMatch = includeArchived
             || (version.Status != ClientReleaseStatus.Archived
                 && version.Status != ClientReleaseStatus.Deleted
-                && version.Status != ClientReleaseStatus.DeleteFailed);
+                && version.Status != ClientReleaseStatus.DeleteFailed
+                && version.Status != ClientReleaseStatus.DeleteRequested);
         return publishedMatch && archiveMatch;
     }
 }

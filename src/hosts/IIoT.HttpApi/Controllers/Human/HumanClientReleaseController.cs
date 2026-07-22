@@ -77,6 +77,17 @@ public sealed class HumanClientReleaseController : ApiControllerBase
             cancellationToken));
     }
 
+    [HttpDelete("components/{componentId:guid}")]
+    public async Task<IActionResult> HardDeleteComponent(
+        [FromRoute] Guid componentId,
+        [FromBody] HardDeleteClientReleaseComponentRequest? request,
+        CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(
+            new HardDeleteClientReleaseComponentCommand(componentId, request?.Reason),
+            cancellationToken));
+    }
+
     [HttpPut("{releaseId:guid}/status")]
     public async Task<IActionResult> UpdateReleaseStatus(
         [FromRoute] Guid releaseId,
@@ -147,3 +158,5 @@ public sealed class HumanClientReleaseController : ApiControllerBase
 public sealed record UpdateClientReleaseStatusRequest(string Status);
 
 public sealed record DeleteClientReleasePackageRequest(string? Reason);
+
+public sealed record HardDeleteClientReleaseComponentRequest(string? Reason);

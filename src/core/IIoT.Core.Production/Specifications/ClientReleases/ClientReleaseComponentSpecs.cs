@@ -56,6 +56,16 @@ public sealed class ClientReleaseComponentByVersionIdSpec : Specification<Client
     }
 }
 
+public sealed class ClientReleaseComponentByComponentIdSpec : Specification<ClientReleaseComponent>
+{
+    public ClientReleaseComponentByComponentIdSpec(Guid componentId)
+    {
+        FilterCondition = component => component.Id == componentId;
+        AddInclude(component => component.Versions);
+        AddInclude("Versions.Artifacts");
+    }
+}
+
 public sealed class ClientReleaseComponentsByChannelSpec : Specification<ClientReleaseComponent>
 {
     public ClientReleaseComponentsByChannelSpec(
@@ -77,7 +87,8 @@ public sealed class ClientReleaseComponentsByChannelSpec : Specification<ClientR
                 && (includeArchived
                     || (version.Status != ClientReleaseStatus.Archived
                         && version.Status != ClientReleaseStatus.Deleted
-                        && version.Status != ClientReleaseStatus.DeleteFailed)));
+                        && version.Status != ClientReleaseStatus.DeleteFailed
+                        && version.Status != ClientReleaseStatus.DeleteRequested)));
 
         AddInclude(component => component.Versions);
         AddInclude("Versions.Artifacts");
