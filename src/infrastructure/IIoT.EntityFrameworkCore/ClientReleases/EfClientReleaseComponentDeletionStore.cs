@@ -31,6 +31,7 @@ public sealed class EfClientReleaseComponentDeletionStore(IIoTDbContext dbContex
     {
         var normalizedChannel = channel.Trim();
         return await dbContext.ClientReleaseComponentDeletions
+            .Include(deletion => deletion.Files)
             .Where(deletion => deletion.Channel == normalizedChannel)
             .ToListAsync(cancellationToken);
     }

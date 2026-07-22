@@ -98,6 +98,14 @@ public sealed class HumanClientReleaseController : ApiControllerBase
             cancellationToken));
     }
 
+    [HttpGet("component-deletions")]
+    public async Task<IActionResult> GetComponentDeletions(CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(
+            new GetClientReleaseComponentDeletionsQuery(),
+            cancellationToken));
+    }
+
     [HttpPut("{releaseId:guid}/status")]
     public async Task<IActionResult> UpdateReleaseStatus(
         [FromRoute] Guid releaseId,

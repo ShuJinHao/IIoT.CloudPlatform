@@ -7,6 +7,9 @@ namespace IIoT.ProductionService.ClientReleases;
 /// <summary>
 /// 按持久化删除操作快照执行幂等文件清理。
 /// 只做纯文件操作，可在新进程/新 DbContext 中按操作 ID 重放到全部目标收敛。
+/// 每个文件目标删除前重新校验从受控根到文件的完整祖先链与登记事实（SHA256/大小），
+/// 防止持久化后祖先目录被替换为符号链接造成穿透。channel manifest 不作为普通文件目标，
+/// 有存活 Host 时按白名单重建，没有存活 Host 时才统一清理。
 /// </summary>
 internal sealed class ClientReleaseComponentDeletionExecutor(
     IOptions<EdgeInstallerArtifactOptions> artifactOptions,
@@ -14,14 +17,16 @@ internal sealed class ClientReleaseComponentDeletionExecutor(
 {
     public const string FailureFileDeletion = "FileDeletionFailed";
     public const string FailureManifestRebuild = "ManifestRebuildFailed";
+    public const string FailureFileFactsMismatch = "FileFactsMismatch";
 
     /// <summary>
     /// survivingNupkgFileNames 是同 channel 全部 runtime 存活 Host 版本仍引用的 .nupkg 文件名，
-    /// 用于白名单重建 channel manifests 并保留共享包。
+    /// 用于白名单重建 channel manifests 并保留共享包；hasSurvivingHost 为 false 时才清理 channel manifest。
     /// </summary>
     public ClientReleaseComponentDeletionOutcome Execute(
         ClientReleaseComponentDeletion deletion,
         IReadOnlyCollection<string> survivingNupkgFileNames,
+        bool hasSurvivingHost,
         CancellationToken cancellationToken)
     {
         var edgeRoot = artifactOptions.Value.ResolveEdgeUpdatesRoot();
@@ -30,19 +35,22 @@ internal sealed class ClientReleaseComponentDeletionExecutor(
             edgeRoot,
             "发布受控目录非法。");
 
-        var deletedPaths = new List<string>();
         var isHost = string.Equals(deletion.ComponentKind, "Host", StringComparison.OrdinalIgnoreCase);
+        var velopackChannelPrefix = $"velopack/{deletion.Channel}/";
+        var deletedPaths = new List<string>();
         var targets = deletion.Files
-            .Select(file => file.RelativePath)
-            .OrderBy(path => path, StringComparer.Ordinal)
+            .OrderBy(file => file.RelativePath, StringComparer.Ordinal)
             .ToList();
-        foreach (var relativePath in targets)
+        foreach (var file in targets)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            // Host 的 velopack .nupkg 先按白名单判断是否共享，共享的在后面保留，不能直接删。
+            var relativePath = file.RelativePath;
+            // Host 的 velopack .nupkg 与 channel manifest 都不在第一阶段删除，
+            // 分别在白名单判定与 manifest 阶段处理。
             if (isHost
-                && relativePath.StartsWith($"velopack/{deletion.Channel}/", StringComparison.Ordinal)
-                && relativePath.EndsWith(".nupkg", StringComparison.OrdinalIgnoreCase))
+                && relativePath.StartsWith(velopackChannelPrefix, StringComparison.Ordinal)
+                && (relativePath.EndsWith(".nupkg", StringComparison.OrdinalIgnoreCase)
+                    || ClientReleaseVelopackPaths.IsChannelManifest(Path.GetFileName(relativePath))))
             {
                 continue;
             }
@@ -61,39 +69,43 @@ internal sealed class ClientReleaseComponentDeletionExecutor(
                     continue;
                 }
 
-                if ((File.GetAttributes(fullPath) & FileAttributes.ReparsePoint) != 0)
-                {
-                    throw new InvalidOperationException("删除操作文件目标包含符号链接或重解析点。");
-                }
+                // 重校验完整祖先链（持久化后祖先目录可能被替换为符号链接）。
+                ClientReleaseControlledDirectory.ValidateChain(
+                    edgeRoot,
+                    Path.GetDirectoryName(fullPath)!,
+                    "删除操作文件目标祖先链包含符号链接或越过受控发布目录。");
+                AssertFileFacts(fullPath, file);
 
                 File.Delete(fullPath);
                 deletedPaths.Add(relativePath);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
-            {
-                ClientReleasePublishDiagnostics.LogFailure(
-                    logger,
-                    LogLevel.Warning,
-                    new EventId(4610, "ClientReleaseComponentFileDeletionFailure"),
-                    "component-file-deletion",
-                    ex,
-                    deletion.ComponentKey);
-                return new ClientReleaseComponentDeletionOutcome(
-                    false,
-                    deletedPaths,
-                    [],
-                    FailureFileDeletion);
-            }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+                {
+                    ClientReleasePublishDiagnostics.LogFailure(
+                        logger,
+                        LogLevel.Warning,
+                        new EventId(4610, "ClientReleaseComponentFileDeletionFailure"),
+                        "component-file-deletion",
+                        ex,
+                        deletion.ComponentKey);
+                    return new ClientReleaseComponentDeletionOutcome(
+                        false,
+                        deletedPaths,
+                        [],
+                        FailureFileDeletion,
+                        false);
+                }
         }
 
-        // 目录内容由删除操作中的精确文件目标删除；空目录由清理最佳努力移除。
         var skippedPaths = new List<string>();
-        if (string.Equals(deletion.ComponentKind, "Host", StringComparison.OrdinalIgnoreCase))
+        var manifestChanged = false;
+        if (isHost)
         {
             var velopackRoot = Path.Combine(edgeRoot, "velopack", deletion.Channel);
             var operationNupkgs = targets
+                .Select(file => file.RelativePath)
                 .Where(path =>
-                    path.StartsWith($"velopack/{deletion.Channel}/", StringComparison.Ordinal)
+                    path.StartsWith(velopackChannelPrefix, StringComparison.Ordinal)
                     && path.EndsWith(".nupkg", StringComparison.OrdinalIgnoreCase))
                 .Select(Path.GetFileName)
                 .Where(name => !string.IsNullOrEmpty(name))
@@ -101,21 +113,43 @@ internal sealed class ClientReleaseComponentDeletionExecutor(
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            // 白名单 = 同 channel 全部 runtime 存活 Host 仍引用的 .nupkg；manifest 按白名单重建。
-            if (Directory.Exists(velopackRoot)
-                && !ClientReleaseVelopackPaths.TryRebuildChannelManifestsFromWhitelist(
-                    velopackRoot,
-                    survivingNupkgFileNames,
-                    logger))
+            if (hasSurvivingHost)
             {
-                return new ClientReleaseComponentDeletionOutcome(
-                    false,
-                    deletedPaths,
-                    skippedPaths,
-                    FailureManifestRebuild);
+                // 仍有存活 Host：按白名单重建 manifest，manifest 必须保留。
+                if (Directory.Exists(velopackRoot)
+                    && !ClientReleaseVelopackPaths.TryRebuildChannelManifestsFromWhitelist(
+                        velopackRoot,
+                        survivingNupkgFileNames,
+                        logger))
+                {
+                    return new ClientReleaseComponentDeletionOutcome(
+                        false,
+                        deletedPaths,
+                        skippedPaths,
+                        FailureManifestRebuild,
+                        false);
+                }
+
+                manifestChanged = Directory.Exists(velopackRoot);
+            }
+            else if (Directory.Exists(velopackRoot))
+            {
+                // 没有任何存活 Host：channel manifest 已无服务对象，统一清理。
+                var before = deletedPaths.Count;
+                if (!TryDeleteChannelManifests(velopackRoot, deletion, deletedPaths))
+                {
+                    return new ClientReleaseComponentDeletionOutcome(
+                        false,
+                        deletedPaths,
+                        skippedPaths,
+                        FailureFileDeletion,
+                        false);
+                }
+
+                manifestChanged = deletedPaths.Count > before;
             }
 
-            // 操作目标里仍被白名单保留的 .nupkg 属于共享包，跳过删除。
+            // 操作目标里仍被白名单保留的 .nupkg 属于共享包，跳过删除；其余在白名单判定后删除。
             var shared = new HashSet<string>(survivingNupkgFileNames, StringComparer.OrdinalIgnoreCase);
             foreach (var name in operationNupkgs)
             {
@@ -128,14 +162,14 @@ internal sealed class ClientReleaseComponentDeletionExecutor(
 
                 if (shared.Contains(name))
                 {
-                    skippedPaths.Add($"velopack/{deletion.Channel}/{name}");
+                    skippedPaths.Add($"{velopackChannelPrefix}{name}");
                     continue;
                 }
 
                 try
                 {
                     File.Delete(path);
-                    deletedPaths.Add($"velopack/{deletion.Channel}/{name}");
+                    deletedPaths.Add($"{velopackChannelPrefix}{name}");
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
@@ -150,7 +184,8 @@ internal sealed class ClientReleaseComponentDeletionExecutor(
                         false,
                         deletedPaths,
                         skippedPaths,
-                        FailureFileDeletion);
+                        FailureFileDeletion,
+                        manifestChanged);
                 }
             }
         }
@@ -161,12 +196,70 @@ internal sealed class ClientReleaseComponentDeletionExecutor(
             true,
             deletedPaths,
             skippedPaths,
-            null);
+            null,
+            manifestChanged);
+    }
+
+    private static void AssertFileFacts(string fullPath, ClientReleaseComponentDeletionFile file)
+    {
+        if ((File.GetAttributes(fullPath) & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new InvalidOperationException("删除操作文件目标包含符号链接或重解析点。");
+        }
+
+        if (!string.IsNullOrEmpty(file.Sha256) && file.SizeBytes.HasValue)
+        {
+            if (!ClientReleaseFileFacts.IsExactRegularFile(fullPath, file.Sha256, file.SizeBytes.Value))
+            {
+                throw new InvalidOperationException($"删除操作文件事实不匹配: {file.RelativePath}");
+            }
+
+            return;
+        }
+
+        if (file.SizeBytes.HasValue && new FileInfo(fullPath).Length != file.SizeBytes.Value)
+        {
+            throw new InvalidOperationException($"删除操作文件大小不匹配: {file.RelativePath}");
+        }
+    }
+
+    private bool TryDeleteChannelManifests(
+        string velopackRoot,
+        ClientReleaseComponentDeletion deletion,
+        ICollection<string> deletedPaths)
+    {
+        foreach (var entry in Directory.EnumerateFiles(velopackRoot, "*", SearchOption.TopDirectoryOnly))
+        {
+            var name = Path.GetFileName(entry);
+            if (!ClientReleaseVelopackPaths.IsChannelManifest(name))
+            {
+                continue;
+            }
+
+            try
+            {
+                File.Delete(entry);
+                deletedPaths.Add($"velopack/{deletion.Channel}/{name}");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                ClientReleasePublishDiagnostics.LogFailure(
+                    logger,
+                    LogLevel.Warning,
+                    new EventId(4610, "ClientReleaseComponentFileDeletionFailure"),
+                    "channel-manifest-deletion",
+                    ex,
+                    deletion.ComponentKey);
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
-    /// 空目录清理是最佳努力收尾：先清每个已删文件的父目录链，再对整个操作根目录
-    /// （插件 plugins/{channel}/{moduleId}、Host velopack/{channel}）自底向上清一次。
+    /// 空目录清理是最佳努力收尾：已删文件的父目录链只在目录树全空时移除；插件操作额外把
+    /// plugins/{channel}/{moduleId} 根目录纳入。目录树不空时保留，避免误删仍被引用的文件所在目录。
     /// 失败不阻断删除收敛，目录本身不是可分发文件。
     /// </summary>
     private static void TryRemoveEmptyDirectories(
@@ -193,7 +286,6 @@ internal sealed class ClientReleaseComponentDeletionExecutor(
             deletedDirectories.Add(Path.Combine("plugins", deletion.Channel, deletion.ComponentKey));
         }
 
-        // 已删文件的父目录链只在目录树全空时移除；目录树不空时保留，避免误删仍被引用的文件所在目录。
         foreach (var relativeDirectory in deletedDirectories
                      .Distinct(StringComparer.Ordinal)
                      .OrderByDescending(directory => directory.Length))
@@ -252,4 +344,5 @@ public sealed record ClientReleaseComponentDeletionOutcome(
     bool Succeeded,
     IReadOnlyList<string> DeletedPaths,
     IReadOnlyList<string> SkippedPaths,
-    string? FailureCode);
+    string? FailureCode,
+    bool ManifestChanged);

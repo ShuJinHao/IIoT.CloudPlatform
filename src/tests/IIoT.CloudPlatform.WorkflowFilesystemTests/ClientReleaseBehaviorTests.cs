@@ -2000,7 +2000,7 @@ public sealed class ClientReleaseBehaviorTests
             const string moduleId = "DieCutting";
             var moduleDirectory = Path.Combine(edgeRoot, "plugins", "stable", moduleId);
             var packagePath = Path.Combine(moduleDirectory, "1.0.0", "die-cutting.zip");
-            WriteFile(packagePath, "plugin-package");
+            var (packageSha, packageSize) = WriteFactFile(packagePath, "plugin-package");
             var component = CreatePluginComponent(
                 moduleId,
                 "模切",
@@ -2012,8 +2012,8 @@ public sealed class ClientReleaseBehaviorTests
                 "win-x64",
                 "net10.0",
                 "/edge-updates/plugins/stable/DieCutting/1.0.0/die-cutting.zip",
-                new string('a', 64),
-                1024,
+                packageSha,
+                packageSize,
                 "错误工序，管理员永久删除",
                 ClientReleaseStatus.Published);
             var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
@@ -2213,14 +2213,27 @@ public sealed class ClientReleaseBehaviorTests
             var velopackRoot = Path.Combine(edgeRoot, "velopack", channel);
             Directory.CreateDirectory(velopackRoot);
 
+            var (fact100Sha, fact100Size) = WriteFactFile(
+                Path.Combine(edgeRoot, "installers", channel, "1.0.0", "installer-artifact.json"),
+                "{}");
+            var (fact110Sha, fact110Size) = WriteFactFile(
+                Path.Combine(edgeRoot, "installers", channel, "1.1.0", "installer-artifact.json"),
+                "{}");
+            var (nupkg100Sha, nupkg100Size) = WriteFactFile(
+                Path.Combine(velopackRoot, "IIoT.EdgeClient-1.0.0-full.nupkg"),
+                "nupkg-1.0.0");
+            var (nupkg110Sha, nupkg110Size) = WriteFactFile(
+                Path.Combine(velopackRoot, "IIoT.EdgeClient-1.1.0-full.nupkg"),
+                "nupkg-1.1.0");
+
             var component = ClientReleaseComponent.CreateHost(channel, "win-x64");
             component.UpsertHostVersion(
                 "1.0.0",
                 "1.0.0",
                 "net10.0",
                 "/edge-updates/installers/stable/1.0.0/installer-artifact.json",
-                new string('a', 64),
-                100,
+                fact100Sha,
+                fact100Size,
                 "old",
                 ClientReleaseStatus.Published,
                 null,
@@ -2233,21 +2246,21 @@ public sealed class ClientReleaseBehaviorTests
                     new ClientReleaseArtifact(
                         ClientReleaseArtifactKind.ManifestFile,
                         "installers/stable/1.0.0/installer-artifact.json",
-                        new string('a', 64),
-                        100),
+                        fact100Sha,
+                        fact100Size),
                     new ClientReleaseArtifact(
                         ClientReleaseArtifactKind.VelopackFile,
                         "velopack/stable/IIoT.EdgeClient-1.0.0-full.nupkg",
-                        new string('a', 64),
-                        100)
+                        nupkg100Sha,
+                        nupkg100Size)
                 ]);
             component.UpsertHostVersion(
                 "1.1.0",
                 "1.0.0",
                 "net10.0",
                 "/edge-updates/installers/stable/1.1.0/installer-artifact.json",
-                new string('b', 64),
-                200,
+                fact110Sha,
+                fact110Size,
                 "current",
                 ClientReleaseStatus.Published,
                 null,
@@ -2260,21 +2273,15 @@ public sealed class ClientReleaseBehaviorTests
                     new ClientReleaseArtifact(
                         ClientReleaseArtifactKind.ManifestFile,
                         "installers/stable/1.1.0/installer-artifact.json",
-                        new string('b', 64),
-                        200),
+                        fact110Sha,
+                        fact110Size),
                     new ClientReleaseArtifact(
                         ClientReleaseArtifactKind.VelopackFile,
                         "velopack/stable/IIoT.EdgeClient-1.1.0-full.nupkg",
-                        new string('b', 64),
-                        200)
+                        nupkg110Sha,
+                        nupkg110Size)
                 ]);
 
-            WriteFile(
-                Path.Combine(velopackRoot, "IIoT.EdgeClient-1.0.0-full.nupkg"),
-                "nupkg-1.0.0");
-            WriteFile(
-                Path.Combine(velopackRoot, "IIoT.EdgeClient-1.1.0-full.nupkg"),
-                "nupkg-1.1.0");
             WriteFile(
                 Path.Combine(velopackRoot, "releases.stable.json"),
                 """
@@ -2291,10 +2298,6 @@ public sealed class ClientReleaseBehaviorTests
 
             var installer100 = Path.Combine(edgeRoot, "installers", channel, "1.0.0");
             var installer110 = Path.Combine(edgeRoot, "installers", channel, "1.1.0");
-            Directory.CreateDirectory(installer100);
-            Directory.CreateDirectory(installer110);
-            WriteFile(Path.Combine(installer100, "installer-artifact.json"), "{}");
-            WriteFile(Path.Combine(installer110, "installer-artifact.json"), "{}");
 
             var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
             componentRepository.Items.Add(component);
@@ -2318,15 +2321,10 @@ public sealed class ClientReleaseBehaviorTests
             Assert.False(File.Exists(Path.Combine(velopackRoot, "IIoT.EdgeClient-1.0.0-full.nupkg")));
             Assert.False(File.Exists(Path.Combine(velopackRoot, "IIoT.EdgeClient-1.1.0-full.nupkg")));
 
-            var releasesStable = File.ReadAllText(Path.Combine(velopackRoot, "releases.stable.json"));
-            Assert.DoesNotContain("IIoT.EdgeClient-1.0.0-full.nupkg", releasesStable);
-            Assert.DoesNotContain("IIoT.EdgeClient-1.1.0-full.nupkg", releasesStable);
-            var assetsStable = File.ReadAllText(Path.Combine(velopackRoot, "assets.stable.json"));
-            Assert.DoesNotContain("IIoT.EdgeClient-1.0.0-full.nupkg", assetsStable);
-            Assert.DoesNotContain("IIoT.EdgeClient-1.1.0-full.nupkg", assetsStable);
-            var releases = File.ReadAllText(Path.Combine(velopackRoot, "RELEASES"));
-            Assert.DoesNotContain("IIoT.EdgeClient-1.0.0-full.nupkg", releases);
-            Assert.DoesNotContain("IIoT.EdgeClient-1.1.0-full.nupkg", releases);
+            // 删除的是该 channel 唯一 Host，没有任何存活 Host，channel manifest 已无服务对象，应被统一清理。
+            Assert.False(File.Exists(Path.Combine(velopackRoot, "releases.stable.json")));
+            Assert.False(File.Exists(Path.Combine(velopackRoot, "assets.stable.json")));
+            Assert.False(File.Exists(Path.Combine(velopackRoot, "RELEASES")));
 
             Assert.Contains(auditTrail.Entries, entry =>
                 entry.OperationType == "ClientRelease.HardDeleteComponent"
@@ -2339,23 +2337,34 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
-    public async Task HardDeleteClientReleaseComponentHandler_ShouldKeepNupkgStillUsedByAnotherComponent()
+    public async Task HardDeleteClientReleaseComponentHandler_ShouldKeepSharedManifestAndNupkg_WhenAnotherRuntimeHostSurvives()
     {
-        var edgeRoot = CreateTempDirectory("iiot-hard-delete-host-true-shared-nupkg-root");
+        var edgeRoot = CreateTempDirectory("iiot-hard-delete-host-cross-runtime-root");
         try
         {
             var channel = "stable";
             var velopackRoot = Path.Combine(edgeRoot, "velopack", channel);
             Directory.CreateDirectory(velopackRoot);
 
+            var (targetFactSha, targetFactSize) = WriteFactFile(
+                Path.Combine(edgeRoot, "installers", channel, "1.0.0", "installer-artifact.json"),
+                "{}");
+            var (survivorFactSha, survivorFactSize) = WriteFactFile(
+                Path.Combine(edgeRoot, "installers", channel, "1.0.0-linux", "installer-artifact.json"),
+                "{}");
+            var (nupkgSha, nupkgSize) = WriteFactFile(
+                Path.Combine(velopackRoot, "IIoT.EdgeClient-1.0.0-full.nupkg"),
+                "shared-nupkg");
+
+            // 目标：win-x64 Host，引用共享 nupkg。
             var target = ClientReleaseComponent.CreateHost(channel, "win-x64");
             target.UpsertHostVersion(
                 "1.0.0",
                 "1.0.0",
                 "net10.0",
                 "/edge-updates/installers/stable/1.0.0/installer-artifact.json",
-                new string('a', 64),
-                100,
+                targetFactSha,
+                targetFactSize,
                 "target",
                 ClientReleaseStatus.Published,
                 null,
@@ -2368,66 +2377,60 @@ public sealed class ClientReleaseBehaviorTests
                     new ClientReleaseArtifact(
                         ClientReleaseArtifactKind.ManifestFile,
                         "installers/stable/1.0.0/installer-artifact.json",
-                        new string('a', 64),
-                        100),
+                        targetFactSha,
+                        targetFactSize),
                     new ClientReleaseArtifact(
                         ClientReleaseArtifactKind.VelopackFile,
                         "velopack/stable/IIoT.EdgeClient-1.0.0-full.nupkg",
-                        new string('a', 64),
-                        100)
+                        nupkgSha,
+                        nupkgSize)
                 ]);
 
-            var survivor = ClientReleaseComponent.CreatePlugin(
-                "Homogenization",
-                "匀浆",
-                null,
-                null,
-                null,
-                channel,
-                "win-x64");
-            survivor.UpsertPluginVersion(
-                "2.0.0",
+            // 存活：同 channel linux-x64 Host，引用同一个 full.nupkg（跨 runtime 共享包）。
+            var survivor = ClientReleaseComponent.CreateHost(channel, "linux-x64");
+            survivor.UpsertHostVersion(
                 "1.0.0",
                 "1.0.0",
-                "99.0.0",
                 "net10.0",
-                "/edge-updates/plugins/stable/Homogenization/2.0.0/homogenization.zip",
-                new string('b', 64),
-                200,
+                "/edge-updates/installers/stable/1.0.0-linux/installer-artifact.json",
+                survivorFactSha,
+                survivorFactSize,
                 "survivor",
-                "[]",
                 ClientReleaseStatus.Published,
                 null,
                 "IIoT",
                 artifacts:
                 [
                     new ClientReleaseArtifact(
-                        ClientReleaseArtifactKind.PluginPackageDirectory,
-                        "plugins/stable/Homogenization/2.0.0"),
+                        ClientReleaseArtifactKind.InstallerDirectory,
+                        "installers/stable/1.0.0-linux"),
                     new ClientReleaseArtifact(
-                        ClientReleaseArtifactKind.PackageFile,
-                        "plugins/stable/Homogenization/2.0.0/homogenization.zip",
-                        new string('b', 64),
-                        200),
+                        ClientReleaseArtifactKind.ManifestFile,
+                        "installers/stable/1.0.0-linux/installer-artifact.json",
+                        survivorFactSha,
+                        survivorFactSize),
                     new ClientReleaseArtifact(
                         ClientReleaseArtifactKind.VelopackFile,
                         "velopack/stable/IIoT.EdgeClient-1.0.0-full.nupkg",
-                        new string('a', 64),
-                        100)
+                        nupkgSha,
+                        nupkgSize)
                 ]);
 
-            WriteFile(
-                Path.Combine(velopackRoot, "IIoT.EdgeClient-1.0.0-full.nupkg"),
-                "shared-nupkg");
             WriteFile(
                 Path.Combine(velopackRoot, "releases.stable.json"),
                 """
                 {"packages":["IIoT.EdgeClient-1.0.0-full.nupkg"]}
                 """);
+            WriteFile(
+                Path.Combine(velopackRoot, "assets.stable.json"),
+                """
+                {"assets":["IIoT.EdgeClient-1.0.0-full.nupkg"]}
+                """);
+            WriteFile(
+                Path.Combine(velopackRoot, "RELEASES"),
+                "hash1 IIoT.EdgeClient-1.0.0-full.nupkg 100");
 
             var installer100 = Path.Combine(edgeRoot, "installers", channel, "1.0.0");
-            Directory.CreateDirectory(installer100);
-            WriteFile(Path.Combine(installer100, "installer-artifact.json"), "{}");
 
             var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
             componentRepository.Items.Add(target);
@@ -2446,10 +2449,17 @@ public sealed class ClientReleaseBehaviorTests
 
             Assert.True(result.IsSuccess);
             Assert.False(Directory.Exists(installer100));
+            // 仍有存活 linux-x64 Host：共享 manifest 与共享 nupkg 都保留，manifest 仍引用它。
             Assert.True(File.Exists(Path.Combine(velopackRoot, "IIoT.EdgeClient-1.0.0-full.nupkg")));
+            Assert.True(File.Exists(Path.Combine(velopackRoot, "releases.stable.json")));
+            Assert.True(File.Exists(Path.Combine(velopackRoot, "assets.stable.json")));
+            Assert.True(File.Exists(Path.Combine(velopackRoot, "RELEASES")));
             Assert.Contains(
                 "IIoT.EdgeClient-1.0.0-full.nupkg",
                 File.ReadAllText(Path.Combine(velopackRoot, "releases.stable.json")));
+            Assert.Contains(
+                "IIoT.EdgeClient-1.0.0-full.nupkg",
+                File.ReadAllText(Path.Combine(velopackRoot, "RELEASES")));
             Assert.Single(componentRepository.Items, survivor);
         }
         finally
@@ -2459,14 +2469,21 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
-    public async Task HardDeleteClientReleaseComponentHandler_ShouldRemoveNupkgReferenceFromManifest_WhenNoOtherComponentUsesIt()
+    public async Task HardDeleteClientReleaseComponentHandler_ShouldRemoveOrphanNupkgAndManifest_WhenNoSurvivingHost()
     {
-        var edgeRoot = CreateTempDirectory("iiot-hard-delete-host-shared-nupkg-root");
+        var edgeRoot = CreateTempDirectory("iiot-hard-delete-host-orphan-nupkg-root");
         try
         {
             var channel = "stable";
             var velopackRoot = Path.Combine(edgeRoot, "velopack", channel);
             Directory.CreateDirectory(velopackRoot);
+
+            var (factSha, factSize) = WriteFactFile(
+                Path.Combine(edgeRoot, "installers", channel, "1.0.0", "installer-artifact.json"),
+                "{}");
+            var (nupkgSha, nupkgSize) = WriteFactFile(
+                Path.Combine(velopackRoot, "IIoT.EdgeClient-1.0.0-full.nupkg"),
+                "orphan-nupkg");
 
             var component = ClientReleaseComponent.CreateHost(channel, "win-x64");
             component.UpsertHostVersion(
@@ -2474,8 +2491,8 @@ public sealed class ClientReleaseBehaviorTests
                 "1.0.0",
                 "net10.0",
                 "/edge-updates/installers/stable/1.0.0/installer-artifact.json",
-                new string('a', 64),
-                100,
+                factSha,
+                factSize,
                 "old",
                 ClientReleaseStatus.Published,
                 null,
@@ -2488,18 +2505,15 @@ public sealed class ClientReleaseBehaviorTests
                     new ClientReleaseArtifact(
                         ClientReleaseArtifactKind.ManifestFile,
                         "installers/stable/1.0.0/installer-artifact.json",
-                        new string('a', 64),
-                        100),
+                        factSha,
+                        factSize),
                     new ClientReleaseArtifact(
                         ClientReleaseArtifactKind.VelopackFile,
                         "velopack/stable/IIoT.EdgeClient-1.0.0-full.nupkg",
-                        new string('a', 64),
-                        100)
+                        nupkgSha,
+                        nupkgSize)
                 ]);
 
-            WriteFile(
-                Path.Combine(velopackRoot, "IIoT.EdgeClient-1.0.0-full.nupkg"),
-                "shared-nupkg");
             WriteFile(
                 Path.Combine(velopackRoot, "releases.stable.json"),
                 """
@@ -2507,8 +2521,6 @@ public sealed class ClientReleaseBehaviorTests
                 """);
 
             var installer100 = Path.Combine(edgeRoot, "installers", channel, "1.0.0");
-            Directory.CreateDirectory(installer100);
-            WriteFile(Path.Combine(installer100, "installer-artifact.json"), "{}");
 
             var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
             componentRepository.Items.Add(component);
@@ -2527,9 +2539,8 @@ public sealed class ClientReleaseBehaviorTests
             Assert.True(result.IsSuccess);
             Assert.False(Directory.Exists(installer100));
             Assert.False(File.Exists(Path.Combine(velopackRoot, "IIoT.EdgeClient-1.0.0-full.nupkg")));
-            Assert.DoesNotContain(
-                "IIoT.EdgeClient-1.0.0-full.nupkg",
-                File.ReadAllText(Path.Combine(velopackRoot, "releases.stable.json")));
+            // 无存活 Host，channel manifest 一并清理。
+            Assert.False(File.Exists(Path.Combine(velopackRoot, "releases.stable.json")));
         }
         finally
         {
@@ -2547,14 +2558,24 @@ public sealed class ClientReleaseBehaviorTests
             var velopackRoot = Path.Combine(edgeRoot, "velopack", channel);
             Directory.CreateDirectory(velopackRoot);
 
+            var (targetFactSha, targetFactSize) = WriteFactFile(
+                Path.Combine(edgeRoot, "installers", channel, "1.0.0", "installer-artifact.json"),
+                "{}");
+            var (survivorFactSha, survivorFactSize) = WriteFactFile(
+                Path.Combine(edgeRoot, "installers", channel, "2.0.0", "installer-artifact.json"),
+                "{}");
+            var (survivorNupkgSha, survivorNupkgSize) = WriteFactFile(
+                Path.Combine(velopackRoot, "IIoT.EdgeClient-2.0.0-full.nupkg"),
+                "survivor-nupkg");
+
             var component = ClientReleaseComponent.CreateHost(channel, "win-x64");
             component.UpsertHostVersion(
                 "1.0.0",
                 "1.0.0",
                 "net10.0",
                 "/edge-updates/installers/stable/1.0.0/installer-artifact.json",
-                new string('a', 64),
-                100,
+                targetFactSha,
+                targetFactSize,
                 "old",
                 ClientReleaseStatus.Published,
                 null,
@@ -2567,18 +2588,47 @@ public sealed class ClientReleaseBehaviorTests
                     new ClientReleaseArtifact(
                         ClientReleaseArtifactKind.ManifestFile,
                         "installers/stable/1.0.0/installer-artifact.json",
-                        new string('a', 64),
-                        100)
+                        targetFactSha,
+                        targetFactSize)
+                ]);
+
+            // 存活 Host：触发 manifest 白名单重建，才会暴露非法 manifest。
+            var survivor = ClientReleaseComponent.CreateHost(channel, "linux-x64");
+            survivor.UpsertHostVersion(
+                "2.0.0",
+                "1.0.0",
+                "net10.0",
+                "/edge-updates/installers/stable/2.0.0/installer-artifact.json",
+                survivorFactSha,
+                survivorFactSize,
+                "survivor",
+                ClientReleaseStatus.Published,
+                null,
+                "IIoT",
+                artifacts:
+                [
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.InstallerDirectory,
+                        "installers/stable/2.0.0"),
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.ManifestFile,
+                        "installers/stable/2.0.0/installer-artifact.json",
+                        survivorFactSha,
+                        survivorFactSize),
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.VelopackFile,
+                        "velopack/stable/IIoT.EdgeClient-2.0.0-full.nupkg",
+                        survivorNupkgSha,
+                        survivorNupkgSize)
                 ]);
 
             WriteFile(Path.Combine(velopackRoot, "releases.stable.json"), "not json");
 
             var installer100 = Path.Combine(edgeRoot, "installers", channel, "1.0.0");
-            Directory.CreateDirectory(installer100);
-            WriteFile(Path.Combine(installer100, "installer-artifact.json"), "{}");
 
             var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
             componentRepository.Items.Add(component);
+            componentRepository.Items.Add(survivor);
             var deletionStore = new InMemoryClientReleaseComponentDeletionStore();
             var auditTrail = new RecordingAuditTrailService();
             var handler = CreateHardDeleteHandler(
@@ -2597,7 +2647,7 @@ public sealed class ClientReleaseBehaviorTests
                 result.Errors?.First() ?? string.Empty);
             Assert.True(File.Exists(Path.Combine(velopackRoot, "releases.stable.json")));
             // 组件元数据已删除，持久化删除操作保持 Failed，可修复 manifest 后按操作 ID 重试。
-            Assert.Empty(componentRepository.Items);
+            Assert.Single(componentRepository.Items, survivor);
             var operation = Assert.Single(deletionStore.Items);
             Assert.Equal(ClientReleaseComponentDeletionStatus.Failed, operation.Status);
             Assert.Equal(ClientReleaseComponentDeletionExecutor.FailureManifestRebuild, operation.FailureCode);
@@ -2622,7 +2672,7 @@ public sealed class ClientReleaseBehaviorTests
             const string moduleId = "DieCutting";
             var moduleDirectory = Path.Combine(edgeRoot, "plugins", "stable", moduleId);
             var packagePath = Path.Combine(moduleDirectory, "1.0.0", "die-cutting.zip");
-            WriteFile(packagePath, "plugin-package");
+            var (packageSha, packageSize) = WriteFactFile(packagePath, "plugin-package");
 
             var component = CreatePluginComponent(
                 moduleId,
@@ -2635,8 +2685,8 @@ public sealed class ClientReleaseBehaviorTests
                 "win-x64",
                 "net10.0",
                 "/edge-updates/plugins/stable/DieCutting/1.0.0/die-cutting.zip",
-                new string('a', 64),
-                1024,
+                packageSha,
+                packageSize,
                 "错误工序，管理员永久删除",
                 ClientReleaseStatus.Published);
 
@@ -2647,7 +2697,7 @@ public sealed class ClientReleaseBehaviorTests
             var deletionStore = new InMemoryClientReleaseComponentDeletionStore();
             var auditTrail = new RecordingAuditTrailService();
             var crashingProcessor = new CancellationAfterCommitProcessor(
-                CreateDeletionProcessor(edgeRoot, committedComponentRepository, deletionStore),
+                CreateDeletionProcessor(edgeRoot, committedComponentRepository, deletionStore, auditTrail),
                 () => throw new InvalidOperationException("模拟进程中断"));
             var firstHandler = new HardDeleteClientReleaseComponentHandler(
                 Options.Create(new EdgeInstallerArtifactOptions { RootPath = Path.Combine(edgeRoot, "installers") }),
@@ -2675,8 +2725,9 @@ public sealed class ClientReleaseBehaviorTests
             var recoveryProcessor = CreateDeletionProcessor(
                 edgeRoot,
                 recoveryComponentRepository,
-                deletionStore);
-            var retryHandler = CreateRetryHandler(deletionStore, recoveryProcessor, auditTrail);
+                deletionStore,
+                auditTrail);
+            var retryHandler = CreateRetryHandler(deletionStore, recoveryProcessor);
 
             var retry = await retryHandler.Handle(
                 new RetryClientReleaseComponentDeletionCommand(operation.Id),
@@ -2689,7 +2740,7 @@ public sealed class ClientReleaseBehaviorTests
             Assert.False(Directory.Exists(moduleDirectory));
             Assert.Empty(deletionStore.Items);
             Assert.Contains(auditTrail.Entries, entry =>
-                entry.OperationType == "ClientRelease.RetryHardDeleteComponent"
+                entry.OperationType == "ClientRelease.HardDeleteComponent"
                 && entry.Succeeded);
         }
         finally
@@ -2706,7 +2757,9 @@ public sealed class ClientReleaseBehaviorTests
         {
             const string moduleId = "DieCutting";
             var moduleDirectory = Path.Combine(edgeRoot, "plugins", "stable", moduleId);
-            WriteFile(Path.Combine(moduleDirectory, "1.0.0", "die-cutting.zip"), "plugin-package");
+            var (packageSha, packageSize) = WriteFactFile(
+                Path.Combine(moduleDirectory, "1.0.0", "die-cutting.zip"),
+                "plugin-package");
             var component = CreatePluginComponent(
                 moduleId,
                 "模切",
@@ -2718,8 +2771,8 @@ public sealed class ClientReleaseBehaviorTests
                 "win-x64",
                 "net10.0",
                 "/edge-updates/plugins/stable/DieCutting/1.0.0/die-cutting.zip",
-                new string('a', 64),
-                1024,
+                packageSha,
+                packageSize,
                 "提交后取消",
                 ClientReleaseStatus.Published);
 
@@ -2736,6 +2789,7 @@ public sealed class ClientReleaseBehaviorTests
                 processorOptions,
                 componentRepository,
                 deletionStore,
+                auditTrail,
                 NullLogger<ClientReleaseComponentDeletionProcessor>.Instance);
             var handler = new HardDeleteClientReleaseComponentHandler(
                 processorOptions,
@@ -2769,8 +2823,9 @@ public sealed class ClientReleaseBehaviorTests
             var recoveryProcessor = CreateDeletionProcessor(
                 edgeRoot,
                 new InMemoryRepository<ClientReleaseComponent>(),
-                deletionStore);
-            var retry = await CreateRetryHandler(deletionStore, recoveryProcessor, auditTrail).Handle(
+                deletionStore,
+                auditTrail);
+            var retry = await CreateRetryHandler(deletionStore, recoveryProcessor).Handle(
                 new RetryClientReleaseComponentDeletionCommand(operation.Id),
                 CancellationToken.None);
 
@@ -2794,14 +2849,25 @@ public sealed class ClientReleaseBehaviorTests
             var channel = "stable";
             var velopackRoot = Path.Combine(edgeRoot, "velopack", channel);
             Directory.CreateDirectory(velopackRoot);
+
+            var (targetFactSha, targetFactSize) = WriteFactFile(
+                Path.Combine(edgeRoot, "installers", channel, "1.0.0", "installer-artifact.json"),
+                "{}");
+            var (survivorFactSha, survivorFactSize) = WriteFactFile(
+                Path.Combine(edgeRoot, "installers", channel, "2.0.0", "installer-artifact.json"),
+                "{}");
+            var (survivorNupkgSha, survivorNupkgSize) = WriteFactFile(
+                Path.Combine(velopackRoot, "IIoT.EdgeClient-2.0.0-full.nupkg"),
+                "survivor-nupkg");
+
             var component = ClientReleaseComponent.CreateHost(channel, "win-x64");
             component.UpsertHostVersion(
                 "1.0.0",
                 "1.0.0",
                 "net10.0",
                 "/edge-updates/installers/stable/1.0.0/installer-artifact.json",
-                new string('a', 64),
-                100,
+                targetFactSha,
+                targetFactSize,
                 "old",
                 ClientReleaseStatus.Published,
                 null,
@@ -2814,16 +2880,45 @@ public sealed class ClientReleaseBehaviorTests
                     new ClientReleaseArtifact(
                         ClientReleaseArtifactKind.ManifestFile,
                         "installers/stable/1.0.0/installer-artifact.json",
-                        new string('a', 64),
-                        100)
+                        targetFactSha,
+                        targetFactSize)
                 ]);
-            var installer100 = Path.Combine(edgeRoot, "installers", channel, "1.0.0");
-            Directory.CreateDirectory(installer100);
-            WriteFile(Path.Combine(installer100, "installer-artifact.json"), "{}");
+
+            // 存活 Host：触发 manifest 白名单重建，非法 manifest 才会导致 Failed。
+            var survivor = ClientReleaseComponent.CreateHost(channel, "linux-x64");
+            survivor.UpsertHostVersion(
+                "2.0.0",
+                "1.0.0",
+                "net10.0",
+                "/edge-updates/installers/stable/2.0.0/installer-artifact.json",
+                survivorFactSha,
+                survivorFactSize,
+                "survivor",
+                ClientReleaseStatus.Published,
+                null,
+                "IIoT",
+                artifacts:
+                [
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.InstallerDirectory,
+                        "installers/stable/2.0.0"),
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.ManifestFile,
+                        "installers/stable/2.0.0/installer-artifact.json",
+                        survivorFactSha,
+                        survivorFactSize),
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.VelopackFile,
+                        "velopack/stable/IIoT.EdgeClient-2.0.0-full.nupkg",
+                        survivorNupkgSha,
+                        survivorNupkgSize)
+                ]);
+
             WriteFile(Path.Combine(velopackRoot, "releases.stable.json"), "not json");
 
             var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
             componentRepository.Items.Add(component);
+            componentRepository.Items.Add(survivor);
             var deletionStore = new InMemoryClientReleaseComponentDeletionStore();
             var auditTrail = new RecordingAuditTrailService();
             var firstHandler = CreateHardDeleteHandler(
@@ -2843,15 +2938,15 @@ public sealed class ClientReleaseBehaviorTests
             WriteFile(
                 Path.Combine(velopackRoot, "releases.stable.json"),
                 """
-                {"packages":["IIoT.EdgeClient-1.0.0-full.nupkg"]}
+                {"packages":["IIoT.EdgeClient-1.0.0-full.nupkg","IIoT.EdgeClient-2.0.0-full.nupkg"]}
                 """);
             var retry = await CreateRetryHandler(
                     deletionStore,
                     CreateDeletionProcessor(
                         edgeRoot,
-                        new InMemoryRepository<ClientReleaseComponent>(),
-                        deletionStore),
-                    auditTrail)
+                        componentRepository,
+                        deletionStore,
+                        auditTrail))
                 .Handle(
                     new RetryClientReleaseComponentDeletionCommand(operation.Id),
                     CancellationToken.None);
@@ -2859,9 +2954,12 @@ public sealed class ClientReleaseBehaviorTests
             Assert.True(retry.IsSuccess);
             Assert.True(retry.Value!.Succeeded);
             Assert.Empty(deletionStore.Items);
-            // 组件没有存活版本引用该 nupkg，manifest 按白名单重建后不再保留它。
+            // 白名单重建后：被删组件的 nupkg 被剔除，存活 Host 的 nupkg 保留。
             Assert.DoesNotContain(
                 "IIoT.EdgeClient-1.0.0-full.nupkg",
+                File.ReadAllText(Path.Combine(velopackRoot, "releases.stable.json")));
+            Assert.Contains(
+                "IIoT.EdgeClient-2.0.0-full.nupkg",
                 File.ReadAllText(Path.Combine(velopackRoot, "releases.stable.json")));
         }
         finally
@@ -2880,8 +2978,8 @@ public sealed class ClientReleaseBehaviorTests
             CreateDeletionProcessor(
                 CreateTempDirectory("iiot-retry-not-found-root"),
                 new InMemoryRepository<ClientReleaseComponent>(),
-                deletionStore),
-            auditTrail);
+                deletionStore,
+                auditTrail));
 
         var result = await handler.Handle(
             new RetryClientReleaseComponentDeletionCommand(Guid.NewGuid()),
@@ -3097,7 +3195,13 @@ public sealed class ClientReleaseBehaviorTests
                 "win-x64",
                 ["1.0.0"],
                 "待清理",
-                ["installers/stable/1.0.0/installer-artifact.json"]));
+                Guid.NewGuid(),
+                "admin",
+                [new ClientReleaseComponentDeletionFileTarget(
+                    "installers/stable/1.0.0/installer-artifact.json",
+                    "ManifestFile",
+                    null,
+                    null)]));
             var handler = new GetClientReleaseCatalogHandler(
                 componentRepository,
                 deletionStore,
@@ -3241,6 +3345,495 @@ public sealed class ClientReleaseBehaviorTests
                     packageSize)
             ]);
         return component;
+    }
+
+    [Fact]
+    public async Task HardDeleteClientReleaseComponentHandler_ShouldKeepAllManifests_WhenTargetsUseRealPublishArtifactSet()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-hard-delete-real-publish-artifacts-root");
+        try
+        {
+            var channel = "stable";
+            var velopackRoot = Path.Combine(edgeRoot, "velopack", channel);
+            Directory.CreateDirectory(velopackRoot);
+
+            var (targetFactSha, targetFactSize) = WriteFactFile(
+                Path.Combine(edgeRoot, "installers", channel, "1.0.0", "installer-artifact.json"),
+                "{}");
+            var (survivorFactSha, survivorFactSize) = WriteFactFile(
+                Path.Combine(edgeRoot, "installers", channel, "2.0.0", "installer-artifact.json"),
+                "{}");
+            var (targetNupkgSha, targetNupkgSize) = WriteFactFile(
+                Path.Combine(velopackRoot, "IIoT.EdgeClient-1.0.0-full.nupkg"),
+                "target-nupkg");
+            var (survivorNupkgSha, survivorNupkgSize) = WriteFactFile(
+                Path.Combine(velopackRoot, "IIoT.EdgeClient-2.0.0-full.nupkg"),
+                "survivor-nupkg");
+            // 真实发布把 RELEASES / releases.*.json / assets.*.json 与 .nupkg 一样登记为 VelopackFile，
+            // 每个都写真实文件事实。
+            var (releasesSha, releasesSize) = WriteFactFile(
+                Path.Combine(velopackRoot, "RELEASES"),
+                "hash IIoT.EdgeClient-1.0.0-full.nupkg 1\nhash IIoT.EdgeClient-2.0.0-full.nupkg 1");
+            var (releasesJsonSha, releasesJsonSize) = WriteFactFile(
+                Path.Combine(velopackRoot, "releases.stable.json"),
+                """{"packages":["IIoT.EdgeClient-1.0.0-full.nupkg","IIoT.EdgeClient-2.0.0-full.nupkg"]}""");
+            var (assetsJsonSha, assetsJsonSize) = WriteFactFile(
+                Path.Combine(velopackRoot, "assets.stable.json"),
+                """{"assets":["IIoT.EdgeClient-1.0.0-full.nupkg","IIoT.EdgeClient-2.0.0-full.nupkg"]}""");
+
+            // 目标 Host：artifact 集合与真实发布一致，包含全部 channel manifest。
+            var target = ClientReleaseComponent.CreateHost(channel, "win-x64");
+            target.UpsertHostVersion(
+                "1.0.0",
+                "1.0.0",
+                "net10.0",
+                "/edge-updates/installers/stable/1.0.0/installer-artifact.json",
+                targetFactSha,
+                targetFactSize,
+                "target",
+                ClientReleaseStatus.Published,
+                null,
+                "IIoT",
+                artifacts:
+                [
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.InstallerDirectory,
+                        "installers/stable/1.0.0"),
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.ManifestFile,
+                        "installers/stable/1.0.0/installer-artifact.json",
+                        targetFactSha,
+                        targetFactSize),
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.VelopackFile,
+                        "velopack/stable/IIoT.EdgeClient-1.0.0-full.nupkg",
+                        targetNupkgSha,
+                        targetNupkgSize),
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.VelopackFile,
+                        "velopack/stable/RELEASES",
+                        releasesSha,
+                        releasesSize),
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.VelopackFile,
+                        "velopack/stable/releases.stable.json",
+                        releasesJsonSha,
+                        releasesJsonSize),
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.VelopackFile,
+                        "velopack/stable/assets.stable.json",
+                        assetsJsonSha,
+                        assetsJsonSize)
+                ]);
+
+            // 存活 Host（另一 runtime）：登记同一批 manifest 与自己的 nupkg。
+            var survivor = ClientReleaseComponent.CreateHost(channel, "linux-x64");
+            survivor.UpsertHostVersion(
+                "2.0.0",
+                "1.0.0",
+                "net10.0",
+                "/edge-updates/installers/stable/2.0.0/installer-artifact.json",
+                survivorFactSha,
+                survivorFactSize,
+                "survivor",
+                ClientReleaseStatus.Published,
+                null,
+                "IIoT",
+                artifacts:
+                [
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.InstallerDirectory,
+                        "installers/stable/2.0.0"),
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.ManifestFile,
+                        "installers/stable/2.0.0/installer-artifact.json",
+                        survivorFactSha,
+                        survivorFactSize),
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.VelopackFile,
+                        "velopack/stable/IIoT.EdgeClient-2.0.0-full.nupkg",
+                        survivorNupkgSha,
+                        survivorNupkgSize),
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.VelopackFile,
+                        "velopack/stable/RELEASES",
+                        releasesSha,
+                        releasesSize),
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.VelopackFile,
+                        "velopack/stable/releases.stable.json",
+                        releasesJsonSha,
+                        releasesJsonSize),
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.VelopackFile,
+                        "velopack/stable/assets.stable.json",
+                        assetsJsonSha,
+                        assetsJsonSize)
+                ]);
+
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(target);
+            componentRepository.Items.Add(survivor);
+            var deletionStore = new InMemoryClientReleaseComponentDeletionStore();
+            var auditTrail = new RecordingAuditTrailService();
+            var handler = CreateHardDeleteHandler(edgeRoot, componentRepository, deletionStore, auditTrail);
+
+            var result = await handler.Handle(
+                new HardDeleteClientReleaseComponentCommand(target.Id),
+                CancellationToken.None);
+
+            Assert.True(result.IsSuccess);
+            // channel manifest 绝不作为普通文件目标删除：跨 runtime 存活 Host 的更新清单必须保留。
+            Assert.True(File.Exists(Path.Combine(velopackRoot, "RELEASES")));
+            Assert.True(File.Exists(Path.Combine(velopackRoot, "releases.stable.json")));
+            Assert.True(File.Exists(Path.Combine(velopackRoot, "assets.stable.json")));
+            // 目标自己的 nupkg 被剔除，存活 Host 的 nupkg 保留。
+            Assert.False(File.Exists(Path.Combine(velopackRoot, "IIoT.EdgeClient-1.0.0-full.nupkg")));
+            Assert.True(File.Exists(Path.Combine(velopackRoot, "IIoT.EdgeClient-2.0.0-full.nupkg")));
+            Assert.DoesNotContain(
+                "IIoT.EdgeClient-1.0.0-full.nupkg",
+                File.ReadAllText(Path.Combine(velopackRoot, "releases.stable.json")));
+            Assert.Contains(
+                "IIoT.EdgeClient-2.0.0-full.nupkg",
+                File.ReadAllText(Path.Combine(velopackRoot, "releases.stable.json")));
+            Assert.False(Directory.Exists(Path.Combine(edgeRoot, "installers", channel, "1.0.0")));
+            Assert.True(Directory.Exists(Path.Combine(edgeRoot, "installers", channel, "2.0.0")));
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task HardDeleteClientReleaseComponentHandler_ShouldRejectRetry_WhenAncestorSwappedToSymlinkAfterPersist()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var edgeRoot = CreateTempDirectory("iiot-hard-delete-symlink-swap-root");
+        try
+        {
+            const string moduleId = "DieCutting";
+            var versionDirectory = Path.Combine(edgeRoot, "plugins", "stable", moduleId, "1.0.0");
+            var packagePath = Path.Combine(versionDirectory, "die-cutting.zip");
+            var (packageSha, packageSize) = WriteFactFile(packagePath, "plugin-package");
+            var component = CreatePluginComponent(
+                moduleId,
+                "模切",
+                "stable",
+                "1.0.0",
+                "1.0.0",
+                "1.0.0",
+                "2.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/plugins/stable/DieCutting/1.0.0/die-cutting.zip",
+                packageSha,
+                packageSize,
+                "持久化后祖先被替换",
+                ClientReleaseStatus.Published);
+
+            // 元数据提交后、文件清理前进程中断，操作保持 Requested。
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(component);
+            var deletionStore = new InMemoryClientReleaseComponentDeletionStore();
+            var auditTrail = new RecordingAuditTrailService();
+            var crashingProcessor = new CancellationAfterCommitProcessor(
+                CreateDeletionProcessor(edgeRoot, componentRepository, deletionStore, auditTrail),
+                () => throw new InvalidOperationException("模拟进程中断"));
+            var firstHandler = new HardDeleteClientReleaseComponentHandler(
+                Options.Create(new EdgeInstallerArtifactOptions { RootPath = Path.Combine(edgeRoot, "installers") }),
+                componentRepository,
+                new InMemoryDeviceClientStateStore(),
+                deletionStore,
+                crashingProcessor,
+                new TestCurrentUser(),
+                auditTrail,
+                NullLogger<HardDeleteClientReleaseComponentHandler>.Instance);
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                firstHandler.Handle(
+                    new HardDeleteClientReleaseComponentCommand(component.Id, "持久化后祖先被替换"),
+                    CancellationToken.None));
+            var operation = Assert.Single(deletionStore.Items);
+            Assert.Equal(ClientReleaseComponentDeletionStatus.Requested, operation.Status);
+
+            // 持久化之后：把版本目录替换为指向受控目录外的符号链接（穿透窗口）。
+            var outside = Path.Combine(edgeRoot, "..", $"iiot-swap-outside-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(outside);
+            WriteFile(Path.Combine(outside, "die-cutting.zip"), "outside");
+            Directory.Delete(versionDirectory, recursive: true);
+            File.CreateSymbolicLink(versionDirectory, outside);
+
+            // 重试前重新校验完整祖先链：symlink 替换必须 fail-closed 抛错，
+            // 不得顺着链接删到受控目录外的文件。
+            await Assert.ThrowsAsync<ClientReleaseValidationException>(() =>
+                CreateRetryHandler(
+                        deletionStore,
+                        CreateDeletionProcessor(
+                            edgeRoot,
+                            new InMemoryRepository<ClientReleaseComponent>(),
+                            deletionStore,
+                            auditTrail))
+                    .Handle(
+                        new RetryClientReleaseComponentDeletionCommand(operation.Id),
+                        CancellationToken.None));
+            Assert.True(File.Exists(Path.Combine(outside, "die-cutting.zip")));
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            var parent = Path.Combine(edgeRoot, "..");
+            foreach (var directory in Directory.EnumerateDirectories(parent, "iiot-swap-outside-*"))
+            {
+                TryDeleteDirectory(directory);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task HardDeleteClientReleaseComponentHandler_ShouldFailClosed_WhenPersistedFileFactsMismatch()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-hard-delete-facts-mismatch-root");
+        try
+        {
+            const string moduleId = "DieCutting";
+            var moduleDirectory = Path.Combine(edgeRoot, "plugins", "stable", moduleId);
+            var packagePath = Path.Combine(moduleDirectory, "1.0.0", "die-cutting.zip");
+            var (packageSha, packageSize) = WriteFactFile(packagePath, "plugin-package");
+            var component = CreatePluginComponent(
+                moduleId,
+                "模切",
+                "stable",
+                "1.0.0",
+                "1.0.0",
+                "1.0.0",
+                "2.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/plugins/stable/DieCutting/1.0.0/die-cutting.zip",
+                packageSha,
+                packageSize,
+                "持久化后文件被替换",
+                ClientReleaseStatus.Published);
+
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(component);
+            var deletionStore = new InMemoryClientReleaseComponentDeletionStore();
+            var auditTrail = new RecordingAuditTrailService();
+            var crashingProcessor = new CancellationAfterCommitProcessor(
+                CreateDeletionProcessor(edgeRoot, componentRepository, deletionStore, auditTrail),
+                () => throw new InvalidOperationException("模拟进程中断"));
+            var firstHandler = new HardDeleteClientReleaseComponentHandler(
+                Options.Create(new EdgeInstallerArtifactOptions { RootPath = Path.Combine(edgeRoot, "installers") }),
+                componentRepository,
+                new InMemoryDeviceClientStateStore(),
+                deletionStore,
+                crashingProcessor,
+                new TestCurrentUser(),
+                auditTrail,
+                NullLogger<HardDeleteClientReleaseComponentHandler>.Instance);
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                firstHandler.Handle(
+                    new HardDeleteClientReleaseComponentCommand(component.Id, "持久化后文件被替换"),
+                    CancellationToken.None));
+            var operation = Assert.Single(deletionStore.Items);
+
+            // 持久化之后：文件内容被改写，登记事实（SHA256/大小）不再匹配。
+            WriteFile(packagePath, "tampered-content");
+
+            var retry = await CreateRetryHandler(
+                    deletionStore,
+                    CreateDeletionProcessor(
+                        edgeRoot,
+                        new InMemoryRepository<ClientReleaseComponent>(),
+                        deletionStore,
+                        auditTrail))
+                .Handle(
+                    new RetryClientReleaseComponentDeletionCommand(operation.Id),
+                    CancellationToken.None);
+
+            Assert.False(retry.Value!.Succeeded);
+            Assert.Equal(
+                ClientReleaseComponentDeletionExecutor.FailureFileDeletion,
+                retry.Value.FailureCode);
+            // 事实不匹配的文件必须原样保留，不得误删。
+            Assert.True(File.Exists(packagePath));
+            Assert.Equal(ClientReleaseComponentDeletionStatus.Failed, operation.Status);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task HardDeleteClientReleaseComponentHandler_ShouldDeleteMetadataOnlyComponent()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-hard-delete-metadata-only-root");
+        try
+        {
+            // 只有元数据、没有任何已登记文件的错误组件也必须能永久删除。
+            var component = ClientReleaseComponent.CreateHost("stable", "win-x64");
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(component);
+            var deletionStore = new InMemoryClientReleaseComponentDeletionStore();
+            var auditTrail = new RecordingAuditTrailService();
+            var handler = CreateHardDeleteHandler(edgeRoot, componentRepository, deletionStore, auditTrail);
+
+            var result = await handler.Handle(
+                new HardDeleteClientReleaseComponentCommand(component.Id, "元数据残留，清理错误组件"),
+                CancellationToken.None);
+
+            Assert.True(result.IsSuccess);
+            Assert.Empty(componentRepository.Items);
+            Assert.Empty(deletionStore.Items);
+            Assert.Contains(auditTrail.Entries, entry =>
+                entry.OperationType == "ClientRelease.HardDeleteComponent"
+                && entry.Succeeded);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task RetryClientReleaseComponentDeletionHandler_ShouldKeepOperationAndAuditPending_WhenAuditNotConfirmed()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-hard-delete-audit-pending-root");
+        try
+        {
+            const string moduleId = "DieCutting";
+            var moduleDirectory = Path.Combine(edgeRoot, "plugins", "stable", moduleId);
+            var (packageSha, packageSize) = WriteFactFile(
+                Path.Combine(moduleDirectory, "1.0.0", "die-cutting.zip"),
+                "plugin-package");
+            var component = CreatePluginComponent(
+                moduleId,
+                "模切",
+                "stable",
+                "1.0.0",
+                "1.0.0",
+                "1.0.0",
+                "2.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/plugins/stable/DieCutting/1.0.0/die-cutting.zip",
+                packageSha,
+                packageSize,
+                "审计写不稳",
+                ClientReleaseStatus.Published);
+
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(component);
+            var deletionStore = new InMemoryClientReleaseComponentDeletionStore();
+            // 审计服务始终报告未确认：模拟审计持久化失败。
+            var auditTrail = new UnconfirmedAuditTrailService();
+            var handler = CreateHardDeleteHandler(edgeRoot, componentRepository, deletionStore, auditTrail);
+
+            var result = await handler.Handle(
+                new HardDeleteClientReleaseComponentCommand(component.Id, "审计写不稳"),
+                CancellationToken.None);
+
+            Assert.True(result.IsSuccess);
+            // 文件清理已收敛，但成功审计没写稳：操作必须保持 CleanupCompleted 等待恢复重放。
+            Assert.False(Directory.Exists(moduleDirectory));
+            Assert.Empty(componentRepository.Items);
+            var operation = Assert.Single(deletionStore.Items);
+            Assert.Equal(ClientReleaseComponentDeletionStatus.CleanupCompleted, operation.Status);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task RetryClientReleaseComponentDeletionHandler_ShouldReplayCleanupCompletedAndRewriteSuccessAudit()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-hard-delete-audit-replay-root");
+        try
+        {
+            const string moduleId = "DieCutting";
+            var moduleDirectory = Path.Combine(edgeRoot, "plugins", "stable", moduleId);
+            var (packageSha, packageSize) = WriteFactFile(
+                Path.Combine(moduleDirectory, "1.0.0", "die-cutting.zip"),
+                "plugin-package");
+            var component = CreatePluginComponent(
+                moduleId,
+                "模切",
+                "stable",
+                "1.0.0",
+                "1.0.0",
+                "1.0.0",
+                "2.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/plugins/stable/DieCutting/1.0.0/die-cutting.zip",
+                packageSha,
+                packageSize,
+                "audit-replay-reason",
+                ClientReleaseStatus.Published);
+
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(component);
+            var deletionStore = new InMemoryClientReleaseComponentDeletionStore();
+            // 第一轮：审计写不稳，操作留在 CleanupCompleted。
+            var unconfirmedAudit = new UnconfirmedAuditTrailService();
+            var firstHandler = CreateHardDeleteHandler(
+                edgeRoot,
+                componentRepository,
+                deletionStore,
+                unconfirmedAudit);
+            var first = await firstHandler.Handle(
+                new HardDeleteClientReleaseComponentCommand(component.Id, "audit-replay-reason"),
+                CancellationToken.None);
+            Assert.True(first.IsSuccess);
+            var operation = Assert.Single(deletionStore.Items);
+            Assert.Equal(ClientReleaseComponentDeletionStatus.CleanupCompleted, operation.Status);
+            Assert.Empty(unconfirmedAudit.Entries);
+
+            // 第二轮：审计恢复可写，按操作 ID 重试直接重放（文件已删，幂等跳过），
+            // 补写成功审计（带操作持久化的管理员身份与删除原因）后才删除操作记录。
+            var recoveredAudit = new RecordingAuditTrailService();
+            var retry = await CreateRetryHandler(
+                    deletionStore,
+                    CreateDeletionProcessor(
+                        edgeRoot,
+                        componentRepository,
+                        deletionStore,
+                        recoveredAudit))
+                .Handle(
+                    new RetryClientReleaseComponentDeletionCommand(operation.Id),
+                    CancellationToken.None);
+
+            Assert.True(retry.IsSuccess);
+            Assert.True(retry.Value!.Succeeded);
+            Assert.Empty(deletionStore.Items);
+            var audit = Assert.Single(recoveredAudit.Entries);
+            Assert.Equal("ClientRelease.HardDeleteComponent", audit.OperationType);
+            Assert.True(audit.Succeeded);
+            Assert.Equal("tester", audit.ActorEmployeeNo);
+            Assert.Contains("audit-replay-reason", audit.Summary);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    private sealed class UnconfirmedAuditTrailService : IAuditTrailService
+    {
+        public List<AuditTrailEntry> Entries { get; } = [];
+
+        public Task TryWriteAsync(AuditTrailEntry entry, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task<bool> TryWriteConfirmedAsync(AuditTrailEntry entry, CancellationToken cancellationToken = default)
+            => Task.FromResult(false);
     }
 
     private static ClientReleaseComponent CreatePluginComponent(
@@ -3584,6 +4177,20 @@ public sealed class ClientReleaseBehaviorTests
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, content, new UTF8Encoding(false));
+    }
+
+    /// <summary>
+    /// 写入与登记 artifact 事实一致的真实文件，返回 (sha256, size)，
+    /// 供硬删除测试让文件事实校验通过（不再用假 sha/size）。
+    /// </summary>
+    private static (string Sha256, long Size) WriteFactFile(string path, string content)
+    {
+        WriteFile(path, content);
+        var bytes = File.ReadAllBytes(path);
+        var sha256 = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(bytes))
+            .ToLowerInvariant();
+        return (sha256, bytes.LongLength);
     }
 
     private static void AssertGatewayReadableDirectory(string path)
@@ -4037,7 +4644,7 @@ public sealed class ClientReleaseBehaviorTests
             componentRepository,
             clientStateStore ?? new InMemoryDeviceClientStateStore(),
             deletionStore,
-            CreateDeletionProcessor(edgeRoot, componentRepository, deletionStore),
+            CreateDeletionProcessor(edgeRoot, componentRepository, deletionStore, auditTrail),
             new TestCurrentUser(),
             auditTrail,
             NullLogger<HardDeleteClientReleaseComponentHandler>.Instance);
@@ -4046,25 +4653,24 @@ public sealed class ClientReleaseBehaviorTests
     private static ClientReleaseComponentDeletionProcessor CreateDeletionProcessor(
         string edgeRoot,
         InMemoryRepository<ClientReleaseComponent> componentRepository,
-        InMemoryClientReleaseComponentDeletionStore deletionStore)
+        InMemoryClientReleaseComponentDeletionStore deletionStore,
+        IAuditTrailService auditTrail)
     {
         return new ClientReleaseComponentDeletionProcessor(
             Options.Create(new EdgeInstallerArtifactOptions { RootPath = Path.Combine(edgeRoot, "installers") }),
             componentRepository,
             deletionStore,
+            auditTrail,
             NullLogger<ClientReleaseComponentDeletionProcessor>.Instance);
     }
 
     private static RetryClientReleaseComponentDeletionHandler CreateRetryHandler(
         InMemoryClientReleaseComponentDeletionStore deletionStore,
-        IClientReleaseComponentDeletionProcessor deletionProcessor,
-        IAuditTrailService auditTrail)
+        IClientReleaseComponentDeletionProcessor deletionProcessor)
     {
         return new RetryClientReleaseComponentDeletionHandler(
             deletionStore,
-            deletionProcessor,
-            new TestCurrentUser(),
-            auditTrail);
+            deletionProcessor);
     }
 
     /// <summary>

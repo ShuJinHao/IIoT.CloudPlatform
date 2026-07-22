@@ -5,6 +5,8 @@ namespace IIoT.Core.Production.Aggregates.ClientReleases;
 /// <summary>
 /// 发布组件永久删除的持久化操作记录。不是业务聚合根，不通过通用 IRepository 暴露；
 /// 与组件元数据删除在同一数据库事务写入，驱动后续可重试、可恢复的幂等文件清理。
+/// 保存请求管理员身份、删除原因和每个受控文件目标的类型与精确事实（SHA256/大小），
+/// 重试前按事实与完整受控目录祖先链重新校验，防止持久化后被替换/穿透。
 /// </summary>
 public sealed class ClientReleaseComponentDeletion : BaseEntity<Guid>
 {
@@ -22,13 +24,10 @@ public sealed class ClientReleaseComponentDeletion : BaseEntity<Guid>
         string targetRuntime,
         IReadOnlyList<string> versions,
         string? reason,
-        IReadOnlyList<string> relativePaths)
+        Guid? requestedByUserId,
+        string? requestedByUserName,
+        IEnumerable<ClientReleaseComponentDeletionFileTarget> fileTargets)
     {
-        if (relativePaths.Count == 0)
-        {
-            throw new ArgumentException("删除操作必须包含至少一个受控文件目标。", nameof(relativePaths));
-        }
-
         Id = Guid.NewGuid();
         ComponentId = componentId;
         ComponentKind = ClientReleaseComponent.NormalizeRequired(componentKind, nameof(componentKind));
@@ -38,13 +37,22 @@ public sealed class ClientReleaseComponentDeletion : BaseEntity<Guid>
         VersionsJson = System.Text.Json.JsonSerializer.Serialize(
             versions.OrderBy(version => version, StringComparer.OrdinalIgnoreCase).ToArray());
         Reason = ClientReleaseComponent.NormalizeOptional(reason);
+        RequestedByUserId = requestedByUserId;
+        RequestedByUserName = ClientReleaseComponent.NormalizeOptional(requestedByUserName);
         Status = ClientReleaseComponentDeletionStatus.Requested;
         RetryCount = 0;
         CreatedAtUtc = DateTime.UtcNow;
         UpdatedAtUtc = CreatedAtUtc;
-        foreach (var relativePath in relativePaths.Distinct(StringComparer.Ordinal).OrderBy(path => path, StringComparer.Ordinal))
+        foreach (var target in fileTargets
+                     .DistinctBy(target => target.RelativePath, StringComparer.Ordinal)
+                     .OrderBy(target => target.RelativePath, StringComparer.Ordinal))
         {
-            _files.Add(new ClientReleaseComponentDeletionFile(Id, relativePath));
+            _files.Add(new ClientReleaseComponentDeletionFile(
+                Id,
+                target.RelativePath,
+                target.ArtifactKind,
+                target.Sha256,
+                target.SizeBytes));
         }
     }
 
@@ -61,6 +69,10 @@ public sealed class ClientReleaseComponentDeletion : BaseEntity<Guid>
     public string VersionsJson { get; private set; } = "[]";
 
     public string? Reason { get; private set; }
+
+    public Guid? RequestedByUserId { get; private set; }
+
+    public string? RequestedByUserName { get; private set; }
 
     public ClientReleaseComponentDeletionStatus Status { get; private set; }
 
@@ -82,6 +94,16 @@ public sealed class ClientReleaseComponentDeletion : BaseEntity<Guid>
         UpdatedAtUtc = DateTime.UtcNow;
     }
 
+    /// <summary>
+    /// 文件清理已收敛，等待成功审计写稳后才能删除操作记录。
+    /// </summary>
+    public void MarkCleanupCompleted()
+    {
+        Status = ClientReleaseComponentDeletionStatus.CleanupCompleted;
+        FailureCode = null;
+        UpdatedAtUtc = DateTime.UtcNow;
+    }
+
     public void ResetForRetry()
     {
         Status = ClientReleaseComponentDeletionStatus.Requested;
@@ -90,26 +112,50 @@ public sealed class ClientReleaseComponentDeletion : BaseEntity<Guid>
     }
 }
 
+/// <summary>
+/// 删除操作持久化的单个受控文件目标：相对路径 + 类型 + 精确事实（SHA256/大小）。
+/// </summary>
+public sealed record ClientReleaseComponentDeletionFileTarget(
+    string RelativePath,
+    string ArtifactKind,
+    string? Sha256,
+    long? SizeBytes);
+
 public sealed class ClientReleaseComponentDeletionFile : BaseEntity<Guid>
 {
     private ClientReleaseComponentDeletionFile()
     {
     }
 
-    internal ClientReleaseComponentDeletionFile(Guid deletionId, string relativePath)
+    internal ClientReleaseComponentDeletionFile(
+        Guid deletionId,
+        string relativePath,
+        string artifactKind,
+        string? sha256,
+        long? sizeBytes)
     {
         Id = Guid.NewGuid();
         ClientReleaseComponentDeletionId = deletionId;
         RelativePath = ClientReleaseComponent.NormalizeRequired(relativePath, nameof(relativePath));
+        ArtifactKind = ClientReleaseComponent.NormalizeRequired(artifactKind, nameof(artifactKind));
+        Sha256 = ClientReleaseComponent.NormalizeOptional(sha256);
+        SizeBytes = sizeBytes;
     }
 
     public Guid ClientReleaseComponentDeletionId { get; private set; }
 
     public string RelativePath { get; private set; } = null!;
+
+    public string ArtifactKind { get; private set; } = null!;
+
+    public string? Sha256 { get; private set; }
+
+    public long? SizeBytes { get; private set; }
 }
 
 public enum ClientReleaseComponentDeletionStatus
 {
     Requested,
-    Failed
+    Failed,
+    CleanupCompleted
 }

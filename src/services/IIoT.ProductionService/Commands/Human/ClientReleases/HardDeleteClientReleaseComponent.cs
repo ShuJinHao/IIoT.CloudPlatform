@@ -1,4 +1,3 @@
-using System.Text.Json;
 using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Core.Production.Specifications.ClientReleases;
@@ -73,23 +72,22 @@ public sealed class HardDeleteClientReleaseComponentHandler(
         var inUseReason = await ResolveInUseReasonAsync(component, cancellationToken);
         if (inUseReason is not null)
         {
-            await WriteAuditAsync(
+            await WriteRequestAuditAsync(
                 component.Id,
                 componentKind,
                 componentName,
                 channel,
                 versions,
                 succeeded: false,
-                [],
-                [],
                 inUseReason,
                 cancellationToken);
             return Result.Invalid(inUseReason);
         }
 
-        // 同事务写入持久化删除操作并删除组件元数据；文件清理由操作 ID 驱动，可在新进程重试。
+        // 同事务写入持久化删除操作（含管理员身份、删除原因、精确文件事实）并删除组件元数据；
+        // 文件清理由操作 ID 驱动，可在新进程重试。允许“只有元数据、没有文件”的错误组件。
         var edgeRoot = artifactOptions.Value.ResolveEdgeUpdatesRoot();
-        var relativePaths = ClientReleaseComponentRelativePaths.Collect(edgeRoot, component);
+        var fileTargets = ClientReleaseComponentRelativePaths.Collect(edgeRoot, component);
         var deletion = new ClientReleaseComponentDeletion(
             component.Id,
             componentKind,
@@ -98,7 +96,9 @@ public sealed class HardDeleteClientReleaseComponentHandler(
             component.TargetRuntime,
             versions,
             request.Reason,
-            relativePaths);
+            ClientReleaseAuditActor.ParseId(currentUser.Id),
+            currentUser.UserName,
+            fileTargets);
 
         deletionStore.Add(deletion);
         componentRepository.Delete(component);
@@ -114,15 +114,13 @@ public sealed class HardDeleteClientReleaseComponentHandler(
                 componentKind,
                 channel,
                 ex.GetType().Name);
-            await WriteAuditAsync(
+            await WriteRequestAuditAsync(
                 component.Id,
                 componentKind,
                 componentName,
                 channel,
                 versions,
                 succeeded: false,
-                [],
-                [],
                 "发布组件元数据删除提交失败，未清理任何文件，请重试永久删除。",
                 CancellationToken.None);
             throw;
@@ -131,17 +129,6 @@ public sealed class HardDeleteClientReleaseComponentHandler(
         var cleanup = await deletionProcessor.ProcessAsync(deletion, cancellationToken);
         if (!cleanup.Succeeded)
         {
-            await WriteAuditAsync(
-                component.Id,
-                componentKind,
-                componentName,
-                channel,
-                versions,
-                succeeded: false,
-                cleanup.DeletedPaths,
-                cleanup.SkippedPaths,
-                cleanup.FailureCode,
-                CancellationToken.None);
             return Result.Invalid(
                 $"发布组件元数据已删除，但发布文件清理未完成（{cleanup.FailureCode}）。请修复后通过永久删除重试入口按操作 ID {deletion.Id} 完成清理。");
         }
@@ -149,17 +136,6 @@ public sealed class HardDeleteClientReleaseComponentHandler(
         var warning = cleanup.SkippedPaths.Count == 0
             ? null
             : $"部分文件仍被存活版本 manifest 引用或不在受控范围，已跳过 {cleanup.SkippedPaths.Count} 项。";
-        await WriteAuditAsync(
-            component.Id,
-            componentKind,
-            componentName,
-            channel,
-            versions,
-            succeeded: true,
-            cleanup.DeletedPaths,
-            cleanup.SkippedPaths,
-            warning,
-            cancellationToken);
 
         return Result.Success(new ClientReleaseComponentHardDeletionResultDto(
             deletion.Id,
@@ -196,27 +172,23 @@ public sealed class HardDeleteClientReleaseComponentHandler(
             : null;
     }
 
-    private async Task WriteAuditAsync(
+    private async Task WriteRequestAuditAsync(
         Guid componentId,
         string componentKind,
         string componentName,
         string channel,
         IReadOnlyList<string> versions,
         bool succeeded,
-        IReadOnlyList<string> deletedPaths,
-        IReadOnlyList<string> skippedPaths,
         string? failureOrWarning,
         CancellationToken cancellationToken)
     {
-        var summary = JsonSerializer.Serialize(new
+        var summary = System.Text.Json.JsonSerializer.Serialize(new
         {
             action = AuditAction,
             componentKind,
             componentName,
             channel,
-            versions,
-            deletedPaths,
-            skippedPaths
+            versions
         });
 
         await auditTrailService.TryWriteAsync(

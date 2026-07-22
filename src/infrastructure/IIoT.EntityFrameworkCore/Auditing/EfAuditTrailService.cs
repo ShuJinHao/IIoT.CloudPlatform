@@ -14,11 +14,19 @@ internal sealed class EfAuditTrailService(
         AuditTrailEntry entry,
         CancellationToken cancellationToken = default)
     {
+        await TryWriteConfirmedAsync(entry, cancellationToken);
+    }
+
+    public async Task<bool> TryWriteConfirmedAsync(
+        AuditTrailEntry entry,
+        CancellationToken cancellationToken = default)
+    {
         try
         {
             await using var dbContext = new IIoTDbContext(dbContextOptions);
             dbContext.AuditTrails.Add(AuditTrailRecord.FromEntry(entry));
             await dbContext.SaveChangesAsync(cancellationToken);
+            return true;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -30,6 +38,7 @@ internal sealed class EfAuditTrailService(
                 PersistenceFailed,
                 "Audit trail persistence failed; ErrorType={ErrorType}.",
                 ex.GetType().Name);
+            return false;
         }
     }
 }

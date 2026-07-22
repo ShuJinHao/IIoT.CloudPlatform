@@ -23,6 +23,8 @@ namespace IIoT.EntityFrameworkCore.Migrations
                     target_runtime = table.Column<string>(type: "character varying(64)", maxLength: 64, nullable: false),
                     versions_json = table.Column<string>(type: "jsonb", nullable: false),
                     reason = table.Column<string>(type: "text", nullable: true),
+                    requested_by_user_id = table.Column<Guid>(type: "uuid", nullable: true),
+                    requested_by_user_name = table.Column<string>(type: "character varying(128)", maxLength: 128, nullable: true),
                     status = table.Column<string>(type: "character varying(24)", maxLength: 24, nullable: false),
                     failure_code = table.Column<string>(type: "character varying(64)", maxLength: 64, nullable: true),
                     retry_count = table.Column<int>(type: "integer", nullable: false),
@@ -40,7 +42,10 @@ namespace IIoT.EntityFrameworkCore.Migrations
                 {
                     id = table.Column<Guid>(type: "uuid", nullable: false),
                     deletion_id = table.Column<Guid>(type: "uuid", nullable: false),
-                    relative_path = table.Column<string>(type: "character varying(1024)", maxLength: 1024, nullable: false)
+                    relative_path = table.Column<string>(type: "character varying(1024)", maxLength: 1024, nullable: false),
+                    artifact_kind = table.Column<string>(type: "character varying(32)", maxLength: 32, nullable: false),
+                    sha256 = table.Column<string>(type: "character varying(64)", maxLength: 64, nullable: true),
+                    size_bytes = table.Column<long>(type: "bigint", nullable: true)
                 },
                 constraints: table =>
                 {

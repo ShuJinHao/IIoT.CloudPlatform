@@ -48,6 +48,13 @@ public sealed class ClientReleaseComponentDeletionConfiguration : IEntityTypeCon
             .HasColumnType("text")
             .HasColumnName("reason");
 
+        builder.Property(deletion => deletion.RequestedByUserId)
+            .HasColumnName("requested_by_user_id");
+
+        builder.Property(deletion => deletion.RequestedByUserName)
+            .HasMaxLength(128)
+            .HasColumnName("requested_by_user_name");
+
         builder.Property(deletion => deletion.Status)
             .IsRequired()
             .HasConversion<string>()
@@ -105,6 +112,18 @@ public sealed class ClientReleaseComponentDeletionFileConfiguration : IEntityTyp
             .IsRequired()
             .HasMaxLength(1024)
             .HasColumnName("relative_path");
+
+        builder.Property(file => file.ArtifactKind)
+            .IsRequired()
+            .HasMaxLength(32)
+            .HasColumnName("artifact_kind");
+
+        builder.Property(file => file.Sha256)
+            .HasMaxLength(64)
+            .HasColumnName("sha256");
+
+        builder.Property(file => file.SizeBytes)
+            .HasColumnName("size_bytes");
 
         builder.HasIndex(file => file.ClientReleaseComponentDeletionId)
             .HasDatabaseName("ix_edge_client_release_component_deletion_files_deletion");
