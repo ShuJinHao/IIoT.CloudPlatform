@@ -77,17 +77,17 @@ export function createReleaseCatalogColumns(
       ]),
     },
     {
-      title: '历史版本',
-      key: 'history',
-      width: 130,
-      render: (row) => row.historyVersions.length > 0
+      title: '其他活动版本',
+      key: 'otherVersions',
+      width: 150,
+      render: (row) => row.otherVersions.length > 0
         ? h(UiButton, {
             size: 'tiny',
             secondary: true,
             type: 'info',
             onClick: () => options.onHistory(row),
-          }, () => [h(History, { size: 13 }), `查看 ${row.historyVersions.length}`])
-        : h('span', { class: 'history-empty' }, '无历史版本'),
+          }, () => [h(History, { size: 13 }), `查看 ${row.otherVersions.length}`])
+        : h('span', { class: 'history-empty' }, '无其他活动版本'),
     },
   ];
 

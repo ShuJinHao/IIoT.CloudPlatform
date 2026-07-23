@@ -1,5 +1,6 @@
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import axios from 'axios';
 import {
   archiveClientReleaseApi,
   deleteClientReleaseFilesApi,
@@ -17,7 +18,11 @@ import {
 import { createHistoryColumns, createInventoryColumns, createReleaseCatalogColumns } from './columns';
 import { useAuthStore } from '../../stores/auth';
 import { Permissions } from '../../types/permissions';
-import { notifyError, notifySuccess, notifyWarning, requestConfirmation } from '../../utils/feedback';
+import { useListPage } from '../../core/list-page';
+import { isApiResult, type ApiResult } from '../../core/types/api';
+import { readProblemDetails, resolveProblemNotification } from '../../core/http/problemDetails';
+import { notifyError, notifySuccess, requestConfirmation } from '../../utils/feedback';
+import type { HardDeleteProblem } from './ReleaseHardDeleteModal.vue';
 import {
   formatDate,
   formatReleaseNotes,
@@ -33,6 +38,14 @@ import {
 } from './types';
 
 const HISTORY_PAGE_SIZE = 10;
+
+function isAxiosErrorWithResponse(error: unknown): error is { response: { status: number; data: unknown } } {
+  return axios.isAxiosError(error) && error.response !== undefined;
+}
+
+function isApiResultError(error: unknown): error is ApiResult<unknown> & { status: number } {
+  return isApiResult(error);
+}
 
 export function useClientReleases() {
   const authStore = useAuthStore();
@@ -52,17 +65,27 @@ export function useClientReleases() {
   const selectedReleaseRow = ref<ReleaseCatalogRow | null>(null);
   const selectedReleaseDetail = ref<ReleaseDetail | null>(null);
 
-  // ===== 独立历史分页 =====
-  const historyItems = ref<ClientReleaseHistoryComponentDto[]>([]);
-  const historyTotal = ref(0);
-  const historyPage = ref(1);
-  const loadingHistory = ref(false);
+  // ===== 独立历史分页（统一 useListPage，loading/empty/error 分离，后端真实分页） =====
+  const history = useListPage<ClientReleaseHistoryComponentDto, Record<string, unknown>>({
+    initialPageSize: HISTORY_PAGE_SIZE,
+    immediate: false,
+    fetcher: async ({ page, pageSize }) => {
+      const result = await getClientReleaseHistoryApi({
+        channel: channel.value,
+        targetRuntime: targetRuntime.value,
+        pageNumber: page,
+        pageSize,
+      });
+      return { items: result.items, total: result.metaData.totalCount };
+    },
+  });
 
   // ===== 永久删除确认弹窗 =====
   const showHardDeleteModal = ref(false);
   const hardDeleteTarget = ref<ReleaseCatalogRow | null>(null);
   const hardDeleteConfirmText = ref('');
   const hardDeleteReason = ref('');
+  const hardDeleteProblem = ref<HardDeleteProblem | null>(null);
 
   // ===== 删除恢复操作列表 =====
   const deletions = ref<ClientReleaseComponentDeletionDto[]>([]);
@@ -108,7 +131,7 @@ export function useClientReleases() {
         componentCode: currentHost.targetRuntime,
         componentId: currentHost.componentId,
         currentVersion: currentHost,
-        historyVersions: hostVersions.filter((version) => version.id !== currentHost.id),
+        otherVersions: hostVersions.filter((version) => version.id !== currentHost.id),
       });
     }
 
@@ -125,15 +148,15 @@ export function useClientReleases() {
         componentCode: plugin.moduleId,
         componentId: currentPlugin.componentId,
         currentVersion: currentPlugin,
-        historyVersions: plugin.versions.filter((version) => version.id !== currentPlugin.id),
+        otherVersions: plugin.versions.filter((version) => version.id !== currentPlugin.id),
       });
     }
 
     return rows;
   });
-  const selectedHistoryVersions = computed(() => selectedReleaseRow.value?.historyVersions ?? []);
+  const selectedOtherVersions = computed(() => selectedReleaseRow.value?.otherVersions ?? []);
   const historyModalTitle = computed(() => (
-    selectedReleaseRow.value ? `${selectedReleaseRow.value.componentName} - 历史版本` : '历史版本'
+    selectedReleaseRow.value ? `${selectedReleaseRow.value.componentName} - 其他活动版本` : '其他活动版本'
   ));
 
   const releaseCatalogColumns = computed(() => createReleaseCatalogColumns({
@@ -187,31 +210,7 @@ export function useClientReleases() {
   }
 
   async function fetchHistory() {
-    loadingHistory.value = true;
-    try {
-      const result = await getClientReleaseHistoryApi({
-        channel: channel.value,
-        targetRuntime: targetRuntime.value,
-        pageNumber: historyPage.value,
-        pageSize: HISTORY_PAGE_SIZE,
-      });
-      historyItems.value = result.items;
-      historyTotal.value = result.metaData.totalCount;
-    } catch {
-      historyItems.value = [];
-      historyTotal.value = 0;
-    } finally {
-      loadingHistory.value = false;
-    }
-  }
-
-  function gotoHistoryPage(page: number) {
-    const totalPages = Math.max(1, Math.ceil(historyTotal.value / HISTORY_PAGE_SIZE));
-    const clamped = Math.max(1, Math.min(totalPages, page));
-    if (clamped !== historyPage.value) {
-      historyPage.value = clamped;
-      void fetchHistory();
-    }
+    await history.refresh();
   }
 
   async function fetchDeletions() {
@@ -230,7 +229,7 @@ export function useClientReleases() {
   }
 
   async function refresh() {
-    const tasks = [fetchCatalog(), fetchInventory(), fetchHistory()];
+    const tasks = [fetchCatalog(), fetchInventory(), history.refresh()];
     if (canHardDelete.value) tasks.push(fetchDeletions());
     await Promise.all(tasks);
   }
@@ -246,7 +245,7 @@ export function useClientReleases() {
   }
 
   function openHistoryModal(row: ReleaseCatalogRow) {
-    if (row.historyVersions.length === 0) return;
+    if (row.otherVersions.length === 0) return;
     selectedReleaseRow.value = row;
     showHistoryModal.value = true;
   }
@@ -322,6 +321,7 @@ export function useClientReleases() {
     hardDeleteTarget.value = row;
     hardDeleteConfirmText.value = '';
     hardDeleteReason.value = '';
+    hardDeleteProblem.value = null;
     showHardDeleteModal.value = true;
   }
 
@@ -330,23 +330,49 @@ export function useClientReleases() {
     hardDeleteTarget.value = null;
     hardDeleteConfirmText.value = '';
     hardDeleteReason.value = '';
+    hardDeleteProblem.value = null;
+  }
+
+  function extractDeletionId(text?: string): string | undefined {
+    if (!text) return undefined;
+    const match = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.exec(text);
+    return match?.[0];
+  }
+
+  async function buildHardDeleteProblem(error: unknown): Promise<HardDeleteProblem> {
+    let payload: unknown;
+    let status = 0;
+    if (isAxiosErrorWithResponse(error)) {
+      status = error.response.status;
+      payload = error.response.data;
+    } else if (isApiResultError(error)) {
+      status = error.status;
+      payload = { errors: error.errors };
+    }
+
+    const problem = await readProblemDetails(payload);
+    const notification = resolveProblemNotification(status, problem);
+    const detail = problem?.detail?.trim() || notification.message;
+    const errors = notification.details;
+    const deletionId =
+      extractDeletionId(detail) ?? errors.map(extractDeletionId).find((id) => id);
+    return {
+      title: notification.title,
+      detail,
+      errors,
+      deletionId,
+    };
   }
 
   async function submitHardDelete() {
     const target = hardDeleteTarget.value;
     if (!target || !canHardDelete.value) return;
 
-    const expected = target.kind === 'plugin' ? target.componentCode : target.componentName;
-    if (hardDeleteConfirmText.value.trim() !== expected) {
-      notifyWarning(`请输入正确的确认内容：${expected}`);
-      return;
-    }
+    // 确认内容与原因为空的拦截已在 modal 内联完成；此处仅做最终 trim。
     const reason = hardDeleteReason.value.trim();
-    if (!reason) {
-      notifyWarning('请填写非空删除原因。');
-      return;
-    }
+    if (!reason) return;
 
+    hardDeleteProblem.value = null;
     submitting.value = true;
     try {
       // 必须使用组件 ID（componentId），禁止用 version.id。
@@ -354,8 +380,10 @@ export function useClientReleases() {
       closeHardDeleteModal();
       notifySuccess(result.warning || `已永久删除组件 ${result.componentName}。`);
       await Promise.all([fetchCatalog(), fetchHistory(), fetchDeletions()]);
-    } catch {
-      // 400 表示元数据可能已删除但文件清理或审计仍待恢复；不显示成功，刷新删除恢复列表。
+    } catch (error) {
+      // 400 表示元数据可能已删除但文件清理或审计仍待恢复：不显示成功，
+      // 在弹窗内联展示真实 ProblemDetails 与 deletionId，并刷新删除恢复列表。
+      hardDeleteProblem.value = await buildHardDeleteProblem(error);
       await fetchDeletions();
     } finally {
       submitting.value = false;
@@ -411,15 +439,19 @@ export function useClientReleases() {
     showReleaseDetailModal,
     selectedReleaseRow,
     selectedReleaseDetail,
-    historyItems,
-    historyTotal,
-    historyPage,
-    loadingHistory,
+    historyItems: history.items,
+    historyTotal: history.total,
+    historyPage: history.page,
+    historyTotalPages: history.totalPages,
+    loadingHistory: history.loading,
+    historyError: history.error,
+    historyIsEmpty: history.isEmpty,
     historyPageSize: HISTORY_PAGE_SIZE,
     showHardDeleteModal,
     hardDeleteTarget,
     hardDeleteConfirmText,
     hardDeleteReason,
+    hardDeleteProblem,
     deletions,
     loadingDeletions,
     retryingDeletionId,
@@ -433,14 +465,14 @@ export function useClientReleases() {
     channelDisplay,
     selectedHostPackageVersion,
     releaseCatalogRows,
-    selectedHistoryVersions,
+    selectedOtherVersions,
     historyModalTitle,
     releaseCatalogColumns,
     historyColumns,
     inventoryColumns,
     refresh,
     fetchHistory,
-    gotoHistoryPage,
+    gotoHistoryPage: history.gotoPage,
     fetchDeletions,
     goPublishManager,
     goInstallerCenter,

@@ -329,21 +329,33 @@
 }
 
 /* ===== 历史版本区域 ===== */
+.history-body,
+.deletions-body {
+  padding: 0 24px 22px;
+}
+
 .history-loading,
-.deletions-loading {
-  padding: var(--space-4);
+.deletions-loading,
+.history-error {
+  padding: var(--space-4) 0;
   color: var(--text-2);
   font-size: var(--fs-sm);
 }
 
+.history-error {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+}
+
 .history-pagination {
   margin-top: var(--space-3);
-  padding: 0 var(--space-1) var(--space-2);
 }
 
 .history-component {
   padding: var(--space-3) 0;
   border-bottom: 1px solid var(--border);
+  min-width: 0;
 }
 
 .history-component:last-child {
@@ -356,6 +368,12 @@
   justify-content: space-between;
   gap: var(--space-3);
   margin-bottom: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.history-component__head > div:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .history-component__head code,
@@ -363,12 +381,14 @@
   margin-left: var(--space-2);
   color: var(--text-2);
   font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
 }
 
 .history-component__meta {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  flex-shrink: 0;
 }
 
 .history-component__channel {
@@ -390,21 +410,25 @@
   align-items: center;
   gap: var(--space-2);
   font-size: var(--fs-sm);
+  min-width: 0;
 }
 
 .history-version__version {
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .history-version__time,
 .history-version__reason {
   color: var(--text-2);
   font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
 }
 
 .history-version__failure {
   color: var(--error);
   font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
 }
 
 /* ===== 永久删除确认 ===== */
@@ -428,6 +452,58 @@
 .hard-delete-label {
   color: var(--text-2);
   font-size: var(--fs-sm);
+}
+
+.hard-delete-error {
+  margin: 0;
+  color: var(--error);
+  font-size: var(--fs-xs);
+}
+
+.hard-delete-problem {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--error-soft);
+  border-left: 3px solid var(--error);
+  border-radius: var(--radius-sm);
+  background: var(--error-soft);
+}
+
+.hard-delete-problem__title {
+  color: var(--error);
+  font-size: var(--fs-sm);
+}
+
+.hard-delete-problem__detail {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.hard-delete-problem__errors {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: grid;
+  gap: var(--space-1);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+.hard-delete-problem__deletion {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.hard-delete-problem__deletion code {
+  color: var(--text-0);
+}
+
+.hard-delete-problem__hint {
+  margin-left: var(--space-2);
 }
 
 /* ===== 删除恢复列表 ===== */
@@ -462,6 +538,10 @@
   flex-wrap: wrap;
 }
 
+.deletion-item__title strong {
+  overflow-wrap: anywhere;
+}
+
 .deletion-item__meta,
 .deletion-item__failure {
   color: var(--text-2);
@@ -469,6 +549,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-3);
+  overflow-wrap: anywhere;
 }
 
 .deletion-item__failure code {

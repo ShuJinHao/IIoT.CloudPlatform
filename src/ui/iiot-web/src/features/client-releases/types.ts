@@ -27,7 +27,8 @@ export interface ReleaseCatalogRow {
   componentCode: string;
   componentId: string;
   currentVersion: ReleaseVersionEntry;
-  historyVersions: ReleaseVersionEntry[];
+  // 当前版本之外的其它活动版本（Draft/Published/Deprecated）；真正的 Archived/Deleted 历史走独立历史查询。
+  otherVersions: ReleaseVersionEntry[];
 }
 
 export interface ReleaseDetail {

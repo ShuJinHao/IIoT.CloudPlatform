@@ -24,7 +24,7 @@
         </button>
       </div>
     </div>
-    <p v-else class="binding-empty">暂无可用插件，请先在发布区登记插件版本。</p>
+    <p v-else class="binding-empty">暂无可用插件。请通过标准发布链路上传插件包后，再回到此处绑定设备生成首装包。</p>
     <div class="binding-actions">
       <span v-if="validationHint" class="binding-hint">{{ validationHint }}</span>
       <UiButton type="primary" :disabled="!canGenerate || generating" @click="generate">

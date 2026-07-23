@@ -25,7 +25,9 @@
         :page="historyPage"
         :page-size="historyPageSize"
         :loading="loadingHistory"
+        :error="historyError"
         @update:page="gotoHistoryPage"
+        @retry="fetchHistory"
       />
     </template>
     <ReleaseInventorySection v-else-if="activeView === 'inventory'" :columns="inventoryColumns" :inventory="inventory" :loading="loadingInventory" />
@@ -33,7 +35,7 @@
       <EdgeBindingDownloadPanel :plugin-components="catalog?.plugins ?? []" :channel="channelDisplay" :target-runtime="targetRuntime || 'win-x64'" :host-version="selectedHostPackageVersion" />
     </NiondTableCard>
 
-    <ReleaseHistoryModal v-model:show="showHistoryModal" :title="historyModalTitle" :selected-row="selectedReleaseRow" :versions="selectedHistoryVersions" :columns="historyColumns" />
+    <ReleaseHistoryModal v-model:show="showHistoryModal" :title="historyModalTitle" :selected-row="selectedReleaseRow" :versions="selectedOtherVersions" :columns="historyColumns" />
     <ReleaseDetailModal v-model:show="showReleaseDetailModal" :detail="selectedReleaseDetail" />
     <ReleaseHardDeleteModal
       v-model:show="showHardDeleteModal"
@@ -41,6 +43,7 @@
       v-model:reason="hardDeleteReason"
       :target="hardDeleteTarget"
       :submitting="submitting"
+      :problem="hardDeleteProblem"
       @cancel="closeHardDeleteModal"
       @submit="submitHardDelete"
     />
@@ -69,14 +72,14 @@ const state = useClientReleases();
 const {
   targetRuntime, catalog, inventory, loadingCatalog, loadingInventory, submitting,
   showHistoryModal, showReleaseDetailModal, selectedReleaseRow, selectedReleaseDetail,
-  historyItems, historyTotal, historyPage, historyPageSize, loadingHistory,
-  showHardDeleteModal, hardDeleteTarget, hardDeleteConfirmText, hardDeleteReason,
+  historyItems, historyTotal, historyPage, historyPageSize, loadingHistory, historyError,
+  showHardDeleteModal, hardDeleteTarget, hardDeleteConfirmText, hardDeleteReason, hardDeleteProblem,
   deletions, loadingDeletions, retryingDeletionId,
   canGenerateInstaller, canManageReleases, canHardDelete, activeView, isPublishRoute,
   pageTitle, pageSubtitle, channelDisplay, selectedHostPackageVersion,
-  releaseCatalogRows, selectedHistoryVersions, historyModalTitle, releaseCatalogColumns,
+  releaseCatalogRows, selectedOtherVersions, historyModalTitle, releaseCatalogColumns,
   historyColumns, inventoryColumns,
-  refresh, gotoHistoryPage, goPublishManager, goInstallerCenter,
+  refresh, fetchHistory, gotoHistoryPage, goPublishManager, goInstallerCenter,
   closeHardDeleteModal, submitHardDelete, retryDeletion,
 } = state;
 

@@ -10,7 +10,7 @@
       </div>
       <UiDataTable :columns="columns" :data="versions" :row-key="rowKey">
         <template #empty>
-          <EmptyState title="无历史版本" description="当前组件只有一个可见版本。" />
+          <EmptyState title="无其他活动版本" description="当前组件只有一个活动版本。" />
         </template>
       </UiDataTable>
     </div>

@@ -1,4 +1,5 @@
 import http from '../../core/http/httpClient';
+import type { PagedList } from '../../core/types/pagination';
 
 const basePath = '/human/client-releases';
 
@@ -241,19 +242,7 @@ export interface ClientReleaseHistoryComponentDto {
   versions: ClientReleaseHistoryVersionDto[];
 }
 
-export interface ClientReleaseHistoryMetaData {
-  currentPage: number;
-  totalPages: number;
-  pageSize: number;
-  totalCount: number;
-  hasPrevious: boolean;
-  hasNext: boolean;
-}
-
-export interface ClientReleaseHistoryPageDto {
-  items: ClientReleaseHistoryComponentDto[];
-  metaData: ClientReleaseHistoryMetaData;
-}
+export type ClientReleaseHistoryPageDto = PagedList<ClientReleaseHistoryComponentDto>;
 
 export const getClientReleaseHistoryApi = (params: {
   channel?: string;
