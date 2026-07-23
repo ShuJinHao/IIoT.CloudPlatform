@@ -647,7 +647,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
             || string.IsNullOrWhiteSpace(manifest.LauncherDirectory)
             || string.IsNullOrWhiteSpace(manifest.HostDirectory)
             || string.IsNullOrWhiteSpace(manifest.PluginsRoot)
-            || manifest.Modules is not { Count: > 0 })
+            || manifest.Modules is null)
         {
             return "Edge 发布包 manifest 不完整。";
         }
@@ -719,9 +719,16 @@ public sealed class PublishEdgeReleaseBundleHandler(
             return "Edge 发布包缺少 host/。";
         }
 
-        if (!Directory.Exists(Path.Combine(installerRoot, manifest.PluginsRoot)))
+        var pluginsRoot = Path.Combine(installerRoot, manifest.PluginsRoot);
+        if (!Directory.Exists(pluginsRoot))
         {
             return "Edge 发布包缺少 plugins/。";
+        }
+
+        if (manifest.Modules.Count == 0
+            && Directory.EnumerateFileSystemEntries(pluginsRoot).Any())
+        {
+            return "Edge 发布包空插件清单仍包含插件文件。";
         }
 
         if (string.IsNullOrWhiteSpace(manifest.VelopackSetupFile)
@@ -734,7 +741,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
 
         foreach (var module in manifest.Modules)
         {
-            var pluginDirectory = Path.Combine(installerRoot, manifest.PluginsRoot, module.PluginDirectory);
+            var pluginDirectory = Path.Combine(pluginsRoot, module.PluginDirectory);
             if (!Directory.Exists(pluginDirectory))
             {
                 return $"Edge 发布包缺少插件目录: {module.ModuleId}。";

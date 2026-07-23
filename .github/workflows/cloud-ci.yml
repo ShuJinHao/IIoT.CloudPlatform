@@ -179,16 +179,16 @@ jobs:
             [int]$_.failed -ne 0 -or [int]$_.notExecuted -ne 0
           })
           if ([int]$inventory.schemaVersion -ne 2 -or
-              [int]$inventory.baselineCases -ne 729 -or
-              [int]$inventory.requiredCases -ne 665 -or
-              $requiredCases.Count -ne 665 -or
+              [int]$inventory.baselineCases -ne 759 -or
+              [int]$inventory.requiredCases -ne 695 -or
+              $requiredCases.Count -ne 695 -or
               $runnerEvidence.Count -ne 18 -or
               $selectedRunnerEvidence.Count -ne 16 -or
               $invalidSelectedEvidence.Count -ne 0 -or
-              [int](($selectedRunnerEvidence | Measure-Object expected -Sum).Sum) -ne 665 -or
+              [int](($selectedRunnerEvidence | Measure-Object expected -Sum).Sum) -ne 695 -or
               [int]$inventory.regressionZeroCount -ne 0 -or
               $regressionEvidence.Count -ne 18 -or
-              [int](($regressionEvidence | Measure-Object actualCases -Sum).Sum) -ne 729 -or
+              [int](($regressionEvidence | Measure-Object actualCases -Sum).Sum) -ne 759 -or
               @($regressionEvidence | Where-Object {
                 [string]::IsNullOrWhiteSpace([string]$_.regressionId) -or
                 [int]$_.minimumCases -le 0 -or

@@ -362,10 +362,50 @@ public sealed class ClientReleaseBehaviorTests
         }
     }
 
+    [Fact]
+    public async Task PublishEdgeReleaseBundleHandler_ShouldPublishHostWithoutEmbeddedModules()
+    {
+        const string version = "2.0.0";
+        var edgeRoot = CreateTempDirectory("iiot-edge-host-only-upload-root");
+        var bundle = CreateEdgeReleaseBundle(version, includePluginModule: false);
+        try
+        {
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            var auditTrail = new RecordingAuditTrailService();
+            var handler = CreatePublishHandler(edgeRoot, componentRepository, new NoopRetentionService(), auditTrail);
+
+            var result = await PublishBundleAsync(handler, bundle.ZipPath);
+
+            Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
+            Assert.NotNull(result.Value);
+            Assert.Equal(new[] { $"host:{version}" }, result.Value!.Components);
+            Assert.Single(componentRepository.Items);
+            Assert.Equal(
+                ClientReleaseComponentKind.Host,
+                Assert.Single(componentRepository.Items).ComponentKind);
+            var publishedPluginsRoot = Path.Combine(
+                edgeRoot,
+                "installers",
+                "stable",
+                version,
+                "plugins");
+            Assert.True(Directory.Exists(publishedPluginsRoot));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(publishedPluginsRoot));
+            Assert.False(Directory.Exists(Path.Combine(edgeRoot, "plugins")));
+            Assert.Contains(auditTrail.Entries, entry => entry.Succeeded && entry.OperationType == "ClientRelease.Publish");
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            bundle.Dispose();
+        }
+    }
+
     [Theory]
     [InlineData("duplicate-id", "重复的插件 moduleId")]
     [InlineData("duplicate-directory", "重复的插件目录")]
     [InlineData("modules-null", "manifest 不完整")]
+    [InlineData("modules-empty-with-plugin-files", "空插件清单仍包含插件文件")]
     [InlineData("module-null", "非法插件声明")]
     [InlineData("module-version-traversal", "非法插件声明")]
     public async Task PublishEdgeReleaseBundleHandler_ShouldRejectInvalidModuleOwnershipBeforePublishing(
@@ -389,6 +429,9 @@ public sealed class ClientReleaseBehaviorTests
                         break;
                     case "modules-null":
                         manifest["modules"] = null;
+                        break;
+                    case "modules-empty-with-plugin-files":
+                        modules.Clear();
                         break;
                     case "module-null":
                         modules.Clear();
@@ -4342,7 +4385,8 @@ public sealed class ClientReleaseBehaviorTests
         string version,
         Action<string>? mutateInstallerRoot = null,
         Action<string>? mutateVelopackRoot = null,
-        Action<JsonObject>? mutateManifest = null)
+        Action<JsonObject>? mutateManifest = null,
+        bool includePluginModule = true)
     {
         var workingRoot = CreateTempDirectory("iiot-edge-upload-bundle");
         var bundleRoot = Path.Combine(workingRoot, "bundle");
@@ -4426,6 +4470,12 @@ public sealed class ClientReleaseBehaviorTests
         var manifestJson = JsonSerializer.SerializeToNode(
             manifest,
             new JsonSerializerOptions(JsonSerializerDefaults.Web))!.AsObject();
+        if (!includePluginModule)
+        {
+            manifestJson["modules"] = new JsonArray();
+            Directory.Delete(pluginRoot, recursive: true);
+        }
+
         mutateManifest?.Invoke(manifestJson);
         File.WriteAllText(
             Path.Combine(installerRoot, "installer-artifact.json"),

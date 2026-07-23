@@ -23,7 +23,7 @@ public sealed class InfrastructureLoggingFilesystemTests
         Assert.Contains("fileSizeLimitBytes: SingleLogFileSizeLimitBytes", productionSource, StringComparison.Ordinal);
         Assert.Contains("rollOnFileSizeLimit: true", productionSource, StringComparison.Ordinal);
 
-        var serviceName = $"contract-{Guid.NewGuid():N}";
+        var serviceName = $"contract-{Guid.NewGuid().ToString("N")[..8]}";
         var productionLogDirectory = Path.Combine(AppContext.BaseDirectory, "logs");
         var originalOutput = Console.Out;
         using var output = new StringWriter();
