@@ -3384,10 +3384,25 @@ public sealed class ClientReleaseBehaviorTests
                 "/edge-updates/plugins/stable/OldModule/2.0.0/old.zip",
                 new string('e', 64), 50, null, ClientReleaseStatus.Archived));
 
-            // 只让 Published 1.0.0 的文件真实存在；catalog 的文件存在性过滤只按真实事实排除版本。
+            var activePlugin = CreatePluginComponent(
+                "CurrentModule", "当前模块", channel, "1.0.0", "1.0.0", "1.0.0", "99.0.0", "win-x64", "net10.0",
+                "/edge-updates/plugins/stable/CurrentModule/1.0.0/current.zip",
+                new string('f', 64), 60, null, ClientReleaseStatus.Published);
+            componentRepository.Items.Add(activePlugin);
+
+            // 状态活动但文件缺失的组件，映射后没有任何可见版本，也不得留下空组件。
+            componentRepository.Items.Add(CreatePluginComponent(
+                "MissingModule", "文件缺失模块", channel, "1.0.0", "1.0.0", "1.0.0", "99.0.0", "win-x64", "net10.0",
+                "/edge-updates/plugins/stable/MissingModule/1.0.0/missing.zip",
+                new string('1', 64), 70, null, ClientReleaseStatus.Published));
+
+            // 只让 Host Published 1.0.0 和 CurrentModule 的文件真实存在。
             var publishedDir = Path.Combine(edgeRoot, "installers", channel, "1.0.0");
             Directory.CreateDirectory(publishedDir);
             WriteFile(Path.Combine(publishedDir, "installer-artifact.json"), "{}");
+            WriteFile(
+                Path.Combine(edgeRoot, "plugins", channel, "CurrentModule", "1.0.0", "current.zip"),
+                "plugin");
 
             var handler = new GetClientReleaseCatalogHandler(
                 componentRepository,
@@ -3404,8 +3419,11 @@ public sealed class ClientReleaseBehaviorTests
             var entry = Assert.Single(result.Value!.Host.Versions);
             Assert.Equal("1.0.0", entry.Version);
             Assert.Equal("Published", entry.Status);
-            // 没有活动版本的插件组件不返回。
-            Assert.Empty(result.Value.Plugins);
+            Assert.Equal(mixed.Id, entry.ComponentId);
+            // Archived-only 与映射后零版本的插件都不返回，只留下真实可见的 CurrentModule。
+            var plugin = Assert.Single(result.Value.Plugins);
+            Assert.Equal("CurrentModule", plugin.ModuleId);
+            Assert.Equal(activePlugin.Id, Assert.Single(plugin.Versions).ComponentId);
         }
         finally
         {
@@ -3414,25 +3432,105 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
-    public async Task GetClientReleaseHistoryHandler_ShouldReturnArchivedAndDeleted_WithRealDeletionFacts()
+    public async Task GetClientReleaseCatalogHandler_ShouldExcludePluginWhoseOnlyVersionIsPendingDeletion()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-catalog-empty-plugin-root");
+        try
+        {
+            var channel = "stable";
+            var component = CreatePluginComponent(
+                "PendingModule", "待清理模块", channel, "1.0.0", "1.0.0", "1.0.0", "99.0.0", "win-x64", "net10.0",
+                "/edge-updates/plugins/stable/PendingModule/1.0.0/pending.zip",
+                new string('a', 64), 50, null, ClientReleaseStatus.Published);
+            WriteFile(
+                Path.Combine(edgeRoot, "plugins", channel, "PendingModule", "1.0.0", "pending.zip"),
+                "plugin");
+
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(component);
+            var deletionStore = new InMemoryClientReleaseComponentDeletionStore();
+            deletionStore.Add(new ClientReleaseComponentDeletion(
+                component.Id,
+                "Plugin",
+                "PendingModule",
+                channel,
+                "win-x64",
+                ["1.0.0"],
+                "等待文件清理",
+                Guid.NewGuid(),
+                "admin",
+                [
+                    new ClientReleaseComponentDeletionFileTarget(
+                        "plugins/stable/PendingModule/1.0.0/pending.zip",
+                        "PackageFile",
+                        new string('a', 64),
+                        50)
+                ]));
+            var handler = new GetClientReleaseCatalogHandler(
+                componentRepository,
+                deletionStore,
+                Options.Create(new EdgeInstallerArtifactOptions { RootPath = Path.Combine(edgeRoot, "installers") }));
+
+            var result = await handler.Handle(
+                new GetClientReleaseCatalogQuery(channel, "win-x64"),
+                CancellationToken.None);
+
+            Assert.True(result.IsSuccess);
+            Assert.Empty(result.Value!.Plugins);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task GetClientReleaseHistoryHandler_ShouldReturnDatabaseReadModelWithDeletionFacts()
     {
         var channel = "stable";
-        var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
-
-        var archivedHost = CreateHostComponent(
-            channel, "1.0.0", "1.0.0", "win-x64", "net10.0",
-            "/edge-updates/installers/stable/1.0.0/installer-artifact.json",
-            new string('a', 64), 100, null, ClientReleaseStatus.Archived);
-        componentRepository.Items.Add(archivedHost);
-
-        var deletedPlugin = CreatePluginComponent(
-            "RemovedModule", "已删模块", channel, "2.0.0", "1.0.0", "1.0.0", "99.0.0", "win-x64", "net10.0",
-            "/edge-updates/plugins/stable/RemovedModule/2.0.0/pkg.zip",
-            new string('b', 64), 50, null, ClientReleaseStatus.Published);
-        SingleVersion(deletedPlugin).MarkDeleted("管理员确认的硬删除原因");
-        componentRepository.Items.Add(deletedPlugin);
-
-        var handler = new GetClientReleaseHistoryHandler(componentRepository);
+        var archivedHostId = Guid.NewGuid();
+        var deletedPluginId = Guid.NewGuid();
+        var deletedAtUtc = DateTime.UtcNow;
+        var queryService = new StubClientReleaseHistoryQueryService(
+        [
+            new ClientReleaseHistoryComponentReadItem(
+                archivedHostId,
+                "Host",
+                "EdgeHost",
+                "Edge Host",
+                channel,
+                "win-x64",
+                [
+                    new ClientReleaseHistoryVersionReadItem(
+                        Guid.NewGuid(),
+                        "1.0.0",
+                        "Archived",
+                        deletedAtUtc.AddDays(-2),
+                        deletedAtUtc.AddDays(-1),
+                        null,
+                        null,
+                        null)
+                ]),
+            new ClientReleaseHistoryComponentReadItem(
+                deletedPluginId,
+                "Plugin",
+                "RemovedModule",
+                "已删模块",
+                channel,
+                "win-x64",
+                [
+                    new ClientReleaseHistoryVersionReadItem(
+                        Guid.NewGuid(),
+                        "2.0.0",
+                        "Deleted",
+                        deletedAtUtc.AddDays(-2),
+                        deletedAtUtc.AddDays(-1),
+                        deletedAtUtc,
+                        "管理员确认的硬删除原因",
+                        null)
+                ])
+        ]);
+        var handler = new GetClientReleaseHistoryHandler(queryService);
 
         var result = await handler.Handle(
             new GetClientReleaseHistoryQuery(new Pagination { PageNumber = 1, PageSize = 10 }, channel, "win-x64"),
@@ -3442,11 +3540,13 @@ public sealed class ClientReleaseBehaviorTests
         Assert.Equal(2, result.Value!.MetaData.TotalCount);
 
         var hostHistory = Assert.Single(result.Value, item => item.ComponentKind == "Host");
+        Assert.Equal(archivedHostId, hostHistory.ComponentId);
         var hostVersion = Assert.Single(hostHistory.Versions);
         Assert.Equal("Archived", hostVersion.Status);
         Assert.Equal("1.0.0", hostVersion.Version);
 
         var pluginHistory = Assert.Single(result.Value, item => item.ModuleId == "RemovedModule");
+        Assert.Equal(deletedPluginId, pluginHistory.ComponentId);
         var pluginVersion = Assert.Single(pluginHistory.Versions);
         Assert.Equal("Deleted", pluginVersion.Status);
         Assert.Equal("管理员确认的硬删除原因", pluginVersion.DeletionReason);
@@ -3454,25 +3554,31 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
-    public async Task GetClientReleaseHistoryHandler_ShouldExcludeComponentsWithoutHistory_AndPageInDatabase()
+    public async Task GetClientReleaseHistoryHandler_ShouldForwardNormalizedPaginationAndReturnMetadata()
     {
         var channel = "stable";
-        var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
-
-        // 1 个只有活动版本的组件（不得出现在历史）、3 个有归档版本的组件。
-        componentRepository.Items.Add(CreateHostComponent(
-            channel, "9.9.9", "1.0.0", "win-x64", "net10.0",
-            "/edge-updates/installers/stable/9.9.9/installer-artifact.json",
-            new string('f', 64), 10, null, ClientReleaseStatus.Published));
-        for (var index = 0; index < 3; index++)
-        {
-            componentRepository.Items.Add(CreatePluginComponent(
-                $"Hist{index}", $"历史{index}", channel, $"1.0.{index}", "1.0.0", "1.0.0", "99.0.0", "win-x64", "net10.0",
-                $"/edge-updates/plugins/stable/Hist{index}/1.0.{index}/p.zip",
-                new string('b', 64), 50, null, ClientReleaseStatus.Archived));
-        }
-
-        var handler = new GetClientReleaseHistoryHandler(componentRepository);
+        var history = Enumerable.Range(0, 3)
+            .Select(index => new ClientReleaseHistoryComponentReadItem(
+                Guid.NewGuid(),
+                "Plugin",
+                $"Hist{index}",
+                $"历史{index}",
+                channel,
+                "win-x64",
+                [
+                    new ClientReleaseHistoryVersionReadItem(
+                        Guid.NewGuid(),
+                        $"1.0.{index}",
+                        "Archived",
+                        DateTime.UtcNow.AddMinutes(-index),
+                        null,
+                        null,
+                        null,
+                        null)
+                ]))
+            .ToList();
+        var queryService = new StubClientReleaseHistoryQueryService(history);
+        var handler = new GetClientReleaseHistoryHandler(queryService);
 
         var page1 = await handler.Handle(
             new GetClientReleaseHistoryQuery(new Pagination { PageNumber = 1, PageSize = 2 }, channel, "win-x64"),
@@ -3488,9 +3594,11 @@ public sealed class ClientReleaseBehaviorTests
         Assert.Equal(2, page1.Value.MetaData.TotalPages);
         Assert.Single(page2.Value!);
         // 两页合起来正好是 3 个不同历史组件，无重复、无活动组件泄漏。
-        var allModuleIds = page1.Value.Concat(page2.Value).Select(item => item.ModuleId).ToList();
+        var allModuleIds = page1.Value!.Concat(page2.Value!).Select(item => item.ModuleId).ToList();
         Assert.Equal(3, allModuleIds.Distinct().Count());
-        Assert.DoesNotContain(allModuleIds, id => id == "EdgeHost");
+        Assert.Equal(2, queryService.Requests.Count);
+        Assert.Equal((0, 2), (queryService.Requests[0].Skip, queryService.Requests[0].Take));
+        Assert.Equal((2, 2), (queryService.Requests[1].Skip, queryService.Requests[1].Take));
     }
 
     private static ClientReleaseComponent CreateHostComponent(
@@ -5329,6 +5437,26 @@ public sealed class ClientReleaseBehaviorTests
             => SaveChangesAsyncOverride is not null
                 ? SaveChangesAsyncOverride(cancellationToken)
                 : Task.FromResult(1);
+    }
+
+    private sealed class StubClientReleaseHistoryQueryService(
+        IReadOnlyList<ClientReleaseHistoryComponentReadItem> items)
+        : IClientReleaseHistoryQueryService
+    {
+        public List<ClientReleaseHistoryQueryRequest> Requests { get; } = [];
+
+        public Task<(IReadOnlyList<ClientReleaseHistoryComponentReadItem> Items, int TotalCount)> GetPagedAsync(
+            ClientReleaseHistoryQueryRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            IReadOnlyList<ClientReleaseHistoryComponentReadItem> page = items
+                .Skip(request.Skip)
+                .Take(request.Take)
+                .ToList();
+            return Task.FromResult((page, items.Count));
+        }
     }
 
     private sealed class InMemoryRepository<T> : IRepository<T>

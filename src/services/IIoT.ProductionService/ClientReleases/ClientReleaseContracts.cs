@@ -33,6 +33,7 @@ public sealed record ClientPluginReleaseComponentDto(
 
 public sealed record ClientHostVersionEntryDto(
     Guid Id,
+    Guid ComponentId,
     string Channel,
     string Version,
     string HostApiVersion,
@@ -54,6 +55,7 @@ public sealed record ClientHostVersionEntryDto(
 
 public sealed record ClientPluginVersionEntryDto(
     Guid Id,
+    Guid ComponentId,
     string Channel,
     string Version,
     string HostApiVersion,
@@ -286,6 +288,7 @@ internal static class ClientReleaseMapping
                     component.AccentColor,
                     ordered.Select(item => ToPluginVersion(item.Component, item.Version, item.FilesPresent)).ToList());
             })
+            .Where(component => component.Versions.Count > 0)
             .ToList();
     }
 
@@ -347,6 +350,7 @@ internal static class ClientReleaseMapping
     {
         return new ClientHostVersionEntryDto(
             release.Id,
+            component.Id,
             component.Channel,
             release.Version,
             release.HostApiVersion,
@@ -374,6 +378,7 @@ internal static class ClientReleaseMapping
     {
         return new ClientPluginVersionEntryDto(
             release.Id,
+            component.Id,
             component.Channel,
             release.Version,
             release.HostApiVersion,

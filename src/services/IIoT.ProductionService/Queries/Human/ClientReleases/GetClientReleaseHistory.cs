@@ -1,13 +1,9 @@
-using IIoT.Core.Production.Aggregates.ClientReleases;
-using IIoT.Core.Production.Contracts.ClientReleases;
-using IIoT.Core.Production.Specifications.ClientReleases;
-using IIoT.ProductionService.ClientReleases;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Paging;
-using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
 
 namespace IIoT.ProductionService.Queries.ClientReleases;
@@ -23,6 +19,7 @@ public sealed record GetClientReleaseHistoryQuery(
     string? TargetRuntime = null) : IHumanQuery<Result<PagedList<ClientReleaseHistoryComponentDto>>>;
 
 public sealed record ClientReleaseHistoryComponentDto(
+    Guid ComponentId,
     string ComponentKind,
     string ModuleId,
     string DisplayName,
@@ -41,45 +38,35 @@ public sealed record ClientReleaseHistoryVersionDto(
     string? DeletionFailure);
 
 public sealed class GetClientReleaseHistoryHandler(
-    IReadRepository<ClientReleaseComponent> componentRepository)
+    IClientReleaseHistoryQueryService historyQueryService)
     : IQueryHandler<GetClientReleaseHistoryQuery, Result<PagedList<ClientReleaseHistoryComponentDto>>>
 {
     public async Task<Result<PagedList<ClientReleaseHistoryComponentDto>>> Handle(
         GetClientReleaseHistoryQuery request,
         CancellationToken cancellationToken)
     {
-        var channel = string.IsNullOrWhiteSpace(request.Channel) ? null : request.Channel.Trim();
-        var components = await componentRepository.GetListAsync(
-            new ClientReleaseComponentsByChannelSpec(channel, request.TargetRuntime, onlyPublished: false, includeArchived: true),
+        var skip = (request.PaginationParams.PageNumber - 1) * request.PaginationParams.PageSize;
+        var (history, totalCount) = await historyQueryService.GetPagedAsync(
+            new ClientReleaseHistoryQueryRequest(
+                request.Channel,
+                request.TargetRuntime,
+                skip,
+                request.PaginationParams.PageSize),
             cancellationToken);
 
-        // 只保留有历史版本的组件，版本集合收窄为历史状态。
-        var history = components
-            .Select(component => (Component: component, Versions: component.Versions
-                .Where(version => version.Status is ClientReleaseStatus.Archived
-                    or ClientReleaseStatus.Deleted
-                    or ClientReleaseStatus.DeleteFailed)
-                .OrderByDescending(version => version.DeletedAtUtc ?? version.PublishedAtUtc ?? version.CreatedAtUtc)
-                .ToList()))
-            .Where(item => item.Versions.Count > 0)
-            .OrderByDescending(item => item.Versions[0].DeletedAtUtc ?? item.Versions[0].PublishedAtUtc ?? item.Versions[0].CreatedAtUtc)
-            .ToList();
-
-        var skip = (request.PaginationParams.PageNumber - 1) * request.PaginationParams.PageSize;
         var page = history
-            .Skip(skip)
-            .Take(request.PaginationParams.PageSize)
             .Select(item => new ClientReleaseHistoryComponentDto(
-                item.Component.ComponentKind.ToString(),
-                item.Component.ComponentKey,
-                item.Component.DisplayName,
-                item.Component.Channel,
-                item.Component.TargetRuntime,
+                item.ComponentId,
+                item.ComponentKind,
+                item.ComponentKey,
+                item.DisplayName,
+                item.Channel,
+                item.TargetRuntime,
                 item.Versions
                     .Select(version => new ClientReleaseHistoryVersionDto(
                         version.Id,
                         version.Version,
-                        version.Status.ToString(),
+                        version.Status,
                         version.CreatedAtUtc,
                         version.PublishedAtUtc,
                         version.DeletedAtUtc,
@@ -90,7 +77,7 @@ public sealed class GetClientReleaseHistoryHandler(
 
         return Result.Success(new PagedList<ClientReleaseHistoryComponentDto>(
             page,
-            history.Count,
+            totalCount,
             request.PaginationParams));
     }
 }

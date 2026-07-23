@@ -124,6 +124,44 @@ public sealed class HttpControllerContractTests
             ((IRequestSizeLimitMetadata)GetRequiredAttribute<RequestSizeLimitAttribute>(report)).MaxRequestBodySize);
     }
 
+    [Fact]
+    public void HumanClientReleaseCatalogAndHistory_ShouldExposeExactReadContracts()
+    {
+        var controller = typeof(HumanClientReleaseController);
+        var catalog = controller.GetMethod(nameof(HumanClientReleaseController.GetCatalog))!;
+        var history = controller.GetMethod(nameof(HumanClientReleaseController.GetHistory))!;
+        var catalogParameters = catalog.GetParameters();
+        var historyParameters = history.GetParameters();
+
+        Assert.Equal(
+            "api/v1/human/client-releases",
+            GetRequiredAttribute<RouteAttribute>(controller).Template);
+        Assert.Equal(
+            HttpApiRateLimitPolicies.GeneralApi,
+            GetRequiredAttribute<EnableRateLimitingAttribute>(controller).PolicyName);
+        Assert.Equal("catalog", GetRequiredAttribute<HttpGetAttribute>(catalog).Template);
+        Assert.Equal("history", GetRequiredAttribute<HttpGetAttribute>(history).Template);
+
+        Assert.Equal(
+            ["channel", "targetRuntime", "onlyPublished", "cancellationToken"],
+            catalogParameters.Select(parameter => parameter.Name));
+        Assert.DoesNotContain(
+            catalogParameters,
+            parameter => string.Equals(parameter.Name, "includeArchived", StringComparison.OrdinalIgnoreCase));
+        Assert.All(
+            catalogParameters[..3],
+            parameter => Assert.NotNull(parameter.GetCustomAttribute<FromQueryAttribute>()));
+
+        Assert.Equal(
+            ["channel", "targetRuntime", "pageNumber", "pageSize", "cancellationToken"],
+            historyParameters.Select(parameter => parameter.Name));
+        Assert.All(
+            historyParameters[..4],
+            parameter => Assert.NotNull(parameter.GetCustomAttribute<FromQueryAttribute>()));
+        Assert.Equal(1, historyParameters[2].DefaultValue);
+        Assert.Equal(10, historyParameters[3].DefaultValue);
+    }
+
     [Theory]
     [InlineData(typeof(EdgeDeviceLogController), nameof(EdgeDeviceLogController.Receive), null, HttpApiRateLimitPolicies.DeviceLogUpload)]
     [InlineData(typeof(EdgeCapacityController), nameof(EdgeCapacityController.ReceiveHourly), "hourly", HttpApiRateLimitPolicies.CapacityUpload)]
