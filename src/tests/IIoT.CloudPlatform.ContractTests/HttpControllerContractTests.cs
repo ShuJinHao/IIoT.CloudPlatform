@@ -162,6 +162,53 @@ public sealed class HttpControllerContractTests
         Assert.Equal(10, historyParameters[3].DefaultValue);
     }
 
+    [Fact]
+    public void HumanDeviceClientOverview_ShouldExposeOnlyPagedListAndReleaseDetailGetContracts()
+    {
+        var controller = typeof(HumanDeviceClientOverviewController);
+        var list = controller.GetMethod(nameof(HumanDeviceClientOverviewController.GetPagedList))!;
+        var releaseDetails = controller.GetMethod(
+            nameof(HumanDeviceClientOverviewController.GetReleaseDetails))!;
+        var listParameters = list.GetParameters();
+        var releaseDetailParameters = releaseDetails.GetParameters();
+        var actions = controller.GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Where(method => method.DeclaringType == controller)
+            .ToArray();
+
+        Assert.Equal(
+            "api/v1/human/device-client-overviews",
+            GetRequiredAttribute<RouteAttribute>(controller).Template);
+        Assert.Equal(
+            HttpApiRateLimitPolicies.GeneralApi,
+            GetRequiredAttribute<EnableRateLimitingAttribute>(controller).PolicyName);
+        Assert.Null(GetRequiredAttribute<HttpGetAttribute>(list).Template);
+        Assert.Equal(
+            "{deviceId:guid}/release-details",
+            GetRequiredAttribute<HttpGetAttribute>(releaseDetails).Template);
+        Assert.DoesNotContain(
+            actions,
+            action => action.GetCustomAttributes<HttpMethodAttribute>()
+                .Any(attribute => attribute.HttpMethods.Any(
+                    verb => !string.Equals(verb, "GET", StringComparison.Ordinal))));
+
+        Assert.Equal(
+            ["pageNumber", "pageSize", "keyword", "sortBy", "sortDirection", "cancellationToken"],
+            listParameters.Select(parameter => parameter.Name));
+        Assert.All(
+            listParameters[..5],
+            parameter => Assert.NotNull(parameter.GetCustomAttribute<FromQueryAttribute>()));
+        Assert.Equal(1, listParameters[0].DefaultValue);
+        Assert.Equal(10, listParameters[1].DefaultValue);
+
+        Assert.Equal(
+            ["deviceId", "channel", "targetRuntime", "cancellationToken"],
+            releaseDetailParameters.Select(parameter => parameter.Name));
+        Assert.NotNull(releaseDetailParameters[0].GetCustomAttribute<FromRouteAttribute>());
+        Assert.All(
+            releaseDetailParameters[1..3],
+            parameter => Assert.NotNull(parameter.GetCustomAttribute<FromQueryAttribute>()));
+    }
+
     [Theory]
     [InlineData(typeof(EdgeDeviceLogController), nameof(EdgeDeviceLogController.Receive), null, HttpApiRateLimitPolicies.DeviceLogUpload)]
     [InlineData(typeof(EdgeCapacityController), nameof(EdgeCapacityController.ReceiveHourly), "hourly", HttpApiRateLimitPolicies.CapacityUpload)]

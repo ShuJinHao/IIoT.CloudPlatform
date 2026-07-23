@@ -92,6 +92,7 @@ public static class DependencyInjection
         builder.Services.AddScoped<IRecipeReadQueryService, QueryServices.RecipeReadQueryService>();
         builder.Services.AddScoped<IDeviceDeletionDependencyQueryService, QueryServices.EfDeviceDeletionDependencyService>();
         builder.Services.AddScoped<IEdgeHostOverviewQueryService, QueryServices.EdgeHostOverviewQueryService>();
+        builder.Services.AddScoped<IDeviceClientOverviewQueryService, QueryServices.DeviceClientOverviewQueryService>();
         builder.Services.AddScoped<IDeviceClientStateStore, EfDeviceClientStateStore>();
         builder.Services.AddScoped<IDeviceClientStateQueryService>(provider =>
             provider.GetRequiredService<IDeviceClientStateStore>());

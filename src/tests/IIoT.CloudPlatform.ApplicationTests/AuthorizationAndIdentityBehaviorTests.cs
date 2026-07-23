@@ -318,6 +318,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         Assert.Contains(ClientReleasePermissions.Publish, permissions);
         Assert.Contains(ClientReleasePermissions.Manage, permissions);
         Assert.Contains(ClientReleasePermissions.HardDelete, permissions);
+        Assert.Contains(DeviceClientOverviewPermissions.Read, permissions);
         Assert.Contains(EdgeHostPermissions.Read, permissions);
         Assert.DoesNotContain("EdgeHost.Manage", permissions);
         Assert.Contains("Role.Read", permissions);
@@ -329,8 +330,29 @@ public sealed class AuthorizationAndIdentityBehaviorTests
     {
         var permissions = SystemRolePermissionTemplates.Templates[SystemRoles.ProductionViewer];
 
+        Assert.Contains(DeviceClientOverviewPermissions.Read, permissions);
         Assert.Contains(EdgeHostPermissions.Read, permissions);
         Assert.DoesNotContain("EdgeHost.Manage", permissions);
+    }
+
+    [Fact]
+    public void SystemRolePermissionTemplates_ShouldKeepOverviewPlcAndReleasePermissionsIndependent()
+    {
+        var deviceAdmin = SystemRolePermissionTemplates.Templates[SystemRoles.DeviceAdmin];
+        var installer = SystemRolePermissionTemplates.Templates[SystemRoles.ClientInstallerOperator];
+        var releaseManager = SystemRolePermissionTemplates.Templates[SystemRoles.ClientReleaseManager];
+
+        Assert.Contains(DeviceClientOverviewPermissions.Read, deviceAdmin);
+        Assert.Contains(EdgeHostPermissions.Read, deviceAdmin);
+        Assert.DoesNotContain(ClientReleasePermissions.Read, deviceAdmin);
+
+        Assert.Contains(DeviceClientOverviewPermissions.Read, installer);
+        Assert.Contains(EdgeHostPermissions.Read, installer);
+        Assert.Contains(ClientReleasePermissions.Read, installer);
+
+        Assert.Contains(DeviceClientOverviewPermissions.Read, releaseManager);
+        Assert.DoesNotContain(EdgeHostPermissions.Read, releaseManager);
+        Assert.Contains(ClientReleasePermissions.Read, releaseManager);
     }
 
     [Fact]

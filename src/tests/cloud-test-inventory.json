@@ -1,19 +1,19 @@
 {
   "schemaVersion": 2,
-  "baselineCases": 765,
-  "requiredCases": 701,
+  "baselineCases": 774,
+  "requiredCases": 710,
   "regressionBaselines": [
     { "regressionId": "CLOUD-ARCH-SUITE", "minimumCases": 72 },
     { "regressionId": "CLOUD-ARCH-FS", "minimumCases": 11 },
     { "regressionId": "CLOUD-UNIT", "minimumCases": 54 },
     { "regressionId": "CLOUD-UNIT-FS", "minimumCases": 1 },
     { "regressionId": "CLOUD-DOMAIN", "minimumCases": 11 },
-    { "regressionId": "CLOUD-APPLICATION", "minimumCases": 149 },
+    { "regressionId": "CLOUD-APPLICATION", "minimumCases": 156 },
     { "regressionId": "CLOUD-APPLICATION-FS", "minimumCases": 5 },
-    { "regressionId": "CLOUD-CONTRACT", "minimumCases": 48 },
+    { "regressionId": "CLOUD-CONTRACT", "minimumCases": 49 },
     { "regressionId": "CLOUD-CONTRACT-FS", "minimumCases": 10 },
     { "regressionId": "CLOUD-PERSISTENCE-SQLITE", "minimumCases": 33 },
-    { "regressionId": "CLOUD-PERSISTENCE-POSTGRES", "minimumCases": 24 },
+    { "regressionId": "CLOUD-PERSISTENCE-POSTGRES", "minimumCases": 25 },
     { "regressionId": "CLOUD-CACHE-001", "minimumCases": 64 },
     { "regressionId": "CLOUD-WORKFLOW", "minimumCases": 21 },
     { "regressionId": "CLOUD-WORKFLOW-FS", "minimumCases": 120 },
@@ -239,12 +239,13 @@
       "owner": "Cloud.Application",
       "executionGroup": "Pure",
       "required": true,
-      "expected": 159,
+      "expected": 166,
       "sources": [
         { "class": "AiReadBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.ApplicationTests/AiReadBehaviorTests.cs", "expected": 41, "capability": "AiRead", "concern": "Security" },
         { "class": "ApplicationFlowGuardTests", "file": "src/tests/IIoT.CloudPlatform.ApplicationTests/ApplicationFlowGuardTests.cs", "expected": 61 },
-        { "class": "AuthorizationAndIdentityBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.ApplicationTests/AuthorizationAndIdentityBehaviorTests.cs", "expected": 30, "capability": "Identity", "concern": "Security" },
+        { "class": "AuthorizationAndIdentityBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.ApplicationTests/AuthorizationAndIdentityBehaviorTests.cs", "expected": 31, "capability": "Identity", "concern": "Security" },
         { "class": "CacheAsideQueryHandlerTests", "file": "src/tests/IIoT.CloudPlatform.ApplicationTests/CacheAsideQueryHandlerTests.cs", "expected": 10, "capability": "Caching", "regressionId": "CLOUD-CACHE-001", "ruleId": "CLOUD-CACHE-001" },
+        { "class": "DeviceClientOverviewBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.ApplicationTests/DeviceClientOverviewBehaviorTests.cs", "expected": 6, "capability": "DeviceClientOverview", "concern": "Security" },
         { "class": "EdgeHostBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.ApplicationTests/EdgeHostBehaviorTests.cs", "expected": 12, "capability": "EdgeHost" },
         { "class": "ProductionCommandBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.ApplicationTests/ProductionCommandBehaviorTests.cs", "expected": 5, "capability": "Production" }
       ]
@@ -286,12 +287,12 @@
       "owner": "Cloud.Contracts",
       "executionGroup": "Pure",
       "required": true,
-      "expected": 48,
+      "expected": 49,
       "sources": [
         { "class": "AiReadHttpContractTests", "file": "src/tests/IIoT.CloudPlatform.ContractTests/AiReadHttpContractTests.cs", "expected": 3, "capability": "AiRead", "concern": "Security" },
         { "class": "CloudOidcProviderBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.ContractTests/CloudOidcProviderBehaviorTests.cs", "expected": 21, "capability": "OIDC", "concern": "Security" },
         { "class": "GatewayAndEventContractTests", "file": "src/tests/IIoT.CloudPlatform.ContractTests/GatewayAndEventContractTests.cs", "expected": 10, "capability": "GatewayEvents" },
-        { "class": "HttpControllerContractTests", "file": "src/tests/IIoT.CloudPlatform.ContractTests/HttpControllerContractTests.cs", "expected": 10, "capability": "HTTP" },
+        { "class": "HttpControllerContractTests", "file": "src/tests/IIoT.CloudPlatform.ContractTests/HttpControllerContractTests.cs", "expected": 11, "capability": "HTTP" },
         { "class": "InfrastructureContractTests", "file": "src/tests/IIoT.CloudPlatform.ContractTests/InfrastructureContractTests.cs", "expected": 1, "capability": "Outbox" },
         { "class": "ProductionContractShapeTests", "file": "src/tests/IIoT.CloudPlatform.ContractTests/ProductionContractShapeTests.cs", "expected": 3, "capability": "Production" }
       ]
@@ -366,12 +367,13 @@
       "owner": "Cloud.Persistence",
       "executionGroup": "Database",
       "required": true,
-      "expected": 24,
+      "expected": 25,
       "sources": [
         { "class": "ClientReleaseCommitRecoveryPostgresTests", "file": "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseCommitRecoveryPostgresTests.cs", "expected": 2, "capability": "ClientRelease", "runtimeDependencies": ["Postgres", "Aspire", "Filesystem"] },
         { "class": "ClientReleaseComponentDeletionPostgresTests", "file": "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseComponentDeletionPostgresTests.cs", "expected": 4, "capability": "ClientRelease", "runtimeDependencies": ["Postgres", "Aspire"] },
         { "class": "ClientReleaseHistoryPostgresTests", "file": "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseHistoryPostgresTests.cs", "expected": 1, "capability": "ClientRelease", "runtimeDependencies": ["Postgres", "Aspire"] },
         { "class": "DatabaseSchemaCompatibilityPostgresTests", "file": "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs", "expected": 1, "capability": "MigrationSchema", "concern": "Compatibility" },
+        { "class": "DeviceClientOverviewPostgresTests", "file": "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DeviceClientOverviewPostgresTests.cs", "expected": 1, "capability": "DeviceClientOverview", "concern": "Security", "runtimeDependencies": ["Postgres", "Aspire"] },
         { "class": "DeviceIdentityQueryPostgresTests", "file": "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DeviceIdentityQueryPostgresTests.cs", "expected": 3, "capability": "DeviceIdentity", "concern": "Security" },
         { "class": "OutboxDispatchPersistenceTests", "file": "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/OutboxDispatchPersistenceTests.cs", "expected": 9, "capability": "Outbox" },
         { "class": "RefreshTokenSessionLimitTests", "file": "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/RefreshTokenSessionLimitTests.cs", "expected": 4, "capability": "Identity", "concern": "Security" }

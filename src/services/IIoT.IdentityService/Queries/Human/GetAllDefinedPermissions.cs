@@ -33,6 +33,9 @@ public class GetAllDefinedPermissionsHandler(
         DevicePermissions.Read, DevicePermissions.Create, DevicePermissions.Update,
         DevicePermissions.Delete, DevicePermissions.CascadeDelete,
 
+        // 设备运行与版本主视图
+        DeviceClientOverviewPermissions.Read,
+
         // 上位机 PLC 状态
         EdgeHostPermissions.Read,
 

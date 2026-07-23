@@ -28,6 +28,7 @@
 
 - Human 读取 PLC runtime state 只能走 `GET /api/v1/human/edge-hosts/{deviceId}/plc-runtime-states`。
 - Human 查询必须使用 `EdgeHost.Read` 权限。
+- Human 统一“设备运行与版本”主视图使用 `DeviceClientOverview.Read`，主列表不得返回或预取 PLC runtime state；只有详情抽屉具备 `EdgeHost.Read` 时才允许调用上述 PLC 专属接口。
 - Human 上位机列表和详情必须以当前人员可访问的 `Device` 为主数据源，左连 `DeviceClientState` 和 `EdgeHostPlcRuntimeState`，不得以旧 `EdgeHost` 配置表作为列表基准。
 - Human 上位机列表的 count、分页和 keyword 过滤必须在数据库侧完成；只允许为当前页设备批量读取 `DeviceClientState` 和 `EdgeHostPlcRuntimeState`，不得为了搜索 PLC 字段把全部授权设备和全部 PLC 状态拉入内存后再分页。
 - Human 查询只能展示设备身份、客户端运行状态和 runtime state 投影，不得反向修配置，不得写 `edge_host_plc_runtime_states`。
