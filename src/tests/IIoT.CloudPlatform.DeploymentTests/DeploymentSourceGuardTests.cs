@@ -508,16 +508,16 @@ public sealed class DeploymentSourceGuardTests
         readmeSource.Should().Contain("日常 `Deploy-Changed.ps1` 内部调用的 `Deploy.ps1` 不安装任何远端 support files");
         readmeSource.Should().Contain("服务器端 `deploy-release.sh` 不再是日常或手工入口");
         readmeSource.Should().Contain("`cloud-ci / build-test`");
-        readmeSource.Should().Contain("16 个物理 runner / 665 case");
+        readmeSource.Should().Contain("16 个物理 runner / 688 case");
         operationsSource.Should().Contain("pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud");
         operationsSource.Should().Contain("project-local `local-release.sh` is a legacy maintenance implementation");
         operationsSource.Should().Contain("`cloud-ci / build-test`");
-        operationsSource.Should().Contain("16 physical runners / 665 cases");
+        operationsSource.Should().Contain("16 physical runners / 688 cases");
         edgeGoLiveSource.Should().Contain("pwsh ./deploy/Deploy-Changed.ps1 -Targets Edge");
         edgeGoLiveSource.Should().Contain("Windows 安装器/Velopack/插件构建");
         edgeGoLiveSource.Should().Contain(
             "scripts/tests/Invoke-CloudTestInventory.ps1 -Mode Required -Configuration Release -NoBuild");
-        edgeGoLiveSource.Should().Contain("16 个物理 runner / 665 case");
+        edgeGoLiveSource.Should().Contain("16 个物理 runner / 688 case");
         runnerSource.Should().Contain("/data/github-runner/cloud");
         runnerSource.Should().Contain("github-runner");
         runnerSource.Should().Contain("self-hosted runner 仅用于 CI 辅助和历史运维");
@@ -930,8 +930,8 @@ public sealed class DeploymentSourceGuardTests
         inventoryScriptSource.Should().Contain("Task.CompletedTask.GetAwaiter" + "().GetResult()");
         inventoryScriptSource.Should().Contain("Task.WaitAll" + "(work)");
         inventoryScriptSource.Should().Contain("response.Result");
-        inventoryManifestSource.Should().Contain("\"baselineCases\": 729");
-        inventoryManifestSource.Should().Contain("\"requiredCases\": 665");
+        inventoryManifestSource.Should().Contain("\"baselineCases\": 752");
+        inventoryManifestSource.Should().Contain("\"requiredCases\": 688");
         inventoryManifestSource.Should().Contain("\"regressionBaselines\"");
         inventoryManifestSource.Should().NotContain("\"regressionId\": null");
         inventoryScriptSource.Should().Contain("RegressionId coverage fell below its non-zero floor");

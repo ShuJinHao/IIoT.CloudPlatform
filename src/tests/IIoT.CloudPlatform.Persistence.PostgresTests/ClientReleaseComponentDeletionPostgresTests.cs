@@ -84,9 +84,11 @@ public sealed class ClientReleaseComponentDeletionPostgresTests(
             Assert.Equal(new string('c', 64), nupkg.Sha256);
             Assert.Equal(5678, nupkg.SizeBytes);
             // 版本列表按序落 jsonb（jsonb 规范化空白，按内容比较）。
+            var persistedVersions = System.Text.Json.JsonSerializer.Deserialize<string[]>(byId.VersionsJson);
+            Assert.NotNull(persistedVersions);
             Assert.Equal(
                 ["1.0.0", "2.0.0"],
-                System.Text.Json.JsonSerializer.Deserialize<string[]>(byId.VersionsJson));
+                persistedVersions);
 
             // catalog 防护依赖 GetByChannelAsync 返回的文件集合：必须 Include(Files)。
             var byChannel = await store.GetByChannelAsync(channel);

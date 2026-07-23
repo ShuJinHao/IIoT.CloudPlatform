@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "baselineCases": 754,
-  "requiredCases": 690,
+  "baselineCases": 752,
+  "requiredCases": 688,
   "regressionBaselines": [
     { "regressionId": "CLOUD-ARCH-SUITE", "minimumCases": 72 },
     { "regressionId": "CLOUD-ARCH-FS", "minimumCases": 11 },
@@ -436,9 +436,9 @@
       "owner": "Cloud.Workflow",
       "executionGroup": "Filesystem",
       "required": true,
-      "expected": 114,
+      "expected": 112,
       "sources": [
-        { "class": "ClientReleaseBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.WorkflowFilesystemTests/ClientReleaseBehaviorTests.cs", "expected": 80, "capability": "ClientRelease" },
+        { "class": "ClientReleaseBehaviorTests", "file": "src/tests/IIoT.CloudPlatform.WorkflowFilesystemTests/ClientReleaseBehaviorTests.cs", "expected": 78, "capability": "ClientRelease" },
         { "class": "ClientReleaseComponentDeletionRecoveryServiceTests", "file": "src/tests/IIoT.CloudPlatform.WorkflowFilesystemTests/ClientReleaseComponentDeletionRecoveryServiceTests.cs", "expected": 2, "capability": "ClientRelease" },
         { "class": "ClientReleasePublishLeaseTests", "file": "src/tests/IIoT.CloudPlatform.WorkflowFilesystemTests/ClientReleasePublishLeaseTests.cs", "expected": 5, "capability": "ClientRelease" },
         { "class": "ClientReleaseUploadSessionTests", "file": "src/tests/IIoT.CloudPlatform.WorkflowFilesystemTests/ClientReleaseUploadSessionTests.cs", "expected": 7, "capability": "ClientRelease" },

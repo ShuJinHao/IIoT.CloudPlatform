@@ -40,7 +40,7 @@ pwsh -NoProfile -File scripts/tests/Invoke-CloudTestInventory.ps1 -Mode Required
 cd src/ui/iiot-web && npm run test:unit && npm run build
 ```
 
-上述 Required 入口会真实执行当前 16 个物理 runner / 665 case，并要求发现数 = 执行数 = 通过数、0 failed、0 skipped。完整后端 EndToEnd 63 case 是依赖 Aspire 的独立显式 lane，需要时使用 `pwsh -NoProfile -File scripts/tests/Invoke-CloudTestInventory.ps1 -Mode EndToEnd -Configuration Release -NoBuild`；若 RabbitMQ/eventbus 无法启动，不得把它冒充安装包链路通过。
+上述 Required 入口会真实执行当前 16 个物理 runner / 688 case，并要求发现数 = 执行数 = 通过数、0 failed、0 skipped。完整后端 EndToEnd 63 case 是依赖 Aspire 的独立显式 lane，需要时使用 `pwsh -NoProfile -File scripts/tests/Invoke-CloudTestInventory.ps1 -Mode EndToEnd -Configuration Release -NoBuild`；若 RabbitMQ/eventbus 无法启动，不得把它冒充安装包链路通过。
 
 ## 2. 先部署 Cloud
 
