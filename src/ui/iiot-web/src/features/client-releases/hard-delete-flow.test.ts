@@ -10,9 +10,9 @@ import type {
   ClientReleaseHardDeletionResultDto,
   ClientHostVersionEntryDto,
 } from './api';
-import ReleaseHardDeleteModal, { type HardDeleteProblem } from './ReleaseHardDeleteModal.vue';
+import ReleaseHardDeleteModal from './ReleaseHardDeleteModal.vue';
 import { useClientReleases } from './useClientReleases';
-import type { ReleaseCatalogRow } from './types';
+import type { HardDeleteProblem, ReleaseCatalogRow } from './types';
 
 // ===== API 模块整体打桩：组件/组合式函数走真实流程，只有边界是假的 =====
 const apiMocks = vi.hoisted(() => ({

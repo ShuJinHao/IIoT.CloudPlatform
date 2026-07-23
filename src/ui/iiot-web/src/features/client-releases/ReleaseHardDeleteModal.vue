@@ -53,14 +53,7 @@ import { computed, ref, watch } from 'vue';
 import UiButton from '../../components/ui/UiButton.vue';
 import UiInput from '../../components/ui/UiInput.vue';
 import UiModal from '../../components/ui/UiModal.vue';
-import type { ReleaseCatalogRow } from './types';
-
-export interface HardDeleteProblem {
-  title: string;
-  detail?: string;
-  errors: string[];
-  deletionId?: string;
-}
+import type { HardDeleteProblem, ReleaseCatalogRow } from './types';
 
 const props = defineProps<{
   target: ReleaseCatalogRow | null;

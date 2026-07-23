@@ -4,7 +4,7 @@
       <div class="table-heading">
         <div>
           <h2>版本 catalog</h2>
-          <p>宿主和工序插件统一展示，历史版本从行内查看</p>
+          <p>宿主和工序插件统一展示，其他活动版本从行内查看；归档和删除历史见下方。</p>
         </div>
       </div>
       <UiDataTable :columns="columns" :data="rows" :loading="loading" :row-key="rowKey">

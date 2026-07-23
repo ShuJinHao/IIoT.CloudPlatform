@@ -277,6 +277,8 @@ export interface ClientReleaseHardDeletionResultDto {
 export const hardDeleteClientReleaseComponentApi = (componentId: string, reason: string) =>
   http.delete<ClientReleaseHardDeletionResultDto>(`${basePath}/components/${componentId}`, {
     data: { reason },
+    // 错误由删除弹窗内联呈现 ProblemDetails，httpClient 不再额外弹全局通知，避免双层弹窗。
+    inlineFeedback: true,
   });
 
 export interface ClientReleaseComponentDeletionDto {

@@ -22,7 +22,6 @@ import { useListPage } from '../../core/list-page';
 import { isApiResult, type ApiResult } from '../../core/types/api';
 import { readProblemDetails, resolveProblemNotification } from '../../core/http/problemDetails';
 import { notifyError, notifySuccess, requestConfirmation } from '../../utils/feedback';
-import type { HardDeleteProblem } from './ReleaseHardDeleteModal.vue';
 import {
   formatDate,
   formatReleaseNotes,
@@ -31,6 +30,7 @@ import {
   pickCurrentVersion,
   statusText,
   statusTone,
+  type HardDeleteProblem,
   type ReleaseCatalogRow,
   type ReleaseDetail,
   type ReleaseVersionEntry,

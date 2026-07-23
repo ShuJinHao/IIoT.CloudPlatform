@@ -14,6 +14,14 @@ export interface DeletionRetryOutcome {
   auditConfirmed: boolean;
 }
 
+/** 永久删除失败时展示在弹窗内的后端 ProblemDetails 摘要。 */
+export interface HardDeleteProblem {
+  title: string;
+  detail?: string;
+  errors: string[];
+  deletionId?: string;
+}
+
 // 重试永久删除只有“清理成功且成功审计已确认落库”才算完成；否则保持待恢复。
 export function isDeletionRetryComplete(outcome: DeletionRetryOutcome): boolean {
   return outcome.succeeded && outcome.auditConfirmed;
