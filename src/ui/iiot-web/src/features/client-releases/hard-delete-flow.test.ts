@@ -18,7 +18,6 @@ import type { HardDeleteProblem, ReleaseCatalogRow } from './types';
 const apiMocks = vi.hoisted(() => ({
   getClientReleaseCatalogApi: vi.fn(),
   getClientReleaseHistoryApi: vi.fn(),
-  getDeviceClientVersionInventoryApi: vi.fn(),
   getClientReleaseComponentDeletionsApi: vi.fn(),
   hardDeleteClientReleaseComponentApi: vi.fn(),
   retryClientReleaseComponentDeletionApi: vi.fn(),
@@ -169,7 +168,6 @@ function makeRetryResult(overrides: Partial<ClientReleaseComponentDeletionRetryR
 function mockHappyApis() {
   apiMocks.getClientReleaseCatalogApi.mockResolvedValue(makeCatalog());
   apiMocks.getClientReleaseHistoryApi.mockResolvedValue(makeHistoryPage([]));
-  apiMocks.getDeviceClientVersionInventoryApi.mockResolvedValue([]);
   apiMocks.getClientReleaseComponentDeletionsApi.mockResolvedValue([]);
 }
 

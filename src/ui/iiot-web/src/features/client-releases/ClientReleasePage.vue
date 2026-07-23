@@ -30,7 +30,6 @@
         @retry="fetchHistory"
       />
     </template>
-    <ReleaseInventorySection v-else-if="activeView === 'inventory'" :columns="inventoryColumns" :inventory="inventory" :loading="loadingInventory" />
     <NiondTableCard v-else>
       <EdgeBindingDownloadPanel :plugin-components="catalog?.plugins ?? []" :channel="channelDisplay" :target-runtime="targetRuntime || 'win-x64'" :host-version="selectedHostPackageVersion" />
     </NiondTableCard>
@@ -64,13 +63,12 @@ import ReleaseDetailModal from './ReleaseDetailModal.vue';
 import ReleaseHardDeleteModal from './ReleaseHardDeleteModal.vue';
 import ReleaseHistoryModal from './ReleaseHistoryModal.vue';
 import ReleaseHistorySection from './ReleaseHistorySection.vue';
-import ReleaseInventorySection from './ReleaseInventorySection.vue';
 import { useClientReleases } from './useClientReleases';
 import './client-release-page.css';
 
 const state = useClientReleases();
 const {
-  targetRuntime, catalog, inventory, loadingCatalog, loadingInventory, submitting,
+  targetRuntime, catalog, loadingCatalog, submitting,
   showHistoryModal, showReleaseDetailModal, selectedReleaseRow, selectedReleaseDetail,
   historyItems, historyTotal, historyPage, historyPageSize, loadingHistory, historyError,
   showHardDeleteModal, hardDeleteTarget, hardDeleteConfirmText, hardDeleteReason, hardDeleteProblem,
@@ -78,7 +76,7 @@ const {
   canGenerateInstaller, canManageReleases, canHardDelete, activeView, isPublishRoute,
   pageTitle, pageSubtitle, channelDisplay, selectedHostPackageVersion,
   releaseCatalogRows, selectedOtherVersions, historyModalTitle, releaseCatalogColumns,
-  historyColumns, inventoryColumns,
+  historyColumns,
   refresh, fetchHistory, gotoHistoryPage, goPublishManager, goInstallerCenter,
   closeHardDeleteModal, submitHardDelete, retryDeletion,
 } = state;

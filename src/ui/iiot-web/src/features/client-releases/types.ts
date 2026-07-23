@@ -1,10 +1,9 @@
 import type {
   ClientHostVersionEntryDto,
   ClientPluginVersionEntryDto,
-  DeviceClientVersionInventoryDto,
 } from './api';
 
-export type ViewMode = 'catalog' | 'inventory' | 'binding';
+export type ViewMode = 'catalog' | 'binding';
 export type TagTone = 'default' | 'primary' | 'info' | 'success' | 'warning' | 'error';
 export type ReleaseKind = 'host' | 'plugin';
 export type ReleaseVersionEntry = ClientHostVersionEntryDto | ClientPluginVersionEntryDto;
@@ -107,10 +106,6 @@ export function formatDate(value?: string | null): string {
 export function formatReleaseNotes(value?: string | null, fallback = '-'): string {
   const text = value?.trim();
   return text && text.length > 0 ? text : fallback;
-}
-
-export function formatCurrentVersion(row: DeviceClientVersionInventoryDto): string {
-  return row.hostVersion || row.currentVersion || '-';
 }
 
 export function pickCurrentVersion<T extends ReleaseVersionEntry>(versions: T[]): T | null {

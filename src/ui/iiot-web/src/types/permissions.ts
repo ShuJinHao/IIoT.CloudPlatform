@@ -35,6 +35,11 @@ export const Permissions = {
     Read: 'EdgeHost.Read',
   },
 
+  // ===== 设备运行与版本统一主视图 =====
+  DeviceClientOverview: {
+    Read: 'DeviceClientOverview.Read',
+  },
+
   // ===== 配方管理 =====
   Recipe: {
     Read:   'Recipe.Read',

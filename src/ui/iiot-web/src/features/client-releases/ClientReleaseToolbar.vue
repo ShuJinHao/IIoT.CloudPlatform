@@ -10,10 +10,6 @@
           <CloudDownload :size="16" />
           版本 catalog
         </button>
-        <button class="release-tab" :class="{ 'is-active': activeView === 'inventory' }" type="button" @click="$emit('update:activeView', 'inventory')">
-          <MonitorCheck :size="16" />
-          设备客户端状态
-        </button>
       </div>
       <div v-else class="release-mode-label">
         <Settings2 :size="16" />
@@ -30,7 +26,7 @@
 </template>
 
 <script setup lang="ts">
-import { Boxes, CloudDownload, MonitorCheck, RefreshCw, Settings2 } from 'lucide-vue-next';
+import { Boxes, CloudDownload, RefreshCw, Settings2 } from 'lucide-vue-next';
 import NiondToolbar from '../../components/layout/NiondToolbar.vue';
 import UiButton from '../../components/ui/UiButton.vue';
 import type { ViewMode } from './types';

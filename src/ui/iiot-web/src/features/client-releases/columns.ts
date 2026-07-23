@@ -3,9 +3,7 @@ import { Archive, ExternalLink, History, Info, ShieldX, Trash2 } from 'lucide-vu
 import UiButton from '../../components/ui/UiButton.vue';
 import UiTag from '../../components/ui/UiTag.vue';
 import type { UiDataTableColumn } from '../../components/ui/types';
-import type { DeviceClientVersionInventoryDto } from './api';
 import {
-  formatCurrentVersion,
   formatDate,
   formatReleaseNotes,
   formatSize,
@@ -201,27 +199,4 @@ export function createHistoryColumns(
   }
 
   return columns;
-}
-
-export function createInventoryColumns(): UiDataTableColumn<DeviceClientVersionInventoryDto>[] {
-  return [
-    { title: '设备名称', key: 'deviceName', minWidth: 190, render: (row) => h('strong', { class: 'device-name' }, row.deviceName) },
-    { title: 'IP', key: 'primaryIp', width: 150, render: (row) => h('span', row.primaryIp || '-') },
-    {
-      title: '软件状态',
-      key: 'softwareStatus',
-      width: 140,
-      render: (row) => h(UiTag, { type: statusTone(row.softwareStatus), size: 'small', bordered: false }, () => statusText(row.softwareStatus)),
-    },
-    { title: '最后运行心跳', key: 'lastRuntimeHeartbeatAtUtc', minWidth: 170, render: (row) => h('span', formatDate(row.lastRuntimeHeartbeatAtUtc)) },
-    {
-      title: '安装状态',
-      key: 'installStatus',
-      width: 120,
-      render: (row) => h(UiTag, { type: statusTone(row.installStatus), size: 'small', bordered: false }, () => statusText(row.installStatus)),
-    },
-    { title: '当前版本', key: 'currentVersion', minWidth: 140, render: (row) => h('strong', { class: 'current-version' }, formatCurrentVersion(row)) },
-    { title: '版本上报时间', key: 'reportedAtUtc', minWidth: 170, render: (row) => h('span', formatDate(row.reportedAtUtc || row.receivedAtUtc)) },
-    { title: '问题', key: 'issue', minWidth: 240, render: (row) => h('span', { class: row.issue ? 'issue-text' : '' }, row.issue || '-') },
-  ];
 }

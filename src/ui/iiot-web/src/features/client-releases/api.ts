@@ -75,40 +75,6 @@ export interface ClientPluginVersionEntryDto {
   deletionFailure?: string | null;
 }
 
-export interface DeviceClientVersionInventoryDto {
-  deviceId: string;
-  deviceName: string;
-  clientCode: string;
-  primaryIp?: string | null;
-  localIpAddresses: string[];
-  remoteIpAddress?: string | null;
-  channel?: string | null;
-  hostVersion?: string | null;
-  hostApiVersion?: string | null;
-  hostUpdateStatus: string;
-  hostCompatibilityIssue?: string | null;
-  installStatus: string;
-  softwareStatus: string;
-  currentVersion: string;
-  issue?: string | null;
-  versionIssue?: string | null;
-  cloudIssue?: string | null;
-  lastRuntimeHeartbeatAtUtc?: string | null;
-  reportedAtUtc?: string | null;
-  receivedAtUtc?: string | null;
-  plugins: DeviceClientPluginInventoryDto[];
-}
-
-export interface DeviceClientPluginInventoryDto {
-  moduleId: string;
-  displayName?: string | null;
-  version?: string | null;
-  hostApiVersion?: string | null;
-  enabled: boolean;
-  updateStatus: string;
-  compatibilityIssue?: string | null;
-}
-
 export interface ClientReleaseRetentionPolicyDto {
   maxVersionsPerComponent: number;
   updatedAtUtc: string;
@@ -157,19 +123,6 @@ export const deleteClientReleaseFilesApi = (releaseId: string, reason?: string |
 
 export const updateClientReleaseStatusApi = (releaseId: string, status: string) =>
   http.put<void>(`${basePath}/${releaseId}/status`, { status });
-
-export const getDeviceClientVersionInventoryApi = (params: {
-  channel?: string;
-  targetRuntime?: string;
-  keyword?: string;
-}) =>
-  http.get<DeviceClientVersionInventoryDto[]>(`${basePath}/device-inventory`, {
-    params: {
-      channel: params.channel || undefined,
-      targetRuntime: params.targetRuntime || undefined,
-      keyword: params.keyword || undefined,
-    },
-  });
 
 export interface EdgeBindingSelection {
   moduleId: string;

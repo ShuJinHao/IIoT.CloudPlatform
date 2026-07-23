@@ -227,7 +227,7 @@ const navItems: NavItem[] = [
   { name: 'Employees', path: '/employees', labelKey: 'nav.employees', icon: Users, permission: Permissions.Employee.Read },
   { name: 'MasterDataProcesses', path: '/master-data/processes', labelKey: 'nav.processes', icon: Settings2, permission: Permissions.Process.Read },
   { name: 'Devices', path: '/devices', labelKey: 'nav.devices', icon: Factory, permission: Permissions.Device.Read },
-  { name: 'EdgeHosts', path: '/edge-hosts', labelKey: 'nav.edgeHosts', icon: Network, permission: Permissions.EdgeHost.Read },
+  { name: 'DeviceClientOverviews', path: '/device-client-overviews', labelKey: 'nav.deviceClientOverviews', icon: Network, permission: Permissions.DeviceClientOverview.Read },
   { name: 'Recipes', path: '/recipes', labelKey: 'nav.recipes', icon: ClipboardList, permission: Permissions.Recipe.Read },
   { name: 'PassStation', path: '/pass-station', labelKey: 'nav.passStation', icon: Route, permission: Permissions.Device.Read },
   { name: 'Capacity', path: '/capacity', labelKey: 'nav.capacity', icon: BarChart3, permission: Permissions.Device.Read },

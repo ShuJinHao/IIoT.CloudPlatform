@@ -2,11 +2,11 @@ import { h } from 'vue';
 import UiButton from '../../components/ui/UiButton.vue';
 import UiTag from '../../components/ui/UiTag.vue';
 import type { UiDataTableColumn } from '../../components/ui/types';
-import type { EdgeHostListItemDto, EdgeHostPlcRuntimeStateDto } from './api';
-import { formatDateTime, formatIpAddresses } from './types';
+import type { DeviceClientOverviewItemDto, EdgeHostPlcRuntimeStateDto } from './api';
+import { formatDateTime } from './types';
 
-interface EdgeHostColumnOptions {
-  onOpenPlcState: (host: EdgeHostListItemDto) => void;
+interface OverviewColumnOptions {
+  onOpenDetail: (row: DeviceClientOverviewItemDto) => void;
 }
 
 type TagTone = 'default' | 'info' | 'success' | 'warning' | 'error';
@@ -28,7 +28,7 @@ function softwareStatusTone(status?: string | null): TagTone {
   }
 }
 
-function softwareStatusText(status?: string | null): string {
+export function softwareStatusText(status?: string | null): string {
   switch ((status ?? '').toLowerCase()) {
     case 'running':
       return '运行中';
@@ -44,6 +44,28 @@ function softwareStatusText(status?: string | null): string {
       return '无运行心跳';
     default:
       return status || '未知';
+  }
+}
+
+// 版本/安装/升级状态（installStatus、hostUpdateStatus、插件 updateStatus）沿用发布管理的中文语义。
+export function releaseStatusText(status?: string | null): string {
+  switch ((status ?? '').toLowerCase()) {
+    case 'normal':
+      return '正常';
+    case 'latest':
+      return '已最新';
+    case 'updateavailable':
+      return '可更新';
+    case 'incompatible':
+      return '不兼容';
+    case 'missingreport':
+      return '未上报';
+    case 'norelease':
+      return '无发布';
+    case 'offline':
+      return '上报超时';
+    default:
+      return softwareStatusText(status);
   }
 }
 
@@ -77,19 +99,18 @@ function runtimeStatusText(status?: string | null): string {
   }
 }
 
-export function createEdgeHostColumns(
-  options: EdgeHostColumnOptions,
-): UiDataTableColumn<EdgeHostListItemDto>[] {
+// 主表只渲染冻结契约的窄字段：设备、IP、软件状态、当前版本、异常摘要。
+// 「最后运行心跳」是合法 sortBy 但不在窄字段里，只在详情抽屉展示。
+export function createOverviewColumns(
+  options: OverviewColumnOptions,
+): UiDataTableColumn<DeviceClientOverviewItemDto>[] {
   return [
     {
-      title: '上位机',
-      key: 'hostName',
-      minWidth: 190,
+      title: '设备名称',
+      key: 'deviceName',
+      minWidth: 200,
       render(row) {
-        return h('div', { class: 'cell-stack' }, [
-          h('span', { class: 'cell-name' }, row.hostName),
-          h('code', { class: 'cell-code' }, row.clientCode),
-        ]);
+        return h('span', { class: 'cell-name' }, row.deviceName);
       },
     },
     {
@@ -97,11 +118,11 @@ export function createEdgeHostColumns(
       key: 'primaryIpAddress',
       minWidth: 150,
       render(row) {
-        return h('span', { class: 'cell-muted' }, formatIpAddresses(row.primaryIpAddress, row.localIpAddresses));
+        return h('span', { class: 'cell-muted' }, row.primaryIpAddress || '-');
       },
     },
     {
-      title: '客户端状态',
+      title: '软件状态',
       key: 'softwareStatus',
       width: 130,
       render(row) {
@@ -115,42 +136,15 @@ export function createEdgeHostColumns(
     {
       title: '当前版本',
       key: 'currentVersion',
-      minWidth: 150,
+      minWidth: 140,
       render(row) {
         return h('span', { class: 'cell-muted' }, row.currentVersion || '-');
       },
     },
     {
-      title: '最后运行心跳',
-      key: 'lastRuntimeHeartbeatAtUtc',
-      minWidth: 170,
-      render(row) {
-        return h('span', { class: 'cell-muted' }, formatDateTime(row.lastRuntimeHeartbeatAtUtc));
-      },
-    },
-    {
-      title: 'PLC 状态',
-      key: 'plcCount',
-      width: 150,
-      render(row) {
-        const text = row.plcCount > 0
-          ? `${row.connectedPlcCount}/${row.plcCount} 已连接`
-          : '未上报';
-        return h('span', { class: row.faultedPlcCount > 0 ? 'cell-error' : 'cell-count' }, text);
-      },
-    },
-    {
-      title: 'PLC 上报时间',
-      key: 'lastPlcSeenAtUtc',
-      minWidth: 170,
-      render(row) {
-        return h('span', { class: 'cell-muted' }, formatDateTime(row.lastPlcSeenAtUtc));
-      },
-    },
-    {
-      title: '问题',
+      title: '异常摘要',
       key: 'issue',
-      minWidth: 210,
+      minWidth: 220,
       render(row) {
         return h('span', { class: row.issue ? 'cell-error' : 'cell-muted' }, row.issue || '-');
       },
@@ -158,13 +152,13 @@ export function createEdgeHostColumns(
     {
       title: '操作',
       key: 'actions',
-      width: 120,
+      width: 110,
       align: 'right',
       render(row) {
         return h(
           UiButton,
-          { size: 'tiny', type: 'primary', secondary: true, onClick: () => options.onOpenPlcState(row) },
-          { default: () => 'PLC 状态' },
+          { size: 'tiny', type: 'primary', secondary: true, onClick: () => options.onOpenDetail(row) },
+          { default: () => '详情' },
         );
       },
     },
@@ -176,7 +170,7 @@ export function createPlcRuntimeStateColumns(): UiDataTableColumn<EdgeHostPlcRun
     {
       title: 'PLC',
       key: 'plcCode',
-      minWidth: 220,
+      minWidth: 200,
       render(row) {
         return h('div', { class: 'cell-stack' }, [
           h('code', { class: 'cell-code' }, row.plcCode),
@@ -187,7 +181,7 @@ export function createPlcRuntimeStateColumns(): UiDataTableColumn<EdgeHostPlcRun
     {
       title: '运行状态',
       key: 'runtimeStatus',
-      width: 120,
+      width: 110,
       render(row) {
         return h(
           UiTag,
@@ -199,7 +193,7 @@ export function createPlcRuntimeStateColumns(): UiDataTableColumn<EdgeHostPlcRun
     {
       title: '协议/地址',
       key: 'runtimeAddress',
-      minWidth: 220,
+      minWidth: 200,
       render(row) {
         return h('div', { class: 'cell-stack' }, [
           h('span', { class: 'cell-muted' }, row.runtimeProtocol || '-'),
@@ -210,7 +204,7 @@ export function createPlcRuntimeStateColumns(): UiDataTableColumn<EdgeHostPlcRun
     {
       title: '工位',
       key: 'runtimeStationCode',
-      width: 120,
+      width: 110,
       render(row) {
         return h('span', { class: 'cell-muted' }, row.runtimeStationCode || '-');
       },
@@ -218,7 +212,7 @@ export function createPlcRuntimeStateColumns(): UiDataTableColumn<EdgeHostPlcRun
     {
       title: '最后错误',
       key: 'lastError',
-      minWidth: 220,
+      minWidth: 200,
       render(row) {
         return h('span', { class: row.lastError ? 'cell-error' : 'cell-muted' }, row.lastError || '-');
       },
@@ -226,7 +220,7 @@ export function createPlcRuntimeStateColumns(): UiDataTableColumn<EdgeHostPlcRun
     {
       title: '最后上报',
       key: 'lastSeenAtUtc',
-      minWidth: 170,
+      minWidth: 160,
       render(row) {
         return h('span', { class: 'cell-muted' }, formatDateTime(row.lastSeenAtUtc));
       },

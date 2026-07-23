@@ -7,15 +7,13 @@ import {
   getClientReleaseCatalogApi,
   getClientReleaseComponentDeletionsApi,
   getClientReleaseHistoryApi,
-  getDeviceClientVersionInventoryApi,
   hardDeleteClientReleaseComponentApi,
   retryClientReleaseComponentDeletionApi,
   type ClientReleaseCatalogDto,
   type ClientReleaseComponentDeletionDto,
   type ClientReleaseHistoryComponentDto,
-  type DeviceClientVersionInventoryDto,
 } from './api';
-import { createHistoryColumns, createInventoryColumns, createReleaseCatalogColumns } from './columns';
+import { createHistoryColumns, createReleaseCatalogColumns } from './columns';
 import { useAuthStore } from '../../stores/auth';
 import { Permissions } from '../../types/permissions';
 import { useListPage } from '../../core/list-page';
@@ -53,12 +51,8 @@ export function useClientReleases() {
   const router = useRouter();
   const channel = ref('stable');
   const targetRuntime = ref('win-x64');
-  const keyword = ref('');
-  const onlyPublished = ref(false);
   const catalog = ref<ClientReleaseCatalogDto | null>(null);
-  const inventory = ref<DeviceClientVersionInventoryDto[]>([]);
   const loadingCatalog = ref(false);
-  const loadingInventory = ref(false);
   const submitting = ref(false);
   const showHistoryModal = ref(false);
   const showReleaseDetailModal = ref(false);
@@ -177,7 +171,6 @@ export function useClientReleases() {
     onArchive: archiveReleaseVersion,
     onDeleteFiles: deleteReleaseFiles,
   }));
-  const inventoryColumns = createInventoryColumns();
 
   async function fetchCatalog() {
     loadingCatalog.value = true;
@@ -185,27 +178,11 @@ export function useClientReleases() {
       catalog.value = await getClientReleaseCatalogApi({
         channel: channel.value,
         targetRuntime: targetRuntime.value,
-        onlyPublished: onlyPublished.value,
       });
     } catch {
       catalog.value = null;
     } finally {
       loadingCatalog.value = false;
-    }
-  }
-
-  async function fetchInventory() {
-    loadingInventory.value = true;
-    try {
-      inventory.value = await getDeviceClientVersionInventoryApi({
-        channel: channel.value,
-        targetRuntime: targetRuntime.value,
-        keyword: keyword.value,
-      });
-    } catch {
-      inventory.value = [];
-    } finally {
-      loadingInventory.value = false;
     }
   }
 
@@ -229,7 +206,7 @@ export function useClientReleases() {
   }
 
   async function refresh() {
-    const tasks = [fetchCatalog(), fetchInventory(), history.refresh()];
+    const tasks = [fetchCatalog(), history.refresh()];
     if (canHardDelete.value) tasks.push(fetchDeletions());
     await Promise.all(tasks);
   }
@@ -414,12 +391,6 @@ export function useClientReleases() {
     }
   }
 
-  watch(activeView, () => {
-    if (activeView.value === 'inventory' && inventory.value.length === 0) {
-      void fetchInventory();
-    }
-  });
-
   watch(canGenerateInstaller, (value) => {
     if (!value && activeView.value === 'binding') {
       activeView.value = 'catalog';
@@ -429,11 +400,8 @@ export function useClientReleases() {
   return {
     channel,
     targetRuntime,
-    keyword,
     catalog,
-    inventory,
     loadingCatalog,
-    loadingInventory,
     submitting,
     showHistoryModal,
     showReleaseDetailModal,
@@ -469,7 +437,6 @@ export function useClientReleases() {
     historyModalTitle,
     releaseCatalogColumns,
     historyColumns,
-    inventoryColumns,
     refresh,
     fetchHistory,
     gotoHistoryPage: history.gotoPage,
