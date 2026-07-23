@@ -2,6 +2,7 @@ using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.EntityFrameworkCore;
 using IIoT.EntityFrameworkCore.ClientReleases;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Xunit;
 
 namespace IIoT.CloudPlatform.Persistence.PostgresTests;
@@ -9,11 +10,159 @@ namespace IIoT.CloudPlatform.Persistence.PostgresTests;
 /// <summary>
 /// 永久删除操作的 PostgreSQL 持久化映射验证：文件事实（类型/SHA256/大小）、管理员身份、
 /// 两阶段状态与文件集合加载（GetByChannelAsync 必须 Include(Files)，否则 catalog 防护不生效）。
+/// 同时验证“删除组件 + 写删除操作”同一事务：成功时组件消失且操作存在；提交失败时组件保留且操作不存在。
 /// </summary>
 [Collection(PostgresPersistenceIntegrationCollection.Name)]
 public sealed class ClientReleaseComponentDeletionPostgresTests(
     ClientReleaseCommitRecoveryPostgresFixture fixture)
 {
+    [Fact]
+    public async Task SameTransaction_ShouldCommitComponentDeleteAndOperationTogether()
+    {
+        var connectionString = await fixture.GetConnectionStringAsync();
+        var options = new DbContextOptionsBuilder<IIoTDbContext>()
+            .UseNpgsql(connectionString)
+            .Options;
+        var channel = $"pgtxn-ok-{Guid.NewGuid():N}"[..16];
+        var component = CreatePluginComponent(channel);
+        var componentId = component.Id;
+
+        // 先落库组件。
+        await using (var seed = new IIoTDbContext(options))
+        {
+            seed.ClientReleaseComponents.Add(component);
+            await seed.SaveChangesAsync();
+        }
+
+        Guid deletionId;
+        // 同一 DbContext / 同一事务：删除组件元数据 + 写删除操作。
+        await using (var tx = new IIoTDbContext(options))
+        {
+            var tracked = await tx.ClientReleaseComponents.SingleAsync(c => c.Id == componentId);
+            var deletion = BuildDeletion(componentId, channel);
+            deletionId = deletion.Id;
+            tx.ClientReleaseComponentDeletions.Add(deletion);
+            tx.ClientReleaseComponents.Remove(tracked);
+            await tx.SaveChangesAsync();
+        }
+
+        // 全新观察：组件消失且操作存在。
+        await using (var verify = new IIoTDbContext(options))
+        {
+            Assert.False(await verify.ClientReleaseComponents.AnyAsync(c => c.Id == componentId));
+            var operation = await verify.ClientReleaseComponentDeletions
+                .Include(d => d.Files)
+                .SingleOrDefaultAsync(d => d.Id == deletionId);
+            Assert.NotNull(operation);
+            Assert.Equal(componentId, operation.ComponentId);
+            Assert.Single(operation.Files);
+        }
+    }
+
+    [Fact]
+    public async Task SameTransaction_ShouldRollbackComponentDeleteAndOperation_WhenCommitFails()
+    {
+        var connectionString = await fixture.GetConnectionStringAsync();
+        var options = new DbContextOptionsBuilder<IIoTDbContext>()
+            .UseNpgsql(connectionString)
+            .Options;
+        var channel = $"pgtxn-fail-{Guid.NewGuid():N}"[..16];
+        var component = CreatePluginComponent(channel);
+        var componentId = component.Id;
+
+        await using (var seed = new IIoTDbContext(options))
+        {
+            seed.ClientReleaseComponents.Add(component);
+            await seed.SaveChangesAsync();
+        }
+
+        // 同一事务里删除组件 + 写操作，但用拦截器在提交时抛错 → 整体回滚。
+        var failOptions = new DbContextOptionsBuilder<IIoTDbContext>()
+            .UseNpgsql(connectionString)
+            .AddInterceptors(new ThrowOnSaveInterceptor())
+            .Options;
+        var deletion = BuildDeletion(componentId, channel);
+        await using (var tx = new IIoTDbContext(failOptions))
+        {
+            var tracked = await tx.ClientReleaseComponents.SingleAsync(c => c.Id == componentId);
+            tx.ClientReleaseComponentDeletions.Add(deletion);
+            tx.ClientReleaseComponents.Remove(tracked);
+            await Assert.ThrowsAnyAsync<Exception>(() => tx.SaveChangesAsync());
+        }
+
+        // 全新观察：组件保留且操作不存在（事务整体回滚，不是只回滚一半）。
+        await using (var verify = new IIoTDbContext(options))
+        {
+            Assert.True(await verify.ClientReleaseComponents.AnyAsync(c => c.Id == componentId));
+            Assert.False(await verify.ClientReleaseComponentDeletions.AnyAsync(d => d.Id == deletion.Id));
+            Assert.False(await verify.Set<ClientReleaseComponentDeletionFile>()
+                .AnyAsync(f => f.ClientReleaseComponentDeletionId == deletion.Id));
+        }
+    }
+
+    private static ClientReleaseComponent CreatePluginComponent(string channel)
+    {
+        var component = ClientReleaseComponent.CreatePlugin(
+            $"PgTxn{Guid.NewGuid():N}"[..20],
+            "PG 事务插件",
+            null,
+            null,
+            null,
+            channel,
+            "win-x64");
+        component.UpsertPluginVersion(
+            "1.0.0",
+            "1.0.0",
+            "1.0.0",
+            "99.0.0",
+            "net10.0",
+            $"/edge-updates/plugins/{channel}/m/1.0.0/p.zip",
+            new string('a', 64),
+            128,
+            "pg txn",
+            "[]",
+            ClientReleaseStatus.Published,
+            null,
+            "IIoT",
+            artifacts:
+            [
+                new ClientReleaseArtifact(
+                    ClientReleaseArtifactKind.PackageFile,
+                    $"plugins/{channel}/m/1.0.0/p.zip",
+                    new string('a', 64),
+                    128)
+            ]);
+        return component;
+    }
+
+    private static ClientReleaseComponentDeletion BuildDeletion(Guid componentId, string channel)
+        => new(
+            componentId,
+            "Plugin",
+            "PgTxn",
+            channel,
+            "win-x64",
+            ["1.0.0"],
+            "pg 同事务验证",
+            Guid.NewGuid(),
+            "admin-tester",
+            [
+                new ClientReleaseComponentDeletionFileTarget(
+                    $"plugins/{channel}/m/1.0.0/p.zip",
+                    "PackageFile",
+                    new string('a', 64),
+                    128)
+            ]);
+
+    private sealed class ThrowOnSaveInterceptor : SaveChangesInterceptor
+    {
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("模拟提交失败");
+    }
+
     [Fact]
     public async Task EfStore_ShouldRoundTripFileFactsAndLoadFilesByChannel()
     {

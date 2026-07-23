@@ -43,8 +43,9 @@ internal static class ClientReleaseVelopackPaths
     /// 以存活 Host 版本的 VelopackFile artifact 为白名单重建 channel manifests。
     /// manifest 中只允许保留白名单内且文件仍存在的 .nupkg 引用；其它内容原样保留。
     /// manifest 不是合法 JSON 对象时 fail closed（返回 false），绝不猜测内容重写。
+    /// manifest 缺失时按白名单真正生成（存活 Host 仍需要更新清单），任一 manifest 无法重建返回 false。
     /// </summary>
-    public static bool TryRebuildChannelManifestsFromWhitelist(
+    public static bool RebuildChannelManifestsFromWhitelist(
         string velopackChannelRoot,
         IReadOnlyCollection<string> survivingNupkgFileNames,
         ILogger logger)
@@ -56,6 +57,12 @@ internal static class ClientReleaseVelopackPaths
             var manifestPath = Path.Combine(velopackChannelRoot, manifestName);
             if (!File.Exists(manifestPath))
             {
+                // 真正重建缺失的 manifest：按白名单生成最小合法清单，不再静默跳过。
+                if (!TryWriteMissingStableManifest(manifestPath, whitelist, logger))
+                {
+                    succeeded = false;
+                }
+
                 continue;
             }
 
@@ -66,6 +73,34 @@ internal static class ClientReleaseVelopackPaths
         }
 
         return succeeded && TryRebuildReleasesFile(velopackChannelRoot, whitelist, logger);
+    }
+
+    /// <summary>
+    /// 缺失的 stable JSON manifest 按白名单真正生成；写失败返回 false。
+    /// </summary>
+    private static bool TryWriteMissingStableManifest(
+        string manifestPath,
+        ISet<string> whitelist,
+        ILogger logger)
+    {
+        var array = new JsonArray();
+        foreach (var fileName in whitelist.OrderBy(name => name, StringComparer.OrdinalIgnoreCase))
+        {
+            if (File.Exists(Path.Combine(Path.GetDirectoryName(manifestPath)!, fileName)))
+            {
+                array.Add(fileName);
+            }
+        }
+
+        var propertyName = Path.GetFileName(manifestPath)
+            .StartsWith("assets.", StringComparison.OrdinalIgnoreCase)
+            ? "assets"
+            : "packages";
+        var root = new JsonObject
+        {
+            [propertyName] = array
+        };
+        return TryAtomicReplaceJson(manifestPath, root, logger);
     }
 
     private static bool TryRebuildStableManifest(
@@ -130,13 +165,19 @@ internal static class ClientReleaseVelopackPaths
         var releasesPath = Path.Combine(velopackChannelRoot, "RELEASES");
         if (!File.Exists(releasesPath))
         {
-            return true;
+            // RELEASES 缺失时按白名单真正生成（存活 Host 仍需要更新清单）。
+            var lines = whitelist
+                .Where(fileName => File.Exists(Path.Combine(velopackChannelRoot, fileName)))
+                .OrderBy(fileName => fileName, StringComparer.OrdinalIgnoreCase)
+                .Select(fileName => $"{ComputeSha256OrEmpty(Path.Combine(velopackChannelRoot, fileName))} {fileName} {new FileInfo(Path.Combine(velopackChannelRoot, fileName)).Length}")
+                .ToArray();
+            return TryWriteLinesAtomic(releasesPath, lines, logger);
         }
 
-        var lines = File.ReadAllLines(releasesPath);
-        var kept = new List<string>(lines.Length);
+        var existing = File.ReadAllLines(releasesPath);
+        var kept = new List<string>(existing.Length);
         var removed = false;
-        foreach (var line in lines)
+        foreach (var line in existing)
         {
             var segments = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             var fileName = segments.FirstOrDefault(IsNugetPackage);
@@ -156,10 +197,15 @@ internal static class ClientReleaseVelopackPaths
             return true;
         }
 
+        return TryWriteLinesAtomic(releasesPath, [.. kept], logger);
+    }
+
+    private static bool TryWriteLinesAtomic(string releasesPath, string[] lines, ILogger logger)
+    {
         var privatePath = CreatePrivateSiblingPath(releasesPath, "rebuild");
         try
         {
-            File.WriteAllLines(privatePath, kept);
+            File.WriteAllLines(privatePath, lines);
             File.Move(privatePath, releasesPath, overwrite: true);
             return true;
         }
@@ -174,6 +220,19 @@ internal static class ClientReleaseVelopackPaths
                 "RELEASES");
             TryDeletePrivateFile(privatePath);
             return false;
+        }
+    }
+
+    private static string ComputeSha256OrEmpty(string path)
+    {
+        try
+        {
+            return ClientReleaseFileFacts.ComputeSha256(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _ = ex;
+            return string.Empty.PadRight(64, '0');
         }
     }
 

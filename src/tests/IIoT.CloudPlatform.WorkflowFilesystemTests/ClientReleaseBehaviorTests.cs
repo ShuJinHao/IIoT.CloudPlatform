@@ -3567,20 +3567,32 @@ public sealed class ClientReleaseBehaviorTests
             Directory.Delete(versionDirectory, recursive: true);
             File.CreateSymbolicLink(versionDirectory, outside);
 
-            // 重试前重新校验完整祖先链：symlink 替换必须 fail-closed 抛错，
-            // 不得顺着链接删到受控目录外的文件。
-            await Assert.ThrowsAsync<ClientReleaseValidationException>(() =>
-                CreateRetryHandler(
+            // 重试前重新校验完整祖先链：symlink 替换必须 fail-closed 落 Failed，
+            // 不得顺着链接删到受控目录外的文件；操作带稳定失败码与失败审计。
+            var retry = await CreateRetryHandler(
+                    deletionStore,
+                    CreateDeletionProcessor(
+                        edgeRoot,
+                        new InMemoryRepository<ClientReleaseComponent>(),
                         deletionStore,
-                        CreateDeletionProcessor(
-                            edgeRoot,
-                            new InMemoryRepository<ClientReleaseComponent>(),
-                            deletionStore,
-                            auditTrail))
-                    .Handle(
-                        new RetryClientReleaseComponentDeletionCommand(operation.Id),
-                        CancellationToken.None));
+                        auditTrail))
+                .Handle(
+                    new RetryClientReleaseComponentDeletionCommand(operation.Id),
+                    CancellationToken.None);
+
+            Assert.False(retry.Value!.Succeeded);
+            Assert.Equal(
+                ClientReleaseComponentDeletionExecutor.FailureFileFactsMismatch,
+                retry.Value.FailureCode);
             Assert.True(File.Exists(Path.Combine(outside, "die-cutting.zip")));
+            Assert.Equal(ClientReleaseComponentDeletionStatus.Failed, operation.Status);
+            Assert.Equal(
+                ClientReleaseComponentDeletionExecutor.FailureFileFactsMismatch,
+                operation.FailureCode);
+            Assert.Contains(auditTrail.Entries, entry =>
+                entry.OperationType == "ClientRelease.HardDeleteComponent"
+                && !entry.Succeeded
+                && entry.FailureReason == ClientReleaseComponentDeletionExecutor.FailureFileFactsMismatch);
         }
         finally
         {
@@ -3657,11 +3669,14 @@ public sealed class ClientReleaseBehaviorTests
 
             Assert.False(retry.Value!.Succeeded);
             Assert.Equal(
-                ClientReleaseComponentDeletionExecutor.FailureFileDeletion,
+                ClientReleaseComponentDeletionExecutor.FailureFileFactsMismatch,
                 retry.Value.FailureCode);
             // 事实不匹配的文件必须原样保留，不得误删。
             Assert.True(File.Exists(packagePath));
             Assert.Equal(ClientReleaseComponentDeletionStatus.Failed, operation.Status);
+            Assert.Equal(
+                ClientReleaseComponentDeletionExecutor.FailureFileFactsMismatch,
+                operation.FailureCode);
         }
         finally
         {
@@ -3693,6 +3708,172 @@ public sealed class ClientReleaseBehaviorTests
             Assert.Contains(auditTrail.Entries, entry =>
                 entry.OperationType == "ClientRelease.HardDeleteComponent"
                 && entry.Succeeded);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task HardDeleteClientReleaseComponentHandler_ShouldRebuildMissingManifest_WhenHostSurvives()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-hard-delete-manifest-missing-root");
+        try
+        {
+            var channel = "stable";
+            var velopackRoot = Path.Combine(edgeRoot, "velopack", channel);
+            Directory.CreateDirectory(velopackRoot);
+
+            var (targetFactSha, targetFactSize) = WriteFactFile(
+                Path.Combine(edgeRoot, "installers", channel, "1.0.0", "installer-artifact.json"),
+                "{}");
+            var (survivorFactSha, survivorFactSize) = WriteFactFile(
+                Path.Combine(edgeRoot, "installers", channel, "2.0.0", "installer-artifact.json"),
+                "{}");
+            var (survivorNupkgSha, survivorNupkgSize) = WriteFactFile(
+                Path.Combine(velopackRoot, "IIoT.EdgeClient-2.0.0-full.nupkg"),
+                "survivor-nupkg");
+
+            var target = ClientReleaseComponent.CreateHost(channel, "win-x64");
+            target.UpsertHostVersion(
+                "1.0.0",
+                "1.0.0",
+                "net10.0",
+                "/edge-updates/installers/stable/1.0.0/installer-artifact.json",
+                targetFactSha,
+                targetFactSize,
+                "target",
+                ClientReleaseStatus.Published,
+                null,
+                "IIoT",
+                artifacts:
+                [
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.InstallerDirectory,
+                        "installers/stable/1.0.0"),
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.ManifestFile,
+                        "installers/stable/1.0.0/installer-artifact.json",
+                        targetFactSha,
+                        targetFactSize)
+                ]);
+
+            // 存活 Host：channel 目录存在但 manifest 全缺失，必须真正重建（不得静默成功留下缺失清单）。
+            var survivor = ClientReleaseComponent.CreateHost(channel, "linux-x64");
+            survivor.UpsertHostVersion(
+                "2.0.0",
+                "1.0.0",
+                "net10.0",
+                "/edge-updates/installers/stable/2.0.0/installer-artifact.json",
+                survivorFactSha,
+                survivorFactSize,
+                "survivor",
+                ClientReleaseStatus.Published,
+                null,
+                "IIoT",
+                artifacts:
+                [
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.InstallerDirectory,
+                        "installers/stable/2.0.0"),
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.ManifestFile,
+                        "installers/stable/2.0.0/installer-artifact.json",
+                        survivorFactSha,
+                        survivorFactSize),
+                    new ClientReleaseArtifact(
+                        ClientReleaseArtifactKind.VelopackFile,
+                        "velopack/stable/IIoT.EdgeClient-2.0.0-full.nupkg",
+                        survivorNupkgSha,
+                        survivorNupkgSize)
+                ]);
+
+            // 不创建任何 manifest 文件：模拟 manifest 已丢失的现场。
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(target);
+            componentRepository.Items.Add(survivor);
+            var deletionStore = new InMemoryClientReleaseComponentDeletionStore();
+            var auditTrail = new RecordingAuditTrailService();
+            var handler = CreateHardDeleteHandler(edgeRoot, componentRepository, deletionStore, auditTrail);
+
+            var result = await handler.Handle(
+                new HardDeleteClientReleaseComponentCommand(target.Id),
+                CancellationToken.None);
+
+            Assert.True(result.IsSuccess);
+            // manifest 被真正重建，且引用存活 Host 的 nupkg。
+            Assert.True(File.Exists(Path.Combine(velopackRoot, "releases.stable.json")));
+            Assert.True(File.Exists(Path.Combine(velopackRoot, "assets.stable.json")));
+            Assert.True(File.Exists(Path.Combine(velopackRoot, "RELEASES")));
+            Assert.Contains(
+                "IIoT.EdgeClient-2.0.0-full.nupkg",
+                File.ReadAllText(Path.Combine(velopackRoot, "releases.stable.json")));
+            Assert.Contains(
+                "IIoT.EdgeClient-2.0.0-full.nupkg",
+                File.ReadAllText(Path.Combine(velopackRoot, "RELEASES")));
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task HardDeleteClientReleaseComponentHandler_ShouldWriteBoundedAuditSummary_WhenManyFiles()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-hard-delete-bounded-summary-root");
+        try
+        {
+            const string moduleId = "DieCutting";
+            var moduleDirectory = Path.Combine(edgeRoot, "plugins", "stable", moduleId, "1.0.0");
+            // 多文件组件：完整路径列表会远超 512，摘要有界（计数 + digest）后必须仍 <= 512。
+            var (packageSha, packageSize) = WriteFactFile(
+                Path.Combine(moduleDirectory, "die-cutting.zip"),
+                "plugin-package");
+            for (var index = 0; index < 40; index++)
+            {
+                WriteFile(
+                    Path.Combine(moduleDirectory, $"payload-{index:D3}.bin"),
+                    $"payload-content-{index}");
+            }
+
+            var component = CreatePluginComponent(
+                moduleId,
+                "模切",
+                "stable",
+                "1.0.0",
+                "1.0.0",
+                "1.0.0",
+                "2.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/plugins/stable/DieCutting/1.0.0/die-cutting.zip",
+                packageSha,
+                packageSize,
+                "多文件有界摘要",
+                ClientReleaseStatus.Published);
+
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(component);
+            var deletionStore = new InMemoryClientReleaseComponentDeletionStore();
+            var auditTrail = new RecordingAuditTrailService();
+            var handler = CreateHardDeleteHandler(edgeRoot, componentRepository, deletionStore, auditTrail);
+
+            var result = await handler.Handle(
+                new HardDeleteClientReleaseComponentCommand(component.Id, "多文件有界摘要"),
+                CancellationToken.None);
+
+            Assert.True(result.IsSuccess);
+            Assert.Empty(deletionStore.Items);
+            var audit = Assert.Single(auditTrail.Entries, entry =>
+                entry.OperationType == "ClientRelease.HardDeleteComponent"
+                && entry.Succeeded);
+            Assert.True(audit.Summary.Length <= 512, $"summary length {audit.Summary.Length} exceeds 512");
+            // 有界字段：计数 + digest + 幂等键 deletionId（TargetIdOrKey）。
+            Assert.Contains("\"deleted\":", audit.Summary);
+            Assert.Contains("\"digest\":", audit.Summary);
+            Assert.DoesNotContain("payload-039", audit.Summary);
         }
         finally
         {
@@ -3738,7 +3919,9 @@ public sealed class ClientReleaseBehaviorTests
                 new HardDeleteClientReleaseComponentCommand(component.Id, "审计写不稳"),
                 CancellationToken.None);
 
-            Assert.True(result.IsSuccess);
+            // 审计未写稳时不得向调用方报告永久删除已完成。
+            Assert.False(result.IsSuccess);
+            Assert.Contains("审计", result.Errors?.First() ?? string.Empty);
             // 文件清理已收敛，但成功审计没写稳：操作必须保持 CleanupCompleted 等待恢复重放。
             Assert.False(Directory.Exists(moduleDirectory));
             Assert.Empty(componentRepository.Items);
@@ -3791,7 +3974,8 @@ public sealed class ClientReleaseBehaviorTests
             var first = await firstHandler.Handle(
                 new HardDeleteClientReleaseComponentCommand(component.Id, "audit-replay-reason"),
                 CancellationToken.None);
-            Assert.True(first.IsSuccess);
+            // 第一轮审计写不稳：不得报告完成，操作留在 CleanupCompleted。
+            Assert.False(first.IsSuccess);
             var operation = Assert.Single(deletionStore.Items);
             Assert.Equal(ClientReleaseComponentDeletionStatus.CleanupCompleted, operation.Status);
             Assert.Empty(unconfirmedAudit.Entries);
@@ -3812,12 +3996,16 @@ public sealed class ClientReleaseBehaviorTests
 
             Assert.True(retry.IsSuccess);
             Assert.True(retry.Value!.Succeeded);
+            Assert.True(retry.Value.AuditConfirmed);
             Assert.Empty(deletionStore.Items);
             var audit = Assert.Single(recoveredAudit.Entries);
             Assert.Equal("ClientRelease.HardDeleteComponent", audit.OperationType);
             Assert.True(audit.Succeeded);
             Assert.Equal("tester", audit.ActorEmployeeNo);
             Assert.Contains("audit-replay-reason", audit.Summary);
+            // 幂等键：TargetIdOrKey 用 deletionId，摘要有界（计数 + digest）不超审计列宽。
+            Assert.Equal(operation.Id.ToString(), audit.TargetIdOrKey);
+            Assert.True(audit.Summary.Length <= 512, $"summary length {audit.Summary.Length} exceeds 512");
         }
         finally
         {

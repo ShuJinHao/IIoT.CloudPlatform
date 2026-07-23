@@ -133,6 +133,13 @@ public sealed class HardDeleteClientReleaseComponentHandler(
                 $"发布组件元数据已删除，但发布文件清理未完成（{cleanup.FailureCode}）。请修复后通过永久删除重试入口按操作 ID {deletion.Id} 完成清理。");
         }
 
+        // 成功审计未写稳时不得报告永久删除已完成：操作保持 CleanupCompleted，由重试/启动恢复补写审计。
+        if (!cleanup.AuditConfirmed)
+        {
+            return Result.Invalid(
+                $"发布文件清理已收敛，但成功审计尚未写稳，永久删除未完成。请通过永久删除重试入口按操作 ID {deletion.Id} 补写审计。");
+        }
+
         var warning = cleanup.SkippedPaths.Count == 0
             ? null
             : $"部分文件仍被存活版本 manifest 引用或不在受控范围，已跳过 {cleanup.SkippedPaths.Count} 项。";

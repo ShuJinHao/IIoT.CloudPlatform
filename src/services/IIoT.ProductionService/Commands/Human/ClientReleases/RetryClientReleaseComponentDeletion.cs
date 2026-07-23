@@ -24,6 +24,7 @@ public sealed record ClientReleaseComponentDeletionRetryResultDto(
     string ComponentKey,
     string Channel,
     bool Succeeded,
+    bool AuditConfirmed,
     IReadOnlyList<string> DeletedPaths,
     IReadOnlyList<string> SkippedPaths,
     string? FailureCode);
@@ -60,7 +61,8 @@ public sealed class RetryClientReleaseComponentDeletionHandler(
             deletion.ComponentKind,
             deletion.ComponentKey,
             deletion.Channel,
-            outcome.Succeeded,
+            outcome.Succeeded && outcome.AuditConfirmed,
+            outcome.AuditConfirmed,
             outcome.DeletedPaths,
             outcome.SkippedPaths,
             outcome.FailureCode));
