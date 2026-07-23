@@ -12,12 +12,16 @@ using Microsoft.Extensions.Options;
 
 namespace IIoT.ProductionService.Queries.ClientReleases;
 
+/// <summary>
+/// Human 发布管理主 catalog：只返回活动版本（Draft/Published/Deprecated），
+/// 归档、已删除和待删除版本不属于主 catalog，历史由独立历史查询承载。
+/// spec 默认排除 Archived/Deleted/DeleteRequested/DeleteFailed，没有活动版本的组件自然不返回。
+/// </summary>
 [AuthorizeRequirement(ClientReleasePermissions.Read)]
 public sealed record GetClientReleaseCatalogQuery(
     string? Channel = null,
     string? TargetRuntime = null,
-    bool OnlyPublished = false,
-    bool IncludeArchived = false) : IHumanQuery<Result<ClientReleaseCatalogDto>>;
+    bool OnlyPublished = false) : IHumanQuery<Result<ClientReleaseCatalogDto>>;
 
 public sealed class GetClientReleaseCatalogHandler(
     IReadRepository<ClientReleaseComponent> componentRepository,
@@ -34,8 +38,7 @@ public sealed class GetClientReleaseCatalogHandler(
             new ClientReleaseComponentsByChannelSpec(
                 channel,
                 request.TargetRuntime,
-                request.OnlyPublished,
-                includeArchived: request.IncludeArchived),
+                request.OnlyPublished),
             cancellationToken);
 
         var edgeRoot = artifactOptions.Value.ResolveEdgeUpdatesRoot();
@@ -56,13 +59,11 @@ public sealed class GetClientReleaseCatalogHandler(
             ClientReleaseMapping.ToHostComponentExcludingMissingFiles(
                 components,
                 missingPaths,
-                onlyPublished: request.OnlyPublished,
-                includeArchived: request.IncludeArchived),
+                onlyPublished: request.OnlyPublished),
             ClientReleaseMapping.ToPluginComponentsExcludingMissingFiles(
                 components,
                 missingPaths,
-                onlyPublished: request.OnlyPublished,
-                includeArchived: request.IncludeArchived),
+                onlyPublished: request.OnlyPublished),
             DateTime.UtcNow));
     }
 

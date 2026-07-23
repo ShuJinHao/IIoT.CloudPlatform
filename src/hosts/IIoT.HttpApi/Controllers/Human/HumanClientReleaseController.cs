@@ -2,6 +2,7 @@ using IIoT.HttpApi.Infrastructure;
 using IIoT.ProductionService.Commands.ClientReleases;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.Queries.ClientReleases;
+using IIoT.SharedKernel.Paging;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -20,11 +21,26 @@ public sealed class HumanClientReleaseController : ApiControllerBase
         [FromQuery] string? channel,
         [FromQuery] string? targetRuntime,
         [FromQuery] bool onlyPublished,
-        [FromQuery] bool includeArchived,
         CancellationToken cancellationToken)
     {
         return ReturnResult(await Sender.Send(
-            new GetClientReleaseCatalogQuery(channel, targetRuntime, onlyPublished, includeArchived),
+            new GetClientReleaseCatalogQuery(channel, targetRuntime, onlyPublished),
+            cancellationToken));
+    }
+
+    [HttpGet("history")]
+    public async Task<IActionResult> GetHistory(
+        [FromQuery] string? channel,
+        [FromQuery] string? targetRuntime,
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 10,
+        CancellationToken cancellationToken = default)
+    {
+        return ReturnResult(await Sender.Send(
+            new GetClientReleaseHistoryQuery(
+                new Pagination { PageNumber = pageNumber, PageSize = pageSize },
+                channel,
+                targetRuntime),
             cancellationToken));
     }
 
