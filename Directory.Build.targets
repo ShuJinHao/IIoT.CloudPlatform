@@ -35,10 +35,4 @@
     </ItemGroup>
   </Target>
 
-  <Target Name="ValidateCloudDeploymentPolicy"
-          BeforeTargets="PrepareForBuild"
-          Condition="'$(DesignTimeBuild)' != 'true' and '$(MSBuildProjectName)' == 'IIoT.HttpApi'">
-    <Exec Command="pwsh -NoProfile -File &quot;$(MSBuildThisFileDirectory)deploy/tests/TestDeploymentPolicy.ps1&quot;" />
-  </Target>
-
 </Project>

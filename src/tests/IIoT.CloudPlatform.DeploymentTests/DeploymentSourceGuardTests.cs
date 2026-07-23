@@ -184,15 +184,8 @@ public sealed class DeploymentSourceGuardTests
         contractSource.Should().Contain("POST_DEPLOY_EDGE_EXPECTED_PLUGIN_MODULE_ID");
         contractSource.Should().Contain("POST_DEPLOY_EDGE_EXPECTED_PLUGIN_VERSION");
         contractSource.Should().Contain("iiot-migration");
-        governanceSource.Should().Contain("状态：代码和发布前门禁已实施，仍需生产真实启动验收后关闭");
         governanceSource.Should().Contain("docs/云端容器非Root权限契约.md");
-        governanceSource.Should().Contain("deploy/scripts/check-container-nonroot-readiness.sh");
-        governanceSource.Should().Contain("pre-deploy-check.sh` 已接入 `check-container-nonroot-readiness.sh");
-        governanceSource.Should().Contain("既有 `installers/plugins/velopack` 子目录权限不满足时会 fail-fast");
-        governanceSource.Should().Contain("POST_DEPLOY_EDGE_EXPECTED_VERSION");
-        governanceSource.Should().Contain("POST_DEPLOY_EDGE_EXPECTED_PLUGIN_MODULE_ID");
-        governanceSource.Should().Contain("POST_DEPLOY_EDGE_EXPECTED_PLUGIN_VERSION");
-        governanceSource.Should().Contain("web/nginx 非特权内部端口");
+        governanceSource.Should().Contain("命中时再读");
         composeSource.Should().Contain("${OIDC_PROVIDER_CERTS_DIR:-/data/iiot-platform/cloud/deploy/certs}:/app/certs:ro");
         composeSource.Should().Contain("${EDGE_UPDATES_DIR:-/data/iiot-platform/edge-client/edge-updates}:/app/edge-updates:rw");
         composeSource.Should().Contain("${EDGE_UPDATES_DIR:-/data/iiot-platform/edge-client/edge-updates}:/usr/share/nginx/html/edge-updates:ro");
@@ -263,25 +256,14 @@ public sealed class DeploymentSourceGuardTests
     {
         var agentsSource = File.ReadAllText(CloudRepositoryPath.Find("AGENTS.md"));
         var cloudRulesSource = File.ReadAllText(CloudRepositoryPath.Find("docs", "云端规则.md"));
-        var retrospectiveSource = File.ReadAllText(CloudRepositoryPath.Find("docs", "改动复盘与规则沉淀.md"));
-        var combinedDocs = string.Join(
-            Environment.NewLine,
-            agentsSource,
-            cloudRulesSource,
-            retrospectiveSource);
 
-        agentsSource.Should().Contain("docs/改动复盘与规则沉淀.md");
-        cloudRulesSource.Should().Contain("改动收口门禁");
-        cloudRulesSource.Should().Contain("已验收功能默认冻结");
-        cloudRulesSource.Should().Contain("最终回复必须列出复盘文档、规则沉淀位置和验证命令");
-        retrospectiveSource.Should().Contain("项目滚动复盘入口");
-        retrospectiveSource.Should().Contain("改动范围");
-        retrospectiveSource.Should().Contain("规则提炼");
-        retrospectiveSource.Should().Contain("无新增长期规则");
-
-        combinedDocs.Should().Contain("改动复盘");
-        combinedDocs.Should().Contain("规则沉淀");
-        combinedDocs.Should().Contain("验证命令");
+        agentsSource.Should().Contain(
+            "只有形成长期规则、修复历史回归、处理生产事故或改变部署机制时，才更新项目复盘");
+        cloudRulesSource.Should().Contain(
+            "只有形成长期规则、修复历史回归、处理生产事故或改变部署机制时");
+        cloudRulesSource.Should().Contain("普通业务修改和测试同批调整不写流水");
+        agentsSource.Should().NotContain("任何代码改动完成前");
+        cloudRulesSource.Should().NotContain("最终回复必须列出复盘文档");
     }
 
     [Fact]
@@ -505,25 +487,30 @@ public sealed class DeploymentSourceGuardTests
         readmeSource.Should().Contain("工作区外部日常入口是 `pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud`");
         readmeSource.Should().Contain("`cloud-image` / `cloud-deploy` 只保留灾备手动入口，必须输入确认词");
         readmeSource.Should().Contain("单个镜像 build/push 默认 15 分钟超时");
-        readmeSource.Should().Contain("日常 `Deploy-Changed.ps1` 内部调用的 `Deploy.ps1` 不安装任何远端 support files");
+        readmeSource.Should().Contain("日常应用发布不安装或覆盖服务器 support files");
         readmeSource.Should().Contain("服务器端 `deploy-release.sh` 不再是日常或手工入口");
-        readmeSource.Should().Contain("`cloud-ci / build-test`");
-        readmeSource.Should().Contain("16 个物理 runner / 688 case");
+        readmeSource.Should().Contain("push/PR 的默认 CI");
+        readmeSource.Should().Contain("受影响 Business");
+        readmeSource.Should().Contain("不存在 nightly 自动全量");
         operationsSource.Should().Contain("pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud");
         operationsSource.Should().Contain("project-local `local-release.sh` is a legacy maintenance implementation");
-        operationsSource.Should().Contain("`cloud-ci / build-test`");
-        operationsSource.Should().Contain("16 physical runners / 688 cases");
+        operationsSource.Should().Contain("Default push/PR CI");
+        operationsSource.Should().Contain("affected Business");
+        operationsSource.Should().Contain("never scheduled as nightly defaults");
+        operationsSource.Should().Contain("does not install or overwrite server support files");
         edgeGoLiveSource.Should().Contain("pwsh ./deploy/Deploy-Changed.ps1 -Targets Edge");
         edgeGoLiveSource.Should().Contain("Windows 安装器/Velopack/插件构建");
-        edgeGoLiveSource.Should().Contain(
-            "scripts/tests/Invoke-CloudTestInventory.ps1 -Mode Required -Configuration Release -NoBuild");
-        edgeGoLiveSource.Should().Contain("16 个物理 runner / 688 case");
+        edgeGoLiveSource.Should().Contain("Architecture");
+        edgeGoLiveSource.Should().Contain("无法归属的文件必须停止报告");
+        edgeGoLiveSource.Should().NotContain("Invoke-CloudTestInventory.ps1");
         runnerSource.Should().Contain("/data/github-runner/cloud");
         runnerSource.Should().Contain("github-runner");
-        runnerSource.Should().Contain("self-hosted runner 仅用于 CI 辅助和历史运维");
-        runnerSource.Should().Contain("旧 `cloud-deploy` workflow 不产生新契约及 run-bound image manifest");
-        runnerSource.Should().Contain("GitHub OIDC + Vault");
-        runnerSource.Should().Contain("production environment protection");
+        runnerSource.Should().Contain(
+            "self-hosted workflow 只允许白名单生产状态 inspect 或用户明确授权的 emergency 操作");
+        runnerSource.Should().Contain("`cloud-routine-request.yml` 不能接收部署请求");
+        runnerSource.Should().Contain(
+            "标准发布所需 Harbor、Cloud、管理员和数据库凭据来自 macOS Keychain");
+        runnerSource.Should().Contain("受 production environment 保护");
         buildAndPushSource.Should().Contain("Cloud local image build requires explicit --services or --all.");
         buildAndPushSource.Should().Contain("IIOT_ROUTINE_BUILD_PROTOCOL=1");
         buildAndPushSource.Should().Contain("REGISTRY must include an explicit Harbor registry host");
@@ -561,7 +548,7 @@ public sealed class DeploymentSourceGuardTests
             {
                 documentationSource.Should().NotContain(
                     retiredTestEntrypoint,
-                    "active deployment documentation must use the physical inventory runner instead of retired test buckets or filters");
+                    "active deployment documentation must use affected selection instead of retired test buckets or ad-hoc filters");
             }
         }
 
@@ -583,7 +570,8 @@ public sealed class DeploymentSourceGuardTests
 
         readmeSource.Should().Contain("single-machine production starter");
         readmeSource.Should().Contain("`release_tag = sha-*`");
-        readmeSource.Should().Contain("日常部署必须由 `Deploy-Changed.ps1` 确认 clean/main 并自动 push GitHub");
+        readmeSource.Should().Contain("入口只接受 clean、已提交的 `main`");
+        readmeSource.Should().Contain("可 push 现有 HEAD但不创建提交或修改 tracked 文件");
         readmeSource.Should().Contain("pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud");
         readmeSource.Should().Contain("禁止把 `cloud-image` 或 `cloud-deploy` 当成日常部署入口");
         readmeSource.Should().Contain("传入 `services` 时只拉取并重启指定服务");
@@ -785,214 +773,86 @@ public sealed class DeploymentSourceGuardTests
     }
 
     [Fact]
-    public void CloudCiWorkflow_ShouldRunDynamicRequiredInventoryAndKeepManualRunnersSeparated()
+    public void CloudCiWorkflow_ShouldUseAffectedSelectionAndExplicitHeavyModes()
     {
-        var workflowSource = File.ReadAllText(CloudRepositoryPath.Find(".github", "workflows", "cloud-ci.yml"));
         var repositoryRoot = Path.GetDirectoryName(CloudRepositoryPath.Find("IIoT.CloudPlatform.slnx"))
             ?? throw new DirectoryNotFoundException("Could not resolve Cloud repository root.");
-        var directoryBuildPropsSource = File.ReadAllText(Path.Combine(repositoryRoot, "Directory.Build.props"));
-        var globalAnalyzerConfigSource = File.ReadAllText(Path.Combine(repositoryRoot, ".globalconfig"));
-        var solutionSource = File.ReadAllText(CloudRepositoryPath.Find("IIoT.CloudPlatform.slnx"));
-        var analyzerProjectSource = File.ReadAllText(
-            CloudRepositoryPath.Find("src", "analyzers", "IIoT.CloudPlatform.Analyzers", "IIoT.CloudPlatform.Analyzers.csproj"));
-        var analyzerSource = File.ReadAllText(
-            CloudRepositoryPath.Find("src", "analyzers", "IIoT.CloudPlatform.Analyzers", "CloudArchitectureAnalyzer.cs"));
-        var analyzerTestsProjectSource = File.ReadAllText(
-            CloudRepositoryPath.Find("src", "tests", "IIoT.CloudPlatform.AnalyzerTests", "IIoT.CloudPlatform.AnalyzerTests.csproj"));
-        var fixtureScriptSource = File.ReadAllText(
-            CloudRepositoryPath.Find("scripts", "tests", "TestCloudArchitectureAnalyzerFixtures.sh"));
-        var realWebE2eRunnerSource = File.ReadAllText(
-            CloudRepositoryPath.Find("src", "ui", "iiot-web", "e2e", "run-real-e2e.mjs"));
-        var realWebE2eHostSource = File.ReadAllText(
-            CloudRepositoryPath.Find("src", "testing", "IIoT.CloudPlatform.WebE2ETestKit", "Program.cs"));
-        var inventoryScriptSource = File.ReadAllText(
-            CloudRepositoryPath.Find("scripts", "tests", "Invoke-CloudTestInventory.ps1"));
-        var workspaceEvidenceSource = File.ReadAllText(
-            CloudRepositoryPath.Find("scripts", "tests", "Get-CloudAiWorkspaceEvidence.ps1"));
-        var qualityBaselineBehaviorSource = File.ReadAllText(
-            CloudRepositoryPath.Find("scripts", "tests", "Test-CloudQualityBaselineProtectionBehavior.ps1"));
-        var coverageScriptSource = File.ReadAllText(
-            CloudRepositoryPath.Find("scripts", "tests", "Test-CloudCoverage.ps1"));
-        var compatibilityScriptSource = File.ReadAllText(
-            CloudRepositoryPath.Find("scripts", "tests", "Test-CloudCompatibility.ps1"));
-        var compatibilityBaselineSource = File.ReadAllText(
-            CloudRepositoryPath.Find("scripts", "tests", "baselines", "cloud-compatibility.json"));
-        var inventoryManifestSource = File.ReadAllText(
-            CloudRepositoryPath.Find("src", "tests", "cloud-test-inventory.json"));
-        var analyzerFixtureStep = GetNamedGitHubWorkflowStep(
-            workflowSource,
-            "Run architecture analyzer fixture gate");
-        var requiredInventoryStep = GetNamedGitHubWorkflowStep(
-            workflowSource,
-            "Run and reconcile required test inventory");
-        var fullEndToEndStep = GetNamedGitHubWorkflowStep(
-            workflowSource,
-            "Run end-to-end tests");
+        var workflowSource = File.ReadAllText(CloudRepositoryPath.Find(".github", "workflows", "cloud-ci.yml"));
+        var selectorSource = File.ReadAllText(
+            CloudRepositoryPath.Find("scripts", "tests", "Select-CloudCiTests.ps1"));
+        var invokerSource = File.ReadAllText(
+            CloudRepositoryPath.Find("scripts", "tests", "Invoke-CloudCiSelectedTests.ps1"));
+        var selectorBehaviorSource = File.ReadAllText(
+            CloudRepositoryPath.Find("scripts", "tests", "Test-CloudCiTestSelection.ps1"));
+        var duplicationSource = File.ReadAllText(
+            CloudRepositoryPath.Find("scripts", "tests", "Test-CloudDuplication.ps1"));
+        var duplicationBaselineSource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "scripts",
+                "tests",
+                "baselines",
+                "cloud-duplication.json"));
 
         workflowSource.Should().Contain("workflow_dispatch:");
-        workflowSource.Should().Contain("include_end_to_end:");
-        workflowSource.Should().NotContain("--filter");
-        workflowSource.Should().MatchRegex(@"(?ms)^  build-test:\n.*?^    timeout-minutes: 25$");
-        workflowSource.Should().MatchRegex(@"(?ms)^  full-end-to-end:\n.*?^    timeout-minutes: 90$");
-        directoryBuildPropsSource.Should().Contain(
-            "src/analyzers/IIoT.CloudPlatform.Analyzers/IIoT.CloudPlatform.Analyzers.csproj");
-        directoryBuildPropsSource.Should().Contain("OutputItemType=\"Analyzer\"");
-        directoryBuildPropsSource.Should().Contain("ReferenceOutputAssembly=\"false\"");
-        directoryBuildPropsSource.Should().Contain("IsAspireProjectResource=\"false\"");
-        directoryBuildPropsSource.Should().Contain("EndsWith('Tests')");
-        directoryBuildPropsSource.Should().Contain("EndsWith('TestKit')");
-        directoryBuildPropsSource.Should().Contain(
-            "'$(MSBuildProjectName)' != 'IIoT.CloudPlatform.PortFakes'");
-        directoryBuildPropsSource.Should().Contain("StartsWith('IIoT.CloudPlatform.Analyzer')");
-        fixtureScriptSource.Should().Contain("IIoT.CloudPlatform.PortFakes");
-        globalAnalyzerConfigSource.Should().Contain(
-            "dotnet_diagnostic.CLOUDARCH003.allowed_projects = IIoT.MigrationWorkApp");
-        globalAnalyzerConfigSource.Should().NotContain(
-            "dotnet_diagnostic.CLOUDARCH003.allowed_projects = IIoT.DataWorker");
-        globalAnalyzerConfigSource.Should().Contain("IIoT.DataWorker::Program");
-        globalAnalyzerConfigSource.Should().Contain(
-            "IIoT.HttpApi::IIoT.HttpApi.DesignTimeDbContextFactory");
-        globalAnalyzerConfigSource.Should().Contain(
-            "IIoT.HttpApi::IIoT.HttpApi.Infrastructure.PostgresReadinessHealthCheck");
-        analyzerProjectSource.Should().Contain("<TargetFramework>netstandard2.0</TargetFramework>");
-        analyzerProjectSource.Should().Contain(
-            "<PackageReference Include=\"Microsoft.CodeAnalysis.CSharp\" Version=\"5.6.0\" PrivateAssets=\"all\" />");
-        analyzerTestsProjectSource.Should().Contain(
-            "<PackageReference Include=\"Microsoft.CodeAnalysis.CSharp\" Version=\"5.6.0\" PrivateAssets=\"all\" />");
-        var expectedContractsMetadataIdentities = new[]
-        {
-            "IIoT.Services.Contracts.IHumanRequest`1",
-            "IIoT.Services.Contracts.IDeviceRequest`1",
-            "IIoT.Services.Contracts.IAnonymousBootstrapRequest`1",
-            "IIoT.Services.Contracts.IPublicRequest`1",
-            "IIoT.Services.Contracts.IAiReadRequest`1",
-            "IIoT.Services.Contracts.ICacheService",
-            "IIoT.Services.Contracts.Authorization.IPermissionProvider",
-            "IIoT.Services.Contracts.Authorization.IDevicePermissionService",
-            "IIoT.Services.Contracts.RecordQueries.IDeviceIdentityQueryService"
-        };
-        var analyzerContractsMetadataIdentities = Regex.Matches(
-                analyzerSource,
-                "GetTypeByMetadataName\\s*\\(\\s*\\\"(IIoT\\.Services\\.Contracts[^\\\"]+)\\\"\\s*\\)")
-            .Select(match => match.Groups[1].Value)
-            .Distinct(StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal)
-            .ToArray();
-        analyzerContractsMetadataIdentities.Should().Equal(
-            expectedContractsMetadataIdentities.Order(StringComparer.Ordinal));
-        fixtureScriptSource.Should().Contain(
-            "contracts_project=\"$repo_root/src/services/IIoT.Services.Contracts/IIoT.Services.Contracts.csproj\"");
-        fixtureScriptSource.Should().Contain(
-            "<ProjectReference Include=\\\"$contracts_project\\\" />");
-        fixtureScriptSource.Should().Contain("ContractsBindingProbe");
-        fixtureScriptSource.Should().Contain("CONTRACTS_METADATA_BINDING_OK identities={expected.Length}");
-        foreach (var identity in expectedContractsMetadataIdentities)
-        {
-            fixtureScriptSource.Should().Contain($"\"{identity}\"");
-        }
-        solutionSource.Should().Contain(
-            "src/analyzers/IIoT.CloudPlatform.Analyzers/IIoT.CloudPlatform.Analyzers.csproj");
-        solutionSource.Should().Contain(
-            "src/tests/IIoT.CloudPlatform.AnalyzerTests/IIoT.CloudPlatform.AnalyzerTests.csproj");
-        solutionSource.Should().Contain(
-            "src/tests/IIoT.CloudPlatform.WorkspaceAlignmentTests/IIoT.CloudPlatform.WorkspaceAlignmentTests.csproj");
-        analyzerFixtureStep.Should().Contain("shell: bash");
-        analyzerFixtureStep.Should().Contain("bash scripts/tests/TestCloudArchitectureAnalyzerFixtures.sh");
-        analyzerFixtureStep.Should().NotContain("if:");
-        analyzerFixtureStep.Should().NotContain("continue-on-error:");
-        fixtureScriptSource.Should().Contain(
-            "ARCHITECTURE_FIXTURES_OK valid=8 invalid=15 callGraphBypass=20 suppressionBypass=3 contractsMetadataIdentities=9");
-        fixtureScriptSource.Should().Contain("build_valid");
-        fixtureScriptSource.Should().Contain("build_invalid");
-        realWebE2eRunnerSource.Should().Contain("mkdtemp(join(tmpdir(), 'iiot-cloud-web-e2e-'))");
-        realWebE2eRunnerSource.Should().Contain("chmod(stateDirectory, 0o700)");
-        realWebE2eRunnerSource.Should().NotContain("artifacts/test-results/cloud-web-e2e-state.json");
-        realWebE2eHostSource.Should().Contain("Path.GetRelativePath(temporaryRoot, statePath)");
-        realWebE2eHostSource.Should().Contain("File.SetUnixFileMode");
-        workflowSource.Should().Contain("!artifacts/test-results/**/*state*.json");
-        workflowSource.Should().Contain("!artifacts/test-results/**/*credential*.json");
-        requiredInventoryStep.Should().Contain(
-            "./scripts/tests/Invoke-CloudTestInventory.ps1 -Mode Required -Configuration Release -NoBuild");
-        requiredInventoryStep.Should().Contain("timeout-minutes: 15");
-        requiredInventoryStep.Should().NotContain("if:");
-        requiredInventoryStep.Should().NotContain("continue-on-error:");
-        workflowSource.Should().Contain("Verify quality baseline behavior");
-        workflowSource.Should().Contain("./scripts/tests/Test-CloudQualityBaselineProtectionBehavior.ps1");
-        qualityBaselineBehaviorSource.Should().Contain("CLOUD_QUALITY_BASELINE_PROTECTION_OK scenarios=9");
-        qualityBaselineBehaviorSource.Should().Contain("initialExactCandidate=1");
-        qualityBaselineBehaviorSource.Should().Contain("coverageImprovementAccepted=1");
-        qualityBaselineBehaviorSource.Should().Contain("coverageRegressionRejected=1");
-        qualityBaselineBehaviorSource.Should().Contain("coverageStructureRejected=1");
-        inventoryScriptSource.Should().Contain("CLOUD_TEST_RUNNER_OK");
-        inventoryScriptSource.Should().Contain(
-            "discovered=$discovered total=$total executed=$executed passed=$passed failed=0 skipped=0");
-        inventoryScriptSource.Should().Contain("Sync-over-async policy fixture was not rejected");
-        inventoryScriptSource.Should().Contain("Task.CompletedTask.GetAwaiter" + "().GetResult()");
-        inventoryScriptSource.Should().Contain("Task.WaitAll" + "(work)");
-        inventoryScriptSource.Should().Contain("response.Result");
-        inventoryManifestSource.Should().Contain("\"baselineCases\": 752");
-        inventoryManifestSource.Should().Contain("\"requiredCases\": 688");
-        inventoryManifestSource.Should().Contain("\"regressionBaselines\"");
-        inventoryManifestSource.Should().NotContain("\"regressionId\": null");
-        inventoryScriptSource.Should().Contain("RegressionId coverage fell below its non-zero floor");
-        inventoryScriptSource.Should().Contain("regressionZero=$regressionZeroCount");
-        inventoryManifestSource.Should().Contain("\"runtime\": \"Aspire\"");
-        inventoryManifestSource.Should().Contain("\"runtimeDependencies\": [\"Aspire\", \"AICopilotWorkspace\"]");
-        inventoryManifestSource.Should().Contain("\"cadence\": \"Release\"");
-        inventoryManifestSource.Should().Contain("\"profile\": \"WorkspaceAlignment\"");
-        workspaceEvidenceSource.Should().Contain(
-            "src/infrastructure/AICopilot.Infrastructure/CloudRead/CloudAiReadClient.cs");
-        workspaceEvidenceSource.Should().Contain(
-            "src/tests/AICopilot.InProcessTests/CloudAiReadClientContractTests.cs");
-        workspaceEvidenceSource.Should().NotContain(
-            "src/infrastructure/AICopilot.CloudReadClient/CloudAiReadClient.cs");
-        workspaceEvidenceSource.Should().NotContain(
-            "src/tests/AICopilot.ContractTests/CloudAiReadClientContractTests.cs");
+        workflowSource.Should().Contain("default=Architecture/Security + affected Business");
+        workflowSource.Should().Contain("Select-CloudCiTests.ps1");
+        workflowSource.Should().Contain("Invoke-CloudCiSelectedTests.ps1");
         workflowSource.Should().Contain(
-            "ARCHITECTURE_FIXTURES_OK valid=8 invalid=15 callGraphBypass=20 suppressionBypass=3 contractsMetadataIdentities=9 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010");
-        workflowSource.Should().Contain("ref: 7474b3a919d8e0058ac529fdda6e2d0cd720390d");
-        compatibilityBaselineSource.Should().Contain("\"schemaVersion\": 4");
-        compatibilityBaselineSource.Should().Contain("\"externalEvidenceBinding\": \"clean-tracked-src-v1\"");
-        compatibilityBaselineSource.Should().Contain("\"externalEvidenceTrackedSourceStateSha256\"");
-        compatibilityBaselineSource.Should().Contain("\"externalEvidenceConsumerStateSha256\"");
-        compatibilityScriptSource.Should().Contain("headMatchesReference");
-        compatibilityScriptSource.Should().Contain("doc-only HEAD fixture");
-        compatibilityScriptSource.Should().Contain("tracked src drift fixture");
-        compatibilityScriptSource.Should().Contain("consumer aggregate drift fixture");
-        compatibilityScriptSource.Should().Contain("dirty repository fixture");
-        compatibilityScriptSource.Should().Contain("external consumer path fixture");
-        compatibilityScriptSource.Should().Contain("external consumer SHA fixture");
-        compatibilityScriptSource.Should().Contain("external consumer pattern fixture");
-        compatibilityScriptSource.Should().Contain("external consumer must-not-contain fixture");
-        workflowSource.Should().Contain("Validate deploy script syntax");
-        workflowSource.Should().Contain("sh -n deploy/scripts/release-common.sh");
-        workflowSource.Should().Contain("sh -n deploy/scripts/pre-deploy-check.sh");
-        workflowSource.Should().Contain("sh -n deploy/scripts/post-deploy-check.sh");
-        workflowSource.Should().Contain("sh -n deploy/scripts/ops-check.sh");
-        workflowSource.Should().Contain("sh -n deploy/scripts/deploy-release.sh");
-        workflowSource.Should().Contain("sh -n deploy/scripts/verify-edge-installer-catalog.sh");
-        workflowSource.Should().Contain("bash -n deploy/scripts/build-and-push.sh");
-        workflowSource.Should().Contain("bash -n deploy/scripts/local-release.sh");
-        workflowSource.Should().Contain("bash -n deploy/scripts/post-release-cleanup.sh");
-        workflowSource.Should().Contain("pwsh -NoProfile -Command");
-        workflowSource.Should().Contain("Parser]::ParseFile(\"deploy/scripts/InvokeEdgeInstallerPackageDownload.ps1\"");
+            "github.event_name == 'workflow_dispatch' && (inputs.mode == 'quality' || inputs.mode == 'full')");
         workflowSource.Should().Contain(
-            "if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.include_end_to_end == true)");
+            "github.event_name == 'workflow_dispatch' && inputs.mode == 'cross-project'");
         workflowSource.Should().Contain(
-            "if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.include_mutation == true)");
-        workflowSource.Should().Contain("CLOUD_QUALITY_BASE_REF: HEAD^");
-        workflowSource.Should().NotContain("quality_base_ref");
-        workflowSource.Should().NotContain("CLOUD_QUALITY_SCHEDULE_BASE_REF");
-        coverageScriptSource.Should().Contain("Assert-CoverageRunnerBinaryEvidence");
-        coverageScriptSource.Should().Contain("Coverage runner used stale production assembly/PDB");
-        coverageScriptSource.Should().Contain("Assert-PortablePdbDocumentChecksum");
-        coverageScriptSource.Should().Contain("Current production source does not match its built portable PDB document checksum");
-        coverageScriptSource.Should().Contain("Assert-CoverageReportIdentitySet");
-        inventoryScriptSource.Should().Contain("Coverage runner contains stale production assembly/PDB before execution");
-        inventoryScriptSource.Should().Contain("Cobertura production packages do not have exact collection-time DLL/PDB evidence");
-        fullEndToEndStep.Should().Contain("timeout-minutes: 60");
-        fullEndToEndStep.Should().Contain(
-            "./scripts/tests/Invoke-CloudTestInventory.ps1 -Mode EndToEnd -Configuration Release -NoBuild");
+            "github.event_name == 'workflow_dispatch' && inputs.mode == 'full'");
+        workflowSource.Should().NotContain("schedule:");
+        workflowSource.Should().NotContain("include_end_to_end:");
+        workflowSource.Should().NotContain("include_mutation:");
+        workflowSource.Should().NotContain("Invoke-CloudTestInventory.ps1");
+        workflowSource.Should().NotContain("Test-CloudCoverage.ps1");
+
+        selectorSource.Should().Contain(
+            "[ValidateSet('Default', 'Deployment', 'Quality', 'CrossProject', 'Full')]");
+        selectorSource.Should().Contain(
+            "Deployment CI selection requires an explicit ChangedFiles set from the exact-SHA deployment impact plan.");
+        selectorSource.Should().Contain(
+            "Cloud CI cannot safely attribute these files; no full-suite fallback was used.");
+        selectorSource.Should().NotContain("cloud-test-inventory.json");
+        invokerSource.Should().Contain("current-discovery.json");
+        invokerSource.Should().Contain("discovered=$total executed=$executed passed=$passed");
+        invokerSource.Should().Contain(
+            "Coverage is a Quality operation and is forbidden for Cloud CI mode");
+        invokerSource.Should().NotContain("baselineCases");
+        invokerSource.Should().NotContain("requiredCases");
+        invokerSource.Should().NotContain("minimumCases");
+        selectorBehaviorSource.Should().Contain(
+            "Deployment mode did not defer a baseline-attributed Business runner migration.");
+
+        File.Exists(Path.Combine(repositoryRoot, "src", "tests", "cloud-test-inventory.json"))
+            .Should().BeFalse();
+        File.Exists(Path.Combine(repositoryRoot, "scripts", "tests", "Invoke-CloudTestInventory.ps1"))
+            .Should().BeFalse();
+        File.Exists(Path.Combine(repositoryRoot, "scripts", "tests", "Test-CloudCoverage.ps1"))
+            .Should().BeFalse();
+        File.Exists(Path.Combine(repositoryRoot, "scripts", "tests", "baselines", "cloud-coverage.json"))
+            .Should().BeFalse();
+        File.Exists(Path.Combine(repositoryRoot, "scripts", "tests", "Test-CloudWebInventory.ps1"))
+            .Should().BeFalse();
+        File.Exists(Path.Combine(repositoryRoot, "src", "ui", "iiot-web", "test-inventory.json"))
+            .Should().BeFalse();
+        Directory.EnumerateFiles(
+                Path.Combine(repositoryRoot, "src", "tests"),
+                "*.csproj",
+                SearchOption.AllDirectories)
+            .Select(File.ReadAllText)
+            .Should()
+            .OnlyContain(projectSource =>
+                !projectSource.Contains(
+                    "CloudTestRequired",
+                    StringComparison.Ordinal));
+        duplicationSource.Should().Contain("tests and test support are dynamic business assets");
+        duplicationSource.Should().NotContain("$supportInputs");
+        duplicationSource.Should().NotContain("$testInputs");
+        duplicationBaselineSource.Should().NotContain("\"category\": \"support\"");
+        duplicationBaselineSource.Should().NotContain("\"category\": \"test-cases\"");
     }
 
     [Fact]

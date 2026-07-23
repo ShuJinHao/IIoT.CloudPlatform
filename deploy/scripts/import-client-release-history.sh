@@ -41,7 +41,7 @@ existing_count=$(compose exec -T postgres psql \
   -U postgres \
   -d iiot-db \
   -At \
-  -c "select (select count(*) from public.edge_client_release_components) + (select count(*) from public.edge_client_release_versions) + (select count(*) from public.edge_client_release_artifacts);" \
+  -c "select (select count(*) from public.edge_client_release_components) + (select count(*) from public.edge_client_release_versions) + (select count(*) from public.edge_client_release_artifacts) + (select count(*) from public.edge_client_release_retention_policies);" \
   | tr -d '\r\n ')
 
 if [ "$existing_count" != "0" ]; then
@@ -50,21 +50,21 @@ if [ "$existing_count" != "0" ]; then
     exit 65
   fi
 
-  compose exec -T postgres psql \
+fi
+
+{
+  if [ "$existing_count" != "0" ]; then
+    printf '%s\n' \
+      'truncate table public.edge_client_release_artifacts, public.edge_client_release_versions, public.edge_client_release_components, public.edge_client_release_retention_policies cascade;'
+  fi
+  cat "$IMPORT_FILE"
+} | compose exec -T postgres psql \
     -h 127.0.0.1 \
     -U postgres \
     -d iiot-db \
+    --single-transaction \
     -v ON_ERROR_STOP=1 \
-    -c "truncate table public.edge_client_release_artifacts, public.edge_client_release_versions, public.edge_client_release_components, public.edge_client_release_retention_policies cascade;" \
     >/dev/null
-fi
-
-cat "$IMPORT_FILE" | compose exec -T postgres psql \
-  -h 127.0.0.1 \
-  -U postgres \
-  -d iiot-db \
-  -v ON_ERROR_STOP=1 \
-  >/dev/null
 
 component_count=$(compose exec -T postgres psql \
   -h 127.0.0.1 \
@@ -87,6 +87,14 @@ artifact_count=$(compose exec -T postgres psql \
   -At \
   -c "select count(*) from public.edge_client_release_artifacts;" \
   | tr -d '\r\n ')
+retention_count=$(compose exec -T postgres psql \
+  -h 127.0.0.1 \
+  -U postgres \
+  -d iiot-db \
+  -At \
+  -c "select count(*) from public.edge_client_release_retention_policies;" \
+  | tr -d '\r\n ')
 
 printf 'Client release history imported from: %s\n' "$IMPORT_FILE"
-printf 'Imported rows: components=%s versions=%s artifacts=%s\n' "$component_count" "$version_count" "$artifact_count"
+printf 'Imported rows: components=%s versions=%s artifacts=%s retention_policies=%s\n' \
+  "$component_count" "$version_count" "$artifact_count" "$retention_count"

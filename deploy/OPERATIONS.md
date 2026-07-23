@@ -1,8 +1,10 @@
 # IIoT Cloud Operations
 
+> 读取边界：只有 Cloud 运维或具体故障命中本文件时才读取对应章节；普通部署不读取历史状态和未命中的运维细节。
+
 三项目上传部署统一入口见 [上传部署总览](../../docs/上传部署总览.md)。
 
-Cloud 日常应用发布使用工作区 `pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud`，自动 push Git、读取生产 SHA 并只选择受影响镜像；`Deploy.ps1 -Target Cloud -Services ...` 是其内部执行器与恢复入口。稳定 Runner 一次安装后不会在应用发布中被替换；日常事务只做必要数据库备份、选中镜像 pull、`--no-deps` 应用更新、健康检查和失败回滚。本文后续旧 `current-release`、support transaction 和 cleanup 说明继续用于基础设施维护与灾备诊断。
+Cloud 日常应用发布使用工作区 `pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud`：只接受 clean、已提交的 HEAD，不创建提交或修改文件，复用同 SHA 证据并只发布受影响镜像。三端从零部署使用 `pwsh ./deploy/Deploy-FromZero.ps1 -Targets Cloud,AICopilot,Edge -ConfirmFromZero`，本机密钥只读 macOS Keychain。普通部署和从零部署均不自动运行全量、coverage、mutation、duplication 或三端质量对齐。
 
 > Current status (2026-07-10): the workspace contract, fresh remote-tip/expected-SHA binding, per-invocation manifests, build-before-support ordering, parent-owned transaction lock, promotion-proof cleanup-only recovery, bounded installer/release process groups, read-only local lock precheck, secret-free dotenv categories, bounded decimal inputs, a strict shared operator-config lock, operator `.env` / release-image state separation, atomic release-state replacement, OCI/config digest verification, healthy no-op, and durable old-transaction evidence passed 33/33 isolated fake behavior tests. `DeploymentGuardTests` passed 20/20 and the `~Deploy` gate passed 39/39. No network, Harbor, SSH, or real production deploy/history/cleanup/health closure ran in this round; this guide is a target contract, not production-acceptance evidence.
 
@@ -97,7 +99,7 @@ curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' "http
 
 ## Standard Release
 
-Routine application release is driven from the operator workstation: run `pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud`; it validates and pushes Git, reads the production baseline, computes the affected service closure, builds the fetched remote tip, pushes immutable images to Harbor, then sends one digest-bound request to the stable server runner. `RemoteTransport=Auto` uses SSH when its TCP endpoint is reachable and otherwise dispatches `cloud-routine-request.yml` to the production self-hosted runner; both transports consume the same request and stable runner. The older workspace transaction remains for deployment-infrastructure maintenance.
+Routine application release is driven from the operator workstation: run `pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud`; it validates and pushes Git, reads the production baseline, computes the affected service closure, builds the fetched remote tip, pushes immutable images to Harbor, then sends one digest-bound request to the stable server runner. `RemoteTransport=Auto` uses SSH only and fails closed before deployment when SSH is unavailable. `cloud-routine-request.yml` is read-only production-state inspection and cannot submit a deployment request. The older workspace transaction remains for explicitly authorized deployment-infrastructure maintenance.
 
 Routine deployment red lines:
 
@@ -111,14 +113,14 @@ Routine deployment red lines:
 
 The standard sequence is:
 
-1. Push or merge to `main`.
-2. `cloud-ci / build-test` runs the current required gate by default: solution restore/build; AnalyzerTests 72 plus the valid 8 / invalid 15 real-project fixtures; compatibility and duplication ratchets; exact discovery/execution/pass reconciliation for 16 physical runners / 695 cases with 16 coverage reports; deployment behavior, policy, and script syntax; Cloud Web Vitest 67 plus browser smoke 2 and the production build; and production Compose validation. Backend EndToEnd 63 and real-browser EndToEnd 1 remain separate nightly/manual lanes, while WorkspaceAlignment 1 remains a separate cross-repository lane.
-3. Run `pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud` from the workspace root. It pushes the committed main branch, reads production state, computes affected services, then invokes the detached immutable build and stable runner request.
-4. `local-release.sh` packages and syntax-checks only the allowlisted support files locally, then `build-and-push.sh` builds the selected `sha-<git-sha>` images. Every invocation owns its services file and image manifest; the manifest binds invocation, plan, tag, services, image references, and OCI digests.
-5. Only after all image builds succeed does `local-release.sh` stage support plus the run-bound image manifest remotely. Before lock acquisition, `workspace-release-transaction.sh` scans incomplete transaction markers, lock metadata, staging, and recovery directories. Any orphan state after SIGKILL, OOM, or reboot is converted to durable blocked evidence and returns `78`; it is never silently removed as a stale lock. The parent writes an atomic transaction marker before any support mutation.
-6. The parent owns the invocation/plan-bound lock and launches both installer and release child in isolated sessions/process groups through `env -i`. HUP/INT/TERM is sent to the whole group, followed by bounded TERM grace and KILL escalation; restore and lock release are prohibited until no descendant remains. Once current state and marker prove promotion, cleanup must never restore old support. A parent kill after the promotion marker leaves the new support/current/runtime consistent, and the next matching invocation performs transaction cleanup only.
-7. Support installation preflights the staged candidate before mutation, backs up the union of new and previous allowlists including missing-file state, and restores the previous manifest atomically on failure. Old manifest traversal, protected paths, and symlinked targets are rejected. `.env`, `certs/`, `releases/`, and `backups/` remain excluded from support synchronization.
-8. `deploy-release.sh` requires the parent-owned transaction marker/lock and verifies OCI digests. Deploy and rollback acquire the strict config lock before reading `.env`, keep it through rollout and final release-image promotion, and never overwrite operator configuration. A supported competing updater loses the lock with `75`; a detected unsupported direct edit also aborts without being overwritten. Release-owned images and current/previous/staged manifests, summaries, history, and backup/verify state use same-directory temporary files plus atomic rename. Dotenv parse errors contain only file, line, and a fixed category, never the offending key/value/token.
+1. The candidate repositories are clean, committed `main` worktrees. The root entrypoint may push the existing HEAD, but it never creates a commit or edits tracked files.
+2. Default push/PR CI runs Architecture, Security, and affected Business only, reconciled against current discovery. Full, coverage, mutation, duplication, Quality, full browser, and CrossProject lanes require an explicit user-selected mode and are never scheduled as nightly defaults.
+3. Run `pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud` from the workspace root. It reads the production baseline and computes affected services from the exact Git diff and dependency closure; an unowned file stops the release instead of falling back to `-All`.
+4. Green evidence is reusable only for the identical SHA and changed-files scope. The entrypoint runs only missing affected Architecture, Security, and DeploymentContract checks; it does not run Business or heavy quality lanes.
+5. The internal `Deploy.ps1 -Target Cloud -Services ...` builds and publishes only the planned immutable images, adds migration only through the declared dependency closure, and does not install or overwrite server support files.
+6. Migration, configuration, health, Edge download-chain, digest, and rollback registration checks must pass before success is reported. The candidate HEAD and tracked-file snapshot are checked again at exit; a failure stops without modifying source, tests, rules, or documentation.
+
+Compose, nginx, Runner, and server support-file installation are separate infrastructure-maintenance operations, not routine application release steps. Only an explicitly authorized maintenance task follows the later workspace transaction, support staging, and recovery sections.
 
 Harbor application repositories keep only the current production `sha-*` tag. Local image build must not remove the current production tag before deploy health checks pass. Post-release cleanup deletes old application `sha-*` tags and Harbor Garbage Collection reclaims disk.
 
@@ -204,7 +206,7 @@ Fast rollback no longer assumes old Cloud application images remain on the serve
 
 ## Cloud 管理员登录排查
 
-生产 Cloud 首部署管理员工号固定为 `101650`，对应 `.env` 键为 `SEED_ADMIN_NO=101650`。管理员密码只允许来自 GitHub secret `SEED_ADMIN_PASSWORD`，不放入 `DEPLOY_ENV_FILE`、仓库文档或日志。
+生产 Cloud 首部署管理员工号固定为 `101650`。标准三端从零部署从 macOS Keychain canonical 项 `cloud.seed-admin-no` 与 `cloud.seed-admin-password` 读取，并在内存中生成远端 `.env` 的 `SEED_ADMIN_NO` / `SEED_ADMIN_PASSWORD`；不得从 GitHub secret、Markdown 或旧 env 回退，也不得把值写入仓库文档或日志。普通增量部署不读取、随机化或修改管理员凭据。
 
 部署规则固定：
 
@@ -214,9 +216,9 @@ Fast rollback no longer assumes old Cloud application images remain on the serve
 
 登录失败时先区分凭据来源：
 
-- Cloud Web 登录使用 Cloud 数据库里的身份账号和 GitHub secret `SEED_ADMIN_PASSWORD`。
+- Cloud Web 登录使用 Cloud 数据库里的身份账号；首部署密码的机器真值是本机 Keychain `cloud.seed-admin-password`，不是 GitHub Actions 或样例文件。
 - Edge Launcher 本地样例账号不是 Cloud 密码来源，不能用 `launcher.accounts.sample.json` 反推 Cloud 密码。
-- GitHub Actions 日志会把 secret 值打码为 `***`，不能从日志反读密码。
+- 部署和迁移日志只允许记录 canonical 键名或脱敏状态，不能输出或反读 Keychain 值。
 
 只读排查顺序：
 

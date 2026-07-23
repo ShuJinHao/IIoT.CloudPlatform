@@ -97,9 +97,9 @@ FusionCache 2.6 的 factory wrapper 必须在值交给 provider 前二次读取 
 - claim 使用有界 lease 与续租；获取冲突可在有界 retry delay 后重试，已完成 receipt 的 retention 不得短于 7 天。claim、renew 和 complete 的 Redis 等待必须绑定原 caller token，在命令返回 completed receipt 或 complete 成功后仍必须执行取消优先级检查；不得用迟到的 commit-point 结果吞掉已观测到的 caller cancellation。续租或完成 compare-set 丢失 owner 必须 fail closed。
 - 严格失效中的 Redis 断连、未知异常和取消必须传播，不复用普通值缓存的降级语义。失败路径必须用与 caller token 解耦的独立有界 cleanup token 执行 best-effort compare-delete；release 超时固定记录 `ErrorType=ReleaseCleanupTimeout`，其它 release 失败只能以 `ValueCacheInfrastructureDegraded (2401)` 记录稳定 operation 与异常类型，不得遮蔽原业务异常实例或 caller cancellation/token。进程崩溃时依靠 lease 过期允许重放补偿。这是“正常/事务重试路径单次逻辑失效 + 崩溃后可补偿重放”，不得宣称进程崩溃下 exactly-once。
 
-## 6. Required 验证
+## 6. 受影响验证
 
-- `IIoT.CloudPlatform.ApplicationTests` 中的 10 条 caller matrix 必须逐个执行真实 handler，锁定空/null admission、原 `Result`、授权顺序和 factory token 透传。
-- `IIoT.CloudPlatform.WorkflowTests` 中的 47 条确定性语义测试覆盖本契约的白名单、未知异常、取消点、factory/admission 单次执行与同实例传播、普通 exact/pattern bump-before-remove/scan，以及系统 namespace、receipt/claim、续租丢失、释放与断连传播。其中 2 个 case 必须分别证明 caller cancellation 和业务主异常在 release failure 下仍保留原实例/token，secondary failure 只记录稳定日志。
-- `IIoT.CloudPlatform.IntegrationTests` 必须直接进入 `cloud-ci / build-test`，使用固定镜像 `redis@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99`。5 条真实 Redis 测试依次覆盖：断连降级与恢复/backplane；claim lease/receipt/system namespace；严格与普通 exact/pattern 失效、caller cancellation 和 synthetic timeout 下的并发 stale-write fence；真实 `GetAllDevicesHandler` 在失效返回后不得回填旧 DTO；真实 Fusion 对 null、拒绝空列表和允许空列表三类显式 admission 的缓存行为。
-- 三层必须分别精确对账为 caller matrix 10/10、Workflow 47/47、Redis 5/5，`failed = 0`、`notExecuted/Skip = 0`；`CLOUD-CACHE-001` 总计为 SQLite 2 + Application 10 + Redis 5 + Workflow 47 = 64 case。Docker/Redis 不可用必须失败，不能 Skip 或改用环境变量替换镜像。
+- 受影响 Application caller matrix 必须执行真实 handler，锁定空/null admission、原 `Result`、授权顺序和 factory token 透传。
+- 受影响 Workflow 测试覆盖本契约的白名单、未知异常、取消点、factory/admission 单次执行与同实例传播、普通 exact/pattern bump-before-remove/scan，以及系统 namespace、receipt/claim、续租丢失、释放与断连传播。
+- 受影响真实 Redis 测试使用固定镜像，覆盖断连恢复/backplane、claim/receipt、并发 stale-write fence、真实 handler 失效后不得回填旧 DTO，以及 null/拒绝空/允许空三类 admission。
+- 本次 selector 选择的测试必须满足 `discovered = executed = passed`、`failed = 0`、`skipped = 0`。历史各层 case 数不是当前下限；Docker/Redis 不可用必须失败，不能 Skip 或换成伪集成测试。

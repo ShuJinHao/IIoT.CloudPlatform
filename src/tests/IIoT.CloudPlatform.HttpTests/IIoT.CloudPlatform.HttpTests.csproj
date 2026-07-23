@@ -8,7 +8,6 @@
     <CloudTestKind>Integration</CloudTestKind>
     <CloudTestRuntime>Pure</CloudTestRuntime>
     <CloudTestExecutionGroup>Pure</CloudTestExecutionGroup>
-    <CloudTestRequired>true</CloudTestRequired>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="FluentAssertions" Version="8.8.0" />

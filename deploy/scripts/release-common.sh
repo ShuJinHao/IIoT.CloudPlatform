@@ -416,6 +416,27 @@ require_deploy_env_file() {
   fi
 }
 
+decode_dotenv_value() {
+  printf '%s\n' "$1" | awk '
+    {
+      value = $0
+      if (length(value) >= 2 &&
+          substr(value, 1, 1) == "\"" &&
+          substr(value, length(value), 1) == "\"") {
+        value = substr(value, 2, length(value) - 2)
+        gsub(/\$\$/, "$", value)
+        gsub(/\\"/, sprintf("%c", 34), value)
+        gsub(/\\\\/, sprintf("%c", 92), value)
+      } else if (length(value) >= 2 &&
+                 substr(value, 1, 1) == "\047" &&
+                 substr(value, length(value), 1) == "\047") {
+        value = substr(value, 2, length(value) - 2)
+      }
+      print value
+    }
+  '
+}
+
 load_dotenv() {
   env_file=${1:-$(compose_env_file_path)}
   require_deploy_env_file "$env_file"
@@ -447,6 +468,7 @@ load_dotenv() {
             exit 64
             ;;
         esac
+        env_value=$(decode_dotenv_value "$env_value")
         export "$env_key=$env_value"
         ;;
       *)

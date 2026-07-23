@@ -7,8 +7,8 @@
     <IsTestProject>true</IsTestProject>
     <CloudTestKind>Architecture</CloudTestKind>
     <CloudTestRuntime>Pure</CloudTestRuntime>
+    <CloudCiSecurity>true</CloudCiSecurity>
     <CloudTestExecutionGroup>Pure</CloudTestExecutionGroup>
-    <CloudTestRequired>true</CloudTestRequired>
   </PropertyGroup>
 
   <ItemGroup>

@@ -8,7 +8,6 @@
     <CloudTestKind>Contract</CloudTestKind>
     <CloudTestRuntime>Filesystem</CloudTestRuntime>
     <CloudTestExecutionGroup>Filesystem</CloudTestExecutionGroup>
-    <CloudTestRequired>true</CloudTestRequired>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="FluentAssertions" Version="8.8.0" />

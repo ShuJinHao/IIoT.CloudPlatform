@@ -35,6 +35,9 @@ foreach ($mode in @($baseBaseline.modes.PSObject.Properties.Name)) {
     Assert-CloudQualityAtMost ([int]$baseline.modes.$mode.minimumTokens) ([int]$baseBaseline.modes.$mode.minimumTokens) "duplication $mode minimumTokens"
 }
 foreach ($baseScan in @($baseBaseline.scans)) {
+    if ([string]$baseScan.category -cne 'production') {
+        continue
+    }
     $candidateScans = @($baseline.scans | Where-Object {
         [string]$_.category -ceq [string]$baseScan.category -and
         [string]$_.mode -ceq [string]$baseScan.mode
@@ -46,12 +49,15 @@ foreach ($baseScan in @($baseBaseline.scans)) {
         Assert-CloudQualityAtMost ([int]$candidateScans[0].$metric) ([int]$baseScan.$metric) "duplication $($baseScan.category)/$($baseScan.mode)/$metric"
     }
 }
+if (@($baseline.scans | Where-Object { [string]$_.category -cne 'production' }).Count -ne 0) {
+    throw 'Cloud duplication Quality mode may scan production sources only; tests and test support are dynamic business assets.'
+}
 
 function Assert-FingerprintBaselineMonotonic($candidateFingerprint, [string]$label) {
     if ([int]$candidateFingerprint.schemaVersion -lt [int]$baseFingerprintBaseline.schemaVersion) {
         throw "$label strict fingerprint schema is downgraded."
     }
-    foreach ($category in @('production', 'support', 'test-cases')) {
+    foreach ($category in @('production')) {
         $baseCategory = $baseFingerprintBaseline.categories.$category
         $candidateCategory = $candidateFingerprint.categories.$category
         if ($null -eq $candidateCategory) {
@@ -64,14 +70,14 @@ function Assert-FingerprintBaselineMonotonic($candidateFingerprint, [string]$lab
 
 Assert-FingerprintBaselineMonotonic $fingerprintBaseline 'candidate'
 $identityChurnFixture = @'
-{"schemaVersion":2,"categories":{"production":{"groupCount":1,"instanceCount":1,"groups":[{"fingerprint":"new","instances":1}]},"support":{"groupCount":0,"instanceCount":0,"groups":[]},"test-cases":{"groupCount":0,"instanceCount":0,"groups":[]}}}
+{"schemaVersion":3,"categories":{"production":{"groupCount":1,"instanceCount":1,"groups":[{"fingerprint":"new","instances":1}]}}}
 '@ | ConvertFrom-Json -Depth 20
 # Identity churn is legal when strict totals do not grow; actual observation is
 # reconciled exactly against the candidate baseline below.
 $savedBaseFingerprintBaseline = $baseFingerprintBaseline
 try {
     $baseFingerprintBaseline = @'
-{"schemaVersion":2,"categories":{"production":{"groupCount":1,"instanceCount":1,"groups":[{"fingerprint":"old","instances":1}]},"support":{"groupCount":0,"instanceCount":0,"groups":[]},"test-cases":{"groupCount":0,"instanceCount":0,"groups":[]}}}
+{"schemaVersion":3,"categories":{"production":{"groupCount":1,"instanceCount":1,"groups":[{"fingerprint":"old","instances":1}]}}}
 '@ | ConvertFrom-Json -Depth 20
     Assert-FingerprintBaselineMonotonic $identityChurnFixture 'identity-churn fixture'
 }
@@ -105,18 +111,8 @@ $productionInputs = @(
     'src/analyzers', 'src/core', 'src/hosts', 'src/infrastructure',
     'src/services', 'src/shared', 'src/ui/iiot-web/src'
 )
-$supportInputs = @('src/testing')
-$webTestInputs = @(Get-ChildItem (Join-Path $repoRoot 'src/ui/iiot-web') -File -Recurse |
-    Where-Object { $_.Name -match '\.(test|spec)\.ts$' } |
-    Where-Object { $_.FullName -notmatch '[\\/](node_modules|dist|test-results|playwright-report)[\\/]' } |
-    ForEach-Object { [System.IO.Path]::GetRelativePath($repoRoot, $_.FullName).Replace('\', '/') } |
-    Sort-Object)
-$testInputs = @('src/tests') + $webTestInputs
-
 $sourceIndexes = @{
     production = @{}
-    support = @{}
-    'test-cases' = @{}
 }
 
 function Add-SourceIndexEntry(
@@ -155,8 +151,6 @@ function Add-InputSources([string]$category, [string[]]$inputs) {
 }
 
 Add-InputSources 'production' $productionInputs
-Add-InputSources 'support' $supportInputs
-Add-InputSources 'test-cases' $testInputs
 
 function Get-Sha256([string]$value) {
     $bytes = [Text.Encoding]::UTF8.GetBytes($value)
@@ -188,16 +182,11 @@ function Get-StrictGroupFingerprint([string]$category, $duplicate) {
 function Get-Inputs([string]$category) {
     switch ($category) {
         'production' { return $productionInputs }
-        'support' { return $supportInputs }
-        'test-cases' { return $testInputs }
         default { throw "Unknown duplication category: $category" }
     }
 }
 
 function Get-Format([string]$category) {
-    if ($category -eq 'support') {
-        return 'csharp'
-    }
     return 'csharp,typescript,javascript,vue'
 }
 
@@ -205,13 +194,9 @@ $results = [System.Collections.Generic.List[object]]::new()
 $crossContextGroups = [System.Collections.Generic.List[object]]::new()
 $strictFingerprintCounts = @{
     production = @{}
-    support = @{}
-    'test-cases' = @{}
 }
 $strictFingerprintEvidence = @{
     production = @{}
-    support = @{}
-    'test-cases' = @{}
 }
 foreach ($expected in $baseline.scans) {
     $category = [string]$expected.category
@@ -298,7 +283,7 @@ foreach ($expected in $baseline.scans) {
 }
 
 $strictCategorySummaries = [ordered]@{}
-foreach ($category in @('production', 'support', 'test-cases')) {
+foreach ($category in @('production')) {
     $categoryCounts = $strictFingerprintCounts[$category]
     $strictGroups = @($categoryCounts.Keys | Sort-Object | ForEach-Object {
         [ordered]@{ fingerprint = $_; instances = [int]$categoryCounts[$_] }
@@ -315,7 +300,7 @@ foreach ($category in @('production', 'support', 'test-cases')) {
 }
 if ($UpdateFingerprintBaseline) {
     $updatedFingerprintBaseline = [ordered]@{
-        schemaVersion = 2
+        schemaVersion = 3
         mode = 'strict'
         normalization = 'source fragment whitespace collapsed; SHA-256 over format and ordered side hashes'
         categories = $strictCategorySummaries
@@ -326,10 +311,10 @@ if ($UpdateFingerprintBaseline) {
     if (-not (Test-Path $fingerprintBaselinePath -PathType Leaf)) {
         throw "Missing strict clone fingerprint baseline: $fingerprintBaselinePath"
     }
-    if ([int]$fingerprintBaseline.schemaVersion -ne 2) {
-        throw 'Strict clone fingerprint baseline must use schemaVersion 2 with all categories.'
+    if ([int]$fingerprintBaseline.schemaVersion -ne 3) {
+        throw 'Strict clone fingerprint baseline must use schemaVersion 3 with the production category.'
     }
-    foreach ($category in @('production', 'support', 'test-cases')) {
+    foreach ($category in @('production')) {
         $expectedCategory = $fingerprintBaseline.categories.$category
         if ($null -eq $expectedCategory) {
             throw "Strict clone fingerprint baseline is missing category $category."

@@ -153,15 +153,18 @@ public sealed class DeploymentGuardTests
     }
 
     [Fact]
-    public void CloudCi_ShouldSyntaxCheckReleaseStateAccessScript()
+    public void CloudCi_ShouldUseAffectedSelectionAndRetireFixedInventory()
     {
+        var repositoryRoot = Path.GetDirectoryName(CloudRepositoryPath.Find("IIoT.CloudPlatform.slnx"))
+            ?? throw new DirectoryNotFoundException("Could not resolve Cloud repository root.");
         var source = File.ReadAllText(CloudRepositoryPath.Find(".github", "workflows", "cloud-ci.yml"));
-        var inventory = File.ReadAllText(CloudRepositoryPath.Find("src", "tests", "cloud-test-inventory.json"));
 
-        source.Should().Contain("sh -n deploy/scripts/check-release-state-access.sh");
-        source.Should().Contain("Invoke-CloudTestInventory.ps1 -Mode Required");
-        inventory.Should().Contain("IIoT.CloudPlatform.DeploymentTests");
-        inventory.Should().Contain("\"expected\": 20");
+        source.Should().Contain("Select-CloudCiTests.ps1");
+        source.Should().Contain("Invoke-CloudCiSelectedTests.ps1");
+        source.Should().NotContain("Invoke-CloudTestInventory.ps1");
+        source.Should().NotContain("schedule:");
+        File.Exists(Path.Combine(repositoryRoot, "src", "tests", "cloud-test-inventory.json"))
+            .Should().BeFalse();
     }
 
     [Fact]

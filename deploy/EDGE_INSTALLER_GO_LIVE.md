@@ -30,26 +30,26 @@ publish/edge-installer-artifacts/stable/1.2.0/
   installer-artifact.json
 ```
 
-Cloud 本地至少验证：
+Cloud 只运行本次安装下载链实际影响到的验证：
 
 ```bash
-dotnet restore IIoT.CloudPlatform.slnx --disable-parallel
-dotnet build IIoT.CloudPlatform.slnx -c Release --no-restore --disable-build-servers --nologo -noAutoResponse
-bash scripts/tests/TestCloudArchitectureAnalyzerFixtures.sh
-pwsh -NoProfile -File scripts/tests/Invoke-CloudTestInventory.ps1 -Mode Required -Configuration Release -NoBuild
-cd src/ui/iiot-web && npm run test:unit && npm run build
+pwsh -NoProfile -File scripts/tests/Select-CloudCiTests.ps1 \
+  -Mode Deployment \
+  -BaseRef <production-baseline-sha> \
+  -HeadRef HEAD
+pwsh -NoProfile -File scripts/tests/Invoke-CloudCiSelectedTests.ps1
 ```
 
-上述 Required 入口会真实执行当前 16 个物理 runner / 695 case，并要求发现数 = 执行数 = 通过数、0 failed、0 skipped。完整后端 EndToEnd 63 case 是依赖 Aspire 的独立显式 lane，需要时使用 `pwsh -NoProfile -File scripts/tests/Invoke-CloudTestInventory.ps1 -Mode EndToEnd -Configuration Release -NoBuild`；若 RabbitMQ/eventbus 无法启动，不得把它冒充安装包链路通过。
+选择器按改动和依赖闭包返回受影响的 `Architecture`、`Security` 与 `DeploymentContract` 项目，并以本次 discovery/TRX 对账；无法归属的文件必须停止报告，不能退化全量。全量、EndToEnd、coverage、mutation 和 duplication 只有用户明确授权对应质量任务时才运行。
 
 ## 2. 先部署 Cloud
 
 必须先把当前 Cloud 后端和前端部署到服务器，否则线上没有 `installer-package` 接口，也没有新的 `.exe` 下载按钮。
 
-标准方式由工作区日常入口调度远端 tip 隔离构建、Harbor 和一次 SSH 部署：
+标准方式由工作区日常入口调度受影响构建和部署：
 
 1. 推送或合并到 `main`。
-2. 确认目标改动已推送到 `origin/main`；本机工作区可以继续修改。
+2. 确认三仓工作树 clean、目标代码已提交且位于 `main`。
 3. 从工作区根运行 `pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud`；入口自动 push Git、读取生产 SHA 并按影响选择 Web 或后端服务，不允许人工猜服务或回退全量。生产 profile 提供 Harbor、Runner 和 challenge 参数。
 4. 确认 Runner `routine-current.env`、HTTP health 和对应服务运行态通过；post-deploy 深度巡检与 cleanup 摘要作为独立维护证据。
 
@@ -73,27 +73,27 @@ docker compose ps
 
 ## 3. 发布 Edge 素材
 
-Edge 安装素材不在 CloudPlatform 仓库生成。当前有两个有效发布入口：
+Edge 安装素材不在 CloudPlatform 仓库生成。生产只有一个有效发布入口，另有一个离线 artifact 构建入口：
 
-- 正式 GitHub 打包：`IIoT.EdgeClient` 的 `edge-pack-modules.yml` 只在 `workflow_dispatch` 或 `edge-v*` / `v*` tag 上完整构建和发布，渠道固定为 `stable`。
+- 离线 GitHub 打包：`IIoT.EdgeClient` 的 `edge-pack-modules.yml` 只在显式 `workflow_dispatch` 上构建并上传 Actions artifacts，到此停止；不连接生产、不登记 release。
 - 日常自动发布：操作者从工作区根运行 `pwsh ./deploy/Deploy-Changed.ps1 -Targets Edge -EdgeReleaseNotesPath <更新说明.md>`。入口自动 push Git、读取已发布宿主基线并按改动选择 EdgeHost 或真实 EdgePlugin；本机完成 Windows 安装器/Velopack/插件构建，通过 Cloud Human API 上传服务器并验证 Windows 下载。生产 stable 不允许 `rsync/scp`，Edge 不推 Harbor。
 - 生产服务器只允许 `stable` 渠道，不保留 `ci`、`dev`、`test` 或其他测试渠道目录。
 
-正式 GitHub 打包入口：
+离线 GitHub artifact 入口：
 
 ```text
 workflow_dispatch
   version = 1.2.0
 ```
 
-该 workflow 的 `package-runtime` job 必须跑在 GitHub hosted `windows-latest`，生成 `edge-installer-artifact` 和 `edge-velopack-releases`。随后 `publish-edge-updates` job 必须跑在内网 `[self-hosted, iiot-linux-prod]` runner，把 artifacts 本地发布到 `${EDGE_UPDATES_DIR}`。当前生产服务器 `EDGE_UPDATES_DIR=/data/iiot-platform/edge-client/edge-updates`。
+该 workflow 只允许在 GitHub hosted `windows-latest` 生成 `edge-runtime-package`、`edge-installer-artifact` 和 `edge-velopack-releases`，上传后停止。禁止恢复 `publish-edge-updates`、self-hosted 生产 job、Cloud 人员凭据或服务器目录写入。当前生产服务器 `EDGE_UPDATES_DIR=/data/iiot-platform/edge-client/edge-updates`，只有工作区根 `Deploy-Changed.ps1` 可经 Cloud Human API 写入。
 
 日常快发入口示例：
 
 ```powershell
-pwsh ./deploy/Invoke-WorkspaceDeploy.ps1 `
-  -Target EdgeHost `
-  -ReleaseNotesPath <本次更新说明.md>
+pwsh ./deploy/Deploy-Changed.ps1 `
+  -Targets Edge `
+  -EdgeReleaseNotesPath <本次更新说明.md>
 ```
 
 快发脚本未传 `-Version` 时会通过 Cloud Human catalog 查询 stable 最新版本并自动递增 patch。上传完成后，Cloud 服务端先校验和落盘 bundle，再从 manifest 派生 DB release 行、写入审计，按 SemVer 执行最新 3 个 stable 版本保留策略，并返回本次部署总结。脚本必须打印 version、sourceCommit、releaseNotes、上传耗时、限速、清理结果和 HTTP 验证结果。

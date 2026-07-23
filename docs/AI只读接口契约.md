@@ -1,10 +1,10 @@
 # AI只读接口契约
 
-本文档约束 `IIoT.CloudPlatform` 暴露给 AICopilot 或其他 AI 调用方的只读业务数据接口。当前契约只覆盖 Cloud 项目，不授权 AICopilot 直连生产库或写 Cloud。
+本文档约束 `IIoT.CloudPlatform` 暴露给 AICopilot 或其他 AI 调用方的只读业务数据接口。当前唯一真实业务数据源是 Cloud；Cloud 写入始终禁止，受控 Text-to-SQL 只可作为同一 Cloud 来源的只读兜底。
 
 ## 1. 基线
 
-- AI 业务读取只能走 Cloud `GET /api/v1/ai/read/*`。
+- 已沉淀业务域优先走 Cloud `GET /api/v1/ai/read/*` 插件接口；只有插件结构化返回同源 `Unsupported` 或 `Unavailable` 时，才允许进入同一 Cloud profile 的受控 Text-to-SQL。
 - Cloud 不给 AI 暴露写接口；`AiReadController` 不得出现 `HttpPost`、`HttpPut`、`HttpPatch` 或 `HttpDelete`。
 - AI 读取必须使用 `HttpApiPolicies.RequireAiReadToken`，并受 `HttpApiRateLimitPolicies.AiRead` 限流。
 - 每个 `GetAiRead*Query` 必须实现 `IAiReadQuery<>`，并使用 `AuthorizeAiRead(AiReadPermissions.*)` 声明权限点。
@@ -91,11 +91,12 @@ GET /api/v1/ai/read/production-records
 - AiRead 失败审计的 `FailureReason` 只记录稳定 `ResultStatus` 或异常类型，不保存 `Result.Errors`、`Exception.Message`、stack trace 或其它原始错误文本。
 - 行为测试必须覆盖权限点、行数限制、时间窗、delegated device scope、生产数据字段过滤和旧 pass-station AI 入口禁用。
 - `AiReadHttpContractTests` 必须守卫 `AiReadController` 的 GET-only 表面、`production-records` 唯一生产数据入口、`AuthorizeAiRead` 权限声明和 raw `payload_jsonb` 禁止暴露。
-- AICopilot 如需新增读取域，必须先在 Cloud 增加正式 AI Read API；不得用 MCP、Tool、Agent workflow、Text-to-SQL 或后台任务绕过本契约直连生产库。
+- AICopilot 查询前必须确认 Cloud 来源、数据域、设备或业务对象、时间范围和过滤条件；`Empty`、`NeedClarification`、`Unauthorized` 或凭据失败不得触发 Text-to-SQL。Text-to-SQL 必须经过唯一共享 AST guard、所选能力 profile 的表列 allowlist、只读数据库账号、限行/限时和审计，禁止跨源 fallback、隐藏 adapter 或后台写入。
+- 新增可复用业务域时优先扩展 Cloud AI Read 插件契约；MES/ERP 等未来来源通过统一 provider/profile registry 注册，不复制 Runner、Guard、RepairLoop 或 Prompt。
 
-## 7. 跨仓 live 验收
+## 7. 显式跨仓 live 验收
 
-- Cloud 提供方和 AICopilot typed client 的单仓测试都通过后，仍必须用当前候选源码启动隔离的真实 Cloud Aspire 环境，通过真实 Gateway HTTP 完成八端点联合验收；StubHandler、手写 JSON 和 Simulation 不得冒充 provider。
+- 本节只在用户当前轮明确授权 `CrossProject` 或三端对齐时执行；普通业务开发、push、部署和 nightly 不得自动运行。显式执行时必须用当前候选源码启动隔离的真实 Cloud Aspire 环境，通过真实 Gateway HTTP 完成插件端点联合验收；StubHandler、手写 JSON 和 Simulation 不得冒充 provider。
 - Cloud E2E 负责准备非生产数据和临时 AI service token，并只通过子进程环境把 BaseUrl/token 传给独立 `AICopilot.CloudAiReadLiveTests`；token 不得出现在命令参数、日志、summary、复盘或仓库。
 - live 矩阵至少锁定八端点非空/空集/`maxRows=1` 截断、严格信封和字段集合、专用状态权限、Missing/Stale、自由文本 scope/审计脱敏以及稳定错误映射；显式运行缺环境变量必须失败，不能 Skip 后宣称通过。
 - 联合验收记录必须包含两仓完整 baseline SHA、两仓候选源码 digest、UTC 时间和脱敏环境标识。任一仓库生产源码变化后旧记录立即失效，必须重跑。

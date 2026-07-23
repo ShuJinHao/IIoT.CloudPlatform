@@ -56,12 +56,12 @@
 ## 7. 测试和验证
 
 - 阶段性改动至少运行 `npm run build`。
-- 涉及核心 HTTP、分页、路由守卫、删除确认、schema 动态列时必须补单元测试并运行 `npm run test:unit`。
+- 涉及核心 HTTP、分页、路由守卫、删除确认、schema 动态列时必须补单元测试，并用 CI selector 或 `vitest related` 运行受影响测试；完整 `npm run test:unit` 只在用户显式 Quality/Full 授权时运行。
 - 涉及可见 UI 布局时必须真实运行或截图验收；build 通过不等于 UI 通过。
 
 ## Pre-change Checklist
 
-- [ ] 已读本文件和 `docs/总规则.md`、`IIoT.CloudPlatform/docs/云端规则.md`、`IIoT.CloudPlatform/docs/过站工序扩展规则.md`。
+- [ ] 已读工作区 `docs/总规则.md` 和本文件；只有改动实际触碰 Cloud 后端边界或过站工序时，才读取对应项目规则/专题章节。
 - [ ] 改动范围只在 `IIoT.CloudPlatform`。
 - [ ] 没有修改后端 API 契约或业务红线。
 - [ ] 新增/修改页面 SFC 不超过 200 行。

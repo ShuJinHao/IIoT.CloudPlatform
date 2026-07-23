@@ -1,34 +1,25 @@
 # IIoT.CloudPlatform Instructions
 
-修改 `IIoT.CloudPlatform` 前先读：
+工作区 `../docs/总规则.md` 是唯一默认必读入口。本文件只负责项目路由和少量 Cloud 硬边界。
 
-- 工作区总规则：`../docs/总规则.md`
-- 云端详细规则：`docs/云端规则.md`
-- 按本次改动模块读取相关专题契约；只有过站工序任务才必读 `docs/过站工序扩展规则.md`。
-- `docs/改动复盘与规则沉淀.md`、旧计划和历史证据不默认全文读取；只在修复历史回归、修改已冻结链路、契约冲突、失败原因不明或用户要求追溯时，按模块名、Rule ID、错误码或关键类型定向检索。
-- 修改 Cloud 前端前必须先读 `src/ui/iiot-web/AGENTS.md`，遵守 Cloud 前端架构规则。
+## 按需路由
 
-## Change Closure
+- 进入 Cloud 实际修改后，只读取 `docs/云端规则.md` 中与本批模块直接相关的章节、相关源码和受影响测试。
+- 只有过站工序任务才读 `docs/过站工序扩展规则.md`；其它专题契约同样只在直接触碰对应边界时读取。
+- 只有修改 `src/ui/iiot-web` 时才读取该目录的 `AGENTS.md`。
+- 部署或生产配置只读取工作区部署总览、`docs/云端规则.md` 部署章节和当前目标部署文档的相关章节。
+- 项目复盘、历史记录、旧计划和证据只在回归、冻结链路冲突、失败原因不明、同类故障追溯或用户明确要求时按关键词读取命中邻域。
 
-- 修改 Cloud 代码前，必须先读工作区总规则、本文档、`docs/云端规则.md`、相关专题契约、相关源码、相关测试和近期 git/GitHub 历史。
-- 已验收功能默认冻结；不能因为局部重构、测试修复或文档整理顺手改变已有业务链路、接口语义、部署口径或权限边界。
-- 每次代码改动完成前，必须更新项目滚动复盘文档 `docs/改动复盘与规则沉淀.md`，最新记录放在最前。
-- 每次复盘必须写明改动范围、改动原因、影响面、验证命令、验证结果和规则提炼结论。
-- 必须判断是否形成长期规则；有则写入 `docs/云端规则.md`、专题契约或工作区长期规则，无则在复盘中写明“无新增长期规则”及原因。
-- 最终回复必须列出复盘文档、规则沉淀位置和验证命令；缺任一项，不得称为完成。
-- 默认只更新项目滚动复盘文档，不为每个任务新增单独流水文档；只有形成可长期复用的业务或技术契约，才新增专题文档。
+## 项目硬边界
 
-## Red Lines
+- Cloud 是人员、权限、设备、配方、设备寻址和生产归档查询的业务源头；新设备注册仅限管理员。
+- `ClientCode` 只用于 bootstrap/寻址且不得维护改写，`DeviceId` 才是正式归档身份；设备删除必须显式检查依赖、二次确认并审计。
+- 配方修改必须创建新版本；新普通过站工序默认只扩展配置，不重开身份、上传或部署主链。
+- AICopilot 面向 Cloud 的能力保持只读，不得新增隐藏写接口或绕过正式 AiRead/只读数据源边界。
 
-- 云端是人员、权限、设备、配方、设备寻址、历史归档查询的业务源头。
-- 新设备注册管理员专属。
-- `ClientCode` 是设备寻址码，不能维护时改写；`DeviceId` 是正式归档标识。
-- 设备删除必须检查历史依赖；配方修改必须版本化。
-- 新普通过站工序默认只改配置，不重开身份链、上传主链路、部署主链路。
+## 任务与部署
 
-## Validation
-
-- Cloud 架构边界由 Analyzer、ArchitectureTests 和项目图严格阻断；领域、Application、Workflow、Contract、Persistence、HTTP、UI 等业务测试可随功能同批新增、修改、迁移或删除。inventory/baseline 只防止静默丢失和漏跑，不得恢复 Phase 0 冻结、transition、waiver、receipt 或额外审批。
-- 后端改动运行匹配 build/test。
-- 前端改动运行 `npm run build`。
-- 涉及部署变量时同步模板和示例。
+- 沟通/审计只读且不运行测试；业务开发只运行 Architecture、Security 和 owner 选出的受影响 Business。全量、coverage、mutation、duplication、Quality、CrossProject 和三端对齐只在用户明确授权时运行；影响无法归属时停止。
+- 普通部署只走工作区 `deploy/Deploy-Changed.ps1`：要求 clean、已提交的 `main`，可 push 现有 HEAD，不创建提交、不编辑文件，只补同 SHA 受影响 Architecture/Security/DeploymentContract 并发布受影响服务。
+- 三端从零部署只走工作区 `deploy/Deploy-FromZero.ps1`；Cloud 阶段处理 release history、基础设施、migration、seed 和健康，不创建设备、不注册 `ClientCode`、不轮换设备 bootstrap secret。
+- 只有形成长期规则、修复历史回归、处理生产事故或改变部署机制时，才更新项目复盘。

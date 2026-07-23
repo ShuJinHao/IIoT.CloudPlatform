@@ -8,7 +8,6 @@
     <CloudTestKind>Persistence</CloudTestKind>
     <CloudTestRuntime>Postgres</CloudTestRuntime>
     <CloudTestExecutionGroup>Database</CloudTestExecutionGroup>
-    <CloudTestRequired>true</CloudTestRequired>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="MassTransit.EntityFrameworkCore" Version="8.3.6" />

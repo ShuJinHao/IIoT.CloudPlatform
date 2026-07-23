@@ -24,7 +24,7 @@ public sealed class CloudWorkspaceAlignmentTests : IAsyncLifetime
     {
         var evidenceMarker = Environment.GetEnvironmentVariable("CLOUD_AI_WORKSPACE_EVIDENCE")
                              ?? throw new InvalidOperationException(
-                                 "WorkspaceAlignment must be launched through Invoke-CloudTestInventory.ps1 -Mode WorkspaceAlignment so repository identity evidence is generated before Aspire starts.");
+                                 "CrossProject validation must be launched through Select-CloudCiTests.ps1 and Invoke-CloudCiSelectedTests.ps1 so repository identity evidence is generated before Aspire starts.");
         var evidence = EvidenceMarkerPattern.Match(evidenceMarker);
         if (!evidence.Success)
             throw new InvalidOperationException("Cloud/AICopilot workspace evidence marker has an invalid shape.");
