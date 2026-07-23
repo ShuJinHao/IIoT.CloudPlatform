@@ -873,6 +873,14 @@ internal sealed class RecordingAuditTrailService : IAuditTrailService
         Entries.Add(entry);
         return Task.CompletedTask;
     }
+
+    public Task<bool> TryWriteConfirmedAsync(
+        AuditTrailEntry entry,
+        CancellationToken cancellationToken = default)
+    {
+        Entries.Add(entry);
+        return Task.FromResult(true);
+    }
 }
 
 internal sealed class RecordingIdempotentCacheInvalidationService

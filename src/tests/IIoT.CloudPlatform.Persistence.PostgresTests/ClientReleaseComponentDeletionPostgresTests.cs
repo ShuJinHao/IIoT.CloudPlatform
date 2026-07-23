@@ -1,8 +1,11 @@
 using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.EntityFrameworkCore;
+using IIoT.EntityFrameworkCore.Auditing;
 using IIoT.EntityFrameworkCore.ClientReleases;
+using IIoT.Services.Contracts.Auditing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace IIoT.CloudPlatform.Persistence.PostgresTests;
@@ -16,6 +19,48 @@ namespace IIoT.CloudPlatform.Persistence.PostgresTests;
 public sealed class ClientReleaseComponentDeletionPostgresTests(
     ClientReleaseCommitRecoveryPostgresFixture fixture)
 {
+    [Fact]
+    public async Task EfAuditTrailService_ShouldPersistOneExactRecordPerIdempotencyKey()
+    {
+        var connectionString = await fixture.GetConnectionStringAsync();
+        var options = new DbContextOptionsBuilder<IIoTDbContext>()
+            .UseNpgsql(connectionString)
+            .Options;
+        var deletionId = Guid.NewGuid();
+        var key = $"client-release-hard-delete-completed:{deletionId:N}";
+        var executedAtUtc = DateTime.UtcNow;
+        executedAtUtc = new DateTime(
+            executedAtUtc.Ticks - executedAtUtc.Ticks % 10,
+            DateTimeKind.Utc);
+        var entry = new AuditTrailEntry(
+            Guid.NewGuid(),
+            "admin-tester",
+            "ClientRelease.HardDeleteComponent",
+            "ClientRelease",
+            deletionId.ToString(),
+            executedAtUtc,
+            true,
+            "{\"deleted\":1,\"pathsDigest\":\"abcdef0123456789\"}",
+            null,
+            key);
+        var service = new EfAuditTrailService(
+            options,
+            NullLogger<EfAuditTrailService>.Instance);
+
+        Assert.True(await service.TryWriteConfirmedAsync(entry));
+        Assert.True(await service.TryWriteConfirmedAsync(entry));
+        Assert.False(await service.TryWriteConfirmedAsync(entry with { Summary = "{\"deleted\":2}" }));
+
+        await using var verify = new IIoTDbContext(options);
+        var stored = await verify.AuditTrails
+            .AsNoTracking()
+            .Where(record => record.IdempotencyKey == key)
+            .ToListAsync();
+        var audit = Assert.Single(stored);
+        Assert.Equal(entry.Summary, audit.Summary);
+        Assert.Equal(entry.ExecutedAtUtc, audit.ExecutedAtUtc);
+    }
+
     [Fact]
     public async Task SameTransaction_ShouldCommitComponentDeleteAndOperationTogether()
     {
@@ -198,7 +243,10 @@ public sealed class ClientReleaseComponentDeletionPostgresTests(
                     new string('c', 64),
                     5678)
             ]);
-        deletion.MarkCleanupCompleted();
+        deletion.MarkCleanupCompleted(
+            ["velopack/stable/obsolete.nupkg"],
+            ["velopack/stable/shared.nupkg"],
+            manifestChanged: true);
 
         await using (var writeContext = new IIoTDbContext(options))
         {
@@ -221,6 +269,12 @@ public sealed class ClientReleaseComponentDeletionPostgresTests(
             Assert.Equal(requestedByUserId, byId.RequestedByUserId);
             Assert.Equal("admin-tester", byId.RequestedByUserName);
             Assert.Equal(ClientReleaseComponentDeletionStatus.CleanupCompleted, byId.Status);
+            Assert.NotNull(byId.CleanupCompletedAtUtc);
+            Assert.True(byId.TryGetCleanupResult(out var cleanupResult));
+            Assert.NotNull(cleanupResult);
+            Assert.Equal(["velopack/stable/obsolete.nupkg"], cleanupResult.DeletedPaths);
+            Assert.Equal(["velopack/stable/shared.nupkg"], cleanupResult.SkippedPaths);
+            Assert.True(cleanupResult.ManifestChanged);
             Assert.Equal(2, byId.Files.Count);
             var manifest = Assert.Single(
                 byId.Files,
@@ -233,9 +287,11 @@ public sealed class ClientReleaseComponentDeletionPostgresTests(
             Assert.Equal(new string('c', 64), nupkg.Sha256);
             Assert.Equal(5678, nupkg.SizeBytes);
             // 版本列表按序落 jsonb（jsonb 规范化空白，按内容比较）。
+            var versions = System.Text.Json.JsonSerializer.Deserialize<string[]>(byId.VersionsJson)
+                           ?? throw new InvalidDataException("versions_json must contain a JSON array.");
             Assert.Equal(
                 ["1.0.0", "2.0.0"],
-                System.Text.Json.JsonSerializer.Deserialize<string[]>(byId.VersionsJson));
+                versions);
 
             // catalog 防护依赖 GetByChannelAsync 返回的文件集合：必须 Include(Files)。
             var byChannel = await store.GetByChannelAsync(channel);

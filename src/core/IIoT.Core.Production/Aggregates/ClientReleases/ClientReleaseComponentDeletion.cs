@@ -84,12 +84,18 @@ public sealed class ClientReleaseComponentDeletion : BaseEntity<Guid>
 
     public DateTime UpdatedAtUtc { get; private set; }
 
+    public string? CleanupResultJson { get; private set; }
+
+    public DateTime? CleanupCompletedAtUtc { get; private set; }
+
     public IReadOnlyCollection<ClientReleaseComponentDeletionFile> Files => _files.AsReadOnly();
 
     public void MarkFailed(string failureCode)
     {
         Status = ClientReleaseComponentDeletionStatus.Failed;
         FailureCode = ClientReleaseComponent.NormalizeRequired(failureCode, nameof(failureCode));
+        CleanupResultJson = null;
+        CleanupCompletedAtUtc = null;
         RetryCount += 1;
         UpdatedAtUtc = DateTime.UtcNow;
     }
@@ -97,20 +103,68 @@ public sealed class ClientReleaseComponentDeletion : BaseEntity<Guid>
     /// <summary>
     /// 文件清理已收敛，等待成功审计写稳后才能删除操作记录。
     /// </summary>
-    public void MarkCleanupCompleted()
+    public void MarkCleanupCompleted(
+        IReadOnlyList<string> deletedPaths,
+        IReadOnlyList<string> skippedPaths,
+        bool manifestChanged)
     {
+        if (Status == ClientReleaseComponentDeletionStatus.CleanupCompleted
+            && CleanupResultJson is not null
+            && CleanupCompletedAtUtc.HasValue)
+        {
+            return;
+        }
+
+        var completedAtUtc = DateTime.UtcNow;
         Status = ClientReleaseComponentDeletionStatus.CleanupCompleted;
         FailureCode = null;
-        UpdatedAtUtc = DateTime.UtcNow;
+        CleanupResultJson = System.Text.Json.JsonSerializer.Serialize(
+            new ClientReleaseComponentDeletionCleanupResult(
+                [.. deletedPaths],
+                [.. skippedPaths],
+                manifestChanged));
+        CleanupCompletedAtUtc = completedAtUtc;
+        UpdatedAtUtc = completedAtUtc;
+    }
+
+    public bool TryGetCleanupResult(out ClientReleaseComponentDeletionCleanupResult? result)
+    {
+        result = null;
+        if (Status != ClientReleaseComponentDeletionStatus.CleanupCompleted
+            || string.IsNullOrWhiteSpace(CleanupResultJson)
+            || !CleanupCompletedAtUtc.HasValue)
+        {
+            return false;
+        }
+
+        try
+        {
+            result = System.Text.Json.JsonSerializer.Deserialize<ClientReleaseComponentDeletionCleanupResult>(
+                CleanupResultJson);
+            return result is not null
+                   && result.DeletedPaths is not null
+                   && result.SkippedPaths is not null;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
+        }
     }
 
     public void ResetForRetry()
     {
         Status = ClientReleaseComponentDeletionStatus.Requested;
         FailureCode = null;
+        CleanupResultJson = null;
+        CleanupCompletedAtUtc = null;
         UpdatedAtUtc = DateTime.UtcNow;
     }
 }
+
+public sealed record ClientReleaseComponentDeletionCleanupResult(
+    IReadOnlyList<string> DeletedPaths,
+    IReadOnlyList<string> SkippedPaths,
+    bool ManifestChanged);
 
 /// <summary>
 /// 删除操作持久化的单个受控文件目标：相对路径 + 类型 + 精确事实（SHA256/大小）。

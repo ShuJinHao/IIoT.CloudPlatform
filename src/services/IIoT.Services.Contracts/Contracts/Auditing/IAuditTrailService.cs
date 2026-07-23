@@ -9,7 +9,8 @@ public sealed record AuditTrailEntry(
     DateTime ExecutedAtUtc,
     bool Succeeded,
     string Summary,
-    string? FailureReason = null);
+    string? FailureReason = null,
+    string? IdempotencyKey = null);
 
 public interface IAuditTrailService
 {
@@ -18,14 +19,10 @@ public interface IAuditTrailService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// 写入审计并返回是否真正持久化成功。默认实现回退到 <see cref="TryWriteAsync"/> 并视为成功，
-    /// 不破坏既有实现；需要在“审计写稳后才能推进”的链路（如永久删除两阶段收敛）使用。
+    /// 写入审计并返回是否真正持久化成功。需要在“审计写稳后才能推进”的链路
+    /// （如永久删除两阶段收敛）使用；实现必须明确确认持久化结果，不能用默认成功掩盖失败。
     /// </summary>
-    async Task<bool> TryWriteConfirmedAsync(
+    Task<bool> TryWriteConfirmedAsync(
         AuditTrailEntry entry,
-        CancellationToken cancellationToken = default)
-    {
-        await TryWriteAsync(entry, cancellationToken);
-        return true;
-    }
+        CancellationToken cancellationToken = default);
 }

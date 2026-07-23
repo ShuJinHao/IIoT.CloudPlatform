@@ -77,6 +77,13 @@ public sealed class ClientReleaseComponentDeletionConfiguration : IEntityTypeCon
             .IsRequired()
             .HasColumnName("updated_at_utc");
 
+        builder.Property(deletion => deletion.CleanupResultJson)
+            .HasColumnType("jsonb")
+            .HasColumnName("cleanup_result_json");
+
+        builder.Property(deletion => deletion.CleanupCompletedAtUtc)
+            .HasColumnName("cleanup_completed_at_utc");
+
         builder.HasIndex(deletion => deletion.Status)
             .HasDatabaseName("ix_edge_client_release_component_deletions_status");
 

@@ -1,8 +1,14 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 
 namespace IIoT.ProductionService.ClientReleases;
+
+internal sealed record ClientReleaseVelopackArtifactFact(
+    string FileName,
+    string Sha256,
+    long SizeBytes);
 
 internal static class ClientReleaseVelopackPaths
 {
@@ -40,256 +46,375 @@ internal static class ClientReleaseVelopackPaths
     }
 
     /// <summary>
-    /// 以存活 Host 版本的 VelopackFile artifact 为白名单重建 channel manifests。
-    /// manifest 中只允许保留白名单内且文件仍存在的 .nupkg 引用；其它内容原样保留。
-    /// manifest 不是合法 JSON 对象时 fail closed（返回 false），绝不猜测内容重写。
-    /// manifest 缺失时按白名单真正生成（存活 Host 仍需要更新清单），任一 manifest 无法重建返回 false。
+    /// 按存活 Host 已登记的真实 Velopack 文件事实过滤三份现有 channel manifest。
+    /// releases.{channel}.json 必须是 VelopackAssetFeed 对象（Assets 数组），
+    /// assets.{channel}.json 必须是 Velopack CLI 生成的顶层 asset 数组，RELEASES 保留原始行格式。
+    /// 任何 manifest 缺失、结构漂移、存活文件缺失或事实不一致都 fail closed；本方法绝不从文件名
+    /// 猜造 PackageId/Version/Type/RelativeFileName/hash 等生产发布元数据。
     /// </summary>
     public static bool RebuildChannelManifestsFromWhitelist(
+        string controlledRoot,
         string velopackChannelRoot,
-        IReadOnlyCollection<string> survivingNupkgFileNames,
+        IReadOnlyCollection<ClientReleaseVelopackArtifactFact> survivingArtifacts,
         ILogger logger)
     {
-        var whitelist = new HashSet<string>(survivingNupkgFileNames, StringComparer.OrdinalIgnoreCase);
-        var succeeded = true;
-        foreach (var manifestName in StableManifestNames)
+        ClientReleaseControlledDirectory.ValidateChain(
+            controlledRoot,
+            velopackChannelRoot,
+            "velopack channel 目录祖先链包含符号链接或越过受控发布目录。");
+
+        if (!TryNormalizeSurvivingArtifacts(
+                controlledRoot,
+                velopackChannelRoot,
+                survivingArtifacts,
+                out var artifactsByName))
         {
-            var manifestPath = Path.Combine(velopackChannelRoot, manifestName);
+            LogManifestRebuildFailure(logger, "channel", "surviving-artifact-missing");
+            return false;
+        }
+
+        var releasesPath = Path.Combine(velopackChannelRoot, "releases.stable.json");
+        var assetsPath = Path.Combine(velopackChannelRoot, "assets.stable.json");
+        var legacyReleasesPath = Path.Combine(velopackChannelRoot, "RELEASES");
+        foreach (var manifestPath in new[] { releasesPath, assetsPath, legacyReleasesPath })
+        {
             if (!File.Exists(manifestPath))
             {
-                // 真正重建缺失的 manifest：按白名单生成最小合法清单，不再静默跳过。
-                if (!TryWriteMissingStableManifest(manifestPath, whitelist, logger))
+                LogManifestRebuildFailure(logger, Path.GetFileName(manifestPath), "missing");
+                return false;
+            }
+
+            ValidateMutableManifest(controlledRoot, manifestPath);
+        }
+
+        try
+        {
+            if (!TryFilterReleaseFeed(
+                    File.ReadAllText(releasesPath),
+                    artifactsByName,
+                    out var releasesJson)
+                || !TryFilterAssetManifest(
+                    File.ReadAllText(assetsPath),
+                    artifactsByName,
+                    out var assetsJson)
+                || !TryFilterLegacyReleases(
+                    File.ReadAllLines(legacyReleasesPath),
+                    artifactsByName.Keys,
+                    out var legacyReleaseLines))
+            {
+                LogManifestRebuildFailure(logger, "channel", "invalid-or-incomplete-schema");
+                return false;
+            }
+
+            // 三份新内容都在内存中验证完成后才逐份原子替换。若中途 IO 失败，目标 Velopack
+            // 文件尚未删除，旧/新 manifest 都只会引用仍存在的文件；操作保持 Failed，重试继续收敛。
+            return TryWriteTextAtomic(controlledRoot, releasesPath, releasesJson, logger)
+                   && TryWriteTextAtomic(controlledRoot, assetsPath, assetsJson, logger)
+                   && TryWriteLinesAtomic(controlledRoot, legacyReleasesPath, legacyReleaseLines, logger);
+        }
+        catch (ClientReleaseValidationException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            ClientReleasePublishDiagnostics.LogFailure(
+                logger,
+                LogLevel.Warning,
+                new EventId(4612, "ClientReleaseVelopackManifestRebuildFailure"),
+                "velopack-manifest-rebuild",
+                ex,
+                "channel");
+            return false;
+        }
+    }
+
+    private static bool TryNormalizeSurvivingArtifacts(
+        string controlledRoot,
+        string velopackChannelRoot,
+        IReadOnlyCollection<ClientReleaseVelopackArtifactFact> survivingArtifacts,
+        out IReadOnlyDictionary<string, ClientReleaseVelopackArtifactFact> artifactsByName)
+    {
+        var normalized = new Dictionary<string, ClientReleaseVelopackArtifactFact>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var artifact in survivingArtifacts)
+        {
+            var fileName = Path.GetFileName(artifact.FileName);
+            if (string.IsNullOrWhiteSpace(fileName)
+                || !string.Equals(fileName, artifact.FileName, StringComparison.Ordinal)
+                || !ClientReleaseFileFacts.IsSha256(artifact.Sha256)
+                || artifact.SizeBytes < 0)
+            {
+                artifactsByName = normalized;
+                return false;
+            }
+
+            if (normalized.TryGetValue(fileName, out var existing))
+            {
+                if (!string.Equals(existing.Sha256, artifact.Sha256, StringComparison.OrdinalIgnoreCase)
+                    || existing.SizeBytes != artifact.SizeBytes)
                 {
-                    succeeded = false;
+                    throw new ClientReleaseValidationException("存活 Velopack 文件登记事实冲突。");
                 }
 
                 continue;
             }
 
-            if (!TryRebuildStableManifest(manifestPath, whitelist, logger))
+            var fullPath = Path.GetFullPath(Path.Combine(velopackChannelRoot, fileName));
+            if (!ClientReleaseFileFacts.IsStrictChildPath(velopackChannelRoot, fullPath)
+                || !File.Exists(fullPath))
             {
-                succeeded = false;
+                artifactsByName = normalized;
+                return false;
             }
+
+            ClientReleaseControlledDirectory.ValidateChain(
+                controlledRoot,
+                Path.GetDirectoryName(fullPath)!,
+                "存活 Velopack 文件祖先链包含符号链接或越过受控发布目录。");
+            if (!ClientReleaseFileFacts.IsExactRegularFile(
+                    fullPath,
+                    artifact.Sha256,
+                    artifact.SizeBytes))
+            {
+                throw new ClientReleaseValidationException("存活 Velopack 文件事实不匹配。");
+            }
+
+            normalized.Add(fileName, artifact with { FileName = fileName });
         }
 
-        return succeeded && TryRebuildReleasesFile(velopackChannelRoot, whitelist, logger);
+        artifactsByName = normalized;
+        return true;
     }
 
-    /// <summary>
-    /// 缺失的 stable JSON manifest 按白名单真正生成；写失败返回 false。
-    /// </summary>
-    private static bool TryWriteMissingStableManifest(
-        string manifestPath,
-        ISet<string> whitelist,
-        ILogger logger)
+    private static bool TryFilterReleaseFeed(
+        string json,
+        IReadOnlyDictionary<string, ClientReleaseVelopackArtifactFact> artifactsByName,
+        out string filteredJson)
     {
-        var array = new JsonArray();
-        foreach (var fileName in whitelist.OrderBy(name => name, StringComparer.OrdinalIgnoreCase))
+        filteredJson = string.Empty;
+        var root = JsonNode.Parse(json) as JsonObject;
+        var assetsProperty = root?.FirstOrDefault(
+            property => string.Equals(property.Key, "Assets", StringComparison.OrdinalIgnoreCase));
+        if (root is null || assetsProperty?.Value is not JsonArray assets)
         {
-            if (File.Exists(Path.Combine(Path.GetDirectoryName(manifestPath)!, fileName)))
-            {
-                array.Add(fileName);
-            }
-        }
-
-        var propertyName = Path.GetFileName(manifestPath)
-            .StartsWith("assets.", StringComparison.OrdinalIgnoreCase)
-            ? "assets"
-            : "packages";
-        var root = new JsonObject
-        {
-            [propertyName] = array
-        };
-        return TryAtomicReplaceJson(manifestPath, root, logger);
-    }
-
-    private static bool TryRebuildStableManifest(
-        string manifestPath,
-        ISet<string> whitelist,
-        ILogger logger)
-    {
-        JsonObject? root;
-        try
-        {
-            root = JsonNode.Parse(File.ReadAllText(manifestPath)) as JsonObject;
-        }
-        catch (JsonException)
-        {
-            root = null;
-        }
-
-        if (root is null)
-        {
-            LogManifestRebuildFailure(logger, manifestPath, "invalid-json");
             return false;
         }
 
-        var removed = false;
-        foreach (var property in root.ToArray())
+        var retained = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var index = assets.Count - 1; index >= 0; index--)
         {
-            if (property.Value is not JsonArray entries)
+            if (assets[index] is not JsonObject asset
+                || !TryReadStringProperty(asset, "FileName", out var fileName))
+            {
+                return false;
+            }
+
+            fileName = Path.GetFileName(fileName);
+            if (!artifactsByName.ContainsKey(fileName))
+            {
+                assets.RemoveAt(index);
+                continue;
+            }
+
+            retained.Add(fileName);
+        }
+
+        var requiredPackages = artifactsByName.Keys.Where(IsNugetPackage);
+        if (requiredPackages.Any(fileName => !retained.Contains(fileName)))
+        {
+            return false;
+        }
+
+        filteredJson = root.ToJsonString();
+        return true;
+    }
+
+    private static bool TryFilterAssetManifest(
+        string json,
+        IReadOnlyDictionary<string, ClientReleaseVelopackArtifactFact> artifactsByName,
+        out string filteredJson)
+    {
+        filteredJson = string.Empty;
+        if (JsonNode.Parse(json) is not JsonArray assets)
+        {
+            return false;
+        }
+
+        var retained = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var index = assets.Count - 1; index >= 0; index--)
+        {
+            if (assets[index] is not JsonObject asset
+                || !TryReadStringProperty(asset, "RelativeFileName", out var relativeFileName))
+            {
+                return false;
+            }
+
+            var fileName = Path.GetFileName(relativeFileName);
+            if (!artifactsByName.ContainsKey(fileName))
+            {
+                assets.RemoveAt(index);
+                continue;
+            }
+
+            retained.Add(fileName);
+        }
+
+        if (artifactsByName.Keys.Any(fileName => !retained.Contains(fileName)))
+        {
+            return false;
+        }
+
+        filteredJson = assets.ToJsonString();
+        return true;
+    }
+
+    private static bool TryFilterLegacyReleases(
+        IReadOnlyList<string> lines,
+        IEnumerable<string> survivingFileNames,
+        out string[] filteredLines)
+    {
+        var survivingPackages = new HashSet<string>(
+            survivingFileNames.Where(IsNugetPackage),
+            StringComparer.OrdinalIgnoreCase);
+        var retained = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var output = new List<string>();
+        foreach (var line in lines)
+        {
+            if (string.IsNullOrWhiteSpace(line))
             {
                 continue;
             }
 
-            for (var index = entries.Count - 1; index >= 0; index--)
-            {
-                var fileName = ResolvePackageFileName(entries[index]);
-                if (fileName is null || !IsNugetPackage(fileName))
-                {
-                    continue;
-                }
-
-                if (!whitelist.Contains(fileName)
-                    || !File.Exists(Path.Combine(Path.GetDirectoryName(manifestPath)!, fileName)))
-                {
-                    entries.RemoveAt(index);
-                    removed = true;
-                }
-            }
-        }
-
-        if (!removed)
-        {
-            return true;
-        }
-
-        return TryAtomicReplaceJson(manifestPath, root, logger);
-    }
-
-    private static bool TryRebuildReleasesFile(
-        string velopackChannelRoot,
-        ISet<string> whitelist,
-        ILogger logger)
-    {
-        var releasesPath = Path.Combine(velopackChannelRoot, "RELEASES");
-        if (!File.Exists(releasesPath))
-        {
-            // RELEASES 缺失时按白名单真正生成（存活 Host 仍需要更新清单）。
-            var lines = whitelist
-                .Where(fileName => File.Exists(Path.Combine(velopackChannelRoot, fileName)))
-                .OrderBy(fileName => fileName, StringComparer.OrdinalIgnoreCase)
-                .Select(fileName => $"{ComputeSha256OrEmpty(Path.Combine(velopackChannelRoot, fileName))} {fileName} {new FileInfo(Path.Combine(velopackChannelRoot, fileName)).Length}")
-                .ToArray();
-            return TryWriteLinesAtomic(releasesPath, lines, logger);
-        }
-
-        var existing = File.ReadAllLines(releasesPath);
-        var kept = new List<string>(existing.Length);
-        var removed = false;
-        foreach (var line in existing)
-        {
             var segments = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             var fileName = segments.FirstOrDefault(IsNugetPackage);
-            if (fileName is not null
-                && (!whitelist.Contains(fileName)
-                    || !File.Exists(Path.Combine(velopackChannelRoot, fileName))))
+            if (fileName is null)
             {
-                removed = true;
+                filteredLines = [];
+                return false;
+            }
+
+            fileName = Path.GetFileName(fileName);
+            if (!survivingPackages.Contains(fileName))
+            {
                 continue;
             }
 
-            kept.Add(line);
+            retained.Add(fileName);
+            output.Add(line);
         }
 
-        if (!removed)
+        if (survivingPackages.Any(fileName => !retained.Contains(fileName)))
         {
-            return true;
-        }
-
-        return TryWriteLinesAtomic(releasesPath, [.. kept], logger);
-    }
-
-    private static bool TryWriteLinesAtomic(string releasesPath, string[] lines, ILogger logger)
-    {
-        var privatePath = CreatePrivateSiblingPath(releasesPath, "rebuild");
-        try
-        {
-            File.WriteAllLines(privatePath, lines);
-            File.Move(privatePath, releasesPath, overwrite: true);
-            return true;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            ClientReleasePublishDiagnostics.LogFailure(
-                logger,
-                LogLevel.Warning,
-                new EventId(4612, "ClientReleaseVelopackManifestRebuildFailure"),
-                "velopack-manifest-rebuild",
-                ex,
-                "RELEASES");
-            TryDeletePrivateFile(privatePath);
+            filteredLines = [];
             return false;
         }
+
+        filteredLines = [.. output];
+        return true;
     }
 
-    private static string ComputeSha256OrEmpty(string path)
+    private static bool TryReadStringProperty(
+        JsonObject item,
+        string propertyName,
+        out string value)
     {
+        value = string.Empty;
+        var property = item.FirstOrDefault(
+            candidate => string.Equals(candidate.Key, propertyName, StringComparison.OrdinalIgnoreCase));
+        if (property.Value is JsonValue jsonValue
+            && jsonValue.TryGetValue<string>(out var candidate)
+            && !string.IsNullOrWhiteSpace(candidate))
+        {
+            value = candidate;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static void ValidateMutableManifest(string controlledRoot, string manifestPath)
+    {
+        ClientReleaseControlledDirectory.ValidateChain(
+            controlledRoot,
+            Path.GetDirectoryName(manifestPath)!,
+            "Velopack manifest 祖先链包含符号链接或越过受控发布目录。");
+        var attributes = File.GetAttributes(manifestPath);
+        if ((attributes & FileAttributes.ReparsePoint) != 0
+            || (attributes & FileAttributes.Directory) != 0)
+        {
+            throw new ClientReleaseValidationException("Velopack manifest 不是受控普通文件。");
+        }
+    }
+
+    private static bool TryWriteTextAtomic(
+        string controlledRoot,
+        string targetPath,
+        string content,
+        ILogger logger)
+    {
+        var privatePath = CreatePrivateSiblingPath(targetPath, "rebuild");
         try
         {
-            return ClientReleaseFileFacts.ComputeSha256(path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            _ = ex;
-            return string.Empty.PadRight(64, '0');
-        }
-    }
-
-    private static string? ResolvePackageFileName(JsonNode? node)
-    {
-        if (node is JsonValue value && value.TryGetValue<string>(out var text))
-        {
-            return Path.GetFileName(text.Trim());
-        }
-
-        if (node is JsonObject entry)
-        {
-            foreach (var property in entry)
+            ValidateMutableManifest(controlledRoot, targetPath);
+            using (var stream = new FileStream(
+                       privatePath,
+                       FileMode.CreateNew,
+                       FileAccess.Write,
+                       FileShare.None,
+                       bufferSize: 4096,
+                       FileOptions.WriteThrough))
+            using (var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
             {
-                if (property.Value is JsonValue propertyValue
-                    && propertyValue.TryGetValue<string>(out var propertyText)
-                    && IsNugetPackage(propertyText.Trim()))
-                {
-                    return Path.GetFileName(propertyText.Trim());
-                }
+                writer.Write(content);
+                writer.Flush();
+                stream.Flush(flushToDisk: true);
             }
-        }
 
-        return null;
-    }
-
-    private static bool TryAtomicReplaceJson(string manifestPath, JsonObject root, ILogger logger)
-    {
-        var privatePath = CreatePrivateSiblingPath(manifestPath, "rebuild");
-        try
-        {
-            File.WriteAllText(privatePath, root.ToJsonString());
-            File.Move(privatePath, manifestPath, overwrite: true);
+            // 生成私有同级文件后再次检查目标及其祖先链，拒绝“读取后、替换前”发生的
+            // symlink/reparse 置换。仍由同目录原子替换保证不会暴露半写 manifest。
+            ValidateMutableManifest(controlledRoot, targetPath);
+            File.Move(privatePath, targetPath, overwrite: true);
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            ClientReleasePublishDiagnostics.LogFailure(
-                logger,
-                LogLevel.Warning,
-                new EventId(4612, "ClientReleaseVelopackManifestRebuildFailure"),
-                "velopack-manifest-rebuild",
-                ex,
-                Path.GetFileName(manifestPath));
+            LogManifestWriteFailure(logger, ex, Path.GetFileName(targetPath));
             TryDeletePrivateFile(privatePath);
             return false;
         }
     }
 
-    private static void LogManifestRebuildFailure(ILogger logger, string manifestPath, string condition)
+    private static bool TryWriteLinesAtomic(
+        string controlledRoot,
+        string targetPath,
+        string[] lines,
+        ILogger logger)
+        => TryWriteTextAtomic(
+            controlledRoot,
+            targetPath,
+            lines.Length == 0 ? string.Empty : string.Join(Environment.NewLine, lines) + Environment.NewLine,
+            logger);
+
+    private static void LogManifestWriteFailure(ILogger logger, Exception ex, string fileName)
+    {
+        ClientReleasePublishDiagnostics.LogFailure(
+            logger,
+            LogLevel.Warning,
+            new EventId(4612, "ClientReleaseVelopackManifestRebuildFailure"),
+            "velopack-manifest-rebuild",
+            ex,
+            fileName);
+    }
+
+    private static void LogManifestRebuildFailure(ILogger logger, string manifestName, string condition)
     {
         ClientReleasePublishDiagnostics.LogCondition(
             logger,
             new EventId(4612, "ClientReleaseVelopackManifestRebuildFailure"),
             "velopack-manifest-rebuild",
             condition,
-            Path.GetFileName(manifestPath));
+            manifestName);
     }
 
     private static bool IsStableJsonManifest(string fileName)

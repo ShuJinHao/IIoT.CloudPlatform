@@ -37,8 +37,14 @@ internal sealed class AuditTrailRecordConfiguration : IEntityTypeConfiguration<A
         builder.Property(x => x.FailureReason)
             .HasMaxLength(512);
 
+        builder.Property(x => x.IdempotencyKey)
+            .HasMaxLength(256);
+
         builder.HasIndex(x => x.ExecutedAtUtc);
         builder.HasIndex(x => x.ActorUserId);
         builder.HasIndex(x => new { x.OperationType, x.TargetType });
+        builder.HasIndex(x => x.IdempotencyKey)
+            .IsUnique()
+            .HasFilter("\"IdempotencyKey\" IS NOT NULL");
     }
 }

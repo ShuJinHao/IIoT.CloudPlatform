@@ -24,6 +24,8 @@ public sealed class AuditTrailRecord
 
     public string? FailureReason { get; private set; }
 
+    public string? IdempotencyKey { get; private set; }
+
     private AuditTrailRecord()
     {
     }
@@ -40,7 +42,8 @@ public sealed class AuditTrailRecord
             ExecutedAtUtc = entry.ExecutedAtUtc,
             Succeeded = entry.Succeeded,
             Summary = entry.Summary,
-            FailureReason = entry.FailureReason
+            FailureReason = entry.FailureReason,
+            IdempotencyKey = entry.IdempotencyKey
         };
     }
 }
