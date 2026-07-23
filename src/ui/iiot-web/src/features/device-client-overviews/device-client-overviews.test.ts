@@ -1,7 +1,9 @@
-import { flushPromises } from '@vue/test-utils';
+import { flushPromises, mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
+import { i18n } from '../../i18n';
 import { Permissions } from '../../types/permissions';
+import DeviceClientOverviewPage from './DeviceClientOverviewPage.vue';
 import { deviceClientOverviewRoutes } from './routes';
 import { releaseStatusText, softwareStatusText } from './columns';
 import { useDeviceClientOverviews } from './useDeviceClientOverviews';
@@ -34,6 +36,17 @@ vi.mock('../../stores/auth', () => ({
 }));
 
 const DEVICE_ID = '1c2b3a4d-5555-4666-8777-888899990000';
+const SECOND_DEVICE_ID = '9d8c7b6a-5555-4666-8777-888899990000';
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 function makeOverviewItem(overrides: Record<string, unknown> = {}) {
   return {
@@ -54,7 +67,7 @@ function makeOverviewPage(items: unknown[], totalCount = items.length) {
   };
 }
 
-function makeReleaseDetails() {
+function makeReleaseDetails(overrides: Record<string, unknown> = {}) {
   return {
     deviceId: DEVICE_ID,
     deviceName: '一号模切机',
@@ -79,10 +92,11 @@ function makeReleaseDetails() {
     plugins: [
       { moduleId: 'die-cutting', displayName: '模切', version: '1.2.0', hostApiVersion: '1.0.0', enabled: true, updateStatus: 'Latest', compatibilityIssue: null },
     ],
+    ...overrides,
   };
 }
 
-function makePlcState() {
+function makePlcState(overrides: Record<string, unknown> = {}) {
   return {
     id: 'plc-state-1',
     deviceId: DEVICE_ID,
@@ -97,6 +111,7 @@ function makePlcState() {
     lastError: null,
     lastSeenAtUtc: '2026-07-23T01:00:00Z',
     updatedAtUtc: '2026-07-23T01:00:00Z',
+    ...overrides,
   };
 }
 
@@ -132,6 +147,7 @@ describe('状态文案映射', () => {
     expect(softwareStatusText('Stopped')).toBe('已停止');
     expect(softwareStatusText('RuntimeHeartbeatStale')).toBe('心跳超时');
     expect(softwareStatusText('MissingRuntimeHeartbeat')).toBe('无运行心跳');
+    expect(softwareStatusText('Unknown')).toBe('未知');
   });
 
   it('版本/升级状态映射中文，未识别值原样返回不伪造', () => {
@@ -141,6 +157,7 @@ describe('状态文案映射', () => {
     expect(releaseStatusText('Incompatible')).toBe('不兼容');
     expect(releaseStatusText('MissingReport')).toBe('未上报');
     expect(releaseStatusText('NoRelease')).toBe('无发布');
+    expect(releaseStatusText('Unknown')).toBe('未知');
     expect(releaseStatusText('SomethingNew')).toBe('SomethingNew');
   });
 });
@@ -213,7 +230,7 @@ describe('useDeviceClientOverviews 主列表', () => {
 });
 
 describe('详情抽屉权限独立请求', () => {
-  it('四种权限组合：无权限的详情既不请求也不持有数据', async () => {
+  it('真实页面按四种权限组合渲染详情入口和区块，零详情权限不出现空入口', async () => {
     const cases: Array<[boolean, boolean, number, number]> = [
       [true, true, 1, 1],
       [true, false, 1, 0],
@@ -224,15 +241,116 @@ describe('详情抽屉权限独立请求', () => {
       vi.clearAllMocks();
       authMock.plc = plc;
       authMock.release = release;
-      const state = useDeviceClientOverviews();
-      await state.refresh();
-      state.openDetailDrawer(state.items.value[0]!);
+      const wrapper = mount(DeviceClientOverviewPage, {
+        attachTo: document.body,
+        global: { plugins: [i18n] },
+      });
       await flushPromises();
+
+      const detailButtons = wrapper.findAll('button').filter((button) => button.text() === '详情');
+      expect(detailButtons).toHaveLength(plc || release ? 1 : 0);
+
+      if (detailButtons[0]) {
+        await detailButtons[0].trigger('click');
+        await flushPromises();
+        const bodyText = document.body.textContent ?? '';
+        expect(bodyText.includes('PLC 状态')).toBe(plc);
+        expect(bodyText.includes('版本、插件和升级详情')).toBe(release);
+      } else {
+        expect(document.querySelector('.ui-drawer')).toBeNull();
+      }
+
       expect(apiMocks.getEdgeHostPlcRuntimeStatesApi.mock.calls).toHaveLength(plcCalls);
       expect(apiMocks.getDeviceClientReleaseDetailsApi.mock.calls).toHaveLength(releaseCalls);
-      expect(state.canViewPlcDetails.value).toBe(plc);
-      expect(state.canViewReleaseDetails.value).toBe(release);
+      wrapper.unmount();
+      document.body.innerHTML = '';
     }
+  });
+
+  it('打开 A 后关闭并打开 B，A 的迟到响应不得覆盖 B 的数据或错误状态', async () => {
+    apiMocks.getDeviceClientOverviewsApi.mockResolvedValue(makeOverviewPage([
+      makeOverviewItem({ deviceId: DEVICE_ID, deviceName: '设备 A' }),
+      makeOverviewItem({ deviceId: SECOND_DEVICE_ID, deviceName: '设备 B' }),
+    ]));
+    const plcA = deferred<ReturnType<typeof makePlcState>[]>();
+    const plcB = deferred<ReturnType<typeof makePlcState>[]>();
+    const releaseA = deferred<ReturnType<typeof makeReleaseDetails>>();
+    const releaseB = deferred<ReturnType<typeof makeReleaseDetails>>();
+    apiMocks.getEdgeHostPlcRuntimeStatesApi.mockImplementation(
+      (deviceId: string) => deviceId === DEVICE_ID ? plcA.promise : plcB.promise,
+    );
+    apiMocks.getDeviceClientReleaseDetailsApi.mockImplementation(
+      (deviceId: string) => deviceId === DEVICE_ID ? releaseA.promise : releaseB.promise,
+    );
+
+    const state = useDeviceClientOverviews();
+    await state.refresh();
+    state.openDetailDrawer(state.items.value[0]!);
+    state.closeDetailDrawer();
+    state.openDetailDrawer(state.items.value[1]!);
+
+    plcB.resolve([makePlcState({
+      id: 'plc-b',
+      deviceId: SECOND_DEVICE_ID,
+      plcCode: 'PLC-B',
+    })]);
+    releaseB.resolve(makeReleaseDetails({
+      deviceId: SECOND_DEVICE_ID,
+      deviceName: '设备 B',
+      currentVersion: '3.0.0',
+    }));
+    await flushPromises();
+    expect(state.selectedDevice.value?.deviceId).toBe(SECOND_DEVICE_ID);
+    expect(state.plcStates.value[0]?.deviceId).toBe(SECOND_DEVICE_ID);
+    expect(state.releaseDetails.value?.deviceId).toBe(SECOND_DEVICE_ID);
+
+    plcA.resolve([makePlcState({ id: 'plc-a', deviceId: DEVICE_ID, plcCode: 'PLC-A' })]);
+    releaseA.reject(axiosError(500, {
+      title: 'Internal Server Error',
+      detail: '设备 A 的迟到错误',
+    }));
+    await flushPromises();
+
+    expect(state.selectedDevice.value?.deviceId).toBe(SECOND_DEVICE_ID);
+    expect(state.plcStates.value[0]?.deviceId).toBe(SECOND_DEVICE_ID);
+    expect(state.releaseDetails.value?.deviceId).toBe(SECOND_DEVICE_ID);
+    expect(state.plcError.value).toBeNull();
+    expect(state.releaseError.value).toBeNull();
+    expect(state.plcLoading.value).toBe(false);
+    expect(state.releaseLoading.value).toBe(false);
+  });
+
+  it('同一设备重试只接受各分支最新请求，旧请求迟到不得回写', async () => {
+    const initialPlc = deferred<ReturnType<typeof makePlcState>[]>();
+    const retriedPlc = deferred<ReturnType<typeof makePlcState>[]>();
+    const initialRelease = deferred<ReturnType<typeof makeReleaseDetails>>();
+    const retriedRelease = deferred<ReturnType<typeof makeReleaseDetails>>();
+    apiMocks.getEdgeHostPlcRuntimeStatesApi
+      .mockReturnValueOnce(initialPlc.promise)
+      .mockReturnValueOnce(retriedPlc.promise);
+    apiMocks.getDeviceClientReleaseDetailsApi
+      .mockReturnValueOnce(initialRelease.promise)
+      .mockReturnValueOnce(retriedRelease.promise);
+
+    const state = useDeviceClientOverviews();
+    await state.refresh();
+    state.openDetailDrawer(state.items.value[0]!);
+    state.retryPlcStates();
+    state.retryReleaseDetails();
+
+    retriedPlc.resolve([makePlcState({ id: 'plc-retry', plcCode: 'PLC-RETRY' })]);
+    retriedRelease.resolve(makeReleaseDetails({ currentVersion: '3.1.0' }));
+    await flushPromises();
+    expect(state.plcStates.value[0]?.plcCode).toBe('PLC-RETRY');
+    expect(state.releaseDetails.value?.currentVersion).toBe('3.1.0');
+
+    initialPlc.resolve([makePlcState({ id: 'plc-old', plcCode: 'PLC-OLD' })]);
+    initialRelease.resolve(makeReleaseDetails({ currentVersion: '2.4.0' }));
+    await flushPromises();
+    expect(state.plcStates.value[0]?.plcCode).toBe('PLC-RETRY');
+    expect(state.releaseDetails.value?.currentVersion).toBe('3.1.0');
+    expect(state.plcLoading.value).toBe(false);
+    expect(state.releaseLoading.value).toBe(false);
   });
 
   it('PLC 详情请求保留专属路由 /human/edge-hosts/{deviceId}/plc-runtime-states', async () => {

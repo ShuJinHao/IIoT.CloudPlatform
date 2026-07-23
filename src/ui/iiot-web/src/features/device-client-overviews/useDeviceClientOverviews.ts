@@ -29,6 +29,9 @@ export function useDeviceClientOverviews() {
   const authStore = useAuthStore();
   const canViewPlcDetails = computed(() => authStore.hasPermission(Permissions.EdgeHost.Read));
   const canViewReleaseDetails = computed(() => authStore.hasPermission(Permissions.ClientRelease.Read));
+  const canViewAnyDetails = computed(
+    () => canViewPlcDetails.value || canViewReleaseDetails.value,
+  );
 
   const listPage = useListPage<DeviceClientOverviewItemDto, OverviewFilter>({
     initialFilter: { keyword: '', sortBy: DEFAULT_SORT_BY, sortDirection: DEFAULT_SORT_DIRECTION },
@@ -95,39 +98,81 @@ export function useDeviceClientOverviews() {
   const releaseDetails = ref<DeviceClientReleaseDetailsDto | null>(null);
   const releaseLoading = ref(false);
   const releaseError = ref<string | null>(null);
+  let plcRequestGeneration = 0;
+  let releaseRequestGeneration = 0;
+
+  function invalidateDetailRequests() {
+    plcRequestGeneration += 1;
+    releaseRequestGeneration += 1;
+  }
+
+  function resetDetailState() {
+    plcStates.value = [];
+    plcLoading.value = false;
+    plcError.value = null;
+    releaseDetails.value = null;
+    releaseLoading.value = false;
+    releaseError.value = null;
+  }
 
   async function fetchPlcStates(deviceId: string) {
+    const requestGeneration = ++plcRequestGeneration;
+    const isCurrentRequest = () =>
+      requestGeneration === plcRequestGeneration
+      && showDetailDrawer.value
+      && selectedDevice.value?.deviceId === deviceId
+      && canViewPlcDetails.value;
+
     plcLoading.value = true;
     plcError.value = null;
     try {
-      plcStates.value = await getEdgeHostPlcRuntimeStatesApi(deviceId);
+      const nextStates = await getEdgeHostPlcRuntimeStatesApi(deviceId);
+      if (!isCurrentRequest()) return;
+      plcStates.value = nextStates;
     } catch (error) {
+      const message = await resolveInlineErrorMessage(error, 'PLC 状态加载失败，请重试。');
+      if (!isCurrentRequest()) return;
       plcStates.value = [];
-      plcError.value = await resolveInlineErrorMessage(error, 'PLC 状态加载失败，请重试。');
+      plcError.value = message;
     } finally {
-      plcLoading.value = false;
+      if (isCurrentRequest()) {
+        plcLoading.value = false;
+      }
     }
   }
 
   async function fetchReleaseDetails(deviceId: string) {
+    const requestGeneration = ++releaseRequestGeneration;
+    const isCurrentRequest = () =>
+      requestGeneration === releaseRequestGeneration
+      && showDetailDrawer.value
+      && selectedDevice.value?.deviceId === deviceId
+      && canViewReleaseDetails.value;
+
     releaseLoading.value = true;
     releaseError.value = null;
     try {
-      releaseDetails.value = await getDeviceClientReleaseDetailsApi(deviceId);
+      const nextDetails = await getDeviceClientReleaseDetailsApi(deviceId);
+      if (!isCurrentRequest()) return;
+      releaseDetails.value = nextDetails;
     } catch (error) {
+      const message = await resolveInlineErrorMessage(error, '版本与升级详情加载失败，请重试。');
+      if (!isCurrentRequest()) return;
       releaseDetails.value = null;
-      releaseError.value = await resolveInlineErrorMessage(error, '版本与升级详情加载失败，请重试。');
+      releaseError.value = message;
     } finally {
-      releaseLoading.value = false;
+      if (isCurrentRequest()) {
+        releaseLoading.value = false;
+      }
     }
   }
 
   function openDetailDrawer(row: DeviceClientOverviewItemDto) {
+    if (!canViewAnyDetails.value) return;
+
+    invalidateDetailRequests();
+    resetDetailState();
     selectedDevice.value = row;
-    plcStates.value = [];
-    plcError.value = null;
-    releaseDetails.value = null;
-    releaseError.value = null;
     showDetailDrawer.value = true;
     // 无对应权限时既不请求，也不渲染占位详情。
     if (canViewPlcDetails.value) {
@@ -151,12 +196,10 @@ export function useDeviceClientOverviews() {
   }
 
   function closeDetailDrawer() {
+    invalidateDetailRequests();
     showDetailDrawer.value = false;
     selectedDevice.value = null;
-    plcStates.value = [];
-    plcError.value = null;
-    releaseDetails.value = null;
-    releaseError.value = null;
+    resetDetailState();
   }
 
   return {
@@ -173,6 +216,7 @@ export function useDeviceClientOverviews() {
     sortDirection,
     canViewPlcDetails,
     canViewReleaseDetails,
+    canViewAnyDetails,
     showDetailDrawer,
     selectedDevice,
     plcStates,

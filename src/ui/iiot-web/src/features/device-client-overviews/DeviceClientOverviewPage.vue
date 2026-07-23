@@ -70,6 +70,7 @@
     </NiondTableCard>
 
     <DeviceClientDetailDrawer
+      v-if="canViewAnyDetails"
       v-model:show="showDetailDrawer"
       :device="selectedDevice"
       :can-view-plc="canViewPlcDetails"
@@ -88,7 +89,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue';
+import { computed, onMounted } from 'vue';
 import { Search } from 'lucide-vue-next';
 import NiondDataPage from '../../components/layout/NiondDataPage.vue';
 import NiondTableCard from '../../components/layout/NiondTableCard.vue';
@@ -109,7 +110,7 @@ import './overview-page.css';
 const {
   items, total, page, pageSize, totalPages, loading, error,
   keyword, sortBy, sortDirection,
-  canViewPlcDetails, canViewReleaseDetails,
+  canViewPlcDetails, canViewReleaseDetails, canViewAnyDetails,
   showDetailDrawer, selectedDevice,
   plcStates, plcLoading, plcError,
   releaseDetails, releaseLoading, releaseError,
@@ -117,7 +118,10 @@ const {
   openDetailDrawer, retryPlcStates, retryReleaseDetails, closeDetailDrawer,
 } = useDeviceClientOverviews();
 
-const overviewColumns = createOverviewColumns({ onOpenDetail: openDetailDrawer });
+const overviewColumns = computed(() => createOverviewColumns({
+  onOpenDetail: openDetailDrawer,
+  canOpenDetail: canViewAnyDetails.value,
+}));
 const sortableColumns = SORTABLE_COLUMNS;
 const rowKey = (row: DeviceClientOverviewItemDto) => row.deviceId;
 

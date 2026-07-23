@@ -7,6 +7,7 @@ import { formatDateTime } from './types';
 
 interface OverviewColumnOptions {
   onOpenDetail: (row: DeviceClientOverviewItemDto) => void;
+  canOpenDetail: boolean;
 }
 
 type TagTone = 'default' | 'info' | 'success' | 'warning' | 'error';
@@ -22,6 +23,8 @@ function softwareStatusTone(status?: string | null): TagTone {
     case 'runtimeheartbeatstale':
       return 'warning';
     case 'missingruntimeheartbeat':
+      return 'default';
+    case 'unknown':
       return 'default';
     default:
       return 'info';
@@ -42,6 +45,8 @@ export function softwareStatusText(status?: string | null): string {
       return '心跳超时';
     case 'missingruntimeheartbeat':
       return '无运行心跳';
+    case 'unknown':
+      return '未知';
     default:
       return status || '未知';
   }
@@ -104,7 +109,7 @@ function runtimeStatusText(status?: string | null): string {
 export function createOverviewColumns(
   options: OverviewColumnOptions,
 ): UiDataTableColumn<DeviceClientOverviewItemDto>[] {
-  return [
+  const columns: UiDataTableColumn<DeviceClientOverviewItemDto>[] = [
     {
       title: '设备名称',
       key: 'deviceName',
@@ -149,7 +154,10 @@ export function createOverviewColumns(
         return h('span', { class: row.issue ? 'cell-error' : 'cell-muted' }, row.issue || '-');
       },
     },
-    {
+  ];
+
+  if (options.canOpenDetail) {
+    columns.push({
       title: '操作',
       key: 'actions',
       width: 110,
@@ -161,8 +169,10 @@ export function createOverviewColumns(
           { default: () => '详情' },
         );
       },
-    },
-  ];
+    });
+  }
+
+  return columns;
 }
 
 export function createPlcRuntimeStateColumns(): UiDataTableColumn<EdgeHostPlcRuntimeStateDto>[] {
