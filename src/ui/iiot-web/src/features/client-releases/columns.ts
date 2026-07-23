@@ -1,5 +1,5 @@
 import { h } from 'vue';
-import { Archive, ExternalLink, History, Info, Trash2 } from 'lucide-vue-next';
+import { Archive, ExternalLink, History, Info, ShieldX, Trash2 } from 'lucide-vue-next';
 import UiButton from '../../components/ui/UiButton.vue';
 import UiTag from '../../components/ui/UiTag.vue';
 import type { UiDataTableColumn } from '../../components/ui/types';
@@ -17,11 +17,13 @@ import {
 
 interface ReleaseCatalogColumnOptions {
   isPublishRoute: () => boolean;
+  canHardDelete: () => boolean;
   onHistory: (row: ReleaseCatalogRow) => void;
   onDetail: (version: ReleaseVersionEntry, row: ReleaseCatalogRow | null) => void;
   onOpenUrl: (url: string) => void;
   onArchive: (version: ReleaseVersionEntry, row: ReleaseCatalogRow | null) => void;
   onDeleteFiles: (version: ReleaseVersionEntry, row: ReleaseCatalogRow | null) => void;
+  onHardDelete: (row: ReleaseCatalogRow) => void;
 }
 
 export function createReleaseCatalogColumns(
@@ -93,28 +95,39 @@ export function createReleaseCatalogColumns(
     columns.push({
       title: '操作',
       key: 'actions',
-      width: 260,
+      width: options.canHardDelete() ? 320 : 260,
       align: 'right',
-      render: (row) => h('div', { class: 'row-actions' }, [
-        h(UiButton, {
-          size: 'tiny',
-          secondary: true,
-          type: 'primary',
-          onClick: () => options.onOpenUrl(row.currentVersion.downloadUrl),
-        }, () => [h(ExternalLink, { size: 13 }), '打开']),
-        h(UiButton, {
-          size: 'tiny',
-          secondary: true,
-          type: 'warning',
-          onClick: () => options.onArchive(row.currentVersion, row),
-        }, () => [h(Archive, { size: 13 }), '归档']),
-        h(UiButton, {
-          size: 'tiny',
-          secondary: true,
-          type: 'error',
-          onClick: () => options.onDeleteFiles(row.currentVersion, row),
-        }, () => [h(Trash2, { size: 13 }), '删文件']),
-      ]),
+      render: (row) => {
+        const buttons = [
+          h(UiButton, {
+            size: 'tiny',
+            secondary: true,
+            type: 'primary',
+            onClick: () => options.onOpenUrl(row.currentVersion.downloadUrl),
+          }, () => [h(ExternalLink, { size: 13 }), '打开']),
+          h(UiButton, {
+            size: 'tiny',
+            secondary: true,
+            type: 'warning',
+            onClick: () => options.onArchive(row.currentVersion, row),
+          }, () => [h(Archive, { size: 13 }), '归档']),
+          h(UiButton, {
+            size: 'tiny',
+            secondary: true,
+            type: 'error',
+            onClick: () => options.onDeleteFiles(row.currentVersion, row),
+          }, () => [h(Trash2, { size: 13 }), '删文件']),
+        ];
+        if (options.canHardDelete()) {
+          buttons.push(h(UiButton, {
+            size: 'tiny',
+            secondary: true,
+            type: 'error',
+            onClick: () => options.onHardDelete(row),
+          }, () => [h(ShieldX, { size: 13 }), '永久删除']));
+        }
+        return h('div', { class: 'row-actions' }, buttons);
+      },
     });
   }
 

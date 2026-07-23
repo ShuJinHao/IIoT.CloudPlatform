@@ -55,6 +55,7 @@ export const Permissions = {
     GenerateInstaller: 'ClientRelease.GenerateInstaller',
     Publish: 'ClientRelease.Publish',
     Manage: 'ClientRelease.Manage',
+    HardDelete: 'ClientRelease.HardDelete',
   },
 } as const;
 

@@ -327,3 +327,150 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ===== 历史版本区域 ===== */
+.history-loading,
+.deletions-loading {
+  padding: var(--space-4);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.history-pagination {
+  margin-top: var(--space-3);
+  padding: 0 var(--space-1) var(--space-2);
+}
+
+.history-component {
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.history-component:last-child {
+  border-bottom: none;
+}
+
+.history-component__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.history-component__head code,
+.deletion-id {
+  margin-left: var(--space-2);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.history-component__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.history-component__channel {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.history-version-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.history-version {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-sm);
+}
+
+.history-version__version {
+  font-weight: 600;
+}
+
+.history-version__time,
+.history-version__reason {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.history-version__failure {
+  color: var(--error);
+  font-size: var(--fs-xs);
+}
+
+/* ===== 永久删除确认 ===== */
+.hard-delete-modal {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.hard-delete-warning {
+  margin: 0;
+  color: var(--error);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+.hard-delete-field {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.hard-delete-label {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+/* ===== 删除恢复列表 ===== */
+.deletion-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.deletion-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.deletion-item__main {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.deletion-item__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.deletion-item__meta,
+.deletion-item__failure {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.deletion-item__failure code {
+  color: var(--error);
+}

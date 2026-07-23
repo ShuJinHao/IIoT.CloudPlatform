@@ -1,36 +1,38 @@
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   archiveClientReleaseApi,
   deleteClientReleaseFilesApi,
   getClientReleaseCatalogApi,
+  getClientReleaseComponentDeletionsApi,
+  getClientReleaseHistoryApi,
   getDeviceClientVersionInventoryApi,
-  upsertClientHostReleaseApi,
-  upsertClientPluginReleaseApi,
+  hardDeleteClientReleaseComponentApi,
+  retryClientReleaseComponentDeletionApi,
   type ClientReleaseCatalogDto,
+  type ClientReleaseComponentDeletionDto,
+  type ClientReleaseHistoryComponentDto,
   type DeviceClientVersionInventoryDto,
 } from './api';
 import { createHistoryColumns, createInventoryColumns, createReleaseCatalogColumns } from './columns';
 import { useAuthStore } from '../../stores/auth';
 import { Permissions } from '../../types/permissions';
-import { notifySuccess, notifyWarning, requestConfirmation } from '../../utils/feedback';
+import { notifyError, notifySuccess, notifyWarning, requestConfirmation } from '../../utils/feedback';
 import {
   formatDate,
   formatReleaseNotes,
   formatSize,
-  getReleaseMetadataValidationMessage,
-  normalizeOptional,
+  isDeletionRetryComplete,
   pickCurrentVersion,
   statusText,
   statusTone,
-  validateReleaseMetadata,
-  type HostReleaseForm,
-  type PluginReleaseForm,
   type ReleaseCatalogRow,
   type ReleaseDetail,
   type ReleaseVersionEntry,
   type ViewMode,
 } from './types';
+
+const HISTORY_PAGE_SIZE = 10;
 
 export function useClientReleases() {
   const authStore = useAuthStore();
@@ -45,18 +47,37 @@ export function useClientReleases() {
   const loadingCatalog = ref(false);
   const loadingInventory = ref(false);
   const submitting = ref(false);
-  const showHostModal = ref(false);
-  const showPluginModal = ref(false);
   const showHistoryModal = ref(false);
   const showReleaseDetailModal = ref(false);
   const selectedReleaseRow = ref<ReleaseCatalogRow | null>(null);
   const selectedReleaseDetail = ref<ReleaseDetail | null>(null);
+
+  // ===== 独立历史分页 =====
+  const historyItems = ref<ClientReleaseHistoryComponentDto[]>([]);
+  const historyTotal = ref(0);
+  const historyPage = ref(1);
+  const loadingHistory = ref(false);
+
+  // ===== 永久删除确认弹窗 =====
+  const showHardDeleteModal = ref(false);
+  const hardDeleteTarget = ref<ReleaseCatalogRow | null>(null);
+  const hardDeleteConfirmText = ref('');
+  const hardDeleteReason = ref('');
+
+  // ===== 删除恢复操作列表 =====
+  const deletions = ref<ClientReleaseComponentDeletionDto[]>([]);
+  const loadingDeletions = ref(false);
+  const retryingDeletionId = ref<string | null>(null);
 
   const canGenerateInstaller = computed(() =>
     authStore.hasPermission(Permissions.ClientRelease.GenerateInstaller),
   );
   const canManageReleases = computed(() =>
     authStore.hasPermission(Permissions.ClientRelease.Manage),
+  );
+  // 永久删除必须同时满足管理员身份和 ClientRelease.HardDelete 权限。
+  const canHardDelete = computed(
+    () => authStore.isAdmin && authStore.hasPermission(Permissions.ClientRelease.HardDelete),
   );
   const activeView = ref<ViewMode>(canGenerateInstaller.value ? 'binding' : 'catalog');
   const isPublishRoute = computed(() => route.name === 'ClientReleasePublish');
@@ -73,44 +94,6 @@ export function useClientReleases() {
   });
   const selectedHostPackageVersion = computed(() => selectedHostPackage.value?.version ?? null);
 
-  const hostForm = reactive<HostReleaseForm>({
-    channel: 'stable',
-    version: '',
-    hostApiVersion: '1.0.0',
-    targetRuntime: 'win-x64',
-    targetFramework: 'net10.0',
-    downloadUrl: '',
-    sha256: '',
-    packageSize: '',
-    releaseNotes: '',
-    status: 'Draft',
-    signature: '',
-    publisher: '',
-  });
-
-  const pluginForm = reactive<PluginReleaseForm>({
-    moduleId: '',
-    displayName: '',
-    description: '',
-    iconKind: '',
-    accentColor: '',
-    channel: 'stable',
-    version: '',
-    hostApiVersion: '1.0.0',
-    minHostVersion: '1.0.0',
-    maxHostVersion: '99.0.0',
-    targetRuntime: 'win-x64',
-    targetFramework: 'net10.0',
-    downloadUrl: '',
-    sha256: '',
-    packageSize: '',
-    releaseNotes: '',
-    dependenciesJson: '[]',
-    status: 'Draft',
-    signature: '',
-    publisher: '',
-  });
-
   const releaseCatalogRows = computed<ReleaseCatalogRow[]>(() => {
     const rows: ReleaseCatalogRow[] = [];
     const hostVersions = catalog.value?.host.versions ?? [];
@@ -123,12 +106,15 @@ export function useClientReleases() {
         kindLabel: '宿主',
         componentName: catalog.value?.host.displayName || '通用宿主',
         componentCode: currentHost.targetRuntime,
+        componentId: currentHost.componentId,
         currentVersion: currentHost,
         historyVersions: hostVersions.filter((version) => version.id !== currentHost.id),
       });
     }
 
     for (const plugin of catalog.value?.plugins ?? []) {
+      // 防御性跳过没有可见版本的空组件。
+      if (plugin.versions.length === 0) continue;
       const currentPlugin = pickCurrentVersion(plugin.versions);
       if (!currentPlugin) continue;
       rows.push({
@@ -137,6 +123,7 @@ export function useClientReleases() {
         kindLabel: '工序插件',
         componentName: plugin.displayName || plugin.moduleId,
         componentCode: plugin.moduleId,
+        componentId: currentPlugin.componentId,
         currentVersion: currentPlugin,
         historyVersions: plugin.versions.filter((version) => version.id !== currentPlugin.id),
       });
@@ -151,11 +138,13 @@ export function useClientReleases() {
 
   const releaseCatalogColumns = computed(() => createReleaseCatalogColumns({
     isPublishRoute: () => isPublishRoute.value,
+    canHardDelete: () => canHardDelete.value,
     onHistory: openHistoryModal,
     onDetail: openReleaseDetailModal,
     onOpenUrl: openUrl,
     onArchive: archiveReleaseVersion,
     onDeleteFiles: deleteReleaseFiles,
+    onHardDelete: openHardDeleteModal,
   }));
   const historyColumns = computed(() => createHistoryColumns({
     isPublishRoute: () => isPublishRoute.value,
@@ -174,7 +163,6 @@ export function useClientReleases() {
         channel: channel.value,
         targetRuntime: targetRuntime.value,
         onlyPublished: onlyPublished.value,
-        includeArchived: true,
       });
     } catch {
       catalog.value = null;
@@ -198,8 +186,53 @@ export function useClientReleases() {
     }
   }
 
+  async function fetchHistory() {
+    loadingHistory.value = true;
+    try {
+      const result = await getClientReleaseHistoryApi({
+        channel: channel.value,
+        targetRuntime: targetRuntime.value,
+        pageNumber: historyPage.value,
+        pageSize: HISTORY_PAGE_SIZE,
+      });
+      historyItems.value = result.items;
+      historyTotal.value = result.metaData.totalCount;
+    } catch {
+      historyItems.value = [];
+      historyTotal.value = 0;
+    } finally {
+      loadingHistory.value = false;
+    }
+  }
+
+  function gotoHistoryPage(page: number) {
+    const totalPages = Math.max(1, Math.ceil(historyTotal.value / HISTORY_PAGE_SIZE));
+    const clamped = Math.max(1, Math.min(totalPages, page));
+    if (clamped !== historyPage.value) {
+      historyPage.value = clamped;
+      void fetchHistory();
+    }
+  }
+
+  async function fetchDeletions() {
+    if (!canHardDelete.value) {
+      deletions.value = [];
+      return;
+    }
+    loadingDeletions.value = true;
+    try {
+      deletions.value = await getClientReleaseComponentDeletionsApi();
+    } catch {
+      deletions.value = [];
+    } finally {
+      loadingDeletions.value = false;
+    }
+  }
+
   async function refresh() {
-    await Promise.all([fetchCatalog(), fetchInventory()]);
+    const tasks = [fetchCatalog(), fetchInventory(), fetchHistory()];
+    if (canHardDelete.value) tasks.push(fetchDeletions());
+    await Promise.all(tasks);
   }
 
   function goPublishManager() {
@@ -210,134 +243,6 @@ export function useClientReleases() {
   function goInstallerCenter() {
     activeView.value = canGenerateInstaller.value ? 'binding' : 'catalog';
     void router.push({ name: 'ClientReleases' });
-  }
-
-  function openHostModal() {
-    if (!canManageReleases.value) return;
-    Object.assign(hostForm, {
-      channel: channel.value || 'stable',
-      version: '',
-      hostApiVersion: selectedHostPackage.value?.hostApiVersion || '1.0.0',
-      targetRuntime: targetRuntime.value || 'win-x64',
-      targetFramework: 'net10.0',
-      downloadUrl: '',
-      sha256: '',
-      packageSize: '',
-      releaseNotes: '',
-      status: 'Draft',
-      signature: '',
-      publisher: '',
-    });
-    showHostModal.value = true;
-  }
-
-  function openPluginModal() {
-    if (!canManageReleases.value) return;
-    Object.assign(pluginForm, {
-      moduleId: '',
-      displayName: '',
-      description: '',
-      iconKind: '',
-      accentColor: '',
-      channel: channel.value || 'stable',
-      version: '',
-      hostApiVersion: selectedHostPackage.value?.hostApiVersion || '1.0.0',
-      minHostVersion: selectedHostPackage.value?.version || '1.0.0',
-      maxHostVersion: '99.0.0',
-      targetRuntime: targetRuntime.value || 'win-x64',
-      targetFramework: 'net10.0',
-      downloadUrl: '',
-      sha256: '',
-      packageSize: '',
-      releaseNotes: '',
-      dependenciesJson: '[]',
-      status: 'Draft',
-      signature: '',
-      publisher: '',
-    });
-    showPluginModal.value = true;
-  }
-
-  async function submitHostRelease() {
-    if (!hostForm.version.trim() || !hostForm.downloadUrl.trim()) {
-      notifyWarning('请填写宿主版本和下载地址。');
-      return;
-    }
-
-    const metadataMessage = getReleaseMetadataValidationMessage(hostForm);
-    if (metadataMessage) {
-      notifyWarning(metadataMessage);
-      return;
-    }
-    const packageSize = validateReleaseMetadata(hostForm);
-    if (packageSize === null) return;
-
-    submitting.value = true;
-    try {
-      await upsertClientHostReleaseApi({
-        ...hostForm,
-        channel: hostForm.channel.trim(),
-        version: hostForm.version.trim(),
-        hostApiVersion: hostForm.hostApiVersion.trim(),
-        targetRuntime: hostForm.targetRuntime.trim(),
-        targetFramework: normalizeOptional(hostForm.targetFramework),
-        downloadUrl: hostForm.downloadUrl.trim(),
-        sha256: hostForm.sha256.trim(),
-        packageSize,
-        releaseNotes: normalizeOptional(hostForm.releaseNotes),
-        signature: normalizeOptional(hostForm.signature),
-        publisher: normalizeOptional(hostForm.publisher),
-      });
-      showHostModal.value = false;
-      await fetchCatalog();
-    } finally {
-      submitting.value = false;
-    }
-  }
-
-  async function submitPluginRelease() {
-    if (!pluginForm.moduleId.trim() || !pluginForm.displayName.trim() || !pluginForm.version.trim()) {
-      notifyWarning('请填写插件模块、名称和版本。');
-      return;
-    }
-
-    const metadataMessage = getReleaseMetadataValidationMessage(pluginForm);
-    if (metadataMessage) {
-      notifyWarning(metadataMessage);
-      return;
-    }
-    const packageSize = validateReleaseMetadata(pluginForm);
-    if (packageSize === null) return;
-
-    submitting.value = true;
-    try {
-      await upsertClientPluginReleaseApi({
-        ...pluginForm,
-        moduleId: pluginForm.moduleId.trim(),
-        displayName: pluginForm.displayName.trim(),
-        description: normalizeOptional(pluginForm.description),
-        iconKind: normalizeOptional(pluginForm.iconKind),
-        accentColor: normalizeOptional(pluginForm.accentColor),
-        channel: pluginForm.channel.trim(),
-        version: pluginForm.version.trim(),
-        hostApiVersion: pluginForm.hostApiVersion.trim(),
-        minHostVersion: pluginForm.minHostVersion.trim(),
-        maxHostVersion: pluginForm.maxHostVersion.trim(),
-        targetRuntime: pluginForm.targetRuntime.trim(),
-        targetFramework: normalizeOptional(pluginForm.targetFramework),
-        downloadUrl: pluginForm.downloadUrl.trim(),
-        sha256: pluginForm.sha256.trim(),
-        packageSize,
-        releaseNotes: normalizeOptional(pluginForm.releaseNotes),
-        dependenciesJson: normalizeOptional(pluginForm.dependenciesJson),
-        signature: normalizeOptional(pluginForm.signature),
-        publisher: normalizeOptional(pluginForm.publisher),
-      });
-      showPluginModal.value = false;
-      await fetchCatalog();
-    } finally {
-      submitting.value = false;
-    }
   }
 
   function openHistoryModal(row: ReleaseCatalogRow) {
@@ -380,7 +285,7 @@ export function useClientReleases() {
     try {
       await archiveClientReleaseApi(version.id);
       notifySuccess('发布版本已归档');
-      await fetchCatalog();
+      await Promise.all([fetchCatalog(), fetchHistory()]);
     } catch {
       /* feedback handled by http client */
     } finally {
@@ -402,11 +307,82 @@ export function useClientReleases() {
     try {
       const result = await deleteClientReleaseFilesApi(version.id);
       notifySuccess(result.warning || '发布文件已删除并归档');
-      await fetchCatalog();
+      await Promise.all([fetchCatalog(), fetchHistory()]);
     } catch {
       /* feedback handled by http client */
     } finally {
       submitting.value = false;
+    }
+  }
+
+  // ===== 永久删除 =====
+
+  function openHardDeleteModal(row: ReleaseCatalogRow) {
+    if (!canHardDelete.value) return;
+    hardDeleteTarget.value = row;
+    hardDeleteConfirmText.value = '';
+    hardDeleteReason.value = '';
+    showHardDeleteModal.value = true;
+  }
+
+  function closeHardDeleteModal() {
+    showHardDeleteModal.value = false;
+    hardDeleteTarget.value = null;
+    hardDeleteConfirmText.value = '';
+    hardDeleteReason.value = '';
+  }
+
+  async function submitHardDelete() {
+    const target = hardDeleteTarget.value;
+    if (!target || !canHardDelete.value) return;
+
+    const expected = target.kind === 'plugin' ? target.componentCode : target.componentName;
+    if (hardDeleteConfirmText.value.trim() !== expected) {
+      notifyWarning(`请输入正确的确认内容：${expected}`);
+      return;
+    }
+    const reason = hardDeleteReason.value.trim();
+    if (!reason) {
+      notifyWarning('请填写非空删除原因。');
+      return;
+    }
+
+    submitting.value = true;
+    try {
+      // 必须使用组件 ID（componentId），禁止用 version.id。
+      const result = await hardDeleteClientReleaseComponentApi(target.componentId, reason);
+      closeHardDeleteModal();
+      notifySuccess(result.warning || `已永久删除组件 ${result.componentName}。`);
+      await Promise.all([fetchCatalog(), fetchHistory(), fetchDeletions()]);
+    } catch {
+      // 400 表示元数据可能已删除但文件清理或审计仍待恢复；不显示成功，刷新删除恢复列表。
+      await fetchDeletions();
+    } finally {
+      submitting.value = false;
+    }
+  }
+
+  // ===== 删除恢复重试 =====
+
+  async function retryDeletion(deletion: ClientReleaseComponentDeletionDto) {
+    if (!canHardDelete.value) return;
+    retryingDeletionId.value = deletion.deletionId;
+    try {
+      const result = await retryClientReleaseComponentDeletionApi(deletion.deletionId);
+      if (isDeletionRetryComplete(result)) {
+        notifySuccess(`已永久删除组件 ${result.componentKey}。`);
+        await Promise.all([fetchCatalog(), fetchHistory(), fetchDeletions()]);
+      } else {
+        notifyError(
+          `组件 ${result.componentKey} 永久删除未完成（${result.failureCode ?? '待恢复'}），可在删除恢复列表中重试。`,
+          { title: '删除待恢复' },
+        );
+        await fetchDeletions();
+      }
+    } catch {
+      await fetchDeletions();
+    } finally {
+      retryingDeletionId.value = null;
     }
   }
 
@@ -431,22 +407,31 @@ export function useClientReleases() {
     loadingCatalog,
     loadingInventory,
     submitting,
-    showHostModal,
-    showPluginModal,
     showHistoryModal,
     showReleaseDetailModal,
     selectedReleaseRow,
     selectedReleaseDetail,
+    historyItems,
+    historyTotal,
+    historyPage,
+    loadingHistory,
+    historyPageSize: HISTORY_PAGE_SIZE,
+    showHardDeleteModal,
+    hardDeleteTarget,
+    hardDeleteConfirmText,
+    hardDeleteReason,
+    deletions,
+    loadingDeletions,
+    retryingDeletionId,
     canGenerateInstaller,
     canManageReleases,
+    canHardDelete,
     activeView,
     isPublishRoute,
     pageTitle,
     pageSubtitle,
     channelDisplay,
     selectedHostPackageVersion,
-    hostForm,
-    pluginForm,
     releaseCatalogRows,
     selectedHistoryVersions,
     historyModalTitle,
@@ -454,13 +439,16 @@ export function useClientReleases() {
     historyColumns,
     inventoryColumns,
     refresh,
+    fetchHistory,
+    gotoHistoryPage,
+    fetchDeletions,
     goPublishManager,
     goInstallerCenter,
-    openHostModal,
-    openPluginModal,
-    submitHostRelease,
-    submitPluginRelease,
     archiveReleaseVersion,
     deleteReleaseFiles,
+    openHardDeleteModal,
+    closeHardDeleteModal,
+    submitHardDelete,
+    retryDeletion,
   };
 }

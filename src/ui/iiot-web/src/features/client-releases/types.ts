@@ -2,16 +2,22 @@ import type {
   ClientHostVersionEntryDto,
   ClientPluginVersionEntryDto,
   DeviceClientVersionInventoryDto,
-  UpsertClientHostReleasePayload,
-  UpsertClientPluginReleasePayload,
 } from './api';
 
 export type ViewMode = 'catalog' | 'inventory' | 'binding';
 export type TagTone = 'default' | 'primary' | 'info' | 'success' | 'warning' | 'error';
 export type ReleaseKind = 'host' | 'plugin';
 export type ReleaseVersionEntry = ClientHostVersionEntryDto | ClientPluginVersionEntryDto;
-export type HostReleaseForm = Omit<UpsertClientHostReleasePayload, 'packageSize'> & { packageSize: string };
-export type PluginReleaseForm = Omit<UpsertClientPluginReleasePayload, 'packageSize'> & { packageSize: string };
+
+export interface DeletionRetryOutcome {
+  succeeded: boolean;
+  auditConfirmed: boolean;
+}
+
+// 重试永久删除只有“清理成功且成功审计已确认落库”才算完成；否则保持待恢复。
+export function isDeletionRetryComplete(outcome: DeletionRetryOutcome): boolean {
+  return outcome.succeeded && outcome.auditConfirmed;
+}
 
 export interface ReleaseCatalogRow {
   key: string;
@@ -19,6 +25,7 @@ export interface ReleaseCatalogRow {
   kindLabel: string;
   componentName: string;
   componentCode: string;
+  componentId: string;
   currentVersion: ReleaseVersionEntry;
   historyVersions: ReleaseVersionEntry[];
 }
@@ -34,70 +41,6 @@ export interface ReleaseDetail {
   publishedAt: string;
   packageSize: string;
   releaseNotes: string;
-}
-
-export interface ReleaseMetadataInput {
-  downloadUrl: string;
-  sha256: string;
-  packageSize: string;
-  status: string;
-  releaseNotes?: string | null;
-}
-
-export const statusOptions = [
-  { label: 'Draft', value: 'Draft' },
-  { label: 'Published', value: 'Published' },
-  { label: 'Deprecated', value: 'Deprecated' },
-  { label: 'Archived', value: 'Archived' },
-  { label: 'Deleted', value: 'Deleted' },
-  { label: 'DeleteFailed', value: 'DeleteFailed' },
-];
-
-const realSha256Pattern = /^[0-9a-f]{64}$/i;
-const placeholderSha256Pattern = /^0{64}$/;
-
-export function normalizeOptional(value?: string | null): string | null {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : null;
-}
-
-export function validateReleaseMetadata(value: ReleaseMetadataInput): number | null {
-  if (getReleaseMetadataValidationMessage(value)) return null;
-
-  return Number(value.packageSize);
-}
-
-export function getReleaseMetadataValidationMessage(value: ReleaseMetadataInput): string | null {
-  if (!isValidDownloadUrl(value.downloadUrl)) {
-    return '下载地址必须是 http/https 地址，或 /edge-updates/ 下的真实发布路径。';
-  }
-
-  const sha256 = value.sha256.trim();
-  if (!realSha256Pattern.test(sha256) || placeholderSha256Pattern.test(sha256)) {
-    return 'SHA256 必须是 64 位十六进制真实 hash，不能使用全 0 占位值。';
-  }
-
-  const packageSize = Number(value.packageSize);
-  if (!Number.isInteger(packageSize) || packageSize <= 0) {
-    return '包大小必须填写真实正整数，不能为 0。';
-  }
-
-  if (value.status === 'Published' && !value.releaseNotes?.trim()) {
-    return '发布状态为 Published 时必须填写更新内容。';
-  }
-
-  return null;
-}
-
-export function isValidDownloadUrl(value: string): boolean {
-  const trimmed = value.trim();
-  if (trimmed.startsWith('/edge-updates/')) return true;
-  try {
-    const url = new URL(trimmed);
-    return url.protocol === 'http:' || url.protocol === 'https:';
-  } catch {
-    return false;
-  }
 }
 
 export function statusTone(status: string): TagTone {
@@ -165,6 +108,5 @@ export function pickCurrentVersion<T extends ReleaseVersionEntry>(versions: T[])
   return versions.find((version) => version.status.toLowerCase() === 'published')
     ?? versions.find((version) => version.status.toLowerCase() === 'deprecated')
     ?? versions.find((version) => version.status.toLowerCase() === 'draft')
-    ?? versions[0]
     ?? null;
 }

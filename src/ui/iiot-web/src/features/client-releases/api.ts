@@ -29,6 +29,7 @@ export interface ClientPluginReleaseComponentDto {
 
 export interface ClientHostVersionEntryDto {
   id: string;
+  componentId: string;
   channel: string;
   version: string;
   hostApiVersion: string;
@@ -50,6 +51,7 @@ export interface ClientHostVersionEntryDto {
 
 export interface ClientPluginVersionEntryDto {
   id: string;
+  componentId: string;
   channel: string;
   version: string;
   hostApiVersion: string;
@@ -70,48 +72,6 @@ export interface ClientPluginVersionEntryDto {
   deletedAtUtc?: string | null;
   deletionReason?: string | null;
   deletionFailure?: string | null;
-}
-
-export interface UpsertClientHostReleasePayload {
-  channel: string;
-  version: string;
-  hostApiVersion: string;
-  targetRuntime: string;
-  targetFramework?: string | null;
-  downloadUrl: string;
-  sha256: string;
-  packageSize: number;
-  releaseNotes?: string | null;
-  status: string;
-  signature?: string | null;
-  publisher?: string | null;
-}
-
-export interface UpsertClientPluginReleasePayload {
-  moduleId: string;
-  displayName: string;
-  description?: string | null;
-  iconKind?: string | null;
-  accentColor?: string | null;
-  channel: string;
-  version: string;
-  hostApiVersion: string;
-  minHostVersion: string;
-  maxHostVersion: string;
-  targetRuntime: string;
-  targetFramework?: string | null;
-  downloadUrl: string;
-  sha256: string;
-  packageSize: number;
-  releaseNotes?: string | null;
-  dependenciesJson?: string | null;
-  status: string;
-  signature?: string | null;
-  publisher?: string | null;
-}
-
-export interface UpsertClientReleaseResultDto {
-  id: string;
 }
 
 export interface DeviceClientVersionInventoryDto {
@@ -169,14 +129,12 @@ export const getClientReleaseCatalogApi = (params: {
   channel?: string;
   targetRuntime?: string;
   onlyPublished?: boolean;
-  includeArchived?: boolean;
 }) =>
   http.get<ClientReleaseCatalogDto>(`${basePath}/catalog`, {
     params: {
       channel: params.channel || undefined,
       targetRuntime: params.targetRuntime || undefined,
       onlyPublished: params.onlyPublished ?? false,
-      includeArchived: params.includeArchived ?? false,
     },
   });
 
@@ -211,12 +169,6 @@ export const getDeviceClientVersionInventoryApi = (params: {
       keyword: params.keyword || undefined,
     },
   });
-
-export const upsertClientHostReleaseApi = (payload: UpsertClientHostReleasePayload) =>
-  http.post<UpsertClientReleaseResultDto>(`${basePath}/host-releases`, payload);
-
-export const upsertClientPluginReleaseApi = (payload: UpsertClientPluginReleasePayload) =>
-  http.post<UpsertClientReleaseResultDto>(`${basePath}/plugin-releases`, payload);
 
 export interface EdgeBindingSelection {
   moduleId: string;
@@ -265,3 +217,112 @@ export const generateEdgeInstallerPackageApi = async (
     fileName: parseDownloadFileName(contentDisposition) || 'IIoT.EdgeClient-installer.exe',
   };
 };
+
+// ===== 发布历史（Archived/Deleted/DeleteFailed） =====
+
+export interface ClientReleaseHistoryVersionDto {
+  id: string;
+  version: string;
+  status: string;
+  createdAtUtc: string;
+  publishedAtUtc?: string | null;
+  deletedAtUtc?: string | null;
+  deletionReason?: string | null;
+  deletionFailure?: string | null;
+}
+
+export interface ClientReleaseHistoryComponentDto {
+  componentId: string;
+  componentKind: string;
+  moduleId: string;
+  displayName: string;
+  channel: string;
+  targetRuntime: string;
+  versions: ClientReleaseHistoryVersionDto[];
+}
+
+export interface ClientReleaseHistoryMetaData {
+  currentPage: number;
+  totalPages: number;
+  pageSize: number;
+  totalCount: number;
+  hasPrevious: boolean;
+  hasNext: boolean;
+}
+
+export interface ClientReleaseHistoryPageDto {
+  items: ClientReleaseHistoryComponentDto[];
+  metaData: ClientReleaseHistoryMetaData;
+}
+
+export const getClientReleaseHistoryApi = (params: {
+  channel?: string;
+  targetRuntime?: string;
+  pageNumber?: number;
+  pageSize?: number;
+}) =>
+  http.get<ClientReleaseHistoryPageDto>(`${basePath}/history`, {
+    params: {
+      channel: params.channel || undefined,
+      targetRuntime: params.targetRuntime || undefined,
+      pageNumber: params.pageNumber ?? 1,
+      pageSize: params.pageSize ?? 10,
+    },
+  });
+
+// ===== 管理员永久删除组件与删除恢复 =====
+
+export interface ClientReleaseHardDeletionResultDto {
+  deletionId: string;
+  componentId: string;
+  componentKind: string;
+  componentName: string;
+  channel: string;
+  versions: string[];
+  filesDeleted: boolean;
+  deletedPaths: string[];
+  skippedPaths: string[];
+  warning?: string | null;
+}
+
+export const hardDeleteClientReleaseComponentApi = (componentId: string, reason: string) =>
+  http.delete<ClientReleaseHardDeletionResultDto>(`${basePath}/components/${componentId}`, {
+    data: { reason },
+  });
+
+export interface ClientReleaseComponentDeletionDto {
+  deletionId: string;
+  componentId: string;
+  componentKind: string;
+  componentKey: string;
+  channel: string;
+  targetRuntime: string;
+  status: string;
+  failureCode?: string | null;
+  retryCount: number;
+  reason?: string | null;
+  requestedByUserName?: string | null;
+  createdAtUtc: string;
+  updatedAtUtc: string;
+}
+
+export const getClientReleaseComponentDeletionsApi = () =>
+  http.get<ClientReleaseComponentDeletionDto[]>(`${basePath}/component-deletions`);
+
+export interface ClientReleaseComponentDeletionRetryResultDto {
+  deletionId: string;
+  componentId: string;
+  componentKind: string;
+  componentKey: string;
+  channel: string;
+  succeeded: boolean;
+  auditConfirmed: boolean;
+  deletedPaths: string[];
+  skippedPaths: string[];
+  failureCode?: string | null;
+}
+
+export const retryClientReleaseComponentDeletionApi = (deletionId: string) =>
+  http.post<ClientReleaseComponentDeletionRetryResultDto>(
+    `${basePath}/component-deletions/${deletionId}/retry`,
+  );
