@@ -1171,8 +1171,9 @@ public sealed class DeploymentSourceGuardTests
         verifyInstallerCatalogSource.Should().Contain("EXPECTED_PLUGIN_MODULE_ID and EXPECTED_PLUGIN_VERSION must be provided together");
         verifyInstallerCatalogSource.Should().Contain("expected plugin module not found in catalog");
         verifyInstallerCatalogSource.Should().Contain("expected plugin version mismatch");
-        verifyInstallerCatalogSource.Should().Contain("expected plugin module not found in installer artifact");
-        verifyInstallerCatalogSource.Should().Contain("expected plugin version mismatch in installer artifact");
+        verifyInstallerCatalogSource.Should().Contain("artifact modules must be an array");
+        verifyInstallerCatalogSource.Should().Contain("Checking split plugin package URL");
+        verifyInstallerCatalogSource.Should().Contain("check_get_download \"$PLUGIN_URL\" \"$PLUGIN_SIZE\"");
         installerDownloadSource.Should().Contain("[Parameter(Mandatory = $true)]");
         installerDownloadSource.Should().Contain("http://<cloud-host>:81");
         installerDownloadSource.Should().NotContain("http://cloud.internal.example:81");

@@ -21,11 +21,12 @@ Checks:
   - at least one plugin version is published in the catalog
   - optional EXPECTED_PLUGIN_MODULE_ID + EXPECTED_PLUGIN_VERSION match a published plugin version
   - installer-artifact.json is reachable
-  - installer-artifact.json describes v2 launcher/host/plugins directories
+  - installer-artifact.json describes v2 launcher/host/plugins directories; modules may be []
   - installer stub URL is reachable and Content-Length matches the manifest when size is present
   - installer stub can be downloaded with HTTP 200 and non-zero bytes
   - Velopack RELEASES and channel manifests are reachable
   - at least one Velopack .nupkg referenced by the manifests is downloadable
+  - an explicitly expected split-repository plugin zip is reachable and its size matches the catalog
 
 This script is read-only. It does not call installer-package and does not rotate device secrets.
 USAGE
@@ -174,7 +175,7 @@ EXPECTED_PLUGIN_VERSION="$EXPECTED_PLUGIN_VERSION" \
 python3 - <<'PY' >"$tmp_dir/artifact-paths.env"
 import json
 import os
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 artifact_url = os.environ["ARTIFACT_URL"]
 artifact = json.loads(open(os.environ["ARTIFACT_FILE"], encoding="utf-8").read())
@@ -197,8 +198,9 @@ if expected_version and artifact.get("version") != expected_version:
 if artifact.get("schemaVersion") != 2:
     raise SystemExit(f"artifact schemaVersion must be 2, actual: {artifact.get('schemaVersion')}")
 
-if not artifact.get("modules"):
-    raise SystemExit("artifact modules is empty")
+modules = artifact.get("modules")
+if not isinstance(modules, list):
+    raise SystemExit("artifact modules must be an array")
 
 base = artifact_url.rsplit("/", 1)[0] + "/"
 stub_file = artifact.get("installerStubFile")
@@ -208,31 +210,37 @@ plugins_root = (artifact.get("pluginsRoot") or "").strip("/")
 if not stub_file or not launcher_directory or not host_directory or not plugins_root:
     raise SystemExit("artifact stub/launcher/host/plugins directory is empty")
 
-for module in artifact.get("modules") or []:
+for module in modules:
     if not module.get("moduleId") or not module.get("pluginDirectory"):
         raise SystemExit("artifact module plugin mapping is incomplete")
 
-if expected_plugin_module_id:
-    artifact_modules = [
-        module
-        for module in artifact.get("modules") or []
-        if module.get("moduleId") == expected_plugin_module_id
-    ]
-    if not artifact_modules:
-        raise SystemExit(f"expected plugin module not found in installer artifact: {expected_plugin_module_id}")
-    if not any(module.get("version") == expected_plugin_version for module in artifact_modules):
-        actual_versions = ",".join(
-            str(module.get("version"))
-            for module in artifact_modules
-            if module.get("version")
-        )
-        raise SystemExit(
-            f"expected plugin version mismatch in installer artifact for {expected_plugin_module_id}: "
-            f"{actual_versions or '<none>'} != {expected_plugin_version}"
-        )
-
 print(f"STUB_URL={urljoin(base, stub_file)}")
 print(f"STUB_SIZE={artifact.get('installerStubSize')}")
+if expected_plugin_module_id:
+    plugin_versions = [
+        version
+        for component in catalog.get("plugins") or []
+        if component.get("moduleId") == expected_plugin_module_id
+        for version in component.get("versions") or []
+        if version.get("version") == expected_plugin_version
+    ]
+    if len(plugin_versions) != 1:
+        raise SystemExit(
+            f"expected split plugin catalog entry must be unique: "
+            f"{expected_plugin_module_id}:{expected_plugin_version}"
+        )
+    plugin = plugin_versions[0]
+    package_file = (
+        f"IIoT.EdgePlugin.{expected_plugin_module_id}-"
+        f"{expected_plugin_version}-{target_runtime}.zip"
+    )
+    plugin_path = (
+        "/edge-updates/plugins/"
+        f"{quote(channel, safe='')}/{quote(expected_plugin_module_id, safe='')}/"
+        f"{quote(expected_plugin_version, safe='')}/{quote(package_file, safe='')}"
+    )
+    print(f"PLUGIN_URL={urljoin(artifact_url, plugin_path)}")
+    print(f"PLUGIN_SIZE={plugin.get('packageSize')}")
 print(
     "artifact_version=%s launcher=%s host=%s pluginsRoot=%s artifact_modules=%s"
     % (
@@ -247,6 +255,8 @@ PY
 
 STUB_URL=$(awk -F= '/^STUB_URL=/{print $2}' "$tmp_dir/artifact-paths.env")
 STUB_SIZE=$(awk -F= '/^STUB_SIZE=/{print $2}' "$tmp_dir/artifact-paths.env")
+PLUGIN_URL=$(awk -F= '/^PLUGIN_URL=/{print $2}' "$tmp_dir/artifact-paths.env")
+PLUGIN_SIZE=$(awk -F= '/^PLUGIN_SIZE=/{print $2}' "$tmp_dir/artifact-paths.env")
 grep '^artifact_' "$tmp_dir/artifact-paths.env"
 
 check_head_content_length() {
@@ -296,6 +306,12 @@ check_get_download() {
 printf 'Checking installer stub URL: %s\n' "$STUB_URL"
 check_head_content_length "$STUB_URL" "$STUB_SIZE" "installer-stub"
 check_get_download "$STUB_URL" "$STUB_SIZE" "installer-stub"
+
+if [ -n "$EXPECTED_PLUGIN_MODULE_ID" ]; then
+  printf 'Checking split plugin package URL: %s\n' "$PLUGIN_URL"
+  check_head_content_length "$PLUGIN_URL" "$PLUGIN_SIZE" "plugin-package"
+  check_get_download "$PLUGIN_URL" "$PLUGIN_SIZE" "plugin-package"
+fi
 
 velopack_base_url="${BASE_URL%/}/edge-updates/velopack/$CHANNEL"
 velopack_releases_file="$tmp_dir/velopack-RELEASES"
