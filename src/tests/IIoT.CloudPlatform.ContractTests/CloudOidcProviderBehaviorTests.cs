@@ -8,6 +8,17 @@ namespace IIoT.CloudPlatform.ContractTests;
 public sealed class CloudOidcProviderBehaviorTests
 {
     [Fact]
+    public void OidcProviderOptions_DefaultAuthorizationSession_ShouldLastOneDay()
+    {
+        var options = new OidcProviderOptions();
+
+        Assert.Equal(24 * 60, options.AccessTokenLifetimeMinutes);
+        Assert.Equal(24 * 60, options.IdentityTokenLifetimeMinutes);
+        Assert.Equal(24 * 60, options.SessionIdleMinutes);
+        Assert.Equal(5, options.AuthorizationCodeLifetimeMinutes);
+    }
+
+    [Fact]
     public void OidcProviderOptions_Validate_ShouldRequireStableIssuerAndRedirectUri()
     {
         var valid = CreateValidOidcProviderOptions();

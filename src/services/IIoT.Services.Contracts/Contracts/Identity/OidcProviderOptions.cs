@@ -14,9 +14,9 @@ public sealed class OidcProviderOptions
     public string[] AicopilotRedirectUris { get; set; } = [];
     public string[] AicopilotPostLogoutRedirectUris { get; set; } = [];
     public int AuthorizationCodeLifetimeMinutes { get; set; } = 5;
-    public int AccessTokenLifetimeMinutes { get; set; } = 10;
-    public int IdentityTokenLifetimeMinutes { get; set; } = 10;
-    public int SessionIdleMinutes { get; set; } = 30;
+    public int AccessTokenLifetimeMinutes { get; set; } = 24 * 60;
+    public int IdentityTokenLifetimeMinutes { get; set; } = 24 * 60;
+    public int SessionIdleMinutes { get; set; } = 24 * 60;
     public string SessionCookieName { get; set; } = "__Host-IIoT-OidcSession";
     public string? SigningCertificatePath { get; set; }
     public string? SigningCertificatePassword { get; set; }
