@@ -19,5 +19,11 @@ create index if not exists ix_pass_station_records_type_completed
 create index if not exists ix_pass_station_records_type_device_completed
     on pass_station_records (type_key, device_id, completed_time desc);
 
+create index if not exists ix_pass_station_records_type_plc_code_completed
+    on pass_station_records (type_key, (payload_jsonb ->> 'plcCode'), completed_time desc);
+
+create index if not exists ix_pass_station_records_type_plc_name_completed
+    on pass_station_records (type_key, (payload_jsonb ->> 'plcName'), completed_time desc);
+
 create index if not exists ix_pass_station_records_type_barcode
     on pass_station_records (type_key, barcode);

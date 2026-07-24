@@ -814,7 +814,7 @@ public sealed class ApplicationFlowGuardTests
     {
         var validator = new ReceivePassStationBatchCommandValidator(CreatePassStationSchemaProvider());
         var command = new ReceivePassStationBatchCommand(
-            "injection",
+            "cp",
             Guid.NewGuid(),
             [
                 new PassStationItemInput(
@@ -823,11 +823,11 @@ public sealed class ApplicationFlowGuardTests
                     DateTime.UtcNow.AddMinutes(-10),
                     JsonPayload("""
                     {
-                      "preInjectionTime": "2026-04-29T09:20:00Z",
-                      "preInjectionWeight": -1,
-                      "postInjectionTime": "2026-04-29T09:25:00Z",
-                      "postInjectionWeight": 12.4,
-                      "injectionVolume": -2
+                      "plcCode": "P2-CP01",
+                      "plcName": "正极模切01",
+                      "startTime": "2026-07-24T00:00:00Z",
+                      "punchingQuantity": -1,
+                      "punchingSpeed": -2
                     }
                     """))
             ]);
@@ -836,7 +836,44 @@ public sealed class ApplicationFlowGuardTests
 
         Assert.False(result.IsValid);
         Assert.Contains(result.Errors, x => x.PropertyName.Contains(nameof(PassStationItemInput.Barcode), StringComparison.Ordinal));
-        Assert.Contains(result.Errors, x => x.PropertyName.Contains("injectionVolume", StringComparison.Ordinal));
+        Assert.Contains(result.Errors, x => x.PropertyName.Contains("punchingQuantity", StringComparison.Ordinal));
+        Assert.Contains(result.Errors, x => x.PropertyName.Contains("punchingSpeed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void UploadCommandValidators_ShouldAcceptStandardCellDataTransportMetadata()
+    {
+        var validator = new ReceivePassStationBatchCommandValidator(CreatePassStationSchemaProvider());
+        var command = new ReceivePassStationBatchCommand(
+            "cp",
+            Guid.NewGuid(),
+            [
+                new PassStationItemInput(
+                    "CP-CLIP-001",
+                    "OK",
+                    DateTime.UtcNow,
+                    JsonPayload("""
+                    {
+                      "processType": "CP",
+                      "displayLabel": "CP-CLIP-001",
+                      "deviceName": "正极模切01",
+                      "deviceCode": "P2-CP01",
+                      "plcDeviceId": 1,
+                      "cellResult": true,
+                      "completedTime": "2026-07-24T00:10:00Z",
+                      "uploadTargets": 3,
+                      "clipSlot": "MG1",
+                      "clipNo": "CP-CLIP-001",
+                      "plcCode": "P2-CP01",
+                      "plcName": "正极模切01",
+                      "startTime": "2026-07-24T00:00:00Z",
+                      "punchingQuantity": 120,
+                      "punchingSpeed": 1.25
+                    }
+                    """))
+            ]);
+
+        Assert.True(validator.Validate(command).IsValid);
     }
 
     [Fact]
@@ -844,7 +881,7 @@ public sealed class ApplicationFlowGuardTests
     {
         var validator = new ReceivePassStationBatchCommandValidator(CreatePassStationSchemaProvider());
         var command = new ReceivePassStationBatchCommand(
-            "stacking",
+            "ap",
             Guid.NewGuid(),
             [
                 new PassStationItemInput(
@@ -853,9 +890,11 @@ public sealed class ApplicationFlowGuardTests
                     DateTime.UtcNow,
                     JsonPayload("""
                     {
-                      "trayCode": "TRAY-001",
-                      "sequenceNo": 1,
-                      "layerCount": 12,
+                      "plcCode": "P1-AP01",
+                      "plcName": "负极模切01",
+                      "startTime": "2026-07-24T00:00:00Z",
+                      "punchingQuantity": 120,
+                      "punchingSpeed": 1.25,
                       "extraField": "bad"
                     }
                     """))
@@ -872,7 +911,7 @@ public sealed class ApplicationFlowGuardTests
     {
         var validator = new ReceivePassStationBatchCommandValidator(CreatePassStationSchemaProvider());
         var command = new ReceivePassStationBatchCommand(
-            "injection",
+            "cp",
             Guid.NewGuid(),
             [
                 new PassStationItemInput(
@@ -881,11 +920,11 @@ public sealed class ApplicationFlowGuardTests
                     DateTime.UtcNow,
                     JsonPayload("""
                     {
-                      "preInjectionTime": "2026-04-29T09:20:00Z",
-                      "preInjectionWeight": 10.2,
-                      "postInjectionTime": "2026-04-29T09:25:00Z",
-                      "postInjectionWeight": 12.4,
-                      "injectionVolume": 2.2
+                      "plcCode": "P2-CP01",
+                      "plcName": "正极模切01",
+                      "startTime": "2026-07-24T00:00:00Z",
+                      "punchingQuantity": 120,
+                      "punchingSpeed": 1.25
                     }
                     """))
             ],
@@ -1296,7 +1335,7 @@ public sealed class ApplicationFlowGuardTests
 
         var result = await handler.Handle(
             new ReceivePassStationBatchCommand(
-                "injection",
+                "cp",
                 deviceId,
                 [
                     new PassStationItemInput(
@@ -1305,11 +1344,11 @@ public sealed class ApplicationFlowGuardTests
                         new DateTime(2026, 4, 29, 9, 30, 0, DateTimeKind.Utc),
                         JsonPayload("""
                         {
-                          "preInjectionTime": "2026-04-29T09:20:00Z",
-                          "preInjectionWeight": 10.2,
-                          "postInjectionTime": "2026-04-29T09:25:00Z",
-                          "postInjectionWeight": 12.4,
-                          "injectionVolume": 2.2
+                          "plcCode": "P2-CP01",
+                          "plcName": "正极模切01",
+                          "startTime": "2026-07-24T00:00:00Z",
+                          "punchingQuantity": 120,
+                          "punchingSpeed": 1.25
                         }
                         """))
                 ],
@@ -1319,12 +1358,12 @@ public sealed class ApplicationFlowGuardTests
         Assert.True(result.IsSuccess);
         Assert.Equal("accepted", result.Value!.Code);
         Assert.False(result.Value.DuplicateAccepted);
-        Assert.Equal("pass-station:injection", registry.LastMessageType);
+        Assert.Equal("pass-station:cp", registry.LastMessageType);
         Assert.Equal("pass-request-1", registry.LastRequestId);
         Assert.Equal("request:pass-request-1", registry.LastDeduplicationKey);
         var registered = Assert.IsType<PassStationBatchReceivedEvent>(registry.LastRegisteredEvent);
-        Assert.Equal("injection", registered.TypeKey);
-        Assert.Equal("injection", registered.ProcessType);
+        Assert.Equal("cp", registered.TypeKey);
+        Assert.Equal("cp", registered.ProcessType);
         Assert.Single(registered.Items);
     }
 
@@ -1343,7 +1382,7 @@ public sealed class ApplicationFlowGuardTests
 
         var result = await handler.Handle(
             new ReceivePassStationBatchCommand(
-                "injection",
+                "cp",
                 deviceId,
                 [
                     new PassStationItemInput(
@@ -1352,11 +1391,11 @@ public sealed class ApplicationFlowGuardTests
                         new DateTime(2026, 4, 29, 9, 30, 0, DateTimeKind.Utc),
                         JsonPayload("""
                         {
-                          "preInjectionTime": "2026-04-29T09:20:00Z",
-                          "preInjectionWeight": 10.2,
-                          "postInjectionTime": "2026-04-29T09:25:00Z",
-                          "postInjectionWeight": 12.4,
-                          "injectionVolume": 2.2
+                          "plcCode": "P2-CP01",
+                          "plcName": "正极模切01",
+                          "startTime": "2026-07-24T00:00:00Z",
+                          "punchingQuantity": 120,
+                          "punchingSpeed": 1.25
                         }
                         """))
                 ],
@@ -1791,7 +1830,7 @@ public sealed class ApplicationFlowGuardTests
 
         var result = await handler.Handle(
             new GetPassStationListByTypeQuery(new PassStationQueryRequest(
-                " injection ",
+                " cp ",
                 PassStationQueryModes.TimeProcess,
                 Page(),
                 processId,
@@ -1801,7 +1840,7 @@ public sealed class ApplicationFlowGuardTests
 
         Assert.True(result.IsSuccess);
         Assert.Equal(1, queryService.GetByConditionCalls);
-        Assert.Equal("injection", queryService.LastRequest!.TypeKey);
+        Assert.Equal("cp", queryService.LastRequest!.TypeKey);
         Assert.Equal(new[] { allowedDeviceId }, queryService.LastAllowedDeviceIds);
     }
 
@@ -1817,7 +1856,7 @@ public sealed class ApplicationFlowGuardTests
 
         var result = await handler.Handle(
             new GetPassStationListByTypeQuery(new PassStationQueryRequest(
-                "injection",
+                "cp",
                 PassStationQueryModes.TimeProcess,
                 Page(),
                 Guid.NewGuid(),
@@ -1851,7 +1890,7 @@ public sealed class ApplicationFlowGuardTests
             new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [Guid.NewGuid()] });
 
         var result = await handler.Handle(
-            new GetPassStationDetailByTypeQuery("injection", detail.Id),
+            new GetPassStationDetailByTypeQuery("cp", detail.Id),
             CancellationToken.None);
 
         Assert.False(result.IsSuccess);
@@ -1984,47 +2023,49 @@ public sealed class ApplicationFlowGuardTests
             [
                 new PassStationTypeDefinitionDto
                 {
-                    TypeKey = "injection",
-                    DisplayName = "注塑",
+                    TypeKey = "cp",
+                    DisplayName = "正极模切",
                     Description = "test",
                     SupportedModes = [..PassStationQueryModes.All],
                     Fields =
                     [
-                        new PassStationFieldDefinitionDto { Key = "preInjectionTime", Label = "注塑前时间", Type = PassStationFieldTypes.DateTime, Required = true },
-                        new PassStationFieldDefinitionDto { Key = "preInjectionWeight", Label = "注塑前重量", Type = PassStationFieldTypes.Number, Required = true, Min = 0 },
-                        new PassStationFieldDefinitionDto { Key = "postInjectionTime", Label = "注塑后时间", Type = PassStationFieldTypes.DateTime, Required = true },
-                        new PassStationFieldDefinitionDto { Key = "postInjectionWeight", Label = "注塑后重量", Type = PassStationFieldTypes.Number, Required = true, Min = 0 },
-                        new PassStationFieldDefinitionDto { Key = "injectionVolume", Label = "注塑量", Type = PassStationFieldTypes.Number, Required = true, Min = 0 }
+                        new PassStationFieldDefinitionDto { Key = "plcCode", Label = "PLC 编码", Type = PassStationFieldTypes.String, Required = true, MaxLength = 64 },
+                        new PassStationFieldDefinitionDto { Key = "plcName", Label = "PLC 名称", Type = PassStationFieldTypes.String, Required = true, MaxLength = 128 },
+                        new PassStationFieldDefinitionDto { Key = "startTime", Label = "开始时间", Type = PassStationFieldTypes.DateTime, Required = true },
+                        new PassStationFieldDefinitionDto { Key = "punchingQuantity", Label = "冲切数量", Type = PassStationFieldTypes.Integer, Required = true, Min = 0 },
+                        new PassStationFieldDefinitionDto { Key = "punchingSpeed", Label = "冲切速度", Type = PassStationFieldTypes.Number, Required = true, Min = 0, Precision = 5 }
                     ],
-                    ListColumns = ["barcode", "cellResult", "injectionVolume", "completedTime"],
+                    ListColumns = ["barcode", "cellResult", "plcName", "punchingQuantity", "punchingSpeed", "completedTime"],
                     DetailSections =
                     [
                         new PassStationDetailSectionDto
                         {
-                            Title = "注塑数据",
-                            Fields = ["barcode", "deviceId", "cellResult", "completedTime", "receivedAt", "injectionVolume"]
+                            Title = "正极模切数据",
+                            Fields = ["barcode", "deviceId", "cellResult", "completedTime", "receivedAt", "plcCode", "plcName", "startTime", "punchingQuantity", "punchingSpeed"]
                         }
                     ]
                 },
                 new PassStationTypeDefinitionDto
                 {
-                    TypeKey = "stacking",
-                    DisplayName = "叠片",
+                    TypeKey = "ap",
+                    DisplayName = "负极模切",
                     Description = "test",
                     SupportedModes = [..PassStationQueryModes.All],
                     Fields =
                     [
-                        new PassStationFieldDefinitionDto { Key = "trayCode", Label = "托盘码", Type = PassStationFieldTypes.String, Required = true, MaxLength = 128 },
-                        new PassStationFieldDefinitionDto { Key = "sequenceNo", Label = "序号", Type = PassStationFieldTypes.Integer, Required = true, Min = 1 },
-                        new PassStationFieldDefinitionDto { Key = "layerCount", Label = "层数", Type = PassStationFieldTypes.Integer, Required = true, Min = 1 }
+                        new PassStationFieldDefinitionDto { Key = "plcCode", Label = "PLC 编码", Type = PassStationFieldTypes.String, Required = true, MaxLength = 64 },
+                        new PassStationFieldDefinitionDto { Key = "plcName", Label = "PLC 名称", Type = PassStationFieldTypes.String, Required = true, MaxLength = 128 },
+                        new PassStationFieldDefinitionDto { Key = "startTime", Label = "开始时间", Type = PassStationFieldTypes.DateTime, Required = true },
+                        new PassStationFieldDefinitionDto { Key = "punchingQuantity", Label = "冲切数量", Type = PassStationFieldTypes.Integer, Required = true, Min = 0 },
+                        new PassStationFieldDefinitionDto { Key = "punchingSpeed", Label = "冲切速度", Type = PassStationFieldTypes.Number, Required = true, Min = 0, Precision = 5 }
                     ],
-                    ListColumns = ["barcode", "cellResult", "trayCode", "completedTime"],
+                    ListColumns = ["barcode", "cellResult", "plcName", "punchingQuantity", "punchingSpeed", "completedTime"],
                     DetailSections =
                     [
                         new PassStationDetailSectionDto
                         {
-                            Title = "叠片数据",
-                            Fields = ["barcode", "deviceId", "cellResult", "completedTime", "receivedAt", "trayCode", "sequenceNo", "layerCount"]
+                            Title = "负极模切数据",
+                            Fields = ["barcode", "deviceId", "cellResult", "completedTime", "receivedAt", "plcCode", "plcName", "startTime", "punchingQuantity", "punchingSpeed"]
                         }
                     ]
                 }

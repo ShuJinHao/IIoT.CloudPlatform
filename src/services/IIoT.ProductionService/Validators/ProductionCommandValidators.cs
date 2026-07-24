@@ -419,7 +419,8 @@ public sealed class ReceivePassStationBatchCommandValidator : AbstractValidator<
         var knownFields = definition.Fields.ToDictionary(field => field.Key, StringComparer.Ordinal);
         foreach (var actualField in payload.Keys)
         {
-            if (!knownFields.ContainsKey(actualField))
+            if (!knownFields.ContainsKey(actualField)
+                && !PassStationPayloadJson.IsAcceptedTransportMetadata(actualField))
                 context.AddFailure($"{prefix}.Payload.{actualField}", $"字段 [{actualField}] 不属于过站类型 [{definition.TypeKey}]。");
         }
 

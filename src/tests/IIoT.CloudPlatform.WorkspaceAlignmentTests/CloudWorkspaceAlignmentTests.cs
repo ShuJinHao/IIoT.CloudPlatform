@@ -218,13 +218,13 @@ public sealed class CloudWorkspaceAlignmentTests : IAsyncLifetime
             });
         }
 
-        await _driver.PostJsonAsync("/api/v1/edge/pass-stations/injection/batch", new
+        await _driver.PostJsonAsync("/api/v1/edge/pass-stations/cp/batch", new
         {
             DeviceId = device.DeviceId,
             Items = new[]
             {
-                CreateAlignmentPassStationItem("X0-LIVE-0001", firstTime, "OK", 1.1m),
-                CreateAlignmentPassStationItem("X0-LIVE-0002", secondTime, "NG", 1.2m)
+                CreateAlignmentPassStationItem("X0-LIVE-0001", firstTime, "OK", 110, 1.1m),
+                CreateAlignmentPassStationItem("X0-LIVE-0002", secondTime, "NG", 120, 1.2m)
             }
         });
     }
@@ -233,7 +233,8 @@ public sealed class CloudWorkspaceAlignmentTests : IAsyncLifetime
         string barcode,
         DateTime completedAt,
         string cellResult,
-        decimal volume)
+        int quantity,
+        decimal speed)
     {
         return new
         {
@@ -242,11 +243,11 @@ public sealed class CloudWorkspaceAlignmentTests : IAsyncLifetime
             CompletedTime = completedAt,
             Payload = new
             {
-                PreInjectionTime = completedAt.AddSeconds(-20),
-                PreInjectionWeight = 11.2m,
-                PostInjectionTime = completedAt.AddSeconds(-5),
-                PostInjectionWeight = 12.5m,
-                InjectionVolume = volume
+                PlcCode = "P2-CP01",
+                PlcName = "正极模切01",
+                StartTime = completedAt.AddMinutes(-5),
+                PunchingQuantity = quantity,
+                PunchingSpeed = speed
             }
         };
     }

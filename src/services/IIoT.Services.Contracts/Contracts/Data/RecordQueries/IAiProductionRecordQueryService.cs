@@ -12,7 +12,9 @@ public sealed record AiProductionRecordQueryRequest(
     Guid? ProcessId = null,
     Guid? DeviceId = null,
     string? Barcode = null,
-    string? Result = null);
+    string? Result = null,
+    string? PlcCode = null,
+    string? PlcName = null);
 
 public sealed record AiProductionRecordQueryItem(
     Guid Id,

@@ -144,7 +144,7 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task PassStationInjection_DuplicateConsume_ShouldPersistOneRow()
+    public async Task PassStationCp_DuplicateConsume_ShouldPersistOneRow()
     {
         await AuthenticateAsAdminAsync();
 
@@ -165,38 +165,38 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
                     CompletedTime = completedTime,
                     Payload = new
                     {
-                        PreInjectionTime = completedTime.AddSeconds(-15),
-                        PreInjectionWeight = 12.34m,
-                        PostInjectionTime = completedTime.AddSeconds(-3),
-                        PostInjectionWeight = 13.21m,
-                        InjectionVolume = 0.87m
+                        PlcCode = "P2-CP01",
+                        PlcName = "正极模切01",
+                        StartTime = completedTime.AddMinutes(-5),
+                        PunchingQuantity = 120,
+                        PunchingSpeed = 1.25m
                     }
                 }
             }
         };
 
-        await PostJsonAsync("/api/v1/edge/pass-stations/injection/batch", request);
-        await PostJsonAsync("/api/v1/edge/pass-stations/injection/batch", request);
+        await PostJsonAsync("/api/v1/edge/pass-stations/cp/batch", request);
+        await PostJsonAsync("/api/v1/edge/pass-stations/cp/batch", request);
 
         await AuthenticateAsAdminAsync();
 
         var result = await EventuallyAsync(async () =>
             await GetFromJsonAsync<PagedResponse<PassStationListItemDto>>(
-                $"/api/v1/human/pass-stations/injection?PageNumber=1&PageSize=20&mode=device-time&deviceId={deviceId}" +
+                $"/api/v1/human/pass-stations/cp?PageNumber=1&PageSize=20&mode=device-time&deviceId={deviceId}" +
                 $"&startTime={Uri.EscapeDataString(completedTime.AddMinutes(-1).ToString("O"))}" +
                 $"&endTime={Uri.EscapeDataString(completedTime.AddMinutes(1).ToString("O"))}"),
             response => response.Items.Count(x => x.Barcode == barcode) == 1);
 
         result.Items.Should().ContainSingle(x => x.Barcode == barcode);
-        result.Items.Single(x => x.Barcode == barcode).Fields.Should().ContainKey("injectionVolume");
+        result.Items.Single(x => x.Barcode == barcode).Fields.Should().ContainKey("punchingQuantity");
     }
 
     [Fact]
-    public async Task PassStationStacking_DuplicateConsume_ShouldPersistOneRow()
+    public async Task PassStationAp_DuplicateConsume_ShouldPersistOneRow()
     {
         await AuthenticateAsAdminAsync();
 
-        var deviceId = await CreateTestDeviceAsync("stacking-pass");
+        var deviceId = await CreateTestDeviceAsync("ap-pass");
         await AuthenticateAsEdgeAsync(deviceId);
         var completedTime = DateTime.SpecifyKind(DateTime.UtcNow.AddMinutes(-4), DateTimeKind.Utc);
         var barcode = $"ST-{Guid.NewGuid():N}"[..14];
@@ -213,33 +213,65 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
                     CompletedTime = completedTime,
                     Payload = new
                     {
-                        TrayCode = "TRAY-STACK-01",
-                        LayerCount = 16,
-                        SequenceNo = 9
+                        PlcCode = "P1-AP01",
+                        PlcName = "负极模切01",
+                        StartTime = completedTime.AddMinutes(-4),
+                        PunchingQuantity = 160,
+                        PunchingSpeed = 1.75m
                     }
                 }
             }
         };
 
-        await PostJsonAsync("/api/v1/edge/pass-stations/stacking/batch", request);
-        await PostJsonAsync("/api/v1/edge/pass-stations/stacking/batch", request);
+        await PostJsonAsync("/api/v1/edge/pass-stations/ap/batch", request);
+        await PostJsonAsync("/api/v1/edge/pass-stations/ap/batch", request);
 
         await AuthenticateAsAdminAsync();
 
         var result = await EventuallyAsync(async () =>
             await GetFromJsonAsync<PagedResponse<PassStationListItemDto>>(
-                $"/api/v1/human/pass-stations/stacking?PageNumber=1&PageSize=20&mode=device-time&deviceId={deviceId}" +
+                $"/api/v1/human/pass-stations/ap?PageNumber=1&PageSize=20&mode=device-time&deviceId={deviceId}" +
                 $"&startTime={Uri.EscapeDataString(completedTime.AddMinutes(-1).ToString("O"))}" +
                 $"&endTime={Uri.EscapeDataString(completedTime.AddMinutes(1).ToString("O"))}"),
             response => response.Items.Count(x => x.Barcode == barcode) == 1);
 
         var item = result.Items.Single(x => x.Barcode == barcode);
-        item.Fields["trayCode"].GetString().Should().Be("TRAY-STACK-01");
-        item.Fields["layerCount"].GetInt32().Should().Be(16);
-        item.Fields["sequenceNo"].GetInt32().Should().Be(9);
+        item.Fields["plcCode"].GetString().Should().Be("P1-AP01");
+        item.Fields["plcName"].GetString().Should().Be("负极模切01");
+        item.Fields["punchingQuantity"].GetInt32().Should().Be(160);
         item.CellResult.Should().Be("OK");
         item.CompletedTime.Should().NotBeNull();
         item.CompletedTime!.Value.ToUniversalTime().Should().BeCloseTo(completedTime, TimeSpan.FromMilliseconds(1));
+    }
+
+    [Theory]
+    [InlineData("injection")]
+    [InlineData("stacking")]
+    [InlineData("homogenization")]
+    public async Task RetiredPassStationType_ShouldRejectUpload(string typeKey)
+    {
+        await AuthenticateAsAdminAsync();
+        var deviceId = await CreateTestDeviceAsync($"retired-{typeKey}");
+        await AuthenticateAsEdgeAsync(deviceId);
+
+        using var response = await _fixture.HttpClient.PostAsJsonAsync(
+            $"/api/v1/edge/pass-stations/{typeKey}/batch",
+            new
+            {
+                DeviceId = deviceId,
+                Items = new[]
+                {
+                    new
+                    {
+                        Barcode = $"OLD-{Guid.NewGuid():N}"[..14],
+                        CellResult = "OK",
+                        CompletedTime = DateTime.UtcNow,
+                        Payload = new { }
+                    }
+                }
+            });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
     [Fact]
@@ -778,7 +810,7 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
             deviceLogUnauthorized.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         }
 
-        using (var passStationUnauthorized = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/edge/pass-stations/injection/batch", new
+        using (var passStationUnauthorized = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/edge/pass-stations/cp/batch", new
                {
                    DeviceId = device.DeviceId,
                    Items = new[]
@@ -788,11 +820,14 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
                            Barcode = $"BC-{Guid.NewGuid():N}"[..14],
                            CellResult = "OK",
                            CompletedTime = completedTime,
-                           PreInjectionTime = completedTime.AddSeconds(-15),
-                           PreInjectionWeight = 12.34m,
-                           PostInjectionTime = completedTime.AddSeconds(-3),
-                           PostInjectionWeight = 13.21m,
-                           InjectionVolume = 0.87m
+                           Payload = new
+                           {
+                               PlcCode = "P2-CP01",
+                               PlcName = "正极模切01",
+                               StartTime = completedTime.AddMinutes(-5),
+                               PunchingQuantity = 120,
+                               PunchingSpeed = 1.25m
+                           }
                        }
                    }
                }))
@@ -800,21 +835,29 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
             passStationUnauthorized.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         }
 
-        using (var stackingUnauthorized = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/edge/pass-stations/stacking", new
+        using (var apUnauthorized = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/edge/pass-stations/ap/batch", new
                {
                    DeviceId = device.DeviceId,
-                   Item = new
+                   Items = new[]
                    {
-                       Barcode = $"ST-{Guid.NewGuid():N}"[..14],
-                       TrayCode = "TRAY-EDGE-01",
-                       LayerCount = 8,
-                       SequenceNo = 3,
-                       CellResult = "Unknown",
-                       CompletedTime = completedTime
+                       new
+                       {
+                           Barcode = $"AP-{Guid.NewGuid():N}"[..14],
+                           CellResult = "OK",
+                           CompletedTime = completedTime,
+                           Payload = new
+                           {
+                               PlcCode = "P1-AP01",
+                               PlcName = "负极模切01",
+                               StartTime = completedTime.AddMinutes(-5),
+                               PunchingQuantity = 120,
+                               PunchingSpeed = 1.25m
+                           }
+                       }
                    }
                }))
         {
-            stackingUnauthorized.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+            apUnauthorized.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         }
     }
 

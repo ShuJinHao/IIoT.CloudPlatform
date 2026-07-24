@@ -84,6 +84,18 @@ internal sealed class AiProductionRecordQueryService(IDbConnectionFactory connec
             parameters.Add("DeviceId", request.DeviceId.Value);
         }
 
+        if (!string.IsNullOrWhiteSpace(request.PlcCode))
+        {
+            conditions += " AND r.payload_jsonb ->> 'plcCode' = @PlcCode";
+            parameters.Add("PlcCode", request.PlcCode);
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.PlcName))
+        {
+            conditions += " AND r.payload_jsonb ->> 'plcName' = @PlcName";
+            parameters.Add("PlcName", request.PlcName);
+        }
+
         if (!string.IsNullOrWhiteSpace(request.Barcode))
         {
             conditions += " AND r.barcode = @Barcode";

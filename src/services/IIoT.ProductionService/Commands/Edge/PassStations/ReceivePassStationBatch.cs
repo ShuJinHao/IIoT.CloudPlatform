@@ -108,6 +108,20 @@ public sealed class ReceivePassStationBatchHandler(
 internal static class PassStationPayloadJson
 {
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
+    private static readonly HashSet<string> AcceptedTransportMetadataFields = new(
+        [
+            "processType",
+            "displayLabel",
+            "deviceName",
+            "deviceCode",
+            "plcDeviceId",
+            "cellResult",
+            "completedTime",
+            "uploadTargets",
+            "clipSlot",
+            "clipNo"
+        ],
+        StringComparer.Ordinal);
 
     public static string NormalizeTypeKey(string typeKey)
     {
@@ -118,6 +132,11 @@ internal static class PassStationPayloadJson
     {
         processType = processType?.Trim();
         return string.IsNullOrWhiteSpace(processType) ? null : processType.ToLowerInvariant();
+    }
+
+    public static bool IsAcceptedTransportMetadata(string fieldName)
+    {
+        return AcceptedTransportMetadataFields.Contains(fieldName);
     }
 
     public static string Canonicalize(JsonElement payload)

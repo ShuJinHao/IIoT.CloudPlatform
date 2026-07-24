@@ -150,6 +150,8 @@ public sealed partial class CloudProductionFlowTests
         var message = $"ai-read-log-{Guid.NewGuid():N}";
         var barcode = $"AI-{Guid.NewGuid():N}"[..14];
         var plcName = $"AI-{Guid.NewGuid():N}"[..10];
+        const string productionPlcCode = "P2-CP05";
+        const string productionPlcName = "正极模切05";
 
         await AuthenticateAsEdgeAsync(device.DeviceId);
 
@@ -179,7 +181,7 @@ public sealed partial class CloudProductionFlowTests
             NgCount = 1,
             PlcName = plcName
         });
-        await PostJsonAsync("/api/v1/edge/pass-stations/injection/batch", new
+        await PostJsonAsync("/api/v1/edge/pass-stations/cp/batch", new
         {
             DeviceId = device.DeviceId,
             Items = new[]
@@ -191,11 +193,11 @@ public sealed partial class CloudProductionFlowTests
                     CompletedTime = completedTime,
                     Payload = new
                     {
-                        PreInjectionTime = completedTime.AddSeconds(-20),
-                        PreInjectionWeight = 11.2m,
-                        PostInjectionTime = completedTime.AddSeconds(-5),
-                        PostInjectionWeight = 12.5m,
-                        InjectionVolume = 1.3m
+                        PlcCode = productionPlcCode,
+                        PlcName = productionPlcName,
+                        StartTime = completedTime.AddMinutes(-5),
+                        PunchingQuantity = 123,
+                        PunchingSpeed = 1.25m
                     }
                 }
             }
@@ -230,12 +232,15 @@ public sealed partial class CloudProductionFlowTests
 
         var productionRecords = await EventuallyAsync(
             async () => await GetFromJsonAsync<AiReadListResponseDto<AiReadProductionRecordDto>>(
-                $"/api/v1/ai/read/production-records?typeKey=injection&deviceId={device.DeviceId}&startTime={startTime}&endTime={endTime}&barcode={Uri.EscapeDataString(barcode)}"),
+                $"/api/v1/ai/read/production-records?typeKey=cp&deviceId={device.DeviceId}&plcCode={productionPlcCode}" +
+                $"&plcName={Uri.EscapeDataString(productionPlcName)}&startTime={startTime}&endTime={endTime}&barcode={Uri.EscapeDataString(barcode)}"),
             response => response.Items.Any(x => x.Barcode == barcode));
         var productionRecord = productionRecords.Items.Single(x => x.Barcode == barcode);
         productionRecords.Source.Should().Be("production_records");
-        productionRecord.TypeKey.Should().Be("injection");
-        productionRecord.Fields.Should().ContainKey("injectionVolume");
+        productionRecord.TypeKey.Should().Be("cp");
+        productionRecord.Fields["plcName"].GetString().Should().Be(productionPlcName);
+        productionRecord.Fields["punchingQuantity"].GetInt32().Should().Be(123);
+        productionRecord.Fields["punchingSpeed"].GetDecimal().Should().Be(1.25m);
         productionRecord.Fields.Should().NotContainKey("notConfigured");
     }
 
@@ -608,6 +613,8 @@ public sealed partial class CloudProductionFlowTests
         await AuthenticateAsEdgeAsync(device.DeviceId);
         var completedTime = DateTime.SpecifyKind(DateTime.UtcNow.AddMinutes(-2), DateTimeKind.Utc);
         var barcode = $"PR-{Guid.NewGuid():N}"[..14];
+        const string plcCode = "P2-CP05";
+        const string plcName = "正极模切05";
 
         var request = new
         {
@@ -621,18 +628,18 @@ public sealed partial class CloudProductionFlowTests
                     CompletedTime = completedTime,
                     Payload = new
                     {
-                        PreInjectionTime = completedTime.AddSeconds(-18),
-                        PreInjectionWeight = 14.1m,
-                        PostInjectionTime = completedTime.AddSeconds(-4),
-                        PostInjectionWeight = 15.6m,
-                        InjectionVolume = 1.5m
+                        PlcCode = plcCode,
+                        PlcName = plcName,
+                        StartTime = completedTime.AddMinutes(-4),
+                        PunchingQuantity = 150,
+                        PunchingSpeed = 1.5m
                     }
                 }
             }
         };
 
-        await PostJsonAsync("/api/v1/edge/pass-stations/injection/batch", request);
-        using (var duplicateResponse = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/edge/pass-stations/injection/batch", request))
+        await PostJsonAsync("/api/v1/edge/pass-stations/cp/batch", request);
+        using (var duplicateResponse = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/edge/pass-stations/cp/batch", request))
         {
             duplicateResponse.EnsureSuccessStatusCode();
             var duplicate = await duplicateResponse.Content.ReadFromJsonAsync<EdgeUploadAcceptedResponseDto>(JsonOptions);
@@ -645,23 +652,27 @@ public sealed partial class CloudProductionFlowTests
         var endTime = Uri.EscapeDataString(completedTime.AddMinutes(1).ToString("O"));
         var humanPassStations = await EventuallyAsync(
             async () => await GetFromJsonAsync<PagedResponse<PassStationListItemDto>>(
-                $"/api/v1/human/pass-stations/injection?PageNumber=1&PageSize=20&mode=device-time&deviceId={device.DeviceId}" +
+                $"/api/v1/human/pass-stations/cp?PageNumber=1&PageSize=20&mode=device-time&deviceId={device.DeviceId}" +
                 $"&startTime={startTime}&endTime={endTime}"),
             response => response.Items.Count(x => x.Barcode == barcode) == 1);
 
         var humanItem = humanPassStations.Items.Single(x => x.Barcode == barcode);
         humanItem.CellResult.Should().Be("NG");
-        humanItem.Fields.Should().ContainKey("injectionVolume");
+        humanItem.Fields["plcName"].GetString().Should().Be(plcName);
+        humanItem.Fields["punchingQuantity"].GetInt32().Should().Be(150);
 
         _fixture.SetAuthToken(CreateAiReadToken([AiReadPermissions.ProductionRecord], [device.DeviceId]));
         var aiProductionRecords = await EventuallyAsync(
             async () => await GetFromJsonAsync<AiReadListResponseDto<AiReadProductionRecordDto>>(
-                $"/api/v1/ai/read/production-records?typeKey=injection&deviceId={device.DeviceId}&startTime={startTime}&endTime={endTime}&barcode={Uri.EscapeDataString(barcode)}"),
+                $"/api/v1/ai/read/production-records?typeKey=cp&deviceId={device.DeviceId}&plcCode={plcCode}" +
+                $"&plcName={Uri.EscapeDataString(plcName)}&startTime={startTime}&endTime={endTime}&barcode={Uri.EscapeDataString(barcode)}"),
             response => response.Items.Count(x => x.Barcode == barcode) == 1);
 
         var aiItem = aiProductionRecords.Items.Single(x => x.Barcode == barcode);
         aiItem.Result.Should().Be("NG");
-        aiItem.Fields.Should().ContainKey("injectionVolume");
+        aiItem.Fields["plcName"].GetString().Should().Be(plcName);
+        aiItem.Fields["punchingQuantity"].GetInt32().Should().Be(150);
+        aiItem.Fields["punchingSpeed"].GetDecimal().Should().Be(1.5m);
     }
 
     [Fact]

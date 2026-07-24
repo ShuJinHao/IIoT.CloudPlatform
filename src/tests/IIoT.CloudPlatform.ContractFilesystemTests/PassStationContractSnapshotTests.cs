@@ -87,18 +87,30 @@ public sealed class PassStationContractSnapshotTests
                 .ToArray());
 
         var validator = new ReceivePassStationBatchCommandValidator(CreateSchemaProvider());
-        var validItem = new PassStationItemInput("BC-001", "PASS", DateTime.UtcNow, ParseJson("{}"));
+        var validItem = new PassStationItemInput(
+            "CP-CLIP-001",
+            "OK",
+            DateTime.UtcNow,
+            ParseJson("""
+            {
+              "plcCode": "P2-CP01",
+              "plcName": "正极模切01",
+              "startTime": "2026-07-24T00:00:00Z",
+              "punchingQuantity": 120,
+              "punchingSpeed": 1.25
+            }
+            """));
         Assert.True(validator.Validate(new ReceivePassStationBatchCommand(
-            " INJECTION ", Guid.NewGuid(), [validItem], "request-1", 1, "INJECTION")).IsValid);
+            " CP ", Guid.NewGuid(), [validItem], "request-1", 1, "CP")).IsValid);
 
-        AssertFailure(validator, new("injection", Guid.Empty, [validItem]), nameof(ReceivePassStationBatchCommand.DeviceId));
-        AssertFailure(validator, new("injection", Guid.NewGuid(), null!), nameof(ReceivePassStationBatchCommand.Items));
-        AssertFailure(validator, new("injection", Guid.NewGuid(), []), nameof(ReceivePassStationBatchCommand.Items));
-        AssertFailure(validator, new("injection", Guid.NewGuid(), Enumerable.Repeat(validItem, 1001).ToList()), nameof(ReceivePassStationBatchCommand.Items));
-        AssertFailure(validator, new("injection", Guid.NewGuid(), [validItem], new string('r', 129)), nameof(ReceivePassStationBatchCommand.RequestId));
-        AssertFailure(validator, new("injection", Guid.NewGuid(), [validItem], SchemaVersion: 2), nameof(ReceivePassStationBatchCommand.SchemaVersion));
-        AssertFailure(validator, new("injection", Guid.NewGuid(), [validItem], ProcessType: new string('p', 33)), nameof(ReceivePassStationBatchCommand.ProcessType));
-        AssertFailure(validator, new("injection", Guid.NewGuid(), [validItem], ProcessType: "coating"), nameof(ReceivePassStationBatchCommand.ProcessType));
+        AssertFailure(validator, new("cp", Guid.Empty, [validItem]), nameof(ReceivePassStationBatchCommand.DeviceId));
+        AssertFailure(validator, new("cp", Guid.NewGuid(), null!), nameof(ReceivePassStationBatchCommand.Items));
+        AssertFailure(validator, new("cp", Guid.NewGuid(), []), nameof(ReceivePassStationBatchCommand.Items));
+        AssertFailure(validator, new("cp", Guid.NewGuid(), Enumerable.Repeat(validItem, 1001).ToList()), nameof(ReceivePassStationBatchCommand.Items));
+        AssertFailure(validator, new("cp", Guid.NewGuid(), [validItem], new string('r', 129)), nameof(ReceivePassStationBatchCommand.RequestId));
+        AssertFailure(validator, new("cp", Guid.NewGuid(), [validItem], SchemaVersion: 2), nameof(ReceivePassStationBatchCommand.SchemaVersion));
+        AssertFailure(validator, new("cp", Guid.NewGuid(), [validItem], ProcessType: new string('p', 33)), nameof(ReceivePassStationBatchCommand.ProcessType));
+        AssertFailure(validator, new("cp", Guid.NewGuid(), [validItem], ProcessType: "coating"), nameof(ReceivePassStationBatchCommand.ProcessType));
         AssertFailure(validator, new("missing", Guid.NewGuid(), [validItem]), nameof(ReceivePassStationBatchCommand.TypeKey));
         AssertItemFailure(validator, validItem with { Barcode = " " }, nameof(PassStationItemInput.Barcode));
         AssertItemFailure(validator, validItem with { Barcode = new string('b', 129) }, nameof(PassStationItemInput.Barcode));
@@ -109,6 +121,47 @@ public sealed class PassStationContractSnapshotTests
         AssertItemFailure(validator, validItem with { Payload = ParseJson("[]") }, nameof(PassStationItemInput.Payload));
         var oversizedPayload = JsonSerializer.Serialize(Enumerable.Range(0, 65).ToDictionary(index => $"f{index}", index => index));
         AssertItemFailure(validator, validItem with { Payload = ParseJson(oversizedPayload) }, nameof(PassStationItemInput.Payload));
+    }
+
+    [Fact]
+    public void ProductionPassStationCatalog_ShouldContainOnlyCpAndAp()
+    {
+        using var document = JsonDocument.Parse(File.ReadAllBytes(CloudRepositoryPath.Find(
+            "src", "hosts", "IIoT.HttpApi", "config", "pass-station-types.json")));
+        var types = document.RootElement
+            .GetProperty("PassStationTypes")
+            .GetProperty("types")
+            .EnumerateArray()
+            .ToArray();
+
+        Assert.Equal(["cp", "ap"], types.Select(type => type.GetProperty("typeKey").GetString()!).ToArray());
+        Assert.Equal(["正极模切", "负极模切"], types.Select(type => type.GetProperty("displayName").GetString()!).ToArray());
+        Assert.All(types, type => Assert.Equal(
+            ["plcCode", "plcName", "startTime", "punchingQuantity", "punchingSpeed"],
+            type.GetProperty("fields")
+                .EnumerateArray()
+                .Select(field => field.GetProperty("key").GetString()!)
+                .ToArray()));
+        var source = document.RootElement.GetRawText();
+        Assert.DoesNotContain("injection", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("stacking", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("homogenization", source, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ProductionPassStationIndexes_ShouldCoverTypePlcAndCompletedTime()
+    {
+        var schemaSql = File.ReadAllText(CloudRepositoryPath.Find(
+            "src", "infrastructure", "IIoT.Dapper", "Production", "Sql", "Schemas", "004_pass_station_records.sql"));
+
+        Assert.Contains(
+            "on pass_station_records (type_key, (payload_jsonb ->> 'plcCode'), completed_time desc)",
+            schemaSql,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "on pass_station_records (type_key, (payload_jsonb ->> 'plcName'), completed_time desc)",
+            schemaSql,
+            StringComparison.Ordinal);
     }
 
     private static void AssertFailure(
@@ -126,7 +179,7 @@ public sealed class PassStationContractSnapshotTests
     {
         AssertFailure(
             validator,
-            new ReceivePassStationBatchCommand("injection", Guid.NewGuid(), [item]),
+            new ReceivePassStationBatchCommand("cp", Guid.NewGuid(), [item]),
             $"Items[0].{itemProperty}");
     }
 
@@ -144,20 +197,18 @@ public sealed class PassStationContractSnapshotTests
             [
                 new PassStationTypeDefinitionDto
                 {
-                    TypeKey = "injection",
-                    DisplayName = "Injection",
+                    TypeKey = "cp",
+                    DisplayName = "正极模切",
                     Description = "Provider contract fixture",
                     Fields =
                     [
-                        new PassStationFieldDefinitionDto
-                        {
-                            Key = "optionalNote",
-                            Label = "Optional note",
-                            Type = PassStationFieldTypes.String,
-                            Required = false
-                        }
+                        new PassStationFieldDefinitionDto { Key = "plcCode", Label = "PLC 编码", Type = PassStationFieldTypes.String, Required = true },
+                        new PassStationFieldDefinitionDto { Key = "plcName", Label = "PLC 名称", Type = PassStationFieldTypes.String, Required = true },
+                        new PassStationFieldDefinitionDto { Key = "startTime", Label = "开始时间", Type = PassStationFieldTypes.DateTime, Required = true },
+                        new PassStationFieldDefinitionDto { Key = "punchingQuantity", Label = "冲切数量", Type = PassStationFieldTypes.Integer, Required = true, Min = 0 },
+                        new PassStationFieldDefinitionDto { Key = "punchingSpeed", Label = "冲切速度", Type = PassStationFieldTypes.Number, Required = true, Min = 0 }
                     ],
-                    ListColumns = ["barcode"],
+                    ListColumns = ["barcode", "plcName", "punchingQuantity", "punchingSpeed"],
                     DetailSections = [new PassStationDetailSectionDto { Title = "Base", Fields = ["barcode"] }],
                     SupportedModes = [PassStationQueryModes.BarcodeProcess]
                 }

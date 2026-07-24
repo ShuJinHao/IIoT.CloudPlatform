@@ -626,30 +626,37 @@ public sealed class AiReadBehaviorTests
     }
 
     [Fact]
-    public async Task AiReadProductionRecordScope_ShouldRedactBarcodeResultAndTypeKey()
+    public async Task AiReadProductionRecordScope_ShouldRedactBarcodeResultTypeKeyAndPlcFilters()
     {
         const string sentinel = "SENSITIVE;scope=value";
         var deviceId = Guid.NewGuid();
+        var queryService = new StubAiProductionRecordQueryService();
         var handler = new GetAiReadProductionRecordsHandler(
             CreatePassStationSchemaProvider(),
-            new StubAiProductionRecordQueryService(),
+            queryService,
             new TestAiReadScopeAccessor { DelegatedDeviceIds = [deviceId] },
             Options.Create(new AiReadOptions()));
 
         var result = await handler.Handle(
             new GetAiReadProductionRecordsQuery(
-                TypeKey: "homogenization",
+                TypeKey: "cp",
                 DeviceId: deviceId,
                 Barcode: sentinel,
                 Result: sentinel,
-                Preset: "last_24h"),
+                Preset: "last_24h",
+                PlcCode: sentinel,
+                PlcName: sentinel),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
         Assert.Contains("typeKey=present", result.Value!.QueryScope, StringComparison.Ordinal);
         Assert.Contains("barcode=present", result.Value.QueryScope, StringComparison.Ordinal);
         Assert.Contains("result=present", result.Value.QueryScope, StringComparison.Ordinal);
+        Assert.Contains("plcCode=present", result.Value.QueryScope, StringComparison.Ordinal);
+        Assert.Contains("plcName=present", result.Value.QueryScope, StringComparison.Ordinal);
         Assert.DoesNotContain(sentinel, result.Value.QueryScope, StringComparison.Ordinal);
+        Assert.Equal(sentinel, queryService.LastRequest!.PlcCode);
+        Assert.Equal(sentinel, queryService.LastRequest.PlcName);
     }
 
     [Fact]
@@ -657,8 +664,8 @@ public sealed class AiReadBehaviorTests
     {
         var repository = new InMemoryRepository<ClientReleaseComponent>();
         var component = ClientReleaseComponent.CreatePlugin(
-            "Homogenization",
-            "匀浆",
+            "CP",
+            "正极模切",
             null,
             null,
             null,
@@ -670,7 +677,7 @@ public sealed class AiReadBehaviorTests
             "1.0.0",
             "9.9.9",
             "net10.0",
-            "/edge-updates/plugins/stable/Homogenization/1.0.0/Homogenization.zip",
+            "/edge-updates/plugins/stable/CP/1.0.0/CP.zip",
             new string('a', 64),
             1024,
             "release notes",
@@ -690,7 +697,7 @@ public sealed class AiReadBehaviorTests
         Assert.True(result.IsSuccess);
         var item = Assert.Single(result.Value!.Items);
         Assert.Equal("Plugin", item.ComponentKind);
-        Assert.Equal("Homogenization", item.ComponentKey);
+        Assert.Equal("CP", item.ComponentKey);
         Assert.Equal("1.0.0", item.Version);
         Assert.Equal("release notes", item.ReleaseNotes);
     }
@@ -861,18 +868,21 @@ public sealed class AiReadBehaviorTests
             [
                 new AiProductionRecordQueryItem(
                     Guid.NewGuid(),
-                    "homogenization",
+                    "cp",
                     deviceId,
-                    "匀浆1号机",
-                    "BC-001",
+                    "正极模切客户端",
+                    "CP-CLIP-001",
                     "OK",
                     DateTime.UtcNow.AddMinutes(-5),
                     DateTime.UtcNow,
                     new Dictionary<string, object?>
                     {
-                        ["viscosity"] = 123.45m,
-                        ["solidContent"] = 56.7m,
-                        ["mixerSpeed"] = 300m
+                        ["plcCode"] = "P2-CP05",
+                        ["plcName"] = "正极模切05",
+                        ["startTime"] = "2026-07-24T00:00:00Z",
+                        ["punchingQuantity"] = 123,
+                        ["punchingSpeed"] = 1.25m,
+                        ["clipSlot"] = "MG1"
                     })
             ],
             TotalCount = 1
@@ -885,21 +895,29 @@ public sealed class AiReadBehaviorTests
 
         var result = await handler.Handle(
             new GetAiReadProductionRecordsQuery(
-                TypeKey: "homogenization",
+                TypeKey: "cp",
                 DeviceId: deviceId,
+                PlcCode: " P2-CP05 ",
+                PlcName: " 正极模切05 ",
                 StartTime: DateTime.UtcNow.AddHours(-1),
                 EndTime: DateTime.UtcNow),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
         var item = Assert.Single(result.Value!.Items);
-        Assert.Equal("homogenization", item.TypeKey);
-        Assert.Equal("匀浆", item.TypeName);
-        Assert.Equal("BC-001", item.Barcode);
-        Assert.True(item.Fields.ContainsKey("viscosity"));
-        Assert.True(item.Fields.ContainsKey("solidContent"));
-        Assert.False(item.Fields.ContainsKey("mixerSpeed"));
-        Assert.Contains(item.FieldSchema, field => field.Key == "viscosity" && field.Label == "粘度");
+        Assert.Equal("cp", item.TypeKey);
+        Assert.Equal("正极模切", item.TypeName);
+        Assert.Equal("正极模切客户端", item.DeviceName);
+        Assert.Equal("CP-CLIP-001", item.Barcode);
+        Assert.Equal("正极模切05", item.Fields["plcName"]);
+        Assert.Equal(123, item.Fields["punchingQuantity"]);
+        Assert.Equal(1.25m, item.Fields["punchingSpeed"]);
+        Assert.False(item.Fields.ContainsKey("plcCode"));
+        Assert.False(item.Fields.ContainsKey("startTime"));
+        Assert.False(item.Fields.ContainsKey("clipSlot"));
+        Assert.Contains(item.FieldSchema, field => field.Key == "plcName" && field.Label == "PLC 名称");
+        Assert.Equal("P2-CP05", queryService.LastRequest!.PlcCode);
+        Assert.Equal("正极模切05", queryService.LastRequest.PlcName);
     }
 
     [Fact]
@@ -912,16 +930,17 @@ public sealed class AiReadBehaviorTests
             [
                 new AiProductionRecordQueryItem(
                     Guid.NewGuid(),
-                    "homogenization",
+                    "cp",
                     deviceId,
-                    "匀浆1号机",
-                    "BC-002",
+                    "正极模切客户端",
+                    "CP-CLIP-002",
                     "OK",
                     DateTime.UtcNow.AddMinutes(-5),
                     DateTime.UtcNow,
                     new Dictionary<string, object?>
                     {
-                        ["mixerSpeed"] = 300m
+                        ["plcCode"] = "P2-CP05",
+                        ["startTime"] = "2026-07-24T00:00:00Z"
                     })
             ],
             TotalCount = 1
@@ -934,7 +953,7 @@ public sealed class AiReadBehaviorTests
 
         var result = await handler.Handle(
             new GetAiReadProductionRecordsQuery(
-                TypeKey: "homogenization",
+                TypeKey: "cp",
                 DeviceId: deviceId,
                 StartTime: DateTime.UtcNow.AddHours(-1),
                 EndTime: DateTime.UtcNow,
@@ -943,8 +962,9 @@ public sealed class AiReadBehaviorTests
 
         Assert.True(result.IsSuccess);
         var item = Assert.Single(result.Value!.Items);
-        Assert.True(item.Fields.ContainsKey("mixerSpeed"));
-        Assert.Contains(item.FieldSchema, field => field.Key == "mixerSpeed");
+        Assert.True(item.Fields.ContainsKey("plcCode"));
+        Assert.True(item.Fields.ContainsKey("startTime"));
+        Assert.Contains(item.FieldSchema, field => field.Key == "plcCode");
     }
 
     [Fact]
@@ -976,7 +996,7 @@ public sealed class AiReadBehaviorTests
 
         var result = await handler.Handle(
             new GetAiReadProductionRecordsQuery(
-                TypeKey: "homogenization",
+                TypeKey: "cp",
                 DeviceId: deviceId,
                 StartTime: DateTime.UtcNow.AddHours(-1),
                 EndTime: DateTime.UtcNow,
@@ -1127,9 +1147,9 @@ public sealed class AiReadBehaviorTests
             [
                 new PassStationTypeDefinitionDto
                 {
-                    TypeKey = "homogenization",
-                    DisplayName = "匀浆",
-                    Description = "匀浆生产数据",
+                    TypeKey = "cp",
+                    DisplayName = "正极模切",
+                    Description = "正极模切生产数据",
                     SupportedModes =
                     [
                         PassStationQueryModes.DeviceTime,
@@ -1139,50 +1159,63 @@ public sealed class AiReadBehaviorTests
                     [
                         new PassStationFieldDefinitionDto
                         {
-                            Key = "viscosity",
-                            Label = "粘度",
-                            Type = PassStationFieldTypes.Number,
+                            Key = "plcCode",
+                            Label = "PLC 编码",
+                            Type = PassStationFieldTypes.String,
                             Required = true,
-                            Unit = "mPa·s",
-                            Precision = 2
                         },
                         new PassStationFieldDefinitionDto
                         {
-                            Key = "solidContent",
-                            Label = "固含量",
-                            Type = PassStationFieldTypes.Number,
-                            Required = true,
-                            Unit = "%",
-                            Precision = 2
+                            Key = "plcName",
+                            Label = "PLC 名称",
+                            Type = PassStationFieldTypes.String,
+                            Required = true
                         },
                         new PassStationFieldDefinitionDto
                         {
-                            Key = "mixerSpeed",
-                            Label = "转速",
+                            Key = "startTime",
+                            Label = "开始时间",
+                            Type = PassStationFieldTypes.DateTime,
+                            Required = true
+                        },
+                        new PassStationFieldDefinitionDto
+                        {
+                            Key = "punchingQuantity",
+                            Label = "冲切数量",
+                            Type = PassStationFieldTypes.Integer,
+                            Required = true,
+                        },
+                        new PassStationFieldDefinitionDto
+                        {
+                            Key = "punchingSpeed",
+                            Label = "冲切速度",
                             Type = PassStationFieldTypes.Number,
-                            Unit = "rpm",
-                            Precision = 1
+                            Required = true,
+                            Precision = 5
                         }
                     ],
                     ListColumns =
                     [
                         "barcode",
                         "cellResult",
-                        "viscosity",
-                        "solidContent",
+                        "plcName",
+                        "punchingQuantity",
+                        "punchingSpeed",
                         "completedTime"
                     ],
                     DetailSections =
                     [
                         new PassStationDetailSectionDto
                         {
-                            Title = "匀浆数据",
+                            Title = "正极模切数据",
                             Fields =
                             [
                                 "barcode",
-                                "viscosity",
-                                "solidContent",
-                                "mixerSpeed",
+                                "plcCode",
+                                "plcName",
+                                "startTime",
+                                "punchingQuantity",
+                                "punchingSpeed",
                                 "completedTime"
                             ]
                         }

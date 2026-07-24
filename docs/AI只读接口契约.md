@@ -68,6 +68,8 @@ GET /api/v1/ai/read/production-records
 - `typeKey`：可选，生产数据类型。
 - `processId`：可选，工序范围。
 - `deviceId`：可选，正式设备 ID。
+- `plcCode`：可选，稳定 PLC 编码精确筛选。
+- `plcName`：可选，中文 PLC 名称精确筛选。
 - `barcode`：可选，条码筛选；返回 scope 中只能标记 `present`，不得回显敏感原值。
 - `result`：可选，结果筛选。
 - `startTime` / `endTime` 或 `preset`：时间窗；二者不得混用。
@@ -76,12 +78,14 @@ GET /api/v1/ai/read/production-records
 
 跨类型查询必须提供 `deviceId` 或 `processId`。指定 `deviceId` 时必须通过 `AiReadQueryGuard.ValidateDeviceAllowed` 校验 delegated device scope。
 
+当前生产 `typeKey` 只有 `cp` 与 `ap`。它们返回中文 Cloud 客户端名、Cloud `deviceId`、弹夹号、结果、完成时间，以及 schema 字段 `plcCode`、`plcName`、`startTime`、`punchingQuantity`、`punchingSpeed`。普通 AI 用户不得看到 Cloud 内部 ClientCode；`P2-CPUC` / `P1-APUC` 是 MES 身份，不是 AI 查询或展示字段。
+
 ## 5. 字段和数据过滤
 
 - 生产数据返回公共列和 schema 化字段，不返回 raw `payload_jsonb`。
 - `fieldMode=list` 只能返回 `pass-station-types.json` 的列表字段，并排除公共列。
 - `fieldMode=full` 可以返回该工序 schema 定义字段，但仍不得绕过 schema 直接暴露 raw payload。
-- 返回 scope 可以包含 `typeKey`、`processId`、`deviceId`、`fieldMode`、`preset`、`startTime`、`endTime`、`delegatedUserId` 和 delegated device 数量；不得回显 barcode 原文、SQL、prompt 或内部参数对象。
+- 返回 scope 可以包含 `typeKey`、`processId`、`deviceId`、`fieldMode`、`preset`、`startTime`、`endTime`、`delegatedUserId` 和 delegated device 数量；`plcCode`、`plcName` 与 barcode 等请求字符串只能标记 `present`，不得回显原文、SQL、prompt 或内部参数对象。
 - 日志和文本字段必须按 `AiReadOptions` 截断，避免一次响应携带过长诊断文本。
 
 ## 6. 审计和验证

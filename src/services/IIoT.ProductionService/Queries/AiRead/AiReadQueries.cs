@@ -655,7 +655,9 @@ public sealed record GetAiReadProductionRecordsQuery(
     DateTime? EndTime = null,
     string? Preset = null,
     string? FieldMode = null,
-    int? MaxRows = null) : IAiReadQuery<Result<AiReadListResponse<AiReadProductionRecordDto>>>;
+    int? MaxRows = null,
+    string? PlcCode = null,
+    string? PlcName = null) : IAiReadQuery<Result<AiReadListResponse<AiReadProductionRecordDto>>>;
 
 public sealed class GetAiReadProductionRecordsHandler(
     IPassStationSchemaProvider schemaProvider,
@@ -722,7 +724,9 @@ public sealed class GetAiReadProductionRecordsHandler(
             ProcessId: request.ProcessId,
             DeviceId: request.DeviceId,
             Barcode: request.Barcode?.Trim(),
-            Result: request.Result?.Trim());
+            Result: request.Result?.Trim(),
+            PlcCode: request.PlcCode?.Trim(),
+            PlcName: request.PlcName?.Trim());
 
         var (items, totalCount) = await productionRecordQueryService.GetAsync(
             queryRequest,
@@ -776,6 +780,8 @@ public sealed class GetAiReadProductionRecordsHandler(
                 ("typeKey", AiReadQueryGuard.ScopeText(requestedDefinition?.TypeKey)),
                 ("processId", AiReadQueryGuard.ScopeGuid(request.ProcessId)),
                 ("deviceId", AiReadQueryGuard.ScopeGuid(request.DeviceId)),
+                ("plcCode", AiReadQueryGuard.ScopeText(request.PlcCode)),
+                ("plcName", AiReadQueryGuard.ScopeText(request.PlcName)),
                 ("barcode", AiReadQueryGuard.ScopeText(request.Barcode)),
                 ("result", AiReadQueryGuard.ScopeText(request.Result)),
                 ("fieldMode", AiReadQueryGuard.ScopeClosed(fieldMode, "list", "full")),

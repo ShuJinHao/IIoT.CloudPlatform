@@ -30,6 +30,10 @@ public sealed class AiReadHttpContractTests
         Assert.Equal(HttpApiRateLimitPolicies.AiRead, controller.GetCustomAttribute<EnableRateLimitingAttribute>()?.PolicyName);
         Assert.Equal("production-records", productionRecords.GetCustomAttribute<HttpGetAttribute>()?.Template);
         Assert.Equal(AiReadPermissions.ProductionRecord, authorization?.Permission);
+        Assert.Contains(productionRecords.GetParameters(), parameter => parameter.Name == "plcCode"
+            && parameter.GetCustomAttribute<FromQueryAttribute>() is not null);
+        Assert.Contains(productionRecords.GetParameters(), parameter => parameter.Name == "plcName"
+            && parameter.GetCustomAttribute<FromQueryAttribute>() is not null);
         Assert.DoesNotContain(actions, method => method.GetCustomAttributes<HttpMethodAttribute>()
             .Any(attribute => attribute.HttpMethods.Any(verb => !string.Equals(verb, "GET", StringComparison.Ordinal))));
         Assert.DoesNotContain(actions.SelectMany(method => method.GetCustomAttributes<HttpMethodAttribute>()), attribute =>

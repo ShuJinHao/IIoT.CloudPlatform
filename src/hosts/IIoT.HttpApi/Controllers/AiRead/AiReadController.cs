@@ -146,6 +146,8 @@ public sealed class AiReadController : ApiControllerBase
         [FromQuery] string? typeKey = null,
         [FromQuery] Guid? processId = null,
         [FromQuery] Guid? deviceId = null,
+        [FromQuery] string? plcCode = null,
+        [FromQuery] string? plcName = null,
         [FromQuery] string? barcode = null,
         [FromQuery] string? result = null,
         [FromQuery] DateTime? startTime = null,
@@ -166,7 +168,9 @@ public sealed class AiReadController : ApiControllerBase
                 endTime,
                 preset,
                 fieldMode,
-                maxRows),
+                maxRows,
+                plcCode,
+                plcName),
             cancellationToken));
     }
 
