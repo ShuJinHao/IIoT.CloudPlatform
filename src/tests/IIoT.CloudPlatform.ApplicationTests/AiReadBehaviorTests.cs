@@ -912,10 +912,11 @@ public sealed class AiReadBehaviorTests
         Assert.Equal("正极模切05", item.Fields["plcName"]);
         Assert.Equal(123, item.Fields["punchingQuantity"]);
         Assert.Equal(1.25m, item.Fields["punchingSpeed"]);
+        Assert.Equal("MG1", item.Fields["clipSlot"]);
         Assert.False(item.Fields.ContainsKey("plcCode"));
         Assert.False(item.Fields.ContainsKey("startTime"));
-        Assert.False(item.Fields.ContainsKey("clipSlot"));
         Assert.Contains(item.FieldSchema, field => field.Key == "plcName" && field.Label == "PLC 名称");
+        Assert.Contains(item.FieldSchema, field => field.Key == "clipSlot" && field.Label == "弹夹位");
         Assert.Equal("P2-CP05", queryService.LastRequest!.PlcCode);
         Assert.Equal("正极模切05", queryService.LastRequest.PlcName);
     }
@@ -940,7 +941,8 @@ public sealed class AiReadBehaviorTests
                     new Dictionary<string, object?>
                     {
                         ["plcCode"] = "P2-CP05",
-                        ["startTime"] = "2026-07-24T00:00:00Z"
+                        ["startTime"] = "2026-07-24T00:00:00Z",
+                        ["clipSlot"] = "MG2"
                     })
             ],
             TotalCount = 1
@@ -964,7 +966,9 @@ public sealed class AiReadBehaviorTests
         var item = Assert.Single(result.Value!.Items);
         Assert.True(item.Fields.ContainsKey("plcCode"));
         Assert.True(item.Fields.ContainsKey("startTime"));
+        Assert.Equal("MG2", item.Fields["clipSlot"]);
         Assert.Contains(item.FieldSchema, field => field.Key == "plcCode");
+        Assert.Contains(item.FieldSchema, field => field.Key == "clipSlot");
     }
 
     [Fact]
@@ -1095,7 +1099,8 @@ public sealed class AiReadBehaviorTests
                     "D",
                     20,
                     19,
-                    1)
+                    1,
+                    "CP09")
             ]
         };
         var handler = new GetAiReadCapacityHourlyHandler(
@@ -1110,6 +1115,7 @@ public sealed class AiReadBehaviorTests
         Assert.True(result.IsSuccess);
         Assert.Equal(2, result.Value!.Items.Count);
         Assert.Equal(90m, result.Value.Items[0].OkRate);
+        Assert.Equal("CP09", result.Value.Items[1].PlcName);
         Assert.Equal(deviceId, queryService.LastHourlyDeviceId);
         Assert.NotNull(queryService.LastHourlyRangeStart);
         Assert.NotNull(queryService.LastHourlyRangeEnd);
@@ -1173,6 +1179,14 @@ public sealed class AiReadBehaviorTests
                         },
                         new PassStationFieldDefinitionDto
                         {
+                            Key = "clipSlot",
+                            Label = "弹夹位",
+                            Type = PassStationFieldTypes.Enum,
+                            Required = false,
+                            Options = ["MG1", "MG2"]
+                        },
+                        new PassStationFieldDefinitionDto
+                        {
                             Key = "startTime",
                             Label = "开始时间",
                             Type = PassStationFieldTypes.DateTime,
@@ -1196,9 +1210,10 @@ public sealed class AiReadBehaviorTests
                     ],
                     ListColumns =
                     [
+                        "plcName",
+                        "clipSlot",
                         "barcode",
                         "cellResult",
-                        "plcName",
                         "punchingQuantity",
                         "punchingSpeed",
                         "completedTime"
@@ -1213,6 +1228,7 @@ public sealed class AiReadBehaviorTests
                                 "barcode",
                                 "plcCode",
                                 "plcName",
+                                "clipSlot",
                                 "startTime",
                                 "punchingQuantity",
                                 "punchingSpeed",

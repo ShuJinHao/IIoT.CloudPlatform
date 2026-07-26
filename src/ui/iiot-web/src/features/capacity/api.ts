@@ -32,18 +32,6 @@ export interface HourlyCapacityAggregateItem {
   ngCount: number;
 }
 
-export interface DailySummaryItem {
-  totalCount: number;
-  okCount: number;
-  ngCount: number;
-  dayShiftTotal: number;
-  dayShiftOk: number;
-  dayShiftNg: number;
-  nightShiftTotal: number;
-  nightShiftOk: number;
-  nightShiftNg: number;
-}
-
 export interface DailyRangeSummaryDto {
   date: string;
   totalCount: number;
@@ -55,6 +43,7 @@ export interface DailyRangeSummaryDto {
   nightShiftTotal: number;
   nightShiftOk: number;
   nightShiftNg: number;
+  plcName?: string | null;
 }
 
 const basePath = '/human/capacity';
@@ -66,6 +55,7 @@ export const getDailyPagedApi = (params: {
   deviceId?: string;
 }) =>
   http.get<PagedList<DailyCapacityItem>>(`${basePath}/daily`, {
+    inlineFeedback: true,
     params: {
       PageNumber: params.PageNumber ?? 1,
       PageSize: params.PageSize ?? 10,
@@ -80,6 +70,7 @@ export const getHourlyByDeviceApi = (params: {
   plcName?: string;
 }) =>
   http.get<HourlyCapacityItem[]>(`${basePath}/hourly`, {
+    inlineFeedback: true,
     params: {
       deviceId: params.deviceId,
       date: params.date,
@@ -92,22 +83,10 @@ export const getHourlyAggregateApi = (params: {
   processId?: string;
 }) =>
   http.get<HourlyCapacityAggregateItem[]>(`${basePath}/hourly/aggregate`, {
+    inlineFeedback: true,
     params: {
       date: params.date,
       processId: params.processId || undefined,
-    },
-  });
-
-export const getDailySummaryApi = (params: {
-  deviceId: string;
-  date: string;
-  plcName?: string;
-}) =>
-  http.get<DailySummaryItem | null>(`${basePath}/summary`, {
-    params: {
-      deviceId: params.deviceId,
-      date: params.date,
-      plcName: params.plcName || undefined,
     },
   });
 
@@ -115,13 +94,14 @@ export const getSummaryRangeApi = (params: {
   deviceId: string;
   startDate: string;
   endDate: string;
-  plcName?: string;
+  breakdownByPlc?: boolean;
 }) =>
   http.get<DailyRangeSummaryDto[]>(`${basePath}/summary/range`, {
+    inlineFeedback: true,
     params: {
       deviceId: params.deviceId,
       startDate: params.startDate,
       endDate: params.endDate,
-      plcName: params.plcName || undefined,
+      breakdownByPlc: params.breakdownByPlc ?? true,
     },
   });

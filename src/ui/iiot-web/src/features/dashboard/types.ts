@@ -2,12 +2,13 @@ import type { Component } from 'vue';
 import type { DeviceLogListItemDto } from '../device-logs/api';
 
 export interface DashboardCard {
-  id: 'production' | 'online-devices' | 'pass-rate';
+  id: 'production' | 'active-clients' | 'pass-rate' | 'alert-records';
   label: string;
   value: string | number;
   helper: string;
   background: string;
   icon: Component;
+  status: DashboardSourceStatus;
 }
 
 export interface AnalysisLink {
@@ -35,6 +36,14 @@ export interface DashboardStatusRow {
   label: string;
   value: number;
   color: string;
+}
+
+export type DashboardSourceKey = 'deviceStatus' | 'capacity' | 'alertCount' | 'recentLogs';
+export type DashboardSourceStatus = 'loading' | 'ready' | 'error';
+
+export interface DashboardSourceState {
+  status: DashboardSourceStatus;
+  error: string;
 }
 
 export type DashboardViewState = 'loading' | 'empty' | 'error' | 'ready';

@@ -1845,6 +1845,48 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
+    public async Task GetPassStationListByTypeHandler_ShouldPreserveClipSlotAndClipNumber()
+    {
+        var deviceId = Guid.NewGuid();
+        var item = new PassStationListItemDto(
+            Guid.NewGuid(),
+            deviceId,
+            "CP-CLIP-001",
+            "OK",
+            DateTime.UtcNow,
+            DateTime.UtcNow,
+            new Dictionary<string, object?>
+            {
+                ["plcName"] = "正极模切01",
+                ["clipSlot"] = "MG1"
+            });
+        var queryService = new StubPassStationRecordQueryService
+        {
+            Items = [item],
+            TotalCount = 1
+        };
+        var handler = new GetPassStationListByTypeHandler(
+            CreatePassStationSchemaProvider(),
+            queryService,
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [deviceId] },
+            new StubProcessReadQueryService());
+
+        var result = await handler.Handle(
+            new GetPassStationListByTypeQuery(new PassStationQueryRequest(
+                "cp",
+                PassStationQueryModes.DeviceLatest,
+                Page(),
+                DeviceId: deviceId)),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var returned = Assert.Single(result.Value!);
+        Assert.Equal("CP-CLIP-001", returned.Barcode);
+        Assert.Equal("MG1", returned.Fields["clipSlot"]);
+        Assert.Equal("正极模切01", returned.Fields["plcName"]);
+    }
+
+    [Fact]
     public async Task GetPassStationListByTypeHandler_ShouldReturnEmptyWhenProcessHasNoAccessibleDevices()
     {
         var queryService = new StubPassStationRecordQueryService();
@@ -2031,17 +2073,18 @@ public sealed class ApplicationFlowGuardTests
                     [
                         new PassStationFieldDefinitionDto { Key = "plcCode", Label = "PLC 编码", Type = PassStationFieldTypes.String, Required = true, MaxLength = 64 },
                         new PassStationFieldDefinitionDto { Key = "plcName", Label = "PLC 名称", Type = PassStationFieldTypes.String, Required = true, MaxLength = 128 },
+                        new PassStationFieldDefinitionDto { Key = "clipSlot", Label = "弹夹位", Type = PassStationFieldTypes.Enum, Required = false, Options = ["MG1", "MG2"] },
                         new PassStationFieldDefinitionDto { Key = "startTime", Label = "开始时间", Type = PassStationFieldTypes.DateTime, Required = true },
                         new PassStationFieldDefinitionDto { Key = "punchingQuantity", Label = "冲切数量", Type = PassStationFieldTypes.Integer, Required = true, Min = 0 },
                         new PassStationFieldDefinitionDto { Key = "punchingSpeed", Label = "冲切速度", Type = PassStationFieldTypes.Number, Required = true, Min = 0, Precision = 5 }
                     ],
-                    ListColumns = ["barcode", "cellResult", "plcName", "punchingQuantity", "punchingSpeed", "completedTime"],
+                    ListColumns = ["plcName", "clipSlot", "barcode", "cellResult", "punchingQuantity", "punchingSpeed", "completedTime"],
                     DetailSections =
                     [
                         new PassStationDetailSectionDto
                         {
                             Title = "正极模切数据",
-                            Fields = ["barcode", "deviceId", "cellResult", "completedTime", "receivedAt", "plcCode", "plcName", "startTime", "punchingQuantity", "punchingSpeed"]
+                            Fields = ["barcode", "deviceId", "cellResult", "completedTime", "receivedAt", "plcCode", "plcName", "clipSlot", "startTime", "punchingQuantity", "punchingSpeed"]
                         }
                     ]
                 },
@@ -2055,17 +2098,18 @@ public sealed class ApplicationFlowGuardTests
                     [
                         new PassStationFieldDefinitionDto { Key = "plcCode", Label = "PLC 编码", Type = PassStationFieldTypes.String, Required = true, MaxLength = 64 },
                         new PassStationFieldDefinitionDto { Key = "plcName", Label = "PLC 名称", Type = PassStationFieldTypes.String, Required = true, MaxLength = 128 },
+                        new PassStationFieldDefinitionDto { Key = "clipSlot", Label = "弹夹位", Type = PassStationFieldTypes.Enum, Required = false, Options = ["MG1", "MG2"] },
                         new PassStationFieldDefinitionDto { Key = "startTime", Label = "开始时间", Type = PassStationFieldTypes.DateTime, Required = true },
                         new PassStationFieldDefinitionDto { Key = "punchingQuantity", Label = "冲切数量", Type = PassStationFieldTypes.Integer, Required = true, Min = 0 },
                         new PassStationFieldDefinitionDto { Key = "punchingSpeed", Label = "冲切速度", Type = PassStationFieldTypes.Number, Required = true, Min = 0, Precision = 5 }
                     ],
-                    ListColumns = ["barcode", "cellResult", "plcName", "punchingQuantity", "punchingSpeed", "completedTime"],
+                    ListColumns = ["plcName", "clipSlot", "barcode", "cellResult", "punchingQuantity", "punchingSpeed", "completedTime"],
                     DetailSections =
                     [
                         new PassStationDetailSectionDto
                         {
                             Title = "负极模切数据",
-                            Fields = ["barcode", "deviceId", "cellResult", "completedTime", "receivedAt", "plcCode", "plcName", "startTime", "punchingQuantity", "punchingSpeed"]
+                            Fields = ["barcode", "deviceId", "cellResult", "completedTime", "receivedAt", "plcCode", "plcName", "clipSlot", "startTime", "punchingQuantity", "punchingSpeed"]
                         }
                     ]
                 }

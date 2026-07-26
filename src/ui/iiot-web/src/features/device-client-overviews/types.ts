@@ -10,7 +10,7 @@ export const DEFAULT_SORT_DIRECTION: DeviceClientOverviewSortDirection = 'asc';
 export const SORTABLE_COLUMNS: ReadonlyArray<{ key: DeviceClientOverviewSortBy; label: string }> = [
   { key: 'deviceName', label: '设备名称' },
   { key: 'softwareStatus', label: '软件状态' },
-  { key: 'currentVersion', label: '当前版本' },
+  { key: 'currentVersion', label: '最近可确认宿主版本' },
   { key: 'lastRuntimeHeartbeatAtUtc', label: '最后运行心跳' },
 ];
 
@@ -18,6 +18,13 @@ export function formatDateTime(value?: string | null): string {
   if (!value) return '-';
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString();
+}
+
+export function formatPackageDigest(value?: string | null): string {
+  const normalized = value?.trim();
+  if (!normalized) return '-';
+  if (normalized.length <= 24) return normalized;
+  return `${normalized.slice(0, 12)}…${normalized.slice(-8)}`;
 }
 
 /** 详情区块内联错误文案：优先后端 ProblemDetails 的 detail/errors/title，不用固定假文案覆盖。 */

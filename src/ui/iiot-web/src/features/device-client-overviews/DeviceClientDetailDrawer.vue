@@ -52,27 +52,7 @@
           <EmptyState title="版本与升级详情加载失败" :description="releaseError" />
           <UiButton size="small" secondary @click="$emit('retryRelease')">重试</UiButton>
         </div>
-        <template v-else-if="release">
-          <dl class="release-facts">
-            <div><dt>当前版本</dt><dd>{{ release.currentVersion || '-' }}</dd></div>
-            <div><dt>安装状态</dt><dd>{{ statusText(release.installStatus) }}</dd></div>
-            <div><dt>升级状态</dt><dd>{{ statusText(release.hostUpdateStatus) }}</dd></div>
-            <div><dt>版本上报时间</dt><dd>{{ reportedAt }}</dd></div>
-            <div><dt>最后运行心跳</dt><dd>{{ lastHeartbeatAt }}</dd></div>
-            <div><dt>发布通道</dt><dd>{{ release.channel || '-' }}</dd></div>
-          </dl>
-          <p v-if="release.versionIssue" class="detail-issue">版本问题：{{ release.versionIssue }}</p>
-          <p v-if="release.hostCompatibilityIssue" class="detail-issue">兼容性问题：{{ release.hostCompatibilityIssue }}</p>
-          <UiDataTable
-            :columns="pluginColumns"
-            :data="release.plugins"
-            :row-key="pluginRowKey"
-          >
-            <template #empty>
-              <EmptyState title="客户端尚未上报插件清单" description="等待 Edge 客户端上报版本快照后展示插件明细。" />
-            </template>
-          </UiDataTable>
-        </template>
+        <DeviceClientVersionFacts v-else-if="release" :release="release" />
       </section>
     </div>
   </UiDrawer>
@@ -85,14 +65,13 @@ import UiButton from '../../components/ui/UiButton.vue';
 import UiDataTable from '../../components/ui/UiDataTable.vue';
 import UiDrawer from '../../components/ui/UiDrawer.vue';
 import UiTag from '../../components/ui/UiTag.vue';
+import DeviceClientVersionFacts from './DeviceClientVersionFacts.vue';
 import type {
   DeviceClientOverviewItemDto,
-  DeviceClientPluginInventoryDto,
   DeviceClientReleaseDetailsDto,
   EdgeHostPlcRuntimeStateDto,
 } from './api';
-import { createPlcRuntimeStateColumns, releaseStatusText, softwareStatusText } from './columns';
-import { formatDateTime } from './types';
+import { createPlcRuntimeStateColumns, softwareStatusText } from './columns';
 
 const props = defineProps<{
   show: boolean;
@@ -130,46 +109,8 @@ const softwareTagTone = computed(() => {
       return 'default';
   }
 });
-const reportedAt = computed(() =>
-  formatDateTime(props.release?.reportedAtUtc ?? props.release?.receivedAtUtc));
-const lastHeartbeatAt = computed(() => formatDateTime(props.release?.lastRuntimeHeartbeatAtUtc));
-
-// 版本/升级状态复用与发布管理一致的中文映射；未识别值原样展示，不伪造。
-function statusText(status?: string | null): string {
-  const text = releaseStatusText(status);
-  return text || '-';
-}
-
-const pluginColumns = [
-  {
-    title: '插件',
-    key: 'moduleId',
-    minWidth: 180,
-    render: (row: DeviceClientPluginInventoryDto) => row.displayName || row.moduleId,
-  },
-  { title: '版本', key: 'version', width: 110, render: (row: DeviceClientPluginInventoryDto) => row.version || '-' },
-  {
-    title: '启用',
-    key: 'enabled',
-    width: 80,
-    render: (row: DeviceClientPluginInventoryDto) => (row.enabled ? '已启用' : '已停用'),
-  },
-  {
-    title: '升级状态',
-    key: 'updateStatus',
-    width: 120,
-    render: (row: DeviceClientPluginInventoryDto) => releaseStatusText(row.updateStatus),
-  },
-  {
-    title: '兼容性问题',
-    key: 'compatibilityIssue',
-    minWidth: 180,
-    render: (row: DeviceClientPluginInventoryDto) => row.compatibilityIssue || '-',
-  },
-];
 
 const plcRowKey = (row: EdgeHostPlcRuntimeStateDto) => row.id;
-const pluginRowKey = (row: DeviceClientPluginInventoryDto) => row.moduleId;
 
 function emitShow(value: boolean) {
   emit('update:show', value);

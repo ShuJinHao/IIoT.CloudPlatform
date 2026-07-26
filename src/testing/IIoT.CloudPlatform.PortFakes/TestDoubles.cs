@@ -424,6 +424,8 @@ internal sealed class StubCapacityQueryService : ICapacityQueryService
 
     public CancellationToken LastSummaryRangeCancellationToken { get; private set; }
 
+    public bool LastSummaryRangeBreakdownByPlc { get; private set; }
+
     public CancellationToken LastDailyPagedCancellationToken { get; private set; }
 
     public IReadOnlyCollection<Guid>? LastAggregateDeviceIds { get; private set; }
@@ -475,7 +477,8 @@ internal sealed class StubCapacityQueryService : ICapacityQueryService
                 item.ShiftCode,
                 item.TotalCount,
                 item.OkCount,
-                item.NgCount))
+                item.NgCount,
+                item.PlcName))
             .ToList());
     }
 
@@ -508,11 +511,13 @@ internal sealed class StubCapacityQueryService : ICapacityQueryService
         DateOnly startDate,
         DateOnly endDate,
         string? plcName = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool breakdownByPlc = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
         SummaryRangeCalls++;
         LastSummaryRangeCancellationToken = cancellationToken;
+        LastSummaryRangeBreakdownByPlc = breakdownByPlc;
         return Task.FromResult(SummaryRangeResult);
     }
 

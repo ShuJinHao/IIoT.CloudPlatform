@@ -26,8 +26,14 @@ public static class CacheKeys
 
     public static string CapacitySummaryPattern(Guid deviceId) => $"iiot:capacity:summary:v1:{deviceId}:*";
 
-    public static string CapacityRange(Guid deviceId, DateOnly startDate, DateOnly endDate, string? plcName) =>
-        $"iiot:capacity:range:v1:{deviceId}:{startDate:yyyyMMdd}:{endDate:yyyyMMdd}:{plcName ?? "all"}";
+    public static string CapacityRange(
+        Guid deviceId,
+        DateOnly startDate,
+        DateOnly endDate,
+        string? plcName,
+        bool breakdownByPlc = false) =>
+        $"iiot:capacity:range:v1:{deviceId}:{startDate:yyyyMMdd}:{endDate:yyyyMMdd}:{plcName ?? "all"}"
+        + (breakdownByPlc ? ":by-plc" : string.Empty);
 
     public static string CapacityRangePattern(Guid deviceId) => $"iiot:capacity:range:v1:{deviceId}:*";
 

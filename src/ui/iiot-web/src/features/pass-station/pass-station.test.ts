@@ -6,13 +6,16 @@ import { buildPassStationSchema, normalizePassStationTypeKey } from './schema';
 import type { PassStationTypeDefinitionDto } from './api';
 
 const definition: PassStationTypeDefinitionDto = {
-  typeKey: 'formation',
-  displayName: '化成',
-  description: '化成追溯记录',
+  typeKey: 'cp',
+  displayName: '正极模切',
+  description: '正极模切追溯记录',
   supportedModes: ['barcode-process', 'device-latest'],
-  fields: [{ key: 'voltage', label: '电压', type: 'number', required: false, unit: 'V' }],
-  listColumns: ['barcode', 'cellResult', 'voltage'],
-  detailSections: [{ title: '基础信息', fields: ['barcode', 'cellResult', 'voltage'] }],
+  fields: [
+    { key: 'plcName', label: 'PLC 名称', type: 'string', required: true },
+    { key: 'clipSlot', label: '弹夹位', type: 'enum', required: false, options: ['MG1', 'MG2'] },
+  ],
+  listColumns: ['plcName', 'clipSlot', 'barcode', 'cellResult'],
+  detailSections: [{ title: '基础信息', fields: ['plcName', 'clipSlot', 'barcode', 'cellResult'] }],
 };
 
 describe('pass station feature schema', () => {
@@ -21,26 +24,30 @@ describe('pass station feature schema', () => {
   });
 
   it('normalizes process code to schema type key', () => {
-    expect(normalizePassStationTypeKey(' Formation ')).toBe('formation');
+    expect(normalizePassStationTypeKey(' CP ')).toBe('cp');
   });
 
   it('builds columns and detail sections from server schema', () => {
     const schema = buildPassStationSchema(definition);
-    expect(schema.title).toBe('化成过站追溯');
-    expect(schema.columns.map((column) => column.key)).toEqual(['barcode', 'cellResult', 'voltage']);
-    expect(schema.detailSections[0]!.fields.map((field) => field.key)).toEqual(['barcode', 'cellResult', 'voltage']);
-    expect(schema.columns[2]!.render({
+    expect(schema.title).toBe('正极模切过站追溯');
+    expect(schema.columns.map((column) => column.key)).toEqual(['plcName', 'clipSlot', 'barcode', 'cellResult']);
+    expect(schema.columns.map((column) => column.label)).toEqual(['PLC 名称', '弹夹位', '弹夹号', '结果']);
+    expect(schema.detailSections[0]!.fields.map((field) => field.key)).toEqual(['plcName', 'clipSlot', 'barcode', 'cellResult']);
+    const record = {
       id: '1',
       deviceId: 'd1',
-      barcode: 'B1',
+      barcode: 'CP-CLIP-001',
       cellResult: 'OK',
       completedTime: null,
       receivedAt: null,
-      fields: { voltage: 3.6 },
-    })).toBe('3.6 V');
+      fields: { plcName: '正极模切01', clipSlot: 'MG1' },
+    };
+    expect(schema.columns[1]!.render(record)).toBe('MG1');
+    expect(schema.columns[2]!.render(record)).toBe('CP-CLIP-001');
+    expect(schema.columns[1]!.render({ ...record, fields: { plcName: '正极模切01' } })).toBe('—');
   });
 
   it('creates UI columns from schema without fixed process pages', () => {
-    expect(createPassStationColumns(buildPassStationSchema(definition))).toHaveLength(3);
+    expect(createPassStationColumns(buildPassStationSchema(definition))).toHaveLength(4);
   });
 });

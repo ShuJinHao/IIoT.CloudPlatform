@@ -13,6 +13,7 @@
     <DashboardStatePanel
       v-if="dashboardNonReadyState"
       :state="dashboardNonReadyState"
+      :error-description="dashboardErrorDescription"
       @retry="loadDashboard"
     />
 
@@ -20,15 +21,28 @@
       <div class="min-w-0 space-y-7">
         <DashboardMetricCards :cards="dashboardCards" />
         <div class="grid grid-cols-[minmax(0,1.45fr)_minmax(280px,0.85fr)] gap-7 max-[1180px]:grid-cols-1">
-          <DashboardTrendPanel :trend-bars="trendBars" />
+          <DashboardTrendPanel
+            :trend-bars="trendBars"
+            :source-state="sourceStates.capacity"
+            @retry="loadDashboard"
+          />
           <DashboardAnalysisPanel :links="analysisLinks" />
         </div>
-        <DashboardRecentAlerts :events="events" />
+        <DashboardRecentAlerts
+          :events="events"
+          :source-state="sourceStates.recentLogs"
+          @retry="loadDashboard"
+        />
       </div>
 
       <DashboardSidebar
         :production-display="productionDisplay"
+        :production-helper="productionHelper"
+        :capacity-state="sourceStates.capacity"
         :status-rows="statusRows"
+        :status-state="sourceStates.deviceStatus"
+        :status-summary="statusSummary"
+        @retry="loadDashboard"
       />
     </section>
   </div>
@@ -55,8 +69,12 @@ const {
   analysisLinks,
   events,
   dashboardNonReadyState,
+  dashboardErrorDescription,
+  sourceStates,
   productionDisplay,
+  productionHelper,
   statusRows,
+  statusSummary,
   loadDashboard,
 } = useDashboard();
 

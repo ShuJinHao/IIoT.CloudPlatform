@@ -95,6 +95,7 @@ public sealed class PassStationContractSnapshotTests
             {
               "plcCode": "P2-CP01",
               "plcName": "正极模切01",
+              "clipSlot": "MG1",
               "startTime": "2026-07-24T00:00:00Z",
               "punchingQuantity": 120,
               "punchingSpeed": 1.25
@@ -102,6 +103,20 @@ public sealed class PassStationContractSnapshotTests
             """));
         Assert.True(validator.Validate(new ReceivePassStationBatchCommand(
             " CP ", Guid.NewGuid(), [validItem], "request-1", 1, "CP")).IsValid);
+        var compatibleItemWithoutClipSlot = validItem with
+        {
+            Payload = ParseJson("""
+            {
+              "plcCode": "P2-CP01",
+              "plcName": "正极模切01",
+              "startTime": "2026-07-24T00:00:00Z",
+              "punchingQuantity": 120,
+              "punchingSpeed": 1.25
+            }
+            """)
+        };
+        Assert.True(validator.Validate(new ReceivePassStationBatchCommand(
+            "cp", Guid.NewGuid(), [compatibleItemWithoutClipSlot])).IsValid);
 
         AssertFailure(validator, new("cp", Guid.Empty, [validItem]), nameof(ReceivePassStationBatchCommand.DeviceId));
         AssertFailure(validator, new("cp", Guid.NewGuid(), null!), nameof(ReceivePassStationBatchCommand.Items));
@@ -119,6 +134,22 @@ public sealed class PassStationContractSnapshotTests
         AssertItemFailure(validator, validItem with { CompletedTime = new DateTime(1999, 12, 31, 23, 59, 59, DateTimeKind.Utc) }, nameof(PassStationItemInput.CompletedTime));
         AssertItemFailure(validator, validItem with { CompletedTime = DateTime.UtcNow.AddDays(2) }, nameof(PassStationItemInput.CompletedTime));
         AssertItemFailure(validator, validItem with { Payload = ParseJson("[]") }, nameof(PassStationItemInput.Payload));
+        AssertItemFailure(
+            validator,
+            validItem with
+            {
+                Payload = ParseJson("""
+                {
+                  "plcCode": "P2-CP01",
+                  "plcName": "正极模切01",
+                  "clipSlot": "MG3",
+                  "startTime": "2026-07-24T00:00:00Z",
+                  "punchingQuantity": 120,
+                  "punchingSpeed": 1.25
+                }
+                """)
+            },
+            "Payload.clipSlot");
         var oversizedPayload = JsonSerializer.Serialize(Enumerable.Range(0, 65).ToDictionary(index => $"f{index}", index => index));
         AssertItemFailure(validator, validItem with { Payload = ParseJson(oversizedPayload) }, nameof(PassStationItemInput.Payload));
     }
@@ -137,11 +168,29 @@ public sealed class PassStationContractSnapshotTests
         Assert.Equal(["cp", "ap"], types.Select(type => type.GetProperty("typeKey").GetString()!).ToArray());
         Assert.Equal(["正极模切", "负极模切"], types.Select(type => type.GetProperty("displayName").GetString()!).ToArray());
         Assert.All(types, type => Assert.Equal(
-            ["plcCode", "plcName", "startTime", "punchingQuantity", "punchingSpeed"],
+            ["plcCode", "plcName", "clipSlot", "startTime", "punchingQuantity", "punchingSpeed"],
             type.GetProperty("fields")
                 .EnumerateArray()
                 .Select(field => field.GetProperty("key").GetString()!)
                 .ToArray()));
+        Assert.All(types, type =>
+        {
+            var clipSlot = type.GetProperty("fields")
+                .EnumerateArray()
+                .Single(field => field.GetProperty("key").GetString() == "clipSlot");
+            Assert.Equal("enum", clipSlot.GetProperty("type").GetString());
+            Assert.False(clipSlot.GetProperty("required").GetBoolean());
+            Assert.Equal(
+                ["MG1", "MG2"],
+                clipSlot.GetProperty("options")
+                    .EnumerateArray()
+                    .Select(option => option.GetString()!)
+                    .ToArray());
+            Assert.Contains("clipSlot", type.GetProperty("listColumns").EnumerateArray().Select(column => column.GetString()!));
+            Assert.Contains(
+                type.GetProperty("detailSections").EnumerateArray(),
+                section => section.GetProperty("fields").EnumerateArray().Any(field => field.GetString() == "clipSlot"));
+        });
         var source = document.RootElement.GetRawText();
         Assert.DoesNotContain("injection", source, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("stacking", source, StringComparison.OrdinalIgnoreCase);
@@ -204,12 +253,20 @@ public sealed class PassStationContractSnapshotTests
                     [
                         new PassStationFieldDefinitionDto { Key = "plcCode", Label = "PLC 编码", Type = PassStationFieldTypes.String, Required = true },
                         new PassStationFieldDefinitionDto { Key = "plcName", Label = "PLC 名称", Type = PassStationFieldTypes.String, Required = true },
+                        new PassStationFieldDefinitionDto
+                        {
+                            Key = "clipSlot",
+                            Label = "弹夹位",
+                            Type = PassStationFieldTypes.Enum,
+                            Required = false,
+                            Options = ["MG1", "MG2"]
+                        },
                         new PassStationFieldDefinitionDto { Key = "startTime", Label = "开始时间", Type = PassStationFieldTypes.DateTime, Required = true },
                         new PassStationFieldDefinitionDto { Key = "punchingQuantity", Label = "冲切数量", Type = PassStationFieldTypes.Integer, Required = true, Min = 0 },
                         new PassStationFieldDefinitionDto { Key = "punchingSpeed", Label = "冲切速度", Type = PassStationFieldTypes.Number, Required = true, Min = 0 }
                     ],
-                    ListColumns = ["barcode", "plcName", "punchingQuantity", "punchingSpeed"],
-                    DetailSections = [new PassStationDetailSectionDto { Title = "Base", Fields = ["barcode"] }],
+                    ListColumns = ["plcName", "clipSlot", "barcode", "punchingQuantity", "punchingSpeed"],
+                    DetailSections = [new PassStationDetailSectionDto { Title = "Base", Fields = ["barcode", "clipSlot"] }],
                     SupportedModes = [PassStationQueryModes.BarcodeProcess]
                 }
             ]

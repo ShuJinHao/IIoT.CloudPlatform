@@ -48,7 +48,11 @@ internal sealed class HourlyCapacityRecordRepository(IDbConnectionFactory connec
                 ok_count = excluded.ok_count,
                 ng_count = excluded.ng_count,
                 reported_at = excluded.reported_at
-            where hourly_capacity.reported_at <= excluded.reported_at;
+            where hourly_capacity.total_count < excluded.total_count
+               or (
+                    hourly_capacity.total_count = excluded.total_count
+                    and hourly_capacity.reported_at <= excluded.reported_at
+               );
             """;
 
         var row = new

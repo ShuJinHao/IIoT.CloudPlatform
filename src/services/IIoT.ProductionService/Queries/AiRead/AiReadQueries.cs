@@ -84,7 +84,8 @@ public sealed record AiReadHourlyCapacityDto(
     int TotalCount,
     int OkCount,
     int NgCount,
-    decimal OkRate);
+    decimal OkRate,
+    string? PlcName = null);
 
 public sealed record AiReadProductionFieldSchemaDto(
     string Key,
@@ -524,7 +525,8 @@ public sealed class GetAiReadCapacityHourlyHandler(
                 row.TotalCount,
                 row.OkCount,
                 row.NgCount,
-                row.TotalCount > 0 ? Math.Round(row.OkCount * 100m / row.TotalCount, 2) : 0m))
+                row.TotalCount > 0 ? Math.Round(row.OkCount * 100m / row.TotalCount, 2) : 0m,
+                row.PlcName))
             .ToList();
 
         return Result.Success(new AiReadListResponse<AiReadHourlyCapacityDto>(

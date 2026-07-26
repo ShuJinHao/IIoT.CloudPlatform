@@ -28,6 +28,7 @@ export const getRecentDeviceLogsApi = (params?: {
   processId?: string;
 }) =>
   http.get<DeviceLogListItemDto[]>(`${basePath}/recent`, {
+    inlineFeedback: true,
     params: {
       limit: params?.limit ?? 20,
       minLevel: params?.minLevel || 'WARN',
@@ -39,6 +40,7 @@ export const getRecentAlertCountApi = (params?: {
   processId?: string;
 }) =>
   http.get<RecentAlertCountDto>(`${basePath}/recent-alerts/count`, {
+    inlineFeedback: true,
     params: {
       processId: params?.processId || undefined,
     },

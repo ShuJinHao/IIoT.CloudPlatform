@@ -49,9 +49,12 @@ public class HumanCapacityController : ApiControllerBase
         [FromQuery] DateOnly startDate,
         [FromQuery] DateOnly endDate,
         [FromQuery] string? plcName = null,
+        [FromQuery] bool breakdownByPlc = false,
         CancellationToken cancellationToken = default)
     {
-        return ReturnResult(await Sender.Send(new GetSummaryRangeQuery(deviceId, startDate, endDate, plcName), cancellationToken));
+        return ReturnResult(await Sender.Send(
+            new GetSummaryRangeQuery(deviceId, startDate, endDate, plcName, breakdownByPlc),
+            cancellationToken));
     }
 
     [HttpGet("daily")]

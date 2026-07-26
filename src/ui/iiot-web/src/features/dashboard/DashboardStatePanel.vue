@@ -15,7 +15,7 @@
     <EmptyState
       v-else
       :title="state === 'error' ? t('dashboard.errorTitle') : t('dashboard.emptyTitle')"
-      :description="state === 'error' ? t('dashboard.errorDesc') : t('dashboard.emptyDesc')"
+      :description="state === 'error' ? (errorDescription || t('dashboard.errorDesc')) : t('dashboard.emptyDesc')"
     >
       <template #icon>
         <AlertTriangle v-if="state === 'error'" :size="56" :stroke-width="1.6" />
@@ -36,7 +36,10 @@ import LoadingState from '../../components/states/LoadingState.vue';
 import UiButton from '../../components/ui/UiButton.vue';
 import type { DashboardNonReadyState } from './types';
 
-defineProps<{ state: DashboardNonReadyState }>();
+defineProps<{
+  state: DashboardNonReadyState;
+  errorDescription?: string;
+}>();
 const emit = defineEmits<{ retry: [] }>();
 const { t } = useI18n();
 </script>

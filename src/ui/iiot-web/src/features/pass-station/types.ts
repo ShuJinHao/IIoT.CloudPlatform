@@ -3,9 +3,9 @@ import type { PassStationQueryMode } from './api';
 export const PAGE_SIZE = 10;
 
 export const queryModeLabels: Record<PassStationQueryMode, string> = {
-  'barcode-process': '条码 + 工序',
+  'barcode-process': '弹夹号 + 工序',
   'time-process': '时间 + 工序',
-  'device-barcode': '设备 + 条码',
+  'device-barcode': '设备 + 弹夹号',
   'device-time': '设备 + 时间',
   'device-latest': '设备最近 200 条',
 };

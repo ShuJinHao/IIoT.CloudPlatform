@@ -3,7 +3,7 @@
     class="overview-page"
     page-key="device-client-overviews"
     title="设备运行与版本"
-    subtitle="统一查看授权设备的客户端软件状态、当前版本与异常摘要"
+    subtitle="统一查看授权设备的软件状态、最近可确认宿主版本与异常摘要"
   >
     <template #toolbar>
       <NiondToolbar>

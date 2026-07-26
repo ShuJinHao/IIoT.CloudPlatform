@@ -81,7 +81,9 @@ export const getScopedDeviceSelectApi = () => {
 };
 
 export const getDeviceStatusSummaryApi = () => {
-  return http.get<DeviceStatusSummaryDto>(`${basePath}/status-summary`);
+  return http.get<DeviceStatusSummaryDto>(`${basePath}/status-summary`, {
+    inlineFeedback: true,
+  });
 };
 
 export const registerDeviceApi = (payload: RegisterDevicePayload) => {

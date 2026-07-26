@@ -1,8 +1,9 @@
-import { computed, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import {
   Activity,
   BarChart3,
+  BellRing,
   Factory,
   Gauge,
   Route,
@@ -15,6 +16,7 @@ import {
 import { getDeviceStatusSummaryApi } from '../devices/api';
 import type { AppLocale } from '../../i18n';
 import { useAuthStore } from '../../stores/auth';
+import { resolveDashboardLoadError } from './errors';
 import {
   mapDashboardEvent,
   hasDashboardData,
@@ -23,8 +25,20 @@ import {
   type DashboardCard,
   type DashboardEvent,
   type DashboardNonReadyState,
-  type DashboardViewState,
+  type DashboardSourceKey,
+  type DashboardSourceState,
 } from './types';
+
+const dashboardSourceKeys: DashboardSourceKey[] = [
+  'deviceStatus',
+  'capacity',
+  'alertCount',
+  'recentLogs',
+];
+
+function createSourceState(): DashboardSourceState {
+  return { status: 'loading', error: '' };
+}
 
 export function useDashboard() {
   const authStore = useAuthStore();
@@ -37,12 +51,15 @@ export function useDashboard() {
   const todayProduction = ref(0);
   const todayOkProduction = ref(0);
   const alertCount = ref(0);
-  const dashboardState = ref<DashboardViewState>('loading');
-  const dashboardNonReadyState = computed<DashboardNonReadyState | null>(() =>
-    dashboardState.value === 'ready' ? null : dashboardState.value,
-  );
   const hourly = ref<{ label: string; value: number }[]>([]);
   const events = ref<DashboardEvent[]>([]);
+  const sourceStates = reactive<Record<DashboardSourceKey, DashboardSourceState>>({
+    deviceStatus: createSourceState(),
+    capacity: createSourceState(),
+    alertCount: createSourceState(),
+    recentLogs: createSourceState(),
+  });
+  let requestGeneration = 0;
 
   const currentLocale = computed(() => locale.value as AppLocale);
   const browserLocale = computed(() =>
@@ -56,6 +73,9 @@ export function useDashboard() {
   const formattedProduction = computed(() =>
     todayProduction.value.toLocaleString(browserLocale.value),
   );
+  const activeClients = computed(() =>
+    onlineDevices.value + warningDevices.value + errorDevices.value,
+  );
   const hasHourlyData = computed(() => hourly.value.length > 0);
   const passRate = computed(() =>
     todayProduction.value > 0
@@ -63,10 +83,20 @@ export function useDashboard() {
       : 0,
   );
   const productionDisplay = computed(() =>
-    hasHourlyData.value ? formattedProduction.value : '--',
+    sourceStates.capacity.status === 'ready' && hasHourlyData.value
+      ? formattedProduction.value
+      : '--',
   );
   const passRateDisplay = computed(() =>
-    hasHourlyData.value ? `${passRate.value.toFixed(1)}%` : '--',
+    sourceStates.capacity.status === 'ready' && hasHourlyData.value
+      ? `${passRate.value.toFixed(1)}%`
+      : '--',
+  );
+  const activeClientsDisplay = computed(() =>
+    sourceStates.deviceStatus.status === 'ready' ? activeClients.value : '--',
+  );
+  const alertCountDisplay = computed(() =>
+    sourceStates.alertCount.status === 'ready' ? alertCount.value : '--',
   );
   const todayLabel = computed(() =>
     new Date().toLocaleDateString(browserLocale.value, {
@@ -75,38 +105,73 @@ export function useDashboard() {
       year: 'numeric',
     }),
   );
+
+  function sourceHelper(
+    key: DashboardSourceKey,
+    readyText: string,
+    emptyText?: string,
+  ): string {
+    const state = sourceStates[key];
+    if (state.status === 'loading') return t('dashboard.sourceLoading');
+    if (state.status === 'error') return state.error;
+    if (emptyText && key === 'capacity' && !hasHourlyData.value) return emptyText;
+    return readyText;
+  }
+
+  const productionHelper = computed(() =>
+    sourceHelper(
+      'capacity',
+      t('dashboard.totalOutputHelper'),
+      t('dashboard.totalOutputEmpty'),
+    ),
+  );
   const dashboardCards = computed<DashboardCard[]>(() => [
     {
       id: 'production',
       label: t('dashboard.totalOutput'),
       value: productionDisplay.value,
-      helper: t('dashboard.totalOutputHelper'),
+      helper: productionHelper.value,
       background: 'var(--chart-1)',
       icon: Factory,
+      status: sourceStates.capacity.status,
     },
     {
-      id: 'online-devices',
-      label: t('dashboard.onlineDevices'),
-      value: onlineDevices.value,
-      helper: t('dashboard.onlineDevicesHelper', {
-        count: `/ ${totalDevices.value}`,
-      }),
+      id: 'active-clients',
+      label: t('dashboard.activeClients'),
+      value: activeClientsDisplay.value,
+      helper: sourceHelper('deviceStatus', t('dashboard.activeClientsHelper', {
+        active: activeClients.value,
+        total: totalDevices.value,
+      })),
       background: 'var(--chart-2)',
       icon: Activity,
+      status: sourceStates.deviceStatus.status,
     },
     {
       id: 'pass-rate',
       label: t('dashboard.passRate'),
       value: passRateDisplay.value,
-      helper: t('dashboard.passRateHelper', {
-        count: alertCount.value,
-      }),
+      helper: sourceHelper(
+        'capacity',
+        t('dashboard.passRateHelper'),
+        t('dashboard.passRateEmpty'),
+      ),
       background: 'var(--chart-3)',
       icon: Gauge,
+      status: sourceStates.capacity.status,
+    },
+    {
+      id: 'alert-records',
+      label: t('dashboard.alertRecords'),
+      value: alertCountDisplay.value,
+      helper: sourceHelper('alertCount', t('dashboard.alertRecordsHelper')),
+      background: 'var(--chart-4)',
+      icon: BellRing,
+      status: sourceStates.alertCount.status,
     },
   ]);
   const trendBars = computed(() => {
-    const source = hourly.value.slice(-10);
+    const source = hourly.value;
     if (!source.length) return [];
     const max = Math.max(...source.map((item) => item.value), 1);
     return source.map((item, index) => ({
@@ -129,6 +194,41 @@ export function useDashboard() {
     { label: t('dashboard.error'), value: errorDevices.value, color: 'var(--error)' },
     { label: t('dashboard.offline'), value: offlineDevices.value, color: 'var(--text-2)' },
   ]);
+  const statusSummary = computed(() =>
+    sourceHelper('deviceStatus', t('dashboard.clientStatusSummary', {
+      active: activeClients.value,
+      total: totalDevices.value,
+    })),
+  );
+  const dashboardHasData = computed(() => hasDashboardData({
+    totalDevices: totalDevices.value,
+    hourlyCount: hourly.value.length,
+    alertCount: alertCount.value,
+    eventCount: events.value.length,
+  }));
+  const dashboardNonReadyState = computed<DashboardNonReadyState | null>(() => {
+    const statuses = dashboardSourceKeys.map((key) => sourceStates[key].status);
+    if (statuses.every((status) => status === 'error')) return 'error';
+    if (!statuses.includes('ready')) return 'loading';
+    if (statuses.every((status) => status === 'ready') && !dashboardHasData.value) {
+      return 'empty';
+    }
+    return null;
+  });
+  const dashboardErrorDescription = computed(() => {
+    const groupedErrors = new Map<string, string[]>();
+    dashboardSourceKeys.forEach((key) => {
+      const state = sourceStates[key];
+      if (state.status !== 'error' || !state.error) return;
+      const labels = groupedErrors.get(state.error) ?? [];
+      labels.push(t(`dashboard.source.${key}`));
+      groupedErrors.set(state.error, labels);
+    });
+    return Array.from(groupedErrors.entries())
+      .map(([message, labels]) => `${labels.join(' / ')}：${message}`)
+      .join('；');
+  });
+
   function resetDashboardData() {
     totalDevices.value = 0;
     onlineDevices.value = 0;
@@ -142,40 +242,71 @@ export function useDashboard() {
     events.value = [];
   }
 
-  async function loadDashboard() {
-    dashboardState.value = 'loading';
-    resetDashboardData();
+  function resetSourceStates() {
+    dashboardSourceKeys.forEach((key) => {
+      sourceStates[key].status = 'loading';
+      sourceStates[key].error = '';
+    });
+  }
 
+  async function loadSource<T>(
+    key: DashboardSourceKey,
+    generation: number,
+    request: () => Promise<T>,
+    apply: (value: T) => void,
+  ) {
     try {
-      const [statusSummary, hourlyData, alertSummary, recentLogs] = await Promise.all([
-        getDeviceStatusSummaryApi(),
-        getHourlyAggregateApi({ date: todayIsoDate() }),
-        getRecentAlertCountApi(),
-        getRecentDeviceLogsApi({ limit: 20, minLevel: 'WARN' }),
-      ]);
-      totalDevices.value = statusSummary.total;
-      onlineDevices.value = statusSummary.online;
-      warningDevices.value = statusSummary.warning;
-      errorDevices.value = statusSummary.error;
-      offlineDevices.value = statusSummary.offline;
-      alertCount.value = alertSummary.count ?? 0;
-      todayProduction.value = hourlyData.reduce((sum, item) => sum + (item.totalCount ?? 0), 0);
-      todayOkProduction.value = hourlyData.reduce((sum, item) => sum + (item.okCount ?? 0), 0);
-      hourly.value = hourlyData.map((item) => ({
-        label: item.timeLabel || `${String(item.hour).padStart(2, '0')}:${String(item.minute).padStart(2, '0')}`,
-        value: item.totalCount,
-      }));
-      events.value = recentLogs.map((log) => mapDashboardEvent(log, browserLocale.value));
-      dashboardState.value = hasDashboardData({
-        totalDevices: totalDevices.value,
-        hourlyCount: hourly.value.length,
-        alertCount: alertCount.value,
-        eventCount: events.value.length,
-      }) ? 'ready' : 'empty';
-    } catch {
-      resetDashboardData();
-      dashboardState.value = 'error';
+      const value = await request();
+      if (generation !== requestGeneration) return;
+      apply(value);
+      sourceStates[key].status = 'ready';
+      sourceStates[key].error = '';
+    } catch (error) {
+      const message = await resolveDashboardLoadError(error);
+      if (generation !== requestGeneration) return;
+      sourceStates[key].status = 'error';
+      sourceStates[key].error = message;
     }
+  }
+
+  async function loadDashboard() {
+    const generation = ++requestGeneration;
+    resetDashboardData();
+    resetSourceStates();
+
+    await Promise.all([
+      loadSource('deviceStatus', generation, getDeviceStatusSummaryApi, (statusSummary) => {
+        totalDevices.value = statusSummary.total;
+        onlineDevices.value = statusSummary.online;
+        warningDevices.value = statusSummary.warning;
+        errorDevices.value = statusSummary.error;
+        offlineDevices.value = statusSummary.offline;
+      }),
+      loadSource('capacity', generation, () =>
+        getHourlyAggregateApi({ date: todayIsoDate() }), (hourlyData) => {
+          todayProduction.value = hourlyData.reduce(
+            (sum, item) => sum + (item.totalCount ?? 0),
+            0,
+          );
+          todayOkProduction.value = hourlyData.reduce(
+            (sum, item) => sum + (item.okCount ?? 0),
+            0,
+          );
+          hourly.value = hourlyData.map((item) => ({
+            label: item.timeLabel
+              || `${String(item.hour).padStart(2, '0')}:${String(item.minute).padStart(2, '0')}`,
+            value: item.totalCount,
+          }));
+        }),
+      loadSource('alertCount', generation, getRecentAlertCountApi, (alertSummary) => {
+        alertCount.value = alertSummary.count ?? 0;
+      }),
+      loadSource('recentLogs', generation, () =>
+        getRecentDeviceLogsApi({ limit: 20, minLevel: 'WARN' }), (recentLogs) => {
+          events.value = recentLogs.map((log) =>
+            mapDashboardEvent(log, browserLocale.value));
+        }),
+    ]);
   }
 
   return {
@@ -188,8 +319,12 @@ export function useDashboard() {
     analysisLinks,
     events,
     dashboardNonReadyState,
+    dashboardErrorDescription,
+    sourceStates,
     productionDisplay,
+    productionHelper,
     statusRows,
+    statusSummary,
     loadDashboard,
   };
 }

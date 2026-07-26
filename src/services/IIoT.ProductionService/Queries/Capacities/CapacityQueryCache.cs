@@ -33,17 +33,19 @@ internal static class CapacityQueryCache
         DateOnly startDate,
         DateOnly endDate,
         string? plcName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool breakdownByPlc = false)
     {
         var data = await cacheService.GetOrSetAsync<List<DailyRangeSummaryDto>>(
-            CacheKeys.CapacityRange(deviceId, startDate, endDate, plcName),
+            CacheKeys.CapacityRange(deviceId, startDate, endDate, plcName, breakdownByPlc),
             async factoryCancellationToken =>
                 (List<DailyRangeSummaryDto>?)await queryService.GetSummaryRangeAsync(
                     deviceId,
                     startDate,
                     endDate,
                     plcName,
-                    factoryCancellationToken),
+                    factoryCancellationToken,
+                    breakdownByPlc),
             static value => value is { Count: > 0 },
             CacheDuration,
             cancellationToken);

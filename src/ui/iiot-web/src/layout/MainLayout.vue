@@ -64,11 +64,6 @@
         </div>
 
         <div class="flex items-center gap-3">
-          <div class="hidden items-center gap-2 rounded-full bg-white px-4 py-2 text-[12px] font-bold text-[#596273] shadow-[var(--shadow-sm)] dark:bg-[#18181b] dark:text-[#c4c4ca] min-[1180px]:flex">
-            <span class="size-2 rounded-full bg-[#10a37f]"></span>
-            {{ t('common.dataSyncNormal') }}
-          </div>
-
           <button
             class="inline-flex h-10 items-center gap-2 rounded-[13px] border border-[var(--border)] bg-white px-3 text-[12px] font-extrabold text-[#111827] transition-colors hover:bg-[#f4f7f8] dark:bg-[#18181b] dark:text-[#f5f5f4] dark:hover:bg-[#202024]"
             type="button"

@@ -10,8 +10,8 @@
       <div class="filter-row">
         <template v-if="currentMode === 'barcode-process'">
           <div class="filter-field filter-field--wide">
-            <span class="filter-field__label">条码</span>
-            <UiInput v-model:value="filters.barcode" placeholder="请输入条码" size="small" style="width: 280px;" @keyup.enter="$emit('search')" />
+            <span class="filter-field__label">弹夹号</span>
+            <UiInput v-model:value="filters.barcode" placeholder="请输入弹夹号" size="small" style="width: 280px;" @keyup.enter="$emit('search')" />
           </div>
         </template>
         <template v-if="currentMode === 'time-process'">
@@ -30,8 +30,8 @@
             <UiSelect v-model:value="filters.deviceId" :options="deviceOptions" placeholder="请选择设备" clearable size="small" style="width: 220px;" />
           </div>
           <div class="filter-field filter-field--wide">
-            <span class="filter-field__label">条码</span>
-            <UiInput v-model:value="filters.barcode" placeholder="请输入条码" size="small" style="width: 240px;" @keyup.enter="$emit('search')" />
+            <span class="filter-field__label">弹夹号</span>
+            <UiInput v-model:value="filters.barcode" placeholder="请输入弹夹号" size="small" style="width: 240px;" @keyup.enter="$emit('search')" />
           </div>
         </template>
         <template v-if="currentMode === 'device-time'">

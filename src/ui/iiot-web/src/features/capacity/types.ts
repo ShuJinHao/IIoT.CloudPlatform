@@ -1,17 +1,34 @@
-import type { DailyRangeSummaryDto, DailySummaryItem } from './api';
-
 export const CAPACITY_PAGE_SIZE = 10;
+export const UNASSIGNED_PLC_KEY = '__unassigned_plc__';
 
 export type RateAccent = 'success' | 'warn' | 'error';
 export type CapacityQueryMode = 'day' | 'month' | 'year';
 
 export interface CapacityDetailRow {
+  bucketKey: string;
+  period: string;
   label: string;
+  plcKey: string;
+  plcName: string;
   shift: string;
   total: number;
   ok: number;
   ng: number;
   rate: number;
+}
+
+export interface CapacitySummary {
+  total: number;
+  ok: number;
+  ng: number;
+  ratePercent: number;
+}
+
+export class CapacityPayloadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CapacityPayloadError';
+  }
 }
 
 export const todayLocal = () => {
@@ -36,51 +53,56 @@ export const rateAccent = (rate: number): RateAccent => {
   return 'error';
 };
 
-const readNumber = (
-  source: Record<string, unknown>,
-  keys: string[],
-  fallback = 0,
-) => {
-  for (const key of keys) {
-    const value = source[key];
-    if (typeof value === 'number' && Number.isFinite(value)) return value;
-    if (typeof value === 'string' && value.trim()) {
-      const parsed = Number(value);
-      if (Number.isFinite(parsed)) return parsed;
-    }
+function requireArray(value: unknown, context: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new CapacityPayloadError(`${context}不是数组。`);
   }
-  return fallback;
-};
+  return value;
+}
 
-const readString = (
-  source: Record<string, unknown>,
-  keys: string[],
-  fallback = '',
-) => {
-  for (const key of keys) {
-    const value = source[key];
-    if (typeof value === 'string' && value.trim()) return value;
+function requireRecord(value: unknown, context: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new CapacityPayloadError(`${context}不是对象。`);
   }
-  return fallback;
-};
+  return value as Record<string, unknown>;
+}
 
-export function mapHourlyDetailRow(source: unknown): CapacityDetailRow {
-  const item = source && typeof source === 'object'
-    ? source as Record<string, unknown>
-    : {};
-  const hour = readNumber(item, ['hour', 'Hour']);
-  const minute = readNumber(item, ['minute', 'Minute']);
-  const total = readNumber(item, ['totalCount', 'total_count', 'TotalCount']);
-  const ok = readNumber(item, ['okCount', 'ok_count', 'OkCount']);
-  const ng = readNumber(item, ['ngCount', 'ng_count', 'NgCount']);
+function requireCount(item: Record<string, unknown>, key: string, context: string): number {
+  const value = item[key];
+  if (!Number.isInteger(value) || (value as number) < 0) {
+    throw new CapacityPayloadError(`${context}.${key}必须是非负整数。`);
+  }
+  return value as number;
+}
 
+function requireString(item: Record<string, unknown>, key: string, context: string): string {
+  const value = item[key];
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new CapacityPayloadError(`${context}.${key}不能为空。`);
+  }
+  return value.trim();
+}
+
+function readPlc(item: Record<string, unknown>, context: string) {
+  const value = item.plcName;
+  if (value !== null && value !== undefined && typeof value !== 'string') {
+    throw new CapacityPayloadError(`${context}.plcName格式无效。`);
+  }
+  const plcName = typeof value === 'string' ? value.trim() : '';
   return {
-    label: readString(
-      item,
-      ['timeLabel', 'time_label', 'TimeLabel'],
-      `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`,
-    ),
-    shift: readString(item, ['shiftCode', 'shift_code', 'ShiftCode']),
+    plcKey: plcName || UNASSIGNED_PLC_KEY,
+    plcName: plcName || '—',
+  };
+}
+
+function readCounts(item: Record<string, unknown>, context: string) {
+  const total = requireCount(item, 'totalCount', context);
+  const ok = requireCount(item, 'okCount', context);
+  const ng = requireCount(item, 'ngCount', context);
+  if (total !== ok + ng) {
+    throw new CapacityPayloadError(`${context}的完工、合格和不合格弹夹数无法对账。`);
+  }
+  return {
     total,
     ok,
     ng,
@@ -88,97 +110,176 @@ export function mapHourlyDetailRow(source: unknown): CapacityDetailRow {
   };
 }
 
-export function createDailyFallbackRows(
-  summary: DailySummaryItem | null,
-  date: string,
-): CapacityDetailRow[] {
-  if (!summary) return [];
-
-  const rows: CapacityDetailRow[] = [
-    {
-      label: '白班 08:30-20:30',
-      shift: 'D',
-      total: summary.dayShiftTotal ?? 0,
-      ok: summary.dayShiftOk ?? 0,
-      ng: summary.dayShiftNg ?? 0,
-      rate: summary.dayShiftTotal > 0
-        ? (summary.dayShiftOk / summary.dayShiftTotal) * 100
-        : 0,
-    },
-    {
-      label: '夜班 20:30-08:30',
-      shift: 'N',
-      total: summary.nightShiftTotal ?? 0,
-      ok: summary.nightShiftOk ?? 0,
-      ng: summary.nightShiftNg ?? 0,
-      rate: summary.nightShiftTotal > 0
-        ? (summary.nightShiftOk / summary.nightShiftTotal) * 100
-        : 0,
-    },
-  ].filter((row) => row.total > 0);
-
-  if (rows.length > 0 || summary.totalCount <= 0) return rows;
-
-  return [{
-    label: date,
-    shift: '-',
-    total: summary.totalCount,
-    ok: summary.okCount,
-    ng: summary.ngCount,
-    rate: summary.totalCount > 0
-      ? (summary.okCount / summary.totalCount) * 100
-      : 0,
-  }];
+interface ParsedHourlyItem {
+  hour: number;
+  minute: number;
+  shiftCode: string;
+  timeLabel: string;
+  plcKey: string;
+  plcName: string;
+  total: number;
+  ok: number;
+  ng: number;
+  rate: number;
 }
 
-export function mapMonthRows(
-  month: string,
-  list: DailyRangeSummaryDto[],
-): CapacityDetailRow[] {
-  const [, monthText] = month.split('-');
-  return list
-    .filter((item) => (item.totalCount ?? 0) > 0)
-    .map((item) => {
-      const total = item.totalCount ?? 0;
-      const ok = item.okCount ?? 0;
-      const ng = item.ngCount ?? 0;
-      const day = item.date?.slice(8, 10) ?? '';
-      return {
-        label: `${monthText}-${day}`,
-        shift: '',
-        total,
-        ok,
-        ng,
-        rate: total > 0 ? (ok / total) * 100 : 0,
-      };
-    });
+interface ParsedRangeItem {
+  date: string;
+  plcKey: string;
+  plcName: string;
+  total: number;
+  ok: number;
+  ng: number;
+  rate: number;
 }
 
-export function mapYearRows(
-  year: number,
-  list: DailyRangeSummaryDto[],
+function parseHourlyItem(value: unknown, index: number): ParsedHourlyItem {
+  const context = `小时产能[${index}]`;
+  const item = requireRecord(value, context);
+  const hour = requireCount(item, 'hour', context);
+  const minute = requireCount(item, 'minute', context);
+  if (hour > 23 || minute > 59) {
+    throw new CapacityPayloadError(`${context}的时间桶超出有效范围。`);
+  }
+  const shiftCode = requireString(item, 'shiftCode', context);
+  const timeLabel = requireString(item, 'timeLabel', context);
+  const counts = readCounts(item, context);
+  const plc = readPlc(item, context);
+  return {
+    hour,
+    minute,
+    shiftCode,
+    timeLabel,
+    ...counts,
+    ...plc,
+  };
+}
+
+function parseRangeItem(value: unknown, index: number): ParsedRangeItem {
+  const context = `范围产能[${index}]`;
+  const item = requireRecord(value, context);
+  const date = requireString(item, 'date', context);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new CapacityPayloadError(`${context}.date格式无效。`);
+  }
+  const counts = readCounts(item, context);
+  const plc = readPlc(item, context);
+  const dayTotal = requireCount(item, 'dayShiftTotal', context);
+  const dayOk = requireCount(item, 'dayShiftOk', context);
+  const dayNg = requireCount(item, 'dayShiftNg', context);
+  const nightTotal = requireCount(item, 'nightShiftTotal', context);
+  const nightOk = requireCount(item, 'nightShiftOk', context);
+  const nightNg = requireCount(item, 'nightShiftNg', context);
+  if (dayTotal !== dayOk + dayNg || nightTotal !== nightOk + nightNg) {
+    throw new CapacityPayloadError(`${context}的班次合格与不合格弹夹数无法对账。`);
+  }
+  if (counts.total !== dayTotal + nightTotal) {
+    throw new CapacityPayloadError(`${context}的班次完工弹夹数与日汇总无法对账。`);
+  }
+  return {
+    date,
+    ...counts,
+    ...plc,
+  };
+}
+
+export function mapHourlyRows(date: string, payload: unknown): CapacityDetailRow[] {
+  return requireArray(payload, '小时产能响应').map((value, index) => {
+    const item = parseHourlyItem(value, index);
+    return {
+      bucketKey: `${date}-${String(item.hour).padStart(2, '0')}:${String(item.minute).padStart(2, '0')}`,
+      period: `${date} ${item.timeLabel}`,
+      label: item.timeLabel,
+      plcKey: item.plcKey,
+      plcName: item.plcName,
+      shift: item.shiftCode,
+      total: item.total,
+      ok: item.ok,
+      ng: item.ng,
+      rate: item.rate,
+    };
+  });
+}
+
+export function mapMonthRows(month: string, payload: unknown): CapacityDetailRow[] {
+  return requireArray(payload, '月产能响应').map((value, index) => {
+    const item = parseRangeItem(value, index);
+    if (!item.date.startsWith(`${month}-`)) {
+      throw new CapacityPayloadError(`月产能响应包含范围外日期：${item.date}。`);
+    }
+    return {
+      bucketKey: item.date,
+      period: item.date,
+      label: item.date.slice(5),
+      plcKey: item.plcKey,
+      plcName: item.plcName,
+      shift: '',
+      total: item.total,
+      ok: item.ok,
+      ng: item.ng,
+      rate: item.rate,
+    };
+  });
+}
+
+export function mapYearRows(year: number, payload: unknown): CapacityDetailRow[] {
+  const groups = new Map<string, CapacityDetailRow>();
+  requireArray(payload, '年产能响应').forEach((value, index) => {
+    const item = parseRangeItem(value, index);
+    if (!item.date.startsWith(`${year}-`)) {
+      throw new CapacityPayloadError(`年产能响应包含范围外日期：${item.date}。`);
+    }
+    const month = item.date.slice(0, 7);
+    const key = `${month}|${item.plcKey}`;
+    const current = groups.get(key) ?? {
+      bucketKey: month,
+      period: month,
+      label: `${Number(month.slice(5))} 月`,
+      plcKey: item.plcKey,
+      plcName: item.plcName,
+      shift: '',
+      total: 0,
+      ok: 0,
+      ng: 0,
+      rate: 0,
+    };
+    current.total += item.total;
+    current.ok += item.ok;
+    current.ng += item.ng;
+    current.rate = current.total > 0 ? (current.ok / current.total) * 100 : 0;
+    groups.set(key, current);
+  });
+  return [...groups.values()].sort((left, right) =>
+    left.bucketKey.localeCompare(right.bucketKey)
+    || left.plcName.localeCompare(right.plcName, 'zh-CN'));
+}
+
+export function filterRowsByPlc(
+  rows: CapacityDetailRow[],
+  plcKey: string | null,
 ): CapacityDetailRow[] {
-  const byMonth: Record<number, { total: number; ok: number; ng: number }> = {};
-  for (let month = 1; month <= 12; month += 1) {
-    byMonth[month] = { total: 0, ok: 0, ng: 0 };
-  }
+  if (!plcKey) return rows;
+  return rows.filter((row) => row.plcKey === plcKey);
+}
 
-  for (const item of list) {
-    const month = parseInt((item.date || '').slice(5, 7), 10);
-    if (!byMonth[month]) continue;
-    byMonth[month].total += item.totalCount ?? 0;
-    byMonth[month].ok += item.okCount ?? 0;
-    byMonth[month].ng += item.ngCount ?? 0;
-  }
+export function summarizeRows(rows: CapacityDetailRow[]): CapacitySummary {
+  const total = rows.reduce((sum, row) => sum + row.total, 0);
+  const ok = rows.reduce((sum, row) => sum + row.ok, 0);
+  const ng = rows.reduce((sum, row) => sum + row.ng, 0);
+  return {
+    total,
+    ok,
+    ng,
+    ratePercent: total > 0 ? (ok * 100) / total : 0,
+  };
+}
 
-  return Object.entries(byMonth).map(([month, value]) => ({
-    label: `${month} 月`,
-    shift: '',
-    total: value.total,
-    ok: value.ok,
-    ng: value.ng,
-    rate: value.total > 0 ? (value.ok / value.total) * 100 : 0,
-  }));
+export function createPlcOptions(rows: CapacityDetailRow[]) {
+  return [...new Map(rows.map((row) => [
+    row.plcKey,
+    { label: row.plcName, value: row.plcKey },
+  ])).values()].sort((left, right) =>
+    left.label.localeCompare(right.label, 'zh-CN'));
 }
 
 export function monthDateRange(month: string) {

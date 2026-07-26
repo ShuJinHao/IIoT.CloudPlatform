@@ -111,7 +111,15 @@ public sealed record DeviceClientVersionInventoryDto(
     DateTime? LastRuntimeHeartbeatAtUtc,
     DateTime? ReportedAtUtc,
     DateTime? ReceivedAtUtc,
-    IReadOnlyList<DeviceClientPluginInventoryDto> Plugins);
+    IReadOnlyList<DeviceClientPluginInventoryDto> Plugins,
+    string? RuntimeHostVersion = null,
+    string? RuntimeHostApiVersion = null,
+    string? ReportedHostVersion = null,
+    string? ReportedHostApiVersion = null,
+    string? LatestPublishedHostVersion = null,
+    string? LatestPublishedHostApiVersion = null,
+    DateTime? LatestPublishedAtUtc = null,
+    string? LatestPublishedHostPackageSha256 = null);
 
 public sealed record DeviceClientPluginInventoryDto(
     string ModuleId,
@@ -120,7 +128,10 @@ public sealed record DeviceClientPluginInventoryDto(
     string? HostApiVersion,
     bool Enabled,
     string UpdateStatus,
-    string? CompatibilityIssue);
+    string? CompatibilityIssue,
+    string? LatestPublishedVersion = null,
+    DateTime? LatestPublishedAtUtc = null,
+    string? LatestPublishedPackageSha256 = null);
 
 public sealed record PublicClientDownloadCatalogDto(
     int CatalogSchemaVersion,

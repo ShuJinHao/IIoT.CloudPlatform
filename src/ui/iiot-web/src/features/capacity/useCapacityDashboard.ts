@@ -1,8 +1,9 @@
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useListPage } from '../../core/list-page';
 import { getScopedDeviceSelectApi, type DeviceSelectDto } from '../devices/api';
 import { getDailyPagedApi, type DailyCapacityItem } from './api';
+import { resolveCapacityLoadError, type CapacityLoadError } from './errors';
 import { CAPACITY_PAGE_SIZE, todayLocal } from './types';
 
 interface CapacityDashboardFilter extends Record<string, unknown> {
@@ -14,6 +15,8 @@ export function useCapacityDashboard() {
   const router = useRouter();
   const allDevices = ref<DeviceSelectDto[]>([]);
   const deviceLoadError = ref('');
+  const listError = ref<CapacityLoadError | null>(null);
+  let listErrorGeneration = 0;
 
   const listPage = useListPage<DailyCapacityItem, CapacityDashboardFilter>({
     initialFilter: { deviceId: null, date: todayLocal() },
@@ -65,13 +68,23 @@ export function useCapacityDashboard() {
     return { total, ok, ng, ratePercent };
   });
 
+  watch(listPage.error, async (error) => {
+    const generation = ++listErrorGeneration;
+    if (!error) {
+      listError.value = null;
+      return;
+    }
+    const resolved = await resolveCapacityLoadError(error);
+    if (generation === listErrorGeneration) listError.value = resolved;
+  });
+
   async function fetchDevices() {
     try {
       deviceLoadError.value = '';
       allDevices.value = await getScopedDeviceSelectApi();
-    } catch {
+    } catch (error) {
       allDevices.value = [];
-      deviceLoadError.value = '设备列表加载失败，请检查权限或稍后重试。';
+      deviceLoadError.value = (await resolveCapacityLoadError(error)).message;
     }
   }
 
@@ -121,6 +134,7 @@ export function useCapacityDashboard() {
     dateFilter,
     deviceOptions,
     deviceLoadError,
+    listError,
     totalStats,
     initialize,
     fetchData,

@@ -2,7 +2,11 @@ import { h } from 'vue';
 import UiButton from '../../components/ui/UiButton.vue';
 import UiTag from '../../components/ui/UiTag.vue';
 import type { UiDataTableColumn } from '../../components/ui/types';
-import type { DeviceClientOverviewItemDto, EdgeHostPlcRuntimeStateDto } from './api';
+import type {
+  DeviceClientOverviewItemDto,
+  DeviceClientPluginInventoryDto,
+  EdgeHostPlcRuntimeStateDto,
+} from './api';
 import { formatDateTime } from './types';
 
 interface OverviewColumnOptions {
@@ -12,7 +16,7 @@ interface OverviewColumnOptions {
 
 type TagTone = 'default' | 'info' | 'success' | 'warning' | 'error';
 
-function softwareStatusTone(status?: string | null): TagTone {
+export function softwareStatusTone(status?: string | null): TagTone {
   switch ((status ?? '').toLowerCase()) {
     case 'running':
       return 'success';
@@ -74,6 +78,21 @@ export function releaseStatusText(status?: string | null): string {
   }
 }
 
+export function releaseStatusTone(status?: string | null): TagTone {
+  switch ((status ?? '').toLowerCase()) {
+    case 'normal':
+    case 'latest':
+      return 'success';
+    case 'updateavailable':
+    case 'offline':
+      return 'warning';
+    case 'incompatible':
+      return 'error';
+    default:
+      return 'default';
+  }
+}
+
 function runtimeStatusTone(status?: string | null): TagTone {
   switch ((status ?? '').toLowerCase()) {
     case 'connected':
@@ -104,7 +123,7 @@ function runtimeStatusText(status?: string | null): string {
   }
 }
 
-// 主表只渲染冻结契约的窄字段：设备、IP、软件状态、当前版本、异常摘要。
+// 主表只渲染冻结契约的窄字段：设备、IP、软件状态、最近可确认宿主版本、异常摘要。
 // 「最后运行心跳」是合法 sortBy 但不在窄字段里，只在详情抽屉展示。
 export function createOverviewColumns(
   options: OverviewColumnOptions,
@@ -139,9 +158,9 @@ export function createOverviewColumns(
       },
     },
     {
-      title: '当前版本',
+      title: '最近可确认宿主版本',
       key: 'currentVersion',
-      minWidth: 140,
+      minWidth: 190,
       render(row) {
         return h('span', { class: 'cell-muted' }, row.currentVersion || '-');
       },
@@ -233,6 +252,96 @@ export function createPlcRuntimeStateColumns(): UiDataTableColumn<EdgeHostPlcRun
       minWidth: 160,
       render(row) {
         return h('span', { class: 'cell-muted' }, formatDateTime(row.lastSeenAtUtc));
+      },
+    },
+  ];
+}
+
+export function createPluginInventoryColumns(): UiDataTableColumn<DeviceClientPluginInventoryDto>[] {
+  return [
+    {
+      title: '插件',
+      key: 'moduleId',
+      minWidth: 160,
+      render(row) {
+        return h('div', { class: 'cell-stack' }, [
+          h('span', { class: 'cell-name' }, row.displayName || row.moduleId),
+          h('code', { class: 'cell-mono' }, row.moduleId),
+        ]);
+      },
+    },
+    {
+      title: '安装事实',
+      key: 'version',
+      minWidth: 150,
+      render(row) {
+        return h('div', { class: 'cell-stack' }, [
+          h(
+            UiTag,
+            { size: 'small', bordered: false, type: 'success' },
+            { default: () => '已安装' },
+          ),
+          h('span', { class: 'cell-mono' }, row.version || '版本未上报'),
+          h('span', { class: 'cell-muted' }, `Host API ${row.hostApiVersion || '未上报'}`),
+        ]);
+      },
+    },
+    {
+      title: '配置状态',
+      key: 'enabled',
+      width: 110,
+      render(row) {
+        return h(
+          UiTag,
+          { size: 'small', bordered: false, type: row.enabled ? 'success' : 'default' },
+          { default: () => (row.enabled ? '配置启用' : '配置停用') },
+        );
+      },
+    },
+    {
+      title: '运行状态',
+      key: 'runtimeStatus',
+      width: 110,
+      render() {
+        return h(
+          UiTag,
+          { size: 'small', bordered: false, type: 'default' },
+          { default: () => '未上报' },
+        );
+      },
+    },
+    {
+      title: '最新正式版本',
+      key: 'latestPublishedVersion',
+      minWidth: 170,
+      render(row) {
+        return h('div', { class: 'cell-stack' }, [
+          h('span', { class: 'cell-mono' }, row.latestPublishedVersion || '无正式发布'),
+          h('span', { class: 'cell-muted' }, formatDateTime(row.latestPublishedAtUtc)),
+        ]);
+      },
+    },
+    {
+      title: '升级与兼容',
+      key: 'updateStatus',
+      minWidth: 180,
+      render(row) {
+        return h('div', { class: 'cell-stack' }, [
+          h(
+            UiTag,
+            {
+              size: 'small',
+              bordered: false,
+              type: releaseStatusTone(row.updateStatus),
+            },
+            { default: () => releaseStatusText(row.updateStatus) },
+          ),
+          h(
+            'span',
+            { class: row.compatibilityIssue ? 'cell-error' : 'cell-muted' },
+            row.compatibilityIssue || '无兼容性问题',
+          ),
+        ]);
       },
     },
   ];

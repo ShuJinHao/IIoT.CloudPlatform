@@ -35,7 +35,8 @@ public interface ICapacityQueryService : IReadOnlyQueryPort
         DateOnly startDate,
         DateOnly endDate,
         string? plcName = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        bool breakdownByPlc = false);
 
     Task<(List<DailyCapacityPagedItemDto> Items, int TotalCount)> GetDailyPagedAsync(
         Pagination pagination,
@@ -52,7 +53,8 @@ public record HourlyCapacityDto(
     string ShiftCode,
     int TotalCount,
     int OkCount,
-    int NgCount);
+    int NgCount,
+    string? PlcName = null);
 
 public record HourlyCapacityPointDto(
     DateTime Time,
@@ -63,7 +65,8 @@ public record HourlyCapacityPointDto(
     string ShiftCode,
     int TotalCount,
     int OkCount,
-    int NgCount);
+    int NgCount,
+    string? PlcName = null);
 
 public record HourlyCapacityAggregateDto(
     int Hour,
@@ -94,7 +97,8 @@ public record DailyRangeSummaryDto(
     int DayShiftNg,
     int NightShiftTotal,
     int NightShiftOk,
-    int NightShiftNg);
+    int NightShiftNg,
+    string? PlcName = null);
 
 public record DailyCapacityPagedItemDto(
     Guid DeviceId,

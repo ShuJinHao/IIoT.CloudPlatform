@@ -110,16 +110,15 @@ public sealed class DeploymentSourceGuardTests
     [Fact]
     public void ProductionRedeployGuide_ShouldPreserveOnlyClientReleaseHistory()
     {
-        var guide = File.ReadAllText(CloudRepositoryPath.Find("docs", "三项目生产清空重部署对齐手册.md"));
+        var guide = File.ReadAllText(CloudRepositoryPath.Find("deploy", "README.md"));
         var exportScript = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "export-client-release-history.sh"));
         var importScript = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "import-client-release-history.sh"));
 
         guide.Should().Contain("唯一需要保留的数据是 Cloud 客户端更新历史元数据");
-        guide.Should().Contain("不保留");
-        guide.Should().Contain("AICOPILOT_PRIVATE_MODEL_CONTEXT_TOKENS");
-        guide.Should().Contain("RS256/JWKS");
-        guide.Should().Contain("JwtSettings.Validate()");
-        guide.Should().Contain("连续失败 5 次");
+        guide.Should().Contain("其它业务数据不保留");
+        guide.Should().Contain("export-client-release-history.sh");
+        guide.Should().Contain("import-client-release-history.sh");
+        guide.Should().Contain("不得创建设备、注册 `ClientCode` 或轮换设备 bootstrap secret");
         exportScript.Should().Contain("edge_client_release_components");
         exportScript.Should().Contain("edge_client_release_versions");
         exportScript.Should().Contain("edge_client_release_artifacts");
@@ -147,7 +146,6 @@ public sealed class DeploymentSourceGuardTests
     public void CloudContainerNonRoot_ShouldHaveExplicitPermissionContractBeforeUserSwitch()
     {
         var contractSource = File.ReadAllText(CloudRepositoryPath.Find("docs", "云端容器非Root权限契约.md"));
-        var governanceSource = File.ReadAllText(CloudRepositoryPath.Find("docs", "云端架构治理清单.md"));
         var composeSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "docker-compose.prod.yml"));
         var httpApiDockerfile = File.ReadAllText(CloudRepositoryPath.Find("src", "hosts", "IIoT.HttpApi", "Dockerfile"));
         var gatewayDockerfile = File.ReadAllText(CloudRepositoryPath.Find("src", "hosts", "IIoT.Gateway", "Dockerfile"));
@@ -184,8 +182,6 @@ public sealed class DeploymentSourceGuardTests
         contractSource.Should().Contain("POST_DEPLOY_EDGE_EXPECTED_PLUGIN_MODULE_ID");
         contractSource.Should().Contain("POST_DEPLOY_EDGE_EXPECTED_PLUGIN_VERSION");
         contractSource.Should().Contain("iiot-migration");
-        governanceSource.Should().Contain("docs/云端容器非Root权限契约.md");
-        governanceSource.Should().Contain("命中时再读");
         composeSource.Should().Contain("${OIDC_PROVIDER_CERTS_DIR:-/data/iiot-platform/cloud/deploy/certs}:/app/certs:ro");
         composeSource.Should().Contain("${EDGE_UPDATES_DIR:-/data/iiot-platform/edge-client/edge-updates}:/app/edge-updates:rw");
         composeSource.Should().Contain("${EDGE_UPDATES_DIR:-/data/iiot-platform/edge-client/edge-updates}:/usr/share/nginx/html/edge-updates:ro");
@@ -257,11 +253,10 @@ public sealed class DeploymentSourceGuardTests
         var agentsSource = File.ReadAllText(CloudRepositoryPath.Find("AGENTS.md"));
         var cloudRulesSource = File.ReadAllText(CloudRepositoryPath.Find("docs", "云端规则.md"));
 
-        agentsSource.Should().Contain(
-            "只有形成长期规则、修复历史回归、处理生产事故或改变部署机制时，才更新项目复盘");
-        cloudRulesSource.Should().Contain(
-            "只有形成长期规则、修复历史回归、处理生产事故或改变部署机制时");
-        cloudRulesSource.Should().Contain("普通业务修改和测试同批调整不写流水");
+        agentsSource.Should().Contain("长期规则直接进入本文件、`docs/云端规则.md` 或对应专题契约");
+        agentsSource.Should().Contain("事故只进入工作区事故文档");
+        cloudRulesSource.Should().Contain("活动树不维护滚动复盘、历史核心类文档、旧计划或日期式治理快照");
+        cloudRulesSource.Should().Contain("真实事故只进入工作区");
         agentsSource.Should().NotContain("任何代码改动完成前");
         cloudRulesSource.Should().NotContain("最终回复必须列出复盘文档");
     }
@@ -389,9 +384,13 @@ public sealed class DeploymentSourceGuardTests
     }
 
     [Fact]
-    public void RollingReview_ShouldNotKeepCopyableSiteIpDeployCommands()
+    public void ActiveDeploymentDocs_ShouldNotKeepCopyableSiteIpDeployCommands()
     {
-        var rollingReviewSource = File.ReadAllText(CloudRepositoryPath.Find("docs", "改动复盘与规则沉淀.md"));
+        var activeDocumentation = string.Join(
+            "\n",
+            File.ReadAllText(CloudRepositoryPath.Find("deploy", "README.md")),
+            File.ReadAllText(CloudRepositoryPath.Find("docs", "云端规则.md")),
+            File.ReadAllText(CloudRepositoryPath.Find("docs", "云端安全部署契约.md")));
         var forbiddenCommandPatterns = new[]
         {
             @"root@10\.98\.90\.154",
@@ -403,9 +402,9 @@ public sealed class DeploymentSourceGuardTests
 
         foreach (var pattern in forbiddenCommandPatterns)
         {
-            Regex.IsMatch(rollingReviewSource, pattern, RegexOptions.CultureInvariant)
+            Regex.IsMatch(activeDocumentation, pattern, RegexOptions.CultureInvariant)
                 .Should()
-                .BeFalse($"rolling review history must not keep copyable site IP/root deploy commands matching {pattern}");
+                .BeFalse($"active deployment documentation must not keep copyable site IP/root deploy commands matching {pattern}");
         }
     }
 
@@ -476,9 +475,6 @@ public sealed class DeploymentSourceGuardTests
     public void StandardDeploymentDocs_ShouldUseLocalBuildPushAndSshDeployPath()
     {
         var readmeSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "README.md"));
-        var operationsSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "OPERATIONS.md"));
-        var edgeGoLiveSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "EDGE_INSTALLER_GO_LIVE.md"));
-        var runnerSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "RUNNER.md"));
         var buildAndPushSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "build-and-push.sh"));
         var localReleaseSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "scripts", "local-release.sh"));
         var imageWorkflowSource = File.ReadAllText(CloudRepositoryPath.Find(".github", "workflows", "cloud-image.yml"));
@@ -492,25 +488,16 @@ public sealed class DeploymentSourceGuardTests
         readmeSource.Should().Contain("push/PR 的默认 CI");
         readmeSource.Should().Contain("受影响 Business");
         readmeSource.Should().Contain("不存在 nightly 自动全量");
-        operationsSource.Should().Contain("pwsh ./deploy/Deploy-Changed.ps1 -Targets Cloud");
-        operationsSource.Should().Contain("project-local `local-release.sh` is a legacy maintenance implementation");
-        operationsSource.Should().Contain("Default push/PR CI");
-        operationsSource.Should().Contain("affected Business");
-        operationsSource.Should().Contain("never scheduled as nightly defaults");
-        operationsSource.Should().Contain("does not install or overwrite server support files");
-        edgeGoLiveSource.Should().Contain("pwsh ./deploy/Deploy-Changed.ps1 -Targets Edge");
-        edgeGoLiveSource.Should().Contain("Windows 安装器/Velopack/插件构建");
-        edgeGoLiveSource.Should().Contain("Architecture");
-        edgeGoLiveSource.Should().Contain("无法归属的文件必须停止报告");
-        edgeGoLiveSource.Should().NotContain("Invoke-CloudTestInventory.ps1");
-        runnerSource.Should().Contain("/data/github-runner/cloud");
-        runnerSource.Should().Contain("github-runner");
-        runnerSource.Should().Contain(
+        readmeSource.Should().Contain("pwsh ./deploy/Deploy-Changed.ps1 -Targets Edge");
+        readmeSource.Should().Contain("Windows 安装器、Velopack 与插件构建属于 Edge Prepare");
+        readmeSource.Should().Contain("/data/github-runner/cloud");
+        readmeSource.Should().Contain("github-runner");
+        readmeSource.Should().Contain(
             "self-hosted workflow 只允许白名单生产状态 inspect 或用户明确授权的 emergency 操作");
-        runnerSource.Should().Contain("`cloud-routine-request.yml` 不能接收部署请求");
-        runnerSource.Should().Contain(
+        readmeSource.Should().Contain("`cloud-routine-request.yml` 不能接收部署请求");
+        readmeSource.Should().Contain(
             "标准发布所需 Harbor、Cloud、管理员和数据库凭据来自 macOS Keychain");
-        runnerSource.Should().Contain("受 production environment 保护");
+        readmeSource.Should().Contain("受 production environment 保护");
         buildAndPushSource.Should().Contain("Cloud local image build requires explicit --services or --all.");
         buildAndPushSource.Should().Contain("IIOT_ROUTINE_BUILD_PROTOCOL=1");
         buildAndPushSource.Should().Contain("REGISTRY must include an explicit Harbor registry host");
@@ -542,7 +529,7 @@ public sealed class DeploymentSourceGuardTests
             "ConfigurationGuardTests",
             "--filter"
         };
-        foreach (var documentationSource in new[] { readmeSource, operationsSource, edgeGoLiveSource })
+        foreach (var documentationSource in new[] { readmeSource })
         {
             foreach (var retiredTestEntrypoint in retiredTestEntrypoints)
             {
@@ -552,7 +539,7 @@ public sealed class DeploymentSourceGuardTests
             }
         }
 
-        foreach (var source in new[] { readmeSource, runnerSource, imageWorkflowSource, deployWorkflowSource, buildAndPushSource, localReleaseSource })
+        foreach (var source in new[] { readmeSource, imageWorkflowSource, deployWorkflowSource, buildAndPushSource, localReleaseSource })
         {
             source.Should().NotContain("appleboy/ssh-action");
             source.Should().NotContain("appleboy/scp-action");
@@ -585,9 +572,9 @@ public sealed class DeploymentSourceGuardTests
         readmeSource.Should().Contain("应用镜像仓库只保留当前生产 `sha-*` tag");
         readmeSource.Should().Contain("EdgeInstallerArtifacts__RootPath=/app/edge-updates/installers");
         readmeSource.Should().Contain("EdgeInstallerArtifacts__VelopackReleasesBaseUrl=${PUBLIC_BASE_URL}/edge-updates/velopack");
-        readmeSource.Should().Contain("[RUNNER.md](./RUNNER.md)");
+        readmeSource.Should().Contain("## Runner 与生产权限");
         readmeSource.Should().Contain("GET /internal/healthz");
-        readmeSource.Should().Contain("[OPERATIONS.md](./OPERATIONS.md)");
+        readmeSource.Should().Contain("## 备份、恢复与回滚");
         readmeSource.Should().Contain("deploy/scripts/deploy-release.sh");
         readmeSource.Should().Contain("deploy/scripts/rollback-release.sh");
         readmeSource.Should().Contain("deploy/releases/current-release.env");
@@ -1380,60 +1367,49 @@ public sealed class DeploymentSourceGuardTests
     }
 
     [Fact]
-    public void OperationsManual_ShouldDocumentHealthBackupRestoreAndExitCodes()
+    public void DeployReadme_ShouldDocumentHealthBackupRestoreAndExitCodes()
     {
-        var operationsSource = File.ReadAllText(CloudRepositoryPath.Find("deploy", "OPERATIONS.md"));
+        var deployReadme = File.ReadAllText(CloudRepositoryPath.Find("deploy", "README.md"));
 
-        operationsSource.Should().Contain("GET /internal/healthz");
-        operationsSource.Should().Contain("127.0.0.1");
-        operationsSource.Should().Contain("gateway_http_port=$(sed -n 's/^GATEWAY_HTTP_PORT=//p' .env | tail -n 1)");
-        operationsSource.Should().Contain("http://127.0.0.1:${gateway_http_port}/internal/healthz");
-        operationsSource.Should().Contain("http://127.0.0.1:${gateway_http_port}/edge-updates/velopack/stable/RELEASES");
-        operationsSource.Should().NotContain("http://127.0.0.1:80/");
-        operationsSource.Should().Contain("./scripts/postgres-backup.sh");
-        operationsSource.Should().Contain("./scripts/postgres-restore.sh");
-        operationsSource.Should().Contain("./scripts/postgres-verify-backup.sh");
-        operationsSource.Should().Contain("./scripts/ops-check.sh");
-        operationsSource.Should().Contain("./scripts/deploy-release.sh");
-        operationsSource.Should().Contain("./scripts/rollback-release.sh");
-        operationsSource.Should().Contain("iiot-linux-prod");
-        operationsSource.Should().Contain("github-runner");
-        operationsSource.Should().Contain("Docker Hub is not a production dependency source");
-        operationsSource.Should().Contain("POST_DEPLOY_VERIFY_EDGE_INSTALLER_CATALOG=1 ./scripts/post-deploy-check.sh");
-        operationsSource.Should().Contain("approved Cloud release APIs");
-        operationsSource.Should().Contain("POST_DEPLOY_EDGE_EXPECTED_VERSION");
-        operationsSource.Should().Contain("POST_DEPLOY_EDGE_EXPECTED_PLUGIN_MODULE_ID");
-        operationsSource.Should().Contain("POST_DEPLOY_EDGE_EXPECTED_PLUGIN_VERSION");
-        operationsSource.Should().Contain("The default post-deploy smoke verifies `/`, `/internal/healthz`, OIDC discovery, JWKS, the DataWorker Docker healthcheck, and `ops-check.sh`");
-        operationsSource.Should().Contain("POST_DEPLOY_VERIFY_OIDC_TOKEN=1");
-        operationsSource.Should().Contain("POST_DEPLOY_OIDC_AUTHORIZATION_CODE_FILE");
-        operationsSource.Should().Contain("POST_DEPLOY_OIDC_CODE_VERIFIER_FILE");
-        operationsSource.Should().Contain("read -rsp 'OIDC authorization code: '");
-        operationsSource.Should().Contain("read -rsp 'OIDC PKCE verifier: '");
-        operationsSource.Should().Contain("real one-time authorization code and matching PKCE verifier");
-        operationsSource.Should().Contain("process environment");
-        operationsSource.Should().Contain("then prints skip lines for the OIDC token gate and Edge catalog gate");
-        operationsSource.Should().Contain("current-release.env");
-        operationsSource.Should().Contain("previous-release.env");
-        operationsSource.Should().Contain("staged-release.env");
-        operationsSource.Should().Contain("history/");
-        operationsSource.Should().Contain("latest-successful-backup.txt");
-        operationsSource.Should().Contain("latest-successful-verify.txt");
-        operationsSource.Should().Contain(".sha256");
-        operationsSource.Should().Contain("02:30");
-        operationsSource.Should().Contain("03:30");
-        operationsSource.Should().Contain("latest_backup_age_hours");
-        operationsSource.Should().Contain("latest_backup_verified_age_days");
-        operationsSource.Should().Contain("latest_backup_file");
-        operationsSource.Should().Contain("`0`");
-        operationsSource.Should().Contain("`1`");
-        operationsSource.Should().Contain("`2`");
-        operationsSource.Should().Contain("Redis is treated as cache");
-        operationsSource.Should().Contain("RabbitMQ queue state is not covered");
-        operationsSource.Should().Contain("It only rolls back the 5 application images.");
-        operationsSource.Should().Contain("It does not run database downgrade logic.");
-        operationsSource.Should().Contain("Transfer to the existing database recovery flow");
-        operationsSource.Should().Contain("Do not replay while `/internal/healthz` is failing");
+        deployReadme.Should().Contain("GET /internal/healthz");
+        deployReadme.Should().Contain("gateway_http_port=$(sed -n 's/^GATEWAY_HTTP_PORT=//p' .env | tail -n 1)");
+        deployReadme.Should().Contain("http://127.0.0.1:${gateway_http_port}/internal/healthz");
+        deployReadme.Should().Contain("http://127.0.0.1:${gateway_http_port}/edge-updates/velopack/stable/RELEASES");
+        deployReadme.Should().NotContain("http://127.0.0.1:80/");
+        deployReadme.Should().Contain("./scripts/postgres-backup.sh");
+        deployReadme.Should().Contain("./scripts/postgres-restore.sh");
+        deployReadme.Should().Contain("./scripts/postgres-verify-backup.sh");
+        deployReadme.Should().Contain("./scripts/ops-check.sh");
+        deployReadme.Should().Contain("./scripts/rollback-release.sh");
+        deployReadme.Should().Contain("POST_DEPLOY_VERIFY_EDGE_INSTALLER_CATALOG=1");
+        deployReadme.Should().Contain("POST_DEPLOY_EDGE_EXPECTED_VERSION");
+        deployReadme.Should().Contain("POST_DEPLOY_EDGE_EXPECTED_PLUGIN_MODULE_ID");
+        deployReadme.Should().Contain("POST_DEPLOY_EDGE_EXPECTED_PLUGIN_VERSION");
+        deployReadme.Should().Contain("POST_DEPLOY_VERIFY_OIDC_TOKEN=1");
+        deployReadme.Should().Contain("POST_DEPLOY_OIDC_AUTHORIZATION_CODE_FILE");
+        deployReadme.Should().Contain("POST_DEPLOY_OIDC_CODE_VERIFIER_FILE");
+        deployReadme.Should().Contain("read -rsp 'OIDC authorization code: '");
+        deployReadme.Should().Contain("read -rsp 'OIDC PKCE verifier: '");
+        deployReadme.Should().Contain("process environment");
+        deployReadme.Should().Contain("current-release.env");
+        deployReadme.Should().Contain("previous-release.env");
+        deployReadme.Should().Contain("staged-release.env");
+        deployReadme.Should().Contain("history/");
+        deployReadme.Should().Contain("latest-successful-backup.txt");
+        deployReadme.Should().Contain("latest-successful-verify.txt");
+        deployReadme.Should().Contain(".sha256");
+        deployReadme.Should().Contain("latest_backup_age_hours");
+        deployReadme.Should().Contain("latest_backup_verified_age_days");
+        deployReadme.Should().Contain("latest_backup_file");
+        deployReadme.Should().Contain("Redis is treated as cache");
+        deployReadme.Should().Contain("RabbitMQ queue state is not covered");
+        deployReadme.Should().Contain("应用快速回滚只恢复 5 个应用镜像");
+        deployReadme.Should().Contain("不运行数据库 downgrade");
+        deployReadme.Should().Contain("转入现有数据库恢复流程");
+        deployReadme.Should().Contain("禁止重放 RabbitMQ 消息");
+        deployReadme.Should().Contain("`0`：");
+        deployReadme.Should().Contain("`1`：");
+        deployReadme.Should().Contain("`2`：");
     }
 
     [Fact]

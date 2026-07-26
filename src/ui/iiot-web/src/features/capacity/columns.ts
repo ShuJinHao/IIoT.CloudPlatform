@@ -47,7 +47,7 @@ export function createCapacityDashboardColumns(
       },
     },
     {
-      title: '总产出',
+      title: '完工弹夹数',
       key: 'totalCount',
       align: 'right',
       width: 120,
@@ -56,7 +56,7 @@ export function createCapacityDashboardColumns(
       },
     },
     {
-      title: '良品',
+      title: '合格弹夹数',
       key: 'okCount',
       align: 'right',
       width: 110,
@@ -65,7 +65,7 @@ export function createCapacityDashboardColumns(
       },
     },
     {
-      title: '不良品',
+      title: '不合格弹夹数',
       key: 'ngCount',
       align: 'right',
       width: 110,
@@ -117,6 +117,14 @@ export function createCapacityDetailColumns(
 ): UiDataTableColumn<CapacityDetailRow>[] {
   const columns: UiDataTableColumn<CapacityDetailRow>[] = [
     {
+      title: 'PLC',
+      key: 'plcName',
+      minWidth: 150,
+      render(row) {
+        return h('span', { class: 'cell-plc' }, row.plcName);
+      },
+    },
+    {
       title: queryMode() === 'day'
         ? '时间段'
         : queryMode() === 'month'
@@ -143,7 +151,7 @@ export function createCapacityDetailColumns(
 
   columns.push(
     {
-      title: '总产出',
+      title: '完工弹夹数',
       key: 'total',
       align: 'right',
       width: 110,
@@ -152,7 +160,7 @@ export function createCapacityDetailColumns(
       },
     },
     {
-      title: '良品',
+      title: '合格弹夹数',
       key: 'ok',
       align: 'right',
       width: 110,
@@ -161,7 +169,7 @@ export function createCapacityDetailColumns(
       },
     },
     {
-      title: '不良品',
+      title: '不合格弹夹数',
       key: 'ng',
       align: 'right',
       width: 110,

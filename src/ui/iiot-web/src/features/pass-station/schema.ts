@@ -39,7 +39,7 @@ export interface PassStationSchema {
 }
 
 const commonFieldLabels: Record<string, string> = {
-  barcode: '条码',
+  barcode: '弹夹号',
   deviceId: '设备 ID',
   cellResult: '结果',
   completedTime: '完成时间',
@@ -54,7 +54,7 @@ const commonFieldClassNames: Record<string, string> = {
 };
 
 function readFieldAsString(value: PassStationFieldValue | undefined, suffix = '') {
-  if (value === null || value === undefined || value === '') return '-';
+  if (value === null || value === undefined || value === '') return '—';
   return `${value}${suffix}`;
 }
 

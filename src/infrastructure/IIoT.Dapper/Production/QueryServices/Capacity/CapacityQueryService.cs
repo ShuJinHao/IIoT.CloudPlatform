@@ -31,12 +31,13 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
                 h.shift_code  AS ShiftCode,
                 h.total_count AS TotalCount,
                 h.ok_count    AS OkCount,
-                h.ng_count    AS NgCount
+                h.ng_count    AS NgCount,
+                h.plc_name    AS PlcName
             FROM hourly_capacity h
             WHERE h.device_id = @DeviceId
               AND h.date = @Date
               AND (@PlcName IS NULL OR h.plc_name = @PlcName)
-            ORDER BY h.hour, h.minute";
+            ORDER BY h.hour, h.minute, h.plc_name";
 
         var cmd = new CommandDefinition(
             sql,
@@ -66,7 +67,8 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
                 q.shift_code  AS ShiftCode,
                 q.total_count AS TotalCount,
                 q.ok_count    AS OkCount,
-                q.ng_count    AS NgCount
+                q.ng_count    AS NgCount,
+                q.plc_name    AS PlcName
             FROM (
                 SELECT
                     h.date,
@@ -77,6 +79,7 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
                     h.total_count,
                     h.ok_count,
                     h.ng_count,
+                    h.plc_name,
                     (h.date::timestamp + make_interval(hours => h.hour, mins => h.minute)) AS bucket_time
                 FROM hourly_capacity h
                 WHERE h.device_id = @DeviceId
@@ -86,7 +89,7 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
             ) q
             WHERE q.bucket_time >= @StartTime
               AND q.bucket_time <= @EndTime
-            ORDER BY q.bucket_time ASC
+            ORDER BY q.bucket_time ASC, q.plc_name ASC
             """;
 
         var cmd = new CommandDefinition(
@@ -196,6 +199,7 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
         public int TotalCount { get; set; }
         public int OkCount { get; set; }
         public int NgCount { get; set; }
+        public string? PlcName { get; set; }
     }
 
     public async Task<List<DailyRangeSummaryDto>> GetSummaryRangeAsync(
@@ -203,24 +207,35 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
         DateOnly startDate,
         DateOnly endDate,
         string? plcName = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool breakdownByPlc = false)
     {
         using var connection = connectionFactory.CreateConnection();
 
-        const string sql = @"
+        var plcSelect = breakdownByPlc
+            ? ", h.plc_name AS PlcName"
+            : ", NULL::text AS PlcName";
+        var plcGroup = breakdownByPlc
+            ? ", h.plc_name"
+            : string.Empty;
+        var plcOrder = breakdownByPlc
+            ? ", h.plc_name ASC"
+            : string.Empty;
+        var sql = $@"
             SELECT
                 h.date                          AS Date,
                 h.shift_code                    AS ShiftCode,
                 COALESCE(SUM(h.total_count), 0) AS TotalCount,
                 COALESCE(SUM(h.ok_count),    0) AS OkCount,
                 COALESCE(SUM(h.ng_count),    0) AS NgCount
+                {plcSelect}
             FROM hourly_capacity h
             WHERE h.device_id = @DeviceId
               AND h.date >= @StartDate
               AND h.date <= @EndDate
               AND (@PlcName IS NULL OR h.plc_name = @PlcName)
-            GROUP BY h.date, h.shift_code
-            ORDER BY h.date ASC, h.shift_code ASC";
+            GROUP BY h.date, h.shift_code{plcGroup}
+            ORDER BY h.date ASC{plcOrder}, h.shift_code ASC";
 
         var cmd = new CommandDefinition(
             sql,
@@ -234,7 +249,9 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
         }
 
         var result = rows
-            .GroupBy(r => r.Date)
+            .GroupBy(r => (
+                r.Date,
+                PlcName: breakdownByPlc ? r.PlcName : null))
             .Select(g =>
             {
                 var day = g.FirstOrDefault(x => x.ShiftCode.Equals("D", StringComparison.OrdinalIgnoreCase));
@@ -249,7 +266,7 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
                 var nightNg = night?.NgCount ?? 0;
 
                 return new DailyRangeSummaryDto(
-                    Date: g.Key,
+                    Date: g.Key.Date,
                     TotalCount: dayTotal + nightTotal,
                     OkCount: dayOk + nightOk,
                     NgCount: dayNg + nightNg,
@@ -258,10 +275,12 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
                     DayShiftNg: dayNg,
                     NightShiftTotal: nightTotal,
                     NightShiftOk: nightOk,
-                    NightShiftNg: nightNg
+                    NightShiftNg: nightNg,
+                    PlcName: g.Key.PlcName
                 );
             })
             .OrderBy(x => x.Date)
+            .ThenBy(x => x.PlcName, StringComparer.Ordinal)
             .ToList();
 
         return result;

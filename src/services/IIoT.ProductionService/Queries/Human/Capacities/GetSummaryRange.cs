@@ -16,7 +16,8 @@ public record GetSummaryRangeQuery(
     Guid DeviceId,
     DateOnly StartDate,
     DateOnly EndDate,
-    string? PlcName = null
+    string? PlcName = null,
+    bool BreakdownByPlc = false
 ) : IHumanQuery<Result<List<DailyRangeSummaryDto>>>;
 
 public class GetSummaryRangeHandler(
@@ -39,6 +40,6 @@ public class GetSummaryRangeHandler(
 
         return Result.Success(await CapacityQueryCache.GetSummaryRangeAsync(
             queryService, cacheService, request.DeviceId, request.StartDate,
-            request.EndDate, request.PlcName, cancellationToken));
+            request.EndDate, request.PlcName, cancellationToken, request.BreakdownByPlc));
     }
 }

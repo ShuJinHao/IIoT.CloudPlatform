@@ -89,8 +89,27 @@ function makeReleaseDetails(overrides: Record<string, unknown> = {}) {
     lastRuntimeHeartbeatAtUtc: '2026-07-23T01:00:00Z',
     reportedAtUtc: '2026-07-23T00:30:00Z',
     receivedAtUtc: null,
+    runtimeHostVersion: '2.4.1',
+    runtimeHostApiVersion: '1.0.1',
+    reportedHostVersion: '2.4.0',
+    reportedHostApiVersion: '1.0.0',
+    latestPublishedHostVersion: '2.5.0',
+    latestPublishedHostApiVersion: '1.0.0',
+    latestPublishedAtUtc: '2026-07-22T08:00:00Z',
+    latestPublishedHostPackageSha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     plugins: [
-      { moduleId: 'die-cutting', displayName: '模切', version: '1.2.0', hostApiVersion: '1.0.0', enabled: true, updateStatus: 'Latest', compatibilityIssue: null },
+      {
+        moduleId: 'die-cutting',
+        displayName: '模切',
+        version: '1.2.0',
+        hostApiVersion: '1.0.0',
+        enabled: true,
+        updateStatus: 'UpdateAvailable',
+        compatibilityIssue: null,
+        latestPublishedVersion: '1.3.0',
+        latestPublishedAtUtc: '2026-07-22T09:00:00Z',
+        latestPublishedPackageSha256: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      },
     ],
     ...overrides,
   };
@@ -163,6 +182,19 @@ describe('状态文案映射', () => {
 });
 
 describe('useDeviceClientOverviews 主列表', () => {
+  it('主列表把混合来源窄字段标记为最近可确认宿主版本', async () => {
+    const wrapper = mount(DeviceClientOverviewPage, {
+      attachTo: document.body,
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(document.body.textContent).toContain('最近可确认宿主版本');
+
+    wrapper.unmount();
+    document.body.innerHTML = '';
+  });
+
   it('分页、keyword、排序参数随请求提交给后端，不做前端全量过滤', async () => {
     apiMocks.getDeviceClientOverviewsApi.mockResolvedValue(makeOverviewPage([makeOverviewItem()], 25));
     const state = useDeviceClientOverviews();
@@ -230,6 +262,102 @@ describe('useDeviceClientOverviews 主列表', () => {
 });
 
 describe('详情抽屉权限独立请求', () => {
+  it('运行实例、安装上报和最新正式发布分别展示，插件三种状态不混用', async () => {
+    authMock.plc = false;
+    apiMocks.getDeviceClientReleaseDetailsApi.mockResolvedValue(makeReleaseDetails({
+      hostVersion: '9.9.9',
+      currentVersion: '宿主 9.9.9 本地候选',
+      runtimeHostVersion: '2.0.6',
+      runtimeHostApiVersion: '2.0.1',
+      reportedHostVersion: '2.0.5',
+      reportedHostApiVersion: '2.0.0',
+      latestPublishedHostVersion: '2.0.10',
+      latestPublishedHostApiVersion: '2.0.0',
+      plugins: [
+        {
+          moduleId: 'CP',
+          displayName: '正极模切',
+          version: '2.0.5',
+          hostApiVersion: '2.0.0',
+          enabled: true,
+          updateStatus: 'UpdateAvailable',
+          compatibilityIssue: null,
+          latestPublishedVersion: '2.0.10',
+          latestPublishedAtUtc: '2026-07-22T09:00:00Z',
+          latestPublishedPackageSha256: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        },
+      ],
+    }));
+    const wrapper = mount(DeviceClientOverviewPage, {
+      attachTo: document.body,
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const detailButton = wrapper.findAll('button').find((button) => button.text() === '详情');
+    await detailButton!.trigger('click');
+    await flushPromises();
+
+    const runtimeFact = document.querySelector('[data-testid="runtime-version-fact"]')?.textContent ?? '';
+    const reportedFact = document.querySelector('[data-testid="reported-version-fact"]')?.textContent ?? '';
+    const publishedFact = document.querySelector('[data-testid="published-version-fact"]')?.textContent ?? '';
+    const pluginFacts = document.querySelector('.plugin-inventory')?.textContent ?? '';
+    expect(runtimeFact).toContain('2.0.6');
+    expect(runtimeFact).not.toContain('2.0.5');
+    expect(runtimeFact).not.toContain('9.9.9');
+    expect(reportedFact).toContain('2.0.5');
+    expect(reportedFact).not.toContain('2.0.6');
+    expect(reportedFact).not.toContain('9.9.9');
+    expect(publishedFact).toContain('2.0.10');
+    expect(publishedFact).not.toContain('9.9.9');
+    expect(pluginFacts).toContain('已安装');
+    expect(pluginFacts).toContain('配置启用');
+    expect(pluginFacts).toContain('未上报');
+
+    wrapper.unmount();
+    document.body.innerHTML = '';
+  });
+
+  it('任一版本事实缺失时不使用其它来源回填', async () => {
+    authMock.plc = false;
+    apiMocks.getDeviceClientReleaseDetailsApi.mockResolvedValue(makeReleaseDetails({
+      hostVersion: '9.9.9',
+      currentVersion: '宿主 9.9.9',
+      runtimeHostVersion: null,
+      runtimeHostApiVersion: null,
+      reportedHostVersion: '2.0.5',
+      reportedHostApiVersion: '2.0.0',
+      latestPublishedHostVersion: null,
+      latestPublishedHostApiVersion: null,
+      latestPublishedAtUtc: null,
+      latestPublishedHostPackageSha256: null,
+      hostUpdateStatus: 'NoRelease',
+      plugins: [],
+    }));
+    const wrapper = mount(DeviceClientOverviewPage, {
+      attachTo: document.body,
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const detailButton = wrapper.findAll('button').find((button) => button.text() === '详情');
+    await detailButton!.trigger('click');
+    await flushPromises();
+
+    const runtimeFact = document.querySelector('[data-testid="runtime-version-fact"]')?.textContent ?? '';
+    const reportedFact = document.querySelector('[data-testid="reported-version-fact"]')?.textContent ?? '';
+    const publishedFact = document.querySelector('[data-testid="published-version-fact"]')?.textContent ?? '';
+    expect(runtimeFact).toContain('未上报');
+    expect(runtimeFact).not.toContain('2.0.5');
+    expect(runtimeFact).not.toContain('9.9.9');
+    expect(reportedFact).toContain('2.0.5');
+    expect(publishedFact).toContain('无正式发布');
+    expect(publishedFact).not.toContain('9.9.9');
+
+    wrapper.unmount();
+    document.body.innerHTML = '';
+  });
+
   it('真实页面按四种权限组合渲染详情入口和区块，零详情权限不出现空入口', async () => {
     const cases: Array<[boolean, boolean, number, number]> = [
       [true, true, 1, 1],

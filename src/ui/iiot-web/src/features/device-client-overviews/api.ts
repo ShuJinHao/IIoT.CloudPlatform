@@ -72,6 +72,9 @@ export interface DeviceClientPluginInventoryDto {
   enabled: boolean;
   updateStatus: string;
   compatibilityIssue?: string | null;
+  latestPublishedVersion?: string | null;
+  latestPublishedAtUtc?: string | null;
+  latestPublishedPackageSha256?: string | null;
 }
 
 export interface DeviceClientReleaseDetailsDto {
@@ -96,6 +99,14 @@ export interface DeviceClientReleaseDetailsDto {
   reportedAtUtc?: string | null;
   receivedAtUtc?: string | null;
   plugins: DeviceClientPluginInventoryDto[];
+  runtimeHostVersion?: string | null;
+  runtimeHostApiVersion?: string | null;
+  reportedHostVersion?: string | null;
+  reportedHostApiVersion?: string | null;
+  latestPublishedHostVersion?: string | null;
+  latestPublishedHostApiVersion?: string | null;
+  latestPublishedAtUtc?: string | null;
+  latestPublishedHostPackageSha256?: string | null;
 }
 
 export const getDeviceClientReleaseDetailsApi = (

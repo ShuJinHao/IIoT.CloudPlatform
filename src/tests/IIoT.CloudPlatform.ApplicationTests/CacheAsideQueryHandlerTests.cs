@@ -304,6 +304,48 @@ public sealed class CacheAsideQueryHandlerTests
     }
 
     [Fact]
+    public async Task GetSummaryRangeHandler_PlcBreakdownUsesSeparateCacheShape()
+    {
+        var deviceId = Guid.NewGuid();
+        var start = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
+        var end = start.AddDays(1);
+        var access = new StubCurrentUserDeviceAccessService
+        {
+            AccessibleDeviceIds = [deviceId]
+        };
+        var queryService = new StubCapacityQueryService
+        {
+            SummaryRangeResult =
+            [
+                new DailyRangeSummaryDto(
+                    start, 10, 9, 1, 6, 6, 0, 4, 3, 1, "CP09")
+            ]
+        };
+        var cache = new RecordingCacheService();
+        var handler = new GetSummaryRangeHandler(access, queryService, cache);
+
+        var aggregate = await handler.Handle(
+            new GetSummaryRangeQuery(deviceId, start, end),
+            CancellationToken.None);
+        var breakdown = await handler.Handle(
+            new GetSummaryRangeQuery(deviceId, start, end, BreakdownByPlc: true),
+            CancellationToken.None);
+        var cachedBreakdown = await handler.Handle(
+            new GetSummaryRangeQuery(deviceId, start, end, BreakdownByPlc: true),
+            CancellationToken.None);
+
+        Assert.True(aggregate.IsSuccess);
+        Assert.True(breakdown.IsSuccess);
+        Assert.True(cachedBreakdown.IsSuccess);
+        Assert.Equal(2, queryService.SummaryRangeCalls);
+        Assert.True(queryService.LastSummaryRangeBreakdownByPlc);
+        Assert.True(cache.Values.ContainsKey(
+            CacheKeys.CapacityRange(deviceId, start, end, null)));
+        Assert.True(cache.Values.ContainsKey(
+            CacheKeys.CapacityRange(deviceId, start, end, null, breakdownByPlc: true)));
+    }
+
+    [Fact]
     public async Task GetAllProcessesHandler_ValidEmptyListIsCached()
     {
         var repository = new InMemoryRepository<MfgProcess>();

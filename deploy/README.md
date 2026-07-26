@@ -4,7 +4,7 @@
 
 本目录是 `IIoT.CloudPlatform` 镜像构建和旧事务维护实现目录。Cloud 日常应用发布统一从工作区根 `deploy/Deploy-Changed.ps1` 发起：入口只接受 clean、已提交的 `main`，可 push 现有 HEAD但不创建提交或修改 tracked 文件；复用同 SHA 证据，只补受影响 Architecture/Security/DeploymentContract，再按依赖闭包发布受影响镜像。全量、coverage、mutation、duplication 和三端对齐不属于部署。三端从零部署只走根 `deploy/Deploy-FromZero.ps1`。三项目口径见 [上传部署总览](../../docs/上传部署总览.md)。
 
-> 当前状态（2026-07-11）：Cloud 全量应用已完成真实 Harbor、生产 Runner、备份、migration、rollout 与健康检查；自动增量入口的编译门禁、依赖影响测试和生产 SHA 只读 inspect 已通过，但尚未用新的单服务业务变更执行生产发布，因此不得把全量成功冒充增量生产 E2E。
+本文只定义当前操作契约，不证明某个候选已经生产验收。真实结果只认工作区部署摘要、服务器 release state、备份/恢复记录与目标健康检查。
 
 日常标准入口示例：
 
@@ -41,9 +41,7 @@ pwsh ./deploy/Deploy-FromZero.ps1 -Targets Cloud,AICopilot,Edge -ConfirmFromZero
 - Cloud catalog、首装、Edge 更新和公开下载的版本集合只来自 Cloud release 记录。文件系统只校验已登记 artifact 的存在性、完整性、受控路径、权限和真实下载；不得扫描目录补出未登记版本，残留文件也不得让 `Deleted` 版本重新可见。
 - 本机 Docker 构建和 SSH 触发服务器部署是标准 Cloud 发布流程。
 - 工作区 `deploy/server/iiot-release-runner.sh` 是日常服务器端入口；`deploy/scripts/deploy-release.sh` 和 `deploy/scripts/rollback-release.sh` 是旧事务维护/恢复入口。
-- self-hosted runner 安装和权限要求见 [RUNNER.md](./RUNNER.md)。
-- 运维、备份、恢复和检查细节见 [OPERATIONS.md](./OPERATIONS.md)。
-- Cloud 下载中心生成 Edge 客户端 `.exe` 的上线顺序见 [EDGE_INSTALLER_GO_LIVE.md](./EDGE_INSTALLER_GO_LIVE.md)。
+- self-hosted runner、运维、备份、恢复和 Edge 下载链验收均在本文件后续章节维护，不再另设第二入口。
 
 当前部署文档按双层口径维护：
 
@@ -224,7 +222,7 @@ docker inspect deploy-iiot-httpapi-1 \
   --format 'working={{index .Config.Labels "com.docker.compose.project.working_dir"}} config={{index .Config.Labels "com.docker.compose.project.config_files"}} project={{index .Config.Labels "com.docker.compose.project"}}'
 ```
 
-2026-06-22 现场校准（不是模板默认值）：`jms.hdc-group.cn` / `10.98.90.154` 的 Cloud compose 工作目录为 `/data/iiot-platform/cloud/deploy`，Docker Root Dir 为 `/data/iiot-platform/runtime/docker`，Edge 更新素材目录为 `/data/iiot-platform/edge-client/edge-updates`。如果服务器目录和本文不一致，先用上面的标签命令对齐真实目录，再修改文档。
+如果服务器目录和本文不一致，先用上面的容器标签命令确认真实目录，再通过受控配置维护对齐；不得把现场 IP、账号或一次性路径写回模板。
 
 首次部署或明确允许清空测试环境时，可以删除旧 stack、旧 compose 容器和旧卷，再按新版 compose 重新启动。例子：
 
@@ -281,7 +279,7 @@ SEED_ADMIN_NO=101650
 - 已存在 `Admin` 用户时，直接跳过管理员播种，不重置、不覆盖现有密码。
 - `SEED_ADMIN_PASSWORD` 只用于首个管理员创建和显式管理员修复；常规部署不会改管理员密码。
 
-Cloud 管理员密码和 Edge Launcher 本地样例账号密码是两套凭据。`launcher.accounts.sample.json` 里的 `101650` 只用于本地启动器样例，不是 Cloud 登录密码来源。Cloud 登录失败时，不得从样例文件、测试常量或历史弱密码推断生产密码；应按 `OPERATIONS.md` 的“Cloud 管理员登录排查”处理。
+Cloud 管理员密码和 Edge Launcher 本地样例账号密码是两套凭据。`launcher.accounts.sample.json` 里的 `101650` 只用于本地启动器样例，不是 Cloud 登录密码来源。Cloud 登录失败时，不得从样例文件、测试常量或历史弱密码推断生产密码；应核对 Keychain 真值、数据库现有 Admin 与 Identity lockout，普通部署不得重置密码。
 
 这些值通常保持模板默认：
 
@@ -407,6 +405,122 @@ GitHub `cloud-image` / `cloud-deploy` 只作为灾备路径，且 workflow 已�
 - 禁止执行 `docker system prune -a --volumes`。
 
 发布后清理是主线；仍必须配置周级兜底清理 cron，避免部署半途中断导致 build cache 和旧镜像长期堆积。
+
+## Runner 与生产权限
+
+- 标准应用发布由工作区入口在操作端构建并通过 SSH 调度服务器事务；self-hosted workflow 只允许白名单生产状态 inspect 或用户明确授权的 emergency 操作。
+- `cloud-routine-request.yml` 不能接收部署请求、修改 `.env`、运行 migration、重启服务或安装 Runner。
+- Runner 必须使用专用非 root 用户 `github-runner`，label 包含 `iiot-linux-prod`，工作目录固定为 `/data/github-runner/cloud`，Docker Root Dir 固定为 `/data/iiot-platform/runtime/docker`。
+- `github-runner` 可访问 Docker、Harbor 和 `/data/iiot-platform/cloud/deploy`，但 Runner 工作目录不得放在生产数据目录。
+- 标准发布所需 Harbor、Cloud、管理员和数据库凭据来自 macOS Keychain，不从 GitHub Secrets、Markdown 或旧 env fallback。
+- 用户明确授权的 emergency workflow 才能使用独立凭据，并且必须受 production environment 保护；不得把 emergency secret 清单复制成标准发布准备步骤。
+- Runner 安装或升级只在基础设施维护窗口通过 `pwsh ./deploy/Deploy.ps1 -Target Cloud -InstallRunner` 执行。`id -u` 必须非 `0`，root 只允许一次性修复 owner/mode。
+
+## Release state 与健康检查
+
+服务器 release state 固定放在 `deploy/releases/`：
+
+```text
+current-release.env
+current-release.summary.md
+current-images.env
+previous-release.env
+staged-release.env
+staged-images.env
+history/
+```
+
+状态文件只记录 5 个应用镜像、release/git/操作者/时间、部署前备份和摘要，不复制数据库密码或 runtime secret。标准部署用户必须能够读写 release state；root 应急路径写入后必须恢复 owner/mode。
+
+服务器本机健康检查从 `.env` 读取端口，禁止写死 `127.0.0.1:80`：
+
+```sh
+gateway_http_port=$(sed -n 's/^GATEWAY_HTTP_PORT=//p' .env | tail -n 1)
+gateway_http_port=${gateway_http_port:-80}
+curl --fail "http://127.0.0.1:${gateway_http_port}/internal/healthz"
+curl --fail --head "http://127.0.0.1:${gateway_http_port}/edge-updates/velopack/stable/RELEASES"
+./scripts/ops-check.sh
+```
+
+`GET /internal/healthz` 只证明 nginx、Gateway、HttpApi 与 PostgreSQL 可达，不覆盖 Redis、RabbitMQ、DataWorker、OIDC token、Edge catalog 或下载字节。默认 post-deploy smoke 还验证 `/`、OIDC discovery、JWKS、DataWorker Docker healthcheck 与 `ops-check.sh`。
+
+需要真实 OIDC token 验收时，必须使用真实一次性 authorization code 与匹配的 PKCE verifier，并通过 `0600` 临时文件传入；不得把 code/verifier 放进日志、文档、shell history、process environment 或 curl 参数：
+
+```sh
+umask 077
+authorization_code_file=$(mktemp)
+code_verifier_file=$(mktemp)
+read -rsp 'OIDC authorization code: ' oidc_code; printf '\n'
+read -rsp 'OIDC PKCE verifier: ' oidc_verifier; printf '\n'
+printf '%s' "$oidc_code" > "$authorization_code_file"
+printf '%s' "$oidc_verifier" > "$code_verifier_file"
+unset oidc_code oidc_verifier
+POST_DEPLOY_VERIFY_OIDC_TOKEN=1 \
+POST_DEPLOY_OIDC_AUTHORIZATION_CODE_FILE="$authorization_code_file" \
+POST_DEPLOY_OIDC_CODE_VERIFIER_FILE="$code_verifier_file" \
+./scripts/post-deploy-check.sh
+rm -f "$authorization_code_file" "$code_verifier_file"
+```
+
+未启用 OIDC token gate 或 Edge catalog gate 时，脚本必须打印明确 skip 行；skip 不能被写成该目标已验收。
+
+## Edge 下载链上线验收
+
+Cloud 必须先发布完成，Edge 再从工作区根执行：
+
+```powershell
+pwsh ./deploy/Deploy-Changed.ps1 -Targets Edge -PreparedReleaseId <prepared-release-id>
+```
+
+Windows 安装器、Velopack 与插件构建属于 Edge Prepare，不属于 Cloud 应用部署。正式上传只走 approved Cloud release APIs，渠道固定为 `stable`；catalog 只读 Cloud release 记录，文件系统只校验已登记 artifact。
+
+验收 Host 与插件下载链：
+
+```sh
+POST_DEPLOY_VERIFY_EDGE_INSTALLER_CATALOG=1 \
+POST_DEPLOY_EDGE_EXPECTED_VERSION=<host-version> \
+POST_DEPLOY_EDGE_EXPECTED_PLUGIN_MODULE_ID=<module-id> \
+POST_DEPLOY_EDGE_EXPECTED_PLUGIN_VERSION=<plugin-version> \
+./scripts/post-deploy-check.sh
+```
+
+该 gate 必须覆盖 public catalog、installer artifact、installer stub、Velopack `RELEASES`、channel manifests、一个被引用的 `.nupkg` 和指定插件 zip。nginx 静态文件存在不能替代 HttpApi 挂载、DB release 行和 Cloud 下载接口。Windows 实机安装验收在 EdgeClient `docs/客户端部署.md` 执行；Cloud 文档不复制该步骤。
+
+## 从零重建与 release history
+
+三端从零重建中，唯一需要保留的数据是 Cloud 客户端更新历史元数据；其它业务数据不保留。导出与导入只走：
+
+```sh
+./scripts/export-client-release-history.sh
+./scripts/import-client-release-history.sh
+```
+
+导入默认禁止覆盖；只有显式受控恢复才允许设置 `ALLOW_CLIENT_RELEASE_HISTORY_IMPORT_OVERWRITE`。恢复 release history 不等于恢复安装字节，reset 前必须验证 Host/AP/CP prepared package、SHA256、大小和版本碰撞。重建过程不得创建设备、注册 `ClientCode` 或轮换设备 bootstrap secret。
+
+## 备份、恢复与回滚
+
+PostgreSQL 是权威业务数据源，必须备份；Redis is treated as cache。Seq 用于诊断但不属于数据库恢复保证；RabbitMQ queue state is not covered by PostgreSQL backup。
+
+标准入口：
+
+```sh
+./scripts/postgres-backup.sh
+./scripts/postgres-verify-backup.sh
+./scripts/postgres-restore.sh <dump-file>
+./scripts/rollback-release.sh
+./scripts/ops-check.sh
+```
+
+- 备份成功后写同名 `.sha256`、`latest-successful-backup.txt`；恢复验证成功后写 `latest-successful-verify.txt`。
+- 应用快速回滚只恢复 5 个应用镜像，不运行数据库 downgrade，也不自动恢复数据库。schema 变化导致回滚后仍不健康时，转入现有数据库恢复流程。
+- 数据库恢复先核对 checksum，再停止应用流量、恢复 `iiot-db`、运行 migration、启动应用，并依次验证 `/internal/healthz`、`ops-check.sh` 与 `/`。
+- 运行态不健康、根因未知、数据库恢复未完成或首批重放已再次出现同类错误时，禁止重放 RabbitMQ 消息。
+
+`ops-check.sh` 始终输出 `latest_backup_age_hours`、`latest_backup_verified_age_days`、`latest_backup_file`。退出码：
+
+- `0`：运行态、Outbox、错误/跳过队列、备份与所要求的恢复验证通过。
+- `1`：健康接口失败或必需容器未运行。
+- `2`：服务可用但 Outbox/错误队列、备份新鲜度或强制恢复验证不满足。
 
 ## 定时备份
 

@@ -4,7 +4,7 @@
       {
         "typeKey": "cp",
         "displayName": "正极模切",
-        "description": "正极模切生产追溯数据。弹夹号、结果、完成时间和 Cloud DeviceId 使用公共列。",
+        "description": "正极模切生产追溯数据。弹夹位使用扩展字段，弹夹号、结果、完成时间和 Cloud DeviceId 使用公共列。",
         "supportedModes": [
           "barcode-process",
           "time-process",
@@ -26,6 +26,16 @@
             "type": "string",
             "required": true,
             "maxLength": 128
+          },
+          {
+            "key": "clipSlot",
+            "label": "弹夹位",
+            "type": "enum",
+            "required": false,
+            "options": [
+              "MG1",
+              "MG2"
+            ]
           },
           {
             "key": "startTime",
@@ -50,9 +60,10 @@
           }
         ],
         "listColumns": [
+          "plcName",
+          "clipSlot",
           "barcode",
           "cellResult",
-          "plcName",
           "punchingQuantity",
           "punchingSpeed",
           "completedTime"
@@ -73,6 +84,7 @@
             "fields": [
               "plcCode",
               "plcName",
+              "clipSlot",
               "startTime",
               "punchingQuantity",
               "punchingSpeed"
@@ -83,7 +95,7 @@
       {
         "typeKey": "ap",
         "displayName": "负极模切",
-        "description": "负极模切生产追溯数据。弹夹号、结果、完成时间和 Cloud DeviceId 使用公共列。",
+        "description": "负极模切生产追溯数据。弹夹位使用扩展字段，弹夹号、结果、完成时间和 Cloud DeviceId 使用公共列。",
         "supportedModes": [
           "barcode-process",
           "time-process",
@@ -105,6 +117,16 @@
             "type": "string",
             "required": true,
             "maxLength": 128
+          },
+          {
+            "key": "clipSlot",
+            "label": "弹夹位",
+            "type": "enum",
+            "required": false,
+            "options": [
+              "MG1",
+              "MG2"
+            ]
           },
           {
             "key": "startTime",
@@ -129,9 +151,10 @@
           }
         ],
         "listColumns": [
+          "plcName",
+          "clipSlot",
           "barcode",
           "cellResult",
-          "plcName",
           "punchingQuantity",
           "punchingSpeed",
           "completedTime"
@@ -152,6 +175,7 @@
             "fields": [
               "plcCode",
               "plcName",
+              "clipSlot",
               "startTime",
               "punchingQuantity",
               "punchingSpeed"

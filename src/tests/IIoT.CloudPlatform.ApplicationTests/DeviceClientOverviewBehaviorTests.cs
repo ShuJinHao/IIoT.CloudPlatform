@@ -168,8 +168,228 @@ public sealed class DeviceClientOverviewBehaviorTests
         Assert.Equal(device.Id, result.Value!.DeviceId);
         Assert.Equal("Running", result.Value.SoftwareStatus);
         Assert.Equal("宿主 4.0.0", result.Value.CurrentVersion);
+        Assert.Equal("4.0.0", result.Value.RuntimeHostVersion);
+        Assert.Equal("1.0.0", result.Value.RuntimeHostApiVersion);
+        Assert.Equal("4.0.0", result.Value.ReportedHostVersion);
+        Assert.Equal("1.0.0", result.Value.ReportedHostApiVersion);
+        Assert.Null(result.Value.LatestPublishedHostVersion);
         Assert.Equal((device.Id, device.Code), stateQueryService.LastRequestedIdentity);
         Assert.Equal(device.Id, access.LastEnsuredDeviceId);
+    }
+
+    [Fact]
+    public async Task ReleaseDetail_ShouldSeparateRuntimeReportedAndLatestPublishedFacts()
+    {
+        var device = new Device("版本事实设备", "DEV-VERSION-FACTS", Guid.NewGuid());
+        var hostPublishedAt = new DateTime(2026, 7, 20, 8, 0, 0, DateTimeKind.Utc);
+        var pluginPublishedAt = hostPublishedAt.AddHours(1);
+        var hostHash = new string('a', 64);
+        var pluginHash = new string('b', 64);
+        var snapshot = new DeviceClientVersionSnapshot(
+            device.Id,
+            device.Code,
+            "2.0.5",
+            "2.0.0",
+            "stable",
+            hostPublishedAt.AddDays(1),
+            [
+                new DeviceClientPluginVersion(
+                    "CP",
+                    "正极模切",
+                    "2.0.5",
+                    "2.0.0",
+                    enabled: true)
+            ]);
+        var state = new DeviceClientState(device.Id, device.Code);
+        state.ApplyVersionReport(snapshot);
+        state.ApplyRuntimeHeartbeat(new EdgeDeviceRuntimeHeartbeat(
+            device.Id,
+            device.Code,
+            "runtime-version-facts",
+            "cutting",
+            "2.0.6",
+            "2.0.1",
+            "Running",
+            hostPublishedAt,
+            hostPublishedAt.AddDays(1),
+            []));
+
+        var host = ClientReleaseComponent.CreateHost("stable", "win-x64");
+        host.UpsertHostVersion(
+            "2.0.9",
+            "2.0.0",
+            "net10.0",
+            "/edge-updates/host/2.0.9.zip",
+            new string('c', 64),
+            1024,
+            null,
+            ClientReleaseStatus.Published,
+            null,
+            "IIoT",
+            hostPublishedAt.AddDays(-1));
+        host.UpsertHostVersion(
+            "2.0.10",
+            "2.0.0",
+            "net10.0",
+            "/edge-updates/host/2.0.10.zip",
+            hostHash,
+            2048,
+            null,
+            ClientReleaseStatus.Published,
+            null,
+            "IIoT",
+            hostPublishedAt);
+        host.UpsertHostVersion(
+            "9.0.0",
+            "9.0.0",
+            "net10.0",
+            "/edge-updates/host/9.0.0.zip",
+            new string('d', 64),
+            4096,
+            null,
+            ClientReleaseStatus.Draft,
+            null,
+            "IIoT");
+
+        var otherChannelHost = ClientReleaseComponent.CreateHost("beta", "win-x64");
+        otherChannelHost.UpsertHostVersion(
+            "99.0.0",
+            "99.0.0",
+            "net10.0",
+            "/edge-updates/host/99.0.0.zip",
+            new string('e', 64),
+            4096,
+            null,
+            ClientReleaseStatus.Published,
+            null,
+            "IIoT",
+            hostPublishedAt.AddDays(1));
+
+        var plugin = ClientReleaseComponent.CreatePlugin(
+            "CP",
+            "正极模切",
+            null,
+            null,
+            null,
+            "stable",
+            "win-x64");
+        plugin.UpsertPluginVersion(
+            "2.0.10",
+            "2.0.0",
+            "2.0.0",
+            "3.0.0",
+            "net10.0",
+            "/edge-updates/plugins/stable/CP/2.0.10/CP.zip",
+            pluginHash,
+            1024,
+            null,
+            "[]",
+            ClientReleaseStatus.Published,
+            null,
+            "IIoT",
+            pluginPublishedAt);
+
+        var deviceRepository = new InMemoryRepository<Device> { SingleOrDefaultResult = device };
+        var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+        componentRepository.ListResult.AddRange([host, otherChannelHost, plugin]);
+        var stateQueryService = new StubDeviceClientStateQueryService();
+        stateQueryService.States.Add(state);
+        stateQueryService.Snapshots.Add(snapshot);
+        var handler = new GetDeviceClientReleaseDetailHandler(
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [device.Id] },
+            deviceRepository,
+            stateQueryService,
+            componentRepository);
+
+        var result = await handler.Handle(
+            new GetDeviceClientReleaseDetailQuery(device.Id, "stable", "win-x64"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
+        var details = result.Value!;
+        Assert.Equal("2.0.6", details.RuntimeHostVersion);
+        Assert.Equal("2.0.1", details.RuntimeHostApiVersion);
+        Assert.Equal("2.0.5", details.ReportedHostVersion);
+        Assert.Equal("2.0.0", details.ReportedHostApiVersion);
+        Assert.Equal("2.0.10", details.LatestPublishedHostVersion);
+        Assert.Equal("2.0.0", details.LatestPublishedHostApiVersion);
+        Assert.Equal(hostPublishedAt, details.LatestPublishedAtUtc);
+        Assert.Equal(hostHash, details.LatestPublishedHostPackageSha256);
+        Assert.Equal("2.0.5", details.HostVersion);
+        Assert.Equal("宿主 2.0.5 / 插件 1 个", details.CurrentVersion);
+
+        var pluginDetails = Assert.Single(details.Plugins);
+        Assert.Equal("2.0.5", pluginDetails.Version);
+        Assert.True(pluginDetails.Enabled);
+        Assert.Equal("2.0.10", pluginDetails.LatestPublishedVersion);
+        Assert.Equal(pluginPublishedAt, pluginDetails.LatestPublishedAtUtc);
+        Assert.Equal(pluginHash, pluginDetails.LatestPublishedPackageSha256);
+        Assert.Null(pluginDetails.GetType().GetProperty("Running"));
+    }
+
+    [Fact]
+    public async Task ReleaseDetail_ShouldNotFallbackBetweenRuntimeAndVersionReportSources()
+    {
+        var reportedDevice = new Device("仅版本上报设备", "DEV-REPORTED-ONLY", Guid.NewGuid());
+        var reportedSnapshot = new DeviceClientVersionSnapshot(
+            reportedDevice.Id,
+            reportedDevice.Code,
+            "3.0.0",
+            "2.0.0",
+            "stable",
+            DateTime.UtcNow,
+            []);
+        var reportedState = new DeviceClientState(reportedDevice.Id, reportedDevice.Code);
+        reportedState.ApplyVersionReport(reportedSnapshot);
+        var reportedStateQuery = new StubDeviceClientStateQueryService();
+        reportedStateQuery.States.Add(reportedState);
+        reportedStateQuery.Snapshots.Add(reportedSnapshot);
+        var reportedHandler = new GetDeviceClientReleaseDetailHandler(
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [reportedDevice.Id] },
+            new InMemoryRepository<Device> { SingleOrDefaultResult = reportedDevice },
+            reportedStateQuery,
+            new InMemoryRepository<ClientReleaseComponent>());
+
+        var reportedResult = await reportedHandler.Handle(
+            new GetDeviceClientReleaseDetailQuery(reportedDevice.Id),
+            CancellationToken.None);
+
+        Assert.True(reportedResult.IsSuccess, string.Join("; ", reportedResult.Errors ?? []));
+        Assert.Equal("3.0.0", reportedResult.Value!.ReportedHostVersion);
+        Assert.Equal("2.0.0", reportedResult.Value.ReportedHostApiVersion);
+        Assert.Null(reportedResult.Value.RuntimeHostVersion);
+        Assert.Null(reportedResult.Value.RuntimeHostApiVersion);
+
+        var runtimeDevice = new Device("仅运行心跳设备", "DEV-RUNTIME-ONLY", Guid.NewGuid());
+        var runtimeState = new DeviceClientState(runtimeDevice.Id, runtimeDevice.Code);
+        runtimeState.ApplyRuntimeHeartbeat(new EdgeDeviceRuntimeHeartbeat(
+            runtimeDevice.Id,
+            runtimeDevice.Code,
+            "runtime-only",
+            "cutting",
+            "3.1.0",
+            "2.1.0",
+            "Running",
+            DateTime.UtcNow.AddMinutes(-5),
+            DateTime.UtcNow,
+            []));
+        var runtimeStateQuery = new StubDeviceClientStateQueryService();
+        runtimeStateQuery.States.Add(runtimeState);
+        var runtimeHandler = new GetDeviceClientReleaseDetailHandler(
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [runtimeDevice.Id] },
+            new InMemoryRepository<Device> { SingleOrDefaultResult = runtimeDevice },
+            runtimeStateQuery,
+            new InMemoryRepository<ClientReleaseComponent>());
+
+        var runtimeResult = await runtimeHandler.Handle(
+            new GetDeviceClientReleaseDetailQuery(runtimeDevice.Id),
+            CancellationToken.None);
+
+        Assert.True(runtimeResult.IsSuccess, string.Join("; ", runtimeResult.Errors ?? []));
+        Assert.Equal("3.1.0", runtimeResult.Value!.RuntimeHostVersion);
+        Assert.Equal("2.1.0", runtimeResult.Value.RuntimeHostApiVersion);
+        Assert.Null(runtimeResult.Value.ReportedHostVersion);
+        Assert.Null(runtimeResult.Value.ReportedHostApiVersion);
     }
 
     private static void AssertPermission<TRequest>(string expectedPermission)

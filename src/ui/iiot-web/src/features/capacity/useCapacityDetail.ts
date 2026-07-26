@@ -1,19 +1,20 @@
 import { computed, ref } from 'vue';
 import { useRoute } from 'vue-router';
-import {
-  getDailySummaryApi,
-  getHourlyByDeviceApi,
-  getSummaryRangeApi,
-} from './api';
+import { useTheme } from '../../composables/useTheme';
+import { getHourlyByDeviceApi, getSummaryRangeApi } from './api';
 import { createCapacityDetailColumns } from './columns';
+import { resolveCapacityLoadError, type CapacityLoadError } from './errors';
+import { capacityExportFileName, downloadCapacityCsv } from './export';
 import {
-  createDailyFallbackRows,
+  createPlcOptions,
+  filterRowsByPlc,
   formatInt,
-  mapHourlyDetailRow,
+  mapHourlyRows,
   mapMonthRows,
   mapYearRows,
   monthDateRange,
   rateAccent,
+  summarizeRows,
   thisMonth,
   todayLocal,
   yearDateRange,
@@ -23,191 +24,178 @@ import {
 
 export function useCapacityDetail() {
   const route = useRoute();
+  const { mode: themeMode } = useTheme();
   const deviceId = ref((route.query.deviceId as string | undefined) ?? '');
-  const deviceName = ref(
-    (route.query.deviceName as string | undefined) ?? '设备详情',
-  );
+  const deviceName = ref((route.query.deviceName as string | undefined) ?? '设备详情');
   const queryMode = ref<CapacityQueryMode>('day');
   const queryDate = ref(todayLocal());
   const queryMonth = ref(thisMonth());
   const queryYear = ref(new Date().getFullYear());
-  const plcNameFilter = ref('');
+  const plcNameFilter = ref<string | null>(null);
   const loading = ref(false);
-  const rows = ref<CapacityDetailRow[]>([]);
+  const loadError = ref<CapacityLoadError | null>(null);
+  const allRows = ref<CapacityDetailRow[]>([]);
+  let requestGeneration = 0;
 
   const yearOptions = Array.from({ length: 5 }, (_, index) => {
     const year = new Date().getFullYear() - index;
     return { label: `${year} 年`, value: year };
   });
-  const summary = computed(() => {
-    const total = rows.value.reduce((sum, row) => sum + row.total, 0);
-    const ok = rows.value.reduce((sum, row) => sum + row.ok, 0);
-    const ng = rows.value.reduce((sum, row) => sum + row.ng, 0);
-    const ratePercent = total > 0 ? (ok * 100) / total : 0;
-    const divisor = queryMode.value === 'year'
-      ? 12
-      : Math.max(1, rows.value.length);
-    const avg = Math.round(total / divisor);
-    return { total, ok, ng, ratePercent, avg };
-  });
-  const avgLabel = computed(() => {
-    if (queryMode.value === 'year') return '月均产出';
-    if (queryMode.value === 'month') return '日均产出';
-    return '半小时均产';
-  });
-  const subtitleText = computed(() => {
-    let text = '产能详细报表 · 年 / 月 / 日 三级查询';
-    if (plcNameFilter.value) text += ` · PLC: ${plcNameFilter.value}`;
-    return text;
-  });
+  const plcOptions = computed(() => createPlcOptions(allRows.value));
+  const rows = computed(() => filterRowsByPlc(allRows.value, plcNameFilter.value));
+  const summary = computed(() => summarizeRows(rows.value));
+  const selectedPlcName = computed(() =>
+    plcOptions.value.find((option) => option.value === plcNameFilter.value)?.label ?? '全部 PLC');
+  const scopeText = computed(() =>
+    queryMode.value === 'day'
+      ? queryDate.value
+      : queryMode.value === 'month'
+        ? queryMonth.value
+        : String(queryYear.value));
+  const subtitleText = computed(() =>
+    `完工弹夹明细 · ${scopeText.value} · ${selectedPlcName.value}`);
   const chartSubtitle = computed(() => {
-    if (queryMode.value === 'day') return `按时间段统计 · ${rows.value.length} 个数据点`;
-    if (queryMode.value === 'month') return `按日统计 · ${queryMonth.value}`;
-    return `按月统计 · ${queryYear.value} 年`;
+    const grain = queryMode.value === 'day' ? '半小时' : queryMode.value === 'month' ? '每日' : '每月';
+    return `${grain}统计 · ${selectedPlcName.value} · ${rows.value.length} 个数据点`;
   });
   const chartOption = computed(() => {
-    const xAxis = rows.value.map((row) => row.label);
+    const labels = rows.value.map((row) => `${row.plcName} · ${row.label}`);
+    const palette = themeMode.value === 'dark'
+      ? {
+          text: '#c4c4ca',
+          grid: 'rgba(255, 255, 255, 0.09)',
+          tooltipBackground: '#202024',
+          tooltipBorder: 'rgba(255, 255, 255, 0.14)',
+          ok: '#5eead4',
+          ng: '#f87171',
+        }
+      : {
+          text: '#596273',
+          grid: 'rgba(17, 24, 39, 0.08)',
+          tooltipBackground: '#ffffff',
+          tooltipBorder: 'rgba(17, 24, 39, 0.12)',
+          ok: '#229aa3',
+          ng: '#ef4444',
+        };
     return {
-      grid: { left: 48, right: 16, top: 32, bottom: 36 },
+      grid: { left: 52, right: 16, top: 32, bottom: labels.length > 8 ? 72 : 48 },
       legend: {
-        data: ['良品', '不良品'],
+        data: ['合格弹夹', '不合格弹夹'],
         top: 0,
         right: 8,
         itemWidth: 12,
         itemHeight: 8,
-        textStyle: { color: 'var(--text-2)', fontSize: 12 },
+        textStyle: { color: palette.text, fontSize: 12 },
       },
       tooltip: {
         trigger: 'axis',
-        backgroundColor: 'rgba(255, 255, 255, 0.98)',
-        borderColor: 'rgba(15, 23, 42, 0.08)',
+        backgroundColor: palette.tooltipBackground,
+        borderColor: palette.tooltipBorder,
         borderWidth: 1,
-        extraCssText: 'box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);',
-        textStyle: {
-          color: 'var(--text-0)',
-          fontFamily: "'Inter', sans-serif",
-          fontSize: 12,
-        },
+        textStyle: { color: palette.text, fontFamily: "'Inter', sans-serif", fontSize: 12 },
         axisPointer: { type: 'shadow' },
       },
       xAxis: {
         type: 'category',
-        data: xAxis,
-        axisLine: { lineStyle: { color: 'rgba(15, 23, 42, 0.08)' } },
+        data: labels,
+        axisLine: { lineStyle: { color: palette.grid } },
         axisLabel: {
-          color: 'var(--text-2)',
+          color: palette.text,
           fontFamily: "'JetBrains Mono', monospace",
           fontSize: 11,
-          rotate: queryMode.value === 'day' && xAxis.length > 12 ? 35 : 0,
-          interval: queryMode.value === 'day' && xAxis.length > 24 ? 'auto' : 0,
+          rotate: labels.length > 6 ? 35 : 0,
+          interval: labels.length > 24 ? 'auto' : 0,
         },
         axisTick: { show: false },
       },
       yAxis: {
         type: 'value',
-        splitLine: { lineStyle: { color: 'rgba(15, 23, 42, 0.05)' } },
+        name: '弹夹数（个）',
+        splitLine: { lineStyle: { color: palette.grid } },
         axisLine: { show: false },
         axisTick: { show: false },
-        axisLabel: {
-          color: 'var(--text-2)',
-          fontFamily: "'JetBrains Mono', monospace",
-          fontSize: 11,
-        },
+        axisLabel: { color: palette.text, fontFamily: "'JetBrains Mono', monospace", fontSize: 11 },
       },
       series: [
         {
-          name: '良品',
+          name: '合格弹夹',
           type: 'bar',
           stack: 'total',
           data: rows.value.map((row) => row.ok),
-          itemStyle: { color: 'var(--brand)', borderRadius: [0, 0, 0, 0] },
+          itemStyle: { color: palette.ok },
           barMaxWidth: 36,
         },
         {
-          name: '不良品',
+          name: '不合格弹夹',
           type: 'bar',
           stack: 'total',
           data: rows.value.map((row) => row.ng),
-          itemStyle: { color: 'var(--error)', borderRadius: [4, 4, 0, 0] },
+          itemStyle: { color: palette.ng, borderRadius: [4, 4, 0, 0] },
           barMaxWidth: 36,
         },
       ],
     };
   });
-  const columns = computed(() =>
-    createCapacityDetailColumns(() => queryMode.value),
-  );
-  const rowKey = (row: CapacityDetailRow) => `${row.label}-${row.shift}`;
+  const columns = computed(() => createCapacityDetailColumns(() => queryMode.value));
+  const rowKey = (row: CapacityDetailRow) =>
+    `${row.bucketKey}-${row.plcKey}-${row.shift || 'all'}`;
+  const canExport = computed(() => !loading.value && !loadError.value && rows.value.length > 0);
 
-  async function fetchDay(date: string) {
-    try {
-      const hourly = await getHourlyByDeviceApi({
+  async function requestRows(): Promise<CapacityDetailRow[]> {
+    if (queryMode.value === 'day') {
+      return mapHourlyRows(queryDate.value, await getHourlyByDeviceApi({
         deviceId: deviceId.value,
-        date,
-        plcName: plcNameFilter.value || undefined,
-      });
-      if (Array.isArray(hourly) && hourly.length > 0) {
-        rows.value = hourly.map(mapHourlyDetailRow);
-        return;
-      }
-    } catch {
-      /* fallback to daily summary */
+        date: queryDate.value,
+      }));
     }
-
-    try {
-      const daily = await getDailySummaryApi({
+    if (queryMode.value === 'month') {
+      const range = monthDateRange(queryMonth.value);
+      return mapMonthRows(queryMonth.value, await getSummaryRangeApi({
         deviceId: deviceId.value,
-        date,
-        plcName: plcNameFilter.value || undefined,
-      });
-      rows.value = createDailyFallbackRows(daily, date);
-    } catch {
-      rows.value = [];
+        ...range,
+        breakdownByPlc: true,
+      }));
     }
-  }
-
-  async function fetchMonth(month: string) {
-    const range = monthDateRange(month);
-    const list = await getSummaryRangeApi({
+    const range = yearDateRange(queryYear.value);
+    return mapYearRows(queryYear.value, await getSummaryRangeApi({
       deviceId: deviceId.value,
       ...range,
-      plcName: plcNameFilter.value || undefined,
-    });
-    rows.value = mapMonthRows(month, list);
-  }
-
-  async function fetchYear(year: number) {
-    const range = yearDateRange(year);
-    const list = await getSummaryRangeApi({
-      deviceId: deviceId.value,
-      ...range,
-      plcName: plcNameFilter.value || undefined,
-    });
-    rows.value = mapYearRows(year, list);
+      breakdownByPlc: true,
+    }));
   }
 
   async function fetchData() {
+    const generation = ++requestGeneration;
+    loading.value = true;
+    loadError.value = null;
+    allRows.value = [];
+    plcNameFilter.value = null;
     if (!deviceId.value) {
-      rows.value = [];
+      loadError.value = {
+        kind: 'api',
+        title: '缺少设备信息',
+        message: '未指定要查询的设备，请返回产能看板后重新进入。',
+      };
+      loading.value = false;
       return;
     }
-    loading.value = true;
-    rows.value = [];
     try {
-      if (queryMode.value === 'day') {
-        await fetchDay(queryDate.value);
-      } else if (queryMode.value === 'month') {
-        await fetchMonth(queryMonth.value);
-      } else {
-        await fetchYear(queryYear.value);
-      }
+      const nextRows = await requestRows();
+      if (generation === requestGeneration) allRows.value = nextRows;
+    } catch (error) {
+      const resolved = await resolveCapacityLoadError(error);
+      if (generation === requestGeneration) loadError.value = resolved;
     } finally {
-      loading.value = false;
+      if (generation === requestGeneration) loading.value = false;
     }
   }
 
-  function onModeChange() {
-    void fetchData();
+  function exportRows() {
+    if (!canExport.value) return;
+    downloadCapacityCsv(
+      capacityExportFileName(deviceName.value, queryMode.value, scopeText.value, selectedPlcName.value),
+      rows.value,
+    );
   }
 
   return {
@@ -218,18 +206,20 @@ export function useCapacityDetail() {
     queryYear,
     plcNameFilter,
     yearOptions,
+    plcOptions,
     loading,
+    loadError,
     rows,
     summary,
-    avgLabel,
     subtitleText,
     chartSubtitle,
     chartOption,
     columns,
     rowKey,
+    canExport,
     fetchData,
+    exportRows,
     formatInt,
     rateAccent,
-    onModeChange,
   };
 }

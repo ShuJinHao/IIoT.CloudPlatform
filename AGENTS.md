@@ -7,8 +7,8 @@
 - 进入 Cloud 实际修改后，只读取 `docs/云端规则.md` 中与本批模块直接相关的章节、相关源码和受影响测试。
 - 只有过站工序任务才读 `docs/过站工序扩展规则.md`；其它专题契约同样只在直接触碰对应边界时读取。
 - 只有修改 `src/ui/iiot-web` 时才读取该目录的 `AGENTS.md`。
-- 部署或生产配置只读取工作区部署总览、`docs/云端规则.md` 部署章节和当前目标部署文档的相关章节。
-- 项目复盘、历史记录、旧计划和证据只在回归、冻结链路冲突、失败原因不明、同类故障追溯或用户明确要求时按关键词读取命中邻域。
+- 部署或生产配置只读取工作区部署总览、`docs/云端规则.md` 部署章节和 `deploy/README.md` 的相关章节。
+- 历史事实只从 Git、发布目录和部署记录追溯；不得新建滚动复盘、历史核心类文档、日期式治理快照或第二份部署手册。真实事故统一写入工作区 `docs/事故/生产事故.md` 或 `docs/事故/部署事故.md`。
 
 ## 项目硬边界
 
@@ -22,4 +22,4 @@
 - 沟通/审计只读且不运行测试；业务开发只运行 Architecture、Security 和 owner 选出的受影响 Business。全量、coverage、mutation、duplication、Quality、CrossProject 和三端对齐只在用户明确授权时运行；影响无法归属时停止。
 - 普通部署只走工作区 `deploy/Deploy-Changed.ps1`：要求 clean、已提交的 `main`，可 push 现有 HEAD，不创建提交、不编辑文件，只补同 SHA 受影响 Architecture/Security/DeploymentContract 并发布受影响服务。
 - 三端从零部署只走工作区 `deploy/Deploy-FromZero.ps1`；Cloud 阶段处理 release history、基础设施、migration、seed 和健康，不创建设备、不注册 `ClientCode`、不轮换设备 bootstrap secret。
-- 只有形成长期规则、修复历史回归、处理生产事故或改变部署机制时，才更新项目复盘。
+- 长期规则直接进入本文件、`docs/云端规则.md` 或对应专题契约；事故只进入工作区事故文档，普通提交和版本变化只由 Git、发布目录与部署记录保存。

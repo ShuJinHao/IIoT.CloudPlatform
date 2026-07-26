@@ -3,12 +3,12 @@
     class="capacity-page"
     page-key="capacity"
     title="产能看板"
-    subtitle="当前权限范围内每日产能汇总，点击「查看详情」进入设备级报表"
+    subtitle="当前权限范围内的设备日汇总；卡片仅统计当前页全部 PLC"
   >
     <div class="capacity-page__stats">
-      <StatCard label="本页总产出" :value="formatInt(totalStats.total)" unit="件" accent="brand" />
-      <StatCard label="本页良品" :value="formatInt(totalStats.ok)" unit="件" accent="success" />
-      <StatCard label="本页不良品" :value="formatInt(totalStats.ng)" unit="件" accent="error" />
+      <StatCard label="本页完工弹夹数" :value="formatInt(totalStats.total)" unit="个" accent="brand" />
+      <StatCard label="本页合格弹夹数" :value="formatInt(totalStats.ok)" unit="个" accent="success" />
+      <StatCard label="本页不合格弹夹数" :value="formatInt(totalStats.ng)" unit="个" accent="error" />
       <StatCard
         label="本页综合良率"
         :value="totalStats.ratePercent.toFixed(1)"
@@ -37,7 +37,7 @@
             v-model:formatted-value="dateFilter"
             value-format="yyyy-MM-dd"
             type="date"
-            size="small"
+            class="h-10"
             style="width: 180px;"
             @update:formatted-value="onFilterChange"
           />
@@ -61,7 +61,20 @@
         :row-key="rowKey"
       >
         <template #empty>
-          <EmptyState title="暂无产能数据" description="当前筛选条件下没有可展示的产能汇总。" />
+          <EmptyState
+            v-if="listError"
+            :title="listError.title"
+            :description="listError.message"
+          >
+            <template #action>
+              <UiButton size="small" type="primary" @click="fetchData">重新加载</UiButton>
+            </template>
+          </EmptyState>
+          <EmptyState
+            v-else
+            title="暂无完工弹夹数据"
+            description="当前筛选条件下没有可展示的设备日汇总。"
+          />
         </template>
       </UiDataTable>
       <div v-if="metaData.totalPages > 1" class="capacity-page__pagination">
@@ -105,8 +118,10 @@ const {
   dateFilter,
   deviceOptions,
   deviceLoadError,
+  listError,
   totalStats,
   initialize,
+  fetchData,
   onFilterChange,
   clearFilters,
   onPageChange,

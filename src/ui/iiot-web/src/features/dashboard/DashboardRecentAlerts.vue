@@ -4,7 +4,23 @@
       <h3 class="text-[var(--fs-2xl)] font-[var(--fw-strong)] text-[var(--text-0)]">{{ t('dashboard.recentAlerts') }}</h3>
       <span class="rounded-[var(--radius-sm)] bg-[var(--bg-2)] px-3 py-2 text-[var(--fs-sm)] font-[var(--fw-strong)] text-[var(--text-1)]">{{ t('common.latest') }}</span>
     </div>
-    <div class="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--border)]">
+    <LoadingState
+      v-if="sourceState.status === 'loading'"
+      data-testid="dashboard-alerts-loading"
+      variant="card"
+      :rows="5"
+    />
+    <EmptyState
+      v-else-if="sourceState.status === 'error'"
+      data-testid="dashboard-alerts-error"
+      :title="t('dashboard.alertsErrorTitle')"
+      :description="sourceState.error"
+    >
+      <template #action>
+        <UiButton type="primary" @click="emit('retry')">{{ t('dashboard.retry') }}</UiButton>
+      </template>
+    </EmptyState>
+    <div v-else class="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--border)]">
       <div class="grid grid-cols-[120px_minmax(0,1fr)_140px_92px] bg-[var(--bg-2)] px-4 py-3 text-[var(--fs-sm)] font-[var(--fw-bold)] text-[var(--muted-foreground)]">
         <span>{{ t('dashboard.time') }}</span>
         <span>{{ t('dashboard.message') }}</span>
@@ -34,11 +50,16 @@
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n';
-import type { DashboardEvent } from './types';
+import EmptyState from '../../components/states/EmptyState.vue';
+import LoadingState from '../../components/states/LoadingState.vue';
+import UiButton from '../../components/ui/UiButton.vue';
+import type { DashboardEvent, DashboardSourceState } from './types';
 
 defineProps<{
   events: DashboardEvent[];
+  sourceState: DashboardSourceState;
 }>();
+const emit = defineEmits<{ retry: [] }>();
 
 const { t } = useI18n();
 </script>

@@ -64,6 +64,7 @@ internal static class DeviceClientVersionInventoryMapping
         var versionIssue = ResolveVersionIssue(state, hostStatus, hostIssue, pluginRows, utcNow);
         var cloudIssue = ResolveCloudIssue();
         var issue = softwareStatus.Issue ?? versionIssue ?? cloudIssue;
+        var latestPublishedHost = referenceCatalog.Host.Version;
 
         return new DeviceClientVersionInventoryDto(
             device.Id,
@@ -86,7 +87,15 @@ internal static class DeviceClientVersionInventoryMapping
             state?.LastRuntimeHeartbeatAtUtc,
             state?.VersionReportedAtUtc ?? snapshot?.ReportedAtUtc,
             state?.VersionReceivedAtUtc ?? snapshot?.ReceivedAtUtc,
-            pluginRows);
+            pluginRows,
+            state?.RuntimeHostVersion,
+            state?.RuntimeHostApiVersion,
+            state?.HostVersion ?? snapshot?.HostVersion,
+            state?.HostApiVersion ?? snapshot?.HostApiVersion,
+            latestPublishedHost?.Version,
+            latestPublishedHost?.HostApiVersion,
+            latestPublishedHost?.PublishedAtUtc,
+            latestPublishedHost?.Sha256);
     }
 
     private static string ResolveHostStatus(
@@ -251,7 +260,10 @@ internal static class DeviceClientVersionInventoryMapping
             plugin.HostApiVersion,
             plugin.Enabled,
             updateStatus,
-            compatibilityIssue);
+            compatibilityIssue,
+            referenceRelease.Version.Version,
+            referenceRelease.Version.PublishedAtUtc,
+            referenceRelease.Version.Sha256);
     }
 
     private sealed class VersionStringComparer : IComparer<string>
