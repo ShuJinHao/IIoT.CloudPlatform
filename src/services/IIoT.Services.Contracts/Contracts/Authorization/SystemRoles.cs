@@ -12,4 +12,13 @@ public static class SystemRoles
     public const string ProductionViewer = "ProductionViewer";
     public const string RoleAdmin = "RoleAdmin";
     public const string HrAdmin = "HrAdmin";
+
+    public static bool IsAdmin(string? roleName)
+        => string.Equals(
+            roleName?.Trim(),
+            Admin,
+            StringComparison.OrdinalIgnoreCase);
+
+    public static bool ContainsAdmin(IEnumerable<string> roleNames)
+        => roleNames.Any(IsAdmin);
 }

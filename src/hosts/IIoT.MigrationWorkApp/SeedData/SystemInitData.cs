@@ -66,10 +66,30 @@ public static class SystemInitData
         {
             var role = await EnsureRoleAsync(roleManager, roleName);
             var claims = await roleManager.GetClaimsAsync(role);
+            var retiredClaims = SelectRetiredDeviceAdminPermissionClaims(
+                roleName,
+                claims);
+            foreach (var retiredClaim in retiredClaims)
+            {
+                var removeResult = await roleManager.RemoveClaimAsync(role, retiredClaim);
+                if (!removeResult.Succeeded)
+                {
+                    Console.WriteLine(
+                        $"❌ 角色 [{roleName}] 旧高危权限 [{retiredClaim.Value}] 清理失败！");
+                    foreach (var error in removeResult.Errors)
+                    {
+                        Console.WriteLine($"   - [{error.Code}]: {error.Description}");
+                    }
+
+                    throw new Exception($"角色 [{roleName}] 旧高危权限清理失败。");
+                }
+            }
+
             var existingPermissions = claims
                 .Where(claim => claim.Type == IIoTClaimTypes.Permission)
-                .Select(claim => claim.Value)
-                .ToHashSet(StringComparer.Ordinal);
+                .Except(retiredClaims)
+                .Select(claim => claim.Value.Trim())
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             foreach (var permission in permissions)
             {
@@ -93,6 +113,27 @@ public static class SystemInitData
                 }
             }
         }
+    }
+
+    internal static IReadOnlyList<Claim> SelectRetiredDeviceAdminPermissionClaims(
+        string roleName,
+        IEnumerable<Claim> claims)
+    {
+        if (!string.Equals(
+                roleName.Trim(),
+                SystemRoles.DeviceAdmin,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return [];
+        }
+
+        var retiredPermissions = SystemRolePermissionTemplates.DeviceAdminRetiredPermissions
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return claims
+            .Where(claim =>
+                claim.Type == IIoTClaimTypes.Permission
+                && retiredPermissions.Contains(claim.Value.Trim()))
+            .ToArray();
     }
 
     private static async Task<IdentityRole<Guid>> EnsureRoleAsync(

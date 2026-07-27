@@ -8,10 +8,7 @@ public static class SystemRolePermissionTemplates
             [SystemRoles.DeviceAdmin] =
             [
                 DevicePermissions.Read,
-                DevicePermissions.Create,
                 DevicePermissions.Update,
-                DevicePermissions.Delete,
-                DevicePermissions.CascadeDelete,
                 DeviceClientOverviewPermissions.Read,
                 EdgeHostPermissions.Read
             ],
@@ -39,17 +36,25 @@ public static class SystemRolePermissionTemplates
             ],
             [SystemRoles.RoleAdmin] =
             [
-                "Role.Read",
-                "Role.Define",
-                "Role.Update"
+                CloudPermissionCatalog.Role.Read,
+                CloudPermissionCatalog.Role.Define,
+                CloudPermissionCatalog.Role.Update
             ],
             [SystemRoles.HrAdmin] =
             [
-                "Role.Read",
-                "Employee.Read",
-                "Employee.Onboard",
-                "Employee.Update",
-                "Employee.UpdateAccess"
+                CloudPermissionCatalog.Role.Read,
+                CloudPermissionCatalog.Employee.Read,
+                CloudPermissionCatalog.Employee.Onboard,
+                CloudPermissionCatalog.Employee.Update,
+                CloudPermissionCatalog.Employee.UpdateAccess,
+                CloudPermissionCatalog.Employee.Deactivate
             ]
         };
+
+    public static readonly IReadOnlyCollection<string> DeviceAdminRetiredPermissions =
+    [
+        DevicePermissions.Create,
+        DevicePermissions.Delete,
+        DevicePermissions.CascadeDelete
+    ];
 }

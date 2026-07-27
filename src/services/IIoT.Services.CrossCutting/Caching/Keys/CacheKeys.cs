@@ -2,8 +2,6 @@ namespace IIoT.Services.CrossCutting.Caching;
 
 public static class CacheKeys
 {
-    public static string AllDefinedPermissions() => "iiot:permissions:v1:all-defined";
-
     public static string ProcessesAll() => "iiot:master-data:processes:v1:all";
 
     public static string AllDevices() => "iiot:devices:v1:all-active";

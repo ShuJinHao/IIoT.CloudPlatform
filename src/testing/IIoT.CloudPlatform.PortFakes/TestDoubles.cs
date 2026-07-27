@@ -904,6 +904,25 @@ internal sealed class RecordingAuditTrailService : IAuditTrailService
     }
 }
 
+internal sealed class StubAdminTargetGuard : IAdminTargetGuard
+{
+    public Result GuardResult { get; set; } = Result.Success();
+
+    public int Calls { get; private set; }
+
+    public Guid? LastTargetUserId { get; private set; }
+
+    public Task<Result> EnsureMutableNonAdminTargetAsync(
+        Guid targetUserId,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Calls++;
+        LastTargetUserId = targetUserId;
+        return Task.FromResult(GuardResult);
+    }
+}
+
 internal sealed class RecordingIdempotentCacheInvalidationService
     : IIdempotentCacheInvalidationService
 {
@@ -1000,7 +1019,11 @@ internal sealed class StubIdentityPasswordService : IIdentityPasswordService
 {
     public Result<bool> SetPasswordResult { get; set; } = Result.Success(true);
 
+    public Result<bool> ResetPasswordResult { get; set; } = Result.Success(true);
+
     public Guid? LastChangedUserId { get; private set; }
+
+    public Guid? LastResetUserId { get; private set; }
 
     public string? LastCurrentPassword { get; private set; }
 
@@ -1041,7 +1064,9 @@ internal sealed class StubIdentityPasswordService : IIdentityPasswordService
         string newPassword,
         CancellationToken cancellationToken = default)
     {
-        throw new NotSupportedException();
+        LastResetUserId = accountId;
+        LastNewPassword = newPassword;
+        return Task.FromResult(ResetPasswordResult);
     }
 }
 
@@ -1263,11 +1288,31 @@ internal sealed class StubRolePolicyService : IRolePolicyService
 
     public Result<bool> UpdateUserPersonalPermissionsResult { get; set; } = Result.Success(true);
 
+    public List<string> RolePermissions { get; set; } = [];
+
+    public List<string> UserPersonalPermissions { get; set; } = [];
+
     public string? DeletedRoleName { get; private set; }
+
+    public string? CreatedRoleName { get; private set; }
+
+    public string? LastUpdatedRoleName { get; private set; }
+
+    public IReadOnlyList<string>? LastUpdatedRolePermissions { get; private set; }
+
+    public Guid? LastUpdatedUserId { get; private set; }
+
+    public IReadOnlyList<string>? LastUpdatedUserPermissions { get; private set; }
 
     public int GetAllRolesCalls { get; private set; }
 
     public int GetRolePermissionsCalls { get; private set; }
+
+    public int UpdateRolePermissionsCalls { get; private set; }
+
+    public int UpdateUserPersonalPermissionsCalls { get; private set; }
+
+    public int GetUserPersonalPermissionsCalls { get; private set; }
 
     public Task<IList<string>> GetAllRolesAsync()
     {
@@ -1282,6 +1327,7 @@ internal sealed class StubRolePolicyService : IRolePolicyService
 
     public Task<Result> CreateRoleAsync(string roleName)
     {
+        CreatedRoleName = roleName;
         return Task.FromResult(CreateRoleResult);
     }
 
@@ -1299,22 +1345,39 @@ internal sealed class StubRolePolicyService : IRolePolicyService
     public Task<List<string>?> GetRolePermissionsAsync(string roleName)
     {
         GetRolePermissionsCalls++;
-        return Task.FromResult<List<string>?>([]);
+        return Task.FromResult<List<string>?>([.. RolePermissions]);
     }
 
     public Task<Result<bool>> UpdateRolePermissionsAsync(string roleName, List<string> permissions)
     {
+        UpdateRolePermissionsCalls++;
+        LastUpdatedRoleName = roleName;
+        LastUpdatedRolePermissions = [.. permissions];
+        if (UpdateRolePermissionsResult.IsSuccess && UpdateRolePermissionsResult.Value)
+        {
+            RolePermissions = [.. permissions];
+        }
+
         return Task.FromResult(UpdateRolePermissionsResult);
     }
 
     public Task<Result<bool>> UpdateUserPersonalPermissionsAsync(Guid userId, List<string> permissions)
     {
+        UpdateUserPersonalPermissionsCalls++;
+        LastUpdatedUserId = userId;
+        LastUpdatedUserPermissions = [.. permissions];
+        if (UpdateUserPersonalPermissionsResult.IsSuccess && UpdateUserPersonalPermissionsResult.Value)
+        {
+            UserPersonalPermissions = [.. permissions];
+        }
+
         return Task.FromResult(UpdateUserPersonalPermissionsResult);
     }
 
     public Task<List<string>> GetUserPersonalPermissionsAsync(Guid userId)
     {
-        return Task.FromResult<List<string>>([]);
+        GetUserPersonalPermissionsCalls++;
+        return Task.FromResult<List<string>>([.. UserPersonalPermissions]);
     }
 }
 

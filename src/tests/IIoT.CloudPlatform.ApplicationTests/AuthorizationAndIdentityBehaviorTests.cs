@@ -1,4 +1,5 @@
 using IIoT.Core.Identity.Aggregates.IdentityAccounts;
+using IIoT.EmployeeService.Commands.Employees;
 using IIoT.IdentityService.Commands;
 using IIoT.IdentityService.Queries;
 using IIoT.ProductionService.Commands.Bootstrap.Devices;
@@ -111,17 +112,78 @@ public sealed class AuthorizationAndIdentityBehaviorTests
     }
 
     [Fact]
+    public async Task AdminTargetGuard_ShouldUsePersistedTrimmedCaseInsensitiveAdminRole()
+    {
+        var targetUserId = Guid.NewGuid();
+        var identityStore = new RecordingIdentityAccountStore
+        {
+            AccountById = IdentityAccount.Create(targetUserId, "A0001")
+        };
+        identityStore.RolesByUserId[targetUserId] = ["  aDmIn  "];
+        var guard = new AdminTargetGuard(identityStore);
+
+        var result = await guard.EnsureMutableNonAdminTargetAsync(targetUserId);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains(AdminTargetProtectionErrors.AdminTargetProtected, result.Errors!);
+    }
+
+    [Fact]
+    public async Task AdminTargetGuard_ShouldReturnUnifiedErrorForMissingTarget()
+    {
+        var guard = new AdminTargetGuard(new RecordingIdentityAccountStore());
+
+        var result = await guard.EnsureMutableNonAdminTargetAsync(Guid.NewGuid());
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains(AdminTargetProtectionErrors.TargetNotFound, result.Errors!);
+    }
+
+    [Fact]
+    public void CloudPermissionCatalog_ShouldCanonicalizeTrimAndCaseWhileRejectingUnknownInput()
+    {
+        var valid = CloudPermissionCatalog.Normalize(
+            [" device.read ", "DEVICE.READ", " recipe.update "]);
+        var invalid = CloudPermissionCatalog.Normalize(
+            ["Device.Read", "Permission.Forged"]);
+
+        Assert.True(valid.IsValid);
+        Assert.Equal(
+            [DevicePermissions.Read, CloudPermissionCatalog.Recipe.Update],
+            valid.Permissions);
+        Assert.False(invalid.IsValid);
+        Assert.Contains("Permission.Forged", invalid.RejectedPermissions);
+    }
+
+    [Fact]
+    public void RoleAdminAssignableCatalog_ShouldExcludeGovernanceAndAdminOnlyPermissions()
+    {
+        var permissions = CloudPermissionCatalog.RoleAdminAssignable;
+        var builtInRoleAdmin =
+            SystemRolePermissionTemplates.Templates[SystemRoles.RoleAdmin];
+
+        Assert.DoesNotContain(CloudPermissionCatalog.Role.Define, permissions);
+        Assert.DoesNotContain(CloudPermissionCatalog.Role.Update, permissions);
+        Assert.DoesNotContain(CloudPermissionCatalog.Employee.Terminate, permissions);
+        Assert.DoesNotContain(DevicePermissions.Create, permissions);
+        Assert.DoesNotContain(DevicePermissions.Delete, permissions);
+        Assert.DoesNotContain(DevicePermissions.CascadeDelete, permissions);
+        Assert.DoesNotContain(ClientReleasePermissions.HardDelete, permissions);
+        Assert.Contains(DevicePermissions.Read, permissions);
+        Assert.Contains(CloudPermissionCatalog.Role.Define, builtInRoleAdmin);
+        Assert.Contains(CloudPermissionCatalog.Role.Update, builtInRoleAdmin);
+    }
+
+    [Fact]
     public async Task DefineRolePolicyHandler_ShouldDeleteRoleWhenPermissionAssignmentFails()
     {
         var rolePolicyService = new StubRolePolicyService
         {
             UpdateRolePermissionsResult = Result.Failure("permission update failed")
         };
-        var cacheService = new RecordingCacheService();
         var auditTrail = new RecordingAuditTrailService();
         var handler = new DefineRolePolicyHandler(
             rolePolicyService,
-            cacheService,
             new TestCurrentUser
             {
                 Id = Guid.NewGuid().ToString(),
@@ -151,11 +213,9 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             RoleExists = true,
             UpdateRolePermissionsResult = Result.Failure("permission update failed")
         };
-        var cacheService = new RecordingCacheService();
         var auditTrail = new RecordingAuditTrailService();
         var handler = new DefineRolePolicyHandler(
             rolePolicyService,
-            cacheService,
             new TestCurrentUser
             {
                 Id = Guid.NewGuid().ToString(),
@@ -180,12 +240,13 @@ public sealed class AuthorizationAndIdentityBehaviorTests
     [Fact]
     public async Task UpdateRolePermissionsHandler_ShouldWriteAuditOnSuccess()
     {
-        var rolePolicyService = new StubRolePolicyService();
-        var cacheService = new RecordingCacheService();
+        var rolePolicyService = new StubRolePolicyService
+        {
+            RolePermissions = [DevicePermissions.Read]
+        };
         var auditTrail = new RecordingAuditTrailService();
         var handler = new UpdateRolePermissionsHandler(
             rolePolicyService,
-            cacheService,
             new TestCurrentUser
             {
                 Id = Guid.NewGuid().ToString(),
@@ -203,7 +264,97 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         Assert.Contains(auditTrail.Entries, x =>
             x.OperationType == "Role.Permissions.Update"
             && x.TargetIdOrKey == "Supervisor"
-            && x.Succeeded);
+            && x.Succeeded
+            && x.Summary.Contains("\"beforePermissions\":[\"Device.Read\"]", StringComparison.Ordinal)
+            && x.Summary.Contains(
+                "\"afterPermissions\":[\"Device.Read\",\"Recipe.Update\"]",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task DefineRolePolicyHandler_ShouldRejectTrimmedAdminWithoutCreatingOrUpdatingRole()
+    {
+        var rolePolicyService = new StubRolePolicyService();
+        var handler = new DefineRolePolicyHandler(
+            rolePolicyService,
+            CreateAdminUser(),
+            new RecordingAuditTrailService());
+
+        var result = await handler.Handle(
+            new DefineRolePolicyCommand("  aDmIn ", [DevicePermissions.Read]),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Null(rolePolicyService.CreatedRoleName);
+        Assert.Equal(0, rolePolicyService.UpdateRolePermissionsCalls);
+    }
+
+    [Fact]
+    public async Task UpdateRolePermissionsHandler_ShouldRejectAdminWithoutWriting()
+    {
+        var rolePolicyService = new StubRolePolicyService
+        {
+            RolePermissions = [DevicePermissions.Read]
+        };
+        var handler = new UpdateRolePermissionsHandler(
+            rolePolicyService,
+            CreateAdminUser(),
+            new RecordingAuditTrailService());
+
+        var result = await handler.Handle(
+            new UpdateRolePermissionsCommand(" ADMIN ", [CloudPermissionCatalog.Recipe.Read]),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(0, rolePolicyService.UpdateRolePermissionsCalls);
+        Assert.Equal([DevicePermissions.Read], rolePolicyService.RolePermissions);
+    }
+
+    [Fact]
+    public async Task DefineRolePolicyHandler_ShouldRejectNonAssignablePermissionAsWholeSet()
+    {
+        var rolePolicyService = new StubRolePolicyService();
+        var auditTrail = new RecordingAuditTrailService();
+        var handler = new DefineRolePolicyHandler(
+            rolePolicyService,
+            CreateAdminUser(),
+            auditTrail);
+
+        var result = await handler.Handle(
+            new DefineRolePolicyCommand(
+                "Supervisor",
+                [DevicePermissions.Read, CloudPermissionCatalog.Role.Update]),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Null(rolePolicyService.CreatedRoleName);
+        Assert.Equal(0, rolePolicyService.UpdateRolePermissionsCalls);
+        Assert.Contains(auditTrail.Entries, entry =>
+            !entry.Succeeded
+            && entry.Summary.Contains("\"reasonCode\":\"PermissionNotAssignable\"", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task UpdateRolePermissionsHandler_ShouldRejectUnknownPermissionWithoutPartialWrite()
+    {
+        var rolePolicyService = new StubRolePolicyService
+        {
+            RolePermissions = [DevicePermissions.Read]
+        };
+        var handler = new UpdateRolePermissionsHandler(
+            rolePolicyService,
+            CreateAdminUser(),
+            new RecordingAuditTrailService());
+
+        var result = await handler.Handle(
+            new UpdateRolePermissionsCommand(
+                "Supervisor",
+                [CloudPermissionCatalog.Recipe.Read, "Permission.Forged"]),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(0, rolePolicyService.UpdateRolePermissionsCalls);
+        Assert.Equal([DevicePermissions.Read], rolePolicyService.RolePermissions);
     }
 
     [Fact]
@@ -217,6 +368,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         var auditTrail = new RecordingAuditTrailService();
         var handler = new UpdateUserPermissionsHandler(
             rolePolicyService,
+            new StubAdminTargetGuard(),
             new TestCurrentUser
             {
                 Id = Guid.NewGuid().ToString(),
@@ -235,6 +387,169 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             x.OperationType == "User.Permissions.Update"
             && x.TargetIdOrKey == userId.ToString()
             && !x.Succeeded);
+    }
+
+    [Fact]
+    public async Task UpdateUserPermissionsHandler_ShouldRejectUnknownPermissionWithoutPartialWrite()
+    {
+        var userId = Guid.NewGuid();
+        var rolePolicyService = new StubRolePolicyService
+        {
+            UserPersonalPermissions = [DevicePermissions.Read]
+        };
+        var auditTrail = new RecordingAuditTrailService();
+        var handler = new UpdateUserPermissionsHandler(
+            rolePolicyService,
+            new StubAdminTargetGuard(),
+            CreateAdminUser(),
+            auditTrail);
+
+        var result = await handler.Handle(
+            new UpdateUserPermissionsCommand(
+                userId,
+                [" device.read ", "DEVICE.READ", "Permission.Forged"]),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(0, rolePolicyService.UpdateUserPersonalPermissionsCalls);
+        Assert.Equal([DevicePermissions.Read], rolePolicyService.UserPersonalPermissions);
+        Assert.Contains(auditTrail.Entries, entry =>
+            !entry.Succeeded
+            && entry.Summary.Contains("\"beforePermissions\":[\"Device.Read\"]", StringComparison.Ordinal)
+            && entry.Summary.Contains("\"afterPermissions\":[\"Device.Read\"]", StringComparison.Ordinal)
+            && entry.Summary.Contains("\"reasonCode\":\"PermissionNotDefined\"", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task UpdateUserPermissionsHandler_ShouldCanonicalizeBeforeWriting()
+    {
+        var userId = Guid.NewGuid();
+        var rolePolicyService = new StubRolePolicyService();
+        var handler = new UpdateUserPermissionsHandler(
+            rolePolicyService,
+            new StubAdminTargetGuard(),
+            CreateAdminUser(),
+            new RecordingAuditTrailService());
+
+        var result = await handler.Handle(
+            new UpdateUserPermissionsCommand(
+                userId,
+                [" device.read ", "DEVICE.READ", " recipe.update "]),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(
+            [DevicePermissions.Read, CloudPermissionCatalog.Recipe.Update],
+            rolePolicyService.LastUpdatedUserPermissions);
+    }
+
+    [Fact]
+    public async Task PersonalPermissionHandlers_ShouldRejectAdminTargetBeforeReadingOrWriting()
+    {
+        var userId = Guid.NewGuid();
+        var rolePolicyService = new StubRolePolicyService
+        {
+            UserPersonalPermissions = [DevicePermissions.Read]
+        };
+        var targetGuard = new StubAdminTargetGuard
+        {
+            GuardResult = Result.Failure(AdminTargetProtectionErrors.AdminTargetProtected)
+        };
+        var auditTrail = new RecordingAuditTrailService();
+        var updateHandler = new UpdateUserPermissionsHandler(
+            rolePolicyService,
+            targetGuard,
+            CreateAdminUser(),
+            auditTrail);
+        var queryHandler = new GetUserPersonalPermissionsHandler(
+            rolePolicyService,
+            targetGuard);
+
+        var updateResult = await updateHandler.Handle(
+            new UpdateUserPermissionsCommand(userId, [CloudPermissionCatalog.Recipe.Read]),
+            CancellationToken.None);
+        var queryResult = await queryHandler.Handle(
+            new GetUserPersonalPermissionsQuery(userId),
+            CancellationToken.None);
+
+        Assert.False(updateResult.IsSuccess);
+        Assert.False(queryResult.IsSuccess);
+        Assert.Equal(0, rolePolicyService.UpdateUserPersonalPermissionsCalls);
+        Assert.Equal(0, rolePolicyService.GetUserPersonalPermissionsCalls);
+        Assert.Equal([DevicePermissions.Read], rolePolicyService.UserPersonalPermissions);
+        Assert.Contains(auditTrail.Entries, entry =>
+            !entry.Succeeded
+            && entry.Summary.Contains(
+                "\"reasonCode\":\"AdminTargetProtected\"",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ResetPasswordHandler_ShouldResetOrdinaryUserWithoutAuditingPasswordContent()
+    {
+        const string newPassword = "Sensitive-Reset-Password-123!";
+        var userId = Guid.NewGuid();
+        var passwordService = new StubIdentityPasswordService();
+        var refreshTokenService = new StubRefreshTokenService();
+        var auditTrail = new RecordingAuditTrailService();
+        var handler = new ResetPasswordHandler(
+            passwordService,
+            refreshTokenService,
+            new StubAdminTargetGuard(),
+            CreateAdminUser(),
+            auditTrail);
+
+        var result = await handler.Handle(
+            new ResetPasswordCommand(userId, newPassword),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(userId, passwordService.LastResetUserId);
+        Assert.Contains(refreshTokenService.Revocations, revocation =>
+            revocation.SubjectId == userId
+            && revocation.Reason == "password-reset");
+        var auditText = string.Join(
+            Environment.NewLine,
+            auditTrail.Entries.Select(entry => $"{entry.Summary} {entry.FailureReason}"));
+        Assert.DoesNotContain(newPassword, auditText, StringComparison.Ordinal);
+        Assert.DoesNotContain("hash", auditText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ResetPasswordHandler_ShouldRejectAdminSelfTargetWithoutPasswordMutation()
+    {
+        const string newPassword = "Must-Not-Be-Written-123!";
+        var adminUserId = Guid.NewGuid();
+        var passwordService = new StubIdentityPasswordService();
+        var auditTrail = new RecordingAuditTrailService();
+        var handler = new ResetPasswordHandler(
+            passwordService,
+            new StubRefreshTokenService(),
+            new StubAdminTargetGuard
+            {
+                GuardResult = Result.Failure(AdminTargetProtectionErrors.AdminTargetProtected)
+            },
+            new TestCurrentUser
+            {
+                Id = adminUserId.ToString(),
+                UserName = "admin-001",
+                Roles = [SystemRoles.Admin],
+                IsAuthenticated = true
+            },
+            auditTrail);
+
+        var result = await handler.Handle(
+            new ResetPasswordCommand(adminUserId, newPassword),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Null(passwordService.LastResetUserId);
+        Assert.DoesNotContain(
+            newPassword,
+            string.Join(
+                Environment.NewLine,
+                auditTrail.Entries.Select(entry => $"{entry.Summary} {entry.FailureReason}")),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -300,11 +615,9 @@ public sealed class AuthorizationAndIdentityBehaviorTests
     }
 
     [Fact]
-    public async Task GetAllDefinedPermissions_ShouldExposeRoleTemplatePermissions()
+    public async Task GetAllDefinedPermissions_ShouldExposeRoleAdminAssignableCatalogOnly()
     {
-        var handler = new GetAllDefinedPermissionsHandler(
-            new StubRolePolicyService(),
-            new RecordingCacheService());
+        var handler = new GetAllDefinedPermissionsHandler();
 
         var result = await handler.Handle(new GetAllDefinedPermissionsQuery(), CancellationToken.None);
 
@@ -312,17 +625,28 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         var permissions = result.Value!
             .SelectMany(group => group.Permissions)
             .ToHashSet(StringComparer.Ordinal);
-        Assert.Contains(DevicePermissions.CascadeDelete, permissions);
         Assert.Contains(ClientReleasePermissions.Read, permissions);
         Assert.Contains(ClientReleasePermissions.GenerateInstaller, permissions);
         Assert.Contains(ClientReleasePermissions.Publish, permissions);
         Assert.Contains(ClientReleasePermissions.Manage, permissions);
-        Assert.Contains(ClientReleasePermissions.HardDelete, permissions);
         Assert.Contains(DeviceClientOverviewPermissions.Read, permissions);
         Assert.Contains(EdgeHostPermissions.Read, permissions);
         Assert.DoesNotContain("EdgeHost.Manage", permissions);
-        Assert.Contains("Role.Read", permissions);
+        Assert.Contains(CloudPermissionCatalog.Role.Read, permissions);
+        Assert.DoesNotContain(CloudPermissionCatalog.Role.Define, permissions);
+        Assert.DoesNotContain(CloudPermissionCatalog.Role.Update, permissions);
+        Assert.DoesNotContain(CloudPermissionCatalog.Employee.Terminate, permissions);
+        Assert.DoesNotContain(DevicePermissions.Create, permissions);
+        Assert.DoesNotContain(DevicePermissions.Delete, permissions);
+        Assert.DoesNotContain(DevicePermissions.CascadeDelete, permissions);
+        Assert.DoesNotContain(ClientReleasePermissions.HardDelete, permissions);
         Assert.DoesNotContain("Device.Deactivate", permissions);
+        Assert.DoesNotContain(
+            typeof(IRolePolicyService),
+            typeof(GetAllDefinedPermissionsHandler)
+                .GetConstructors()
+                .SelectMany(constructor => constructor.GetParameters())
+                .Select(parameter => parameter.ParameterType));
     }
 
     [Fact]
@@ -345,6 +669,9 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         Assert.Contains(DeviceClientOverviewPermissions.Read, deviceAdmin);
         Assert.Contains(EdgeHostPermissions.Read, deviceAdmin);
         Assert.DoesNotContain(ClientReleasePermissions.Read, deviceAdmin);
+        Assert.DoesNotContain(DevicePermissions.Create, deviceAdmin);
+        Assert.DoesNotContain(DevicePermissions.Delete, deviceAdmin);
+        Assert.DoesNotContain(DevicePermissions.CascadeDelete, deviceAdmin);
 
         Assert.Contains(DeviceClientOverviewPermissions.Read, installer);
         Assert.Contains(EdgeHostPermissions.Read, installer);
@@ -353,6 +680,17 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         Assert.Contains(DeviceClientOverviewPermissions.Read, releaseManager);
         Assert.DoesNotContain(EdgeHostPermissions.Read, releaseManager);
         Assert.Contains(ClientReleasePermissions.Read, releaseManager);
+    }
+
+    [Fact]
+    public void HrAdminTemplate_ShouldAllowOrdinaryEmployeeStatusMaintenance()
+    {
+        var permissions = SystemRolePermissionTemplates.Templates[SystemRoles.HrAdmin];
+
+        Assert.Contains(CloudPermissionCatalog.Employee.Update, permissions);
+        Assert.Contains(CloudPermissionCatalog.Employee.UpdateAccess, permissions);
+        Assert.Contains(CloudPermissionCatalog.Employee.Deactivate, permissions);
+        Assert.DoesNotContain(CloudPermissionCatalog.Employee.Terminate, permissions);
     }
 
     [Fact]
@@ -424,13 +762,148 @@ public sealed class AuthorizationAndIdentityBehaviorTests
 
         Assert.Contains(DevicePermissions.Delete, permissions);
         Assert.Contains(DevicePermissions.CascadeDelete, permissions);
+        Assert.NotEmpty(typeof(DeleteDeviceCommand)
+            .GetCustomAttributes(typeof(AdminOnlyAttribute), inherit: false));
+    }
+
+    [Fact]
+    public void SensitivePersonnelRequests_ShouldRequireAdminOnly()
+    {
+        Type[] requestTypes =
+        [
+            typeof(GetUserPersonalPermissionsQuery),
+            typeof(UpdateUserPermissionsCommand),
+            typeof(ResetPasswordCommand),
+            typeof(TerminateEmployeeCommand)
+        ];
+
+        foreach (var requestType in requestTypes)
+        {
+            Assert.NotEmpty(requestType.GetCustomAttributes(
+                typeof(AdminOnlyAttribute),
+                inherit: false));
+        }
+    }
+
+    [Fact]
+    public async Task NonAdminWithUpdateAccess_ShouldNotWritePersonalPermissions_AndShouldBeAudited()
+    {
+        var nextCalled = false;
+        var auditTrail = new RecordingAuditTrailService();
+        var command = new UpdateUserPermissionsCommand(
+            Guid.NewGuid(),
+            [DevicePermissions.Read]);
+        var behavior = new AdminOnlyBehavior<UpdateUserPermissionsCommand, Result<bool>>(
+            new StubCurrentUserDeviceAccessService { IsAdministrator = false },
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "hr-admin",
+                Roles = [SystemRoles.HrAdmin],
+                Permissions = [CloudPermissionCatalog.Employee.UpdateAccess],
+                IsAuthenticated = true
+            },
+            auditTrail);
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            behavior.Handle(
+                command,
+                _ =>
+                {
+                    nextCalled = true;
+                    return Task.FromResult(Result.Success(true));
+                },
+                CancellationToken.None));
+
+        Assert.False(nextCalled);
+        Assert.Contains(auditTrail.Entries, entry =>
+            entry.OperationType == "User.Permissions.Update"
+            && !entry.Succeeded
+            && entry.Summary.Contains("\"reasonCode\":\"AdminRequired\"", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task NonAdminWithEmployeePermissions_ShouldNotReadPersonalPermissions()
+    {
+        var nextCalled = false;
+        var query = new GetUserPersonalPermissionsQuery(Guid.NewGuid());
+        var behavior = new AdminOnlyBehavior<
+            GetUserPersonalPermissionsQuery,
+            Result<List<string>>>(
+            new StubCurrentUserDeviceAccessService { IsAdministrator = false },
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "hr-admin",
+                Roles = [SystemRoles.HrAdmin],
+                Permissions =
+                [
+                    CloudPermissionCatalog.Employee.Read,
+                    CloudPermissionCatalog.Employee.UpdateAccess
+                ],
+                IsAuthenticated = true
+            },
+            new RecordingAuditTrailService());
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            behavior.Handle(
+                query,
+                _ =>
+                {
+                    nextCalled = true;
+                    return Task.FromResult(Result.Success(new List<string>()));
+                },
+                CancellationToken.None));
+
+        Assert.False(nextCalled);
+    }
+
+    [Fact]
+    public async Task DeviceAdminWithLegacyDeleteClaims_ShouldNotReachDeleteDeviceHandler()
+    {
+        var nextCalled = false;
+        var command = new DeleteDeviceCommand(Guid.NewGuid());
+        var behavior = new AdminOnlyBehavior<DeleteDeviceCommand, Result<bool>>(
+            new StubCurrentUserDeviceAccessService { IsAdministrator = false },
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "device-admin",
+                Roles = [SystemRoles.DeviceAdmin],
+                Permissions =
+                [
+                    DevicePermissions.Delete,
+                    DevicePermissions.CascadeDelete
+                ],
+                IsAuthenticated = true
+            },
+            new RecordingAuditTrailService());
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            behavior.Handle(
+                command,
+                _ =>
+                {
+                    nextCalled = true;
+                    return Task.FromResult(Result.Success(true));
+                },
+                CancellationToken.None));
+
+        Assert.False(nextCalled);
     }
 
     [Fact]
     public async Task AdminOnlyBehavior_ShouldRejectNonAdmin()
     {
         var behavior = new AdminOnlyBehavior<AdminOnlyHumanCommand, Result<bool>>(
-            new StubCurrentUserDeviceAccessService { IsAdministrator = false });
+            new StubCurrentUserDeviceAccessService { IsAdministrator = false },
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "operator-001",
+                IsAuthenticated = true
+            },
+            new RecordingAuditTrailService());
 
         var exception = await Assert.ThrowsAsync<ForbiddenException>(() =>
             behavior.Handle(
@@ -446,7 +919,15 @@ public sealed class AuthorizationAndIdentityBehaviorTests
     {
         var nextCalled = false;
         var behavior = new AdminOnlyBehavior<AdminOnlyHumanCommand, Result<bool>>(
-            new StubCurrentUserDeviceAccessService { IsAdministrator = true });
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "admin-001",
+                Roles = [SystemRoles.Admin],
+                IsAuthenticated = true
+            },
+            new RecordingAuditTrailService());
 
         var result = await behavior.Handle(
             new AdminOnlyHumanCommand(),
@@ -739,6 +1220,15 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             && x.SubjectId == deviceId
             && x.Reason == "device-unavailable");
     }
+
+    private static TestCurrentUser CreateAdminUser()
+        => new()
+        {
+            Id = Guid.NewGuid().ToString(),
+            UserName = "admin-001",
+            Roles = [SystemRoles.Admin],
+            IsAuthenticated = true
+        };
 
     private sealed class StubPermissionProvider : IPermissionProvider
     {

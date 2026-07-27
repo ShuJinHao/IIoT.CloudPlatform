@@ -12,7 +12,7 @@ public sealed class CurrentUserDeviceAccessService(
     private const string InvalidUserCredentialMessage = "用户凭证异常";
     private const string UnauthorizedDeviceMessage = "越权: 未授权访问该设备";
 
-    public bool IsAdministrator => currentUser.Roles.Contains(SystemRoles.Admin, StringComparer.Ordinal);
+    public bool IsAdministrator => SystemRoles.ContainsAdmin(currentUser.Roles);
 
     public async Task<Result<IReadOnlyList<Guid>?>> GetAccessibleDeviceIdsAsync(
         CancellationToken cancellationToken = default)

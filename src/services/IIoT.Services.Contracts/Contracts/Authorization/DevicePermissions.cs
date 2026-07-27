@@ -2,9 +2,9 @@ namespace IIoT.Services.Contracts.Authorization;
 
 public static class DevicePermissions
 {
-    public const string Read = "Device.Read";
-    public const string Create = "Device.Create";
-    public const string Update = "Device.Update";
-    public const string Delete = "Device.Delete";
-    public const string CascadeDelete = "Device.CascadeDelete";
+    public const string Read = CloudPermissionCatalog.Device.Read;
+    public const string Create = CloudPermissionCatalog.Device.Create;
+    public const string Update = CloudPermissionCatalog.Device.Update;
+    public const string Delete = CloudPermissionCatalog.Device.Delete;
+    public const string CascadeDelete = CloudPermissionCatalog.Device.CascadeDelete;
 }

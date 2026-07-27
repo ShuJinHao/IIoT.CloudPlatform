@@ -1,90 +1,160 @@
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
+using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
 using IIoT.Services.CrossCutting.Attributes;
-using IIoT.Services.CrossCutting.Caching;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 
 namespace IIoT.IdentityService.Commands;
 
-[AuthorizeRequirement("Role.Define")]
+[AuthorizeRequirement(CloudPermissionCatalog.Role.Define)]
 [DistributedLock("iiot:lock:role:{RoleName}", TimeoutSeconds = 5)]
 public record DefineRolePolicyCommand(string RoleName, List<string> Permissions) : IHumanCommand<Result<bool>>;
 
 public class DefineRolePolicyHandler(
     IRolePolicyService rolePolicyService,
-    ICacheService cacheService,
     ICurrentUser currentUser,
     IAuditTrailService auditTrailService
 ) : ICommandHandler<DefineRolePolicyCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(DefineRolePolicyCommand request, CancellationToken cancellationToken)
     {
-        var roleAlreadyExists = await rolePolicyService.RoleExistsAsync(request.RoleName);
+        var roleName = (request.RoleName ?? string.Empty).Trim();
+        if (SystemRoles.IsAdmin(roleName))
+        {
+            return await FailAsync(
+                roleName,
+                [],
+                [],
+                [],
+                ["禁止定义、覆盖或修改 Admin 角色。"],
+                "AdminRoleProtected",
+                0,
+                cancellationToken);
+        }
+
+        var roleAlreadyExists = await rolePolicyService.RoleExistsAsync(roleName);
+        var beforePermissions = roleAlreadyExists
+            ? await rolePolicyService.GetRolePermissionsAsync(roleName) ?? []
+            : [];
+        var validation = CloudPermissionCatalog.NormalizeRoleAdminAssignable(request.Permissions);
+        if (!validation.IsValid)
+        {
+            return await FailAsync(
+                roleName,
+                beforePermissions,
+                beforePermissions,
+                validation.Permissions,
+                ["权限集合包含未知权限或 RoleAdmin 不可分配权限，未执行任何修改。"],
+                "PermissionNotAssignable",
+                validation.RejectedPermissions.Count,
+                cancellationToken);
+        }
+
+        var normalizedPermissions = validation.Permissions.ToList();
         var createResult = roleAlreadyExists
             ? Result.Success()
-            : await rolePolicyService.CreateRoleAsync(request.RoleName);
+            : await rolePolicyService.CreateRoleAsync(roleName);
 
         if (!createResult.IsSuccess)
         {
             return await FailAsync(
-                request,
+                roleName,
+                beforePermissions,
+                beforePermissions,
+                normalizedPermissions,
                 createResult.Errors?.ToArray() ?? ["Role creation failed."],
+                "RoleCreationFailed",
+                0,
                 cancellationToken);
         }
 
         try
         {
-            var updateResult = await rolePolicyService.UpdateRolePermissionsAsync(request.RoleName, request.Permissions);
+            var updateResult = await rolePolicyService.UpdateRolePermissionsAsync(
+                roleName,
+                normalizedPermissions);
 
             if (!updateResult.IsSuccess || !updateResult.Value)
             {
                 if (!roleAlreadyExists)
-                    await rolePolicyService.DeleteRoleAsync(request.RoleName);
+                    await rolePolicyService.DeleteRoleAsync(roleName);
 
                 return await FailAsync(
-                    request,
+                    roleName,
+                    beforePermissions,
+                    roleAlreadyExists
+                        ? await rolePolicyService.GetRolePermissionsAsync(roleName) ?? beforePermissions
+                        : [],
+                    normalizedPermissions,
                     updateResult.Errors?.ToArray() ?? ["Role permission assignment failed."],
+                    "PermissionPersistenceFailed",
+                    0,
                     cancellationToken);
             }
 
-            await cacheService.RemoveAsync(
-                CacheKeys.AllDefinedPermissions(),
-                cancellationToken);
-
+            var afterPermissions = await rolePolicyService.GetRolePermissionsAsync(roleName)
+                ?? normalizedPermissions;
             await auditTrailService.TryWriteAsync(
                 CreateAuditEntry(
-                    request,
+                    roleName,
                     succeeded: true,
-                    summary: $"Defined role {request.RoleName} with {request.Permissions.Count} permissions."),
+                    summary: PermissionAuditSummary.Serialize(
+                        "RoleDefine",
+                        beforePermissions,
+                        afterPermissions,
+                        normalizedPermissions,
+                        "Succeeded")),
                 cancellationToken);
 
             return Result.Success(true);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             if (!roleAlreadyExists)
-                await rolePolicyService.DeleteRoleAsync(request.RoleName);
+                await rolePolicyService.DeleteRoleAsync(roleName);
 
             var message = roleAlreadyExists
-                ? $"Define role policy failed with exception: {ex.Message}"
-                : $"Define role policy failed with exception and rolled back the new role: {ex.Message}";
+                ? "角色定义执行失败。"
+                : "角色定义执行失败，已回滚本次新建角色。";
 
-            return await FailAsync(request, [message], cancellationToken);
+            return await FailAsync(
+                roleName,
+                beforePermissions,
+                roleAlreadyExists
+                    ? await rolePolicyService.GetRolePermissionsAsync(roleName) ?? beforePermissions
+                    : [],
+                normalizedPermissions,
+                [message],
+                "UnexpectedFailure",
+                0,
+                cancellationToken);
         }
     }
 
     private async Task<Result<bool>> FailAsync(
-        DefineRolePolicyCommand request,
+        string roleName,
+        IEnumerable<string> beforePermissions,
+        IEnumerable<string> afterPermissions,
+        IEnumerable<string> requestedPermissions,
         string[] errors,
+        string reasonCode,
+        int rejectedPermissionCount,
         CancellationToken cancellationToken)
     {
         await auditTrailService.TryWriteAsync(
             CreateAuditEntry(
-                request,
+                roleName,
                 succeeded: false,
-                summary: $"Define role {request.RoleName}.",
+                summary: PermissionAuditSummary.Serialize(
+                    "RoleDefine",
+                    beforePermissions,
+                    afterPermissions,
+                    requestedPermissions,
+                    "Rejected",
+                    reasonCode,
+                    rejectedPermissionCount),
                 failureReason: string.Join("; ", errors)),
             cancellationToken);
 
@@ -92,7 +162,7 @@ public class DefineRolePolicyHandler(
     }
 
     private AuditTrailEntry CreateAuditEntry(
-        DefineRolePolicyCommand request,
+        string roleName,
         bool succeeded,
         string summary,
         string? failureReason = null)
@@ -102,7 +172,7 @@ public class DefineRolePolicyHandler(
             currentUser.UserName,
             "Role.Define",
             "Role",
-            request.RoleName,
+            roleName,
             DateTime.UtcNow,
             succeeded,
             summary,
