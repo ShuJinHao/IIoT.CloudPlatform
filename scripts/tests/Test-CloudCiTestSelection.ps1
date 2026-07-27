@@ -448,6 +448,7 @@ try {
 
 $workflowText = Get-Content (Join-Path $root '.github/workflows/cloud-ci.yml') -Raw
 $selectorText = Get-Content $selector -Raw
+$runnerText = Get-Content (Join-Path $root 'scripts/tests/Invoke-CloudCiSelectedTests.ps1') -Raw
 if ($selectorText -notmatch "'core\.quotepath=false'" -or
     $selectorText -notmatch 'StandardOutputEncoding\s*=\s*\$utf8' -or
     $selectorText -notmatch "'-z'" -or
@@ -469,5 +470,9 @@ if ($workflowText -match "\`$env:CI_MODE\s+-ne\s+'default'" -or
 if ($workflowText -notmatch 'if\s*\(\[string\]::IsNullOrWhiteSpace\(\$baseRef\)\)\s*\{\s*\$baseRef\s*=\s*''HEAD\^''') {
     throw 'Cloud manual CI modes do not have a deterministic base ref.'
 }
+if ($runnerText -notmatch "ForEach-Object\s*\{\s*\[int\]\`$_\['discovered'\]\s*\}" -or
+    $runnerText -match 'Measure-Object\s+discovered\s+-Sum') {
+    throw 'Cloud CI discovery aggregation does not safely read ordered result dictionaries.'
+}
 
-Write-Host 'CLOUD_CI_SELECTION_BEHAVIOR_OK positive=1 utf8Paths=1 docs=1 quality=1 deployment=1 deferred=1 dynamic=1 dynamicDeployment=1 retiredBusiness=1 unownedRetired=1 cross=1 negative=1 workflowGate=1'
+Write-Host 'CLOUD_CI_SELECTION_BEHAVIOR_OK positive=1 utf8Paths=1 docs=1 quality=1 deployment=1 deferred=1 dynamic=1 dynamicDeployment=1 retiredBusiness=1 unownedRetired=1 cross=1 negative=1 workflowGate=1 discoveryAggregation=1'
