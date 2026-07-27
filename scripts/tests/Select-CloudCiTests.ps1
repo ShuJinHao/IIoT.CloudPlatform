@@ -37,6 +37,61 @@ function Get-RepositoryRelativePath {
     return [IO.Path]::GetRelativePath($Root, [IO.Path]::GetFullPath($Path)).Replace('\', '/')
 }
 
+function Invoke-GitUtf8 {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [Parameter(Mandatory)][string]$FailureMessage,
+        [switch]$NullDelimited
+    )
+
+    $utf8 = [Text.UTF8Encoding]::new($false)
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = 'git'
+    $startInfo.WorkingDirectory = $Root
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = $utf8
+    $startInfo.StandardErrorEncoding = $utf8
+    foreach ($argument in @('-c', 'core.quotepath=false') + $Arguments) {
+        [void]$startInfo.ArgumentList.Add($argument)
+    }
+
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw "$FailureMessage Git did not start."
+        }
+        $standardOutput = $process.StandardOutput.ReadToEndAsync()
+        $standardError = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $output = $standardOutput.GetAwaiter().GetResult()
+        $errorOutput = $standardError.GetAwaiter().GetResult()
+        $exitCode = $process.ExitCode
+    } finally {
+        $process.Dispose()
+    }
+
+    if ($exitCode -ne 0) {
+        $detail = $errorOutput.Trim()
+        if ([string]::IsNullOrWhiteSpace($detail)) {
+            $detail = $output.Trim()
+        }
+        throw "$FailureMessage`n$detail"
+    }
+    if ([string]::IsNullOrEmpty($output)) {
+        return @()
+    }
+    if ($NullDelimited) {
+        return @($output.Split([char]0, [StringSplitOptions]::RemoveEmptyEntries))
+    }
+    return @([regex]::Split($output, '\r?\n') |
+        Where-Object { -not [string]::IsNullOrEmpty($_) })
+}
+
 function Get-DirectProjectProperty {
     param(
         [Parameter(Mandatory)][xml]$Project,
@@ -321,11 +376,16 @@ if (-not $PSBoundParameters.ContainsKey('ChangedFiles')) {
         if ([string]::IsNullOrWhiteSpace($BaseRef) -or $BaseRef -match '^0+$') {
             throw 'Default CI selection requires a non-zero BaseRef. Use workflow_dispatch mode Full for an initial branch history.'
         }
-        $diffOutput = @(& git -C $root diff --no-renames --name-only --diff-filter=ACMRTUXBD "$BaseRef...$HeadRef" 2>&1)
-        if ($LASTEXITCODE -ne 0) {
-            throw "Unable to calculate changed files for $BaseRef...${HeadRef}:`n$($diffOutput -join [Environment]::NewLine)"
-        }
-        $ChangedFiles = @($diffOutput)
+        $ChangedFiles = @(Invoke-GitUtf8 -Root $root `
+            -Arguments @(
+                'diff',
+                '--no-renames',
+                '--name-only',
+                '-z',
+                '--diff-filter=ACMRTUXBD',
+                "$BaseRef...$HeadRef") `
+            -FailureMessage "Unable to calculate changed files for $BaseRef...${HeadRef}:" `
+            -NullDelimited)
     }
 }
 $changed = @($ChangedFiles |

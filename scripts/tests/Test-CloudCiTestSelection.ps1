@@ -177,6 +177,43 @@ try {
         throw 'Default source selection included the explicit Quality lane.'
     }
 
+    $utf8Root = Join-Path $temporaryRoot 'utf8-git-paths'
+    $utf8Base = New-DynamicRunnerFixture -Root $utf8Root
+    Write-FixtureFile `
+        -Root $utf8Root `
+        -Path 'src/core/Cloud.Product/中文 文件.cs' `
+        -Content 'internal sealed class Utf8PathFixture { }'
+    Write-FixtureFile `
+        -Root $utf8Root `
+        -Path 'docs/生产 发布说明.md' `
+        -Content '# UTF-8 path fixture'
+    & git -C $utf8Root add .
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to stage Cloud UTF-8 selector fixture.' }
+    & git -C $utf8Root -c user.name=selector-fixture -c user.email=selector@example.invalid `
+        commit -q -m 'utf8 paths'
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to commit Cloud UTF-8 selector fixture.' }
+    $utf8Output = Join-Path $temporaryRoot 'utf8-paths.json'
+    & $selector `
+        -RepositoryRoot $utf8Root `
+        -BaseRef $utf8Base `
+        -HeadRef HEAD `
+        -OutputPath $utf8Output `
+        -GitHubOutputPath ''
+    $utf8Selection = Get-Content $utf8Output -Raw | ConvertFrom-Json
+    $utf8ChangedFiles = @($utf8Selection.changedFiles)
+    $utf8BusinessNames = @($utf8Selection.selectedDotNetProjects |
+        Where-Object { @($_.categories) -contains 'Business' } |
+        Select-Object -ExpandProperty projectName)
+    if ($utf8ChangedFiles -notcontains 'src/core/Cloud.Product/中文 文件.cs' -or
+        $utf8ChangedFiles -notcontains 'docs/生产 发布说明.md' -or
+        $utf8BusinessNames -notcontains 'Cloud.Business.Legacy' -or
+        @($utf8Selection.unclassifiedFiles).Count -ne 0 -or
+        @($utf8ChangedFiles | Where-Object {
+                $_ -match '^"' -or $_ -match '\\[0-7]{3}'
+            }).Count -ne 0) {
+        throw "Git UTF-8 path selection did not preserve exact repository paths: $($utf8ChangedFiles -join ', ')"
+    }
+
     $docsOutput = Join-Path $temporaryRoot 'docs.json'
     & $selector `
         -RepositoryRoot $root `
@@ -410,8 +447,20 @@ try {
 }
 
 $workflowText = Get-Content (Join-Path $root '.github/workflows/cloud-ci.yml') -Raw
+$selectorText = Get-Content $selector -Raw
+if ($selectorText -notmatch "'core\.quotepath=false'" -or
+    $selectorText -notmatch 'StandardOutputEncoding\s*=\s*\$utf8' -or
+    $selectorText -notmatch "'-z'" -or
+    $selectorText -notmatch 'Split\(\[char\]0') {
+    throw 'Cloud selector Git path protocol is not fixed to unquoted UTF-8 NUL-delimited output.'
+}
 if ($workflowText -notmatch '\$selectorInputs\.Count\s+-gt\s+0[\s\S]*?Test-CloudCiTestSelection\.ps1') {
     throw 'Cloud default CI does not gate selector behavior tests on affected selector inputs.'
+}
+if ($workflowText -notmatch 'git\s+-c\s+core\.quotepath=false\s+diff\s+--name-only' -or
+    $workflowText -notmatch '\[Console\]::OutputEncoding\s*=\s*\$utf8' -or
+    $workflowText -notmatch '\$OutputEncoding\s*=\s*\$utf8') {
+    throw 'Cloud default CI does not force unquoted Git paths and UTF-8 PowerShell decoding.'
 }
 if ($workflowText -match "\`$env:CI_MODE\s+-ne\s+'default'" -or
     ($workflowText.Split('Test-CloudCiTestSelection.ps1', [StringSplitOptions]::None).Length - 1) -ne 2) {
@@ -421,4 +470,4 @@ if ($workflowText -notmatch 'if\s*\(\[string\]::IsNullOrWhiteSpace\(\$baseRef\)\
     throw 'Cloud manual CI modes do not have a deterministic base ref.'
 }
 
-Write-Host 'CLOUD_CI_SELECTION_BEHAVIOR_OK positive=1 docs=1 quality=1 deployment=1 deferred=1 dynamic=1 dynamicDeployment=1 retiredBusiness=1 unownedRetired=1 cross=1 negative=1 workflowGate=1'
+Write-Host 'CLOUD_CI_SELECTION_BEHAVIOR_OK positive=1 utf8Paths=1 docs=1 quality=1 deployment=1 deferred=1 dynamic=1 dynamicDeployment=1 retiredBusiness=1 unownedRetired=1 cross=1 negative=1 workflowGate=1'

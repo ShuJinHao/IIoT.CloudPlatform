@@ -59,8 +59,12 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($baseRef)) {
             $baseRef = 'HEAD^'
           }
+          $utf8 = [Text.UTF8Encoding]::new($false)
+          [Console]::InputEncoding = $utf8
+          [Console]::OutputEncoding = $utf8
+          $OutputEncoding = $utf8
           $selectorInputs = @(
-            & git diff --name-only $baseRef HEAD -- `
+            & git -c core.quotepath=false diff --name-only $baseRef HEAD -- `
               '.github/workflows/cloud-ci.yml' `
               'scripts/tests/Select-CloudCiTests.ps1' `
               'scripts/tests/Invoke-CloudCiSelectedTests.ps1' `
