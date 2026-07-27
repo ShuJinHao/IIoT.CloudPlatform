@@ -2,5 +2,5 @@ namespace IIoT.Services.Contracts.Authorization;
 
 public static class DeviceClientOverviewPermissions
 {
-    public const string Read = "DeviceClientOverview.Read";
+    public const string Read = CloudPermissionCatalog.DeviceClientOverview.Read;
 }

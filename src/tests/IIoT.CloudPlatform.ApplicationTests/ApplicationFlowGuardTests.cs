@@ -294,7 +294,11 @@ public sealed class ApplicationFlowGuardTests
             unitOfWork,
             refreshTokenService,
             new TestCurrentUser { Id = Guid.NewGuid().ToString(), IsAuthenticated = true },
-            new RecordingPermissionProvider());
+            new RecordingPermissionProvider
+            {
+                Permissions = [CloudPermissionCatalog.Employee.Deactivate]
+            },
+            new StubAdminTargetGuard());
 
         var result = await handler.Handle(
             new UpdateEmployeeProfileCommand(employeeId, " New Name ", false),
@@ -313,6 +317,216 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal(1, unitOfWork.BeginCalls);
         Assert.Equal(1, unitOfWork.CommitCalls);
         Assert.Equal(0, unitOfWork.RollbackCalls);
+    }
+
+    [Fact]
+    public async Task HrAdmin_ShouldReactivateOrdinaryEmployeeThroughProfileUpdate()
+    {
+        var employeeId = Guid.NewGuid();
+        var employee = new Employee(employeeId, "E001", "Inactive User");
+        employee.Deactivate();
+        var repository = new InMemoryRepository<Employee>
+        {
+            SingleOrDefaultResult = employee
+        };
+        var identityStore = new RecordingIdentityAccountStore();
+        var handler = new UpdateEmployeeProfileHandler(
+            repository,
+            identityStore,
+            new RecordingUnitOfWork(),
+            new StubRefreshTokenService(),
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                Roles = [SystemRoles.HrAdmin],
+                IsAuthenticated = true
+            },
+            new RecordingPermissionProvider
+            {
+                Permissions = [CloudPermissionCatalog.Employee.Deactivate]
+            },
+            new StubAdminTargetGuard());
+
+        var result = await handler.Handle(
+            new UpdateEmployeeProfileCommand(employeeId, "Active User", true),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(employee.IsActive);
+        Assert.Equal(employeeId, identityStore.LastSetEnabledId);
+        Assert.True(identityStore.LastSetEnabledValue);
+    }
+
+    [Fact]
+    public async Task EmployeeUpdatePermissionAlone_ShouldNotChangeEmployeeStatus()
+    {
+        var employeeId = Guid.NewGuid();
+        var employee = new Employee(employeeId, "E002", "Active User");
+        var repository = new InMemoryRepository<Employee>
+        {
+            SingleOrDefaultResult = employee
+        };
+        var identityStore = new RecordingIdentityAccountStore();
+        var unitOfWork = new RecordingUnitOfWork();
+        var handler = new UpdateEmployeeProfileHandler(
+            repository,
+            identityStore,
+            unitOfWork,
+            new StubRefreshTokenService(),
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                Roles = [SystemRoles.HrAdmin],
+                IsAuthenticated = true
+            },
+            new RecordingPermissionProvider
+            {
+                Permissions = [CloudPermissionCatalog.Employee.Update]
+            },
+            new StubAdminTargetGuard());
+
+        var result = await handler.Handle(
+            new UpdateEmployeeProfileCommand(employeeId, "Changed Name", false),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.True(employee.IsActive);
+        Assert.Equal("Active User", employee.RealName);
+        Assert.Empty(repository.UpdatedEntities);
+        Assert.Null(identityStore.LastSetEnabledId);
+        Assert.Equal(1, unitOfWork.RollbackCalls);
+    }
+
+    [Fact]
+    public async Task UpdateEmployeeProfile_ShouldRejectAdminRoleAssignmentBeforeMutation()
+    {
+        var employeeId = Guid.NewGuid();
+        var employee = new Employee(employeeId, "E003", "Ordinary User");
+        var repository = new InMemoryRepository<Employee>
+        {
+            SingleOrDefaultResult = employee
+        };
+        var identityStore = new RecordingIdentityAccountStore();
+        var unitOfWork = new RecordingUnitOfWork();
+        var handler = new UpdateEmployeeProfileHandler(
+            repository,
+            identityStore,
+            unitOfWork,
+            new StubRefreshTokenService(),
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                Roles = [SystemRoles.HrAdmin],
+                IsAuthenticated = true
+            },
+            new RecordingPermissionProvider
+            {
+                Permissions = [CloudPermissionCatalog.Employee.UpdateAccess]
+            },
+            new StubAdminTargetGuard());
+
+        var result = await handler.Handle(
+            new UpdateEmployeeProfileCommand(
+                employeeId,
+                "Changed Name",
+                true,
+                "  aDmIn  "),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("Ordinary User", employee.RealName);
+        Assert.Empty(repository.UpdatedEntities);
+        Assert.Empty(identityStore.ReplacedRoles);
+        Assert.Equal(0, unitOfWork.BeginCalls);
+    }
+
+    [Fact]
+    public async Task EmployeeWriteHandlers_ShouldRejectAdminTargetBeforeAnyDataMutation()
+    {
+        var employeeId = Guid.NewGuid();
+        var targetGuard = new StubAdminTargetGuard
+        {
+            GuardResult = Result.Failure(AdminTargetProtectionErrors.AdminTargetProtected)
+        };
+
+        var profileRepository = new InMemoryRepository<Employee>
+        {
+            SingleOrDefaultResult = new Employee(employeeId, "A001", "Admin")
+        };
+        var profileIdentityStore = new RecordingIdentityAccountStore();
+        var profileUnitOfWork = new RecordingUnitOfWork();
+        var profileHandler = new UpdateEmployeeProfileHandler(
+            profileRepository,
+            profileIdentityStore,
+            profileUnitOfWork,
+            new StubRefreshTokenService(),
+            new TestCurrentUser { Id = Guid.NewGuid().ToString(), IsAuthenticated = true },
+            new RecordingPermissionProvider(),
+            targetGuard);
+
+        var accessRepository = new InMemoryRepository<Employee>
+        {
+            SingleOrDefaultResult = new Employee(employeeId, "A001", "Admin")
+        };
+        var accessHandler = new UpdateEmployeeAccessHandler(
+            accessRepository,
+            targetGuard);
+
+        var deactivateRepository = new InMemoryRepository<Employee>
+        {
+            SingleOrDefaultResult = new Employee(employeeId, "A001", "Admin")
+        };
+        var deactivateIdentityStore = new RecordingIdentityAccountStore();
+        var deactivateUnitOfWork = new RecordingUnitOfWork();
+        var deactivateHandler = new DeactivateEmployeeHandler(
+            deactivateRepository,
+            deactivateIdentityStore,
+            deactivateUnitOfWork,
+            new StubRefreshTokenService(),
+            targetGuard);
+
+        var terminateRepository = new InMemoryRepository<Employee>
+        {
+            SingleOrDefaultResult = new Employee(employeeId, "A001", "Admin")
+        };
+        var terminateIdentityStore = new RecordingIdentityAccountStore();
+        var terminateUnitOfWork = new RecordingUnitOfWork();
+        var terminateHandler = new TerminateEmployeeHandler(
+            terminateRepository,
+            terminateIdentityStore,
+            terminateUnitOfWork,
+            new StubRefreshTokenService(),
+            targetGuard);
+
+        var profileResult = await profileHandler.Handle(
+            new UpdateEmployeeProfileCommand(employeeId, "Changed", false),
+            CancellationToken.None);
+        var accessResult = await accessHandler.Handle(
+            new UpdateEmployeeAccessCommand(employeeId, [Guid.NewGuid()]),
+            CancellationToken.None);
+        var deactivateResult = await deactivateHandler.Handle(
+            new DeactivateEmployeeCommand(employeeId),
+            CancellationToken.None);
+        var terminateResult = await terminateHandler.Handle(
+            new TerminateEmployeeCommand(employeeId),
+            CancellationToken.None);
+
+        Assert.False(profileResult.IsSuccess);
+        Assert.False(accessResult.IsSuccess);
+        Assert.False(deactivateResult.IsSuccess);
+        Assert.False(terminateResult.IsSuccess);
+        Assert.Equal(4, targetGuard.Calls);
+        Assert.Equal(0, profileRepository.GetSingleOrDefaultCalls);
+        Assert.Equal(0, accessRepository.GetSingleOrDefaultCalls);
+        Assert.Equal(0, deactivateRepository.GetSingleOrDefaultCalls);
+        Assert.Equal(0, terminateRepository.GetSingleOrDefaultCalls);
+        Assert.Empty(profileRepository.UpdatedEntities);
+        Assert.Empty(accessRepository.UpdatedEntities);
+        Assert.Empty(deactivateRepository.UpdatedEntities);
+        Assert.Empty(terminateIdentityStore.DeletedIds);
+        Assert.Equal(0, profileUnitOfWork.BeginCalls);
+        Assert.Equal(0, deactivateUnitOfWork.BeginCalls);
+        Assert.Equal(0, terminateUnitOfWork.BeginCalls);
     }
 
     [Fact]
@@ -390,7 +604,8 @@ public sealed class ApplicationFlowGuardTests
             repository,
             identityStore,
             unitOfWork,
-            new StubRefreshTokenService());
+            new StubRefreshTokenService(),
+            new StubAdminTargetGuard());
 
         var result = await handler.Handle(new DeactivateEmployeeCommand(employeeId), CancellationToken.None);
 
@@ -416,7 +631,8 @@ public sealed class ApplicationFlowGuardTests
             repository,
             identityStore,
             unitOfWork,
-            refreshTokenService);
+            refreshTokenService,
+            new StubAdminTargetGuard());
 
         var result = await handler.Handle(new DeactivateEmployeeCommand(employeeId), CancellationToken.None);
 
@@ -446,7 +662,8 @@ public sealed class ApplicationFlowGuardTests
             repository,
             identityStore,
             unitOfWork,
-            new StubRefreshTokenService());
+            new StubRefreshTokenService(),
+            new StubAdminTargetGuard());
 
         var result = await handler.Handle(new TerminateEmployeeCommand(employeeId), CancellationToken.None);
 
@@ -472,7 +689,8 @@ public sealed class ApplicationFlowGuardTests
             repository,
             identityStore,
             unitOfWork,
-            refreshTokenService);
+            refreshTokenService,
+            new StubAdminTargetGuard());
 
         var result = await handler.Handle(new TerminateEmployeeCommand(employeeId), CancellationToken.None);
 
@@ -497,7 +715,9 @@ public sealed class ApplicationFlowGuardTests
         {
             SingleOrDefaultResult = employee
         };
-        var handler = new UpdateEmployeeAccessHandler(repository);
+        var handler = new UpdateEmployeeAccessHandler(
+            repository,
+            new StubAdminTargetGuard());
 
         var result = await handler.Handle(
             new UpdateEmployeeAccessCommand(employeeId, [updatedDeviceId]),

@@ -14,7 +14,16 @@ namespace IIoT.ProductionService.Commands.Devices;
 
 [AuthorizeRequirement(DevicePermissions.Delete)]
 [AuthorizeRequirement(DevicePermissions.CascadeDelete)]
-public record DeleteDeviceCommand(Guid DeviceId) : IHumanCommand<Result<bool>>;
+[AdminOnly]
+public record DeleteDeviceCommand(Guid DeviceId)
+    : IHumanCommand<Result<bool>>, IAdminOnlyAuditRequest
+{
+    public string AdminAuditOperationType => "Device.Delete";
+
+    public string AdminAuditTargetType => "Device";
+
+    public string AdminAuditTargetIdOrKey => DeviceId.ToString();
+}
 
 public class DeleteDeviceHandler(
     ICurrentUser currentUser,

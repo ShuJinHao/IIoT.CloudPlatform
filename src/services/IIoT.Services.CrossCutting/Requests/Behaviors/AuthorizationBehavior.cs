@@ -59,7 +59,7 @@ public class AuthorizationBehavior<TRequest, TResponse>(
             return await next(cancellationToken);
         }
 
-        if (user.Roles.Contains(SystemRoles.Admin, StringComparer.Ordinal))
+        if (SystemRoles.ContainsAdmin(user.Roles))
             return await next(cancellationToken);
 
         if (!Guid.TryParse(user.Id, out var userId))

@@ -2,6 +2,7 @@ using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.Employees.Specifications;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Authorization;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -11,7 +12,7 @@ namespace IIoT.EmployeeService.Commands.Employees;
 /// <summary>
 /// 业务指令:全量同步员工的机台管辖权
 /// </summary>
-[AuthorizeRequirement("Employee.UpdateAccess")]
+[AuthorizeRequirement(CloudPermissionCatalog.Employee.UpdateAccess)]
 [DistributedLock("iiot:lock:employee:{EmployeeId}", TimeoutSeconds = 5)]
 public record UpdateEmployeeAccessCommand(
     Guid EmployeeId,
@@ -19,19 +20,29 @@ public record UpdateEmployeeAccessCommand(
 ) : IHumanCommand<Result<bool>>;
 
 public class UpdateEmployeeAccessHandler(
-    IRepository<Employee> employeeRepository
+    IRepository<Employee> employeeRepository,
+    IAdminTargetGuard adminTargetGuard
 ) : ICommandHandler<UpdateEmployeeAccessCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(
         UpdateEmployeeAccessCommand request,
         CancellationToken cancellationToken)
     {
+        var targetResult = await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
+            request.EmployeeId,
+            cancellationToken);
+        if (!targetResult.IsSuccess)
+        {
+            return Result.Failure(targetResult.Errors?.ToArray()
+                ?? [AdminTargetProtectionErrors.TargetNotFound]);
+        }
+
         var employee = await employeeRepository.GetSingleOrDefaultAsync(
             new EmployeeWithAccessesSpec(request.EmployeeId),
             cancellationToken);
 
         if (employee is null)
-            return Result.Failure("未找到目标员工档案");
+            return Result.Failure(AdminTargetProtectionErrors.TargetNotFound);
 
         // 机台管辖权差集更新
         var existingDeviceIds = employee.DeviceAccesses.Select(d => d.DeviceId).ToList();

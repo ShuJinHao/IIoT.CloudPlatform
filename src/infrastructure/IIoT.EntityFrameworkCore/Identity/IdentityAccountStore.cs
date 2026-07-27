@@ -120,19 +120,19 @@ public sealed class IdentityAccountStore(
         }
 
         var normalizedRoleName = roleName?.Trim();
-        if (string.Equals(normalizedRoleName, SystemRoles.Admin, StringComparison.OrdinalIgnoreCase))
+        if (SystemRoles.IsAdmin(normalizedRoleName))
         {
             return Result.Failure("管理员角色禁止通过员工编辑维护");
         }
 
         var currentRoles = await userManager.GetRolesAsync(user);
-        if (currentRoles.Contains(SystemRoles.Admin, StringComparer.Ordinal))
+        if (SystemRoles.ContainsAdmin(currentRoles))
         {
             return Result.Failure("管理员角色禁止通过员工编辑维护");
         }
 
         var removableRoles = currentRoles
-            .Where(role => !string.Equals(role, SystemRoles.Admin, StringComparison.Ordinal))
+            .Where(role => !SystemRoles.IsAdmin(role))
             .ToArray();
         if (removableRoles.Length > 0)
         {

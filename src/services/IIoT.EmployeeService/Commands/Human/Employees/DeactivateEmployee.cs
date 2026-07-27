@@ -2,6 +2,7 @@ using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.Employees.Specifications;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
@@ -9,7 +10,7 @@ using IIoT.SharedKernel.Result;
 
 namespace IIoT.EmployeeService.Commands.Employees;
 
-[AuthorizeRequirement("Employee.Deactivate")]
+[AuthorizeRequirement(CloudPermissionCatalog.Employee.Deactivate)]
 [DistributedLock("iiot:lock:employee:{EmployeeId}", TimeoutSeconds = 5)]
 public record DeactivateEmployeeCommand(Guid EmployeeId) : IHumanCommand<Result>;
 
@@ -17,13 +18,23 @@ public class DeactivateEmployeeHandler(
     IRepository<Employee> employeeRepository,
     IIdentityAccountStore identityAccountStore,
     IUnitOfWork unitOfWork,
-    IRefreshTokenService refreshTokenService)
+    IRefreshTokenService refreshTokenService,
+    IAdminTargetGuard adminTargetGuard)
     : ICommandHandler<DeactivateEmployeeCommand, Result>
 {
     public async Task<Result> Handle(
         DeactivateEmployeeCommand request,
         CancellationToken cancellationToken)
     {
+        var targetResult = await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
+            request.EmployeeId,
+            cancellationToken);
+        if (!targetResult.IsSuccess)
+        {
+            return Result.Failure(targetResult.Errors?.ToArray()
+                ?? [AdminTargetProtectionErrors.TargetNotFound]);
+        }
+
         try
         {
             await unitOfWork.BeginTransactionAsync(cancellationToken);
@@ -35,7 +46,7 @@ public class DeactivateEmployeeHandler(
             if (employee is null)
             {
                 await unitOfWork.RollbackAsync(cancellationToken);
-                return Result.Failure("未找到目标员工档案");
+                return Result.Failure(AdminTargetProtectionErrors.TargetNotFound);
             }
 
             if (employee.IsActive)

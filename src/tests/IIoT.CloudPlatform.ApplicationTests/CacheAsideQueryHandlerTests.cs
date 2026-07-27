@@ -363,11 +363,9 @@ public sealed class CacheAsideQueryHandlerTests
     }
 
     [Fact]
-    public async Task GetAllDefinedPermissionsHandler_ResultIsCachedAndPreCancellationSkipsRoleCalls()
+    public async Task GetAllDefinedPermissionsHandler_UsesOnlyCodeCatalogAndHonorsCancellation()
     {
-        var roles = new StubRolePolicyService { Roles = ["Operator"] };
-        var cache = new RecordingCacheService();
-        var handler = new GetAllDefinedPermissionsHandler(roles, cache);
+        var handler = new GetAllDefinedPermissionsHandler();
 
         var first = await handler.Handle(
             new GetAllDefinedPermissionsQuery(),
@@ -380,22 +378,17 @@ public sealed class CacheAsideQueryHandlerTests
         Assert.NotEmpty(first.Value!);
         Assert.True(second.IsSuccess);
         Assert.NotEmpty(second.Value!);
-        Assert.Equal(1, roles.GetAllRolesCalls);
-        Assert.Equal(1, roles.GetRolePermissionsCalls);
-        Assert.Equal(1, cache.FactoryCalls);
-        Assert.True(cache.Values.ContainsKey(CacheKeys.AllDefinedPermissions()));
+        Assert.Equal(
+            first.Value!.SelectMany(group => group.Permissions),
+            second.Value!.SelectMany(group => group.Permissions));
 
-        var cancelledRoles = new StubRolePolicyService { Roles = ["Operator"] };
-        var cancelledCache = new RecordingCacheService();
-        var cancelledHandler = new GetAllDefinedPermissionsHandler(cancelledRoles, cancelledCache);
+        var cancelledHandler = new GetAllDefinedPermissionsHandler();
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelledHandler.Handle(
             new GetAllDefinedPermissionsQuery(),
             cancellation.Token));
-        Assert.Equal(0, cancelledRoles.GetAllRolesCalls);
-        Assert.False(cancelledCache.Values.ContainsKey(CacheKeys.AllDefinedPermissions()));
     }
 
     private static async Task AssertSuccessfulEmptyPairAsync<T>(Func<Task<Result<T>>> operation)

@@ -98,8 +98,8 @@ public static class DependencyInjection
         cfg.AddOpenBehavior(typeof(DeviceBindingBehavior<,>));
         cfg.AddOpenBehavior(typeof(AiReadAuditBehavior<,>));
         cfg.AddOpenBehavior(typeof(AiReadAuthorizationBehavior<,>));
-        cfg.AddOpenBehavior(typeof(AuthorizationBehavior<,>));
         cfg.AddOpenBehavior(typeof(AdminOnlyBehavior<,>));
+        cfg.AddOpenBehavior(typeof(AuthorizationBehavior<,>));
         cfg.AddOpenBehavior(typeof(DistributedLockBehavior<,>));
     }
 
@@ -298,6 +298,7 @@ public static class DependencyInjection
 
         builder.Services.AddScoped<ICurrentUser, CurrentUser>();
         builder.Services.AddScoped<ICurrentUserDeviceAccessService, CurrentUserDeviceAccessService>();
+        builder.Services.AddScoped<IAdminTargetGuard, AdminTargetGuard>();
         builder.Services.AddScoped<IClientReleaseUploadSource, CurrentClientReleaseUploadSource>();
         builder.Services.AddScoped<ICloudOidcSessionService, CloudOidcSessionService>();
         builder.Services.AddScoped<IAiReadScopeAccessor, HttpAiReadScopeAccessor>();

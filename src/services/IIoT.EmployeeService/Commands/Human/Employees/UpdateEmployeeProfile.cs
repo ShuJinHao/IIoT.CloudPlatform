@@ -10,7 +10,7 @@ using IIoT.SharedKernel.Result;
 
 namespace IIoT.EmployeeService.Commands.Employees;
 
-[AuthorizeRequirement("Employee.Update")]
+[AuthorizeRequirement(CloudPermissionCatalog.Employee.Update)]
 [DistributedLock("iiot:lock:employee:{EmployeeId}", TimeoutSeconds = 5)]
 public record UpdateEmployeeProfileCommand(
     Guid EmployeeId,
@@ -25,17 +25,46 @@ public class UpdateEmployeeProfileHandler(
     IUnitOfWork unitOfWork,
     IRefreshTokenService refreshTokenService,
     ICurrentUser currentUser,
-    IPermissionProvider permissionProvider)
+    IPermissionProvider permissionProvider,
+    IAdminTargetGuard adminTargetGuard)
     : ICommandHandler<UpdateEmployeeProfileCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(
         UpdateEmployeeProfileCommand request,
         CancellationToken cancellationToken)
     {
+        var targetResult = await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
+            request.EmployeeId,
+            cancellationToken);
+        if (!targetResult.IsSuccess)
+        {
+            return Result.Failure(targetResult.Errors?.ToArray()
+                ?? [AdminTargetProtectionErrors.TargetNotFound]);
+        }
+
         var realName = request.RealName?.Trim() ?? string.Empty;
         if (string.IsNullOrEmpty(realName))
         {
             return Result.Failure("员工姓名不能为空");
+        }
+
+        var normalizedRoleName = request.RoleName?.Trim();
+        if (request.RoleName is not null)
+        {
+            var rolePermissionResult = await EnsurePermissionAsync(
+                CloudPermissionCatalog.Employee.UpdateAccess,
+                "角色设置需要 Employee.UpdateAccess 权限",
+                cancellationToken);
+            if (!rolePermissionResult.IsSuccess)
+            {
+                return Result.Failure(rolePermissionResult.Errors?.ToArray()
+                    ?? ["角色设置需要 Employee.UpdateAccess 权限"]);
+            }
+
+            if (SystemRoles.IsAdmin(normalizedRoleName))
+            {
+                return Result.Failure("管理员角色禁止通过员工编辑维护");
+            }
         }
 
         try
@@ -49,7 +78,22 @@ public class UpdateEmployeeProfileHandler(
             if (employee is null)
             {
                 await unitOfWork.RollbackAsync(cancellationToken);
-                return Result.Failure("未找到该员工");
+                return Result.Failure(AdminTargetProtectionErrors.TargetNotFound);
+            }
+
+            var statusChanged = employee.IsActive != request.IsActive;
+            if (statusChanged)
+            {
+                var statusPermissionResult = await EnsurePermissionAsync(
+                    CloudPermissionCatalog.Employee.Deactivate,
+                    "人员状态变更需要 Employee.Deactivate 权限",
+                    cancellationToken);
+                if (!statusPermissionResult.IsSuccess)
+                {
+                    await unitOfWork.RollbackAsync(cancellationToken);
+                    return Result.Failure(statusPermissionResult.Errors?.ToArray()
+                        ?? ["人员状态变更需要 Employee.Deactivate 权限"]);
+                }
             }
 
             employee.Rename(employee.EmployeeNo, realName);
@@ -78,22 +122,9 @@ public class UpdateEmployeeProfileHandler(
 
             if (request.RoleName is not null)
             {
-                var rolePermissionResult = await EnsureCanUpdateAccessAsync(cancellationToken);
-                if (!rolePermissionResult.IsSuccess)
-                {
-                    await unitOfWork.RollbackAsync(cancellationToken);
-                    return Result.Failure(rolePermissionResult.Errors?.ToArray() ?? ["角色设置需要 Employee.UpdateAccess 权限"]);
-                }
-
-                if (request.RoleName.Equals(SystemRoles.Admin, StringComparison.OrdinalIgnoreCase))
-                {
-                    await unitOfWork.RollbackAsync(cancellationToken);
-                    return Result.Failure("管理员角色禁止通过员工编辑维护");
-                }
-
                 var roleResult = await identityAccountStore.ReplaceAssignableRoleAsync(
                     request.EmployeeId,
-                    request.RoleName,
+                    normalizedRoleName,
                     cancellationToken);
                 if (!roleResult.IsSuccess)
                 {
@@ -108,7 +139,7 @@ public class UpdateEmployeeProfileHandler(
                     cancellationToken);
             }
 
-            if (!request.IsActive)
+            if (statusChanged && !request.IsActive)
             {
                 await refreshTokenService.RevokeSubjectTokensAsync(
                     IIoTClaimTypes.HumanActor,
@@ -127,9 +158,12 @@ public class UpdateEmployeeProfileHandler(
         }
     }
 
-    private async Task<Result> EnsureCanUpdateAccessAsync(CancellationToken cancellationToken)
+    private async Task<Result> EnsurePermissionAsync(
+        string requiredPermission,
+        string failureMessage,
+        CancellationToken cancellationToken)
     {
-        if (currentUser.Roles.Contains(SystemRoles.Admin, StringComparer.Ordinal))
+        if (SystemRoles.ContainsAdmin(currentUser.Roles))
         {
             return Result.Success();
         }
@@ -140,8 +174,11 @@ public class UpdateEmployeeProfileHandler(
         }
 
         var permissions = await permissionProvider.GetPermissionsAsync(userId, cancellationToken);
-        return permissions.Contains("Employee.UpdateAccess")
+        return permissions.Any(permission => string.Equals(
+                permission?.Trim(),
+                requiredPermission,
+                StringComparison.OrdinalIgnoreCase))
             ? Result.Success()
-            : Result.Failure("角色设置需要 Employee.UpdateAccess 权限");
+            : Result.Failure(failureMessage);
     }
 }

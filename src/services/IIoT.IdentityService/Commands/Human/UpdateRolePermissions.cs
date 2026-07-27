@@ -3,56 +3,83 @@ using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
 using IIoT.Services.CrossCutting.Attributes;
-using IIoT.Services.CrossCutting.Caching;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 
 namespace IIoT.IdentityService.Commands;
 
-[AuthorizeRequirement("Role.Update")]
+[AuthorizeRequirement(CloudPermissionCatalog.Role.Update)]
 [DistributedLock("iiot:lock:role:{RoleName}", TimeoutSeconds = 5)]
 public record UpdateRolePermissionsCommand(string RoleName, List<string> Permissions) : IHumanCommand<Result<bool>>;
 
 public class UpdateRolePermissionsHandler(
     IRolePolicyService rolePolicyService,
-    ICacheService cacheService,
     ICurrentUser currentUser,
     IAuditTrailService auditTrailService
 ) : ICommandHandler<UpdateRolePermissionsCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(UpdateRolePermissionsCommand request, CancellationToken cancellationToken)
     {
-        if (request.RoleName.Equals(SystemRoles.Admin, StringComparison.OrdinalIgnoreCase))
+        var roleName = (request.RoleName ?? string.Empty).Trim();
+        if (SystemRoles.IsAdmin(roleName))
         {
             return await FailAsync(
-                request,
-                "System protection: built-in Admin role permissions cannot be modified.",
+                roleName,
+                [],
+                [],
+                [],
+                ["禁止定义、覆盖或修改 Admin 角色。"],
+                "AdminRoleProtected",
+                0,
                 cancellationToken);
         }
 
-        var result = await rolePolicyService.UpdateRolePermissionsAsync(request.RoleName, request.Permissions);
+        var beforePermissions = await rolePolicyService.GetRolePermissionsAsync(roleName) ?? [];
+        var validation = CloudPermissionCatalog.NormalizeRoleAdminAssignable(request.Permissions);
+        if (!validation.IsValid)
+        {
+            return await FailAsync(
+                roleName,
+                beforePermissions,
+                beforePermissions,
+                validation.Permissions,
+                ["权限集合包含未知权限或 RoleAdmin 不可分配权限，未执行任何修改。"],
+                "PermissionNotAssignable",
+                validation.RejectedPermissions.Count,
+                cancellationToken);
+        }
+
+        var normalizedPermissions = validation.Permissions.ToList();
+        var result = await rolePolicyService.UpdateRolePermissionsAsync(
+            roleName,
+            normalizedPermissions);
+        var afterPermissions = await rolePolicyService.GetRolePermissionsAsync(roleName)
+            ?? (result.IsSuccess && result.Value ? normalizedPermissions : beforePermissions);
 
         if (result.IsSuccess && result.Value)
         {
-            await cacheService.RemoveAsync(
-                CacheKeys.AllDefinedPermissions(),
-                cancellationToken);
-
             await auditTrailService.TryWriteAsync(
                 CreateAuditEntry(
-                    request,
+                    roleName,
                     succeeded: true,
-                    summary: $"Updated role {request.RoleName} permissions with {request.Permissions.Count} entries."),
+                    summary: PermissionAuditSummary.Serialize(
+                        "RolePermissionsUpdate",
+                        beforePermissions,
+                        afterPermissions,
+                        normalizedPermissions,
+                        "Succeeded")),
                 cancellationToken);
         }
         else
         {
-            await auditTrailService.TryWriteAsync(
-                CreateAuditEntry(
-                    request,
-                    succeeded: false,
-                    summary: $"Update role {request.RoleName} permissions.",
-                    failureReason: string.Join("; ", result.Errors ?? ["Role permission update failed."])),
+            return await FailAsync(
+                roleName,
+                beforePermissions,
+                afterPermissions,
+                normalizedPermissions,
+                result.Errors?.ToArray() ?? ["Role permission update failed."],
+                "PermissionPersistenceFailed",
+                0,
                 cancellationToken);
         }
 
@@ -60,23 +87,35 @@ public class UpdateRolePermissionsHandler(
     }
 
     private async Task<Result<bool>> FailAsync(
-        UpdateRolePermissionsCommand request,
-        string message,
+        string roleName,
+        IEnumerable<string> beforePermissions,
+        IEnumerable<string> afterPermissions,
+        IEnumerable<string> requestedPermissions,
+        string[] errors,
+        string reasonCode,
+        int rejectedPermissionCount,
         CancellationToken cancellationToken)
     {
         await auditTrailService.TryWriteAsync(
             CreateAuditEntry(
-                request,
+                roleName,
                 succeeded: false,
-                summary: $"Update role {request.RoleName} permissions.",
-                failureReason: message),
+                summary: PermissionAuditSummary.Serialize(
+                    "RolePermissionsUpdate",
+                    beforePermissions,
+                    afterPermissions,
+                    requestedPermissions,
+                    "Rejected",
+                    reasonCode,
+                    rejectedPermissionCount),
+                failureReason: string.Join("; ", errors)),
             cancellationToken);
 
-        return Result.Failure(message);
+        return Result.Failure(errors);
     }
 
     private AuditTrailEntry CreateAuditEntry(
-        UpdateRolePermissionsCommand request,
+        string roleName,
         bool succeeded,
         string summary,
         string? failureReason = null)
@@ -86,7 +125,7 @@ public class UpdateRolePermissionsHandler(
             currentUser.UserName,
             "Role.Permissions.Update",
             "Role",
-            request.RoleName,
+            roleName,
             DateTime.UtcNow,
             succeeded,
             summary,
