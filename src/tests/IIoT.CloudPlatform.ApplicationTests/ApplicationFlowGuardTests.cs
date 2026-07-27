@@ -1477,20 +1477,74 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
+    public async Task GetDeviceStatusSummaryHandler_ShouldUseOnlyRequestedAuthorizedDevice()
+    {
+        var selectedDeviceId = Guid.NewGuid();
+        var accessService = new StubCurrentUserDeviceAccessService
+        {
+            AccessibleDeviceIds = [selectedDeviceId, Guid.NewGuid()]
+        };
+        var queryService = new StubDeviceOperationalStatusQueryService
+        {
+            Summary = new DeviceStatusSummaryDto(1, 0, 1, 0, 0, DateTimeOffset.UtcNow)
+        };
+        var handler = new GetDeviceStatusSummaryHandler(accessService, queryService);
+
+        var result = await handler.Handle(
+            new GetDeviceStatusSummaryQuery(selectedDeviceId),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(selectedDeviceId, accessService.LastCheckedDeviceId);
+        Assert.Equal(0, accessService.GetAccessibleDeviceIdsCalls);
+        Assert.Equal(new[] { selectedDeviceId }, queryService.LastDeviceIds);
+    }
+
+    [Fact]
+    public async Task GetDeviceStatusSummaryHandler_ShouldForbidUnauthorizedRequestedDevice()
+    {
+        var selectedDeviceId = Guid.NewGuid();
+        var queryService = new StubDeviceOperationalStatusQueryService();
+        var handler = new GetDeviceStatusSummaryHandler(
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [] },
+            queryService);
+
+        var result = await handler.Handle(
+            new GetDeviceStatusSummaryQuery(selectedDeviceId),
+            CancellationToken.None);
+
+        Assert.Equal(ResultStatus.Forbidden, result.Status);
+        Assert.Null(queryService.LastDeviceIds);
+    }
+
+    [Fact]
     public async Task GetDeviceSelectListHandler_ShouldReturnAllDevicesForAdmin()
     {
         var repository = new InMemoryRepository<Device>();
-        repository.ListResult.Add(new Device("Device-B", "DEV-B", Guid.NewGuid()));
-        repository.ListResult.Add(new Device("Device-A", "DEV-A", Guid.NewGuid()));
+        var processAId = Guid.NewGuid();
+        var processBId = Guid.NewGuid();
+        repository.ListResult.Add(new Device("Device-B", "DEV-B", processBId));
+        repository.ListResult.Add(new Device("Device-A", "DEV-A", processAId));
+        var processQueries = new StubProcessReadQueryService();
+        processQueries.PagedProcesses.AddRange([
+            new ProcessReadItem(processAId, "PROC-A", "工序 A"),
+            new ProcessReadItem(processBId, "PROC-B", "工序 B")
+        ]);
         var handler = new GetDeviceSelectListHandler(
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
-            repository);
+            repository,
+            processQueries);
 
         var result = await handler.Handle(new GetDeviceSelectListQuery(), CancellationToken.None);
 
         Assert.True(result.IsSuccess);
         Assert.Equal(2, result.Value!.Count);
         Assert.Equal(new[] { "Device-A", "Device-B" }, result.Value.Select(x => x.DeviceName).ToArray());
+        Assert.Equal(
+            new[] { processAId, processBId }.Order(),
+            processQueries.LastProcessIds!.Order());
+        Assert.Equal("PROC-A", result.Value[0].ProcessCode);
+        Assert.Equal("工序 A", result.Value[0].ProcessName);
     }
 
     [Fact]
@@ -1501,9 +1555,13 @@ public sealed class ApplicationFlowGuardTests
         var repository = new InMemoryRepository<Device>();
         repository.ListResult.Add(authorizedDevice);
         repository.ListResult.Add(forbiddenDevice);
+        var processQueries = new StubProcessReadQueryService();
+        processQueries.PagedProcesses.Add(
+            new ProcessReadItem(authorizedDevice.ProcessId, "PROC-AUTH", "授权工序"));
         var handler = new GetDeviceSelectListHandler(
             new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [authorizedDevice.Id] },
-            repository);
+            repository,
+            processQueries);
 
         var result = await handler.Handle(new GetDeviceSelectListQuery(), CancellationToken.None);
 
@@ -1511,6 +1569,9 @@ public sealed class ApplicationFlowGuardTests
         var device = Assert.Single(result.Value!);
         Assert.Equal(authorizedDevice.Id, device.Id);
         Assert.Equal("DEV-AUTH", device.Code);
+        Assert.Equal("PROC-AUTH", device.ProcessCode);
+        Assert.Equal("授权工序", device.ProcessName);
+        Assert.Equal(new[] { authorizedDevice.ProcessId }, processQueries.LastProcessIds);
     }
 
     [Fact]
@@ -1520,13 +1581,30 @@ public sealed class ApplicationFlowGuardTests
         repository.ListResult.Add(new Device("Device-A", "DEV-A", Guid.NewGuid()));
         var handler = new GetDeviceSelectListHandler(
             new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [] },
-            repository);
+            repository,
+            new StubProcessReadQueryService());
 
         var result = await handler.Handle(new GetDeviceSelectListQuery(), CancellationToken.None);
 
         Assert.True(result.IsSuccess);
         Assert.Empty(result.Value!);
         Assert.Null(repository.LastGetListSpecification);
+    }
+
+    [Fact]
+    public async Task GetDeviceSelectListHandler_ShouldFailWhenDeviceProcessIsMissing()
+    {
+        var repository = new InMemoryRepository<Device>();
+        repository.ListResult.Add(new Device("Device-A", "DEV-A", Guid.NewGuid()));
+        var handler = new GetDeviceSelectListHandler(
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            repository,
+            new StubProcessReadQueryService());
+
+        var result = await handler.Handle(new GetDeviceSelectListQuery(), CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("设备关联的工序主数据不完整。", result.Errors!);
     }
 
     [Fact]
@@ -1568,6 +1646,62 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
+    public async Task GetRecentDeviceLogsHandler_ShouldUseOnlyRequestedAuthorizedDevice()
+    {
+        var selectedDeviceId = Guid.NewGuid();
+        var accessService = new StubCurrentUserDeviceAccessService
+        {
+            AccessibleDeviceIds = [selectedDeviceId, Guid.NewGuid()]
+        };
+        var queryService = new StubDeviceLogQueryService();
+        var handler = new GetRecentDeviceLogsHandler(accessService, queryService);
+
+        var result = await handler.Handle(
+            new GetRecentDeviceLogsQuery(DeviceId: selectedDeviceId),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(selectedDeviceId, accessService.LastCheckedDeviceId);
+        Assert.Equal(0, accessService.GetAccessibleDeviceIdsCalls);
+        Assert.Null(queryService.LastRecentProcessId);
+        Assert.Equal(new[] { selectedDeviceId }, queryService.LastRecentDeviceIds);
+    }
+
+    [Fact]
+    public async Task GetRecentDeviceLogsHandler_ShouldRejectAmbiguousProcessAndDeviceScope()
+    {
+        var queryService = new StubDeviceLogQueryService();
+        var handler = new GetRecentDeviceLogsHandler(
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            queryService);
+
+        var result = await handler.Handle(
+            new GetRecentDeviceLogsQuery(
+                ProcessId: Guid.NewGuid(),
+                DeviceId: Guid.NewGuid()),
+            CancellationToken.None);
+
+        Assert.Equal(ResultStatus.Invalid, result.Status);
+        Assert.Null(queryService.LastRecentDeviceIds);
+    }
+
+    [Fact]
+    public async Task GetRecentDeviceLogsHandler_ShouldForbidUnauthorizedRequestedDevice()
+    {
+        var queryService = new StubDeviceLogQueryService();
+        var handler = new GetRecentDeviceLogsHandler(
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [] },
+            queryService);
+
+        var result = await handler.Handle(
+            new GetRecentDeviceLogsQuery(DeviceId: Guid.NewGuid()),
+            CancellationToken.None);
+
+        Assert.Equal(ResultStatus.Forbidden, result.Status);
+        Assert.Null(queryService.LastRecentDeviceIds);
+    }
+
+    [Fact]
     public async Task GetRecentAlertCountHandler_ShouldUseDefaultWindowAndCurrentUserScope()
     {
         var allowedDeviceId = Guid.NewGuid();
@@ -1590,6 +1724,61 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal(processId, queryService.LastAlertProcessId);
         Assert.Equal(new[] { allowedDeviceId }, queryService.LastAlertDeviceIds);
         Assert.Equal(new[] { "WARN", "WARNING", "ERROR", "ERR" }, queryService.LastAlertLevels);
+    }
+
+    [Fact]
+    public async Task GetRecentAlertCountHandler_ShouldUseOnlyRequestedAuthorizedDevice()
+    {
+        var selectedDeviceId = Guid.NewGuid();
+        var accessService = new StubCurrentUserDeviceAccessService
+        {
+            AccessibleDeviceIds = [selectedDeviceId, Guid.NewGuid()]
+        };
+        var queryService = new StubDeviceLogQueryService { RecentAlertCount = 2 };
+        var handler = new GetRecentAlertCountHandler(accessService, queryService);
+
+        var result = await handler.Handle(
+            new GetRecentAlertCountQuery(DeviceId: selectedDeviceId),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, result.Value!.Count);
+        Assert.Equal(selectedDeviceId, accessService.LastCheckedDeviceId);
+        Assert.Equal(0, accessService.GetAccessibleDeviceIdsCalls);
+        Assert.Null(queryService.LastAlertProcessId);
+        Assert.Equal(new[] { selectedDeviceId }, queryService.LastAlertDeviceIds);
+    }
+
+    [Fact]
+    public async Task GetRecentAlertCountHandler_ShouldRejectAmbiguousProcessAndDeviceScope()
+    {
+        var queryService = new StubDeviceLogQueryService();
+        var handler = new GetRecentAlertCountHandler(
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            queryService);
+
+        var result = await handler.Handle(
+            new GetRecentAlertCountQuery(Guid.NewGuid(), Guid.NewGuid()),
+            CancellationToken.None);
+
+        Assert.Equal(ResultStatus.Invalid, result.Status);
+        Assert.Null(queryService.LastAlertDeviceIds);
+    }
+
+    [Fact]
+    public async Task GetRecentAlertCountHandler_ShouldForbidUnauthorizedRequestedDevice()
+    {
+        var queryService = new StubDeviceLogQueryService();
+        var handler = new GetRecentAlertCountHandler(
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [] },
+            queryService);
+
+        var result = await handler.Handle(
+            new GetRecentAlertCountQuery(DeviceId: Guid.NewGuid()),
+            CancellationToken.None);
+
+        Assert.Equal(ResultStatus.Forbidden, result.Status);
+        Assert.Null(queryService.LastAlertDeviceIds);
     }
 
     [Fact]

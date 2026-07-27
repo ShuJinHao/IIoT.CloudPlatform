@@ -247,11 +247,27 @@ internal sealed class StubProcessReadQueryService : IProcessReadQueryService
 
     public List<ProcessReadItem> PagedProcesses { get; } = [];
 
+    public IReadOnlyCollection<Guid>? LastProcessIds { get; private set; }
+
     public IReadOnlyList<Guid> DeviceIds { get; set; } = [];
 
     public bool HasDevices { get; set; }
 
     public bool HasRecipes { get; set; }
+
+    public Task<IReadOnlyList<ProcessReadItem>> GetByIdsAsync(
+        IReadOnlyCollection<Guid> processIds,
+        CancellationToken cancellationToken = default)
+    {
+        LastProcessIds = processIds;
+        var processIdSet = processIds.ToHashSet();
+        return Task.FromResult<IReadOnlyList<ProcessReadItem>>(
+            PagedProcesses
+                .Where(process => processIdSet.Contains(process.Id))
+                .OrderBy(process => process.ProcessCode, StringComparer.Ordinal)
+                .ThenBy(process => process.Id)
+                .ToList());
+    }
 
     public Task<(IReadOnlyList<ProcessReadItem> Items, int TotalCount)> GetPagedAsync(
         Guid? processId,

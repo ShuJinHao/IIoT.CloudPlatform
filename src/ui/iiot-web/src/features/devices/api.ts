@@ -15,6 +15,11 @@ export interface DeviceSelectDto {
   processId: string;
 }
 
+export interface ScopedDeviceSelectDto extends DeviceSelectDto {
+  processCode: string;
+  processName: string;
+}
+
 export interface DeviceStatusSummaryDto {
   total: number;
   online: number;
@@ -77,12 +82,15 @@ export const getAllActiveDevicesApi = () => {
 };
 
 export const getScopedDeviceSelectApi = () => {
-  return http.get<DeviceSelectDto[]>(`${basePath}/select`);
+  return http.get<ScopedDeviceSelectDto[]>(`${basePath}/select`);
 };
 
-export const getDeviceStatusSummaryApi = () => {
+export const getDeviceStatusSummaryApi = (params?: { deviceId?: string }) => {
   return http.get<DeviceStatusSummaryDto>(`${basePath}/status-summary`, {
     inlineFeedback: true,
+    params: {
+      deviceId: params?.deviceId || undefined,
+    },
   });
 };
 

@@ -46,20 +46,8 @@ export interface DashboardSourceState {
   error: string;
 }
 
-export type DashboardViewState = 'loading' | 'empty' | 'error' | 'ready';
+export type DashboardViewState = 'loading' | 'error' | 'ready';
 export type DashboardNonReadyState = Exclude<DashboardViewState, 'ready'>;
-
-export function hasDashboardData(value: {
-  totalDevices: number;
-  hourlyCount: number;
-  alertCount: number;
-  eventCount: number;
-}): boolean {
-  return value.totalDevices > 0
-    || value.hourlyCount > 0
-    || value.alertCount > 0
-    || value.eventCount > 0;
-}
 
 export function todayIsoDate(date = new Date()): string {
   const year = date.getFullYear();

@@ -9,6 +9,10 @@ public sealed record ProcessReadItem(
 
 public interface IProcessReadQueryService : IReadOnlyQueryPort
 {
+    Task<IReadOnlyList<ProcessReadItem>> GetByIdsAsync(
+        IReadOnlyCollection<Guid> processIds,
+        CancellationToken cancellationToken = default);
+
     Task<(IReadOnlyList<ProcessReadItem> Items, int TotalCount)> GetPagedAsync(
         Guid? processId,
         string? keyword,

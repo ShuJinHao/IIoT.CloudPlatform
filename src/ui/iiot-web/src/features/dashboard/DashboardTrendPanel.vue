@@ -3,7 +3,7 @@
     <div class="mb-8 flex items-start justify-between gap-4">
       <div>
         <h3 class="text-[var(--fs-2xl)] font-[var(--fw-strong)] text-[var(--text-0)]">{{ t('dashboard.productionTrend') }}</h3>
-        <p class="mt-1 text-[var(--fs-base)] font-[var(--fw-semibold)] text-[var(--muted-foreground)]">{{ t('dashboard.trendSubtitle') }}</p>
+        <p class="mt-1 text-[var(--fs-base)] font-[var(--fw-semibold)] text-[var(--muted-foreground)]">{{ subtitle }}</p>
       </div>
     </div>
     <LoadingState
@@ -56,6 +56,7 @@ import type { DashboardSourceState, DashboardTrendBar } from './types';
 defineProps<{
   trendBars: DashboardTrendBar[];
   sourceState: DashboardSourceState;
+  subtitle: string;
 }>();
 const emit = defineEmits<{ retry: [] }>();
 
