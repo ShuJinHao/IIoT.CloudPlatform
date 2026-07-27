@@ -19,17 +19,23 @@ public class HumanDeviceLogController : ApiControllerBase
         [FromQuery] int limit = 20,
         [FromQuery] string? minLevel = "WARN",
         [FromQuery] Guid? processId = null,
+        [FromQuery] Guid? deviceId = null,
         CancellationToken cancellationToken = default)
     {
-        return ReturnResult(await Sender.Send(new GetRecentDeviceLogsQuery(limit, minLevel, processId), cancellationToken));
+        return ReturnResult(await Sender.Send(
+            new GetRecentDeviceLogsQuery(limit, minLevel, processId, deviceId),
+            cancellationToken));
     }
 
     [HttpGet("recent-alerts/count")]
     public async Task<IActionResult> GetRecentAlertCount(
         [FromQuery] Guid? processId = null,
+        [FromQuery] Guid? deviceId = null,
         CancellationToken cancellationToken = default)
     {
-        return ReturnResult(await Sender.Send(new GetRecentAlertCountQuery(processId), cancellationToken));
+        return ReturnResult(await Sender.Send(
+            new GetRecentAlertCountQuery(processId, deviceId),
+            cancellationToken));
     }
 
     [HttpGet("by-level")]

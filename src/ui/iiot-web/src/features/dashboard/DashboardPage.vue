@@ -10,8 +10,77 @@
       </div>
     </section>
 
+    <DashboardContextToolbar
+      :process-id="selectedProcessId"
+      :device-id="selectedDeviceId"
+      :process-options="processOptions"
+      :device-options="deviceOptions"
+      :selected-process="selectedProcess"
+      :selected-device="selectedDevice"
+      :loading="contextStatus === 'loading'"
+      :has-authorized-devices="hasAuthorizedDevices"
+      @update:process-id="selectProcess"
+      @update:device-id="selectDevice"
+    />
+
+    <section
+      v-if="contextStatus === 'loading'"
+      data-testid="dashboard-context-loading"
+      class="min-h-[280px] rounded-[var(--radius-xl)] bg-white p-8 shadow-[var(--shadow-sm)]"
+    >
+      <LoadingState variant="card" :rows="5" />
+    </section>
+
+    <section
+      v-else-if="contextStatus === 'error'"
+      data-testid="dashboard-context-error"
+      class="min-h-[280px] rounded-[var(--radius-xl)] bg-white p-8 shadow-[var(--shadow-sm)]"
+    >
+      <EmptyState
+        :title="t('dashboard.contextErrorTitle')"
+        :description="contextError"
+      >
+        <template #icon>
+          <AlertTriangle :size="52" :stroke-width="1.6" />
+        </template>
+        <template #action>
+          <UiButton type="primary" @click="loadContext">{{ t('dashboard.retry') }}</UiButton>
+        </template>
+      </EmptyState>
+    </section>
+
+    <section
+      v-else-if="!hasAuthorizedDevices"
+      data-testid="dashboard-no-devices"
+      class="min-h-[280px] rounded-[var(--radius-xl)] bg-white p-8 shadow-[var(--shadow-sm)]"
+    >
+      <EmptyState
+        :title="t('dashboard.noDevicesTitle')"
+        :description="t('dashboard.noDevicesDesc')"
+      >
+        <template #icon>
+          <Factory :size="52" :stroke-width="1.6" />
+        </template>
+      </EmptyState>
+    </section>
+
+    <section
+      v-else-if="!selectedDevice"
+      data-testid="dashboard-selection-required"
+      class="min-h-[280px] rounded-[var(--radius-xl)] bg-white p-8 shadow-[var(--shadow-sm)]"
+    >
+      <EmptyState
+        :title="t('dashboard.selectionTitle')"
+        :description="t('dashboard.selectionDesc')"
+      >
+        <template #icon>
+          <ListFilter :size="52" :stroke-width="1.6" />
+        </template>
+      </EmptyState>
+    </section>
+
     <DashboardStatePanel
-      v-if="dashboardNonReadyState"
+      v-else-if="dashboardNonReadyState"
       :state="dashboardNonReadyState"
       :error-description="dashboardErrorDescription"
       @retry="loadDashboard"
@@ -24,6 +93,7 @@
           <DashboardTrendPanel
             :trend-bars="trendBars"
             :source-state="sourceStates.capacity"
+            :subtitle="trendSubtitle"
             @retry="loadDashboard"
           />
           <DashboardAnalysisPanel :links="analysisLinks" />
@@ -50,7 +120,12 @@
 
 <script setup lang="ts">
 import { onMounted } from 'vue';
+import { AlertTriangle, Factory, ListFilter } from 'lucide-vue-next';
+import EmptyState from '../../components/states/EmptyState.vue';
+import LoadingState from '../../components/states/LoadingState.vue';
+import UiButton from '../../components/ui/UiButton.vue';
 import DashboardAnalysisPanel from './DashboardAnalysisPanel.vue';
+import DashboardContextToolbar from './DashboardContextToolbar.vue';
 import DashboardMetricCards from './DashboardMetricCards.vue';
 import DashboardRecentAlerts from './DashboardRecentAlerts.vue';
 import DashboardSidebar from './DashboardSidebar.vue';
@@ -71,12 +146,25 @@ const {
   dashboardNonReadyState,
   dashboardErrorDescription,
   sourceStates,
+  contextStatus,
+  contextError,
+  processOptions,
+  deviceOptions,
+  selectedProcessId,
+  selectedDeviceId,
+  selectedProcess,
+  selectedDevice,
+  hasAuthorizedDevices,
   productionDisplay,
   productionHelper,
   statusRows,
   statusSummary,
+  trendSubtitle,
+  loadContext,
   loadDashboard,
+  selectProcess,
+  selectDevice,
 } = useDashboard();
 
-onMounted(loadDashboard);
+onMounted(loadContext);
 </script>

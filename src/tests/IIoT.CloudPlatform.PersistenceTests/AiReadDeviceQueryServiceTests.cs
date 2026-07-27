@@ -92,6 +92,25 @@ public sealed class AiReadDeviceQueryServiceTests
 public sealed class AiReadProcessQueryServiceTests
 {
     [Fact]
+    public async Task GetByIdsAsync_ShouldReturnOnlyRequestedProcessesInStableOrder()
+    {
+        await using var database = await SqliteEfTestDatabase.CreateAsync();
+        await using var dbContext = database.CreateContext();
+        var processB = new MfgProcess("PROC-B", "工序 B");
+        var processA = new MfgProcess("PROC-A", "工序 A");
+        var processOutsideScope = new MfgProcess("PROC-C", "工序 C");
+        dbContext.MfgProcesses.AddRange(processB, processA, processOutsideScope);
+        await dbContext.SaveChangesAsync();
+        var service = new ProcessReadQueryService(dbContext);
+
+        var items = await service.GetByIdsAsync(
+            [processB.Id, processA.Id, processA.Id]);
+
+        Assert.Equal([processA.Id, processB.Id], items.Select(item => item.Id));
+        Assert.Equal(["PROC-A", "PROC-B"], items.Select(item => item.ProcessCode));
+    }
+
+    [Fact]
     public async Task GetPagedAsync_ShouldIntersectProcessIdAndKeyword()
     {
         await using var database = await SqliteEfTestDatabase.CreateAsync();

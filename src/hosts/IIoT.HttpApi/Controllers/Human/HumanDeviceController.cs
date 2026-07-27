@@ -35,9 +35,11 @@ public class HumanDeviceController : ApiControllerBase
     }
 
     [HttpGet("status-summary")]
-    public async Task<IActionResult> GetStatusSummary(CancellationToken cancellationToken)
+    public async Task<IActionResult> GetStatusSummary(
+        [FromQuery] Guid? deviceId = null,
+        CancellationToken cancellationToken = default)
     {
-        return ReturnResult(await Sender.Send(new GetDeviceStatusSummaryQuery(), cancellationToken));
+        return ReturnResult(await Sender.Send(new GetDeviceStatusSummaryQuery(deviceId), cancellationToken));
     }
 
     [HttpGet("{id}/deletion-impact")]

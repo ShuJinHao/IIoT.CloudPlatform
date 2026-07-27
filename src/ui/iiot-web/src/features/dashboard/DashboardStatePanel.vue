@@ -14,14 +14,13 @@
 
     <EmptyState
       v-else
-      :title="state === 'error' ? t('dashboard.errorTitle') : t('dashboard.emptyTitle')"
-      :description="state === 'error' ? (errorDescription || t('dashboard.errorDesc')) : t('dashboard.emptyDesc')"
+      :title="t('dashboard.errorTitle')"
+      :description="errorDescription || t('dashboard.errorDesc')"
     >
       <template #icon>
-        <AlertTriangle v-if="state === 'error'" :size="56" :stroke-width="1.6" />
-        <Database v-else :size="56" :stroke-width="1.6" />
+        <AlertTriangle :size="56" :stroke-width="1.6" />
       </template>
-      <template v-if="state === 'error'" #action>
+      <template #action>
         <UiButton type="primary" @click="emit('retry')">{{ t('dashboard.retry') }}</UiButton>
       </template>
     </EmptyState>
@@ -29,7 +28,7 @@
 </template>
 
 <script setup lang="ts">
-import { AlertTriangle, Database } from 'lucide-vue-next';
+import { AlertTriangle } from 'lucide-vue-next';
 import { useI18n } from 'vue-i18n';
 import EmptyState from '../../components/states/EmptyState.vue';
 import LoadingState from '../../components/states/LoadingState.vue';

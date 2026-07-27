@@ -11,12 +11,14 @@ namespace IIoT.ProductionService.Queries.DeviceLogs;
 public record GetRecentDeviceLogsQuery(
     int Limit = 20,
     string? MinLevel = "WARN",
-    Guid? ProcessId = null
+    Guid? ProcessId = null,
+    Guid? DeviceId = null
 ) : IHumanQuery<Result<List<DeviceLogListItemDto>>>;
 
 [AuthorizeRequirement("Device.Read")]
 public record GetRecentAlertCountQuery(
-    Guid? ProcessId = null
+    Guid? ProcessId = null,
+    Guid? DeviceId = null
 ) : IHumanQuery<Result<RecentAlertCountDto>>;
 
 public class GetRecentDeviceLogsHandler(
@@ -30,6 +32,16 @@ public class GetRecentDeviceLogsHandler(
         GetRecentDeviceLogsQuery request,
         CancellationToken cancellationToken)
     {
+        if (request.ProcessId.HasValue && request.DeviceId.HasValue)
+        {
+            return Result.Invalid("processId 与 deviceId 不能同时指定。");
+        }
+
+        if (request.DeviceId == Guid.Empty)
+        {
+            return Result.Invalid("设备不能为空。");
+        }
+
         if (!DeviceLogSeverityLevels.TryGetLevelsAtOrAbove(
                 request.MinLevel,
                 out var levels,
@@ -38,15 +50,33 @@ public class GetRecentDeviceLogsHandler(
             return Result.Invalid("日志等级仅支持 INFO、WARN、ERROR。");
         }
 
-        var scope = await currentUserDeviceAccessService.GetAccessibleDeviceIdsAsync(cancellationToken);
-        if (!scope.IsSuccess)
+        IReadOnlyCollection<Guid>? deviceIds;
+        if (request.DeviceId.HasValue)
         {
-            return Result.Failure(scope.Errors?.FirstOrDefault() ?? "用户凭证异常");
-        }
+            var access = await currentUserDeviceAccessService.EnsureCanAccessDeviceAsync(
+                request.DeviceId.Value,
+                cancellationToken);
+            if (!access.IsSuccess)
+            {
+                return Result.Forbidden(access.Errors?.ToArray() ?? ["越权: 未授权访问该设备"]);
+            }
 
-        if (scope.Value is { Count: 0 })
+            deviceIds = [request.DeviceId.Value];
+        }
+        else
         {
-            return Result.Success(new List<DeviceLogListItemDto>());
+            var scope = await currentUserDeviceAccessService.GetAccessibleDeviceIdsAsync(cancellationToken);
+            if (!scope.IsSuccess)
+            {
+                return Result.Failure(scope.Errors?.FirstOrDefault() ?? "用户凭证异常");
+            }
+
+            if (scope.Value is { Count: 0 })
+            {
+                return Result.Success(new List<DeviceLogListItemDto>());
+            }
+
+            deviceIds = scope.Value;
         }
 
         var limit = Math.Clamp(request.Limit, 1, MaxLimit);
@@ -54,7 +84,7 @@ public class GetRecentDeviceLogsHandler(
             limit,
             levels,
             request.ProcessId,
-            scope.Value,
+            deviceIds,
             cancellationToken);
 
         return Result.Success(items);
@@ -73,22 +103,50 @@ public class GetRecentAlertCountHandler(
         GetRecentAlertCountQuery request,
         CancellationToken cancellationToken)
     {
-        var scope = await currentUserDeviceAccessService.GetAccessibleDeviceIdsAsync(cancellationToken);
-        if (!scope.IsSuccess)
+        if (request.ProcessId.HasValue && request.DeviceId.HasValue)
         {
-            return Result.Failure(scope.Errors?.FirstOrDefault() ?? "用户凭证异常");
+            return Result.Invalid("processId 与 deviceId 不能同时指定。");
+        }
+
+        if (request.DeviceId == Guid.Empty)
+        {
+            return Result.Invalid("设备不能为空。");
+        }
+
+        IReadOnlyCollection<Guid>? deviceIds;
+        if (request.DeviceId.HasValue)
+        {
+            var access = await currentUserDeviceAccessService.EnsureCanAccessDeviceAsync(
+                request.DeviceId.Value,
+                cancellationToken);
+            if (!access.IsSuccess)
+            {
+                return Result.Forbidden(access.Errors?.ToArray() ?? ["越权: 未授权访问该设备"]);
+            }
+
+            deviceIds = [request.DeviceId.Value];
+        }
+        else
+        {
+            var scope = await currentUserDeviceAccessService.GetAccessibleDeviceIdsAsync(cancellationToken);
+            if (!scope.IsSuccess)
+            {
+                return Result.Failure(scope.Errors?.FirstOrDefault() ?? "用户凭证异常");
+            }
+
+            deviceIds = scope.Value;
         }
 
         var now = DateTimeOffset.UtcNow;
         var windowStart = now.AddHours(-AlertWindowHours);
 
-        var count = scope.Value is { Count: 0 }
+        var count = deviceIds is { Count: 0 }
             ? 0
             : await queryService.CountRecentAlertsAsync(
                 windowStart,
                 DeviceLogSeverityLevels.WarningAndErrorLevels,
                 request.ProcessId,
-                scope.Value,
+                deviceIds,
                 cancellationToken);
 
         return Result.Success(new RecentAlertCountDto(
