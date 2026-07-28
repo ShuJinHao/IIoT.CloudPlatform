@@ -92,6 +92,7 @@ export function useEmployees() {
     keyword?: string;
     response: EmployeePageResponse;
   } | null = null;
+  let fallbackToPreviousEmployeePage = false;
   const listPage = useListPage<EmployeeListItemDto, { keyword: string }>({
     initialFilter: { keyword: '' },
     initialPageSize: PAGE_SIZE,
@@ -106,13 +107,35 @@ export function useEmployees() {
       if (queuedPage) {
         queuedEmployeePage = null;
       }
-      const response = useQueuedPage
+      let targetPage = page;
+      let response = useQueuedPage
         ? queuedPage.response
         : await getEmployeePagedListApi({
             PaginationParams: { PageNumber: page, PageSize: pageSize },
             Keyword: requestKeyword,
           });
+      if (
+        !useQueuedPage
+        && fallbackToPreviousEmployeePage
+        && response.items.length === 0
+        && targetPage > 1
+      ) {
+        targetPage -= 1;
+        response = await getEmployeePagedListApi({
+          PaginationParams: { PageNumber: targetPage, PageSize: pageSize },
+          Keyword: requestKeyword,
+        });
+      }
       metaData.value = response.metaData;
+      if (targetPage !== page) {
+        queuedEmployeePage = {
+          page: targetPage,
+          pageSize,
+          keyword: requestKeyword,
+          response,
+        };
+        listPage.page.value = targetPage;
+      }
       return { items: response.items, total: response.metaData.totalCount };
     },
   });
@@ -193,35 +216,22 @@ export function useEmployees() {
     listPage.gotoPage(page);
   }
 
-  async function refreshAfterMutation() {
-    const pageSize = listPage.pageSize.value;
-    const keyword = listPage.filter.keyword || undefined;
-    let targetPage = listPage.page.value;
-
+  async function refreshAfterMutation(options: { fallbackToPreviousPage?: boolean } = {}) {
+    const previousItems = [...listPage.items.value];
+    const previousTotal = listPage.total.value;
+    const previousMetaData = { ...metaData.value };
+    fallbackToPreviousEmployeePage = options.fallbackToPreviousPage === true;
     try {
-      let response = await getEmployeePagedListApi({
-        PaginationParams: { PageNumber: targetPage, PageSize: pageSize },
-        Keyword: keyword,
-      });
-      if (response.items.length === 0 && targetPage > 1) {
-        targetPage -= 1;
-        response = await getEmployeePagedListApi({
-          PaginationParams: { PageNumber: targetPage, PageSize: pageSize },
-          Keyword: keyword,
-        });
-      }
-
-      metaData.value = response.metaData;
-      listPage.items.value = response.items;
-      listPage.total.value = response.metaData.totalCount;
-      listPage.error.value = null;
-      if (targetPage !== listPage.page.value) {
-        queuedEmployeePage = { page: targetPage, pageSize, keyword, response };
-        listPage.page.value = targetPage;
+      await listPage.refresh();
+      if (listPage.error.value) {
+        listPage.items.value = previousItems;
+        listPage.total.value = previousTotal;
+        metaData.value = previousMetaData;
+        return false;
       }
       return true;
-    } catch {
-      return false;
+    } finally {
+      fallbackToPreviousEmployeePage = false;
     }
   }
 
@@ -630,7 +640,7 @@ export function useEmployees() {
         confirmSubmitting.value = true;
         try {
           await terminateEmployeeApi(employee.id);
-          const refreshed = await refreshAfterMutation();
+          const refreshed = await refreshAfterMutation({ fallbackToPreviousPage: true });
           if (!refreshed) {
             notifyWarning(EMPLOYEE_REFRESH_FAILED_MESSAGE);
             if (generation === confirmDialogGeneration) {

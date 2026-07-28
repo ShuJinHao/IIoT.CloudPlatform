@@ -876,6 +876,27 @@ describe('employees feature guards', () => {
     expect(state.accessForm.DeviceIds).toEqual(['device-1', 'device-2']);
   });
 
+  it('keeps the unified list loading lifecycle active during the post-save refresh', async () => {
+    authMock.state!.permissions = [Permissions.Employee.UpdateAccess];
+    const refresh = deferred<ReturnType<typeof emptyEmployeePage>>();
+    employeeApiMocks.getEmployeePagedListApi.mockReturnValue(refresh.promise);
+    const state = useEmployees();
+
+    await state.openAccessModal(employee.id);
+    const submission = state.submitAccess();
+    await vi.waitFor(() => {
+      expect(employeeApiMocks.getEmployeePagedListApi).toHaveBeenCalledTimes(1);
+    });
+
+    expect(state.loading.value).toBe(true);
+
+    refresh.resolve(emptyEmployeePage());
+    await submission;
+
+    expect(state.loading.value).toBe(false);
+    expect(feedbackMocks.notifySuccess).toHaveBeenCalledWith('设备管辖权保存成功');
+  });
+
   it('does not let an old successful submission close a newer employee modal', async () => {
     authMock.state!.permissions = [Permissions.Employee.UpdateAccess];
     deviceApiMocks.getEmployeeAccessDeviceCandidatesApi.mockResolvedValue([
