@@ -594,6 +594,42 @@ describe('employees feature guards', () => {
     });
   });
 
+  it('keeps the employee submission lock after closing until the pending write settles', async () => {
+    authMock.state!.permissions = [Permissions.Employee.UpdateAccess];
+    deviceApiMocks.getEmployeeAccessDeviceCandidatesApi.mockResolvedValue([
+      { id: 'device-1', deviceName: '正极模切客户端' },
+    ]);
+    employeeApiMocks.getEmployeeAccessApi.mockResolvedValue({
+      deviceIds: ['device-1'],
+    });
+    const pendingUpdate = deferred<boolean>();
+    employeeApiMocks.updateEmployeeAccessApi.mockReturnValue(pendingUpdate.promise);
+    const state = useEmployees();
+
+    await state.openAccessModal(employee.id);
+    const submission = state.submitAccess();
+    state.closeAccessModal();
+    await state.openAccessModal(employee.id);
+    await state.submitAccess();
+
+    expect(state.showAccessModal.value).toBe(false);
+    expect(deviceApiMocks.getEmployeeAccessDeviceCandidatesApi).toHaveBeenCalledTimes(1);
+    expect(employeeApiMocks.getEmployeeAccessApi).toHaveBeenCalledTimes(1);
+    expect(employeeApiMocks.updateEmployeeAccessApi).toHaveBeenCalledTimes(1);
+    expect(feedbackMocks.notifyWarning).toHaveBeenCalledWith(
+      '设备管辖权正在保存，请稍后重试',
+    );
+
+    pendingUpdate.resolve(true);
+    await submission;
+    await state.openAccessModal(employee.id);
+
+    expect(state.showAccessModal.value).toBe(true);
+    expect(state.accessReady.value).toBe(true);
+    expect(deviceApiMocks.getEmployeeAccessDeviceCandidatesApi).toHaveBeenCalledTimes(2);
+    expect(employeeApiMocks.getEmployeeAccessApi).toHaveBeenCalledTimes(2);
+  });
+
   it('hides and blocks reset password and termination for a non-Admin with historical permissions', async () => {
     authMock.state!.permissions = [
       Permissions.Employee.Update,
