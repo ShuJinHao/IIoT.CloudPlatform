@@ -64,6 +64,7 @@ const columns = createEmployeeColumns({
   canUpdateEmployee: () => employeeState.canUpdateEmployee.value,
   canUpdateAccess: () => employeeState.canUpdateAccess.value,
   canDeactivateEmployee: () => employeeState.canDeactivateEmployee.value,
+  canResetPassword: () => employeeState.canResetPassword.value,
   canTerminateEmployee: () => employeeState.canTerminateEmployee.value,
   canManagePersonalPermissions: () => employeeState.canManagePersonalPermissions.value,
   onDetail: employeeState.openDetailModal,

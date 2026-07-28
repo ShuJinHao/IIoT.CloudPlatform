@@ -46,20 +46,19 @@ const feedbackMocks = vi.hoisted(() => ({
 vi.mock('../../utils/feedback', () => feedbackMocks);
 
 const authMock = vi.hoisted(() => ({
-  isAdmin: false,
-  permissions: [] as string[],
+  state: null as { isAdmin: boolean; permissions: string[] } | null,
+  hasPermission: vi.fn(),
 }));
 
 vi.mock('../../stores/auth', () => ({
   useAuthStore: () => ({
     get isAdmin() {
-      return authMock.isAdmin;
+      return authMock.state?.isAdmin ?? false;
     },
     get permissions() {
-      return authMock.permissions;
+      return authMock.state?.permissions ?? [];
     },
-    hasPermission: (permission: string) =>
-      authMock.isAdmin || authMock.permissions.includes(permission),
+    hasPermission: (permission: string) => authMock.hasPermission(permission),
   }),
 }));
 
@@ -83,13 +82,16 @@ function emptyEmployeePage() {
   };
 }
 
-function mountEmployeeActions(canManagePersonalPermissions: () => boolean) {
+type EmployeeColumnOptions = Parameters<typeof createEmployeeColumns>[0];
+
+function mountEmployeeActions(options: Partial<EmployeeColumnOptions> = {}) {
   const actionColumn = createEmployeeColumns({
     canUpdateEmployee: () => false,
     canUpdateAccess: () => false,
     canDeactivateEmployee: () => false,
+    canResetPassword: () => false,
     canTerminateEmployee: () => false,
-    canManagePersonalPermissions,
+    canManagePersonalPermissions: () => false,
     onDetail: vi.fn(),
     onEdit: vi.fn(),
     onResetPassword: vi.fn(),
@@ -97,6 +99,7 @@ function mountEmployeeActions(canManagePersonalPermissions: () => boolean) {
     onPersonalPermissions: vi.fn(),
     onDeactivate: vi.fn(),
     onTerminate: vi.fn(),
+    ...options,
   }).find((column) => column.key === 'actions');
 
   expect(actionColumn?.render, '员工操作列必须提供 render').toBeTypeOf('function');
@@ -112,8 +115,14 @@ describe('employees feature guards', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     document.body.innerHTML = '';
-    authMock.isAdmin = false;
-    authMock.permissions = [];
+    authMock.state = reactive({
+      isAdmin: false,
+      permissions: [] as string[],
+    });
+    authMock.hasPermission.mockImplementation(
+      (permission: string) =>
+        authMock.state!.isAdmin || authMock.state!.permissions.includes(permission),
+    );
     employeeApiMocks.getEmployeePagedListApi.mockResolvedValue(emptyEmployeePage());
     employeeApiMocks.getEmployeeDetailApi.mockResolvedValue({
       ...employee,
@@ -123,10 +132,13 @@ describe('employees feature guards', () => {
     employeeApiMocks.getEmployeeAccessApi.mockResolvedValue({ deviceIds: [] });
     employeeApiMocks.getAllRolesApi.mockResolvedValue([]);
     employeeApiMocks.updateEmployeeProfileApi.mockResolvedValue(true);
+    employeeApiMocks.deactivateEmployeeApi.mockResolvedValue(true);
+    employeeApiMocks.terminateEmployeeApi.mockResolvedValue(true);
     deviceApiMocks.getAllActiveDevicesApi.mockResolvedValue([]);
     identityApiMocks.getAllDefinedPermissionsApi.mockResolvedValue([]);
     identityApiMocks.getUserPersonalPermissionsApi.mockResolvedValue([]);
     identityApiMocks.updateUserPermissionsApi.mockResolvedValue(true);
+    identityApiMocks.resetPasswordApi.mockResolvedValue(true);
   });
 
   it('requires employee read permission on the route', () => {
@@ -143,7 +155,7 @@ describe('employees feature guards', () => {
   });
 
   it('submits only employeeId and realName when updating an employee profile', async () => {
-    authMock.permissions = [Permissions.Employee.Update];
+    authMock.state!.permissions = [Permissions.Employee.Update];
     const state = useEmployees();
 
     state.openEditModal(employee);
@@ -197,13 +209,149 @@ describe('employees feature guards', () => {
     wrapper.unmount();
   });
 
+  it('hides and blocks reset password and termination for a non-Admin with historical permissions', async () => {
+    authMock.state!.permissions = [
+      Permissions.Employee.Update,
+      Permissions.Employee.Terminate,
+    ];
+    const state = useEmployees();
+    const actions = mountEmployeeActions({
+      canUpdateEmployee: () => state.canUpdateEmployee.value,
+      canResetPassword: () => state.canResetPassword.value,
+      canTerminateEmployee: () => state.canTerminateEmployee.value,
+    });
+
+    expect(state.canUpdateEmployee.value).toBe(true);
+    expect(state.canResetPassword.value).toBe(false);
+    expect(state.canTerminateEmployee.value).toBe(false);
+    expect(actions.text()).toContain('编辑');
+    expect(actions.text()).not.toContain('重置密码');
+    expect(actions.text()).not.toContain('离职');
+
+    state.openResetPwdModal(employee);
+    state.resetPwdForm.newPwd = 'Password1';
+    state.resetPwdForm.confirm = 'Password1';
+    await state.submitResetPwd();
+    state.handleTerminate(employee);
+    await state.confirmDialog.onConfirm();
+
+    expect(state.showResetPwdModal.value).toBe(false);
+    expect(state.resetPwdTarget.value).toBeNull();
+    expect(state.confirmDialog.show).toBe(false);
+    expect(identityApiMocks.resetPasswordApi).not.toHaveBeenCalled();
+    expect(employeeApiMocks.terminateEmployeeApi).not.toHaveBeenCalled();
+  });
+
+  it('keeps both high-risk actions available to an Admin with no raw permissions', async () => {
+    authMock.state!.isAdmin = true;
+    authMock.state!.permissions = [];
+    const state = useEmployees();
+    const actions = mountEmployeeActions({
+      canResetPassword: () => state.canResetPassword.value,
+      canTerminateEmployee: () => state.canTerminateEmployee.value,
+    });
+
+    expect(state.canResetPassword.value).toBe(true);
+    expect(state.canTerminateEmployee.value).toBe(true);
+    expect(actions.text()).toContain('重置密码');
+    expect(actions.text()).toContain('离职');
+    expect(authMock.hasPermission).toHaveBeenCalledWith(Permissions.Employee.Update);
+    expect(authMock.hasPermission).toHaveBeenCalledWith(Permissions.Employee.Terminate);
+
+    state.openResetPwdModal(employee);
+    expect(state.showResetPwdModal.value).toBe(true);
+    state.resetPwdForm.newPwd = 'Password1';
+    state.resetPwdForm.confirm = 'Password1';
+    await state.submitResetPwd();
+
+    expect(identityApiMocks.resetPasswordApi).toHaveBeenCalledWith({
+      userId: employee.id,
+      newPassword: 'Password1',
+    });
+    expect(state.showResetPwdModal.value).toBe(false);
+
+    state.handleTerminate(employee);
+    expect(state.confirmDialog.show).toBe(true);
+    await state.confirmDialog.onConfirm();
+
+    expect(employeeApiMocks.terminateEmployeeApi).toHaveBeenCalledWith(employee.id);
+    expect(state.confirmDialog.show).toBe(false);
+  });
+
+  it('blocks both high-risk submissions when Admin identity is lost after opening', async () => {
+    authMock.state!.isAdmin = true;
+    const state = useEmployees();
+
+    state.openResetPwdModal(employee);
+    state.resetPwdForm.newPwd = 'Password1';
+    state.resetPwdForm.confirm = 'Password1';
+    authMock.state!.isAdmin = false;
+    authMock.state!.permissions = [
+      Permissions.Employee.Update,
+      Permissions.Employee.Terminate,
+    ];
+    await nextTick();
+
+    expect(state.canResetPassword.value).toBe(false);
+    await state.submitResetPwd();
+    expect(identityApiMocks.resetPasswordApi).not.toHaveBeenCalled();
+    expect(state.showResetPwdModal.value).toBe(false);
+    expect(state.resetPwdTarget.value).toBeNull();
+    expect(feedbackMocks.notifyWarning).toHaveBeenLastCalledWith(
+      '管理员权限已失效，请重新登录后重试',
+    );
+
+    authMock.state!.isAdmin = true;
+    await nextTick();
+    state.handleTerminate(employee);
+    expect(state.confirmDialog.show).toBe(true);
+
+    authMock.state!.isAdmin = false;
+    await nextTick();
+    expect(state.canTerminateEmployee.value).toBe(false);
+    await state.confirmDialog.onConfirm();
+
+    expect(employeeApiMocks.terminateEmployeeApi).not.toHaveBeenCalled();
+    expect(state.confirmDialog.show).toBe(false);
+    expect(feedbackMocks.notifyWarning).toHaveBeenCalledTimes(2);
+    expect(feedbackMocks.notifyWarning).toHaveBeenLastCalledWith(
+      '管理员权限已失效，请重新登录后重试',
+    );
+  });
+
+  it('keeps edit, access and deactivate actions for HrAdmin without exposing Admin-only actions', () => {
+    authMock.state!.permissions = [
+      Permissions.Employee.Update,
+      Permissions.Employee.UpdateAccess,
+      Permissions.Employee.Deactivate,
+    ];
+    const state = useEmployees();
+    const actions = mountEmployeeActions({
+      canUpdateEmployee: () => state.canUpdateEmployee.value,
+      canUpdateAccess: () => state.canUpdateAccess.value,
+      canDeactivateEmployee: () => state.canDeactivateEmployee.value,
+      canResetPassword: () => state.canResetPassword.value,
+      canTerminateEmployee: () => state.canTerminateEmployee.value,
+      canManagePersonalPermissions: () => state.canManagePersonalPermissions.value,
+    });
+
+    expect(actions.text()).toContain('编辑');
+    expect(actions.text()).toContain('管辖权');
+    expect(actions.text()).toContain('停用');
+    expect(actions.text()).not.toContain('重置密码');
+    expect(actions.text()).not.toContain('离职');
+    expect(actions.text()).not.toContain('特批权限');
+  });
+
   it('hides and blocks personal permissions for non-Admin even with access and role permissions', async () => {
-    authMock.permissions = [
+    authMock.state!.permissions = [
       Permissions.Employee.UpdateAccess,
       Permissions.Role.Define,
     ];
     const state = useEmployees();
-    const actions = mountEmployeeActions(() => state.canManagePersonalPermissions.value);
+    const actions = mountEmployeeActions({
+      canManagePersonalPermissions: () => state.canManagePersonalPermissions.value,
+    });
 
     expect(state.canManagePersonalPermissions.value).toBe(false);
     expect(actions.text()).not.toContain('特批权限');
@@ -220,7 +368,7 @@ describe('employees feature guards', () => {
   });
 
   it('keeps personal permissions available to a real Admin', async () => {
-    authMock.isAdmin = true;
+    authMock.state!.isAdmin = true;
     identityApiMocks.getAllDefinedPermissionsApi.mockResolvedValue([
       {
         groupName: 'Device',
@@ -231,7 +379,9 @@ describe('employees feature guards', () => {
       Permissions.Device.Read,
     ]);
     const state = useEmployees();
-    const actions = mountEmployeeActions(() => state.canManagePersonalPermissions.value);
+    const actions = mountEmployeeActions({
+      canManagePersonalPermissions: () => state.canManagePersonalPermissions.value,
+    });
 
     expect(state.canManagePersonalPermissions.value).toBe(true);
     expect(actions.text()).toContain('特批权限');
