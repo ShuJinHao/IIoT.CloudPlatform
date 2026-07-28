@@ -16,6 +16,7 @@ import { useAuthStore } from '../../stores/auth';
 import { Permissions } from '../../types/permissions';
 import { notifySuccess, notifyWarning } from '../../utils/feedback';
 import {
+  activateEmployeeApi,
   deactivateEmployeeApi,
   getAllRolesApi,
   getEmployeeAccessApi,
@@ -36,6 +37,11 @@ const ADMIN_PERMISSION_EXPIRED_MESSAGE = '管理员权限已失效，请重新�
 const ACCESS_PERMISSION_EXPIRED_MESSAGE = '设备管辖权权限已失效，请重新登录后重试';
 const ACCESS_NOT_READY_MESSAGE = '设备管辖权尚未加载完成，请稍后重试';
 const ACCESS_SUBMITTING_MESSAGE = '设备管辖权正在保存，请稍后重试';
+const STATUS_PERMISSION_EXPIRED_MESSAGE = '人员状态操作权限已失效，请重新登录后重试';
+const STATUS_SUBMITTING_MESSAGE = '人员状态操作正在处理中，请稍后重试';
+const EMPLOYEE_REFRESH_FAILED_MESSAGE = '员工操作已完成，但列表刷新失败，请重新加载页面确认最新状态';
+
+type EmployeePageResponse = Awaited<ReturnType<typeof getEmployeePagedListApi>>;
 
 const emptyMetaData = (): PagedMetaData => ({
   totalCount: 0,
@@ -59,6 +65,7 @@ export function useEmployees() {
   const accessLoading = ref(false);
   const accessReady = ref(false);
   const accessSubmitting = ref(false);
+  const confirmSubmitting = ref(false);
   const detailData = ref<EmployeeDetailDto | null>(null);
   const editTarget = ref<EmployeeListItemDto | null>(null);
   const resetPwdTarget = ref<EmployeeListItemDto | null>(null);
@@ -76,18 +83,59 @@ export function useEmployees() {
     title: '',
     desc: '',
     confirmText: '',
+    confirmType: 'warning',
     onConfirm: async () => {},
   });
+  let queuedEmployeePage: {
+    page: number;
+    pageSize: number;
+    keyword?: string;
+    response: EmployeePageResponse;
+  } | null = null;
+  let fallbackToPreviousEmployeePage = false;
   const listPage = useListPage<EmployeeListItemDto, { keyword: string }>({
     initialFilter: { keyword: '' },
     initialPageSize: PAGE_SIZE,
     immediate: false,
     fetcher: async ({ page, pageSize, filter }) => {
-      const response = await getEmployeePagedListApi({
-        PaginationParams: { PageNumber: page, PageSize: pageSize },
-        Keyword: filter.keyword || undefined,
-      });
+      const requestKeyword = filter.keyword || undefined;
+      const queuedPage = queuedEmployeePage;
+      const useQueuedPage = queuedPage
+        && queuedPage.page === page
+        && queuedPage.pageSize === pageSize
+        && queuedPage.keyword === requestKeyword;
+      if (queuedPage) {
+        queuedEmployeePage = null;
+      }
+      let targetPage = page;
+      let response = useQueuedPage
+        ? queuedPage.response
+        : await getEmployeePagedListApi({
+            PaginationParams: { PageNumber: page, PageSize: pageSize },
+            Keyword: requestKeyword,
+          });
+      if (
+        !useQueuedPage
+        && fallbackToPreviousEmployeePage
+        && response.items.length === 0
+        && targetPage > 1
+      ) {
+        targetPage -= 1;
+        response = await getEmployeePagedListApi({
+          PaginationParams: { PageNumber: targetPage, PageSize: pageSize },
+          Keyword: requestKeyword,
+        });
+      }
       metaData.value = response.metaData;
+      if (targetPage !== page) {
+        queuedEmployeePage = {
+          page: targetPage,
+          pageSize,
+          keyword: requestKeyword,
+          response,
+        };
+        listPage.page.value = targetPage;
+      }
       return { items: response.items, total: response.metaData.totalCount };
     },
   });
@@ -116,6 +164,7 @@ export function useEmployees() {
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
   let candidateRequestGeneration = 0;
   let accessRequestGeneration = 0;
+  let confirmDialogGeneration = 0;
   const accessSubmissionTargetIds = new Set<string>();
 
   async function prefetchAccessCandidates() {
@@ -167,11 +216,22 @@ export function useEmployees() {
     listPage.gotoPage(page);
   }
 
-  async function refreshAfterMutation() {
-    await fetchList();
-    if (listPage.items.value.length === 0 && listPage.page.value > 1) {
-      listPage.page.value -= 1;
-      await fetchList();
+  async function refreshAfterMutation(options: { fallbackToPreviousPage?: boolean } = {}) {
+    const previousItems = [...listPage.items.value];
+    const previousTotal = listPage.total.value;
+    const previousMetaData = { ...metaData.value };
+    fallbackToPreviousEmployeePage = options.fallbackToPreviousPage === true;
+    try {
+      await listPage.refresh();
+      if (listPage.error.value) {
+        listPage.items.value = previousItems;
+        listPage.total.value = previousTotal;
+        metaData.value = previousMetaData;
+        return false;
+      }
+      return true;
+    } finally {
+      fallbackToPreviousEmployeePage = false;
     }
   }
 
@@ -467,47 +527,135 @@ export function useEmployees() {
     }
   }
 
+  function canOpenStatusConfirm(employee: EmployeeListItemDto, expectedActive: boolean) {
+    if (employee.isActive !== expectedActive) return false;
+    if (!canDeactivateEmployee.value) {
+      confirmDialog.show = false;
+      notifyWarning(STATUS_PERMISSION_EXPIRED_MESSAGE);
+      return false;
+    }
+    if (confirmSubmitting.value) {
+      notifyWarning(STATUS_SUBMITTING_MESSAGE);
+      return false;
+    }
+    return true;
+  }
+
+  async function submitStatusChange(
+    generation: number,
+    employee: EmployeeListItemDto,
+    operation: 'deactivate' | 'activate',
+  ) {
+    if (confirmSubmitting.value) return;
+    if (!canDeactivateEmployee.value) {
+      if (generation === confirmDialogGeneration) {
+        confirmDialog.show = false;
+      }
+      notifyWarning(STATUS_PERMISSION_EXPIRED_MESSAGE);
+      return;
+    }
+
+    confirmSubmitting.value = true;
+    try {
+      if (operation === 'deactivate') {
+        await deactivateEmployeeApi(employee.id);
+      } else {
+        await activateEmployeeApi(employee.id);
+      }
+      const refreshed = await refreshAfterMutation();
+      if (!refreshed) {
+        notifyWarning(EMPLOYEE_REFRESH_FAILED_MESSAGE);
+        if (generation === confirmDialogGeneration) {
+          confirmDialog.show = false;
+        }
+        return;
+      }
+      notifySuccess(
+        operation === 'deactivate'
+          ? '员工停用成功'
+          : '员工重新启用成功，请通知该员工重新登录',
+      );
+      if (generation === confirmDialogGeneration) {
+        confirmDialog.show = false;
+      }
+    } catch {
+      /* feedback handled by http client */
+    } finally {
+      confirmSubmitting.value = false;
+    }
+  }
+
   function handleDeactivate(employee: EmployeeListItemDto) {
+    if (!canOpenStatusConfirm(employee, true)) return;
+
+    const generation = ++confirmDialogGeneration;
     Object.assign(confirmDialog, {
       show: true,
       title: '停用员工',
-      desc: `确定要停用「${employee.realName}（${employee.employeeNo}）」吗？停用后该员工将无法登录，档案数据保留。`,
+      desc: `确定要停用「${employee.realName}（${employee.employeeNo}）」吗？停用后该员工将无法登录，现有 Access Token、Refresh Token 和 OIDC 会话立即失效，档案数据保留。`,
       confirmText: '确认停用',
-      onConfirm: async () => {
-        submitting.value = true;
-        try {
-          await deactivateEmployeeApi(employee.id);
-          confirmDialog.show = false;
-          await refreshAfterMutation();
-        } finally {
-          submitting.value = false;
-        }
-      },
+      confirmType: 'warning',
+      onConfirm: () => submitStatusChange(generation, employee, 'deactivate'),
+    });
+  }
+
+  function handleActivate(employee: EmployeeListItemDto) {
+    if (!canOpenStatusConfirm(employee, false)) return;
+
+    const generation = ++confirmDialogGeneration;
+    Object.assign(confirmDialog, {
+      show: true,
+      title: '重新启用员工',
+      desc: `确定要重新启用「${employee.realName}（${employee.employeeNo}）」吗？员工将恢复登录资格，但停用前的 Access Token、Refresh Token 和 OIDC 会话不会恢复，必须重新登录。`,
+      confirmText: '确认重新启用',
+      confirmType: 'success',
+      onConfirm: () => submitStatusChange(generation, employee, 'activate'),
     });
   }
 
   function handleTerminate(employee: EmployeeListItemDto) {
     if (!canTerminateEmployee.value) return;
+    if (confirmSubmitting.value) {
+      notifyWarning(STATUS_SUBMITTING_MESSAGE);
+      return;
+    }
 
+    const generation = ++confirmDialogGeneration;
     Object.assign(confirmDialog, {
       show: true,
       title: '员工离职销户（不可撤销）',
       desc: `即将永久删除「${employee.realName}（${employee.employeeNo}）」的所有档案，含身份账号与权限数据，此操作不可撤销！`,
       confirmText: '确认离职销户',
+      confirmType: 'error',
       onConfirm: async () => {
+        if (confirmSubmitting.value) return;
         if (!canTerminateEmployee.value) {
-          confirmDialog.show = false;
+          if (generation === confirmDialogGeneration) {
+            confirmDialog.show = false;
+          }
           notifyWarning(ADMIN_PERMISSION_EXPIRED_MESSAGE);
           return;
         }
 
-        submitting.value = true;
+        confirmSubmitting.value = true;
         try {
           await terminateEmployeeApi(employee.id);
-          confirmDialog.show = false;
-          await refreshAfterMutation();
+          const refreshed = await refreshAfterMutation({ fallbackToPreviousPage: true });
+          if (!refreshed) {
+            notifyWarning(EMPLOYEE_REFRESH_FAILED_MESSAGE);
+            if (generation === confirmDialogGeneration) {
+              confirmDialog.show = false;
+            }
+            return;
+          }
+          notifySuccess('员工离职销户成功');
+          if (generation === confirmDialogGeneration) {
+            confirmDialog.show = false;
+          }
+        } catch {
+          /* feedback handled by http client */
         } finally {
-          submitting.value = false;
+          confirmSubmitting.value = false;
         }
       },
     });
@@ -551,6 +699,7 @@ export function useEmployees() {
     personalPermForm,
     permissionGroups,
     confirmDialog,
+    confirmSubmitting,
     initialize,
     fetchList,
     onSearchInput,
@@ -571,6 +720,7 @@ export function useEmployees() {
     togglePersonalPerm,
     submitPersonalPerm,
     handleDeactivate,
+    handleActivate,
     handleTerminate,
   };
 }

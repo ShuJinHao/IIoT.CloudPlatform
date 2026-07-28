@@ -31,7 +31,7 @@
     <EmployeeDetailModal v-model:show="showDetailModal" :detail="detailData" :device-name-map="deviceNameMap" />
     <EmployeeResetPasswordModal v-model:show="showResetPwdModal" :target="resetPwdTarget" :form="resetPwdForm" :submitting="submitting" @submit="submitResetPwd" />
     <EmployeePersonalPermissionsModal v-model:show="showPersonalPermModal" :target="personalPermTarget" :loading="personalPermLoading" :permission-groups="permissionGroups" :selected-permissions="personalPermForm" :submitting="submitting" @toggle-permission="togglePersonalPerm" @submit="submitPersonalPerm" />
-    <EmployeeConfirmModal v-model:show="confirmDialog.show" :dialog="confirmDialog" :submitting="submitting" />
+    <EmployeeConfirmModal v-model:show="confirmDialog.show" :dialog="confirmDialog" :submitting="confirmSubmitting" />
   </NiondDataPage>
 </template>
 
@@ -73,6 +73,7 @@ const columns = createEmployeeColumns({
   onAccess: employeeState.openAccessModal,
   onPersonalPermissions: employeeState.openPersonalPermModal,
   onDeactivate: employeeState.handleDeactivate,
+  onActivate: employeeState.handleActivate,
   onTerminate: employeeState.handleTerminate,
 });
 const rowKey = (row: EmployeeListItemDto) => row.id;
@@ -81,7 +82,7 @@ const {
   employees, loading, keyword, currentPage, metaData, submitting, canUpdateAccess, allDevices, deviceNameMap, roleOptions,
   showOnboardModal, onboardForm, showEditModal, editForm, editTarget, showAccessModal, accessLoading, accessReady, accessSubmitting,
   accessForm, showDetailModal, detailData, showResetPwdModal, resetPwdTarget, resetPwdForm, showPersonalPermModal,
-  personalPermTarget, personalPermLoading, personalPermForm, permissionGroups, confirmDialog, initialize, fetchList,
+  personalPermTarget, personalPermLoading, personalPermForm, permissionGroups, confirmDialog, confirmSubmitting, initialize, fetchList,
   onSearchInput, onClearKeyword, onPageChange, openOnboardModal, submitOnboard, submitEdit, toggleDeviceAccess,
   submitAccess, submitResetPwd, togglePersonalPerm, submitPersonalPerm,
 } = employeeState;

@@ -17,6 +17,7 @@ interface EmployeeColumnOptions {
   onAccess: (id: string) => void;
   onPersonalPermissions: (employee: EmployeeListItemDto) => void;
   onDeactivate: (employee: EmployeeListItemDto) => void;
+  onActivate: (employee: EmployeeListItemDto) => void;
   onTerminate: (employee: EmployeeListItemDto) => void;
 }
 
@@ -82,6 +83,9 @@ export function createEmployeeColumns(
             : null,
           row.isActive && options.canDeactivateEmployee()
             ? h(UiButton, { size: 'tiny', type: 'warning', secondary: true, onClick: () => options.onDeactivate(row) }, { default: () => '停用' })
+            : null,
+          !row.isActive && options.canDeactivateEmployee()
+            ? h(UiButton, { size: 'tiny', type: 'success', secondary: true, onClick: () => options.onActivate(row) }, { default: () => '重新启用' })
             : null,
           options.canTerminateEmployee()
             ? h(UiButton, { size: 'tiny', type: 'error', secondary: true, onClick: () => options.onTerminate(row) }, { default: () => '离职' })
