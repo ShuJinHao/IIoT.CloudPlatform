@@ -441,6 +441,26 @@ describe('employees feature guards', () => {
     expect(feedbackMocks.notifySuccess).not.toHaveBeenCalled();
   });
 
+  it('reports a completed status write separately when the list refresh fails', async () => {
+    authMock.state!.permissions = [Permissions.Employee.Deactivate];
+    employeeApiMocks.getEmployeePagedListApi.mockRejectedValue(
+      new Error('ProblemDetails handled by http client'),
+    );
+    const state = useEmployees();
+
+    state.handleActivate(inactiveEmployee);
+    await state.confirmDialog.onConfirm();
+
+    expect(employeeApiMocks.activateEmployeeApi).toHaveBeenCalledWith(inactiveEmployee.id);
+    expect(employeeApiMocks.getEmployeePagedListApi).toHaveBeenCalledTimes(1);
+    expect(feedbackMocks.notifySuccess).not.toHaveBeenCalled();
+    expect(feedbackMocks.notifyWarning).toHaveBeenCalledWith(
+      '员工状态已更新，但列表刷新失败，请重新加载页面确认最新状态',
+    );
+    expect(state.confirmDialog.show).toBe(false);
+    expect(state.confirmSubmitting.value).toBe(false);
+  });
+
   it('prefetches minimal device candidates only for Employee.UpdateAccess holders', async () => {
     const readerState = useEmployees();
     await readerState.initialize();

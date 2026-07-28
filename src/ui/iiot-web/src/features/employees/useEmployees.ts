@@ -39,6 +39,7 @@ const ACCESS_NOT_READY_MESSAGE = '设备管辖权尚未加载完成，请稍后�
 const ACCESS_SUBMITTING_MESSAGE = '设备管辖权正在保存，请稍后重试';
 const STATUS_PERMISSION_EXPIRED_MESSAGE = '人员状态操作权限已失效，请重新登录后重试';
 const STATUS_SUBMITTING_MESSAGE = '人员状态操作正在处理中，请稍后重试';
+const STATUS_REFRESH_FAILED_MESSAGE = '员工状态已更新，但列表刷新失败，请重新加载页面确认最新状态';
 
 const emptyMetaData = (): PagedMetaData => ({
   totalCount: 0,
@@ -509,6 +510,13 @@ export function useEmployees() {
         await activateEmployeeApi(employee.id);
       }
       await refreshAfterMutation();
+      if (listPage.error.value) {
+        notifyWarning(STATUS_REFRESH_FAILED_MESSAGE);
+        if (generation === confirmDialogGeneration) {
+          confirmDialog.show = false;
+        }
+        return;
+      }
       notifySuccess(
         operation === 'deactivate'
           ? '员工停用成功'
