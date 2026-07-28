@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.2",
   "ruleId": "CLOUD-TEST-GOV-001",
-  "generatedAtUtc": "2026-07-13T05:30:45.7059120+00:00",
+  "generatedAtUtc": "2026-07-12T13:38:15.0736920+00:00",
   "provenance": {
     "sourceHead": "ef9d9dbef87e0e561c98815c83b4775670991c0b",
     "baselineStatus": "ReviewedSource",

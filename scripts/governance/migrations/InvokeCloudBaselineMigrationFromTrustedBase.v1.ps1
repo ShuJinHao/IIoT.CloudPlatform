@@ -11,10 +11,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$validatorRepositoryPath = 'scripts/tests/baselines/migrations/ValidateCloudBaselineMigration.v1.ps1'
+$validatorRepositoryPath = 'scripts/governance/migrations/ValidateCloudBaselineMigration.v1.ps1'
 
 if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
-    $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '../../../..')).Path
+    $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 }
 $RepositoryRoot = [IO.Path]::GetFullPath($RepositoryRoot)
 if ($RemainingArguments.Count -ne 0) {

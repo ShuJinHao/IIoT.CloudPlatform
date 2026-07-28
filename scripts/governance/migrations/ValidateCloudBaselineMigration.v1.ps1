@@ -27,13 +27,13 @@ $script:RuleId = 'CLOUD-BASELINE-MIG-001'
 $script:ReceiptSchemaVersion = '1.0'
 $script:BaselinePath = 'scripts/tests/baselines/cloud-test-governance.baseline.json'
 $script:PolicyPath = 'scripts/tests/TestCloudTestGovernancePolicy.ps1'
-$script:PendingRoot = 'scripts/tests/baselines/migrations/pending/'
-$script:ConsumedRoot = 'scripts/tests/baselines/migrations/consumed/'
-$script:CancelledRoot = 'scripts/tests/baselines/migrations/cancelled/'
-$script:ValidatorPath = 'scripts/tests/baselines/migrations/ValidateCloudBaselineMigration.v1.ps1'
-$script:TrustedWrapperPath = 'scripts/tests/baselines/migrations/InvokeCloudBaselineMigrationFromTrustedBase.v1.ps1'
-$script:SelfTestPath = 'scripts/tests/baselines/migrations/TestCloudBaselineMigrationValidator.v1.ps1'
-$script:SchemaPath = 'scripts/tests/baselines/migrations/cloud-baseline-migration-receipt.schema.json'
+$script:PendingRoot = 'scripts/governance/migrations/pending/'
+$script:ConsumedRoot = 'scripts/governance/migrations/consumed/'
+$script:CancelledRoot = 'scripts/governance/migrations/cancelled/'
+$script:ValidatorPath = 'scripts/governance/migrations/ValidateCloudBaselineMigration.v1.ps1'
+$script:TrustedWrapperPath = 'scripts/governance/migrations/InvokeCloudBaselineMigrationFromTrustedBase.v1.ps1'
+$script:SelfTestPath = 'scripts/governance/migrations/TestCloudBaselineMigrationValidator.v1.ps1'
+$script:SchemaPath = 'scripts/governance/migrations/cloud-baseline-migration-receipt.schema.json'
 $script:TrustImplementationPaths = @(
     $script:TrustedWrapperPath,
     $script:SelfTestPath,
@@ -425,7 +425,7 @@ function Assert-TargetWorkflowTrustClosure {
           if ($trustedBase -notmatch '^[0-9a-fA-F]{40}$' -or $trustedBase -match '^0{40}$') {
             $trustedBase = (git rev-parse HEAD^ | Out-String).Trim()
           }
-          $trustedWrapperPath = 'scripts/tests/baselines/migrations/InvokeCloudBaselineMigrationFromTrustedBase.v1.ps1'
+          $trustedWrapperPath = 'scripts/governance/migrations/InvokeCloudBaselineMigrationFromTrustedBase.v1.ps1'
           $entry = (git ls-tree $trustedBase -- $trustedWrapperPath | Out-String).Trim()
           $entryPattern = '^100644 blob (?<ObjectId>[0-9a-f]+)\t' + [regex]::Escape($trustedWrapperPath) + '$'
           if ($LASTEXITCODE -ne 0 -or $entry -notmatch $entryPattern) {
@@ -476,7 +476,7 @@ jobs:
     $selfTestBlock = @'
       - name: Run Cloud baseline migration validator self-tests
         shell: pwsh
-        run: ./scripts/tests/baselines/migrations/TestCloudBaselineMigrationValidator.v1.ps1
+        run: ./scripts/governance/migrations/TestCloudBaselineMigrationValidator.v1.ps1
 '@
     $beforeGate = @'
   build-test:
@@ -759,6 +759,7 @@ function Test-IsProtectedPath {
     if ($Path.StartsWith('.github/workflows/', [StringComparison]::Ordinal) -or
         $Path.StartsWith('.github/actions/', [StringComparison]::Ordinal) -or
         $Path.StartsWith('scripts/tests/', [StringComparison]::Ordinal) -or
+        $Path.StartsWith('scripts/governance/', [StringComparison]::Ordinal) -or
         $Path.StartsWith('src/Analyzers/', [StringComparison]::Ordinal) -or
         $Path.StartsWith('src/analyzers/', [StringComparison]::Ordinal) -or
         $Path.StartsWith('src/tests/', [StringComparison]::Ordinal) -or
@@ -1936,7 +1937,7 @@ function New-ReceiptDescription {
 }
 
 if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
-    $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '../../../..')).Path
+    $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 }
 if ($RemainingArguments.Count -ne 0) {
     Stop-MigrationValidation -Code 'PARAMETER' -Message (

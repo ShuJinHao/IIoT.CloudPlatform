@@ -8,16 +8,16 @@ $ErrorActionPreference = 'Stop'
 
 $ValidatorPath = (Resolve-Path $ValidatorPath).Path
 $TrustedWrapperPath = (Resolve-Path (Join-Path $PSScriptRoot 'InvokeCloudBaselineMigrationFromTrustedBase.v1.ps1')).Path
-$TrustedWrapperRelativePath = 'scripts/tests/baselines/migrations/InvokeCloudBaselineMigrationFromTrustedBase.v1.ps1'
+$TrustedWrapperRelativePath = 'scripts/governance/migrations/InvokeCloudBaselineMigrationFromTrustedBase.v1.ps1'
 $SchemaPath = (Resolve-Path (Join-Path $PSScriptRoot 'cloud-baseline-migration-receipt.schema.json')).Path
 $SelfPath = $MyInvocation.MyCommand.Path
 $Now = [DateTimeOffset]::UtcNow
 $IssuedAtUtc = $Now.AddMinutes(-5).ToString('yyyy-MM-ddTHH:mm:ssZ')
 $ExpiresAtUtc = $Now.AddDays(6).ToString('yyyy-MM-ddTHH:mm:ssZ')
 $MigrationId = 'CLOUD-BASELINE-MIG-SELFTEST-001'
-$ReceiptRelativePath = "scripts/tests/baselines/migrations/pending/$MigrationId.json"
-$ConsumedRelativePath = "scripts/tests/baselines/migrations/consumed/$MigrationId.json"
-$CancelledRelativePath = "scripts/tests/baselines/migrations/cancelled/$MigrationId.json"
+$ReceiptRelativePath = "scripts/governance/migrations/pending/$MigrationId.json"
+$ConsumedRelativePath = "scripts/governance/migrations/consumed/$MigrationId.json"
+$CancelledRelativePath = "scripts/governance/migrations/cancelled/$MigrationId.json"
 $script:Passed = 0
 $script:Failed = 0
 $script:TempRoots = [Collections.Generic.List[string]]::new()
@@ -116,7 +116,7 @@ jobs:
           if ($trustedBase -notmatch '^[0-9a-fA-F]{40}$' -or $trustedBase -match '^0{40}$') {
             $trustedBase = (git rev-parse HEAD^ | Out-String).Trim()
           }
-          $trustedWrapperPath = 'scripts/tests/baselines/migrations/InvokeCloudBaselineMigrationFromTrustedBase.v1.ps1'
+          $trustedWrapperPath = 'scripts/governance/migrations/InvokeCloudBaselineMigrationFromTrustedBase.v1.ps1'
           $entry = (git ls-tree $trustedBase -- $trustedWrapperPath | Out-String).Trim()
           $entryPattern = '^100644 blob (?<ObjectId>[0-9a-f]+)\t' + [regex]::Escape($trustedWrapperPath) + '$'
           if ($LASTEXITCODE -ne 0 -or $entry -notmatch $entryPattern) {
@@ -142,7 +142,7 @@ jobs:
           }
       - name: Run Cloud baseline migration validator self-tests
         shell: pwsh
-        run: ./scripts/tests/baselines/migrations/TestCloudBaselineMigrationValidator.v1.ps1
+        run: ./scripts/governance/migrations/TestCloudBaselineMigrationValidator.v1.ps1
       - name: Setup .NET
         uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
@@ -346,10 +346,10 @@ pass() {
 pass "$label"
 '@
     Write-Utf8File -Path (Join-Path $root 'src/App/Program.cs') -Content "internal static class Program { }`n"
-    $validatorTarget = Join-Path $root 'scripts/tests/baselines/migrations/ValidateCloudBaselineMigration.v1.ps1'
-    $wrapperTarget = Join-Path $root 'scripts/tests/baselines/migrations/InvokeCloudBaselineMigrationFromTrustedBase.v1.ps1'
-    $selfTarget = Join-Path $root 'scripts/tests/baselines/migrations/TestCloudBaselineMigrationValidator.v1.ps1'
-    $schemaTarget = Join-Path $root 'scripts/tests/baselines/migrations/cloud-baseline-migration-receipt.schema.json'
+    $validatorTarget = Join-Path $root 'scripts/governance/migrations/ValidateCloudBaselineMigration.v1.ps1'
+    $wrapperTarget = Join-Path $root 'scripts/governance/migrations/InvokeCloudBaselineMigrationFromTrustedBase.v1.ps1'
+    $selfTarget = Join-Path $root 'scripts/governance/migrations/TestCloudBaselineMigrationValidator.v1.ps1'
+    $schemaTarget = Join-Path $root 'scripts/governance/migrations/cloud-baseline-migration-receipt.schema.json'
     [IO.Directory]::CreateDirectory((Split-Path $validatorTarget -Parent)) | Out-Null
     [IO.File]::Copy($ValidatorPath, $validatorTarget, $true)
     [IO.File]::Copy($TrustedWrapperPath, $wrapperTarget, $true)
@@ -444,7 +444,7 @@ function New-AuthorizationFixture {
     }
     if ($AddSecondPending) {
         $second = $receiptJson.Replace($MigrationId, 'CLOUD-BASELINE-MIG-SELFTEST-002')
-        Write-Utf8File -Path (Join-Path $fixture.Root 'scripts/tests/baselines/migrations/pending/CLOUD-BASELINE-MIG-SELFTEST-002.json') -Content "$second`n"
+        Write-Utf8File -Path (Join-Path $fixture.Root 'scripts/governance/migrations/pending/CLOUD-BASELINE-MIG-SELFTEST-002.json') -Content "$second`n"
     }
     $authorization = Commit-All -Root $fixture.Root -Message 'authorize migration'
     $fixture | Add-Member -NotePropertyName Authorization -NotePropertyValue $authorization -Force
@@ -457,7 +457,7 @@ function New-TrustTemplateFixture {
     Write-CloudFixtureBaseline -Root $fixture.Root
     $fixture.Base = Commit-All -Root $fixture.Root -Message 'integrated trusted workflow base'
     [IO.File]::AppendAllText(
-        (Join-Path $fixture.Root 'scripts/tests/baselines/migrations/ValidateCloudBaselineMigration.v1.ps1'),
+        (Join-Path $fixture.Root 'scripts/governance/migrations/ValidateCloudBaselineMigration.v1.ps1'),
         "# reviewed trust upgrade candidate`n",
         [Text.UTF8Encoding]::new($false))
     $template = Commit-All -Root $fixture.Root -Message 'trust upgrade template'
@@ -538,7 +538,7 @@ function Complete-Candidate {
     }
     if ($ModifyCandidateValidator) {
         [IO.File]::AppendAllText(
-            (Join-Path $Fixture.Root 'scripts/tests/baselines/migrations/ValidateCloudBaselineMigration.v1.ps1'),
+            (Join-Path $Fixture.Root 'scripts/governance/migrations/ValidateCloudBaselineMigration.v1.ps1'),
             "# candidate bypass`n",
             [Text.UTF8Encoding]::new($false))
     }
@@ -1296,7 +1296,7 @@ try {
         param($root)
         $path = Join-Path $root '.github/workflows/cloud-ci.yml'
         $text = [IO.File]::ReadAllText($path).Replace(
-            './scripts/tests/baselines/migrations/TestCloudBaselineMigrationValidator.v1.ps1',
+            './scripts/governance/migrations/TestCloudBaselineMigrationValidator.v1.ps1',
             'Write-Host skipped-migration-self-test')
         Write-Utf8File -Path $path -Content $text
     }
@@ -1313,7 +1313,7 @@ try {
         $path = Join-Path $root '.github/workflows/cloud-ci.yml'
         [IO.File]::AppendAllText(
             $path,
-            "# scripts/tests/baselines/migrations/TestCloudBaselineMigrationValidator.v1.ps1`n",
+            "# scripts/governance/migrations/TestCloudBaselineMigrationValidator.v1.ps1`n",
             [Text.UTF8Encoding]::new($false))
     }
     $duplicateMigrationSelfTest = Complete-Candidate -Fixture $duplicateMigrationSelfTest
@@ -1426,7 +1426,7 @@ try {
         $path = Join-Path $root '.github/workflows/cloud-image.yml'
         [IO.File]::AppendAllText(
             $path,
-            "# scripts/tests/baselines/migrations/InvokeCloudBaselineMigrationFromTrustedBase.v1.ps1`n",
+            "# scripts/governance/migrations/InvokeCloudBaselineMigrationFromTrustedBase.v1.ps1`n",
             [Text.UTF8Encoding]::new($false))
     }
     $duplicateWrapperReference = Complete-Candidate -Fixture $duplicateWrapperReference
@@ -1454,7 +1454,7 @@ try {
     $extraTrustAsset = New-TrustTemplateFixture
     Invoke-Git -Root $extraTrustAsset.Root -Arguments @('checkout', '--quiet', $extraTrustAsset.Template)
     Write-Utf8File `
-        -Path (Join-Path $extraTrustAsset.Root 'scripts/tests/baselines/migrations/FutureTrustBypass.ps1') `
+        -Path (Join-Path $extraTrustAsset.Root 'scripts/governance/migrations/FutureTrustBypass.ps1') `
         -Content "throw 'candidate trust bypass'`n"
     Invoke-Git -Root $extraTrustAsset.Root -Arguments @('add', '--all')
     Invoke-Git -Root $extraTrustAsset.Root -Arguments @('commit', '--quiet', '--amend', '--no-edit')
@@ -1651,7 +1651,7 @@ try {
 
     $wrapperBypass = New-BaseFixture
     Write-Utf8File `
-        -Path (Join-Path $wrapperBypass.Root 'scripts/tests/baselines/migrations/InvokeCloudBaselineMigrationFromTrustedBase.v1.ps1') `
+        -Path (Join-Path $wrapperBypass.Root 'scripts/governance/migrations/InvokeCloudBaselineMigrationFromTrustedBase.v1.ps1') `
         -Content "exit 0`n"
     $wrapperCandidate = Commit-All -Root $wrapperBypass.Root -Message 'attempt wrapper bypass'
     Assert-Rejected -Name 'base-extracted wrapper ignores candidate wrapper bypass' -ExpectedCode 'IMMUTABLE' -Action {
