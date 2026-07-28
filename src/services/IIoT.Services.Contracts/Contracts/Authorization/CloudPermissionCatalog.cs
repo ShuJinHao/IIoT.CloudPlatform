@@ -169,6 +169,61 @@ public static class CloudPermissionCatalog
         IEnumerable<string>? permissions)
         => NormalizeAgainst(permissions, RoleAdminAssignableCanonicalPermissions);
 
+    /// <summary>
+    /// 按目标角色统一规范化角色权限更新请求。
+    /// RoleAdmin 的治理权限为内置锁定项：请求可以携带，也可以省略，
+    /// 但不能把这些权限作为普通可编辑权限扩散到其它角色。
+    /// </summary>
+    public static PermissionSetValidation NormalizeForTargetRole(
+        string? roleName,
+        IEnumerable<string>? permissions)
+    {
+        var normalizedInput = Normalize(permissions);
+        if (!normalizedInput.IsValid)
+        {
+            return normalizedInput;
+        }
+
+        var isRoleAdmin = string.Equals(
+            roleName?.Trim(),
+            SystemRoles.RoleAdmin,
+            StringComparison.OrdinalIgnoreCase);
+        var editablePermissions = isRoleAdmin
+            ? normalizedInput.Permissions
+                .Where(permission =>
+                    !string.Equals(permission, Role.Read, StringComparison.Ordinal)
+                    && !string.Equals(permission, Role.Define, StringComparison.Ordinal)
+                    && !string.Equals(permission, Role.Update, StringComparison.Ordinal))
+            : normalizedInput.Permissions;
+        var editableValidation = NormalizeRoleAdminAssignable(editablePermissions);
+        if (!editableValidation.IsValid)
+        {
+            return new PermissionSetValidation(
+                normalizedInput.Permissions,
+                editableValidation.RejectedPermissions);
+        }
+
+        if (!isRoleAdmin)
+        {
+            return editableValidation;
+        }
+
+        var effectivePermissions = new HashSet<string>(
+            editableValidation.Permissions,
+            StringComparer.OrdinalIgnoreCase)
+        {
+            Role.Read,
+            Role.Define,
+            Role.Update
+        };
+
+        return new PermissionSetValidation(
+            AllPermissionValues
+                .Where(effectivePermissions.Contains)
+                .ToArray(),
+            []);
+    }
+
     private static PermissionSetValidation NormalizeAgainst(
         IEnumerable<string>? permissions,
         IReadOnlyDictionary<string, string> allowedPermissions)

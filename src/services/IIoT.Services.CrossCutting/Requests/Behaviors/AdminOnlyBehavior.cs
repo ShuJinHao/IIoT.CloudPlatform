@@ -12,7 +12,6 @@ namespace IIoT.Services.CrossCutting.Behaviors;
 /// 人员端管理员专属操作守卫。
 /// </summary>
 public sealed class AdminOnlyBehavior<TRequest, TResponse>(
-    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     ICurrentUser currentUser,
     IAuditTrailService auditTrailService) : IPipelineBehavior<TRequest, TResponse>
     where TRequest : IRequest<TResponse>
@@ -29,7 +28,10 @@ public sealed class AdminOnlyBehavior<TRequest, TResponse>(
         if (!requiresAdmin)
             return await next(cancellationToken);
 
-        if (!currentUserDeviceAccessService.IsAdministrator)
+        if (!SystemRoles.IsAuthenticatedHumanAdmin(
+                currentUser.IsAuthenticated,
+                currentUser.ActorType,
+                currentUser.Roles))
         {
             if (request is IAdminOnlyAuditRequest auditRequest)
             {

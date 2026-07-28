@@ -21,6 +21,39 @@ public static class SystemInitData
         IConfiguration configuration,
         CancellationToken cancellationToken = default)
     {
+        ValidateRolePermissionTemplates();
+
+        var strategy = dbContext.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(async () =>
+        {
+            await using var transaction =
+                await dbContext.Database.BeginTransactionAsync(cancellationToken);
+            try
+            {
+                await SeedCoreAsync(
+                    dbContext,
+                    userManager,
+                    roleManager,
+                    configuration,
+                    cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                Console.WriteLine("✅ 系统身份角色模板和管理员播种事务提交成功。");
+            }
+            catch
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                throw;
+            }
+        });
+    }
+
+    private static async Task SeedCoreAsync(
+        IIoTDbContext dbContext,
+        UserManager<ApplicationUser> userManager,
+        RoleManager<IdentityRole<Guid>> roleManager,
+        IConfiguration configuration,
+        CancellationToken cancellationToken)
+    {
         // 1. 确保超级管理员和岗位角色模板存在
         var adminRoleName = SystemRoles.Admin;
         await EnsureRoleAsync(roleManager, adminRoleName);
@@ -57,6 +90,42 @@ public static class SystemInitData
             seedAdmin,
             resetPassword: false,
             cancellationToken);
+    }
+
+    private static void ValidateRolePermissionTemplates()
+    {
+        foreach (var (roleName, permissions) in SystemRolePermissionTemplates.Templates)
+        {
+            if (string.IsNullOrWhiteSpace(roleName)
+                || SystemRoles.IsAdminLike(roleName))
+            {
+                throw new InvalidOperationException(
+                    $"内置角色模板名称非法：[{roleName}]。");
+            }
+
+            var validation = CloudPermissionCatalog.NormalizeForTargetRole(
+                roleName,
+                permissions);
+            if (!validation.IsValid
+                || validation.Permissions.Count != permissions.Count)
+            {
+                throw new InvalidOperationException(
+                    $"内置角色模板 [{roleName}] 包含未知、重复或不可分配权限。");
+            }
+
+            if (string.Equals(
+                    roleName,
+                    SystemRoles.DeviceAdmin,
+                    StringComparison.OrdinalIgnoreCase)
+                && permissions.Any(permission =>
+                    SystemRolePermissionTemplates.DeviceAdminRetiredPermissions.Contains(
+                        permission,
+                        StringComparer.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException(
+                    "DeviceAdmin 内置模板不得重新携带设备注册或删除权限。");
+            }
+        }
     }
 
     private static async Task EnsureRolePermissionTemplatesAsync(
@@ -172,127 +241,103 @@ public static class SystemInitData
         CancellationToken cancellationToken)
     {
         var targetPassword = seedAdmin.RequirePassword();
+        var identityUser = await userManager.FindByNameAsync(seedAdmin.EmployeeNo);
+        var createdUser = false;
 
-        // 4. 获取执行策略(应对断网重试)
-        var strategy = dbContext.Database.CreateExecutionStrategy();
-
-        // 5. 将事务包裹在执行策略中
-        await strategy.ExecuteAsync(async () =>
+        if (identityUser is null)
         {
-            // 在策略内部合法开启强事务
-            await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
-
-            try
+            identityUser = new ApplicationUser
             {
-                var identityUser = await userManager.FindByNameAsync(seedAdmin.EmployeeNo);
-                var createdUser = false;
+                Id = Guid.NewGuid(),
+                UserName = seedAdmin.EmployeeNo,
+                IsEnabled = true
+            };
 
-                if (identityUser is null)
+            var createResult = await userManager.CreateAsync(identityUser, targetPassword);
+            if (!createResult.Succeeded)
+            {
+                Console.WriteLine($"❌ 账号 [{seedAdmin.EmployeeNo}] 创建失败！");
+                foreach (var error in createResult.Errors)
                 {
-                    identityUser = new ApplicationUser
-                    {
-                        Id = Guid.NewGuid(),
-                        UserName = seedAdmin.EmployeeNo,
-                        IsEnabled = true
-                    };
+                    Console.WriteLine($"   - [{error.Code}]: {error.Description}");
+                }
 
-                    // 6. 创建底层身份认证账号
-                    var createResult = await userManager.CreateAsync(identityUser, targetPassword);
+                throw new Exception("Identity 账号创建失败，事务终止！");
+            }
 
-                    if (!createResult.Succeeded)
+            createdUser = true;
+        }
+        else
+        {
+            if (!identityUser.IsEnabled)
+            {
+                identityUser.IsEnabled = true;
+                var updateResult = await userManager.UpdateAsync(identityUser);
+                if (!updateResult.Succeeded)
+                {
+                    Console.WriteLine($"❌ 账号 [{seedAdmin.EmployeeNo}] 启用失败！");
+                    foreach (var error in updateResult.Errors)
                     {
-                        Console.WriteLine($"❌ 账号 [{seedAdmin.EmployeeNo}] 创建失败！详细死因如下：");
-                        foreach (var error in createResult.Errors)
-                        {
-                            Console.WriteLine($"   - [{error.Code}]: {error.Description}");
-                        }
-                        // 直接抛出异常，精准触发下方的 catch 回滚
-                        throw new Exception("Identity 账号创建失败，事务终止！");
+                        Console.WriteLine($"   - [{error.Code}]: {error.Description}");
                     }
 
-                    createdUser = true;
-                }
-                else
-                {
-                    if (!identityUser.IsEnabled)
-                    {
-                        identityUser.IsEnabled = true;
-                        var updateResult = await userManager.UpdateAsync(identityUser);
-                        if (!updateResult.Succeeded)
-                        {
-                            Console.WriteLine($"❌ 账号 [{seedAdmin.EmployeeNo}] 启用失败！");
-                            foreach (var error in updateResult.Errors)
-                            {
-                                Console.WriteLine($"   - [{error.Code}]: {error.Description}");
-                            }
-
-                            throw new Exception("Identity 账号启用失败，事务终止！");
-                        }
-                    }
-
-                    if (resetPassword)
-                    {
-                        await ResetPasswordAsync(userManager, identityUser, targetPassword, seedAdmin.EmployeeNo);
-                    }
-                }
-
-                // 7. 赋予 Admin 角色
-                if (!await userManager.IsInRoleAsync(identityUser, adminRoleName))
-                {
-                    var addRoleResult = await userManager.AddToRoleAsync(identityUser, adminRoleName);
-                    if (!addRoleResult.Succeeded)
-                    {
-                        Console.WriteLine($"❌ 账号 [{seedAdmin.EmployeeNo}] 授予 Admin 角色失败！");
-                        foreach (var error in addRoleResult.Errors)
-                        {
-                            Console.WriteLine($"   - [{error.Code}]: {error.Description}");
-                        }
-
-                        throw new Exception("Admin 角色授予失败，事务终止！");
-                    }
-                }
-
-                // 8. 创建或修复核心业务聚合根 (员工)
-                var employee = await dbContext.Employees
-                    .SingleOrDefaultAsync(x => x.Id == identityUser.Id, cancellationToken);
-
-                if (employee is null)
-                {
-                    employee = new Employee(identityUser.Id, seedAdmin.EmployeeNo, seedAdmin.RealName);
-                    dbContext.Employees.Add(employee);
-                }
-                else
-                {
-                    employee.Rename(seedAdmin.EmployeeNo, seedAdmin.RealName);
-                    employee.Activate();
-                }
-
-                await dbContext.SaveChangesAsync(cancellationToken);
-
-                // 9. 全部成功，提交事务
-                await transaction.CommitAsync();
-                if (createdUser)
-                {
-                    Console.WriteLine($"✅ 事务提交成功！账号 [{seedAdmin.EmployeeNo}] 及员工业务数据已完整播种！");
-                }
-                else if (resetPassword)
-                {
-                    Console.WriteLine($"✅ 账号 [{seedAdmin.EmployeeNo}] 密码、Admin 角色和员工状态已按显式运维开关修复。");
-                }
-                else
-                {
-                    Console.WriteLine($"✅ 账号 [{seedAdmin.EmployeeNo}] 已存在，Admin 角色和员工状态已确认。");
+                    throw new Exception("Identity 账号启用失败，事务终止！");
                 }
             }
-            catch (Exception ex)
+
+            if (resetPassword)
             {
-                // 任何异常都回滚
-                await transaction.RollbackAsync();
-                Console.WriteLine($"⛔ 发生致命错误，已触发事务回滚！所有脏数据已清除。错误信息: {ex.Message}");
-                // 将异常继续抛出，让外层的重试机制知道失败了
-                throw;
+                await ResetPasswordAsync(
+                    userManager,
+                    identityUser,
+                    targetPassword,
+                    seedAdmin.EmployeeNo);
             }
-        });
+        }
+
+        if (!await userManager.IsInRoleAsync(identityUser, adminRoleName))
+        {
+            var addRoleResult = await userManager.AddToRoleAsync(identityUser, adminRoleName);
+            if (!addRoleResult.Succeeded)
+            {
+                Console.WriteLine($"❌ 账号 [{seedAdmin.EmployeeNo}] 授予 Admin 角色失败！");
+                foreach (var error in addRoleResult.Errors)
+                {
+                    Console.WriteLine($"   - [{error.Code}]: {error.Description}");
+                }
+
+                throw new Exception("Admin 角色授予失败，事务终止！");
+            }
+        }
+
+        var employee = await dbContext.Employees
+            .SingleOrDefaultAsync(x => x.Id == identityUser.Id, cancellationToken);
+
+        if (employee is null)
+        {
+            employee = new Employee(identityUser.Id, seedAdmin.EmployeeNo, seedAdmin.RealName);
+            dbContext.Employees.Add(employee);
+        }
+        else
+        {
+            employee.Rename(seedAdmin.EmployeeNo, seedAdmin.RealName);
+            employee.Activate();
+        }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        if (createdUser)
+        {
+            Console.WriteLine($"✅ 账号 [{seedAdmin.EmployeeNo}] 及员工业务数据已准备播种。");
+        }
+        else if (resetPassword)
+        {
+            Console.WriteLine($"✅ 账号 [{seedAdmin.EmployeeNo}] 已准备按显式运维开关修复。");
+        }
+        else
+        {
+            Console.WriteLine($"✅ 账号 [{seedAdmin.EmployeeNo}] 与员工状态已核对。");
+        }
     }
 
     private static async Task ResetPasswordAsync(

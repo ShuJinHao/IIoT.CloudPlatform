@@ -22,6 +22,7 @@ public record OnboardEmployeeCommand(
 public class OnboardEmployeeHandler(
     IIdentityAccountStore identityAccountStore,
     IIdentityPasswordService identityPasswordService,
+    IRolePolicyService rolePolicyService,
     IRepository<Employee> employeeRepository,
     IUnitOfWork unitOfWork,
     ICurrentUser currentUser,
@@ -32,17 +33,23 @@ public class OnboardEmployeeHandler(
         OnboardEmployeeCommand request,
         CancellationToken cancellationToken)
     {
-        if (!string.IsNullOrWhiteSpace(request.RoleName))
+        var normalizedRoleName = request.RoleName?.Trim();
+        if (!string.IsNullOrEmpty(normalizedRoleName))
         {
+            if (SystemRoles.IsAdminLike(request.RoleName))
+            {
+                return Result.Failure("管理员角色禁止通过该接口创建");
+            }
+
             var rolePermissionResult = await EnsureCanUpdateAccessAsync(cancellationToken);
             if (!rolePermissionResult.IsSuccess)
             {
                 return Result.Failure(rolePermissionResult.Errors?.ToArray() ?? ["角色设置需要 Employee.UpdateAccess 权限"]);
             }
 
-            if (request.RoleName.Equals(SystemRoles.Admin, StringComparison.OrdinalIgnoreCase))
+            if (!await rolePolicyService.RoleExistsAsync(normalizedRoleName))
             {
-                return Result.Failure("管理员角色禁止通过该接口创建");
+                return Result.Failure("角色未定义");
             }
         }
 
@@ -77,11 +84,11 @@ public class OnboardEmployeeHandler(
                 return Result.Failure(passwordResult.Errors?.ToArray() ?? ["密码设置失败"]);
             }
 
-            if (!string.IsNullOrWhiteSpace(request.RoleName))
+            if (!string.IsNullOrEmpty(normalizedRoleName))
             {
                 var roleResult = await identityAccountStore.AssignRoleAsync(
                     sharedId,
-                    request.RoleName,
+                    normalizedRoleName,
                     cancellationToken);
 
                 if (!roleResult.IsSuccess)
@@ -108,7 +115,10 @@ public class OnboardEmployeeHandler(
 
     private async Task<Result> EnsureCanUpdateAccessAsync(CancellationToken cancellationToken)
     {
-        if (currentUser.Roles.Contains(SystemRoles.Admin, StringComparer.Ordinal))
+        if (SystemRoles.IsAuthenticatedHumanAdmin(
+                currentUser.IsAuthenticated,
+                currentUser.ActorType,
+                currentUser.Roles))
         {
             return Result.Success();
         }
@@ -119,7 +129,7 @@ public class OnboardEmployeeHandler(
         }
 
         var permissions = await permissionProvider.GetPermissionsAsync(userId, cancellationToken);
-        return permissions.Contains("Employee.UpdateAccess")
+        return permissions.Contains(CloudPermissionCatalog.Employee.UpdateAccess)
             ? Result.Success()
             : Result.Failure("角色设置需要 Employee.UpdateAccess 权限");
     }

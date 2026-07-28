@@ -25,12 +25,15 @@ public sealed class RolePolicyService(
     public async Task<Result> CreateRoleAsync(string roleName)
     {
         var normalizedRoleName = (roleName ?? string.Empty).Trim();
-        if (SystemRoles.IsAdmin(normalizedRoleName))
+        if (SystemRoles.IsAdminLike(roleName))
         {
             return Result.Failure("禁止定义、覆盖或修改 Admin 角色。");
         }
 
-        if (await roleManager.RoleExistsAsync(normalizedRoleName)) return Result.Success();
+        if (await roleManager.RoleExistsAsync(normalizedRoleName))
+        {
+            return Result.Failure("角色已存在，DefineRolePolicy 只允许创建新角色。");
+        }
 
         var result = await roleManager.CreateAsync(new IdentityRole<Guid>(normalizedRoleName));
         return result.ToResult();
@@ -69,16 +72,20 @@ public sealed class RolePolicyService(
     public async Task<Result<bool>> UpdateRolePermissionsAsync(string roleName, List<string> permissions)
     {
         var normalizedRoleName = (roleName ?? string.Empty).Trim();
-        if (SystemRoles.IsAdmin(normalizedRoleName))
+        if (SystemRoles.IsAdminLike(roleName))
         {
             return Result.Failure("禁止定义、覆盖或修改 Admin 角色。");
         }
 
-        var validation = CloudPermissionCatalog.NormalizeRoleAdminAssignable(permissions);
+        var validation = CloudPermissionCatalog.NormalizeForTargetRole(
+            normalizedRoleName,
+            permissions);
         if (!validation.IsValid)
         {
             return Result.Failure("权限集合包含未知权限或 RoleAdmin 不可分配权限，未执行任何修改。");
         }
+
+        var effectivePermissions = validation.Permissions.ToList();
 
         var role = await roleManager.FindByNameAsync(normalizedRoleName);
         if (role == null) return Result.Failure("\u89D2\u8272\u4E0D\u5B58\u5728");
@@ -87,7 +94,7 @@ public sealed class RolePolicyService(
         var existingPermissions = claims
             .Where(c => c.Type == IIoTClaimTypes.Permission)
             .ToList();
-        var desiredPermissions = validation.Permissions.ToDictionary(
+        var desiredPermissions = effectivePermissions.ToDictionary(
             permission => permission,
             permission => permission,
             StringComparer.OrdinalIgnoreCase);
@@ -109,7 +116,7 @@ public sealed class RolePolicyService(
                 return Result.Failure(removeResult.Errors.Select(error => error.Description).ToArray());
         }
 
-        foreach (var permission in validation.Permissions.Where(permission => !retainedPermissions.Contains(permission)))
+        foreach (var permission in effectivePermissions.Where(permission => !retainedPermissions.Contains(permission)))
         {
             var addResult = await roleManager.AddClaimAsync(
                 role,
