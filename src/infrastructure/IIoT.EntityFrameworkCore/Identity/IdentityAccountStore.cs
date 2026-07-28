@@ -63,6 +63,23 @@ public sealed class IdentityAccountStore(
             : Result.Failure(result.Errors.Select(e => e.Description).ToArray());
     }
 
+    public async Task<Result<bool>> RotateSecurityStampAsync(
+        Guid id,
+        CancellationToken cancellationToken = default)
+    {
+        var user = await userManager.FindByIdAsync(id.ToString());
+        if (user is null)
+        {
+            return Result.Success(false);
+        }
+
+        user.SecurityStamp = Guid.NewGuid().ToString("N");
+        var result = await userManager.UpdateAsync(user);
+        return result.Succeeded
+            ? Result.Success(true)
+            : Result.Failure(result.Errors.Select(e => e.Description).ToArray());
+    }
+
     public async Task<Result<bool>> DeleteAsync(Guid id, CancellationToken cancellationToken = default)
     {
         var user = await userManager.FindByIdAsync(id.ToString());
@@ -126,10 +143,31 @@ public sealed class IdentityAccountStore(
             return Result.Failure("用户不存在");
         }
 
-        var normalizedRoleName = roleName?.Trim();
         if (SystemRoles.IsAdminLike(roleName))
         {
             return Result.Failure("管理员角色禁止通过员工编辑维护");
+        }
+
+        string? canonicalRoleName = null;
+        if (roleName is not null)
+        {
+            var normalizedRoleName = roleName.Trim();
+            if (string.IsNullOrWhiteSpace(normalizedRoleName))
+            {
+                return Result.Failure("角色名称不能为空或纯空白");
+            }
+
+            var targetRole = await roleManager.FindByNameAsync(normalizedRoleName);
+            canonicalRoleName = targetRole?.Name;
+            if (string.IsNullOrWhiteSpace(canonicalRoleName))
+            {
+                return Result.Failure("角色未定义");
+            }
+
+            if (SystemRoles.IsAdminLike(canonicalRoleName))
+            {
+                return Result.Failure("管理员角色禁止通过员工编辑维护");
+            }
         }
 
         var currentRoles = await userManager.GetRolesAsync(user);
@@ -141,6 +179,18 @@ public sealed class IdentityAccountStore(
         var removableRoles = currentRoles
             .Where(role => !SystemRoles.IsAdminLike(role))
             .ToArray();
+        var isNoChange = canonicalRoleName is null
+            ? removableRoles.Length == 0
+            : removableRoles.Length == 1
+              && string.Equals(
+                  removableRoles[0].Trim(),
+                  canonicalRoleName,
+                  StringComparison.OrdinalIgnoreCase);
+        if (isNoChange)
+        {
+            return Result.Success(true);
+        }
+
         if (removableRoles.Length > 0)
         {
             var removeResult = await userManager.RemoveFromRolesAsync(user, removableRoles);
@@ -150,17 +200,12 @@ public sealed class IdentityAccountStore(
             }
         }
 
-        if (string.IsNullOrWhiteSpace(normalizedRoleName))
+        if (canonicalRoleName is null)
         {
             return Result.Success(true);
         }
 
-        if (!await roleManager.RoleExistsAsync(normalizedRoleName))
-        {
-            return Result.Failure("角色未定义");
-        }
-
-        var addResult = await userManager.AddToRoleAsync(user, normalizedRoleName);
+        var addResult = await userManager.AddToRoleAsync(user, canonicalRoleName);
         return addResult.Succeeded
             ? Result.Success(true)
             : Result.Failure(addResult.Errors.Select(e => e.Description).ToArray());

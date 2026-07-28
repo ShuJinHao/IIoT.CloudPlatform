@@ -32,6 +32,18 @@ public sealed class UpdateEmployeeAccessCommandValidator : AbstractValidator<Upd
     }
 }
 
+public sealed class UpdateEmployeeRoleCommandValidator : AbstractValidator<UpdateEmployeeRoleCommand>
+{
+    public UpdateEmployeeRoleCommandValidator()
+    {
+        RuleFor(x => x.EmployeeId).NotEmpty();
+        RuleFor(x => x.RoleName)
+            .Must(roleName => roleName is null || !string.IsNullOrWhiteSpace(roleName))
+            .WithMessage("roleName 不能为空或纯空白；使用 null 明确清除角色。")
+            .MaximumLength(256);
+    }
+}
+
 public sealed class DeactivateEmployeeCommandValidator : AbstractValidator<DeactivateEmployeeCommand>
 {
     public DeactivateEmployeeCommandValidator()
