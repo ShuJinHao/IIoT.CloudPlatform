@@ -71,6 +71,9 @@ export const updateEmployeeAccessApi = (id: string, payload: UpdateAccessPayload
 export const deactivateEmployeeApi = (id: string) =>
   http.put<boolean>(`${basePath}/${id}/deactivate`);
 
+export const activateEmployeeApi = (id: string) =>
+  http.put<boolean>(`${basePath}/${id}/activate`);
+
 export const terminateEmployeeApi = (id: string) =>
   http.delete<boolean>(`${basePath}/${id}`);
 

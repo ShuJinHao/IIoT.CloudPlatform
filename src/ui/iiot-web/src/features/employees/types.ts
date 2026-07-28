@@ -23,6 +23,7 @@ export interface EmployeeConfirmDialogState {
   title: string;
   desc: string;
   confirmText: string;
+  confirmType: 'success' | 'warning' | 'error';
   onConfirm: () => Promise<void>;
 }
 

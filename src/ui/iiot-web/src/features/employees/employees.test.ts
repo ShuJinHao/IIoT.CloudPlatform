@@ -2,9 +2,11 @@ import { mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, nextTick, reactive } from 'vue';
 import { Permissions } from '../../types/permissions';
+import UiButton from '../../components/ui/UiButton.vue';
 import type { EmployeeListItemDto } from './api';
 import { createEmployeeColumns } from './columns';
 import EmployeeAccessModal from './EmployeeAccessModal.vue';
+import EmployeeConfirmModal from './EmployeeConfirmModal.vue';
 import EmployeeEditModal from './EmployeeEditModal.vue';
 import { employeeRoutes } from './routes';
 import { isResetPasswordInvalid } from './types';
@@ -18,6 +20,7 @@ const employeeApiMocks = vi.hoisted(() => ({
   updateEmployeeProfileApi: vi.fn(),
   updateEmployeeAccessApi: vi.fn(),
   deactivateEmployeeApi: vi.fn(),
+  activateEmployeeApi: vi.fn(),
   terminateEmployeeApi: vi.fn(),
   getAllRolesApi: vi.fn(),
 }));
@@ -71,6 +74,14 @@ const employee: EmployeeListItemDto = {
   deviceCount: 2,
 };
 
+const inactiveEmployee: EmployeeListItemDto = {
+  ...employee,
+  id: 'employee-2',
+  employeeNo: 'E0002',
+  realName: '李四',
+  isActive: false,
+};
+
 function emptyEmployeePage() {
   return {
     items: [],
@@ -95,7 +106,10 @@ function deferred<T>() {
 
 type EmployeeColumnOptions = Parameters<typeof createEmployeeColumns>[0];
 
-function mountEmployeeActions(options: Partial<EmployeeColumnOptions> = {}) {
+function mountEmployeeActions(
+  options: Partial<EmployeeColumnOptions> = {},
+  row: EmployeeListItemDto = employee,
+) {
   const actionColumn = createEmployeeColumns({
     canUpdateEmployee: () => false,
     canUpdateAccess: () => false,
@@ -109,6 +123,7 @@ function mountEmployeeActions(options: Partial<EmployeeColumnOptions> = {}) {
     onAccess: vi.fn(),
     onPersonalPermissions: vi.fn(),
     onDeactivate: vi.fn(),
+    onActivate: vi.fn(),
     onTerminate: vi.fn(),
     ...options,
   }).find((column) => column.key === 'actions');
@@ -116,7 +131,7 @@ function mountEmployeeActions(options: Partial<EmployeeColumnOptions> = {}) {
   expect(actionColumn?.render, '员工操作列必须提供 render').toBeTypeOf('function');
   const Harness = defineComponent({
     setup() {
-      return () => h('div', [actionColumn!.render!(employee, 0)]);
+      return () => h('div', [actionColumn!.render!(row, 0)]);
     },
   });
   return mount(Harness);
@@ -144,6 +159,7 @@ describe('employees feature guards', () => {
     employeeApiMocks.getAllRolesApi.mockResolvedValue([]);
     employeeApiMocks.updateEmployeeProfileApi.mockResolvedValue(true);
     employeeApiMocks.deactivateEmployeeApi.mockResolvedValue(true);
+    employeeApiMocks.activateEmployeeApi.mockResolvedValue(true);
     employeeApiMocks.terminateEmployeeApi.mockResolvedValue(true);
     deviceApiMocks.getEmployeeAccessDeviceCandidatesApi.mockResolvedValue([]);
     identityApiMocks.getAllDefinedPermissionsApi.mockResolvedValue([]);
@@ -218,6 +234,211 @@ describe('employees feature guards', () => {
     expect(modal!.querySelectorAll('input')).toHaveLength(2);
 
     wrapper.unmount();
+  });
+
+  it('shows exactly one permission-gated status action for each employee state', () => {
+    authMock.state!.permissions = [Permissions.Employee.Deactivate];
+    const state = useEmployees();
+    const options = {
+      canDeactivateEmployee: () => state.canDeactivateEmployee.value,
+      onDeactivate: state.handleDeactivate,
+      onActivate: state.handleActivate,
+    };
+
+    const activeActions = mountEmployeeActions(options, employee);
+    const inactiveActions = mountEmployeeActions(options, inactiveEmployee);
+
+    expect(activeActions.text()).toContain('停用');
+    expect(activeActions.text()).not.toContain('重新启用');
+    expect(inactiveActions.text()).toContain('重新启用');
+    expect(inactiveActions.text()).not.toContain('停用');
+
+    activeActions.unmount();
+    inactiveActions.unmount();
+  });
+
+  it('hides and blocks both status actions without Employee.Deactivate', () => {
+    const state = useEmployees();
+    const activeActions = mountEmployeeActions({
+      canDeactivateEmployee: () => state.canDeactivateEmployee.value,
+    }, employee);
+    const inactiveActions = mountEmployeeActions({
+      canDeactivateEmployee: () => state.canDeactivateEmployee.value,
+    }, inactiveEmployee);
+
+    expect(activeActions.text()).not.toContain('停用');
+    expect(inactiveActions.text()).not.toContain('重新启用');
+
+    state.handleDeactivate(employee);
+    state.handleActivate(inactiveEmployee);
+
+    expect(state.confirmDialog.show).toBe(false);
+    expect(employeeApiMocks.deactivateEmployeeApi).not.toHaveBeenCalled();
+    expect(employeeApiMocks.activateEmployeeApi).not.toHaveBeenCalled();
+    expect(feedbackMocks.notifyWarning).toHaveBeenCalledTimes(2);
+    expect(feedbackMocks.notifyWarning).toHaveBeenLastCalledWith(
+      '人员状态操作权限已失效，请重新登录后重试',
+    );
+
+    activeActions.unmount();
+    inactiveActions.unmount();
+  });
+
+  it('uses warning, success and danger semantics for employee confirmations', async () => {
+    authMock.state!.permissions = [Permissions.Employee.Deactivate];
+    const state = useEmployees();
+
+    state.handleDeactivate(employee);
+    expect(state.confirmDialog.title).toBe('停用员工');
+    expect(state.confirmDialog.confirmType).toBe('warning');
+    expect(state.confirmDialog.desc).toContain('现有 Access Token、Refresh Token 和 OIDC 会话立即失效');
+
+    state.handleActivate(inactiveEmployee);
+    expect(state.confirmDialog.title).toBe('重新启用员工');
+    expect(state.confirmDialog.confirmType).toBe('success');
+    expect(state.confirmDialog.desc).toContain('停用前的 Access Token、Refresh Token 和 OIDC 会话不会恢复');
+    expect(state.confirmDialog.desc).toContain('必须重新登录');
+
+    authMock.state!.isAdmin = true;
+    state.handleTerminate(employee);
+    expect(state.confirmDialog.confirmType).toBe('error');
+
+    const Harness = defineComponent({
+      components: { EmployeeConfirmModal },
+      setup() {
+        return { state };
+      },
+      template: `
+        <EmployeeConfirmModal
+          v-model:show="state.confirmDialog.show"
+          :dialog="state.confirmDialog"
+          :submitting="state.confirmSubmitting.value"
+        />
+      `,
+    });
+    const wrapper = mount(Harness, { attachTo: document.body });
+    await nextTick();
+
+    const buttons = wrapper.findAllComponents(UiButton);
+    expect(buttons).toHaveLength(2);
+    expect(buttons[1]!.props('type')).toBe('error');
+
+    state.confirmSubmitting.value = true;
+    await nextTick();
+    await buttons[0]!.trigger('click');
+    document.body.querySelector<HTMLButtonElement>('.ui-modal__close')!.click();
+    await nextTick();
+
+    expect(state.confirmDialog.show).toBe(true);
+    expect(buttons[0]!.props('disabled')).toBe(true);
+
+    state.confirmSubmitting.value = false;
+    await nextTick();
+    await buttons[0]!.trigger('click');
+    expect(state.confirmDialog.show).toBe(false);
+
+    wrapper.unmount();
+  });
+
+  it('closes and blocks both status requests when permission expires after opening', async () => {
+    authMock.state!.permissions = [Permissions.Employee.Deactivate];
+    const state = useEmployees();
+
+    state.handleDeactivate(employee);
+    authMock.state!.permissions = [];
+    await nextTick();
+    await state.confirmDialog.onConfirm();
+
+    expect(state.confirmDialog.show).toBe(false);
+    expect(employeeApiMocks.deactivateEmployeeApi).not.toHaveBeenCalled();
+
+    authMock.state!.permissions = [Permissions.Employee.Deactivate];
+    await nextTick();
+    state.handleActivate(inactiveEmployee);
+    authMock.state!.permissions = [];
+    await nextTick();
+    await state.confirmDialog.onConfirm();
+
+    expect(state.confirmDialog.show).toBe(false);
+    expect(employeeApiMocks.activateEmployeeApi).not.toHaveBeenCalled();
+    expect(feedbackMocks.notifyWarning).toHaveBeenCalledTimes(2);
+    expect(feedbackMocks.notifyWarning).toHaveBeenLastCalledWith(
+      '人员状态操作权限已失效，请重新登录后重试',
+    );
+  });
+
+  it('submits reactivation once and blocks target switching until it settles', async () => {
+    authMock.state!.permissions = [Permissions.Employee.Deactivate];
+    const activation = deferred<boolean>();
+    employeeApiMocks.activateEmployeeApi.mockReturnValue(activation.promise);
+    const state = useEmployees();
+
+    state.handleActivate(inactiveEmployee);
+    const activationTitle = state.confirmDialog.title;
+    const firstSubmission = state.confirmDialog.onConfirm();
+    const duplicateSubmission = state.confirmDialog.onConfirm();
+    await duplicateSubmission;
+
+    expect(state.confirmSubmitting.value).toBe(true);
+    expect(employeeApiMocks.activateEmployeeApi).toHaveBeenCalledTimes(1);
+    expect(employeeApiMocks.activateEmployeeApi).toHaveBeenCalledWith(inactiveEmployee.id);
+
+    state.handleDeactivate(employee);
+    expect(state.confirmDialog.title).toBe(activationTitle);
+    expect(employeeApiMocks.deactivateEmployeeApi).not.toHaveBeenCalled();
+    expect(feedbackMocks.notifyWarning).toHaveBeenCalledWith(
+      '人员状态操作正在处理中，请稍后重试',
+    );
+
+    activation.resolve(true);
+    await firstSubmission;
+
+    expect(state.confirmSubmitting.value).toBe(false);
+    expect(state.confirmDialog.show).toBe(false);
+    expect(employeeApiMocks.getEmployeePagedListApi).toHaveBeenCalledTimes(1);
+    expect(feedbackMocks.notifySuccess).toHaveBeenCalledWith(
+      '员工重新启用成功，请通知该员工重新登录',
+    );
+  });
+
+  it('refreshes the server list after deactivation without optimistic local state', async () => {
+    authMock.state!.permissions = [Permissions.Employee.Deactivate];
+    employeeApiMocks.getEmployeePagedListApi.mockResolvedValue({
+      items: [{ ...employee, isActive: false }],
+      metaData: {
+        totalCount: 1,
+        pageSize: 10,
+        currentPage: 1,
+        totalPages: 1,
+      },
+    });
+    const state = useEmployees();
+
+    state.handleDeactivate(employee);
+    await state.confirmDialog.onConfirm();
+
+    expect(employeeApiMocks.deactivateEmployeeApi).toHaveBeenCalledWith(employee.id);
+    expect(employee.isActive).toBe(true);
+    expect(state.employees.value).toEqual([{ ...employee, isActive: false }]);
+    expect(feedbackMocks.notifySuccess).toHaveBeenCalledWith('员工停用成功');
+    expect(state.confirmDialog.show).toBe(false);
+  });
+
+  it('keeps the confirmation and server state when a status request fails', async () => {
+    authMock.state!.permissions = [Permissions.Employee.Deactivate];
+    employeeApiMocks.deactivateEmployeeApi.mockRejectedValue(
+      new Error('ProblemDetails handled by http client'),
+    );
+    const state = useEmployees();
+
+    state.handleDeactivate(employee);
+    await state.confirmDialog.onConfirm();
+
+    expect(state.confirmDialog.show).toBe(true);
+    expect(state.confirmSubmitting.value).toBe(false);
+    expect(employee.isActive).toBe(true);
+    expect(employeeApiMocks.getEmployeePagedListApi).not.toHaveBeenCalled();
+    expect(feedbackMocks.notifySuccess).not.toHaveBeenCalled();
   });
 
   it('prefetches minimal device candidates only for Employee.UpdateAccess holders', async () => {
@@ -697,6 +918,7 @@ describe('employees feature guards', () => {
 
     expect(employeeApiMocks.terminateEmployeeApi).toHaveBeenCalledWith(employee.id);
     expect(state.confirmDialog.show).toBe(false);
+    expect(feedbackMocks.notifySuccess).toHaveBeenCalledWith('员工离职销户成功');
   });
 
   it('blocks both high-risk submissions when Admin identity is lost after opening', async () => {
