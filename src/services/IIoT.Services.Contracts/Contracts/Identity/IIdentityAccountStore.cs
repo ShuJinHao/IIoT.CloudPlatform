@@ -22,6 +22,10 @@ public interface IIdentityAccountStore
         bool isEnabled,
         CancellationToken cancellationToken = default);
 
+    Task<Result<bool>> RotateSecurityStampAsync(
+        Guid id,
+        CancellationToken cancellationToken = default);
+
     Task<Result<bool>> DeleteAsync(
         Guid id,
         CancellationToken cancellationToken = default);

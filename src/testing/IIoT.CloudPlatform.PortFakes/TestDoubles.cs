@@ -769,6 +769,8 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
 
     public Result<bool> SetEnabledResult { get; set; } = Result.Success(true);
 
+    public Result<bool> RotateSecurityStampResult { get; set; } = Result.Success(true);
+
     public Result<bool> DeleteResult { get; set; } = Result.Success(true);
 
     public Result<bool> AssignRoleResult { get; set; } = Result.Success(true);
@@ -776,6 +778,10 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
     public Result<bool> ReplaceAssignableRoleResult { get; set; } = Result.Success(true);
 
     public List<(Guid UserId, string? RoleName)> ReplacedRoles { get; } = [];
+
+    public List<Guid> RotatedSecurityStampIds { get; } = [];
+
+    public int GetRolesCalls { get; private set; }
 
     public Task<Result<IdentityAccount>> CreateAsync(
         IdentityAccount account,
@@ -817,6 +823,18 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
         LastSetEnabledId = id;
         LastSetEnabledValue = isEnabled;
         return Task.FromResult(SetEnabledResult);
+    }
+
+    public Task<Result<bool>> RotateSecurityStampAsync(
+        Guid id,
+        CancellationToken cancellationToken = default)
+    {
+        if (RotateSecurityStampResult.IsSuccess && RotateSecurityStampResult.Value)
+        {
+            RotatedSecurityStampIds.Add(id);
+        }
+
+        return Task.FromResult(RotateSecurityStampResult);
     }
 
     public Task<Result<bool>> DeleteAsync(Guid id, CancellationToken cancellationToken = default)
@@ -876,6 +894,7 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
 
     public Task<IList<string>> GetRolesAsync(Guid id, CancellationToken cancellationToken = default)
     {
+        GetRolesCalls++;
         return Task.FromResult(
             RolesByUserId.TryGetValue(id, out var roles)
                 ? roles
@@ -887,11 +906,14 @@ internal sealed class RecordingAuditTrailService : IAuditTrailService
 {
     public List<AuditTrailEntry> Entries { get; } = [];
 
+    public List<CancellationToken> CancellationTokens { get; } = [];
+
     public Task TryWriteAsync(
         AuditTrailEntry entry,
         CancellationToken cancellationToken = default)
     {
         Entries.Add(entry);
+        CancellationTokens.Add(cancellationToken);
         return Task.CompletedTask;
     }
 
@@ -900,6 +922,7 @@ internal sealed class RecordingAuditTrailService : IAuditTrailService
         CancellationToken cancellationToken = default)
     {
         Entries.Add(entry);
+        CancellationTokens.Add(cancellationToken);
         return Task.FromResult(true);
     }
 }
@@ -1238,6 +1261,8 @@ internal sealed class StubEmployeeLookupService : IEmployeeLookupService
 
 internal sealed class RecordingUnitOfWork : IUnitOfWork
 {
+    public Action? OnCommit { get; set; }
+
     public int BeginCalls { get; private set; }
 
     public int CommitCalls { get; private set; }
@@ -1253,6 +1278,7 @@ internal sealed class RecordingUnitOfWork : IUnitOfWork
     public Task CommitAsync(CancellationToken cancellationToken = default)
     {
         CommitCalls++;
+        OnCommit?.Invoke();
         return Task.CompletedTask;
     }
 

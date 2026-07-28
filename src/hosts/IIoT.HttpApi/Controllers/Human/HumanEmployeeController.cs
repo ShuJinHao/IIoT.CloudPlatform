@@ -1,6 +1,7 @@
 using IIoT.EmployeeService.Commands.Employees;
 using IIoT.EmployeeService.Queries.Employees;
 using IIoT.HttpApi.Infrastructure;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -66,6 +67,19 @@ public class HumanEmployeeController : ApiControllerBase
         return ReturnResult(await Sender.Send(command with { EmployeeId = id }, cancellationToken));
     }
 
+    [HttpPut("{id}/role")]
+    [Authorize(Policy = HttpApiPolicies.RequireHumanUserToken)]
+    public async Task<IActionResult> UpdateRole(
+        [FromRoute] Guid id,
+        [FromBody] UpdateEmployeeRoleRequest request,
+        CancellationToken cancellationToken)
+    {
+        return ReturnResult(
+            await Sender.Send(
+                new UpdateEmployeeRoleCommand(id, request.RoleName),
+                cancellationToken));
+    }
+
     [HttpPut("{id}/deactivate")]
     public async Task<IActionResult> Deactivate(
         [FromRoute] Guid id,
@@ -89,4 +103,11 @@ public class HumanEmployeeController : ApiControllerBase
     {
         return ReturnResult(await Sender.Send(new TerminateEmployeeCommand(id), cancellationToken));
     }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record UpdateEmployeeRoleRequest
+{
+    [JsonRequired]
+    public string? RoleName { get; init; }
 }

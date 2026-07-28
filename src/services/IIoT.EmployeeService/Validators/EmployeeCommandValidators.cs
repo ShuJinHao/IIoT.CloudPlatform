@@ -32,6 +32,14 @@ public sealed class UpdateEmployeeAccessCommandValidator : AbstractValidator<Upd
     }
 }
 
+public sealed class UpdateEmployeeRoleCommandValidator : AbstractValidator<UpdateEmployeeRoleCommand>
+{
+    public UpdateEmployeeRoleCommandValidator()
+    {
+        RuleFor(x => x.EmployeeId).NotEmpty();
+    }
+}
+
 public sealed class DeactivateEmployeeCommandValidator : AbstractValidator<DeactivateEmployeeCommand>
 {
     public DeactivateEmployeeCommandValidator()
