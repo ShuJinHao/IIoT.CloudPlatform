@@ -35,14 +35,13 @@ public static class CloudIdentityStatusVersions
         Guid cloudUserId,
         bool accountEnabled,
         bool employeeActive,
-        uint employeeRowVersion,
         string? accountSecurityStamp)
     {
         var normalizedSecurityStamp = string.IsNullOrWhiteSpace(accountSecurityStamp)
             ? "legacy-uninitialized"
             : accountSecurityStamp;
         var source = FormattableString.Invariant(
-            $"{cloudUserId:N}|{accountEnabled}|{employeeActive}|{employeeRowVersion}|{normalizedSecurityStamp}");
+            $"{cloudUserId:N}|{accountEnabled}|{employeeActive}|{normalizedSecurityStamp}");
         var digest = SHA256.HashData(Encoding.UTF8.GetBytes(source));
         return $"v2:{Convert.ToHexString(digest)}";
     }

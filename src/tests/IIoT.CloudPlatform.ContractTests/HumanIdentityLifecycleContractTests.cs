@@ -31,6 +31,22 @@ public sealed class HumanIdentityLifecycleContractTests
     }
 
     [Fact]
+    public void HumanStatusVersion_ShouldDependOnlyOnStatusSpecificState()
+    {
+        var method = typeof(CloudIdentityStatusVersions).GetMethod(
+            nameof(CloudIdentityStatusVersions.Create))!;
+
+        Assert.Equal(
+            [
+                "cloudUserId",
+                "accountEnabled",
+                "employeeActive",
+                "accountSecurityStamp"
+            ],
+            method.GetParameters().Select(parameter => parameter.Name));
+    }
+
+    [Fact]
     public void ActivateEmployeeCommand_ShouldReuseDeactivatePermissionAndEmployeeLock()
     {
         var authorization = Assert.Single(

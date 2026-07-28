@@ -50,7 +50,6 @@ public sealed class CloudOidcPersistenceTests
                 userId,
                 accountEnabled: false,
                 employeeActive: false,
-                employee.RowVersion,
                 securityStamp),
             profile.StatusVersion);
     }
@@ -88,9 +87,37 @@ public sealed class CloudOidcPersistenceTests
                 userId,
                 accountEnabled: true,
                 employeeActive: true,
-                employee.RowVersion,
                 securityStamp),
             result.Value.StatusVersion);
+    }
+
+    [Fact]
+    public async Task IdentityStatusVersion_ShouldRemainStableForProfileOnlyUpdate()
+    {
+        using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
+        using var scope = provider.CreateScope();
+
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var employee = TestIdentityData.AddEmployeeWithIdentity(
+            dbContext,
+            "E-OIDC-PROFILE",
+            "Original Name");
+        await dbContext.SaveChangesAsync();
+
+        var profileService = new CloudOidcUserProfileService(dbContext);
+        var before = await profileService.GetByUserIdAsync(employee.Id);
+
+        employee.Rename(employee.EmployeeNo, "Updated Name");
+        dbContext.Employees.Update(employee);
+        await dbContext.SaveChangesAsync();
+        dbContext.ChangeTracker.Clear();
+
+        var after = await profileService.GetByUserIdAsync(employee.Id);
+
+        Assert.NotNull(before);
+        Assert.NotNull(after);
+        Assert.Equal("Updated Name", after.RealName);
+        Assert.Equal(before.StatusVersion, after.StatusVersion);
     }
 
     [Fact]
