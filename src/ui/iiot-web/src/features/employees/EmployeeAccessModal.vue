@@ -2,7 +2,7 @@
   <UiModal v-model:show="show" preset="card" title="配置设备管辖权" style="width: 580px;" :mask-closable="false">
     <div class="form-stack">
       <LoadingState v-if="loading" :rows="4" />
-      <div v-else>
+      <div v-else-if="ready">
         <div class="access-header">
           <span class="access-header__title">可访问设备</span>
           <span class="access-header__hint">当前已分配 {{ form.DeviceIds.length }} 台</span>
@@ -12,6 +12,7 @@
             v-for="device in devices"
             :key="device.id"
             :checked="form.DeviceIds.includes(device.id)"
+            :disabled="!canUpdateAccess || submitting"
             @update:checked="(checked: boolean) => $emit('toggle-device', device.id, checked)"
           >
             {{ device.deviceName }}
@@ -23,7 +24,14 @@
     <template #footer>
       <div class="modal-actions">
         <UiButton @click="show = false">关闭</UiButton>
-        <UiButton type="primary" :loading="submitting" @click="$emit('submit')">保存管辖权</UiButton>
+        <UiButton
+          type="primary"
+          :loading="submitting"
+          :disabled="!ready || loading || !canUpdateAccess"
+          @click="$emit('submit')"
+        >
+          保存管辖权
+        </UiButton>
       </div>
     </template>
   </UiModal>
@@ -35,7 +43,7 @@ import LoadingState from '../../components/states/LoadingState.vue';
 import UiButton from '../../components/ui/UiButton.vue';
 import UiCheckbox from '../../components/ui/UiCheckbox.vue';
 import UiModal from '../../components/ui/UiModal.vue';
-import type { DeviceSelectDto } from '../devices/api';
+import type { EmployeeAccessDeviceCandidateDto } from '../devices/api';
 import type { EmployeeAccessForm } from './types';
 
 defineEmits<{
@@ -45,8 +53,10 @@ defineEmits<{
 const show = defineModel<boolean>('show', { required: true });
 defineProps<{
   form: EmployeeAccessForm;
-  devices: DeviceSelectDto[];
+  devices: EmployeeAccessDeviceCandidateDto[];
   loading: boolean;
+  ready: boolean;
   submitting: boolean;
+  canUpdateAccess: boolean;
 }>();
 </script>

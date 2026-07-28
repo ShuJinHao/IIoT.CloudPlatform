@@ -1,5 +1,8 @@
-import { computed, reactive, ref } from 'vue';
-import { getAllActiveDevicesApi, type DeviceSelectDto } from '../devices/api';
+import { computed, reactive, ref, watch } from 'vue';
+import {
+  getEmployeeAccessDeviceCandidatesApi,
+  type EmployeeAccessDeviceCandidateDto,
+} from '../devices/api';
 import { useListPage } from '../../core/list-page';
 import type { PagedMetaData } from '../../core/types/pagination';
 import {
@@ -30,6 +33,8 @@ import { isResetPasswordInvalid, type EmployeeConfirmDialogState } from './types
 
 const PAGE_SIZE = 10;
 const ADMIN_PERMISSION_EXPIRED_MESSAGE = '管理员权限已失效，请重新登录后重试';
+const ACCESS_PERMISSION_EXPIRED_MESSAGE = '设备管辖权权限已失效，请重新登录后重试';
+const ACCESS_NOT_READY_MESSAGE = '设备管辖权尚未加载完成，请稍后重试';
 
 const emptyMetaData = (): PagedMetaData => ({
   totalCount: 0,
@@ -43,7 +48,7 @@ export function useEmployees() {
   const metaData = ref<PagedMetaData>(emptyMetaData());
   const availableRoles = ref<string[]>([]);
   const submitting = ref(false);
-  const allDevices = ref<DeviceSelectDto[]>([]);
+  const allDevices = ref<EmployeeAccessDeviceCandidateDto[]>([]);
   const showOnboardModal = ref(false);
   const showEditModal = ref(false);
   const showAccessModal = ref(false);
@@ -51,6 +56,8 @@ export function useEmployees() {
   const showResetPwdModal = ref(false);
   const showPersonalPermModal = ref(false);
   const accessLoading = ref(false);
+  const accessReady = ref(false);
+  const accessSubmitting = ref(false);
   const detailData = ref<EmployeeDetailDto | null>(null);
   const editTarget = ref<EmployeeListItemDto | null>(null);
   const resetPwdTarget = ref<EmployeeListItemDto | null>(null);
@@ -106,12 +113,29 @@ export function useEmployees() {
   const roleOptions = computed(() => availableRoles.value.map((r) => ({ label: r, value: r })));
 
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  let candidateRequestGeneration = 0;
+  let accessRequestGeneration = 0;
 
-  async function fetchSelectData() {
-    try {
-      allDevices.value = await getAllActiveDevicesApi();
-    } catch {
+  async function prefetchAccessCandidates() {
+    if (!canUpdateAccess.value) {
+      candidateRequestGeneration += 1;
       allDevices.value = [];
+      return;
+    }
+
+    const requestGeneration = ++candidateRequestGeneration;
+    try {
+      const candidates = await getEmployeeAccessDeviceCandidatesApi();
+      if (
+        requestGeneration === candidateRequestGeneration
+        && canUpdateAccess.value
+      ) {
+        allDevices.value = candidates;
+      }
+    } catch {
+      if (requestGeneration === candidateRequestGeneration) {
+        allDevices.value = [];
+      }
     }
   }
 
@@ -150,7 +174,7 @@ export function useEmployees() {
   }
 
   async function initialize() {
-    await Promise.all([fetchList(), fetchSelectData()]);
+    await Promise.all([fetchList(), prefetchAccessCandidates()]);
   }
 
   async function openOnboardModal() {
@@ -217,22 +241,92 @@ export function useEmployees() {
     }
   }
 
+  function isCurrentAccessSession(requestGeneration: number, targetId: string) {
+    return (
+      requestGeneration === accessRequestGeneration
+      && accessTargetId.value === targetId
+      && showAccessModal.value
+    );
+  }
+
+  function closeAccessModal(options: { clearCandidates?: boolean } = {}) {
+    accessRequestGeneration += 1;
+    accessTargetId.value = '';
+    accessReady.value = false;
+    accessSubmitting.value = false;
+    accessForm.DeviceIds = [];
+    accessLoading.value = false;
+    if (options.clearCandidates) {
+      allDevices.value = [];
+    }
+    showAccessModal.value = false;
+  }
+
+  watch(
+    showAccessModal,
+    (show) => {
+      if (
+        !show
+        && (
+          accessTargetId.value
+          || accessLoading.value
+          || accessReady.value
+          || accessSubmitting.value
+          || accessForm.DeviceIds.length > 0
+        )
+      ) {
+        closeAccessModal();
+      }
+    },
+    { flush: 'sync' },
+  );
+
   async function openAccessModal(id: string) {
+    if (!canUpdateAccess.value) {
+      closeAccessModal();
+      notifyWarning(ACCESS_PERMISSION_EXPIRED_MESSAGE);
+      return;
+    }
+
+    candidateRequestGeneration += 1;
+    const requestGeneration = ++accessRequestGeneration;
     accessTargetId.value = id;
+    accessForm.DeviceIds = [];
+    accessReady.value = false;
+    accessSubmitting.value = false;
     accessLoading.value = true;
     showAccessModal.value = true;
-    await fetchSelectData();
+
     try {
-      const access = await getEmployeeAccessApi(id);
+      const [candidates, access] = await Promise.all([
+        getEmployeeAccessDeviceCandidatesApi(),
+        getEmployeeAccessApi(id),
+      ]);
+      if (!isCurrentAccessSession(requestGeneration, id)) return;
+
+      allDevices.value = [...candidates];
       accessForm.DeviceIds = [...access.deviceIds];
+      accessReady.value = true;
     } catch {
-      accessForm.DeviceIds = [];
+      if (!isCurrentAccessSession(requestGeneration, id)) return;
+      closeAccessModal({ clearCandidates: true });
     } finally {
-      accessLoading.value = false;
+      if (isCurrentAccessSession(requestGeneration, id)) {
+        accessLoading.value = false;
+      }
     }
   }
 
   function toggleDeviceAccess(deviceId: string, checked: boolean) {
+    if (
+      !canUpdateAccess.value
+      || !accessReady.value
+      || accessLoading.value
+      || accessSubmitting.value
+    ) {
+      return;
+    }
+
     if (checked && !accessForm.DeviceIds.includes(deviceId)) accessForm.DeviceIds.push(deviceId);
     if (!checked) {
       const idx = accessForm.DeviceIds.indexOf(deviceId);
@@ -241,16 +335,39 @@ export function useEmployees() {
   }
 
   async function submitAccess() {
-    submitting.value = true;
+    if (!canUpdateAccess.value) {
+      closeAccessModal();
+      notifyWarning(ACCESS_PERMISSION_EXPIRED_MESSAGE);
+      return;
+    }
+    if (accessSubmitting.value) return;
+    if (
+      !accessReady.value
+      || accessLoading.value
+      || !accessTargetId.value
+    ) {
+      notifyWarning(ACCESS_NOT_READY_MESSAGE);
+      return;
+    }
+
+    const requestGeneration = accessRequestGeneration;
+    const targetId = accessTargetId.value;
+    const deviceIds = [...accessForm.DeviceIds];
+    accessSubmitting.value = true;
     try {
-      await updateEmployeeAccessApi(accessTargetId.value, {
-        employeeId: accessTargetId.value,
-        deviceIds: accessForm.DeviceIds,
+      await updateEmployeeAccessApi(targetId, {
+        employeeId: targetId,
+        deviceIds,
       });
-      showAccessModal.value = false;
-      await fetchList();
+      notifySuccess('设备管辖权保存成功');
+      if (isCurrentAccessSession(requestGeneration, targetId)) {
+        closeAccessModal();
+      }
+      await refreshAfterMutation();
     } finally {
-      submitting.value = false;
+      if (isCurrentAccessSession(requestGeneration, targetId)) {
+        accessSubmitting.value = false;
+      }
     }
   }
 
@@ -410,6 +527,8 @@ export function useEmployees() {
     editTarget,
     showAccessModal,
     accessLoading,
+    accessReady,
+    accessSubmitting,
     accessForm,
     showDetailModal,
     detailData,
@@ -432,6 +551,7 @@ export function useEmployees() {
     openEditModal,
     submitEdit,
     openAccessModal,
+    closeAccessModal,
     toggleDeviceAccess,
     submitAccess,
     openDetailModal,

@@ -20,6 +20,11 @@ export interface ScopedDeviceSelectDto extends DeviceSelectDto {
   processName: string;
 }
 
+export interface EmployeeAccessDeviceCandidateDto {
+  id: string;
+  deviceName: string;
+}
+
 export interface DeviceStatusSummaryDto {
   total: number;
   online: number;
@@ -84,6 +89,12 @@ export const getAllActiveDevicesApi = () => {
 
 export const getScopedDeviceSelectApi = () => {
   return http.get<ScopedDeviceSelectDto[]>(`${basePath}/select`);
+};
+
+export const getEmployeeAccessDeviceCandidatesApi = () => {
+  return http.get<EmployeeAccessDeviceCandidateDto[]>(
+    `${basePath}/employee-access-candidates`,
+  );
 };
 
 export const getDeviceStatusSummaryApi = (params?: { deviceId?: string }) => {

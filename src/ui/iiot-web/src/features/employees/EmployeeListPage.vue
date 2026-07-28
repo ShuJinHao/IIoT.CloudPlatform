@@ -27,7 +27,7 @@
 
     <EmployeeOnboardModal v-model:show="showOnboardModal" :form="onboardForm" :role-options="roleOptions" :can-update-access="canUpdateAccess" :submitting="submitting" @submit="submitOnboard" />
     <EmployeeEditModal v-model:show="showEditModal" :form="editForm" :target="editTarget" :submitting="submitting" @submit="submitEdit" />
-    <EmployeeAccessModal v-model:show="showAccessModal" :form="accessForm" :devices="allDevices" :loading="accessLoading" :submitting="submitting" @toggle-device="toggleDeviceAccess" @submit="submitAccess" />
+    <EmployeeAccessModal v-model:show="showAccessModal" :form="accessForm" :devices="allDevices" :loading="accessLoading" :ready="accessReady" :submitting="accessSubmitting" :can-update-access="canUpdateAccess" @toggle-device="toggleDeviceAccess" @submit="submitAccess" />
     <EmployeeDetailModal v-model:show="showDetailModal" :detail="detailData" :device-name-map="deviceNameMap" />
     <EmployeeResetPasswordModal v-model:show="showResetPwdModal" :target="resetPwdTarget" :form="resetPwdForm" :submitting="submitting" @submit="submitResetPwd" />
     <EmployeePersonalPermissionsModal v-model:show="showPersonalPermModal" :target="personalPermTarget" :loading="personalPermLoading" :permission-groups="permissionGroups" :selected-permissions="personalPermForm" :submitting="submitting" @toggle-permission="togglePersonalPerm" @submit="submitPersonalPerm" />
@@ -79,7 +79,7 @@ const rowKey = (row: EmployeeListItemDto) => row.id;
 
 const {
   employees, loading, keyword, currentPage, metaData, submitting, canUpdateAccess, allDevices, deviceNameMap, roleOptions,
-  showOnboardModal, onboardForm, showEditModal, editForm, editTarget, showAccessModal, accessLoading,
+  showOnboardModal, onboardForm, showEditModal, editForm, editTarget, showAccessModal, accessLoading, accessReady, accessSubmitting,
   accessForm, showDetailModal, detailData, showResetPwdModal, resetPwdTarget, resetPwdForm, showPersonalPermModal,
   personalPermTarget, personalPermLoading, personalPermForm, permissionGroups, confirmDialog, initialize, fetchList,
   onSearchInput, onClearKeyword, onPageChange, openOnboardModal, submitOnboard, submitEdit, toggleDeviceAccess,
