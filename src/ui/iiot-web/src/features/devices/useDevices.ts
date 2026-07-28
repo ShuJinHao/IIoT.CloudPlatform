@@ -93,8 +93,9 @@ export function useDevices() {
     authStore.hasPermission(Permissions.Device.Update),
   );
   const canDeleteDevice = computed(() =>
-    authStore.hasPermission(Permissions.Device.Delete)
-    && authStore.hasPermission(Permissions.Device.CascadeDelete),
+    authStore.isAdmin
+    && authStore.permissions.includes(Permissions.Device.Delete)
+    && authStore.permissions.includes(Permissions.Device.CascadeDelete),
   );
   const deletionImpactRows = computed<DeviceDeletionImpactRow[]>(() => {
     const impact = confirmDialog.impact;
@@ -229,6 +230,8 @@ export function useDevices() {
   }
 
   async function handleDelete(device: DeviceListItemDto) {
+    if (!canDeleteDevice.value) return;
+
     submitting.value = true;
     let impact: DeviceDeletionImpactDto;
     try {
@@ -249,7 +252,8 @@ export function useDevices() {
       requiredText: '',
       confirmInput: '',
       onConfirm: async () => {
-        if (confirmDisabled.value) return;
+        if (!canDeleteDevice.value || confirmDisabled.value) return;
+
         submitting.value = true;
         try {
           await deleteDeviceApi(device.id);

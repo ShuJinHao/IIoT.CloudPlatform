@@ -7,8 +7,6 @@ export interface EmployeeOnboardForm {
 
 export interface EmployeeEditForm {
   RealName: string;
-  IsActive: boolean;
-  RoleName: string | null;
 }
 
 export interface EmployeeAccessForm {

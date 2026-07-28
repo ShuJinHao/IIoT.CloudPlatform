@@ -26,7 +26,7 @@
     </NiondTableCard>
 
     <EmployeeOnboardModal v-model:show="showOnboardModal" :form="onboardForm" :role-options="roleOptions" :can-update-access="canUpdateAccess" :submitting="submitting" @submit="submitOnboard" />
-    <EmployeeEditModal v-model:show="showEditModal" :form="editForm" :target="editTarget" :role-options="roleOptions" :can-update-access="canUpdateAccess" :role-load-failed="editRoleLoadFailed" :submitting="submitting" @submit="submitEdit" />
+    <EmployeeEditModal v-model:show="showEditModal" :form="editForm" :target="editTarget" :submitting="submitting" @submit="submitEdit" />
     <EmployeeAccessModal v-model:show="showAccessModal" :form="accessForm" :devices="allDevices" :loading="accessLoading" :submitting="submitting" @toggle-device="toggleDeviceAccess" @submit="submitAccess" />
     <EmployeeDetailModal v-model:show="showDetailModal" :detail="detailData" :device-name-map="deviceNameMap" />
     <EmployeeResetPasswordModal v-model:show="showResetPwdModal" :target="resetPwdTarget" :form="resetPwdForm" :submitting="submitting" @submit="submitResetPwd" />
@@ -78,7 +78,7 @@ const rowKey = (row: EmployeeListItemDto) => row.id;
 
 const {
   employees, loading, keyword, currentPage, metaData, submitting, canUpdateAccess, allDevices, deviceNameMap, roleOptions,
-  showOnboardModal, onboardForm, showEditModal, editForm, editTarget, editRoleLoadFailed, showAccessModal, accessLoading,
+  showOnboardModal, onboardForm, showEditModal, editForm, editTarget, showAccessModal, accessLoading,
   accessForm, showDetailModal, detailData, showResetPwdModal, resetPwdTarget, resetPwdForm, showPersonalPermModal,
   personalPermTarget, personalPermLoading, personalPermForm, permissionGroups, confirmDialog, initialize, fetchList,
   onSearchInput, onClearKeyword, onPageChange, openOnboardModal, submitOnboard, submitEdit, toggleDeviceAccess,
