@@ -25,7 +25,7 @@ public sealed class AdminTargetGuard(
         var roles = await identityAccountStore.GetRolesAsync(
             targetUserId,
             cancellationToken);
-        return SystemRoles.ContainsAdmin(roles)
+        return SystemRoles.ContainsAdminLike(roles)
             ? Result.Failure(AdminTargetProtectionErrors.AdminTargetProtected)
             : Result.Success();
     }

@@ -86,23 +86,34 @@ public sealed class IdentityAccountStore(
         string roleName,
         CancellationToken cancellationToken = default)
     {
+        var normalizedRoleName = roleName?.Trim();
+        if (SystemRoles.IsAdminLike(roleName))
+        {
+            return Result.Failure("管理员角色禁止通过该接口分配");
+        }
+
+        if (string.IsNullOrEmpty(normalizedRoleName))
+        {
+            return Result.Failure("角色未定义");
+        }
+
         var user = await userManager.FindByIdAsync(id.ToString());
         if (user is null)
         {
             return Result.Failure("用户不存在");
         }
 
-        if (!await roleManager.RoleExistsAsync(roleName))
+        if (!await roleManager.RoleExistsAsync(normalizedRoleName))
         {
             return Result.Failure("角色未定义");
         }
 
-        if (await userManager.IsInRoleAsync(user, roleName))
+        if (await userManager.IsInRoleAsync(user, normalizedRoleName))
         {
             return Result.Success(true);
         }
 
-        var result = await userManager.AddToRoleAsync(user, roleName);
+        var result = await userManager.AddToRoleAsync(user, normalizedRoleName);
         return result.Succeeded
             ? Result.Success(true)
             : Result.Failure(result.Errors.Select(e => e.Description).ToArray());
@@ -120,19 +131,19 @@ public sealed class IdentityAccountStore(
         }
 
         var normalizedRoleName = roleName?.Trim();
-        if (SystemRoles.IsAdmin(normalizedRoleName))
+        if (SystemRoles.IsAdminLike(roleName))
         {
             return Result.Failure("管理员角色禁止通过员工编辑维护");
         }
 
         var currentRoles = await userManager.GetRolesAsync(user);
-        if (SystemRoles.ContainsAdmin(currentRoles))
+        if (SystemRoles.ContainsAdminLike(currentRoles))
         {
             return Result.Failure("管理员角色禁止通过员工编辑维护");
         }
 
         var removableRoles = currentRoles
-            .Where(role => !SystemRoles.IsAdmin(role))
+            .Where(role => !SystemRoles.IsAdminLike(role))
             .ToArray();
         if (removableRoles.Length > 0)
         {

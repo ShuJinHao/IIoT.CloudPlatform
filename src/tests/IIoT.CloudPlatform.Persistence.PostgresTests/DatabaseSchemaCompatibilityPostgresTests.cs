@@ -12,6 +12,181 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
     ClientReleaseCommitRecoveryPostgresFixture fixture)
 {
     [Fact]
+    public async Task AdminLikeRolePreflight_ShouldFailWithoutMutatingHistoricalRole()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        var testToken = budget.Token;
+        await using var connection = new NpgsqlConnection(budget.ConnectionString);
+        await connection.OpenAsync(testToken);
+        await using var transaction = await connection.BeginTransactionAsync(testToken);
+        var options = new DbContextOptionsBuilder<IIoTDbContext>()
+            .UseNpgsql(connection)
+            .Options;
+        await using var dbContext = new IIoTDbContext(options);
+        await dbContext.Database.UseTransactionAsync(transaction, testToken);
+        var orchestrator = new DatabaseInitializationOrchestrator(
+            dbContext,
+            null!,
+            null!,
+            null!,
+            null!,
+            new ConfigurationBuilder().Build(),
+            NullLogger<DatabaseInitializationOrchestrator>.Instance);
+
+        try
+        {
+            await orchestrator.EnsureCanonicalAdminRolePreflightAsync(testToken);
+
+            var roleId = Guid.NewGuid();
+            var userId = Guid.NewGuid();
+            var unique = Guid.NewGuid().ToString("N");
+            await ExecuteNonQueryAsync(
+                connection,
+                transaction,
+                $"""
+                 INSERT INTO "AspNetRoles" ("Id", "Name", "NormalizedName", "ConcurrencyStamp")
+                 VALUES ('{roleId}'::uuid, ' Admin ', ' ADMIN-{unique}', '{unique}');
+
+                 INSERT INTO "AspNetUsers" (
+                     "Id",
+                     "UserName",
+                     "NormalizedUserName",
+                     "EmailConfirmed",
+                     "PhoneNumberConfirmed",
+                     "TwoFactorEnabled",
+                     "LockoutEnabled",
+                     "AccessFailedCount")
+                 VALUES (
+                     '{userId}'::uuid,
+                     'admin-like-{unique}',
+                     'ADMIN-LIKE-{unique}',
+                     FALSE,
+                     FALSE,
+                     FALSE,
+                     TRUE,
+                     0);
+
+                 INSERT INTO "AspNetUserRoles" ("UserId", "RoleId")
+                 VALUES ('{userId}'::uuid, '{roleId}'::uuid);
+                 """,
+                testToken);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => orchestrator.EnsureCanonicalAdminRolePreflightAsync(testToken));
+
+            Assert.Contains(roleId.ToString(), exception.Message, StringComparison.Ordinal);
+            Assert.Contains("name=\" Admin \"", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("users=1", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("未执行自动合并、删除或用户角色变更", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(
+                " Admin ",
+                await ExecuteScalarAsync(
+                    connection,
+                    transaction,
+                    $"SELECT \"Name\" FROM \"AspNetRoles\" WHERE \"Id\" = '{roleId}'::uuid",
+                    testToken,
+                    static value => Convert.ToString(value)
+                                    ?? throw new InvalidOperationException("Expected a role name.")));
+        }
+        finally
+        {
+            await PostgresTestBudget.RollbackAsync(transaction);
+        }
+    }
+
+    [Fact]
+    public async Task IdentityAuthorizationPreflight_ShouldAllowTargetedDeviceAdminCleanupButRejectUnknownPermission()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        var testToken = budget.Token;
+        await using var connection = new NpgsqlConnection(budget.ConnectionString);
+        await connection.OpenAsync(testToken);
+        await using var transaction = await connection.BeginTransactionAsync(testToken);
+        var options = new DbContextOptionsBuilder<IIoTDbContext>()
+            .UseNpgsql(connection)
+            .Options;
+        await using var dbContext = new IIoTDbContext(options);
+        await dbContext.Database.UseTransactionAsync(transaction, testToken);
+        var orchestrator = new DatabaseInitializationOrchestrator(
+            dbContext,
+            null!,
+            null!,
+            null!,
+            null!,
+            new ConfigurationBuilder().Build(),
+            NullLogger<DatabaseInitializationOrchestrator>.Instance);
+
+        try
+        {
+            var deviceAdminRoleId = Guid.NewGuid();
+            var customRoleId = Guid.NewGuid();
+            var unique = Guid.NewGuid().ToString("N");
+            await ExecuteNonQueryAsync(
+                connection,
+                transaction,
+                $"""
+                 INSERT INTO "AspNetRoles" ("Id", "Name", "NormalizedName", "ConcurrencyStamp")
+                 VALUES
+                    ('{deviceAdminRoleId}'::uuid, ' DeviceAdmin ', 'DEVICEADMIN-{unique}', '{unique}-device'),
+                    ('{customRoleId}'::uuid, 'Supervisor-{unique}', 'SUPERVISOR-{unique}', '{unique}-custom');
+
+                 INSERT INTO "AspNetRoleClaims" ("RoleId", "ClaimType", "ClaimValue")
+                 VALUES
+                    ('{deviceAdminRoleId}'::uuid, 'permission', 'Device.Create');
+                 """,
+                testToken);
+
+            await orchestrator.EnsureIdentityAuthorizationPreflightAsync(testToken);
+
+            await ExecuteNonQueryAsync(
+                connection,
+                transaction,
+                $"""
+                 INSERT INTO "AspNetRoleClaims" ("RoleId", "ClaimType", "ClaimValue")
+                 VALUES
+                    ('{customRoleId}'::uuid, 'permission', 'Permission.Forged');
+                 """,
+                testToken);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => orchestrator.EnsureIdentityAuthorizationPreflightAsync(testToken));
+
+            Assert.Contains("Permission.Forged", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("PermissionNotDefined", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(
+                1L,
+                await ExecuteScalarAsync(
+                    connection,
+                    transaction,
+                    $"""
+                     SELECT COUNT(*)
+                     FROM "AspNetRoleClaims"
+                     WHERE "RoleId" = '{customRoleId}'::uuid
+                       AND "ClaimValue" = 'Permission.Forged'
+                     """,
+                    testToken,
+                    static value => Convert.ToInt64(value)));
+            Assert.Equal(
+                1L,
+                await ExecuteScalarAsync(
+                    connection,
+                    transaction,
+                    $"""
+                     SELECT COUNT(*)
+                     FROM "AspNetRoleClaims"
+                     WHERE "RoleId" = '{deviceAdminRoleId}'::uuid
+                       AND "ClaimValue" = 'Device.Create'
+                     """,
+                    testToken,
+                    static value => Convert.ToInt64(value)));
+        }
+        finally
+        {
+            await PostgresTestBudget.RollbackAsync(transaction);
+        }
+    }
+
+    [Fact]
     public async Task LegacyDeviceAndIdentitySchemas_ShouldUpgradeAgainstRealPostgres()
     {
         using var budget = await PostgresTestBudget.CreateAsync(fixture);

@@ -21,7 +21,7 @@ public class DefineRolePolicyHandler(
     public async Task<Result<bool>> Handle(DefineRolePolicyCommand request, CancellationToken cancellationToken)
     {
         var roleName = (request.RoleName ?? string.Empty).Trim();
-        if (SystemRoles.IsAdmin(roleName))
+        if (SystemRoles.IsAdminLike(roleName))
         {
             return await FailAsync(
                 roleName,
@@ -35,10 +35,24 @@ public class DefineRolePolicyHandler(
         }
 
         var roleAlreadyExists = await rolePolicyService.RoleExistsAsync(roleName);
-        var beforePermissions = roleAlreadyExists
-            ? await rolePolicyService.GetRolePermissionsAsync(roleName) ?? []
-            : [];
-        var validation = CloudPermissionCatalog.NormalizeRoleAdminAssignable(request.Permissions);
+        if (roleAlreadyExists)
+        {
+            var existingPermissions = await rolePolicyService.GetRolePermissionsAsync(roleName) ?? [];
+            return await FailAsync(
+                roleName,
+                existingPermissions,
+                existingPermissions,
+                [],
+                ["角色已存在，定义接口只允许创建新角色。"],
+                "RoleAlreadyExists",
+                0,
+                cancellationToken);
+        }
+
+        List<string> beforePermissions = [];
+        var validation = CloudPermissionCatalog.NormalizeForTargetRole(
+            roleName,
+            request.Permissions);
         if (!validation.IsValid)
         {
             return await FailAsync(
@@ -53,9 +67,7 @@ public class DefineRolePolicyHandler(
         }
 
         var normalizedPermissions = validation.Permissions.ToList();
-        var createResult = roleAlreadyExists
-            ? Result.Success()
-            : await rolePolicyService.CreateRoleAsync(roleName);
+        var createResult = await rolePolicyService.CreateRoleAsync(roleName);
 
         if (!createResult.IsSuccess)
         {
@@ -78,15 +90,12 @@ public class DefineRolePolicyHandler(
 
             if (!updateResult.IsSuccess || !updateResult.Value)
             {
-                if (!roleAlreadyExists)
-                    await rolePolicyService.DeleteRoleAsync(roleName);
+                await rolePolicyService.DeleteRoleAsync(roleName);
 
                 return await FailAsync(
                     roleName,
                     beforePermissions,
-                    roleAlreadyExists
-                        ? await rolePolicyService.GetRolePermissionsAsync(roleName) ?? beforePermissions
-                        : [],
+                    [],
                     normalizedPermissions,
                     updateResult.Errors?.ToArray() ?? ["Role permission assignment failed."],
                     "PermissionPersistenceFailed",
@@ -112,21 +121,14 @@ public class DefineRolePolicyHandler(
         }
         catch (Exception)
         {
-            if (!roleAlreadyExists)
-                await rolePolicyService.DeleteRoleAsync(roleName);
-
-            var message = roleAlreadyExists
-                ? "角色定义执行失败。"
-                : "角色定义执行失败，已回滚本次新建角色。";
+            await rolePolicyService.DeleteRoleAsync(roleName);
 
             return await FailAsync(
                 roleName,
                 beforePermissions,
-                roleAlreadyExists
-                    ? await rolePolicyService.GetRolePermissionsAsync(roleName) ?? beforePermissions
-                    : [],
+                [],
                 normalizedPermissions,
-                [message],
+                ["角色定义执行失败，已回滚本次新建角色。"],
                 "UnexpectedFailure",
                 0,
                 cancellationToken);

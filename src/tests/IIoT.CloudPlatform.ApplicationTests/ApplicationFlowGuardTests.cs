@@ -81,6 +81,7 @@ public sealed class ApplicationFlowGuardTests
                 Id = Guid.NewGuid().ToString(),
                 UserName = "admin-001",
                 Roles = [SystemRoles.Admin],
+                ActorType = IIoTClaimTypes.HumanActor,
                 IsAuthenticated = true
             },
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
@@ -162,6 +163,7 @@ public sealed class ApplicationFlowGuardTests
                 Id = Guid.NewGuid().ToString(),
                 UserName = "admin-001",
                 Roles = [SystemRoles.Admin],
+                ActorType = IIoTClaimTypes.HumanActor,
                 IsAuthenticated = true
             },
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
@@ -194,6 +196,7 @@ public sealed class ApplicationFlowGuardTests
                 Id = Guid.NewGuid().ToString(),
                 UserName = "admin-001",
                 Roles = [SystemRoles.Admin],
+                ActorType = IIoTClaimTypes.HumanActor,
                 IsAuthenticated = true
             },
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
@@ -277,7 +280,7 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
-    public async Task UpdateEmployeeProfileHandler_ShouldDeactivateEmployee_AndRevokeRefreshTokens()
+    public async Task UpdateEmployeeProfileHandler_ShouldOnlyRenameBasicProfile()
     {
         var employeeId = Guid.NewGuid();
         var employee = new Employee(employeeId, "E001", "Old Name");
@@ -285,159 +288,46 @@ public sealed class ApplicationFlowGuardTests
         {
             SingleOrDefaultResult = employee
         };
-        var identityStore = new RecordingIdentityAccountStore();
         var unitOfWork = new RecordingUnitOfWork();
-        var refreshTokenService = new StubRefreshTokenService();
         var handler = new UpdateEmployeeProfileHandler(
             repository,
-            identityStore,
             unitOfWork,
-            refreshTokenService,
-            new TestCurrentUser { Id = Guid.NewGuid().ToString(), IsAuthenticated = true },
-            new RecordingPermissionProvider
-            {
-                Permissions = [CloudPermissionCatalog.Employee.Deactivate]
-            },
             new StubAdminTargetGuard());
 
         var result = await handler.Handle(
-            new UpdateEmployeeProfileCommand(employeeId, " New Name ", false),
+            new UpdateEmployeeProfileCommand(employeeId, " New Name "),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
         Assert.Equal("New Name", employee.RealName);
-        Assert.False(employee.IsActive);
+        Assert.True(employee.IsActive);
         Assert.Contains(employee, repository.UpdatedEntities);
-        Assert.Equal(employeeId, identityStore.LastSetEnabledId);
-        Assert.False(identityStore.LastSetEnabledValue);
-        Assert.Contains(refreshTokenService.Revocations, x =>
-            x.ActorType == IIoT.Services.Contracts.Identity.IIoTClaimTypes.HumanActor
-            && x.SubjectId == employeeId
-            && x.Reason == "employee-deactivated");
         Assert.Equal(1, unitOfWork.BeginCalls);
         Assert.Equal(1, unitOfWork.CommitCalls);
         Assert.Equal(0, unitOfWork.RollbackCalls);
     }
 
     [Fact]
-    public async Task HrAdmin_ShouldReactivateOrdinaryEmployeeThroughProfileUpdate()
+    public void UpdateEmployeeProfileCommand_ShouldRejectAccessAndStatusFields()
     {
         var employeeId = Guid.NewGuid();
-        var employee = new Employee(employeeId, "E001", "Inactive User");
-        employee.Deactivate();
-        var repository = new InMemoryRepository<Employee>
-        {
-            SingleOrDefaultResult = employee
-        };
-        var identityStore = new RecordingIdentityAccountStore();
-        var handler = new UpdateEmployeeProfileHandler(
-            repository,
-            identityStore,
-            new RecordingUnitOfWork(),
-            new StubRefreshTokenService(),
-            new TestCurrentUser
-            {
-                Id = Guid.NewGuid().ToString(),
-                Roles = [SystemRoles.HrAdmin],
-                IsAuthenticated = true
-            },
-            new RecordingPermissionProvider
-            {
-                Permissions = [CloudPermissionCatalog.Employee.Deactivate]
-            },
-            new StubAdminTargetGuard());
+        var json =
+            $$"""
+              {
+                "employeeId": "{{employeeId}}",
+                "realName": "Changed Name",
+                "isActive": false,
+                "roleName": "Supervisor"
+              }
+              """;
 
-        var result = await handler.Handle(
-            new UpdateEmployeeProfileCommand(employeeId, "Active User", true),
-            CancellationToken.None);
-
-        Assert.True(result.IsSuccess);
-        Assert.True(employee.IsActive);
-        Assert.Equal(employeeId, identityStore.LastSetEnabledId);
-        Assert.True(identityStore.LastSetEnabledValue);
-    }
-
-    [Fact]
-    public async Task EmployeeUpdatePermissionAlone_ShouldNotChangeEmployeeStatus()
-    {
-        var employeeId = Guid.NewGuid();
-        var employee = new Employee(employeeId, "E002", "Active User");
-        var repository = new InMemoryRepository<Employee>
-        {
-            SingleOrDefaultResult = employee
-        };
-        var identityStore = new RecordingIdentityAccountStore();
-        var unitOfWork = new RecordingUnitOfWork();
-        var handler = new UpdateEmployeeProfileHandler(
-            repository,
-            identityStore,
-            unitOfWork,
-            new StubRefreshTokenService(),
-            new TestCurrentUser
-            {
-                Id = Guid.NewGuid().ToString(),
-                Roles = [SystemRoles.HrAdmin],
-                IsAuthenticated = true
-            },
-            new RecordingPermissionProvider
-            {
-                Permissions = [CloudPermissionCatalog.Employee.Update]
-            },
-            new StubAdminTargetGuard());
-
-        var result = await handler.Handle(
-            new UpdateEmployeeProfileCommand(employeeId, "Changed Name", false),
-            CancellationToken.None);
-
-        Assert.False(result.IsSuccess);
-        Assert.True(employee.IsActive);
-        Assert.Equal("Active User", employee.RealName);
-        Assert.Empty(repository.UpdatedEntities);
-        Assert.Null(identityStore.LastSetEnabledId);
-        Assert.Equal(1, unitOfWork.RollbackCalls);
-    }
-
-    [Fact]
-    public async Task UpdateEmployeeProfile_ShouldRejectAdminRoleAssignmentBeforeMutation()
-    {
-        var employeeId = Guid.NewGuid();
-        var employee = new Employee(employeeId, "E003", "Ordinary User");
-        var repository = new InMemoryRepository<Employee>
-        {
-            SingleOrDefaultResult = employee
-        };
-        var identityStore = new RecordingIdentityAccountStore();
-        var unitOfWork = new RecordingUnitOfWork();
-        var handler = new UpdateEmployeeProfileHandler(
-            repository,
-            identityStore,
-            unitOfWork,
-            new StubRefreshTokenService(),
-            new TestCurrentUser
-            {
-                Id = Guid.NewGuid().ToString(),
-                Roles = [SystemRoles.HrAdmin],
-                IsAuthenticated = true
-            },
-            new RecordingPermissionProvider
-            {
-                Permissions = [CloudPermissionCatalog.Employee.UpdateAccess]
-            },
-            new StubAdminTargetGuard());
-
-        var result = await handler.Handle(
-            new UpdateEmployeeProfileCommand(
-                employeeId,
-                "Changed Name",
-                true,
-                "  aDmIn  "),
-            CancellationToken.None);
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal("Ordinary User", employee.RealName);
-        Assert.Empty(repository.UpdatedEntities);
-        Assert.Empty(identityStore.ReplacedRoles);
-        Assert.Equal(0, unitOfWork.BeginCalls);
+        Assert.Throws<JsonException>(() =>
+            JsonSerializer.Deserialize<UpdateEmployeeProfileCommand>(
+                json,
+                new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                }));
     }
 
     [Fact]
@@ -453,15 +343,10 @@ public sealed class ApplicationFlowGuardTests
         {
             SingleOrDefaultResult = new Employee(employeeId, "A001", "Admin")
         };
-        var profileIdentityStore = new RecordingIdentityAccountStore();
         var profileUnitOfWork = new RecordingUnitOfWork();
         var profileHandler = new UpdateEmployeeProfileHandler(
             profileRepository,
-            profileIdentityStore,
             profileUnitOfWork,
-            new StubRefreshTokenService(),
-            new TestCurrentUser { Id = Guid.NewGuid().ToString(), IsAuthenticated = true },
-            new RecordingPermissionProvider(),
             targetGuard);
 
         var accessRepository = new InMemoryRepository<Employee>
@@ -499,7 +384,7 @@ public sealed class ApplicationFlowGuardTests
             targetGuard);
 
         var profileResult = await profileHandler.Handle(
-            new UpdateEmployeeProfileCommand(employeeId, "Changed", false),
+            new UpdateEmployeeProfileCommand(employeeId, "Changed"),
             CancellationToken.None);
         var accessResult = await accessHandler.Handle(
             new UpdateEmployeeAccessCommand(employeeId, [Guid.NewGuid()]),
@@ -542,6 +427,7 @@ public sealed class ApplicationFlowGuardTests
         var handler = new OnboardEmployeeHandler(
             identityStore,
             passwordService,
+            new StubRolePolicyService { RoleExists = true },
             repository,
             unitOfWork,
             new TestCurrentUser { Id = Guid.NewGuid().ToString(), IsAuthenticated = true },
@@ -571,6 +457,7 @@ public sealed class ApplicationFlowGuardTests
         var handler = new OnboardEmployeeHandler(
             identityStore,
             passwordService,
+            new StubRolePolicyService { RoleExists = true },
             repository,
             unitOfWork,
             new TestCurrentUser { Id = Guid.NewGuid().ToString(), IsAuthenticated = true },
@@ -584,6 +471,132 @@ public sealed class ApplicationFlowGuardTests
         Assert.Null(repository.AddedEntity);
         Assert.Equal(0, unitOfWork.BeginCalls);
         Assert.Contains(result.Errors ?? [], error => error.Contains("Employee.UpdateAccess"));
+    }
+
+    [Theory]
+    [InlineData(" Admin ")]
+    [InlineData("ADMIN ")]
+    [InlineData("admin")]
+    public async Task OnboardEmployeeHandler_ShouldRejectAdminLikeRoleBeforeCreatingAnyData(
+        string roleName)
+    {
+        var repository = new InMemoryRepository<Employee>();
+        var identityStore = new RecordingIdentityAccountStore();
+        var passwordService = new StubIdentityPasswordService();
+        var unitOfWork = new RecordingUnitOfWork();
+        var handler = new OnboardEmployeeHandler(
+            identityStore,
+            passwordService,
+            new StubRolePolicyService(),
+            repository,
+            unitOfWork,
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                Roles = [SystemRoles.Admin],
+                ActorType = IIoTClaimTypes.HumanActor,
+                IsAuthenticated = true
+            },
+            new RecordingPermissionProvider());
+
+        var result = await handler.Handle(
+            new OnboardEmployeeCommand("E1006", "Protected", "Password123!", roleName),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Empty(identityStore.CreatedAccounts);
+        Assert.Empty(identityStore.AssignedRoles);
+        Assert.Equal(0, passwordService.SetPasswordCalls);
+        Assert.Null(repository.AddedEntity);
+        Assert.Equal(0, unitOfWork.BeginCalls);
+        Assert.Equal(0, unitOfWork.CommitCalls);
+        Assert.Equal(0, unitOfWork.RollbackCalls);
+    }
+
+    [Fact]
+    public async Task OnboardEmployeeHandler_ShouldRejectMissingRoleBeforeCreatingAnyData()
+    {
+        var repository = new InMemoryRepository<Employee>();
+        var identityStore = new RecordingIdentityAccountStore();
+        var passwordService = new StubIdentityPasswordService();
+        var unitOfWork = new RecordingUnitOfWork();
+        var handler = new OnboardEmployeeHandler(
+            identityStore,
+            passwordService,
+            new StubRolePolicyService { RoleExists = false },
+            repository,
+            unitOfWork,
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                Roles = [SystemRoles.HrAdmin],
+                ActorType = IIoTClaimTypes.HumanActor,
+                IsAuthenticated = true
+            },
+            new RecordingPermissionProvider
+            {
+                Permissions = [CloudPermissionCatalog.Employee.UpdateAccess]
+            });
+
+        var result = await handler.Handle(
+            new OnboardEmployeeCommand(
+                "E1007",
+                "Missing Role",
+                "Password123!",
+                "Role-Does-Not-Exist"),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("角色未定义", result.Errors ?? []);
+        Assert.Empty(identityStore.CreatedAccounts);
+        Assert.Equal(0, passwordService.SetPasswordCalls);
+        Assert.Null(repository.AddedEntity);
+        Assert.Equal(0, unitOfWork.BeginCalls);
+    }
+
+    [Theory]
+    [InlineData(IIoTClaimTypes.EdgeDeviceActor)]
+    [InlineData(IIoTClaimTypes.AiServiceActor)]
+    public async Task OnboardEmployeeHandler_ShouldNotGrantAccessBypassToNonHumanAdmin(
+        string actorType)
+    {
+        var repository = new InMemoryRepository<Employee>();
+        var identityStore = new RecordingIdentityAccountStore();
+        var passwordService = new StubIdentityPasswordService();
+        var unitOfWork = new RecordingUnitOfWork();
+        var handler = new OnboardEmployeeHandler(
+            identityStore,
+            passwordService,
+            new StubRolePolicyService { RoleExists = true },
+            repository,
+            unitOfWork,
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                Roles = [SystemRoles.Admin],
+                ActorType = actorType,
+                IsAuthenticated = true
+            },
+            new RecordingPermissionProvider());
+
+        var result = await handler.Handle(
+            new OnboardEmployeeCommand(
+                "E1008",
+                "Non Human",
+                "Password123!",
+                "Supervisor"),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains(
+            result.Errors ?? [],
+            error => error.Contains(
+                CloudPermissionCatalog.Employee.UpdateAccess,
+                StringComparison.Ordinal));
+        Assert.Empty(identityStore.CreatedAccounts);
+        Assert.Equal(0, passwordService.SetPasswordCalls);
+        Assert.Null(repository.AddedEntity);
+        Assert.Equal(0, unitOfWork.BeginCalls);
     }
 
     [Fact]
@@ -788,6 +801,7 @@ public sealed class ApplicationFlowGuardTests
                 Id = Guid.NewGuid().ToString(),
                 Roles = [SystemRoles.Admin],
                 UserName = "admin",
+                ActorType = IIoTClaimTypes.HumanActor,
                 IsAuthenticated = true
             },
             repository,

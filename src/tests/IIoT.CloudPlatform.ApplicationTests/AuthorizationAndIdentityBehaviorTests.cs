@@ -31,6 +31,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             {
                 Id = Guid.NewGuid().ToString(),
                 Roles = [SystemRoles.Admin],
+                ActorType = IIoTClaimTypes.HumanActor,
                 IsAuthenticated = true
             },
             permissionService);
@@ -40,6 +41,65 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         Assert.True(scope.IsSuccess);
         Assert.Null(scope.Value);
         Assert.Equal(0, permissionService.GetAccessibleDeviceIdsCalls);
+    }
+
+    [Theory]
+    [InlineData(IIoTClaimTypes.EdgeDeviceActor)]
+    [InlineData(IIoTClaimTypes.AiServiceActor)]
+    [InlineData(null)]
+    public async Task CurrentUserDeviceAccessService_ShouldNotGrantGlobalScopeToNonHumanAdmin(
+        string? actorType)
+    {
+        var userId = Guid.NewGuid();
+        var deviceId = Guid.NewGuid();
+        var permissionService = new StubDevicePermissionService
+        {
+            AccessibleDeviceIds = [deviceId]
+        };
+        var service = new CurrentUserDeviceAccessService(
+            new TestCurrentUser
+            {
+                Id = userId.ToString(),
+                Roles = [SystemRoles.Admin],
+                ActorType = actorType,
+                IsAuthenticated = true
+            },
+            permissionService);
+
+        var scope = await service.GetAccessibleDeviceIdsAsync();
+
+        Assert.True(scope.IsSuccess);
+        Assert.Equal([deviceId], scope.Value);
+        Assert.Equal(userId, permissionService.LastUserId);
+    }
+
+    [Theory]
+    [InlineData(" Admin ")]
+    [InlineData("ADMIN ")]
+    public async Task CurrentUserDeviceAccessService_ShouldNotGrantGlobalScopeToAdminLikeRole(
+        string roleName)
+    {
+        var userId = Guid.NewGuid();
+        var deviceId = Guid.NewGuid();
+        var permissionService = new StubDevicePermissionService
+        {
+            AccessibleDeviceIds = [deviceId]
+        };
+        var service = new CurrentUserDeviceAccessService(
+            new TestCurrentUser
+            {
+                Id = userId.ToString(),
+                Roles = [roleName],
+                IsAuthenticated = true
+            },
+            permissionService);
+
+        var scope = await service.GetAccessibleDeviceIdsAsync();
+
+        Assert.True(scope.IsSuccess);
+        Assert.Equal([deviceId], scope.Value);
+        Assert.Equal(1, permissionService.GetAccessibleDeviceIdsCalls);
+        Assert.Equal(userId, permissionService.LastUserId);
     }
 
     [Fact]
@@ -162,6 +222,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         var builtInRoleAdmin =
             SystemRolePermissionTemplates.Templates[SystemRoles.RoleAdmin];
 
+        Assert.Contains(CloudPermissionCatalog.Role.Read, permissions);
         Assert.DoesNotContain(CloudPermissionCatalog.Role.Define, permissions);
         Assert.DoesNotContain(CloudPermissionCatalog.Role.Update, permissions);
         Assert.DoesNotContain(CloudPermissionCatalog.Employee.Terminate, permissions);
@@ -172,6 +233,80 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         Assert.Contains(DevicePermissions.Read, permissions);
         Assert.Contains(CloudPermissionCatalog.Role.Define, builtInRoleAdmin);
         Assert.Contains(CloudPermissionCatalog.Role.Update, builtInRoleAdmin);
+    }
+
+    [Fact]
+    public void TargetRolePermissionNormalization_ShouldAcceptFullRoleAdminPagePayload()
+    {
+        var validation = CloudPermissionCatalog.NormalizeForTargetRole(
+            SystemRoles.RoleAdmin,
+            [
+                CloudPermissionCatalog.Role.Read,
+                CloudPermissionCatalog.Role.Define,
+                CloudPermissionCatalog.Role.Update,
+                CloudPermissionCatalog.Employee.Read,
+                CloudPermissionCatalog.Recipe.Update
+            ]);
+
+        Assert.True(validation.IsValid);
+        Assert.Equal(
+            [
+                CloudPermissionCatalog.Employee.Read,
+                CloudPermissionCatalog.Recipe.Update,
+                CloudPermissionCatalog.Role.Read,
+                CloudPermissionCatalog.Role.Define,
+                CloudPermissionCatalog.Role.Update
+            ],
+            validation.Permissions);
+    }
+
+    [Fact]
+    public void TargetRolePermissionNormalization_ShouldRestoreOmittedRoleAdminLockedPermissions()
+    {
+        var validation = CloudPermissionCatalog.NormalizeForTargetRole(
+            SystemRoles.RoleAdmin,
+            [CloudPermissionCatalog.Recipe.Read]);
+
+        Assert.True(validation.IsValid);
+        Assert.Equal(
+            [
+                CloudPermissionCatalog.Recipe.Read,
+                CloudPermissionCatalog.Role.Read,
+                CloudPermissionCatalog.Role.Define,
+                CloudPermissionCatalog.Role.Update
+            ],
+            validation.Permissions);
+    }
+
+    [Fact]
+    public void TargetRolePermissionNormalization_ShouldAcceptHrAdminRoleReadWithoutGovernancePermissions()
+    {
+        var validation = CloudPermissionCatalog.NormalizeForTargetRole(
+            SystemRoles.HrAdmin,
+            [
+                CloudPermissionCatalog.Role.Read,
+                CloudPermissionCatalog.Employee.Read,
+                CloudPermissionCatalog.Employee.Update
+            ]);
+
+        Assert.True(validation.IsValid);
+        Assert.Contains(CloudPermissionCatalog.Role.Read, validation.Permissions);
+        Assert.DoesNotContain(CloudPermissionCatalog.Role.Define, validation.Permissions);
+        Assert.DoesNotContain(CloudPermissionCatalog.Role.Update, validation.Permissions);
+    }
+
+    [Theory]
+    [InlineData(CloudPermissionCatalog.Role.Define)]
+    [InlineData(CloudPermissionCatalog.Role.Update)]
+    public void TargetRolePermissionNormalization_ShouldRejectGovernancePermissionForOrdinaryRole(
+        string governancePermission)
+    {
+        var validation = CloudPermissionCatalog.NormalizeForTargetRole(
+            "Supervisor",
+            [CloudPermissionCatalog.Role.Read, governancePermission]);
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(governancePermission, validation.RejectedPermissions);
     }
 
     [Fact]
@@ -189,6 +324,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
                 Id = Guid.NewGuid().ToString(),
                 UserName = "admin-001",
                 Roles = [SystemRoles.Admin],
+                ActorType = IIoTClaimTypes.HumanActor,
                 IsAuthenticated = true
             },
             auditTrail);
@@ -206,12 +342,12 @@ public sealed class AuthorizationAndIdentityBehaviorTests
     }
 
     [Fact]
-    public async Task DefineRolePolicyHandler_ShouldNotDeleteExistingRoleWhenPermissionAssignmentFails()
+    public async Task DefineRolePolicyHandler_ShouldRejectExistingRoleWithoutChangingPermissions()
     {
         var rolePolicyService = new StubRolePolicyService
         {
             RoleExists = true,
-            UpdateRolePermissionsResult = Result.Failure("permission update failed")
+            RolePermissions = [DevicePermissions.Read]
         };
         var auditTrail = new RecordingAuditTrailService();
         var handler = new DefineRolePolicyHandler(
@@ -221,6 +357,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
                 Id = Guid.NewGuid().ToString(),
                 UserName = "admin-001",
                 Roles = [SystemRoles.Admin],
+                ActorType = IIoTClaimTypes.HumanActor,
                 IsAuthenticated = true
             },
             auditTrail);
@@ -231,10 +368,14 @@ public sealed class AuthorizationAndIdentityBehaviorTests
 
         Assert.False(result.IsSuccess);
         Assert.Null(rolePolicyService.DeletedRoleName);
+        Assert.Null(rolePolicyService.CreatedRoleName);
+        Assert.Equal(0, rolePolicyService.UpdateRolePermissionsCalls);
+        Assert.Equal([DevicePermissions.Read], rolePolicyService.RolePermissions);
         Assert.Contains(auditTrail.Entries, x =>
             x.OperationType == "Role.Define"
             && x.TargetIdOrKey == "Auditor"
-            && !x.Succeeded);
+            && !x.Succeeded
+            && x.Summary.Contains("\"reasonCode\":\"RoleAlreadyExists\"", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -252,6 +393,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
                 Id = Guid.NewGuid().ToString(),
                 UserName = "admin-001",
                 Roles = [SystemRoles.Admin],
+                ActorType = IIoTClaimTypes.HumanActor,
                 IsAuthenticated = true
             },
             auditTrail);
@@ -269,6 +411,44 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             && x.Summary.Contains(
                 "\"afterPermissions\":[\"Device.Read\",\"Recipe.Update\"]",
                 StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task UpdateRolePermissionsHandler_ShouldUseTargetRoleNormalizationForFullRoleAdminPayload()
+    {
+        var rolePolicyService = new StubRolePolicyService
+        {
+            RolePermissions =
+            [
+                CloudPermissionCatalog.Role.Read,
+                CloudPermissionCatalog.Role.Define,
+                CloudPermissionCatalog.Role.Update,
+                DevicePermissions.Read
+            ]
+        };
+        var handler = new UpdateRolePermissionsHandler(
+            rolePolicyService,
+            CreateAdminUser(),
+            new RecordingAuditTrailService());
+        List<string> pagePayload =
+        [
+            CloudPermissionCatalog.Role.Read,
+            CloudPermissionCatalog.Role.Define,
+            CloudPermissionCatalog.Role.Update,
+            CloudPermissionCatalog.Employee.Read,
+            CloudPermissionCatalog.Recipe.Update
+        ];
+        var expected = CloudPermissionCatalog.NormalizeForTargetRole(
+            SystemRoles.RoleAdmin,
+            pagePayload);
+
+        var result = await handler.Handle(
+            new UpdateRolePermissionsCommand(SystemRoles.RoleAdmin, pagePayload),
+            CancellationToken.None);
+
+        Assert.True(expected.IsValid);
+        Assert.True(result.IsSuccess);
+        Assert.Equal(expected.Permissions, rolePolicyService.LastUpdatedRolePermissions);
     }
 
     [Fact]
@@ -374,6 +554,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
                 Id = Guid.NewGuid().ToString(),
                 UserName = "admin-001",
                 Roles = [SystemRoles.Admin],
+                ActorType = IIoTClaimTypes.HumanActor,
                 IsAuthenticated = true
             },
             auditTrail);
@@ -534,6 +715,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
                 Id = adminUserId.ToString(),
                 UserName = "admin-001",
                 Roles = [SystemRoles.Admin],
+                ActorType = IIoTClaimTypes.HumanActor,
                 IsAuthenticated = true
             },
             auditTrail);
@@ -794,7 +976,6 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             Guid.NewGuid(),
             [DevicePermissions.Read]);
         var behavior = new AdminOnlyBehavior<UpdateUserPermissionsCommand, Result<bool>>(
-            new StubCurrentUserDeviceAccessService { IsAdministrator = false },
             new TestCurrentUser
             {
                 Id = Guid.NewGuid().ToString(),
@@ -830,7 +1011,6 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         var behavior = new AdminOnlyBehavior<
             GetUserPersonalPermissionsQuery,
             Result<List<string>>>(
-            new StubCurrentUserDeviceAccessService { IsAdministrator = false },
             new TestCurrentUser
             {
                 Id = Guid.NewGuid().ToString(),
@@ -864,7 +1044,6 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         var nextCalled = false;
         var command = new DeleteDeviceCommand(Guid.NewGuid());
         var behavior = new AdminOnlyBehavior<DeleteDeviceCommand, Result<bool>>(
-            new StubCurrentUserDeviceAccessService { IsAdministrator = false },
             new TestCurrentUser
             {
                 Id = Guid.NewGuid().ToString(),
@@ -896,7 +1075,6 @@ public sealed class AuthorizationAndIdentityBehaviorTests
     public async Task AdminOnlyBehavior_ShouldRejectNonAdmin()
     {
         var behavior = new AdminOnlyBehavior<AdminOnlyHumanCommand, Result<bool>>(
-            new StubCurrentUserDeviceAccessService { IsAdministrator = false },
             new TestCurrentUser
             {
                 Id = Guid.NewGuid().ToString(),
@@ -914,17 +1092,78 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         Assert.Contains("管理员", exception.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(" Admin ")]
+    [InlineData("ADMIN ")]
+    public async Task AdminOnlyBehavior_ShouldRejectAdminLikeRoleClaim(string roleName)
+    {
+        var nextCalled = false;
+        var behavior = new AdminOnlyBehavior<AdminOnlyHumanCommand, Result<bool>>(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "admin-like-user",
+                Roles = [roleName],
+                IsAuthenticated = true
+            },
+            new RecordingAuditTrailService());
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            behavior.Handle(
+                new AdminOnlyHumanCommand(),
+                _ =>
+                {
+                    nextCalled = true;
+                    return Task.FromResult(Result.Success(true));
+                },
+                CancellationToken.None));
+
+        Assert.False(nextCalled);
+    }
+
+    [Theory]
+    [InlineData(IIoTClaimTypes.EdgeDeviceActor)]
+    [InlineData(IIoTClaimTypes.AiServiceActor)]
+    [InlineData(null)]
+    public async Task AdminOnlyBehavior_ShouldRejectNonHumanAdminRoleClaim(
+        string? actorType)
+    {
+        var nextCalled = false;
+        var behavior = new AdminOnlyBehavior<AdminOnlyHumanCommand, Result<bool>>(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "non-human-admin-claim",
+                Roles = [SystemRoles.Admin],
+                ActorType = actorType,
+                IsAuthenticated = true
+            },
+            new RecordingAuditTrailService());
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            behavior.Handle(
+                new AdminOnlyHumanCommand(),
+                _ =>
+                {
+                    nextCalled = true;
+                    return Task.FromResult(Result.Success(true));
+                },
+                CancellationToken.None));
+
+        Assert.False(nextCalled);
+    }
+
     [Fact]
     public async Task AdminOnlyBehavior_ShouldAllowAdmin()
     {
         var nextCalled = false;
         var behavior = new AdminOnlyBehavior<AdminOnlyHumanCommand, Result<bool>>(
-            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
             new TestCurrentUser
             {
                 Id = Guid.NewGuid().ToString(),
                 UserName = "admin-001",
                 Roles = [SystemRoles.Admin],
+                ActorType = IIoTClaimTypes.HumanActor,
                 IsAuthenticated = true
             },
             new RecordingAuditTrailService());
@@ -1046,6 +1285,69 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         Assert.True(result.IsSuccess);
         Assert.True(nextCalled);
         Assert.Null(permissionProvider.LastUserId);
+    }
+
+    [Theory]
+    [InlineData(" Admin ")]
+    [InlineData("ADMIN ")]
+    public async Task AuthorizationBehavior_ShouldNotGrantAdminBypassToAdminLikeRoleClaim(
+        string roleName)
+    {
+        var userId = Guid.NewGuid();
+        var permissionProvider = new RecordingPermissionProvider
+        {
+            Permissions = []
+        };
+        var behavior = new AuthorizationBehavior<EdgeReleaseManageCommand, Result<bool>>(
+            new TestCurrentUser
+            {
+                Id = userId.ToString(),
+                UserName = "admin-like-user",
+                Roles = [roleName],
+                ActorType = IIoTClaimTypes.HumanActor,
+                IsAuthenticated = true
+            },
+            permissionProvider);
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            behavior.Handle(
+                new EdgeReleaseManageCommand(),
+                _ => Task.FromResult(Result.Success(true)),
+                CancellationToken.None));
+
+        Assert.Equal(userId, permissionProvider.LastUserId);
+    }
+
+    [Theory]
+    [InlineData(IIoTClaimTypes.EdgeDeviceActor)]
+    [InlineData(IIoTClaimTypes.AiServiceActor)]
+    [InlineData(null)]
+    public async Task AuthorizationBehavior_ShouldNotGrantAdminBypassToNonHumanActor(
+        string? actorType)
+    {
+        var userId = Guid.NewGuid();
+        var permissionProvider = new RecordingPermissionProvider
+        {
+            Permissions = []
+        };
+        var behavior = new AuthorizationBehavior<EdgeReleaseManageCommand, Result<bool>>(
+            new TestCurrentUser
+            {
+                Id = userId.ToString(),
+                UserName = "non-human-admin-claim",
+                Roles = [SystemRoles.Admin],
+                ActorType = actorType,
+                IsAuthenticated = true
+            },
+            permissionProvider);
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            behavior.Handle(
+                new EdgeReleaseManageCommand(),
+                _ => Task.FromResult(Result.Success(true)),
+                CancellationToken.None));
+
+        Assert.Equal(userId, permissionProvider.LastUserId);
     }
 
     [Fact]
@@ -1227,6 +1529,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             Id = Guid.NewGuid().ToString(),
             UserName = "admin-001",
             Roles = [SystemRoles.Admin],
+            ActorType = IIoTClaimTypes.HumanActor,
             IsAuthenticated = true
         };
 

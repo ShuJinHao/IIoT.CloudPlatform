@@ -21,7 +21,7 @@ public class UpdateRolePermissionsHandler(
     public async Task<Result<bool>> Handle(UpdateRolePermissionsCommand request, CancellationToken cancellationToken)
     {
         var roleName = (request.RoleName ?? string.Empty).Trim();
-        if (SystemRoles.IsAdmin(roleName))
+        if (SystemRoles.IsAdminLike(roleName))
         {
             return await FailAsync(
                 roleName,
@@ -35,7 +35,9 @@ public class UpdateRolePermissionsHandler(
         }
 
         var beforePermissions = await rolePolicyService.GetRolePermissionsAsync(roleName) ?? [];
-        var validation = CloudPermissionCatalog.NormalizeRoleAdminAssignable(request.Permissions);
+        var validation = CloudPermissionCatalog.NormalizeForTargetRole(
+            roleName,
+            request.Permissions);
         if (!validation.IsValid)
         {
             return await FailAsync(

@@ -1,9 +1,11 @@
 using System.Data;
 using System.Text;
+using System.Text.Json;
 using IIoT.Dapper.Initializers;
 using IIoT.EntityFrameworkCore;
 using IIoT.EntityFrameworkCore.Identity;
 using IIoT.MigrationWorkApp.SeedData;
+using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -52,6 +54,48 @@ public sealed class DatabaseInitializationOrchestrator(
         ALTER TABLE devices DROP COLUMN IF EXISTS mac_address;
         """;
 
+    private const string AdminLikeRolePreflightSql =
+        """
+        SELECT
+            role."Id",
+            role."Name",
+            COUNT(user_role."UserId") AS user_count
+        FROM "AspNetRoles" role
+        LEFT JOIN "AspNetUserRoles" user_role
+            ON user_role."RoleId" = role."Id"
+        WHERE UPPER(BTRIM(COALESCE(role."Name", ''))) = 'ADMIN'
+          AND COALESCE(role."Name", '') <> 'Admin'
+        GROUP BY role."Id", role."Name"
+        ORDER BY role."Name", role."Id";
+        """;
+
+    private const string PermissionClaimPreflightSql =
+        """
+        SELECT
+            'role' AS owner_type,
+            claim."Id"::text AS claim_id,
+            role."Name" AS owner_name,
+            claim."ClaimValue"
+        FROM "AspNetRoleClaims" claim
+        INNER JOIN "AspNetRoles" role
+            ON role."Id" = claim."RoleId"
+        WHERE claim."ClaimType" = 'permission'
+
+        UNION ALL
+
+        SELECT
+            'user' AS owner_type,
+            claim."Id"::text AS claim_id,
+            "user"."UserName" AS owner_name,
+            claim."ClaimValue"
+        FROM "AspNetUserClaims" claim
+        INNER JOIN "AspNetUsers" "user"
+            ON "user"."Id" = claim."UserId"
+        WHERE claim."ClaimType" = 'permission'
+
+        ORDER BY owner_type, owner_name, claim_id;
+        """;
+
     private const string NormalizeHourlyCapacityPrimaryKeySql =
         """
         DO $$
@@ -93,6 +137,7 @@ public sealed class DatabaseInitializationOrchestrator(
         var strategy = dbContext.Database.CreateExecutionStrategy();
         await strategy.ExecuteAsync(async () =>
         {
+            await EnsureIdentityAuthorizationPreflightAsync(cancellationToken);
             await dbContext.Database.MigrateAsync(cancellationToken);
             await EnsureIdentitySchemaCompatibilityAsync(cancellationToken);
             await EnsureDeviceCodeSchemaCompatibilityAsync(cancellationToken);
@@ -208,6 +253,228 @@ public sealed class DatabaseInitializationOrchestrator(
             cancellationToken);
     }
 
+    internal async Task EnsureCanonicalAdminRolePreflightAsync(
+        CancellationToken cancellationToken)
+    {
+        logger.LogInformation("Checking for non-canonical Admin-like identity roles.");
+
+        if (!await IdentityAuthorizationTablesExistAsync(cancellationToken))
+        {
+            return;
+        }
+
+        var conflicts = await GetAdminLikeRoleConflictsAsync(cancellationToken);
+        if (conflicts.Count == 0)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(BuildAdminLikeRoleConflictMessage(conflicts));
+    }
+
+    internal async Task EnsureIdentityAuthorizationPreflightAsync(
+        CancellationToken cancellationToken)
+    {
+        if (!await IdentityAuthorizationTablesExistAsync(cancellationToken))
+        {
+            logger.LogInformation(
+                "Identity authorization tables do not exist yet; database authorization preflight is empty.");
+            return;
+        }
+
+        await EnsureCanonicalAdminRolePreflightAsync(cancellationToken);
+
+        var conflicts = await GetPermissionClaimConflictsAsync(cancellationToken);
+        if (conflicts.Count > 0)
+        {
+            throw new InvalidOperationException(
+                BuildPermissionClaimConflictMessage(conflicts));
+        }
+    }
+
+    private async Task<bool> IdentityAuthorizationTablesExistAsync(
+        CancellationToken cancellationToken)
+    {
+        var connection = dbContext.Database.GetDbConnection();
+        var shouldCloseConnection = connection.State != ConnectionState.Open;
+
+        if (shouldCloseConnection)
+        {
+            await connection.OpenAsync(cancellationToken);
+        }
+
+        try
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT
+                    to_regclass('"AspNetRoles"') IS NOT NULL
+                    AND to_regclass('"AspNetUsers"') IS NOT NULL
+                    AND to_regclass('"AspNetUserRoles"') IS NOT NULL
+                    AND to_regclass('"AspNetRoleClaims"') IS NOT NULL
+                    AND to_regclass('"AspNetUserClaims"') IS NOT NULL;
+                """;
+
+            return Convert.ToBoolean(
+                await command.ExecuteScalarAsync(cancellationToken));
+        }
+        finally
+        {
+            if (shouldCloseConnection)
+            {
+                await connection.CloseAsync();
+            }
+        }
+    }
+
+    private async Task<List<AdminLikeRoleConflict>> GetAdminLikeRoleConflictsAsync(
+        CancellationToken cancellationToken)
+    {
+        var connection = dbContext.Database.GetDbConnection();
+        var shouldCloseConnection = connection.State != ConnectionState.Open;
+
+        if (shouldCloseConnection)
+        {
+            await connection.OpenAsync(cancellationToken);
+        }
+
+        try
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = AdminLikeRolePreflightSql;
+
+            var conflicts = new List<AdminLikeRoleConflict>();
+            using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                conflicts.Add(new AdminLikeRoleConflict(
+                    reader.GetGuid(0),
+                    reader.GetString(1),
+                    reader.GetFieldValue<long>(2)));
+            }
+
+            return conflicts;
+        }
+        finally
+        {
+            if (shouldCloseConnection)
+            {
+                await connection.CloseAsync();
+            }
+        }
+    }
+
+    private static string BuildAdminLikeRoleConflictMessage(
+        IReadOnlyCollection<AdminLikeRoleConflict> conflicts)
+    {
+        var details = conflicts.Select(conflict =>
+            $"roleId={conflict.RoleId}, name={JsonSerializer.Serialize(conflict.Name)}, users={conflict.UserCount}");
+        return "身份角色预检失败：发现非规范 Admin-like 角色。"
+               + " 未执行自动合并、删除或用户角色变更；请管理员确认数据并定向处理后重试。"
+               + " 异常角色："
+               + string.Join("; ", details);
+    }
+
+    private async Task<List<PermissionClaimConflict>> GetPermissionClaimConflictsAsync(
+        CancellationToken cancellationToken)
+    {
+        var connection = dbContext.Database.GetDbConnection();
+        var shouldCloseConnection = connection.State != ConnectionState.Open;
+
+        if (shouldCloseConnection)
+        {
+            await connection.OpenAsync(cancellationToken);
+        }
+
+        try
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = PermissionClaimPreflightSql;
+
+            var conflicts = new List<PermissionClaimConflict>();
+            using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var ownerType = reader.GetString(0);
+                var claimId = reader.GetString(1);
+                var ownerName = reader.IsDBNull(2) ? null : reader.GetString(2);
+                var permission = reader.IsDBNull(3) ? null : reader.GetString(3);
+                var validation = CloudPermissionCatalog.Normalize([permission!]);
+
+                if (!validation.IsValid)
+                {
+                    conflicts.Add(new PermissionClaimConflict(
+                        ownerType,
+                        claimId,
+                        ownerName,
+                        permission,
+                        "PermissionNotDefined"));
+                    continue;
+                }
+
+                if (!string.Equals(ownerType, "role", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (SystemRoles.IsCanonicalAdminRole(ownerName))
+                {
+                    continue;
+                }
+
+                var isRetiredDeviceAdminPermission =
+                    string.Equals(
+                        ownerName?.Trim(),
+                        SystemRoles.DeviceAdmin,
+                        StringComparison.OrdinalIgnoreCase)
+                    && SystemRolePermissionTemplates.DeviceAdminRetiredPermissions.Contains(
+                        validation.Permissions[0],
+                        StringComparer.OrdinalIgnoreCase);
+                if (isRetiredDeviceAdminPermission)
+                {
+                    continue;
+                }
+
+                var roleValidation = CloudPermissionCatalog.NormalizeForTargetRole(
+                    ownerName,
+                    validation.Permissions);
+                if (!roleValidation.IsValid)
+                {
+                    conflicts.Add(new PermissionClaimConflict(
+                        ownerType,
+                        claimId,
+                        ownerName,
+                        permission,
+                        "PermissionNotAssignableToRole"));
+                }
+            }
+
+            return conflicts;
+        }
+        finally
+        {
+            if (shouldCloseConnection)
+            {
+                await connection.CloseAsync();
+            }
+        }
+    }
+
+    private static string BuildPermissionClaimConflictMessage(
+        IReadOnlyCollection<PermissionClaimConflict> conflicts)
+    {
+        var details = conflicts.Select(conflict =>
+            $"ownerType={conflict.OwnerType}, claimId={conflict.ClaimId}, "
+            + $"owner={JsonSerializer.Serialize(conflict.OwnerName)}, "
+            + $"permission={JsonSerializer.Serialize(conflict.Permission)}, "
+            + $"reason={conflict.Reason}");
+        return "身份权限预检失败：发现非法角色或个人权限声明。"
+               + " 未执行 migration、seed、权限清理或账号变更；请管理员定向处理后重试。"
+               + " 非法声明："
+               + string.Join("; ", details);
+    }
+
     private async Task InitializeRecordSchemasAsync(CancellationToken cancellationToken)
     {
         logger.LogInformation("开始初始化记录表 schema。");
@@ -300,4 +567,16 @@ public sealed class DatabaseInitializationOrchestrator(
     private sealed record NormalizedClientCodeConflict(
         string NormalizedCode,
         long DuplicateCount);
+
+    private sealed record AdminLikeRoleConflict(
+        Guid RoleId,
+        string Name,
+        long UserCount);
+
+    private sealed record PermissionClaimConflict(
+        string OwnerType,
+        string ClaimId,
+        string? OwnerName,
+        string? Permission,
+        string Reason);
 }

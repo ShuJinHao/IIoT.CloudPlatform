@@ -1021,6 +1021,10 @@ internal sealed class StubIdentityPasswordService : IIdentityPasswordService
 
     public Result<bool> ResetPasswordResult { get; set; } = Result.Success(true);
 
+    public int SetPasswordCalls { get; private set; }
+
+    public Guid? LastSetPasswordUserId { get; private set; }
+
     public Guid? LastChangedUserId { get; private set; }
 
     public Guid? LastResetUserId { get; private set; }
@@ -1044,6 +1048,9 @@ internal sealed class StubIdentityPasswordService : IIdentityPasswordService
         string newPassword,
         CancellationToken cancellationToken = default)
     {
+        SetPasswordCalls++;
+        LastSetPasswordUserId = accountId;
+        LastNewPassword = newPassword;
         return Task.FromResult(SetPasswordResult);
     }
 
