@@ -43,6 +43,8 @@ import {
 
 const PAGE_SIZE = 10;
 const ADMIN_PERMISSION_EXPIRED_MESSAGE = '管理员权限已失效，请重新登录后重试';
+const ONBOARD_PERMISSION_EXPIRED_MESSAGE = '员工入职权限已失效，请重新登录后重试';
+const ONBOARD_ROLE_PERMISSION_EXPIRED_MESSAGE = '角色管理权限已失效，本次入职未提交，请重新打开后重试';
 const ACCESS_PERMISSION_EXPIRED_MESSAGE = '设备管辖权权限已失效，请重新登录后重试';
 const ACCESS_NOT_READY_MESSAGE = '设备管辖权尚未加载完成，请稍后重试';
 const ACCESS_SUBMITTING_MESSAGE = '设备管辖权正在保存，请稍后重试';
@@ -335,6 +337,12 @@ export function useEmployees() {
   }
 
   async function openOnboardModal() {
+    if (!authStore.hasPermission(Permissions.Employee.Onboard)) {
+      showOnboardModal.value = false;
+      notifyWarning(ONBOARD_PERMISSION_EXPIRED_MESSAGE);
+      return;
+    }
+
     Object.assign(onboardForm, { EmployeeNo: '', RealName: '', Password: '', RoleName: null });
     showOnboardModal.value = true;
     if (!canManageEmployeeRole.value) {
@@ -354,18 +362,30 @@ export function useEmployees() {
   }
 
   async function submitOnboard() {
+    if (!authStore.hasPermission(Permissions.Employee.Onboard)) {
+      showOnboardModal.value = false;
+      notifyWarning(ONBOARD_PERMISSION_EXPIRED_MESSAGE);
+      return;
+    }
+    const selectedRoleName = onboardForm.RoleName || null;
+    if (selectedRoleName && !canManageEmployeeRole.value) {
+      showOnboardModal.value = false;
+      notifyWarning(ONBOARD_ROLE_PERMISSION_EXPIRED_MESSAGE);
+      return;
+    }
     if (!onboardForm.EmployeeNo.trim() || !onboardForm.RealName.trim() || !onboardForm.Password.trim()) {
       notifyWarning('工号、姓名和初始密码为必填项');
       return;
     }
     submitting.value = true;
     try {
-      await onboardEmployeeApi({
+      const payload = {
         employeeNo: onboardForm.EmployeeNo,
         realName: onboardForm.RealName,
         password: onboardForm.Password,
-        roleName: canManageEmployeeRole.value ? onboardForm.RoleName || undefined : undefined,
-      });
+        ...(selectedRoleName ? { roleName: selectedRoleName } : {}),
+      };
+      await onboardEmployeeApi(payload);
       showOnboardModal.value = false;
       await fetchList();
     } finally {

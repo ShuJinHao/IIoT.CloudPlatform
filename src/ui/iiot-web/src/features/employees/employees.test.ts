@@ -1187,7 +1187,10 @@ describe('employees feature guards', () => {
       ' HrAdmin ',
     ])).toEqual(['RoleAdmin', 'HrAdmin']);
 
-    authMock.state!.permissions = [Permissions.Employee.UpdateAccess];
+    authMock.state!.permissions = [
+      Permissions.Employee.Onboard,
+      Permissions.Employee.UpdateAccess,
+    ];
     const state = useEmployees();
     await state.openOnboardModal();
 
@@ -1196,6 +1199,7 @@ describe('employees feature guards', () => {
     expect(state.roleOptions.value).toEqual([]);
 
     authMock.state!.permissions = [
+      Permissions.Employee.Onboard,
       Permissions.Employee.UpdateAccess,
       Permissions.Role.Read,
     ];
@@ -1248,6 +1252,152 @@ describe('employees feature guards', () => {
     await nextTick();
     expect(document.body.textContent).toContain('系统角色');
     wrapper.unmount();
+  });
+
+  it('requires Employee.Onboard before opening and again before submitting', async () => {
+    const state = useEmployees();
+
+    await state.openOnboardModal();
+
+    expect(state.showOnboardModal.value).toBe(false);
+    expect(employeeApiMocks.getAllRolesApi).not.toHaveBeenCalled();
+    expect(feedbackMocks.notifyWarning).toHaveBeenCalledWith(
+      '员工入职权限已失效，请重新登录后重试',
+    );
+
+    authMock.state!.permissions = [
+      Permissions.Employee.Onboard,
+      Permissions.Employee.UpdateAccess,
+      Permissions.Role.Read,
+    ];
+    employeeApiMocks.getAllRolesApi.mockResolvedValue(['HrAdmin']);
+    await state.openOnboardModal();
+    Object.assign(state.onboardForm, {
+      EmployeeNo: 'E1001',
+      RealName: '入职权限测试',
+      Password: 'Password1',
+      RoleName: 'HrAdmin',
+    });
+    authMock.state!.permissions = [
+      Permissions.Employee.UpdateAccess,
+      Permissions.Role.Read,
+    ];
+
+    await state.submitOnboard();
+
+    expect(state.showOnboardModal.value).toBe(false);
+    expect(employeeApiMocks.onboardEmployeeApi).not.toHaveBeenCalled();
+    expect(feedbackMocks.notifyWarning).toHaveBeenLastCalledWith(
+      '员工入职权限已失效，请重新登录后重试',
+    );
+  });
+
+  it.each([
+    Permissions.Employee.UpdateAccess,
+    Permissions.Role.Read,
+  ])('blocks a selected onboarding role when %s expires before submission', async (expiredPermission) => {
+    const requiredPermissions = [
+      Permissions.Employee.Onboard,
+      Permissions.Employee.UpdateAccess,
+      Permissions.Role.Read,
+    ];
+    authMock.state!.permissions = [...requiredPermissions];
+    employeeApiMocks.getAllRolesApi.mockResolvedValue(['HrAdmin']);
+    const state = useEmployees();
+    await state.openOnboardModal();
+    Object.assign(state.onboardForm, {
+      EmployeeNo: 'E1002',
+      RealName: '角色权限测试',
+      Password: 'Password1',
+      RoleName: 'HrAdmin',
+    });
+    authMock.state!.permissions = requiredPermissions.filter(
+      (permission) => permission !== expiredPermission,
+    );
+
+    await state.submitOnboard();
+
+    expect(state.showOnboardModal.value).toBe(false);
+    expect(state.onboardForm.RoleName).toBe('HrAdmin');
+    expect(employeeApiMocks.onboardEmployeeApi).not.toHaveBeenCalled();
+    expect(feedbackMocks.notifyWarning).toHaveBeenCalledWith(
+      '角色管理权限已失效，本次入职未提交，请重新打开后重试',
+    );
+  });
+
+  it('allows role-free onboarding with only Employee.Onboard', async () => {
+    authMock.state!.permissions = [Permissions.Employee.Onboard];
+    const state = useEmployees();
+    await state.openOnboardModal();
+    Object.assign(state.onboardForm, {
+      EmployeeNo: 'E1003',
+      RealName: '无角色员工',
+      Password: 'Password1',
+      RoleName: null,
+    });
+
+    await state.submitOnboard();
+
+    expect(employeeApiMocks.onboardEmployeeApi).toHaveBeenCalledTimes(1);
+    const payload = employeeApiMocks.onboardEmployeeApi.mock.calls[0]![0];
+    expect(payload).toEqual({
+      employeeNo: 'E1003',
+      realName: '无角色员工',
+      password: 'Password1',
+    });
+    expect(payload).not.toHaveProperty('roleName');
+    expect(state.showOnboardModal.value).toBe(false);
+  });
+
+  it('preserves the canonical selected role when both role permissions remain valid', async () => {
+    authMock.state!.permissions = [
+      Permissions.Employee.Onboard,
+      Permissions.Employee.UpdateAccess,
+      Permissions.Role.Read,
+    ];
+    employeeApiMocks.getAllRolesApi.mockResolvedValue([' Admin ', ' HrAdmin ']);
+    const state = useEmployees();
+    await state.openOnboardModal();
+    Object.assign(state.onboardForm, {
+      EmployeeNo: 'E1004',
+      RealName: '有角色员工',
+      Password: 'Password1',
+      RoleName: state.roleOptions.value[0]!.value,
+    });
+
+    await state.submitOnboard();
+
+    expect(employeeApiMocks.onboardEmployeeApi).toHaveBeenCalledWith({
+      employeeNo: 'E1004',
+      realName: '有角色员工',
+      password: 'Password1',
+      roleName: 'HrAdmin',
+    });
+  });
+
+  it('keeps canonical Admin onboarding available with empty raw permission claims', async () => {
+    authMock.state!.isAdmin = true;
+    authMock.state!.permissions = [];
+    employeeApiMocks.getAllRolesApi.mockResolvedValue(['RoleAdmin']);
+    const state = useEmployees();
+    await state.openOnboardModal();
+    Object.assign(state.onboardForm, {
+      EmployeeNo: 'E1005',
+      RealName: '管理员入职测试',
+      Password: 'Password1',
+      RoleName: 'RoleAdmin',
+    });
+
+    await state.submitOnboard();
+
+    expect(state.canManageEmployeeRole.value).toBe(true);
+    expect(employeeApiMocks.onboardEmployeeApi).toHaveBeenCalledWith({
+      employeeNo: 'E1005',
+      realName: '管理员入职测试',
+      password: 'Password1',
+      roleName: 'RoleAdmin',
+    });
+    expect(authMock.hasPermission).toHaveBeenCalledWith(Permissions.Employee.Onboard);
   });
 
   it('shows the role action only with the dual permission model and hides the current user', () => {
@@ -1376,6 +1526,7 @@ describe('employees feature guards', () => {
 
   it('keeps a delayed onboarding role load from overwriting the active employee role candidates', async () => {
     authMock.state!.permissions = [
+      Permissions.Employee.Onboard,
       Permissions.Employee.UpdateAccess,
       Permissions.Role.Read,
     ];
