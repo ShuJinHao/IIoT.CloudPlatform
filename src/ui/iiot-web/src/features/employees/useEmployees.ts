@@ -29,6 +29,7 @@ import {
 import { isResetPasswordInvalid, type EmployeeConfirmDialogState } from './types';
 
 const PAGE_SIZE = 10;
+const ADMIN_PERMISSION_EXPIRED_MESSAGE = '管理员权限已失效，请重新登录后重试';
 
 const emptyMetaData = (): PagedMetaData => ({
   totalCount: 0,
@@ -268,7 +269,13 @@ export function useEmployees() {
   }
 
   async function submitResetPwd() {
-    if (!canResetPassword.value || !resetPwdTarget.value) return;
+    if (!resetPwdTarget.value) return;
+    if (!canResetPassword.value) {
+      showResetPwdModal.value = false;
+      resetPwdTarget.value = null;
+      notifyWarning(ADMIN_PERMISSION_EXPIRED_MESSAGE);
+      return;
+    }
 
     const validationMessage = isResetPasswordInvalid(resetPwdForm.newPwd, resetPwdForm.confirm);
     if (validationMessage) {
@@ -361,7 +368,11 @@ export function useEmployees() {
       desc: `即将永久删除「${employee.realName}（${employee.employeeNo}）」的所有档案，含身份账号与权限数据，此操作不可撤销！`,
       confirmText: '确认离职销户',
       onConfirm: async () => {
-        if (!canTerminateEmployee.value) return;
+        if (!canTerminateEmployee.value) {
+          confirmDialog.show = false;
+          notifyWarning(ADMIN_PERMISSION_EXPIRED_MESSAGE);
+          return;
+        }
 
         submitting.value = true;
         try {

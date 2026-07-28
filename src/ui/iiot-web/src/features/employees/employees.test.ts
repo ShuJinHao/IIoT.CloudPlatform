@@ -295,7 +295,11 @@ describe('employees feature guards', () => {
     expect(state.canResetPassword.value).toBe(false);
     await state.submitResetPwd();
     expect(identityApiMocks.resetPasswordApi).not.toHaveBeenCalled();
-    expect(state.showResetPwdModal.value).toBe(true);
+    expect(state.showResetPwdModal.value).toBe(false);
+    expect(state.resetPwdTarget.value).toBeNull();
+    expect(feedbackMocks.notifyWarning).toHaveBeenLastCalledWith(
+      '管理员权限已失效，请重新登录后重试',
+    );
 
     authMock.state!.isAdmin = true;
     await nextTick();
@@ -308,7 +312,11 @@ describe('employees feature guards', () => {
     await state.confirmDialog.onConfirm();
 
     expect(employeeApiMocks.terminateEmployeeApi).not.toHaveBeenCalled();
-    expect(state.confirmDialog.show).toBe(true);
+    expect(state.confirmDialog.show).toBe(false);
+    expect(feedbackMocks.notifyWarning).toHaveBeenCalledTimes(2);
+    expect(feedbackMocks.notifyWarning).toHaveBeenLastCalledWith(
+      '管理员权限已失效，请重新登录后重试',
+    );
   });
 
   it('keeps edit, access and deactivate actions for HrAdmin without exposing Admin-only actions', () => {
