@@ -12,7 +12,7 @@ public sealed class RefreshTokenSessionLimitTests(
     ClientReleaseCommitRecoveryPostgresFixture fixture)
 {
     [Fact]
-    public async Task IssueAsync_ShouldRevokeOldestHumanSessionWhenLimitIsReached()
+    public async Task IssueHumanAsync_ShouldRevokeOldestHumanSessionWhenLimitIsReached()
     {
         await using var dbContext = await CreateDbContextAsync();
         var subjectId = Guid.NewGuid();
@@ -29,7 +29,7 @@ public sealed class RefreshTokenSessionLimitTests(
 
         var service = CreateService(dbContext, humanMaxActiveSessions: 3);
 
-        await service.IssueAsync(IIoTClaimTypes.HumanActor, subjectId);
+        await service.IssueHumanAsync(subjectId, "status-current");
 
         var sessions = await dbContext.RefreshTokenSessions
             .Where(x => x.ActorType == IIoTClaimTypes.HumanActor && x.SubjectId == subjectId)
@@ -70,14 +70,15 @@ public sealed class RefreshTokenSessionLimitTests(
         var subjectId = Guid.NewGuid();
         var unlimitedService = CreateService(dbContext, humanMaxActiveSessions: 0);
 
-        var firstSession = await unlimitedService.IssueAsync(IIoTClaimTypes.HumanActor, subjectId);
-        await unlimitedService.IssueAsync(IIoTClaimTypes.HumanActor, subjectId);
+        var firstSession = await unlimitedService.IssueHumanAsync(subjectId, "status-current");
+        await unlimitedService.IssueHumanAsync(subjectId, "status-current");
 
         var limitedService = CreateService(dbContext, humanMaxActiveSessions: 1);
 
         var rotationResult = await limitedService.RotateAsync(IIoTClaimTypes.HumanActor, firstSession.Token);
 
         Assert.True(rotationResult.IsSuccess);
+        Assert.Equal("status-current", rotationResult.Value!.IdentityStatusVersion);
 
         var sessions = await dbContext.RefreshTokenSessions
             .Where(x => x.ActorType == IIoTClaimTypes.HumanActor && x.SubjectId == subjectId)

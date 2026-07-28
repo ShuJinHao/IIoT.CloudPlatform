@@ -16,8 +16,20 @@ public sealed class CloudOidcSessionService(
         string employeeNo,
         CancellationToken cancellationToken = default)
     {
-        var profile = await profileService.GetByEmployeeNoAsync(employeeNo, cancellationToken);
-        if (profile is null || !profile.AccountEnabled || !profile.EmployeeActive)
+        CloudOidcUserProfile? profile;
+        try
+        {
+            profile = await profileService.GetByEmployeeNoAsync(employeeNo, cancellationToken);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            profile = null;
+        }
+
+        if (profile is null ||
+            !profile.AccountEnabled ||
+            !profile.EmployeeActive ||
+            string.IsNullOrWhiteSpace(profile.StatusVersion))
         {
             await auditTrailService.TryWriteAsync(
                 new AuditTrailEntry(
@@ -39,7 +51,8 @@ public sealed class CloudOidcSessionService(
                 new Claim(ClaimTypes.NameIdentifier, profile.UserId.ToString()),
                 new Claim(ClaimTypes.Name, profile.EmployeeNo),
                 new Claim("employee_no", profile.EmployeeNo),
-                new Claim("display_name", profile.RealName)
+                new Claim("display_name", profile.RealName),
+                new Claim(IIoTClaimTypes.IdentityStatusVersion, profile.StatusVersion)
             ],
             CloudOidcDefaults.SessionScheme);
 

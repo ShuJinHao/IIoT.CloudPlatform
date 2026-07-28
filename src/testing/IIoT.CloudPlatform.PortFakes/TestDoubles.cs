@@ -1017,11 +1017,15 @@ internal sealed class StaticDomainEventDispatchContext(Guid messageId) : IDomain
 
 internal sealed class StubIdentityPasswordService : IIdentityPasswordService
 {
+    public Result<bool> CheckPasswordResult { get; set; } = Result.Success(true);
+
     public Result<bool> SetPasswordResult { get; set; } = Result.Success(true);
 
     public Result<bool> ResetPasswordResult { get; set; } = Result.Success(true);
 
     public int SetPasswordCalls { get; private set; }
+
+    public int CheckPasswordCalls { get; private set; }
 
     public Guid? LastSetPasswordUserId { get; private set; }
 
@@ -1040,7 +1044,8 @@ internal sealed class StubIdentityPasswordService : IIdentityPasswordService
         string password,
         CancellationToken cancellationToken = default)
     {
-        throw new NotSupportedException();
+        CheckPasswordCalls++;
+        return Task.FromResult(CheckPasswordResult);
     }
 
     public Task<Result<bool>> SetPasswordAsync(
@@ -1083,13 +1088,28 @@ internal sealed class StubRefreshTokenService : IRefreshTokenService
 
     public List<(string ActorType, Guid SubjectId)> Issues { get; } = [];
 
+    public List<(Guid SubjectId, string IdentityStatusVersion)> HumanIssues { get; } = [];
+
     public string? LastRotateActorType { get; private set; }
 
     public string? LastRotatedRefreshToken { get; private set; }
 
     public Guid NextRotateSubjectId { get; set; } = Guid.NewGuid();
 
+    public string? NextRotateIdentityStatusVersion { get; set; }
+
     public Result<RefreshTokenRotationResult>? RotateResultOverride { get; set; }
+
+    public Task<RefreshTokenEnvelope> IssueHumanAsync(
+        Guid subjectId,
+        string identityStatusVersion,
+        CancellationToken cancellationToken = default)
+    {
+        HumanIssues.Add((subjectId, identityStatusVersion));
+        return Task.FromResult(new RefreshTokenEnvelope(
+            $"refresh-human-{subjectId:N}",
+            DateTimeOffset.UtcNow.AddDays(7)));
+    }
 
     public Task<RefreshTokenEnvelope> IssueAsync(
         string actorType,
@@ -1121,7 +1141,8 @@ internal sealed class StubRefreshTokenService : IRefreshTokenService
         return Task.FromResult(Result.Success(new RefreshTokenRotationResult(
             actorType,
             NextRotateSubjectId,
-            new RefreshTokenEnvelope($"rotated-{refreshToken}", DateTimeOffset.UtcNow.AddDays(7)))));
+            new RefreshTokenEnvelope($"rotated-{refreshToken}", DateTimeOffset.UtcNow.AddDays(7)),
+            NextRotateIdentityStatusVersion)));
     }
 
     public Task RevokeSubjectTokensAsync(
@@ -1132,6 +1153,86 @@ internal sealed class StubRefreshTokenService : IRefreshTokenService
     {
         Revocations.Add((actorType, subjectId, reason));
         return Task.CompletedTask;
+    }
+}
+
+internal sealed class StubHumanSessionRevocationService : IHumanSessionRevocationService
+{
+    public List<(Guid SubjectId, string Reason)> Revocations { get; } = [];
+
+    public Exception? ExceptionToThrow { get; set; }
+
+    public Task RevokeAllAsync(
+        Guid subjectId,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (ExceptionToThrow is not null)
+        {
+            throw ExceptionToThrow;
+        }
+
+        Revocations.Add((subjectId, reason));
+        return Task.CompletedTask;
+    }
+}
+
+internal sealed class StubCloudOidcUserProfileService : ICloudOidcUserProfileService
+{
+    public CloudOidcUserProfile? Profile { get; set; }
+
+    public Exception? ExceptionToThrow { get; set; }
+
+    public int GetByUserIdCalls { get; private set; }
+
+    public int GetByEmployeeNoCalls { get; private set; }
+
+    public Task<CloudOidcUserProfile?> GetByUserIdAsync(
+        Guid userId,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        GetByUserIdCalls++;
+        if (ExceptionToThrow is not null)
+        {
+            throw ExceptionToThrow;
+        }
+
+        return Task.FromResult(Profile?.UserId == userId ? Profile : null);
+    }
+
+    public Task<CloudOidcUserProfile?> GetByEmployeeNoAsync(
+        string employeeNo,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        GetByEmployeeNoCalls++;
+        if (ExceptionToThrow is not null)
+        {
+            throw ExceptionToThrow;
+        }
+
+        return Task.FromResult(
+            string.Equals(Profile?.EmployeeNo, employeeNo, StringComparison.Ordinal)
+                ? Profile
+                : null);
+    }
+}
+
+internal sealed class StubEmployeeLookupService : IEmployeeLookupService
+{
+    public EmployeeLookupDto? Employee { get; set; }
+
+    public int GetByIdCalls { get; private set; }
+
+    public Task<EmployeeLookupDto?> GetByIdAsync(
+        Guid employeeId,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        GetByIdCalls++;
+        return Task.FromResult(Employee?.Id == employeeId ? Employee : null);
     }
 }
 
@@ -1505,12 +1606,16 @@ internal sealed class StubDeviceDeletionDependencyQueryService : IDeviceDeletion
 
 internal sealed class StubJwtTokenGenerator : IJwtTokenGenerator
 {
+    public string? LastHumanIdentityStatusVersion { get; private set; }
+
     public JwtTokenResult GenerateHumanToken(
         Guid userId,
         string userName,
         IEnumerable<string> roles,
-        IEnumerable<string> permissions)
+        IEnumerable<string> permissions,
+        string identityStatusVersion)
     {
+        LastHumanIdentityStatusVersion = identityStatusVersion;
         return new JwtTokenResult($"human-{userId:N}", DateTimeOffset.UtcNow.AddMinutes(60));
     }
 

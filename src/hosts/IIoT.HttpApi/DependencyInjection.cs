@@ -6,6 +6,7 @@ using IIoT.EmployeeService.Commands.Employees;
 using IIoT.EntityFrameworkCore;
 using IIoT.EventBus;
 using IIoT.HttpApi.Infrastructure;
+using IIoT.HttpApi.Infrastructure.Authentication;
 using IIoT.HttpApi.Infrastructure.Oidc;
 using IIoT.Infrastructure;
 using IIoT.Infrastructure.Authentication;
@@ -143,6 +144,21 @@ public static class DependencyInjection
                     IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
                     ClockSkew = TimeSpan.Zero
                 };
+                options.Events = new JwtBearerEvents
+                {
+                    OnTokenValidated = async context =>
+                    {
+                        var validator = context.HttpContext.RequestServices
+                            .GetRequiredService<HumanJwtStatusValidator>();
+                        if (context.Principal is null ||
+                            !await validator.IsCurrentAsync(
+                                context.Principal,
+                                context.HttpContext.RequestAborted))
+                        {
+                            context.Fail("Human identity status is unavailable or no longer current.");
+                        }
+                    }
+                };
             })
             .AddCookie(CloudOidcDefaults.SessionScheme, options =>
             {
@@ -202,6 +218,8 @@ public static class DependencyInjection
                     aspNetCore.DisableTransportSecurityRequirement();
                 }
             });
+
+        builder.Services.AddScoped<HumanJwtStatusValidator>();
 
         ConfigureHttpAuthorization(
             builder.Services.AddAuthorizationBuilder(),

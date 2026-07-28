@@ -1,3 +1,4 @@
+using IIoT.Core.Identity.Aggregates.IdentityAccounts;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Messaging;
@@ -11,7 +12,9 @@ public sealed class RefreshHumanIdentityHandler(
     IIdentityAccountStore identityAccountStore,
     IPermissionProvider permissionProvider,
     IJwtTokenGenerator jwtTokenGenerator,
-    IRefreshTokenService refreshTokenService)
+    IRefreshTokenService refreshTokenService,
+    IHumanSessionRevocationService sessionRevocationService,
+    ICloudOidcUserProfileService profileService)
     : ICommandHandler<RefreshHumanIdentityCommand, Result<HumanIdentitySessionResult>>
 {
     public async Task<Result<HumanIdentitySessionResult>> Handle(
@@ -28,14 +31,38 @@ public sealed class RefreshHumanIdentityHandler(
             return Result.Unauthorized(rotationResult.Errors?.ToArray() ?? ["刷新令牌无效或已过期。"]);
         }
 
-        var account = await identityAccountStore.GetByIdAsync(
-            rotationResult.Value!.SubjectId,
-            cancellationToken);
-
-        if (account is null || !account.IsEnabled)
+        IdentityAccount? account;
+        CloudOidcUserProfile? profile;
+        try
         {
-            await refreshTokenService.RevokeSubjectTokensAsync(
-                IIoTClaimTypes.HumanActor,
+            account = await identityAccountStore.GetByIdAsync(
+                rotationResult.Value!.SubjectId,
+                cancellationToken);
+            profile = await profileService.GetByUserIdAsync(
+                rotationResult.Value.SubjectId,
+                cancellationToken);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            await sessionRevocationService.RevokeAllAsync(
+                rotationResult.Value!.SubjectId,
+                "identity-status-unavailable",
+                cancellationToken);
+            return Result.Unauthorized("账号不可用。");
+        }
+
+        if (account is null ||
+            !account.IsEnabled ||
+            profile is null ||
+            !profile.AccountEnabled ||
+            !profile.EmployeeActive ||
+            string.IsNullOrWhiteSpace(profile.StatusVersion) ||
+            !string.Equals(
+                rotationResult.Value.IdentityStatusVersion,
+                profile.StatusVersion,
+                StringComparison.Ordinal))
+        {
+            await sessionRevocationService.RevokeAllAsync(
                 rotationResult.Value.SubjectId,
                 "identity-unavailable",
                 cancellationToken);
@@ -50,7 +77,8 @@ public sealed class RefreshHumanIdentityHandler(
             account.Id,
             account.EmployeeNo,
             roles,
-            permissions);
+            permissions,
+            profile.StatusVersion);
 
         return Result.Success(new HumanIdentitySessionResult(
             accessToken.Token,

@@ -16,8 +16,11 @@ public class JwtTokenGenerator(IOptions<JwtSettings> jwtOptions) : IJwtTokenGene
         Guid userId,
         string employeeNo,
         IEnumerable<string> roles,
-        IEnumerable<string> permissions)
+        IEnumerable<string> permissions,
+        string identityStatusVersion)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(identityStatusVersion);
+
         var claims = new List<Claim>
         {
             new(JwtRegisteredClaimNames.Sub, userId.ToString()),
@@ -25,6 +28,7 @@ public class JwtTokenGenerator(IOptions<JwtSettings> jwtOptions) : IJwtTokenGene
             new(ClaimTypes.NameIdentifier, userId.ToString()),
             new(ClaimTypes.Name, employeeNo),
             new(IIoTClaimTypes.ActorType, IIoTClaimTypes.HumanActor),
+            new(IIoTClaimTypes.IdentityStatusVersion, identityStatusVersion),
             new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
         };
 

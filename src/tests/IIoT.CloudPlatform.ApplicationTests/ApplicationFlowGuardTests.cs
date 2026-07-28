@@ -367,7 +367,20 @@ public sealed class ApplicationFlowGuardTests
             deactivateRepository,
             deactivateIdentityStore,
             deactivateUnitOfWork,
-            new StubRefreshTokenService(),
+            new StubHumanSessionRevocationService(),
+            targetGuard);
+
+        var activateRepository = new InMemoryRepository<Employee>
+        {
+            SingleOrDefaultResult = new Employee(employeeId, "A001", "Admin")
+        };
+        var activateIdentityStore = new RecordingIdentityAccountStore();
+        var activateUnitOfWork = new RecordingUnitOfWork();
+        var activateHandler = new ActivateEmployeeHandler(
+            activateRepository,
+            activateIdentityStore,
+            activateUnitOfWork,
+            new StubHumanSessionRevocationService(),
             targetGuard);
 
         var terminateRepository = new InMemoryRepository<Employee>
@@ -380,7 +393,7 @@ public sealed class ApplicationFlowGuardTests
             terminateRepository,
             terminateIdentityStore,
             terminateUnitOfWork,
-            new StubRefreshTokenService(),
+            new StubHumanSessionRevocationService(),
             targetGuard);
 
         var profileResult = await profileHandler.Handle(
@@ -392,6 +405,9 @@ public sealed class ApplicationFlowGuardTests
         var deactivateResult = await deactivateHandler.Handle(
             new DeactivateEmployeeCommand(employeeId),
             CancellationToken.None);
+        var activateResult = await activateHandler.Handle(
+            new ActivateEmployeeCommand(employeeId),
+            CancellationToken.None);
         var terminateResult = await terminateHandler.Handle(
             new TerminateEmployeeCommand(employeeId),
             CancellationToken.None);
@@ -399,11 +415,13 @@ public sealed class ApplicationFlowGuardTests
         Assert.False(profileResult.IsSuccess);
         Assert.False(accessResult.IsSuccess);
         Assert.False(deactivateResult.IsSuccess);
+        Assert.False(activateResult.IsSuccess);
         Assert.False(terminateResult.IsSuccess);
-        Assert.Equal(4, targetGuard.Calls);
+        Assert.Equal(5, targetGuard.Calls);
         Assert.Equal(0, profileRepository.GetSingleOrDefaultCalls);
         Assert.Equal(0, accessRepository.GetSingleOrDefaultCalls);
         Assert.Equal(0, deactivateRepository.GetSingleOrDefaultCalls);
+        Assert.Equal(0, activateRepository.GetSingleOrDefaultCalls);
         Assert.Equal(0, terminateRepository.GetSingleOrDefaultCalls);
         Assert.Empty(profileRepository.UpdatedEntities);
         Assert.Empty(accessRepository.UpdatedEntities);
@@ -411,6 +429,7 @@ public sealed class ApplicationFlowGuardTests
         Assert.Empty(terminateIdentityStore.DeletedIds);
         Assert.Equal(0, profileUnitOfWork.BeginCalls);
         Assert.Equal(0, deactivateUnitOfWork.BeginCalls);
+        Assert.Equal(0, activateUnitOfWork.BeginCalls);
         Assert.Equal(0, terminateUnitOfWork.BeginCalls);
     }
 
@@ -617,7 +636,7 @@ public sealed class ApplicationFlowGuardTests
             repository,
             identityStore,
             unitOfWork,
-            new StubRefreshTokenService(),
+            new StubHumanSessionRevocationService(),
             new StubAdminTargetGuard());
 
         var result = await handler.Handle(new DeactivateEmployeeCommand(employeeId), CancellationToken.None);
@@ -639,22 +658,140 @@ public sealed class ApplicationFlowGuardTests
         };
         var identityStore = new RecordingIdentityAccountStore();
         var unitOfWork = new RecordingUnitOfWork();
-        var refreshTokenService = new StubRefreshTokenService();
+        var sessionRevocationService = new StubHumanSessionRevocationService();
         var handler = new DeactivateEmployeeHandler(
             repository,
             identityStore,
             unitOfWork,
-            refreshTokenService,
+            sessionRevocationService,
             new StubAdminTargetGuard());
 
         var result = await handler.Handle(new DeactivateEmployeeCommand(employeeId), CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        Assert.Contains(refreshTokenService.Revocations, x =>
-            x.ActorType == IIoT.Services.Contracts.Identity.IIoTClaimTypes.HumanActor
-            && x.SubjectId == employeeId
+        Assert.Contains(sessionRevocationService.Revocations, x =>
+            x.SubjectId == employeeId
             && x.Reason == "employee-deactivated");
         Assert.Equal(1, unitOfWork.CommitCalls);
+    }
+
+    [Fact]
+    public async Task DeactivateEmployeeHandler_ShouldRemainIdempotentAndRevokeResidualSessions()
+    {
+        var employeeId = Guid.NewGuid();
+        var employee = new Employee(employeeId, "E1005", "Inactive User");
+        employee.Deactivate();
+        var sessionRevocationService = new StubHumanSessionRevocationService();
+        var handler = new DeactivateEmployeeHandler(
+            new InMemoryRepository<Employee> { SingleOrDefaultResult = employee },
+            new RecordingIdentityAccountStore(),
+            new RecordingUnitOfWork(),
+            sessionRevocationService,
+            new StubAdminTargetGuard());
+
+        var first = await handler.Handle(
+            new DeactivateEmployeeCommand(employeeId),
+            CancellationToken.None);
+        var second = await handler.Handle(
+            new DeactivateEmployeeCommand(employeeId),
+            CancellationToken.None);
+
+        Assert.True(first.IsSuccess);
+        Assert.True(second.IsSuccess);
+        Assert.False(employee.IsActive);
+        Assert.Equal(2, sessionRevocationService.Revocations.Count);
+    }
+
+    [Fact]
+    public async Task ActivateEmployeeHandler_ShouldRestoreBothStatesAndRequireRelogin()
+    {
+        var employeeId = Guid.NewGuid();
+        var employee = new Employee(employeeId, "E1006", "Activate User");
+        employee.Deactivate();
+        var repository = new InMemoryRepository<Employee>
+        {
+            SingleOrDefaultResult = employee
+        };
+        var identityStore = new RecordingIdentityAccountStore();
+        var unitOfWork = new RecordingUnitOfWork();
+        var sessionRevocationService = new StubHumanSessionRevocationService();
+        var handler = new ActivateEmployeeHandler(
+            repository,
+            identityStore,
+            unitOfWork,
+            sessionRevocationService,
+            new StubAdminTargetGuard());
+
+        var result = await handler.Handle(
+            new ActivateEmployeeCommand(employeeId),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(employee.IsActive);
+        Assert.Equal(employeeId, identityStore.LastSetEnabledId);
+        Assert.True(identityStore.LastSetEnabledValue);
+        Assert.Contains(sessionRevocationService.Revocations, revocation =>
+            revocation.SubjectId == employeeId &&
+            revocation.Reason == "employee-activated-relogin-required");
+        Assert.Equal(1, unitOfWork.CommitCalls);
+    }
+
+    [Fact]
+    public async Task ActivateEmployeeHandler_ShouldRollbackWhenIdentityAccountDisappears()
+    {
+        var employeeId = Guid.NewGuid();
+        var employee = new Employee(employeeId, "E1007", "Missing Identity");
+        employee.Deactivate();
+        var unitOfWork = new RecordingUnitOfWork();
+        var sessionRevocationService = new StubHumanSessionRevocationService();
+        var handler = new ActivateEmployeeHandler(
+            new InMemoryRepository<Employee> { SingleOrDefaultResult = employee },
+            new RecordingIdentityAccountStore
+            {
+                SetEnabledResult = Result.Success(false)
+            },
+            unitOfWork,
+            sessionRevocationService,
+            new StubAdminTargetGuard());
+
+        var result = await handler.Handle(
+            new ActivateEmployeeCommand(employeeId),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(1, unitOfWork.RollbackCalls);
+        Assert.Equal(0, unitOfWork.CommitCalls);
+        Assert.Empty(sessionRevocationService.Revocations);
+    }
+
+    [Fact]
+    public async Task ActivateEmployeeHandler_ShouldRemainIdempotentAndRevokeAnyResidualSessions()
+    {
+        var employeeId = Guid.NewGuid();
+        var employee = new Employee(employeeId, "E1008", "Active User");
+        var repository = new InMemoryRepository<Employee>
+        {
+            SingleOrDefaultResult = employee
+        };
+        var sessionRevocationService = new StubHumanSessionRevocationService();
+        var handler = new ActivateEmployeeHandler(
+            repository,
+            new RecordingIdentityAccountStore(),
+            new RecordingUnitOfWork(),
+            sessionRevocationService,
+            new StubAdminTargetGuard());
+
+        var first = await handler.Handle(
+            new ActivateEmployeeCommand(employeeId),
+            CancellationToken.None);
+        var second = await handler.Handle(
+            new ActivateEmployeeCommand(employeeId),
+            CancellationToken.None);
+
+        Assert.True(first.IsSuccess);
+        Assert.True(second.IsSuccess);
+        Assert.True(employee.IsActive);
+        Assert.Equal(2, sessionRevocationService.Revocations.Count);
     }
 
     [Fact]
@@ -675,7 +812,7 @@ public sealed class ApplicationFlowGuardTests
             repository,
             identityStore,
             unitOfWork,
-            new StubRefreshTokenService(),
+            new StubHumanSessionRevocationService(),
             new StubAdminTargetGuard());
 
         var result = await handler.Handle(new TerminateEmployeeCommand(employeeId), CancellationToken.None);
@@ -697,20 +834,19 @@ public sealed class ApplicationFlowGuardTests
         };
         var identityStore = new RecordingIdentityAccountStore();
         var unitOfWork = new RecordingUnitOfWork();
-        var refreshTokenService = new StubRefreshTokenService();
+        var sessionRevocationService = new StubHumanSessionRevocationService();
         var handler = new TerminateEmployeeHandler(
             repository,
             identityStore,
             unitOfWork,
-            refreshTokenService,
+            sessionRevocationService,
             new StubAdminTargetGuard());
 
         var result = await handler.Handle(new TerminateEmployeeCommand(employeeId), CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        Assert.Contains(refreshTokenService.Revocations, x =>
-            x.ActorType == IIoT.Services.Contracts.Identity.IIoTClaimTypes.HumanActor
-            && x.SubjectId == employeeId
+        Assert.Contains(sessionRevocationService.Revocations, x =>
+            x.SubjectId == employeeId
             && x.Reason == "employee-terminated");
         Assert.Equal(1, unitOfWork.CommitCalls);
     }

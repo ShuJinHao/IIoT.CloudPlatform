@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using IIoT.SharedKernel.Architecture;
 
 namespace IIoT.Services.Contracts.Identity;
@@ -33,11 +35,15 @@ public static class CloudIdentityStatusVersions
         Guid cloudUserId,
         bool accountEnabled,
         bool employeeActive,
-        uint employeeRowVersion)
+        uint employeeRowVersion,
+        string? accountSecurityStamp)
     {
-        var accountState = accountEnabled ? "enabled" : "disabled";
-        var employeeState = employeeActive ? "active" : "inactive";
-        return FormattableString.Invariant(
-            $"v1:{cloudUserId:N}:{accountState}:{employeeState}:{employeeRowVersion}");
+        var normalizedSecurityStamp = string.IsNullOrWhiteSpace(accountSecurityStamp)
+            ? "legacy-uninitialized"
+            : accountSecurityStamp;
+        var source = FormattableString.Invariant(
+            $"{cloudUserId:N}|{accountEnabled}|{employeeActive}|{employeeRowVersion}|{normalizedSecurityStamp}");
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(source));
+        return $"v2:{Convert.ToHexString(digest)}";
     }
 }

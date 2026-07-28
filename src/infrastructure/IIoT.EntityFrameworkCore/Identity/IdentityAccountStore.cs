@@ -55,12 +55,8 @@ public sealed class IdentityAccountStore(
             return Result.Success(false);
         }
 
-        if (user.IsEnabled == isEnabled)
-        {
-            return Result.Success(true);
-        }
-
         user.IsEnabled = isEnabled;
+        user.SecurityStamp = Guid.NewGuid().ToString("N");
         var result = await userManager.UpdateAsync(user);
         return result.Succeeded
             ? Result.Success(true)

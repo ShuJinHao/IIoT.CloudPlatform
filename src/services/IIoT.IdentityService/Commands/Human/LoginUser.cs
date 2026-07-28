@@ -12,7 +12,8 @@ public class LoginUserHandler(
     IIdentityPasswordService identityPasswordService,
     IPermissionProvider permissionProvider,
     IJwtTokenGenerator jwtTokenGenerator,
-    IRefreshTokenService refreshTokenService)
+    IRefreshTokenService refreshTokenService,
+    ICloudOidcUserProfileService profileService)
     : ICommandHandler<LoginUserCommand, Result<HumanIdentitySessionResult>>
 {
     private const string InvalidLoginMessage = "账号不存在或密码错误";
@@ -45,13 +46,36 @@ public class LoginUserHandler(
             return Result.Failure(InvalidLoginMessage);
         }
 
+        CloudOidcUserProfile? profile;
+        try
+        {
+            profile = await profileService.GetByUserIdAsync(account.Id, cancellationToken);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Result.Failure(InvalidLoginMessage);
+        }
+
+        if (profile is null ||
+            !profile.AccountEnabled ||
+            !profile.EmployeeActive ||
+            string.IsNullOrWhiteSpace(profile.StatusVersion))
+        {
+            return Result.Failure(InvalidLoginMessage);
+        }
+
         var roles = await identityAccountStore.GetRolesAsync(account.Id, cancellationToken);
 
         var permissions = await permissionProvider.GetPermissionsAsync(account.Id, cancellationToken);
-        var accessToken = jwtTokenGenerator.GenerateHumanToken(account.Id, request.EmployeeNo, roles, permissions);
-        var refreshToken = await refreshTokenService.IssueAsync(
-            IIoTClaimTypes.HumanActor,
+        var accessToken = jwtTokenGenerator.GenerateHumanToken(
             account.Id,
+            request.EmployeeNo,
+            roles,
+            permissions,
+            profile.StatusVersion);
+        var refreshToken = await refreshTokenService.IssueHumanAsync(
+            account.Id,
+            profile.StatusVersion,
             cancellationToken);
 
         return Result.Success(new HumanIdentitySessionResult(

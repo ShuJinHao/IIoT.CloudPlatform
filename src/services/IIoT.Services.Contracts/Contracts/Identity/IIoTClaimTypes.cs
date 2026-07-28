@@ -12,6 +12,7 @@ public static class IIoTClaimTypes
     public const string DelegatedUserId = "delegated_user_id";
     public const string DelegatedDeviceId = "delegated_device_id";
     public const string Permission = "Permission";
+    public const string IdentityStatusVersion = "status_version";
     public const string EdgeDeviceActor = "edge-device";
     public const string HumanActor = "human-user";
     public const string AiServiceActor = "ai-service-account";

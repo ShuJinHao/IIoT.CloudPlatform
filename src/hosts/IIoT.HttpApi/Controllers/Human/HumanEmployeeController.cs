@@ -74,6 +74,14 @@ public class HumanEmployeeController : ApiControllerBase
         return ReturnResult(await Sender.Send(new DeactivateEmployeeCommand(id), cancellationToken));
     }
 
+    [HttpPut("{id}/activate")]
+    public async Task<IActionResult> Activate(
+        [FromRoute] Guid id,
+        CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(new ActivateEmployeeCommand(id), cancellationToken));
+    }
+
     [HttpDelete("{id}")]
     public async Task<IActionResult> Terminate(
         [FromRoute] Guid id,
