@@ -203,16 +203,9 @@ public static class DependencyInjection
                 }
             });
 
-        builder.Services.AddAuthorizationBuilder()
-            .SetDefaultPolicy(authenticatedUserPolicy)
-            .SetFallbackPolicy(authenticatedUserPolicy)
-            .AddPolicy(HttpApiPolicies.RequireEdgeDeviceToken, policy =>
-                policy.RequireAuthenticatedUser()
-                    .RequireClaim(IIoTClaimTypes.ActorType, IIoTClaimTypes.EdgeDeviceActor)
-                    .RequireClaim(IIoTClaimTypes.DeviceId))
-            .AddPolicy(HttpApiPolicies.RequireAiReadToken, policy =>
-                policy.RequireAuthenticatedUser()
-                    .RequireClaim(IIoTClaimTypes.ActorType, IIoTClaimTypes.AiServiceActor));
+        ConfigureHttpAuthorization(
+            builder.Services.AddAuthorizationBuilder(),
+            authenticatedUserPolicy);
 
         builder.Services.Configure<ForwardedHeadersOptions>(options =>
         {
@@ -308,6 +301,25 @@ public static class DependencyInjection
         builder.Services.AddProblemDetails();
         builder.Services.AddHealthChecks()
             .AddCheck<PostgresReadinessHealthCheck>("postgres-ready");
+    }
+
+    internal static void ConfigureHttpAuthorization(
+        AuthorizationBuilder authorizationBuilder,
+        AuthorizationPolicy authenticatedUserPolicy)
+    {
+        authorizationBuilder
+            .SetDefaultPolicy(authenticatedUserPolicy)
+            .SetFallbackPolicy(authenticatedUserPolicy)
+            .AddPolicy(HttpApiPolicies.RequireHumanUserToken, policy =>
+                policy.RequireAuthenticatedUser()
+                    .RequireClaim(IIoTClaimTypes.ActorType, IIoTClaimTypes.HumanActor))
+            .AddPolicy(HttpApiPolicies.RequireEdgeDeviceToken, policy =>
+                policy.RequireAuthenticatedUser()
+                    .RequireClaim(IIoTClaimTypes.ActorType, IIoTClaimTypes.EdgeDeviceActor)
+                    .RequireClaim(IIoTClaimTypes.DeviceId))
+            .AddPolicy(HttpApiPolicies.RequireAiReadToken, policy =>
+                policy.RequireAuthenticatedUser()
+                    .RequireClaim(IIoTClaimTypes.ActorType, IIoTClaimTypes.AiServiceActor));
     }
 
     private static void ConfigureOpenIddictCertificates(
