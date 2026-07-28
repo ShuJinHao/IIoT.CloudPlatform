@@ -94,8 +94,10 @@ export function useDevices() {
   );
   const canDeleteDevice = computed(() =>
     authStore.isAdmin
-    && authStore.permissions.includes(Permissions.Device.Delete)
-    && authStore.permissions.includes(Permissions.Device.CascadeDelete),
+    && authStore.hasAllPermissions([
+      Permissions.Device.Delete,
+      Permissions.Device.CascadeDelete,
+    ]),
   );
   const deletionImpactRows = computed<DeviceDeletionImpactRow[]>(() => {
     const impact = confirmDialog.impact;
@@ -112,6 +114,7 @@ export function useDevices() {
       { label: '上传幂等登记', value: impact.uploadReceiveRegistrations },
       { label: '人员设备授权', value: impact.employeeDeviceAccesses },
       { label: '设备 refresh token', value: impact.refreshTokenSessions },
+      { label: 'PLC 运行状态', value: impact.edgeHostPlcRuntimeStates },
     ];
   });
   const confirmDisabled = computed(() =>
