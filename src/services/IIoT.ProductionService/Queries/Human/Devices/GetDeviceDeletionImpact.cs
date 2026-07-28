@@ -1,6 +1,7 @@
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Specifications.Devices;
 using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Attributes;
@@ -12,8 +13,16 @@ namespace IIoT.ProductionService.Queries.Devices;
 
 [AuthorizeRequirement(DevicePermissions.Delete)]
 [AuthorizeRequirement(DevicePermissions.CascadeDelete)]
+[AdminOnly]
 public sealed record GetDeviceDeletionImpactQuery(Guid DeviceId)
-    : IHumanQuery<Result<DeviceDeletionImpactDto>>;
+    : IHumanQuery<Result<DeviceDeletionImpactDto>>, IAdminOnlyAuditRequest
+{
+    public string AdminAuditOperationType => "Device.DeletionImpact.Read";
+
+    public string AdminAuditTargetType => "Device";
+
+    public string AdminAuditTargetIdOrKey => DeviceId.ToString();
+}
 
 public sealed record DeviceDeletionImpactDto(
     Guid DeviceId,

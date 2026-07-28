@@ -1,17 +1,21 @@
 using IIoT.Core.Identity.Aggregates.IdentityAccounts;
+using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.EmployeeService.Commands.Employees;
 using IIoT.IdentityService.Commands;
 using IIoT.IdentityService.Queries;
 using IIoT.ProductionService.Commands.Bootstrap.Devices;
 using IIoT.ProductionService.Commands.ClientReleases;
 using IIoT.ProductionService.Commands.Devices;
+using IIoT.ProductionService.Queries.Devices;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.CrossCutting.Authorization;
 using IIoT.Services.CrossCutting.Behaviors;
 using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.CrossCutting.Exceptions;
 using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts.RecordQueries;
 using IIoT.SharedKernel.Result;
 using Xunit;
 
@@ -949,6 +953,238 @@ public sealed class AuthorizationAndIdentityBehaviorTests
     }
 
     [Fact]
+    public void GetDeviceDeletionImpactQuery_ShouldRequireAdminOnlyAndDeletePermissions_AndExposeAuditMetadata()
+    {
+        var deviceId = Guid.NewGuid();
+        var query = new GetDeviceDeletionImpactQuery(deviceId);
+        var permissions = typeof(GetDeviceDeletionImpactQuery)
+            .GetCustomAttributes(typeof(AuthorizeRequirementAttribute), inherit: false)
+            .Cast<AuthorizeRequirementAttribute>()
+            .Select(attribute => attribute.Permission)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.Equal(2, permissions.Count);
+        Assert.Contains(DevicePermissions.Delete, permissions);
+        Assert.Contains(DevicePermissions.CascadeDelete, permissions);
+        Assert.Single(typeof(GetDeviceDeletionImpactQuery)
+            .GetCustomAttributes(typeof(AdminOnlyAttribute), inherit: false));
+
+        var auditRequest = Assert.IsAssignableFrom<IAdminOnlyAuditRequest>(query);
+        Assert.Equal("Device.DeletionImpact.Read", auditRequest.AdminAuditOperationType);
+        Assert.Equal("Device", auditRequest.AdminAuditTargetType);
+        Assert.Equal(deviceId.ToString(), auditRequest.AdminAuditTargetIdOrKey);
+    }
+
+    [Fact]
+    public async Task NonAdminWithDeleteClaims_ShouldNotReachDeviceImpactHandler_AndShouldBeAudited()
+    {
+        var handlerCalled = false;
+        var deviceRepository = new InMemoryRepository<Device>();
+        var dependencyQueryService = new RecordingDeviceDeletionDependencyQueryService();
+        var deviceAccessService = new StubCurrentUserDeviceAccessService();
+        var auditTrail = new RecordingAuditTrailService();
+        var handler = new GetDeviceDeletionImpactHandler(
+            deviceRepository,
+            dependencyQueryService,
+            deviceAccessService);
+        var query = new GetDeviceDeletionImpactQuery(Guid.NewGuid());
+        var behavior = new AdminOnlyBehavior<
+            GetDeviceDeletionImpactQuery,
+            Result<DeviceDeletionImpactDto>>(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "device-admin",
+                Roles = [SystemRoles.DeviceAdmin],
+                ActorType = IIoTClaimTypes.HumanActor,
+                Permissions =
+                [
+                    DevicePermissions.Delete,
+                    DevicePermissions.CascadeDelete
+                ],
+                IsAuthenticated = true
+            },
+            auditTrail);
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            behavior.Handle(
+                query,
+                cancellationToken =>
+                {
+                    handlerCalled = true;
+                    return handler.Handle(query, cancellationToken);
+                },
+                CancellationToken.None));
+
+        Assert.False(handlerCalled);
+        Assert.Equal(0, deviceRepository.GetSingleOrDefaultCalls);
+        Assert.Equal(0, deviceAccessService.EnsureCanAccessDeviceCalls);
+        Assert.Equal(0, dependencyQueryService.GetImpactCalls);
+
+        var entry = Assert.Single(auditTrail.Entries);
+        Assert.Equal("Device.DeletionImpact.Read", entry.OperationType);
+        Assert.Equal("Device", entry.TargetType);
+        Assert.Equal(query.DeviceId.ToString(), entry.TargetIdOrKey);
+        Assert.False(entry.Succeeded);
+        Assert.Contains("\"action\":\"AdminOnlyDenied\"", entry.Summary, StringComparison.Ordinal);
+        Assert.Contains("\"reasonCode\":\"AdminRequired\"", entry.Summary, StringComparison.Ordinal);
+        Assert.Contains(
+            "\"requestType\":\"GetDeviceDeletionImpactQuery\"",
+            entry.Summary,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HumanAdminWithoutRawPermissionClaims_ShouldPassDeviceImpactAuthorizationPipelines()
+    {
+        var deviceId = Guid.NewGuid();
+        var query = new GetDeviceDeletionImpactQuery(deviceId);
+        var currentUser = new TestCurrentUser
+        {
+            Id = Guid.NewGuid().ToString(),
+            UserName = "admin-without-personal-claims",
+            Roles = [SystemRoles.Admin],
+            ActorType = IIoTClaimTypes.HumanActor,
+            Permissions = [],
+            IsAuthenticated = true
+        };
+        var permissionProvider = new RecordingPermissionProvider
+        {
+            Permissions = []
+        };
+        var adminOnlyBehavior = new AdminOnlyBehavior<
+            GetDeviceDeletionImpactQuery,
+            Result<DeviceDeletionImpactDto>>(
+            currentUser,
+            new RecordingAuditTrailService());
+        var authorizationBehavior = new AuthorizationBehavior<
+            GetDeviceDeletionImpactQuery,
+            Result<DeviceDeletionImpactDto>>(
+            currentUser,
+            permissionProvider);
+        var nextCalled = false;
+        var expected = new DeviceDeletionImpactDto(
+            deviceId,
+            "device-001",
+            "client-001",
+            Guid.NewGuid(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0);
+
+        var result = await adminOnlyBehavior.Handle(
+            query,
+            cancellationToken => authorizationBehavior.Handle(
+                query,
+                _ =>
+                {
+                    nextCalled = true;
+                    return Task.FromResult(Result.Success(expected));
+                },
+                cancellationToken),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(expected, result.Value);
+        Assert.True(nextCalled);
+        Assert.Null(permissionProvider.LastUserId);
+    }
+
+    [Theory]
+    [InlineData(IIoTClaimTypes.EdgeDeviceActor)]
+    [InlineData(IIoTClaimTypes.AiServiceActor)]
+    [InlineData(IIoTClaimTypes.EdgeReleasePublisherActor)]
+    public async Task DeviceImpactAdminOnly_ShouldRejectMachineAdminClaims(string actorType)
+    {
+        var nextCalled = false;
+        var auditTrail = new RecordingAuditTrailService();
+        var query = new GetDeviceDeletionImpactQuery(Guid.NewGuid());
+        var behavior = new AdminOnlyBehavior<
+            GetDeviceDeletionImpactQuery,
+            Result<DeviceDeletionImpactDto>>(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "machine-with-admin-claim",
+                Roles = [SystemRoles.Admin],
+                ActorType = actorType,
+                Permissions =
+                [
+                    DevicePermissions.Delete,
+                    DevicePermissions.CascadeDelete
+                ],
+                IsAuthenticated = true
+            },
+            auditTrail);
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            behavior.Handle(
+                query,
+                _ =>
+                {
+                    nextCalled = true;
+                    return Task.FromResult<Result<DeviceDeletionImpactDto>>(
+                        Result.Failure("unexpected"));
+                },
+                CancellationToken.None));
+
+        Assert.False(nextCalled);
+        Assert.Contains(auditTrail.Entries, entry =>
+            entry.OperationType == "Device.DeletionImpact.Read"
+            && !entry.Succeeded
+            && entry.Summary.Contains("\"reasonCode\":\"AdminRequired\"", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(" Admin ")]
+    [InlineData("ADMIN")]
+    public async Task DeviceImpactAdminOnly_ShouldRejectAdminLikeRoleClaim(string roleName)
+    {
+        var nextCalled = false;
+        var query = new GetDeviceDeletionImpactQuery(Guid.NewGuid());
+        var behavior = new AdminOnlyBehavior<
+            GetDeviceDeletionImpactQuery,
+            Result<DeviceDeletionImpactDto>>(
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserName = "admin-like-user",
+                Roles = [roleName],
+                ActorType = IIoTClaimTypes.HumanActor,
+                Permissions =
+                [
+                    DevicePermissions.Delete,
+                    DevicePermissions.CascadeDelete
+                ],
+                IsAuthenticated = true
+            },
+            new RecordingAuditTrailService());
+
+        await Assert.ThrowsAsync<ForbiddenException>(() =>
+            behavior.Handle(
+                query,
+                _ =>
+                {
+                    nextCalled = true;
+                    return Task.FromResult<Result<DeviceDeletionImpactDto>>(
+                        Result.Failure("unexpected"));
+                },
+                CancellationToken.None));
+
+        Assert.False(nextCalled);
+    }
+
+    [Fact]
     public void SensitivePersonnelRequests_ShouldRequireAdminOnly()
     {
         Type[] requestTypes =
@@ -1538,6 +1774,36 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         public Task<IList<string>> GetPermissionsAsync(Guid userId, CancellationToken cancellationToken = default)
         {
             return Task.FromResult<IList<string>>([]);
+        }
+    }
+
+    private sealed class RecordingDeviceDeletionDependencyQueryService
+        : IDeviceDeletionDependencyQueryService
+    {
+        public int GetImpactCalls { get; private set; }
+
+        public Task<DeviceDeletionDependencies> GetDependenciesAsync(
+            Guid deviceId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new DeviceDeletionDependencies(false, false, false, false));
+        }
+
+        public Task<DeviceDeletionImpact> GetImpactAsync(
+            Guid deviceId,
+            CancellationToken cancellationToken = default)
+        {
+            GetImpactCalls++;
+            return Task.FromResult(new DeviceDeletionImpact(0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
+        }
+
+        public Task<DeviceCascadeDeletionResult> DeleteCascadeAsync(
+            Guid deviceId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new DeviceCascadeDeletionResult(
+                true,
+                new DeviceDeletionImpact(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)));
         }
     }
 
