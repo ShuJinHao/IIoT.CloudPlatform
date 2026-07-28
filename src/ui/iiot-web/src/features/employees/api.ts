@@ -39,6 +39,10 @@ export interface UpdateAccessPayload {
   deviceIds: string[];
 }
 
+export interface UpdateEmployeeRolePayload {
+  roleName: string | null;
+}
+
 const basePath = '/human/employees';
 
 export const getEmployeePagedListApi = (params: {
@@ -67,6 +71,9 @@ export const updateEmployeeProfileApi = (id: string, payload: UpdateProfilePaylo
 
 export const updateEmployeeAccessApi = (id: string, payload: UpdateAccessPayload) =>
   http.put<boolean>(`${basePath}/${id}/access`, payload);
+
+export const updateEmployeeRoleApi = (id: string, payload: UpdateEmployeeRolePayload) =>
+  http.put<boolean>(`${basePath}/${id}/role`, payload);
 
 export const deactivateEmployeeApi = (id: string) =>
   http.put<boolean>(`${basePath}/${id}/deactivate`);

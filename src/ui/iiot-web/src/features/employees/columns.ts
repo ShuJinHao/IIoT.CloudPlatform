@@ -7,6 +7,7 @@ import type { EmployeeListItemDto } from './api';
 interface EmployeeColumnOptions {
   canUpdateEmployee: () => boolean;
   canUpdateAccess: () => boolean;
+  canManageRole: (employee: EmployeeListItemDto) => boolean;
   canDeactivateEmployee: () => boolean;
   canResetPassword: () => boolean;
   canTerminateEmployee: () => boolean;
@@ -15,6 +16,7 @@ interface EmployeeColumnOptions {
   onEdit: (employee: EmployeeListItemDto) => void;
   onResetPassword: (employee: EmployeeListItemDto) => void;
   onAccess: (id: string) => void;
+  onRole: (employee: EmployeeListItemDto) => void;
   onPersonalPermissions: (employee: EmployeeListItemDto) => void;
   onDeactivate: (employee: EmployeeListItemDto) => void;
   onActivate: (employee: EmployeeListItemDto) => void;
@@ -64,7 +66,7 @@ export function createEmployeeColumns(
     {
       title: '操作',
       key: 'actions',
-      width: 320,
+      width: 360,
       align: 'right',
       render(row) {
         return h('div', { class: 'row-actions' }, [
@@ -77,6 +79,9 @@ export function createEmployeeColumns(
             : null,
           options.canUpdateAccess()
             ? h(UiButton, { size: 'tiny', type: 'primary', secondary: true, onClick: () => options.onAccess(row.id) }, { default: () => '管辖权' })
+            : null,
+          options.canManageRole(row)
+            ? h(UiButton, { size: 'tiny', type: 'info', secondary: true, onClick: () => options.onRole(row) }, { default: () => '角色' })
             : null,
           options.canManagePersonalPermissions()
             ? h(UiButton, { size: 'tiny', type: 'info', secondary: true, onClick: () => options.onPersonalPermissions(row) }, { default: () => '特批权限' })
