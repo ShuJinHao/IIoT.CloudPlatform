@@ -39,7 +39,9 @@ const ACCESS_NOT_READY_MESSAGE = '设备管辖权尚未加载完成，请稍后�
 const ACCESS_SUBMITTING_MESSAGE = '设备管辖权正在保存，请稍后重试';
 const STATUS_PERMISSION_EXPIRED_MESSAGE = '人员状态操作权限已失效，请重新登录后重试';
 const STATUS_SUBMITTING_MESSAGE = '人员状态操作正在处理中，请稍后重试';
-const STATUS_REFRESH_FAILED_MESSAGE = '员工状态已更新，但列表刷新失败，请重新加载页面确认最新状态';
+const EMPLOYEE_REFRESH_FAILED_MESSAGE = '员工操作已完成，但列表刷新失败，请重新加载页面确认最新状态';
+
+type EmployeePageResponse = Awaited<ReturnType<typeof getEmployeePagedListApi>>;
 
 const emptyMetaData = (): PagedMetaData => ({
   totalCount: 0,
@@ -84,15 +86,32 @@ export function useEmployees() {
     confirmType: 'warning',
     onConfirm: async () => {},
   });
+  let queuedEmployeePage: {
+    page: number;
+    pageSize: number;
+    keyword?: string;
+    response: EmployeePageResponse;
+  } | null = null;
   const listPage = useListPage<EmployeeListItemDto, { keyword: string }>({
     initialFilter: { keyword: '' },
     initialPageSize: PAGE_SIZE,
     immediate: false,
     fetcher: async ({ page, pageSize, filter }) => {
-      const response = await getEmployeePagedListApi({
-        PaginationParams: { PageNumber: page, PageSize: pageSize },
-        Keyword: filter.keyword || undefined,
-      });
+      const requestKeyword = filter.keyword || undefined;
+      const queuedPage = queuedEmployeePage;
+      const useQueuedPage = queuedPage
+        && queuedPage.page === page
+        && queuedPage.pageSize === pageSize
+        && queuedPage.keyword === requestKeyword;
+      if (queuedPage) {
+        queuedEmployeePage = null;
+      }
+      const response = useQueuedPage
+        ? queuedPage.response
+        : await getEmployeePagedListApi({
+            PaginationParams: { PageNumber: page, PageSize: pageSize },
+            Keyword: requestKeyword,
+          });
       metaData.value = response.metaData;
       return { items: response.items, total: response.metaData.totalCount };
     },
@@ -175,10 +194,34 @@ export function useEmployees() {
   }
 
   async function refreshAfterMutation() {
-    await fetchList();
-    if (listPage.items.value.length === 0 && listPage.page.value > 1) {
-      listPage.page.value -= 1;
-      await fetchList();
+    const pageSize = listPage.pageSize.value;
+    const keyword = listPage.filter.keyword || undefined;
+    let targetPage = listPage.page.value;
+
+    try {
+      let response = await getEmployeePagedListApi({
+        PaginationParams: { PageNumber: targetPage, PageSize: pageSize },
+        Keyword: keyword,
+      });
+      if (response.items.length === 0 && targetPage > 1) {
+        targetPage -= 1;
+        response = await getEmployeePagedListApi({
+          PaginationParams: { PageNumber: targetPage, PageSize: pageSize },
+          Keyword: keyword,
+        });
+      }
+
+      metaData.value = response.metaData;
+      listPage.items.value = response.items;
+      listPage.total.value = response.metaData.totalCount;
+      listPage.error.value = null;
+      if (targetPage !== listPage.page.value) {
+        queuedEmployeePage = { page: targetPage, pageSize, keyword, response };
+        listPage.page.value = targetPage;
+      }
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -509,9 +552,9 @@ export function useEmployees() {
       } else {
         await activateEmployeeApi(employee.id);
       }
-      await refreshAfterMutation();
-      if (listPage.error.value) {
-        notifyWarning(STATUS_REFRESH_FAILED_MESSAGE);
+      const refreshed = await refreshAfterMutation();
+      if (!refreshed) {
+        notifyWarning(EMPLOYEE_REFRESH_FAILED_MESSAGE);
         if (generation === confirmDialogGeneration) {
           confirmDialog.show = false;
         }
@@ -587,7 +630,14 @@ export function useEmployees() {
         confirmSubmitting.value = true;
         try {
           await terminateEmployeeApi(employee.id);
-          await refreshAfterMutation();
+          const refreshed = await refreshAfterMutation();
+          if (!refreshed) {
+            notifyWarning(EMPLOYEE_REFRESH_FAILED_MESSAGE);
+            if (generation === confirmDialogGeneration) {
+              confirmDialog.show = false;
+            }
+            return;
+          }
           notifySuccess('员工离职销户成功');
           if (generation === confirmDialogGeneration) {
             confirmDialog.show = false;

@@ -441,24 +441,97 @@ describe('employees feature guards', () => {
     expect(feedbackMocks.notifySuccess).not.toHaveBeenCalled();
   });
 
-  it('reports a completed status write separately when the list refresh fails', async () => {
+  it('preserves a page-two refresh failure before reporting a completed status write', async () => {
     authMock.state!.permissions = [Permissions.Employee.Deactivate];
-    employeeApiMocks.getEmployeePagedListApi.mockRejectedValue(
+    const state = useEmployees();
+    state.currentPage.value = 2;
+    await vi.waitFor(() => {
+      expect(employeeApiMocks.getEmployeePagedListApi).toHaveBeenCalledTimes(1);
+    });
+    employeeApiMocks.getEmployeePagedListApi.mockClear();
+    employeeApiMocks.getEmployeePagedListApi.mockRejectedValueOnce(
       new Error('ProblemDetails handled by http client'),
     );
-    const state = useEmployees();
 
     state.handleActivate(inactiveEmployee);
     await state.confirmDialog.onConfirm();
+    await nextTick();
 
     expect(employeeApiMocks.activateEmployeeApi).toHaveBeenCalledWith(inactiveEmployee.id);
     expect(employeeApiMocks.getEmployeePagedListApi).toHaveBeenCalledTimes(1);
     expect(feedbackMocks.notifySuccess).not.toHaveBeenCalled();
     expect(feedbackMocks.notifyWarning).toHaveBeenCalledWith(
-      '员工状态已更新，但列表刷新失败，请重新加载页面确认最新状态',
+      '员工操作已完成，但列表刷新失败，请重新加载页面确认最新状态',
+    );
+    expect(state.currentPage.value).toBe(2);
+    expect(state.confirmDialog.show).toBe(false);
+    expect(state.confirmSubmitting.value).toBe(false);
+  });
+
+  it('does not report full termination success when the list refresh fails', async () => {
+    authMock.state!.isAdmin = true;
+    employeeApiMocks.getEmployeePagedListApi.mockRejectedValue(
+      new Error('ProblemDetails handled by http client'),
+    );
+    const state = useEmployees();
+
+    state.handleTerminate(employee);
+    await state.confirmDialog.onConfirm();
+
+    expect(employeeApiMocks.terminateEmployeeApi).toHaveBeenCalledWith(employee.id);
+    expect(employeeApiMocks.getEmployeePagedListApi).toHaveBeenCalledTimes(1);
+    expect(feedbackMocks.notifySuccess).not.toHaveBeenCalled();
+    expect(feedbackMocks.notifyWarning).toHaveBeenCalledWith(
+      '员工操作已完成，但列表刷新失败，请重新加载页面确认最新状态',
     );
     expect(state.confirmDialog.show).toBe(false);
     expect(state.confirmSubmitting.value).toBe(false);
+  });
+
+  it('loads the previous page once when termination empties the current page', async () => {
+    authMock.state!.isAdmin = true;
+    const state = useEmployees();
+    state.currentPage.value = 2;
+    await vi.waitFor(() => {
+      expect(employeeApiMocks.getEmployeePagedListApi).toHaveBeenCalledTimes(1);
+    });
+    employeeApiMocks.getEmployeePagedListApi.mockReset();
+    employeeApiMocks.getEmployeePagedListApi
+      .mockResolvedValueOnce({
+        items: [],
+        metaData: {
+          totalCount: 10,
+          pageSize: 10,
+          currentPage: 2,
+          totalPages: 1,
+        },
+      })
+      .mockResolvedValueOnce({
+        items: [employee],
+        metaData: {
+          totalCount: 10,
+          pageSize: 10,
+          currentPage: 1,
+          totalPages: 1,
+        },
+      });
+
+    state.handleTerminate(employee);
+    await state.confirmDialog.onConfirm();
+    await nextTick();
+
+    expect(employeeApiMocks.getEmployeePagedListApi).toHaveBeenCalledTimes(2);
+    expect(employeeApiMocks.getEmployeePagedListApi).toHaveBeenNthCalledWith(1, {
+      PaginationParams: { PageNumber: 2, PageSize: 10 },
+      Keyword: undefined,
+    });
+    expect(employeeApiMocks.getEmployeePagedListApi).toHaveBeenNthCalledWith(2, {
+      PaginationParams: { PageNumber: 1, PageSize: 10 },
+      Keyword: undefined,
+    });
+    expect(state.currentPage.value).toBe(1);
+    expect(state.employees.value).toEqual([employee]);
+    expect(feedbackMocks.notifySuccess).toHaveBeenCalledWith('员工离职销户成功');
   });
 
   it('prefetches minimal device candidates only for Employee.UpdateAccess holders', async () => {
