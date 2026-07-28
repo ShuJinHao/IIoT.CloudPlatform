@@ -28,6 +28,16 @@ public class HumanDeviceController : ApiControllerBase
         return ReturnResult(await Sender.Send(new GetDeviceSelectListQuery(), cancellationToken));
     }
 
+    [HttpGet("employee-access-candidates")]
+    [Authorize(Policy = HttpApiPolicies.RequireHumanUserToken)]
+    public async Task<IActionResult> GetEmployeeAccessCandidates(CancellationToken cancellationToken)
+    {
+        return ReturnResult(
+            await Sender.Send(
+                new GetEmployeeAccessDeviceCandidatesQuery(),
+                cancellationToken));
+    }
+
     [HttpGet("all")]
     public async Task<IActionResult> GetAll(CancellationToken cancellationToken)
     {
