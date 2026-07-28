@@ -1716,11 +1716,14 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         {
             NextRotateSubjectId = subjectId
         };
+        var sessionRevocationService = new StubHumanSessionRevocationService();
         var handler = new RefreshHumanIdentityHandler(
             identityStore,
             new StubPermissionProvider(),
             new StubJwtTokenGenerator(),
-            refreshTokenService);
+            refreshTokenService,
+            sessionRevocationService,
+            new StubCloudOidcUserProfileService());
 
         var result = await handler.Handle(
             new RefreshHumanIdentityCommand("refresh-human"),
@@ -1728,10 +1731,203 @@ public sealed class AuthorizationAndIdentityBehaviorTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal(ResultStatus.Unauthorized, result.Status);
-        Assert.Contains(refreshTokenService.Revocations, x =>
-            x.ActorType == IIoT.Services.Contracts.Identity.IIoTClaimTypes.HumanActor
-            && x.SubjectId == subjectId
+        Assert.Contains(
+            sessionRevocationService.Revocations,
+            x => x.SubjectId == subjectId
             && x.Reason == "identity-unavailable");
+    }
+
+    [Fact]
+    public async Task LoginUserHandler_ShouldIssueCurrentStatusVersionOnlyForActiveHuman()
+    {
+        var subjectId = Guid.NewGuid();
+        var account = IdentityAccount.Create(subjectId, "E2002");
+        var identityStore = new RecordingIdentityAccountStore
+        {
+            AccountByEmployeeNo = account
+        };
+        var profileService = new StubCloudOidcUserProfileService
+        {
+            Profile = CreateActiveProfile(subjectId, account.EmployeeNo, "status-v2")
+        };
+        var tokenGenerator = new StubJwtTokenGenerator();
+        var refreshTokenService = new StubRefreshTokenService();
+        var handler = new LoginUserHandler(
+            identityStore,
+            new StubIdentityPasswordService(),
+            new StubPermissionProvider(),
+            tokenGenerator,
+            refreshTokenService,
+            profileService);
+
+        var result = await handler.Handle(
+            new LoginUserCommand(account.EmployeeNo, "Password123!"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("status-v2", tokenGenerator.LastHumanIdentityStatusVersion);
+        Assert.Contains(refreshTokenService.HumanIssues, issue =>
+            issue.SubjectId == subjectId &&
+            issue.IdentityStatusVersion == "status-v2");
+    }
+
+    [Fact]
+    public async Task LoginUserHandler_ShouldFailClosedWhenEmployeeIsInactive()
+    {
+        var subjectId = Guid.NewGuid();
+        var account = IdentityAccount.Create(subjectId, "E2003");
+        var profileService = new StubCloudOidcUserProfileService
+        {
+            Profile = CreateActiveProfile(subjectId, account.EmployeeNo, "status-v2") with
+            {
+                EmployeeActive = false
+            }
+        };
+        var refreshTokenService = new StubRefreshTokenService();
+        var handler = new LoginUserHandler(
+            new RecordingIdentityAccountStore { AccountByEmployeeNo = account },
+            new StubIdentityPasswordService(),
+            new StubPermissionProvider(),
+            new StubJwtTokenGenerator(),
+            refreshTokenService,
+            profileService);
+
+        var result = await handler.Handle(
+            new LoginUserCommand(account.EmployeeNo, "Password123!"),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Empty(refreshTokenService.Issues);
+    }
+
+    [Fact]
+    public async Task EdgeOperatorLoginHandler_ShouldRejectInactiveAdminBeforeDeviceBypass()
+    {
+        var subjectId = Guid.NewGuid();
+        var account = IdentityAccount.Create(subjectId, "E2004");
+        var identityStore = new RecordingIdentityAccountStore
+        {
+            AccountByEmployeeNo = account
+        };
+        identityStore.RolesByUserId[subjectId] = [SystemRoles.Admin];
+        var employeeLookup = new StubEmployeeLookupService();
+        var refreshTokenService = new StubRefreshTokenService();
+        var handler = new EdgeOperatorLoginHandler(
+            identityStore,
+            new StubIdentityPasswordService(),
+            new StubPermissionProvider(),
+            new StubJwtTokenGenerator(),
+            refreshTokenService,
+            employeeLookup,
+            new StubCloudOidcUserProfileService
+            {
+                Profile = CreateActiveProfile(subjectId, account.EmployeeNo, "status-v2") with
+                {
+                    EmployeeActive = false
+                }
+            });
+
+        var result = await handler.Handle(
+            new EdgeOperatorLoginCommand(account.EmployeeNo, "Password123!", Guid.NewGuid()),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(0, employeeLookup.GetByIdCalls);
+        Assert.Empty(refreshTokenService.Issues);
+    }
+
+    [Fact]
+    public async Task RefreshHumanIdentityHandler_ShouldIssueJwtWithLiveStatusVersion()
+    {
+        var subjectId = Guid.NewGuid();
+        var account = IdentityAccount.Create(subjectId, "E2005");
+        var tokenGenerator = new StubJwtTokenGenerator();
+        var sessionRevocationService = new StubHumanSessionRevocationService();
+        var handler = new RefreshHumanIdentityHandler(
+            new RecordingIdentityAccountStore { AccountById = account },
+            new StubPermissionProvider(),
+            tokenGenerator,
+            new StubRefreshTokenService
+            {
+                NextRotateSubjectId = subjectId,
+                NextRotateIdentityStatusVersion = "status-current"
+            },
+            sessionRevocationService,
+            new StubCloudOidcUserProfileService
+            {
+                Profile = CreateActiveProfile(subjectId, account.EmployeeNo, "status-current")
+            });
+
+        var result = await handler.Handle(
+            new RefreshHumanIdentityCommand("refresh-human"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("status-current", tokenGenerator.LastHumanIdentityStatusVersion);
+        Assert.Empty(sessionRevocationService.Revocations);
+    }
+
+    [Fact]
+    public async Task RefreshHumanIdentityHandler_ShouldFailClosedAndRevokeWhenStatusQueryFails()
+    {
+        var subjectId = Guid.NewGuid();
+        var account = IdentityAccount.Create(subjectId, "E2006");
+        var sessionRevocationService = new StubHumanSessionRevocationService();
+        var handler = new RefreshHumanIdentityHandler(
+            new RecordingIdentityAccountStore { AccountById = account },
+            new StubPermissionProvider(),
+            new StubJwtTokenGenerator(),
+            new StubRefreshTokenService { NextRotateSubjectId = subjectId },
+            sessionRevocationService,
+            new StubCloudOidcUserProfileService
+            {
+                ExceptionToThrow = new InvalidOperationException("status store unavailable")
+            });
+
+        var result = await handler.Handle(
+            new RefreshHumanIdentityCommand("refresh-human"),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ResultStatus.Unauthorized, result.Status);
+        Assert.Contains(sessionRevocationService.Revocations, revocation =>
+            revocation.SubjectId == subjectId &&
+            revocation.Reason == "identity-status-unavailable");
+    }
+
+    [Fact]
+    public async Task RefreshHumanIdentityHandler_ShouldRejectPreDeactivationVersionAfterReactivation()
+    {
+        var subjectId = Guid.NewGuid();
+        var account = IdentityAccount.Create(subjectId, "E2007");
+        var sessionRevocationService = new StubHumanSessionRevocationService();
+        var handler = new RefreshHumanIdentityHandler(
+            new RecordingIdentityAccountStore { AccountById = account },
+            new StubPermissionProvider(),
+            new StubJwtTokenGenerator(),
+            new StubRefreshTokenService
+            {
+                NextRotateSubjectId = subjectId,
+                NextRotateIdentityStatusVersion = "status-before-deactivation"
+            },
+            sessionRevocationService,
+            new StubCloudOidcUserProfileService
+            {
+                Profile = CreateActiveProfile(
+                    subjectId,
+                    account.EmployeeNo,
+                    "status-after-reactivation")
+            });
+
+        var result = await handler.Handle(
+            new RefreshHumanIdentityCommand("refresh-human"),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ResultStatus.Unauthorized, result.Status);
+        Assert.Contains(sessionRevocationService.Revocations, revocation =>
+            revocation.SubjectId == subjectId &&
+            revocation.Reason == "identity-unavailable");
     }
 
     [Fact]
@@ -1768,6 +1964,18 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             ActorType = IIoTClaimTypes.HumanActor,
             IsAuthenticated = true
         };
+
+    private static CloudOidcUserProfile CreateActiveProfile(
+        Guid userId,
+        string employeeNo,
+        string statusVersion)
+        => new(
+            userId,
+            employeeNo,
+            "Active Human",
+            AccountEnabled: true,
+            EmployeeActive: true,
+            StatusVersion: statusVersion);
 
     private sealed class StubPermissionProvider : IPermissionProvider
     {

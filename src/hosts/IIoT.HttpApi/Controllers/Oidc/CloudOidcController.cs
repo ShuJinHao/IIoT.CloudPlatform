@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Security.Claims;
 using IIoT.HttpApi.Infrastructure.Oidc;
@@ -62,9 +63,10 @@ public sealed class CloudOidcController(
             return ShowLoginRequiredPage();
         }
 
-        var profile = await profileService.GetByUserIdAsync(userId, cancellationToken);
-        if (profile is null || !profile.AccountEnabled || !profile.EmployeeActive)
+        var profile = await GetProfileAsync(userId, cancellationToken);
+        if (!HasCurrentStatusVersion(session.Principal, profile))
         {
+            await sessionService.SignOutAsync(HttpContext);
             await WriteAuditAsync(
                 CloudOidcDefaults.AuthorizeAuditOperation,
                 profile?.UserId ?? userId,
@@ -75,9 +77,7 @@ public sealed class CloudOidcController(
                 profile is null ? "Cloud 用户资料不存在。" : "Cloud 账号或员工状态不可用。",
                 cancellationToken);
 
-            return ForbidWithOpenIddictError(
-                Errors.AccessDenied,
-                "Cloud 账号或员工状态不可用。");
+            return ShowLoginRequiredPage();
         }
 
         var principal = CreatePrincipal(profile, request.GetScopes());
@@ -139,8 +139,8 @@ public sealed class CloudOidcController(
                 "The authorization code is invalid or expired.");
         }
 
-        var profile = await profileService.GetByUserIdAsync(userId, cancellationToken);
-        if (profile is null || !profile.AccountEnabled || !profile.EmployeeActive)
+        var profile = await GetProfileAsync(userId, cancellationToken);
+        if (!HasCurrentStatusVersion(authentication.Principal, profile))
         {
             await WriteAuditAsync(
                 CloudOidcDefaults.TokenAuditOperation,
@@ -193,8 +193,8 @@ public sealed class CloudOidcController(
             return Unauthorized();
         }
 
-        var profile = await profileService.GetByUserIdAsync(userId, cancellationToken);
-        if (profile is null || !profile.AccountEnabled || !profile.EmployeeActive)
+        var profile = await GetProfileAsync(userId, cancellationToken);
+        if (!HasCurrentStatusVersion(User, profile))
         {
             await WriteAuditAsync(
                 CloudOidcDefaults.UserInfoAuditOperation,
@@ -270,10 +270,7 @@ public sealed class CloudOidcController(
             identity.SetClaim("tenant_id", profile.TenantId);
         }
 
-        if (!string.IsNullOrWhiteSpace(profile.StatusVersion))
-        {
-            identity.SetClaim("status_version", profile.StatusVersion);
-        }
+        identity.SetClaim(IIoTClaimTypes.IdentityStatusVersion, profile.StatusVersion);
 
         var principal = new ClaimsPrincipal(identity);
         var scopes = requestedScopes
@@ -315,10 +312,7 @@ public sealed class CloudOidcController(
             payload["tenant_id"] = profile.TenantId;
         }
 
-        if (!string.IsNullOrWhiteSpace(profile.StatusVersion))
-        {
-            payload["status_version"] = profile.StatusVersion;
-        }
+        payload[IIoTClaimTypes.IdentityStatusVersion] = profile.StatusVersion;
 
         return payload;
     }
@@ -335,7 +329,7 @@ public sealed class CloudOidcController(
             "account_enabled" => [Destinations.AccessToken, Destinations.IdentityToken],
             "employee_active" => [Destinations.AccessToken, Destinations.IdentityToken],
             "tenant_id" => [Destinations.AccessToken, Destinations.IdentityToken],
-            "status_version" => [Destinations.AccessToken, Destinations.IdentityToken],
+            IIoTClaimTypes.IdentityStatusVersion => [Destinations.AccessToken, Destinations.IdentityToken],
             _ => [Destinations.AccessToken]
         };
     }
@@ -352,6 +346,34 @@ public sealed class CloudOidcController(
         userId = Guid.Empty;
         var value = principal?.GetClaim(Claims.Subject);
         return Guid.TryParse(value, out userId);
+    }
+
+    private async Task<CloudOidcUserProfile?> GetProfileAsync(
+        Guid userId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await profileService.GetByUserIdAsync(userId, cancellationToken);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+    }
+
+    internal static bool HasCurrentStatusVersion(
+        ClaimsPrincipal? principal,
+        [NotNullWhen(true)] CloudOidcUserProfile? profile)
+    {
+        return profile is not null &&
+               profile.AccountEnabled &&
+               profile.EmployeeActive &&
+               !string.IsNullOrWhiteSpace(profile.StatusVersion) &&
+               string.Equals(
+                   principal?.FindFirstValue(IIoTClaimTypes.IdentityStatusVersion),
+                   profile.StatusVersion,
+                   StringComparison.Ordinal);
     }
 
     private IActionResult ForbidWithOpenIddictError(string error, string description)

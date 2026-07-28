@@ -12,15 +12,44 @@ public sealed class EfRefreshTokenService(
     IOptions<RefreshTokenOptions> refreshTokenOptions) : IRefreshTokenService
 {
     private const string SessionLimitRevokedReason = "session-limit";
+    private const string HumanTokenVersionPrefix = "h1";
     private readonly RefreshTokenOptions _options = refreshTokenOptions.Value;
+
+    public Task<RefreshTokenEnvelope> IssueHumanAsync(
+        Guid subjectId,
+        string identityStatusVersion,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(identityStatusVersion);
+        return IssueCoreAsync(
+            IIoTClaimTypes.HumanActor,
+            subjectId,
+            identityStatusVersion,
+            cancellationToken);
+    }
 
     public async Task<RefreshTokenEnvelope> IssueAsync(
         string actorType,
         Guid subjectId,
         CancellationToken cancellationToken = default)
     {
+        if (string.Equals(actorType, IIoTClaimTypes.HumanActor, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Human refresh tokens must be issued with an identity status version.");
+        }
+
+        return await IssueCoreAsync(actorType, subjectId, null, cancellationToken);
+    }
+
+    private async Task<RefreshTokenEnvelope> IssueCoreAsync(
+        string actorType,
+        Guid subjectId,
+        string? identityStatusVersion,
+        CancellationToken cancellationToken)
+    {
         var now = DateTimeOffset.UtcNow;
-        var token = GenerateToken();
+        var token = GenerateToken(identityStatusVersion);
         var session = CreateSession(actorType, subjectId, token, now);
 
         await RevokeOverflowHumanSessionsAsync(actorType, subjectId, now, cancellationToken);
@@ -48,7 +77,22 @@ public sealed class EfRefreshTokenService(
             return Result.Unauthorized("Refresh token is invalid or expired.");
         }
 
-        var replacementToken = GenerateToken();
+        var identityStatusVersion = string.Equals(
+            actorType,
+            IIoTClaimTypes.HumanActor,
+            StringComparison.Ordinal)
+            ? TryReadHumanIdentityStatusVersion(refreshToken)
+            : null;
+        if (string.Equals(actorType, IIoTClaimTypes.HumanActor, StringComparison.Ordinal) &&
+            string.IsNullOrWhiteSpace(identityStatusVersion))
+        {
+            existing.RevokedAtUtc = now;
+            existing.RevokedReason = "status-version-missing";
+            await dbContext.SaveChangesAsync(cancellationToken);
+            return Result.Unauthorized("Refresh token is invalid or expired.");
+        }
+
+        var replacementToken = GenerateToken(identityStatusVersion);
         var replacementSession = CreateSession(actorType, existing.SubjectId, replacementToken, now);
 
         existing.RevokedAtUtc = now;
@@ -68,7 +112,8 @@ public sealed class EfRefreshTokenService(
         return Result.Success(new RefreshTokenRotationResult(
             actorType,
             existing.SubjectId,
-            new RefreshTokenEnvelope(replacementToken, replacementSession.ExpiresAtUtc)));
+            new RefreshTokenEnvelope(replacementToken, replacementSession.ExpiresAtUtc),
+            identityStatusVersion));
     }
 
     public async Task RevokeSubjectTokensAsync(
@@ -160,9 +205,50 @@ public sealed class EfRefreshTokenService(
             : _options.HumanTtlDays;
     }
 
-    private static string GenerateToken()
+    private static string GenerateToken(string? identityStatusVersion)
     {
-        return Convert.ToHexString(RandomNumberGenerator.GetBytes(64));
+        var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(64));
+        if (string.IsNullOrWhiteSpace(identityStatusVersion))
+        {
+            return secret;
+        }
+
+        var encodedStatusVersion = Convert.ToBase64String(
+                Encoding.UTF8.GetBytes(identityStatusVersion))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+        return $"{HumanTokenVersionPrefix}.{encodedStatusVersion}.{secret}";
+    }
+
+    private static string? TryReadHumanIdentityStatusVersion(string token)
+    {
+        var segments = token.Split('.', 3, StringSplitOptions.None);
+        if (segments.Length != 3 ||
+            !string.Equals(segments[0], HumanTokenVersionPrefix, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(segments[1]) ||
+            string.IsNullOrWhiteSpace(segments[2]))
+        {
+            return null;
+        }
+
+        try
+        {
+            var encoded = segments[1]
+                .Replace('-', '+')
+                .Replace('_', '/');
+            var padding = encoded.Length % 4;
+            if (padding > 0)
+            {
+                encoded = encoded.PadRight(encoded.Length + 4 - padding, '=');
+            }
+
+            return Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
     }
 
     private static string ComputeTokenHash(string token)

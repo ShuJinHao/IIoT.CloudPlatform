@@ -9,7 +9,8 @@ public sealed record RefreshTokenEnvelope(
 public sealed record RefreshTokenRotationResult(
     string ActorType,
     Guid SubjectId,
-    RefreshTokenEnvelope RefreshToken);
+    RefreshTokenEnvelope RefreshToken,
+    string? IdentityStatusVersion);
 
 public sealed class RefreshTokenOptions
 {
@@ -40,6 +41,11 @@ public sealed class RefreshTokenOptions
 
 public interface IRefreshTokenService
 {
+    Task<RefreshTokenEnvelope> IssueHumanAsync(
+        Guid subjectId,
+        string identityStatusVersion,
+        CancellationToken cancellationToken = default);
+
     Task<RefreshTokenEnvelope> IssueAsync(
         string actorType,
         Guid subjectId,

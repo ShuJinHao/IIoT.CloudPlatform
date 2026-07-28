@@ -28,7 +28,7 @@ public class TerminateEmployeeHandler(
     IRepository<Employee> employeeRepository,
     IIdentityAccountStore identityAccountStore,
     IUnitOfWork unitOfWork,
-    IRefreshTokenService refreshTokenService,
+    IHumanSessionRevocationService sessionRevocationService,
     IAdminTargetGuard adminTargetGuard)
     : ICommandHandler<TerminateEmployeeCommand, Result>
 {
@@ -70,8 +70,7 @@ public class TerminateEmployeeHandler(
                 return Result.Failure(identityResult.Errors?.ToArray() ?? ["账号销毁失败"]);
             }
 
-            await refreshTokenService.RevokeSubjectTokensAsync(
-                IIoTClaimTypes.HumanActor,
+            await sessionRevocationService.RevokeAllAsync(
                 request.EmployeeId,
                 "employee-terminated",
                 cancellationToken);

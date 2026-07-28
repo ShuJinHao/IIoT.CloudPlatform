@@ -30,17 +30,18 @@ public sealed class GetCloudIdentityStatusHandler(
             return Result.NotFound("Cloud identity was not found.");
         }
 
+        if (string.IsNullOrWhiteSpace(profile.StatusVersion))
+        {
+            return Result.Failure("Cloud identity status version is unavailable.");
+        }
+
         return Result.Success(
             new CloudIdentityStatusDto(
                 profile.UserId,
                 tenantId,
                 profile.AccountEnabled,
                 profile.EmployeeActive,
-                profile.StatusVersion ?? CloudIdentityStatusVersions.Create(
-                    profile.UserId,
-                    profile.AccountEnabled,
-                    profile.EmployeeActive,
-                    0),
+                profile.StatusVersion,
                 DateTime.UtcNow));
     }
 

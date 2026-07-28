@@ -12,18 +12,18 @@ namespace IIoT.EmployeeService.Commands.Employees;
 
 [AuthorizeRequirement(CloudPermissionCatalog.Employee.Deactivate)]
 [DistributedLock("iiot:lock:employee:{EmployeeId}", TimeoutSeconds = 5)]
-public record DeactivateEmployeeCommand(Guid EmployeeId) : IHumanCommand<Result>;
+public sealed record ActivateEmployeeCommand(Guid EmployeeId) : IHumanCommand<Result>;
 
-public class DeactivateEmployeeHandler(
+public sealed class ActivateEmployeeHandler(
     IRepository<Employee> employeeRepository,
     IIdentityAccountStore identityAccountStore,
     IUnitOfWork unitOfWork,
     IHumanSessionRevocationService sessionRevocationService,
     IAdminTargetGuard adminTargetGuard)
-    : ICommandHandler<DeactivateEmployeeCommand, Result>
+    : ICommandHandler<ActivateEmployeeCommand, Result>
 {
     public async Task<Result> Handle(
-        DeactivateEmployeeCommand request,
+        ActivateEmployeeCommand request,
         CancellationToken cancellationToken)
     {
         var targetResult = await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
@@ -42,34 +42,32 @@ public class DeactivateEmployeeHandler(
             var employee = await employeeRepository.GetSingleOrDefaultAsync(
                 new EmployeeWithAccessesSpec(request.EmployeeId),
                 cancellationToken);
-
             if (employee is null)
             {
                 await unitOfWork.RollbackAsync(cancellationToken);
                 return Result.Failure(AdminTargetProtectionErrors.TargetNotFound);
             }
 
-            if (employee.IsActive)
+            if (!employee.IsActive)
             {
-                employee.Deactivate();
+                employee.Activate();
                 employeeRepository.Update(employee);
                 await employeeRepository.SaveChangesAsync(cancellationToken);
             }
 
             var identityResult = await identityAccountStore.SetEnabledAsync(
                 request.EmployeeId,
-                false,
+                true,
                 cancellationToken);
-
             if (!identityResult.IsSuccess || !identityResult.Value)
             {
                 await unitOfWork.RollbackAsync(cancellationToken);
-                return Result.Failure(identityResult.Errors?.ToArray() ?? ["员工身份账号停用失败"]);
+                return Result.Failure(identityResult.Errors?.ToArray() ?? ["员工身份账号启用失败"]);
             }
 
             await sessionRevocationService.RevokeAllAsync(
                 request.EmployeeId,
-                "employee-deactivated",
+                "employee-activated-relogin-required",
                 cancellationToken);
             await unitOfWork.CommitAsync(cancellationToken);
 

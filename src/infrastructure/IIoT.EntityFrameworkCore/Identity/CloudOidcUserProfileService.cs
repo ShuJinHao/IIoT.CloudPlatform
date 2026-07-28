@@ -33,7 +33,7 @@ public sealed class CloudOidcUserProfileService(IIoTDbContext dbContext) : IClou
                              employee.RealName,
                              user.IsEnabled,
                              employee.IsActive,
-                             employee.RowVersion))
+                             user.SecurityStamp))
             .FirstOrDefaultAsync(cancellationToken);
 
         return row?.ToProfile();
@@ -53,7 +53,7 @@ public sealed class CloudOidcUserProfileService(IIoTDbContext dbContext) : IClou
                              employee.RealName,
                              user.IsEnabled,
                              employee.IsActive,
-                             employee.RowVersion))
+                             user.SecurityStamp))
             .FirstOrDefaultAsync(cancellationToken);
 
         return row?.ToProfile();
@@ -65,7 +65,7 @@ public sealed class CloudOidcUserProfileService(IIoTDbContext dbContext) : IClou
         string RealName,
         bool AccountEnabled,
         bool EmployeeActive,
-        uint EmployeeRowVersion)
+        string? AccountSecurityStamp)
     {
         public CloudOidcUserProfile ToProfile()
         {
@@ -76,7 +76,11 @@ public sealed class CloudOidcUserProfileService(IIoTDbContext dbContext) : IClou
                 AccountEnabled,
                 EmployeeActive,
                 null,
-                CloudIdentityStatusVersions.Create(UserId, AccountEnabled, EmployeeActive, EmployeeRowVersion));
+                CloudIdentityStatusVersions.Create(
+                    UserId,
+                    AccountEnabled,
+                    EmployeeActive,
+                    AccountSecurityStamp));
         }
     }
 }

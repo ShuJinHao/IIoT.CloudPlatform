@@ -18,7 +18,8 @@ public class EdgeOperatorLoginHandler(
     IPermissionProvider permissionProvider,
     IJwtTokenGenerator jwtTokenGenerator,
     IRefreshTokenService refreshTokenService,
-    IEmployeeLookupService employeeLookupService)
+    IEmployeeLookupService employeeLookupService,
+    ICloudOidcUserProfileService profileService)
     : ICommandHandler<EdgeOperatorLoginCommand, Result<HumanIdentitySessionResult>>
 {
     private const string InvalidLoginMessage = "账号不存在或密码错误";
@@ -51,6 +52,24 @@ public class EdgeOperatorLoginHandler(
             return Result.Failure(InvalidLoginMessage);
         }
 
+        CloudOidcUserProfile? profile;
+        try
+        {
+            profile = await profileService.GetByUserIdAsync(account.Id, cancellationToken);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Result.Failure(InvalidLoginMessage);
+        }
+
+        if (profile is null ||
+            !profile.AccountEnabled ||
+            !profile.EmployeeActive ||
+            string.IsNullOrWhiteSpace(profile.StatusVersion))
+        {
+            return Result.Failure(InvalidLoginMessage);
+        }
+
         var roles = await identityAccountStore.GetRolesAsync(account.Id, cancellationToken);
         var isAdmin = roles.Contains(SystemRoles.Admin, StringComparer.Ordinal);
 
@@ -79,10 +98,11 @@ public class EdgeOperatorLoginHandler(
             account.Id,
             request.EmployeeNo,
             roles,
-            permissions);
-        var refreshToken = await refreshTokenService.IssueAsync(
-            IIoTClaimTypes.HumanActor,
+            permissions,
+            profile.StatusVersion);
+        var refreshToken = await refreshTokenService.IssueHumanAsync(
             account.Id,
+            profile.StatusVersion,
             cancellationToken);
 
         return Result.Success(new HumanIdentitySessionResult(

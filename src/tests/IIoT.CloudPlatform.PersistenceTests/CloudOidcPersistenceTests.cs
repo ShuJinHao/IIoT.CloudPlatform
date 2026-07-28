@@ -1,9 +1,16 @@
+using System.Security.Cryptography;
+using System.Text;
 using IIoT.EntityFrameworkCore;
 using IIoT.EntityFrameworkCore.Identity;
 using IIoT.IdentityService.Queries;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using OpenIddict.Abstractions;
+using OpenIddict.EntityFrameworkCore.Models;
 using Xunit;
 
 namespace IIoT.CloudPlatform.PersistenceTests;
@@ -25,6 +32,7 @@ public sealed class CloudOidcPersistenceTests
             employeeActive: false);
         var userId = employee.Id;
         await dbContext.SaveChangesAsync();
+        var securityStamp = dbContext.Users.Single(user => user.Id == userId).SecurityStamp!;
 
         var service = new CloudOidcUserProfileService(dbContext);
 
@@ -38,7 +46,11 @@ public sealed class CloudOidcPersistenceTests
         Assert.False(profile.EmployeeActive);
         Assert.Null(profile.TenantId);
         Assert.Equal(
-            CloudIdentityStatusVersions.Create(userId, accountEnabled: false, employeeActive: false, employee.RowVersion),
+            CloudIdentityStatusVersions.Create(
+                userId,
+                accountEnabled: false,
+                employeeActive: false,
+                securityStamp),
             profile.StatusVersion);
     }
 
@@ -55,6 +67,7 @@ public sealed class CloudOidcPersistenceTests
             "Cloud Status User");
         var userId = employee.Id;
         await dbContext.SaveChangesAsync();
+        var securityStamp = dbContext.Users.Single(user => user.Id == userId).SecurityStamp!;
 
         var service = new CloudOidcUserProfileService(dbContext);
         var handler = new GetCloudIdentityStatusHandler(service);
@@ -70,7 +83,219 @@ public sealed class CloudOidcPersistenceTests
         Assert.True(result.Value.AccountEnabled);
         Assert.True(result.Value.EmployeeActive);
         Assert.Equal(
-            CloudIdentityStatusVersions.Create(userId, accountEnabled: true, employeeActive: true, employee.RowVersion),
+            CloudIdentityStatusVersions.Create(
+                userId,
+                accountEnabled: true,
+                employeeActive: true,
+                securityStamp),
             result.Value.StatusVersion);
+    }
+
+    [Fact]
+    public async Task IdentityStatusVersion_ShouldRemainStableForProfileOnlyUpdate()
+    {
+        using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
+        using var scope = provider.CreateScope();
+
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var employee = TestIdentityData.AddEmployeeWithIdentity(
+            dbContext,
+            "E-OIDC-PROFILE",
+            "Original Name");
+        await dbContext.SaveChangesAsync();
+
+        var profileService = new CloudOidcUserProfileService(dbContext);
+        var before = await profileService.GetByUserIdAsync(employee.Id);
+
+        employee.Rename(employee.EmployeeNo, "Updated Name");
+        dbContext.Employees.Update(employee);
+        await dbContext.SaveChangesAsync();
+        dbContext.ChangeTracker.Clear();
+
+        var after = await profileService.GetByUserIdAsync(employee.Id);
+
+        Assert.NotNull(before);
+        Assert.NotNull(after);
+        Assert.Equal("Updated Name", after.RealName);
+        Assert.Equal(before.StatusVersion, after.StatusVersion);
+    }
+
+    [Fact]
+    public async Task IdentityStatusVersion_ShouldNeverReviveAfterDisableAndReenable()
+    {
+        using var provider = TestServiceProviders.CreateIdentityServiceProvider();
+        using var scope = provider.CreateScope();
+
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var employee = TestIdentityData.AddEmployeeWithIdentity(
+            dbContext,
+            "E-OIDC-REACTIVATE",
+            "Reactivated User");
+        await dbContext.SaveChangesAsync();
+
+        var profileService = new CloudOidcUserProfileService(dbContext);
+        var identityStore = new IdentityAccountStore(
+            scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>(),
+            scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>());
+
+        var before = await profileService.GetByUserIdAsync(employee.Id);
+        var disabledResult = await identityStore.SetEnabledAsync(employee.Id, false);
+        var disabled = await profileService.GetByUserIdAsync(employee.Id);
+        var enabledResult = await identityStore.SetEnabledAsync(employee.Id, true);
+        var reactivated = await profileService.GetByUserIdAsync(employee.Id);
+        var repeatedEnableResult = await identityStore.SetEnabledAsync(employee.Id, true);
+        var repeatedActivation = await profileService.GetByUserIdAsync(employee.Id);
+
+        Assert.True(disabledResult.IsSuccess);
+        Assert.True(enabledResult.IsSuccess);
+        Assert.True(repeatedEnableResult.IsSuccess);
+        Assert.NotNull(before);
+        Assert.NotNull(disabled);
+        Assert.NotNull(reactivated);
+        Assert.NotNull(repeatedActivation);
+        Assert.False(disabled.AccountEnabled);
+        Assert.True(reactivated.AccountEnabled);
+        Assert.NotEqual(before.StatusVersion, disabled.StatusVersion);
+        Assert.NotEqual(before.StatusVersion, reactivated.StatusVersion);
+        Assert.NotEqual(disabled.StatusVersion, reactivated.StatusVersion);
+        Assert.NotEqual(reactivated.StatusVersion, repeatedActivation.StatusVersion);
+    }
+
+    [Fact]
+    public async Task HumanSessionRevocationService_ShouldRevokeRefreshTokensAndAllOidcGrants()
+    {
+        using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
+        using var scope = provider.CreateScope();
+
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var subjectId = Guid.NewGuid();
+        var otherSubjectId = Guid.NewGuid();
+        var authorization = new OpenIddictEntityFrameworkCoreAuthorization<Guid>
+        {
+            Id = Guid.NewGuid(),
+            Subject = subjectId.ToString(),
+            Status = OpenIddictConstants.Statuses.Valid,
+            Type = "permanent"
+        };
+        var token = new OpenIddictEntityFrameworkCoreToken<Guid>
+        {
+            Id = Guid.NewGuid(),
+            Authorization = authorization,
+            Subject = subjectId.ToString(),
+            Status = OpenIddictConstants.Statuses.Valid,
+            Type = "authorization_code"
+        };
+        var otherToken = new OpenIddictEntityFrameworkCoreToken<Guid>
+        {
+            Id = Guid.NewGuid(),
+            Subject = otherSubjectId.ToString(),
+            Status = OpenIddictConstants.Statuses.Valid,
+            Type = "access_token"
+        };
+        var refreshSession = new RefreshTokenSession
+        {
+            Id = Guid.NewGuid(),
+            ActorType = IIoTClaimTypes.HumanActor,
+            SubjectId = subjectId,
+            TokenHash = "human-token",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            ExpiresAtUtc = DateTimeOffset.UtcNow.AddHours(1)
+        };
+        var machineSession = new RefreshTokenSession
+        {
+            Id = Guid.NewGuid(),
+            ActorType = IIoTClaimTypes.EdgeDeviceActor,
+            SubjectId = subjectId,
+            TokenHash = "machine-token",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            ExpiresAtUtc = DateTimeOffset.UtcNow.AddHours(1)
+        };
+        dbContext.OpenIddictAuthorizations.Add(authorization);
+        dbContext.OpenIddictTokens.AddRange(token, otherToken);
+        dbContext.RefreshTokenSessions.AddRange(refreshSession, machineSession);
+        await dbContext.SaveChangesAsync();
+
+        await new HumanSessionRevocationService(dbContext).RevokeAllAsync(
+            subjectId,
+            "employee-deactivated");
+        dbContext.ChangeTracker.Clear();
+
+        var persistedAuthorization = await dbContext.OpenIddictAuthorizations
+            .SingleAsync(item => item.Id == authorization.Id);
+        var persistedToken = await dbContext.OpenIddictTokens
+            .SingleAsync(item => item.Id == token.Id);
+        var persistedOtherToken = await dbContext.OpenIddictTokens
+            .SingleAsync(item => item.Id == otherToken.Id);
+        var persistedHumanSession = await dbContext.RefreshTokenSessions
+            .SingleAsync(item => item.Id == refreshSession.Id);
+        var persistedMachineSession = await dbContext.RefreshTokenSessions
+            .SingleAsync(item => item.Id == machineSession.Id);
+
+        Assert.Equal(OpenIddictConstants.Statuses.Revoked, persistedAuthorization.Status);
+        Assert.Equal(OpenIddictConstants.Statuses.Revoked, persistedToken.Status);
+        Assert.Equal(OpenIddictConstants.Statuses.Valid, persistedOtherToken.Status);
+        Assert.NotNull(persistedHumanSession.RevokedAtUtc);
+        Assert.Equal("employee-deactivated", persistedHumanSession.RevokedReason);
+        Assert.Null(persistedMachineSession.RevokedAtUtc);
+    }
+
+    [Fact]
+    public async Task HumanRefreshToken_ShouldPreserveIssuedStatusVersionAcrossRotation()
+    {
+        using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
+        using var scope = provider.CreateScope();
+
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var service = new EfRefreshTokenService(
+            dbContext,
+            Options.Create(new RefreshTokenOptions
+            {
+                HumanMaxActiveSessions = 0
+            }));
+        var subjectId = Guid.NewGuid();
+
+        var issued = await service.IssueHumanAsync(subjectId, "status-at-login");
+        var rotated = await service.RotateAsync(
+            IIoTClaimTypes.HumanActor,
+            issued.Token);
+
+        Assert.StartsWith("h1.", issued.Token, StringComparison.Ordinal);
+        Assert.True(rotated.IsSuccess);
+        Assert.Equal(subjectId, rotated.Value!.SubjectId);
+        Assert.Equal("status-at-login", rotated.Value.IdentityStatusVersion);
+        Assert.StartsWith("h1.", rotated.Value.RefreshToken.Token, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LegacyHumanRefreshTokenWithoutStatusVersion_ShouldBeRevokedOnUse()
+    {
+        using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
+        using var scope = provider.CreateScope();
+
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var legacyToken = "legacy-human-refresh-token";
+        var session = new RefreshTokenSession
+        {
+            Id = Guid.NewGuid(),
+            ActorType = IIoTClaimTypes.HumanActor,
+            SubjectId = Guid.NewGuid(),
+            TokenHash = Convert.ToHexString(SHA256.HashData(
+                Encoding.UTF8.GetBytes(legacyToken))),
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            ExpiresAtUtc = DateTimeOffset.UtcNow.AddHours(1)
+        };
+        dbContext.RefreshTokenSessions.Add(session);
+        await dbContext.SaveChangesAsync();
+        var service = new EfRefreshTokenService(
+            dbContext,
+            Options.Create(new RefreshTokenOptions()));
+
+        var result = await service.RotateAsync(
+            IIoTClaimTypes.HumanActor,
+            legacyToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("status-version-missing", session.RevokedReason);
+        Assert.NotNull(session.RevokedAtUtc);
     }
 }
