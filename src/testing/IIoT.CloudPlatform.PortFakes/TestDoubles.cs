@@ -906,11 +906,14 @@ internal sealed class RecordingAuditTrailService : IAuditTrailService
 {
     public List<AuditTrailEntry> Entries { get; } = [];
 
+    public List<CancellationToken> CancellationTokens { get; } = [];
+
     public Task TryWriteAsync(
         AuditTrailEntry entry,
         CancellationToken cancellationToken = default)
     {
         Entries.Add(entry);
+        CancellationTokens.Add(cancellationToken);
         return Task.CompletedTask;
     }
 
@@ -919,6 +922,7 @@ internal sealed class RecordingAuditTrailService : IAuditTrailService
         CancellationToken cancellationToken = default)
     {
         Entries.Add(entry);
+        CancellationTokens.Add(cancellationToken);
         return Task.FromResult(true);
     }
 }
@@ -1257,6 +1261,8 @@ internal sealed class StubEmployeeLookupService : IEmployeeLookupService
 
 internal sealed class RecordingUnitOfWork : IUnitOfWork
 {
+    public Action? OnCommit { get; set; }
+
     public int BeginCalls { get; private set; }
 
     public int CommitCalls { get; private set; }
@@ -1272,6 +1278,7 @@ internal sealed class RecordingUnitOfWork : IUnitOfWork
     public Task CommitAsync(CancellationToken cancellationToken = default)
     {
         CommitCalls++;
+        OnCommit?.Invoke();
         return Task.CompletedTask;
     }
 

@@ -165,6 +165,37 @@ public sealed class EmployeeRoleAssignmentTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task OverlongRole_ShouldBeRejectedThroughStructuredAudit()
+    {
+        var targetId = Guid.NewGuid();
+        var identityStore = CreateIdentityStore(targetId, "ProductionViewer");
+        var rolePolicy = new StubRolePolicyService { Roles = ["ProductionViewer"] };
+        var targetGuard = new StubAdminTargetGuard();
+        var audit = new RecordingAuditTrailService();
+        var handler = CreateHandler(
+            identityStore,
+            rolePolicy,
+            new RecordingUnitOfWork(),
+            new StubHumanSessionRevocationService(),
+            targetGuard,
+            Human(Guid.NewGuid(), "HrAdmin"),
+            audit);
+
+        var result = await handler.Handle(
+            new UpdateEmployeeRoleCommand(targetId, new string('R', 257)),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(0, rolePolicy.GetAllRolesCalls);
+        Assert.Equal(0, targetGuard.Calls);
+        Assert.Empty(identityStore.ReplacedRoles);
+        Assert.Contains(
+            "\"resultCode\":\"RoleNameTooLong\"",
+            Assert.Single(audit.Entries).Summary,
+            StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("Admin")]
     [InlineData(" admin ")]
@@ -444,16 +475,53 @@ public sealed class EmployeeRoleAssignmentTests
     }
 
     [Fact]
-    public void Validator_ShouldDistinguishNullClearFromBlankInput()
+    public async Task SuccessAudit_ShouldCompleteWhenRequestIsCanceledAfterCommit()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var targetId = Guid.NewGuid();
+        var identityStore = CreateIdentityStore(targetId, "ProductionViewer");
+        var unitOfWork = new RecordingUnitOfWork
+        {
+            OnCommit = cancellation.Cancel
+        };
+        var audit = new RecordingAuditTrailService();
+        var handler = CreateHandler(
+            identityStore,
+            new StubRolePolicyService { Roles = ["ProductionViewer", "RoleAdmin"] },
+            unitOfWork,
+            new StubHumanSessionRevocationService(),
+            new StubAdminTargetGuard(),
+            Human(Guid.NewGuid(), "HrAdmin"),
+            audit);
+
+        var result = await handler.Handle(
+            new UpdateEmployeeRoleCommand(targetId, "RoleAdmin"),
+            cancellation.Token);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(cancellation.IsCancellationRequested);
+        Assert.False(Assert.Single(audit.CancellationTokens).CanBeCanceled);
+        Assert.Contains(
+            "\"resultCode\":\"Succeeded\"",
+            Assert.Single(audit.Entries).Summary,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Validator_ShouldRouteRoleInputIntoAuditedHandler()
     {
         var validator = new UpdateEmployeeRoleCommandValidator();
 
         Assert.True(validator.Validate(
             new UpdateEmployeeRoleCommand(Guid.NewGuid(), null)).IsValid);
-        Assert.False(validator.Validate(
+        Assert.True(validator.Validate(
             new UpdateEmployeeRoleCommand(Guid.NewGuid(), string.Empty)).IsValid);
-        Assert.False(validator.Validate(
+        Assert.True(validator.Validate(
             new UpdateEmployeeRoleCommand(Guid.NewGuid(), "   ")).IsValid);
+        Assert.True(validator.Validate(
+            new UpdateEmployeeRoleCommand(Guid.NewGuid(), new string('R', 257))).IsValid);
+        Assert.False(validator.Validate(
+            new UpdateEmployeeRoleCommand(Guid.Empty, "ProductionViewer")).IsValid);
     }
 
     private static RecordingIdentityAccountStore CreateIdentityStore(

@@ -60,6 +60,19 @@ public sealed class UpdateEmployeeRoleHandler(
                 cancellationToken);
         }
 
+        if (request.RoleName is { Length: > 256 })
+        {
+            return await RejectAsync(
+                request,
+                [],
+                [],
+                requestedRoleName,
+                null,
+                "RoleNameTooLong",
+                ["roleName 长度不能超过 256 个字符。"],
+                cancellationToken);
+        }
+
         if (SystemRoles.IsAdminLike(requestedRoleName))
         {
             return await RejectAsync(
@@ -280,7 +293,7 @@ public sealed class UpdateEmployeeRoleHandler(
             succeeded: true,
             resultCode: "Succeeded",
             failureReason: null,
-            cancellationToken);
+            CancellationToken.None);
         return Result.Success(true);
     }
 
