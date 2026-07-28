@@ -25,9 +25,27 @@
       </div>
     </NiondTableCard>
 
-    <EmployeeOnboardModal v-model:show="showOnboardModal" :form="onboardForm" :role-options="roleOptions" :can-update-access="canUpdateAccess" :submitting="submitting" @submit="submitOnboard" />
+    <EmployeeOnboardModal v-model:show="showOnboardModal" :form="onboardForm" :role-options="roleOptions" :can-assign-role="canManageEmployeeRole" :submitting="submitting" @submit="submitOnboard" />
     <EmployeeEditModal v-model:show="showEditModal" :form="editForm" :target="editTarget" :submitting="submitting" @submit="submitEdit" />
     <EmployeeAccessModal v-model:show="showAccessModal" :form="accessForm" :devices="allDevices" :loading="accessLoading" :ready="accessReady" :submitting="accessSubmitting" :can-update-access="canUpdateAccess" @toggle-device="toggleDeviceAccess" @submit="submitAccess" />
+    <EmployeeRoleModal
+      :show="showRoleModal"
+      :target="roleTarget"
+      :detail="roleDetail"
+      :current-role-names="currentRoleNames"
+      :missing-role-names="missingRoleNames"
+      :role-options="employeeRoleOptions"
+      :selection="roleForm.Selection"
+      :loading="roleLoading"
+      :ready="roleReady"
+      :submitting="roleSubmitting"
+      :can-manage-role="canManageEmployeeRole"
+      :can-submit="canSubmitRole"
+      :has-multiple-roles="hasMultipleCurrentRoles"
+      @request-close="closeRoleModal"
+      @update-selection="setRoleSelection"
+      @submit="submitRole"
+    />
     <EmployeeDetailModal v-model:show="showDetailModal" :detail="detailData" :device-name-map="deviceNameMap" />
     <EmployeeResetPasswordModal v-model:show="showResetPwdModal" :target="resetPwdTarget" :form="resetPwdForm" :submitting="submitting" @submit="submitResetPwd" />
     <EmployeePersonalPermissionsModal v-model:show="showPersonalPermModal" :target="personalPermTarget" :loading="personalPermLoading" :permission-groups="permissionGroups" :selected-permissions="personalPermForm" :submitting="submitting" @toggle-permission="togglePersonalPerm" @submit="submitPersonalPerm" />
@@ -56,6 +74,7 @@ import EmployeeEditModal from './EmployeeEditModal.vue';
 import EmployeeOnboardModal from './EmployeeOnboardModal.vue';
 import EmployeePersonalPermissionsModal from './EmployeePersonalPermissionsModal.vue';
 import EmployeeResetPasswordModal from './EmployeeResetPasswordModal.vue';
+import EmployeeRoleModal from './EmployeeRoleModal.vue';
 import { useEmployees } from './useEmployees';
 import './employee-page.css';
 
@@ -63,6 +82,7 @@ const employeeState = useEmployees();
 const columns = createEmployeeColumns({
   canUpdateEmployee: () => employeeState.canUpdateEmployee.value,
   canUpdateAccess: () => employeeState.canUpdateAccess.value,
+  canManageRole: employeeState.canManageRoleForEmployee,
   canDeactivateEmployee: () => employeeState.canDeactivateEmployee.value,
   canResetPassword: () => employeeState.canResetPassword.value,
   canTerminateEmployee: () => employeeState.canTerminateEmployee.value,
@@ -71,6 +91,7 @@ const columns = createEmployeeColumns({
   onEdit: employeeState.openEditModal,
   onResetPassword: employeeState.openResetPwdModal,
   onAccess: employeeState.openAccessModal,
+  onRole: employeeState.openRoleModal,
   onPersonalPermissions: employeeState.openPersonalPermModal,
   onDeactivate: employeeState.handleDeactivate,
   onActivate: employeeState.handleActivate,
@@ -79,12 +100,13 @@ const columns = createEmployeeColumns({
 const rowKey = (row: EmployeeListItemDto) => row.id;
 
 const {
-  employees, loading, keyword, currentPage, metaData, submitting, canUpdateAccess, allDevices, deviceNameMap, roleOptions,
+  employees, loading, keyword, currentPage, metaData, submitting, canUpdateAccess, canManageEmployeeRole, allDevices, deviceNameMap, roleOptions,
   showOnboardModal, onboardForm, showEditModal, editForm, editTarget, showAccessModal, accessLoading, accessReady, accessSubmitting,
-  accessForm, showDetailModal, detailData, showResetPwdModal, resetPwdTarget, resetPwdForm, showPersonalPermModal,
+  accessForm, showRoleModal, roleTarget, roleDetail, roleLoading, roleReady, roleSubmitting, roleForm, currentRoleNames,
+  missingRoleNames, employeeRoleOptions, canSubmitRole, hasMultipleCurrentRoles, showDetailModal, detailData, showResetPwdModal, resetPwdTarget, resetPwdForm, showPersonalPermModal,
   personalPermTarget, personalPermLoading, personalPermForm, permissionGroups, confirmDialog, confirmSubmitting, initialize, fetchList,
   onSearchInput, onClearKeyword, onPageChange, openOnboardModal, submitOnboard, submitEdit, toggleDeviceAccess,
-  submitAccess, submitResetPwd, togglePersonalPerm, submitPersonalPerm,
+  submitAccess, closeRoleModal, setRoleSelection, submitRole, submitResetPwd, togglePersonalPerm, submitPersonalPerm,
 } = employeeState;
 
 onMounted(initialize);

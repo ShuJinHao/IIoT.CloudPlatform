@@ -259,3 +259,63 @@
   line-height: 1.6;
   margin: 0;
 }
+
+.role-target-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-3);
+}
+
+.role-target-card__name {
+  color: var(--text-0);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+}
+
+.role-target-card__meta {
+  margin-top: var(--space-1);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.role-inline-notice {
+  margin: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+.role-inline-notice--warning {
+  border: 1px solid var(--warn-soft);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.role-inline-notice--session {
+  border: 1px solid var(--info-soft);
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.ui-modal__panel:has(.employee-role-modal.is-busy) > .ui-modal__close {
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+@media (max-width: 720px) {
+  .form-grid--2,
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .employee-page__table .row-actions {
+    min-width: 0;
+  }
+}

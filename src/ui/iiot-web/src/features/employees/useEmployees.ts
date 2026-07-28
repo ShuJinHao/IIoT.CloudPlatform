@@ -26,11 +26,20 @@ import {
   terminateEmployeeApi,
   updateEmployeeAccessApi,
   updateEmployeeProfileApi,
+  updateEmployeeRoleApi,
   type EmployeeDetailDto,
   type EmployeeListItemDto,
   type UpdateProfilePayload,
 } from './api';
-import { isResetPasswordInvalid, type EmployeeConfirmDialogState } from './types';
+import {
+  EMPLOYEE_ROLE_CLEAR_SELECTION,
+  employeeRoleSelectionValue,
+  isAdminLikeRoleName,
+  isResetPasswordInvalid,
+  normalizeAssignableRoleNames,
+  type EmployeeConfirmDialogState,
+  type EmployeeRoleForm,
+} from './types';
 
 const PAGE_SIZE = 10;
 const ADMIN_PERMISSION_EXPIRED_MESSAGE = '管理员权限已失效，请重新登录后重试';
@@ -39,6 +48,12 @@ const ACCESS_NOT_READY_MESSAGE = '设备管辖权尚未加载完成，请稍后�
 const ACCESS_SUBMITTING_MESSAGE = '设备管辖权正在保存，请稍后重试';
 const STATUS_PERMISSION_EXPIRED_MESSAGE = '人员状态操作权限已失效，请重新登录后重试';
 const STATUS_SUBMITTING_MESSAGE = '人员状态操作正在处理中，请稍后重试';
+const ROLE_PERMISSION_EXPIRED_MESSAGE = '角色管理权限已失效，请重新登录后重试';
+const ROLE_SELF_UPDATE_MESSAGE = '不能修改当前登录用户自己的角色';
+const ROLE_NOT_READY_MESSAGE = '员工角色尚未加载完成，请稍后重试';
+const ROLE_SUBMITTING_MESSAGE = '员工角色正在保存，请稍后重试';
+const ROLE_TARGET_INVALID_MESSAGE = '员工角色目标已失效，请重新打开后重试';
+const ROLE_ADMIN_TARGET_MESSAGE = 'Admin 对应人员禁止通过员工角色入口修改';
 const EMPLOYEE_REFRESH_FAILED_MESSAGE = '员工操作已完成，但列表刷新失败，请重新加载页面确认最新状态';
 
 type EmployeePageResponse = Awaited<ReturnType<typeof getEmployeePagedListApi>>;
@@ -50,24 +65,51 @@ const emptyMetaData = (): PagedMetaData => ({
   totalPages: 1,
 });
 
+function roleComparisonKey(roleName: string) {
+  return roleName.trim().toLowerCase();
+}
+
+function normalizeCurrentRoleNames(roleNames: readonly string[]): string[] {
+  const normalizedRoles: string[] = [];
+  const seen = new Set<string>();
+
+  for (const roleName of roleNames) {
+    const normalizedRoleName = roleName.trim();
+    const comparisonKey = roleComparisonKey(normalizedRoleName);
+    if (!normalizedRoleName || seen.has(comparisonKey)) continue;
+
+    seen.add(comparisonKey);
+    normalizedRoles.push(normalizedRoleName);
+  }
+
+  return normalizedRoles;
+}
+
 export function useEmployees() {
   const authStore = useAuthStore();
   const metaData = ref<PagedMetaData>(emptyMetaData());
   const availableRoles = ref<string[]>([]);
+  const employeeAssignableRoles = ref<string[]>([]);
   const submitting = ref(false);
   const allDevices = ref<EmployeeAccessDeviceCandidateDto[]>([]);
   const showOnboardModal = ref(false);
   const showEditModal = ref(false);
   const showAccessModal = ref(false);
+  const showRoleModal = ref(false);
   const showDetailModal = ref(false);
   const showResetPwdModal = ref(false);
   const showPersonalPermModal = ref(false);
   const accessLoading = ref(false);
   const accessReady = ref(false);
   const accessSubmitting = ref(false);
+  const roleLoading = ref(false);
+  const roleReady = ref(false);
+  const roleSubmitting = ref(false);
   const confirmSubmitting = ref(false);
   const detailData = ref<EmployeeDetailDto | null>(null);
   const editTarget = ref<EmployeeListItemDto | null>(null);
+  const roleTarget = ref<EmployeeListItemDto | null>(null);
+  const roleDetail = ref<EmployeeDetailDto | null>(null);
   const resetPwdTarget = ref<EmployeeListItemDto | null>(null);
   const personalPermTarget = ref<EmployeeListItemDto | null>(null);
   const personalPermLoading = ref(false);
@@ -77,6 +119,7 @@ export function useEmployees() {
   const onboardForm = reactive({ EmployeeNo: '', RealName: '', Password: '', RoleName: null as string | null });
   const editForm = reactive({ RealName: '' });
   const accessForm = reactive({ DeviceIds: [] as string[] });
+  const roleForm = reactive<EmployeeRoleForm>({ Selection: '' });
   const resetPwdForm = reactive({ newPwd: '', confirm: '' });
   const confirmDialog = reactive<EmployeeConfirmDialogState>({
     show: false,
@@ -148,6 +191,12 @@ export function useEmployees() {
   });
   const canUpdateEmployee = computed(() => authStore.hasPermission(Permissions.Employee.Update));
   const canUpdateAccess = computed(() => authStore.hasPermission(Permissions.Employee.UpdateAccess));
+  const canManageEmployeeRole = computed(() =>
+    authStore.hasAllPermissions([
+      Permissions.Employee.UpdateAccess,
+      Permissions.Role.Read,
+    ]),
+  );
   const canDeactivateEmployee = computed(() => authStore.hasPermission(Permissions.Employee.Deactivate));
   const canResetPassword = computed(() =>
     authStore.isAdmin
@@ -160,12 +209,58 @@ export function useEmployees() {
   const canManagePersonalPermissions = computed(() => authStore.isAdmin);
   const deviceNameMap = computed(() => Object.fromEntries(allDevices.value.map((d) => [d.id, d.deviceName])));
   const roleOptions = computed(() => availableRoles.value.map((r) => ({ label: r, value: r })));
+  const employeeRoleOptions = computed(() => [
+    { label: '不分配角色', value: EMPLOYEE_ROLE_CLEAR_SELECTION },
+    ...employeeAssignableRoles.value.map((roleName) => ({
+      label: roleName,
+      value: employeeRoleSelectionValue(roleName),
+    })),
+  ]);
+  const currentRoleNames = computed(() =>
+    normalizeCurrentRoleNames(roleDetail.value?.roleNames ?? []),
+  );
+  const missingRoleNames = computed(() => {
+    const candidateKeys = new Set(employeeAssignableRoles.value.map(roleComparisonKey));
+    return currentRoleNames.value.filter(
+      (roleName) => !candidateKeys.has(roleComparisonKey(roleName)),
+    );
+  });
+  const hasMultipleCurrentRoles = computed(() => currentRoleNames.value.length > 1);
+  const selectedCanonicalRoleName = computed(() => {
+    if (!roleForm.Selection || roleForm.Selection === EMPLOYEE_ROLE_CLEAR_SELECTION) {
+      return null;
+    }
+
+    return employeeAssignableRoles.value.find(
+      (roleName) => employeeRoleSelectionValue(roleName) === roleForm.Selection,
+    ) ?? null;
+  });
+  const hasRoleChanged = computed(() => {
+    if (!roleForm.Selection) return false;
+    if (roleForm.Selection === EMPLOYEE_ROLE_CLEAR_SELECTION) {
+      return currentRoleNames.value.length > 0;
+    }
+    if (!selectedCanonicalRoleName.value) return false;
+
+    return currentRoleNames.value.length !== 1
+      || roleComparisonKey(currentRoleNames.value[0]!)
+        !== roleComparisonKey(selectedCanonicalRoleName.value);
+  });
+  const canSubmitRole = computed(() =>
+    roleReady.value
+    && !roleLoading.value
+    && !roleSubmitting.value
+    && canManageEmployeeRole.value
+    && hasRoleChanged.value,
+  );
 
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
   let candidateRequestGeneration = 0;
   let accessRequestGeneration = 0;
+  let roleRequestGeneration = 0;
   let confirmDialogGeneration = 0;
   const accessSubmissionTargetIds = new Set<string>();
+  const roleSubmissionTargetIds = new Set<string>();
 
   async function prefetchAccessCandidates() {
     if (!canUpdateAccess.value) {
@@ -242,7 +337,7 @@ export function useEmployees() {
   async function openOnboardModal() {
     Object.assign(onboardForm, { EmployeeNo: '', RealName: '', Password: '', RoleName: null });
     showOnboardModal.value = true;
-    if (!canUpdateAccess.value) {
+    if (!canManageEmployeeRole.value) {
       availableRoles.value = [];
       return;
     }
@@ -252,7 +347,7 @@ export function useEmployees() {
   async function loadAssignableRoles() {
     try {
       const roles = await getAllRolesApi();
-      availableRoles.value = roles.filter((r) => r !== 'Admin');
+      availableRoles.value = normalizeAssignableRoleNames(roles);
     } catch {
       availableRoles.value = [];
     }
@@ -269,7 +364,7 @@ export function useEmployees() {
         employeeNo: onboardForm.EmployeeNo,
         realName: onboardForm.RealName,
         password: onboardForm.Password,
-        roleName: canUpdateAccess.value ? onboardForm.RoleName || undefined : undefined,
+        roleName: canManageEmployeeRole.value ? onboardForm.RoleName || undefined : undefined,
       });
       showOnboardModal.value = false;
       await fetchList();
@@ -439,6 +534,199 @@ export function useEmployees() {
         accessSubmitting.value = false;
       }
     }
+  }
+
+  function canManageRoleForEmployee(employee: EmployeeListItemDto) {
+    return (
+      canManageEmployeeRole.value
+      && employee.id !== authStore.userId
+    );
+  }
+
+  function isCurrentRoleSession(requestGeneration: number, targetId: string) {
+    return (
+      requestGeneration === roleRequestGeneration
+      && roleTarget.value?.id === targetId
+      && showRoleModal.value
+    );
+  }
+
+  function clearRoleModalState() {
+    roleRequestGeneration += 1;
+    roleTarget.value = null;
+    roleDetail.value = null;
+    employeeAssignableRoles.value = [];
+    roleForm.Selection = '';
+    roleReady.value = false;
+    roleLoading.value = false;
+    roleSubmitting.value = false;
+  }
+
+  function closeRoleModal() {
+    if (roleLoading.value || roleSubmitting.value) return false;
+    showRoleModal.value = false;
+    return true;
+  }
+
+  watch(
+    showRoleModal,
+    (show) => {
+      if (
+        !show
+        && (
+          roleTarget.value
+          || roleDetail.value
+          || roleForm.Selection
+          || roleLoading.value
+          || roleReady.value
+          || roleSubmitting.value
+        )
+      ) {
+        clearRoleModalState();
+      }
+    },
+    { flush: 'sync' },
+  );
+
+  async function openRoleModal(employee: EmployeeListItemDto) {
+    if (!canManageEmployeeRole.value) {
+      notifyWarning(ROLE_PERMISSION_EXPIRED_MESSAGE);
+      return;
+    }
+    if (employee.id === authStore.userId) {
+      notifyWarning(ROLE_SELF_UPDATE_MESSAGE);
+      return;
+    }
+    if (roleSubmitting.value || roleSubmissionTargetIds.has(employee.id)) {
+      notifyWarning(ROLE_SUBMITTING_MESSAGE);
+      return;
+    }
+
+    const requestGeneration = ++roleRequestGeneration;
+    roleTarget.value = employee;
+    roleDetail.value = null;
+    roleForm.Selection = '';
+    roleReady.value = false;
+    roleLoading.value = true;
+    showRoleModal.value = true;
+
+    try {
+      const [roles, detail] = await Promise.all([
+        getAllRolesApi(),
+        getEmployeeDetailApi(employee.id),
+      ]);
+      if (!isCurrentRoleSession(requestGeneration, employee.id)) return;
+      if (detail.id !== employee.id) {
+        notifyWarning(ROLE_TARGET_INVALID_MESSAGE);
+        showRoleModal.value = false;
+        return;
+      }
+
+      const assignableRoles = normalizeAssignableRoleNames(roles);
+      const normalizedCurrentRoles = normalizeCurrentRoleNames(detail.roleNames);
+      if (normalizedCurrentRoles.some(isAdminLikeRoleName)) {
+        notifyWarning(ROLE_ADMIN_TARGET_MESSAGE);
+        showRoleModal.value = false;
+        return;
+      }
+      employeeAssignableRoles.value = assignableRoles;
+      roleDetail.value = detail;
+
+      if (normalizedCurrentRoles.length === 0) {
+        roleForm.Selection = EMPLOYEE_ROLE_CLEAR_SELECTION;
+      } else if (normalizedCurrentRoles.length === 1) {
+        const currentRoleKey = roleComparisonKey(normalizedCurrentRoles[0]!);
+        const currentRoleName = assignableRoles.find(
+          (roleName) => roleComparisonKey(roleName) === currentRoleKey,
+        );
+        roleForm.Selection = currentRoleName
+          ? employeeRoleSelectionValue(currentRoleName)
+          : '';
+      }
+
+      roleReady.value = true;
+    } catch {
+      if (isCurrentRoleSession(requestGeneration, employee.id)) {
+        showRoleModal.value = false;
+      }
+    } finally {
+      if (isCurrentRoleSession(requestGeneration, employee.id)) {
+        roleLoading.value = false;
+      }
+    }
+  }
+
+  function setRoleSelection(selection: string) {
+    if (
+      !canManageEmployeeRole.value
+      || !roleReady.value
+      || roleLoading.value
+      || roleSubmitting.value
+    ) {
+      return;
+    }
+
+    roleForm.Selection = selection;
+  }
+
+  async function submitRole() {
+    const target = roleTarget.value;
+    if (!canManageEmployeeRole.value) {
+      showRoleModal.value = false;
+      notifyWarning(ROLE_PERMISSION_EXPIRED_MESSAGE);
+      return;
+    }
+    if (!target || target.id === authStore.userId || roleDetail.value?.id !== target.id) {
+      showRoleModal.value = false;
+      notifyWarning(target?.id === authStore.userId
+        ? ROLE_SELF_UPDATE_MESSAGE
+        : ROLE_TARGET_INVALID_MESSAGE);
+      return;
+    }
+    if (roleSubmitting.value || roleSubmissionTargetIds.has(target.id)) {
+      notifyWarning(ROLE_SUBMITTING_MESSAGE);
+      return;
+    }
+    if (!roleReady.value || roleLoading.value) {
+      notifyWarning(ROLE_NOT_READY_MESSAGE);
+      return;
+    }
+    if (!canSubmitRole.value) return;
+
+    const requestedRoleName = roleForm.Selection === EMPLOYEE_ROLE_CLEAR_SELECTION
+      ? null
+      : selectedCanonicalRoleName.value;
+    if (roleForm.Selection !== EMPLOYEE_ROLE_CLEAR_SELECTION && !requestedRoleName) {
+      notifyWarning(ROLE_NOT_READY_MESSAGE);
+      return;
+    }
+
+    const requestGeneration = roleRequestGeneration;
+    const targetId = target.id;
+    let completed = false;
+    roleSubmissionTargetIds.add(targetId);
+    roleSubmitting.value = true;
+    try {
+      await updateEmployeeRoleApi(targetId, { roleName: requestedRoleName });
+      completed = true;
+    } catch {
+      /* feedback handled by http client */
+    } finally {
+      roleSubmissionTargetIds.delete(targetId);
+      if (isCurrentRoleSession(requestGeneration, targetId)) {
+        roleSubmitting.value = false;
+      }
+    }
+
+    if (!completed) return;
+
+    if (detailData.value?.id === targetId) {
+      detailData.value = null;
+    }
+    if (isCurrentRoleSession(requestGeneration, targetId)) {
+      showRoleModal.value = false;
+    }
+    notifySuccess('角色已更新，员工现有会话已失效，请通知员工重新登录');
   }
 
   async function openDetailModal(id: string) {
@@ -668,9 +956,12 @@ export function useEmployees() {
     currentPage: listPage.page,
     metaData,
     availableRoles,
+    employeeAssignableRoles,
     submitting,
     canUpdateEmployee,
     canUpdateAccess,
+    canManageEmployeeRole,
+    canManageRoleForEmployee,
     canDeactivateEmployee,
     canResetPassword,
     canTerminateEmployee,
@@ -678,6 +969,7 @@ export function useEmployees() {
     allDevices,
     deviceNameMap,
     roleOptions,
+    employeeRoleOptions,
     showOnboardModal,
     onboardForm,
     showEditModal,
@@ -688,6 +980,17 @@ export function useEmployees() {
     accessReady,
     accessSubmitting,
     accessForm,
+    showRoleModal,
+    roleTarget,
+    roleDetail,
+    roleLoading,
+    roleReady,
+    roleSubmitting,
+    roleForm,
+    currentRoleNames,
+    missingRoleNames,
+    hasMultipleCurrentRoles,
+    canSubmitRole,
     showDetailModal,
     detailData,
     showResetPwdModal,
@@ -713,6 +1016,10 @@ export function useEmployees() {
     closeAccessModal,
     toggleDeviceAccess,
     submitAccess,
+    openRoleModal,
+    closeRoleModal,
+    setRoleSelection,
+    submitRole,
     openDetailModal,
     openResetPwdModal,
     submitResetPwd,

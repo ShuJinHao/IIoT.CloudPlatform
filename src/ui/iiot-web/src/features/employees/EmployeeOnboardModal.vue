@@ -15,7 +15,7 @@
           <label class="form-label">初始密码 <span class="required">*</span></label>
           <UiInput v-model:value="form.Password" type="password" show-password-on="click" placeholder="至少 8 位，含大小写和数字" />
         </div>
-        <div v-if="canUpdateAccess" class="form-field">
+        <div v-if="canAssignRole" class="form-field">
           <label class="form-label">系统角色</label>
           <UiSelect v-model:value="form.RoleName" :options="roleOptions" placeholder="不分配角色" clearable />
         </div>
@@ -45,7 +45,7 @@ const show = defineModel<boolean>('show', { required: true });
 defineProps<{
   form: EmployeeOnboardForm;
   roleOptions: UiSelectOption[];
-  canUpdateAccess: boolean;
+  canAssignRole: boolean;
   submitting: boolean;
 }>();
 </script>

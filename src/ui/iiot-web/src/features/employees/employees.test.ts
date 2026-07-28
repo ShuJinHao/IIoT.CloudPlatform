@@ -8,8 +8,15 @@ import { createEmployeeColumns } from './columns';
 import EmployeeAccessModal from './EmployeeAccessModal.vue';
 import EmployeeConfirmModal from './EmployeeConfirmModal.vue';
 import EmployeeEditModal from './EmployeeEditModal.vue';
+import EmployeeOnboardModal from './EmployeeOnboardModal.vue';
+import EmployeeRoleModal from './EmployeeRoleModal.vue';
 import { employeeRoutes } from './routes';
-import { isResetPasswordInvalid } from './types';
+import {
+  EMPLOYEE_ROLE_CLEAR_SELECTION,
+  employeeRoleSelectionValue,
+  isResetPasswordInvalid,
+  normalizeAssignableRoleNames,
+} from './types';
 import { useEmployees } from './useEmployees';
 
 const employeeApiMocks = vi.hoisted(() => ({
@@ -19,6 +26,7 @@ const employeeApiMocks = vi.hoisted(() => ({
   onboardEmployeeApi: vi.fn(),
   updateEmployeeProfileApi: vi.fn(),
   updateEmployeeAccessApi: vi.fn(),
+  updateEmployeeRoleApi: vi.fn(),
   deactivateEmployeeApi: vi.fn(),
   activateEmployeeApi: vi.fn(),
   terminateEmployeeApi: vi.fn(),
@@ -50,8 +58,9 @@ const feedbackMocks = vi.hoisted(() => ({
 vi.mock('../../utils/feedback', () => feedbackMocks);
 
 const authMock = vi.hoisted(() => ({
-  state: null as { isAdmin: boolean; permissions: string[] } | null,
+  state: null as { isAdmin: boolean; permissions: string[]; userId: string } | null,
   hasPermission: vi.fn(),
+  hasAllPermissions: vi.fn(),
 }));
 
 vi.mock('../../stores/auth', () => ({
@@ -62,7 +71,11 @@ vi.mock('../../stores/auth', () => ({
     get permissions() {
       return authMock.state?.permissions ?? [];
     },
+    get userId() {
+      return authMock.state?.userId ?? '';
+    },
     hasPermission: (permission: string) => authMock.hasPermission(permission),
+    hasAllPermissions: (permissions: string[]) => authMock.hasAllPermissions(permissions),
   }),
 }));
 
@@ -113,6 +126,7 @@ function mountEmployeeActions(
   const actionColumn = createEmployeeColumns({
     canUpdateEmployee: () => false,
     canUpdateAccess: () => false,
+    canManageRole: () => false,
     canDeactivateEmployee: () => false,
     canResetPassword: () => false,
     canTerminateEmployee: () => false,
@@ -121,6 +135,7 @@ function mountEmployeeActions(
     onEdit: vi.fn(),
     onResetPassword: vi.fn(),
     onAccess: vi.fn(),
+    onRole: vi.fn(),
     onPersonalPermissions: vi.fn(),
     onDeactivate: vi.fn(),
     onActivate: vi.fn(),
@@ -144,10 +159,16 @@ describe('employees feature guards', () => {
     authMock.state = reactive({
       isAdmin: false,
       permissions: [] as string[],
+      userId: 'current-user',
     });
     authMock.hasPermission.mockImplementation(
       (permission: string) =>
         authMock.state!.isAdmin || authMock.state!.permissions.includes(permission),
+    );
+    authMock.hasAllPermissions.mockImplementation(
+      (permissions: string[]) =>
+        authMock.state!.isAdmin
+        || permissions.every((permission) => authMock.state!.permissions.includes(permission)),
     );
     employeeApiMocks.getEmployeePagedListApi.mockResolvedValue(emptyEmployeePage());
     employeeApiMocks.getEmployeeDetailApi.mockResolvedValue({
@@ -161,6 +182,7 @@ describe('employees feature guards', () => {
     employeeApiMocks.deactivateEmployeeApi.mockResolvedValue(true);
     employeeApiMocks.activateEmployeeApi.mockResolvedValue(true);
     employeeApiMocks.terminateEmployeeApi.mockResolvedValue(true);
+    employeeApiMocks.updateEmployeeRoleApi.mockResolvedValue(true);
     deviceApiMocks.getEmployeeAccessDeviceCandidatesApi.mockResolvedValue([]);
     identityApiMocks.getAllDefinedPermissionsApi.mockResolvedValue([]);
     identityApiMocks.getUserPersonalPermissionsApi.mockResolvedValue([]);
@@ -1153,5 +1175,518 @@ describe('employees feature guards', () => {
       userId: employee.id,
       permissions: [Permissions.Device.Read],
     });
+  });
+
+  it('normalizes assignable roles and requires both access-update and role-read for onboarding', async () => {
+    expect(normalizeAssignableRoleNames([
+      ' Admin ',
+      'ADMIN',
+      '',
+      ' RoleAdmin ',
+      'roleadmin',
+      ' HrAdmin ',
+    ])).toEqual(['RoleAdmin', 'HrAdmin']);
+
+    authMock.state!.permissions = [Permissions.Employee.UpdateAccess];
+    const state = useEmployees();
+    await state.openOnboardModal();
+
+    expect(state.canManageEmployeeRole.value).toBe(false);
+    expect(employeeApiMocks.getAllRolesApi).not.toHaveBeenCalled();
+    expect(state.roleOptions.value).toEqual([]);
+
+    authMock.state!.permissions = [
+      Permissions.Employee.UpdateAccess,
+      Permissions.Role.Read,
+    ];
+    employeeApiMocks.getAllRolesApi.mockResolvedValue([
+      ' Admin ',
+      ' RoleAdmin ',
+      'roleadmin',
+      'HrAdmin',
+      ' ',
+    ]);
+    await state.openOnboardModal();
+
+    expect(state.canManageEmployeeRole.value).toBe(true);
+    expect(employeeApiMocks.getAllRolesApi).toHaveBeenCalledTimes(1);
+    expect(state.roleOptions.value).toEqual([
+      { label: 'RoleAdmin', value: 'RoleAdmin' },
+      { label: 'HrAdmin', value: 'HrAdmin' },
+    ]);
+
+    const Harness = defineComponent({
+      components: { EmployeeOnboardModal },
+      setup() {
+        const modalState = reactive({
+          show: true,
+          canAssignRole: false,
+          form: {
+            EmployeeNo: '',
+            RealName: '',
+            Password: '',
+            RoleName: null as string | null,
+          },
+        });
+        return { modalState, options: state.roleOptions };
+      },
+      template: `
+        <EmployeeOnboardModal
+          v-model:show="modalState.show"
+          :form="modalState.form"
+          :role-options="options"
+          :can-assign-role="modalState.canAssignRole"
+          :submitting="false"
+        />
+      `,
+    });
+    const wrapper = mount(Harness, { attachTo: document.body });
+    await nextTick();
+    expect(document.body.textContent).not.toContain('系统角色');
+
+    wrapper.vm.modalState.canAssignRole = true;
+    await nextTick();
+    expect(document.body.textContent).toContain('系统角色');
+    wrapper.unmount();
+  });
+
+  it('shows the role action only with the dual permission model and hides the current user', () => {
+    authMock.state!.permissions = [Permissions.Employee.UpdateAccess];
+    const state = useEmployees();
+    const options = {
+      canManageRole: state.canManageRoleForEmployee,
+      onRole: state.openRoleModal,
+    };
+
+    let actions = mountEmployeeActions(options, employee);
+    expect(actions.text()).not.toContain('角色');
+    actions.unmount();
+
+    authMock.state!.permissions = [
+      Permissions.Employee.UpdateAccess,
+      Permissions.Role.Read,
+    ];
+    actions = mountEmployeeActions(options, employee);
+    expect(actions.text()).toContain('角色');
+    actions.unmount();
+
+    authMock.state!.userId = employee.id;
+    actions = mountEmployeeActions(options, employee);
+    expect(actions.text()).not.toContain('角色');
+    actions.unmount();
+
+    authMock.state!.isAdmin = true;
+    authMock.state!.permissions = [];
+    actions = mountEmployeeActions(options, inactiveEmployee);
+    expect(actions.text()).toContain('角色');
+    expect(authMock.hasAllPermissions).toHaveBeenCalledWith([
+      Permissions.Employee.UpdateAccess,
+      Permissions.Role.Read,
+    ]);
+    actions.unmount();
+  });
+
+  it('rejects an Admin-like target after detail loading before role controls become ready', async () => {
+    authMock.state!.permissions = [
+      Permissions.Employee.UpdateAccess,
+      Permissions.Role.Read,
+    ];
+    employeeApiMocks.getAllRolesApi.mockResolvedValue(['RoleAdmin', 'HrAdmin']);
+    employeeApiMocks.getEmployeeDetailApi.mockResolvedValue({
+      ...employee,
+      deviceIds: [],
+      roleNames: [' admin '],
+    });
+    const state = useEmployees();
+
+    await state.openRoleModal(employee);
+    await state.submitRole();
+
+    expect(state.showRoleModal.value).toBe(false);
+    expect(state.roleReady.value).toBe(false);
+    expect(state.roleTarget.value).toBeNull();
+    expect(employeeApiMocks.updateEmployeeRoleApi).not.toHaveBeenCalled();
+    expect(feedbackMocks.notifyWarning).toHaveBeenCalledWith(
+      'Admin 对应人员禁止通过员工角色入口修改',
+    );
+  });
+
+  it('initializes zero and single roles, while requiring an explicit choice for legacy role states', async () => {
+    authMock.state!.permissions = [
+      Permissions.Employee.UpdateAccess,
+      Permissions.Role.Read,
+    ];
+    employeeApiMocks.getAllRolesApi.mockResolvedValue([
+      ' Admin ',
+      'RoleAdmin',
+      ' roleadmin ',
+      'HrAdmin',
+    ]);
+    const state = useEmployees();
+
+    employeeApiMocks.getEmployeeDetailApi.mockResolvedValue({
+      ...employee,
+      deviceIds: [],
+      roleNames: [],
+    });
+    await state.openRoleModal(employee);
+    expect(state.roleForm.Selection).toBe(EMPLOYEE_ROLE_CLEAR_SELECTION);
+    expect(state.canSubmitRole.value).toBe(false);
+    state.closeRoleModal();
+
+    employeeApiMocks.getEmployeeDetailApi.mockResolvedValue({
+      ...employee,
+      deviceIds: [],
+      roleNames: [' roleadmin '],
+    });
+    await state.openRoleModal(employee);
+    expect(state.roleForm.Selection).toBe(employeeRoleSelectionValue('RoleAdmin'));
+    expect(state.canSubmitRole.value).toBe(false);
+    expect(state.missingRoleNames.value).toEqual([]);
+    state.closeRoleModal();
+
+    employeeApiMocks.getEmployeeDetailApi.mockResolvedValue({
+      ...employee,
+      deviceIds: [],
+      roleNames: ['RoleAdmin', 'HrAdmin'],
+    });
+    await state.openRoleModal(employee);
+    expect(state.roleForm.Selection).toBe('');
+    expect(state.hasMultipleCurrentRoles.value).toBe(true);
+    expect(state.canSubmitRole.value).toBe(false);
+    state.setRoleSelection(EMPLOYEE_ROLE_CLEAR_SELECTION);
+    expect(state.canSubmitRole.value).toBe(true);
+    state.closeRoleModal();
+
+    employeeApiMocks.getEmployeeDetailApi.mockResolvedValue({
+      ...employee,
+      deviceIds: [],
+      roleNames: ['DeletedLegacyRole'],
+    });
+    await state.openRoleModal(employee);
+    expect(state.roleForm.Selection).toBe('');
+    expect(state.missingRoleNames.value).toEqual(['DeletedLegacyRole']);
+    expect(state.employeeRoleOptions.value).not.toContainEqual({
+      label: 'DeletedLegacyRole',
+      value: 'DeletedLegacyRole',
+    });
+    state.setRoleSelection(employeeRoleSelectionValue('HrAdmin'));
+    expect(state.canSubmitRole.value).toBe(true);
+  });
+
+  it('keeps a delayed onboarding role load from overwriting the active employee role candidates', async () => {
+    authMock.state!.permissions = [
+      Permissions.Employee.UpdateAccess,
+      Permissions.Role.Read,
+    ];
+    const onboardingRoles = deferred<string[]>();
+    employeeApiMocks.getAllRolesApi
+      .mockReturnValueOnce(onboardingRoles.promise)
+      .mockResolvedValueOnce(['RoleAdmin']);
+    employeeApiMocks.getEmployeeDetailApi.mockResolvedValue({
+      ...employee,
+      deviceIds: [],
+      roleNames: ['RoleAdmin'],
+    });
+    const state = useEmployees();
+
+    const onboardingOpen = state.openOnboardModal();
+    state.showOnboardModal.value = false;
+    await state.openRoleModal(employee);
+    expect(state.employeeAssignableRoles.value).toEqual(['RoleAdmin']);
+
+    onboardingRoles.resolve(['HrAdmin']);
+    await onboardingOpen;
+
+    expect(state.roleOptions.value).toEqual([{ label: 'HrAdmin', value: 'HrAdmin' }]);
+    expect(state.employeeAssignableRoles.value).toEqual(['RoleAdmin']);
+    expect(state.roleForm.Selection).toBe(employeeRoleSelectionValue('RoleAdmin'));
+  });
+
+  it('commits only the latest parallel role load and ignores closed or repeated stale requests', async () => {
+    authMock.state!.permissions = [
+      Permissions.Employee.UpdateAccess,
+      Permissions.Role.Read,
+    ];
+    const firstRoles = deferred<string[]>();
+    const firstDetail = deferred<Awaited<ReturnType<typeof employeeApiMocks.getEmployeeDetailApi>>>();
+    const secondRoles = deferred<string[]>();
+    const secondDetail = deferred<Awaited<ReturnType<typeof employeeApiMocks.getEmployeeDetailApi>>>();
+    employeeApiMocks.getAllRolesApi
+      .mockReturnValueOnce(firstRoles.promise)
+      .mockReturnValueOnce(secondRoles.promise);
+    employeeApiMocks.getEmployeeDetailApi
+      .mockReturnValueOnce(firstDetail.promise)
+      .mockReturnValueOnce(secondDetail.promise);
+    const state = useEmployees();
+
+    const firstOpen = state.openRoleModal(employee);
+    const secondOpen = state.openRoleModal(inactiveEmployee);
+    expect(employeeApiMocks.getAllRolesApi).toHaveBeenCalledTimes(2);
+    expect(employeeApiMocks.getEmployeeDetailApi).toHaveBeenNthCalledWith(1, employee.id);
+    expect(employeeApiMocks.getEmployeeDetailApi).toHaveBeenNthCalledWith(2, inactiveEmployee.id);
+
+    firstRoles.resolve(['RoleAdmin']);
+    firstDetail.resolve({
+      ...employee,
+      deviceIds: [],
+      roleNames: ['RoleAdmin'],
+    });
+    await firstOpen;
+    expect(state.roleTarget.value?.id).toBe(inactiveEmployee.id);
+    expect(state.roleReady.value).toBe(false);
+
+    secondRoles.resolve(['HrAdmin']);
+    secondDetail.resolve({
+      ...inactiveEmployee,
+      deviceIds: [],
+      roleNames: ['HrAdmin'],
+    });
+    await secondOpen;
+    expect(state.roleTarget.value?.id).toBe(inactiveEmployee.id);
+    expect(state.roleForm.Selection).toBe(employeeRoleSelectionValue('HrAdmin'));
+    expect(state.roleReady.value).toBe(true);
+
+    const staleSameRoles = deferred<string[]>();
+    const staleSameDetail = deferred<Awaited<ReturnType<typeof employeeApiMocks.getEmployeeDetailApi>>>();
+    const latestSameRoles = deferred<string[]>();
+    const latestSameDetail = deferred<Awaited<ReturnType<typeof employeeApiMocks.getEmployeeDetailApi>>>();
+    employeeApiMocks.getAllRolesApi
+      .mockReturnValueOnce(staleSameRoles.promise)
+      .mockReturnValueOnce(latestSameRoles.promise);
+    employeeApiMocks.getEmployeeDetailApi
+      .mockReturnValueOnce(staleSameDetail.promise)
+      .mockReturnValueOnce(latestSameDetail.promise);
+
+    const staleSameOpen = state.openRoleModal(inactiveEmployee);
+    const latestSameOpen = state.openRoleModal(inactiveEmployee);
+    latestSameRoles.resolve(['RoleAdmin']);
+    latestSameDetail.resolve({
+      ...inactiveEmployee,
+      deviceIds: [],
+      roleNames: ['RoleAdmin'],
+    });
+    await latestSameOpen;
+    staleSameRoles.resolve(['HrAdmin']);
+    staleSameDetail.resolve({
+      ...inactiveEmployee,
+      deviceIds: [],
+      roleNames: ['HrAdmin'],
+    });
+    await staleSameOpen;
+
+    expect(state.roleForm.Selection).toBe(employeeRoleSelectionValue('RoleAdmin'));
+    expect(state.employeeAssignableRoles.value).toEqual(['RoleAdmin']);
+
+    const repeatedRoles = deferred<string[]>();
+    const repeatedDetail = deferred<Awaited<ReturnType<typeof employeeApiMocks.getEmployeeDetailApi>>>();
+    employeeApiMocks.getAllRolesApi.mockReturnValueOnce(repeatedRoles.promise);
+    employeeApiMocks.getEmployeeDetailApi.mockReturnValueOnce(repeatedDetail.promise);
+    const repeatedOpen = state.openRoleModal(inactiveEmployee);
+    state.showRoleModal.value = false;
+    repeatedRoles.resolve(['RoleAdmin']);
+    repeatedDetail.resolve({
+      ...inactiveEmployee,
+      deviceIds: [],
+      roleNames: ['RoleAdmin'],
+    });
+    await repeatedOpen;
+
+    expect(state.showRoleModal.value).toBe(false);
+    expect(state.roleTarget.value).toBeNull();
+    expect(state.roleDetail.value).toBeNull();
+    expect(state.roleForm.Selection).toBe('');
+  });
+
+  it('rechecks permission and identity before role submission', async () => {
+    authMock.state!.permissions = [
+      Permissions.Employee.UpdateAccess,
+      Permissions.Role.Read,
+    ];
+    employeeApiMocks.getAllRolesApi.mockResolvedValue(['RoleAdmin', 'HrAdmin']);
+    employeeApiMocks.getEmployeeDetailApi.mockResolvedValue({
+      ...employee,
+      deviceIds: [],
+      roleNames: ['RoleAdmin'],
+    });
+    const state = useEmployees();
+
+    await state.openRoleModal(employee);
+    await state.submitRole();
+    expect(employeeApiMocks.updateEmployeeRoleApi).not.toHaveBeenCalled();
+
+    state.setRoleSelection(employeeRoleSelectionValue('HrAdmin'));
+    authMock.state!.permissions = [Permissions.Employee.UpdateAccess];
+    await nextTick();
+    await state.submitRole();
+    expect(state.showRoleModal.value).toBe(false);
+    expect(employeeApiMocks.updateEmployeeRoleApi).not.toHaveBeenCalled();
+    expect(feedbackMocks.notifyWarning).toHaveBeenLastCalledWith(
+      '角色管理权限已失效，请重新登录后重试',
+    );
+
+    authMock.state!.permissions = [
+      Permissions.Employee.UpdateAccess,
+      Permissions.Role.Read,
+    ];
+    await state.openRoleModal(employee);
+    state.setRoleSelection(employeeRoleSelectionValue('HrAdmin'));
+    authMock.state!.userId = employee.id;
+    await state.submitRole();
+    expect(state.showRoleModal.value).toBe(false);
+    expect(employeeApiMocks.updateEmployeeRoleApi).not.toHaveBeenCalled();
+    expect(feedbackMocks.notifyWarning).toHaveBeenLastCalledWith(
+      '不能修改当前登录用户自己的角色',
+    );
+  });
+
+  it('submits canonical replacement and explicit null without a fake list refresh', async () => {
+    authMock.state!.permissions = [
+      Permissions.Employee.UpdateAccess,
+      Permissions.Role.Read,
+    ];
+    employeeApiMocks.getAllRolesApi.mockResolvedValue(['RoleAdmin', 'HrAdmin']);
+    employeeApiMocks.getEmployeeDetailApi.mockResolvedValue({
+      ...employee,
+      deviceIds: [],
+      roleNames: ['RoleAdmin'],
+    });
+    const state = useEmployees();
+
+    await state.openDetailModal(employee.id);
+    await state.openRoleModal(employee);
+    state.setRoleSelection(employeeRoleSelectionValue('HrAdmin'));
+    await state.submitRole();
+
+    expect(employeeApiMocks.updateEmployeeRoleApi).toHaveBeenCalledWith(employee.id, {
+      roleName: 'HrAdmin',
+    });
+    expect(employeeApiMocks.getEmployeePagedListApi).not.toHaveBeenCalled();
+    expect(state.detailData.value).toBeNull();
+    expect(state.showRoleModal.value).toBe(false);
+    expect(feedbackMocks.notifySuccess).toHaveBeenCalledWith(
+      '角色已更新，员工现有会话已失效，请通知员工重新登录',
+    );
+
+    employeeApiMocks.updateEmployeeRoleApi.mockClear();
+    feedbackMocks.notifySuccess.mockClear();
+    await state.openRoleModal(employee);
+    state.setRoleSelection(EMPLOYEE_ROLE_CLEAR_SELECTION);
+    await state.submitRole();
+
+    expect(employeeApiMocks.updateEmployeeRoleApi).toHaveBeenCalledWith(employee.id, {
+      roleName: null,
+    });
+    expect(feedbackMocks.notifySuccess).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the modal on PUT failure and locks duplicate or target-switching submissions', async () => {
+    authMock.state!.permissions = [
+      Permissions.Employee.UpdateAccess,
+      Permissions.Role.Read,
+    ];
+    employeeApiMocks.getAllRolesApi.mockResolvedValue(['RoleAdmin', 'HrAdmin']);
+    employeeApiMocks.getEmployeeDetailApi.mockImplementation(async (id: string) => ({
+      ...(id === employee.id ? employee : inactiveEmployee),
+      deviceIds: [],
+      roleNames: ['RoleAdmin'],
+    }));
+    const state = useEmployees();
+
+    await state.openRoleModal(employee);
+    state.setRoleSelection(employeeRoleSelectionValue('HrAdmin'));
+    employeeApiMocks.updateEmployeeRoleApi.mockRejectedValueOnce(
+      new Error('ProblemDetails handled by http client'),
+    );
+    await state.submitRole();
+    expect(state.showRoleModal.value).toBe(true);
+    expect(state.roleSubmitting.value).toBe(false);
+    expect(feedbackMocks.notifySuccess).not.toHaveBeenCalled();
+
+    const pendingUpdate = deferred<boolean>();
+    employeeApiMocks.updateEmployeeRoleApi.mockReturnValueOnce(pendingUpdate.promise);
+    const firstSubmission = state.submitRole();
+    const duplicateSubmission = state.submitRole();
+    await duplicateSubmission;
+
+    expect(employeeApiMocks.updateEmployeeRoleApi).toHaveBeenCalledTimes(2);
+    expect(state.roleSubmitting.value).toBe(true);
+    expect(state.closeRoleModal()).toBe(false);
+    await state.openRoleModal(inactiveEmployee);
+    expect(state.roleTarget.value?.id).toBe(employee.id);
+    expect(feedbackMocks.notifyWarning).toHaveBeenCalledWith(
+      '员工角色正在保存，请稍后重试',
+    );
+
+    pendingUpdate.resolve(true);
+    await firstSubmission;
+    expect(state.showRoleModal.value).toBe(false);
+    expect(state.roleSubmitting.value).toBe(false);
+  });
+
+  it('renders legacy and session warnings and blocks modal closing while busy', async () => {
+    const Harness = defineComponent({
+      components: { EmployeeRoleModal },
+      setup() {
+        const modalState = reactive({
+          show: true,
+          submitting: false,
+          selection: '',
+          closeRequests: 0,
+        });
+        return {
+          modalState,
+          employee,
+          detail: {
+            ...employee,
+            deviceIds: [],
+            roleNames: ['RoleAdmin', 'DeletedLegacyRole'],
+          },
+          options: [
+            { label: '不分配角色', value: EMPLOYEE_ROLE_CLEAR_SELECTION },
+            { label: 'RoleAdmin', value: employeeRoleSelectionValue('RoleAdmin') },
+          ],
+        };
+      },
+      template: `
+        <EmployeeRoleModal
+          :show="modalState.show"
+          :target="employee"
+          :detail="detail"
+          :current-role-names="detail.roleNames"
+          :missing-role-names="['DeletedLegacyRole']"
+          :role-options="options"
+          :selection="modalState.selection"
+          :loading="false"
+          :ready="true"
+          :submitting="modalState.submitting"
+          :can-manage-role="true"
+          :can-submit="true"
+          :has-multiple-roles="true"
+          @request-close="modalState.closeRequests += 1"
+          @update-selection="modalState.selection = $event"
+        />
+      `,
+    });
+    const wrapper = mount(Harness, { attachTo: document.body });
+    await nextTick();
+
+    const modal = document.body.querySelector('.ui-modal')!;
+    expect(modal.textContent).toContain('检测到多个遗留角色');
+    expect(modal.textContent).toContain('DeletedLegacyRole 已不在正式候选清单');
+    expect(modal.textContent).toContain('Access Token、Refresh Token 和 OIDC 会话立即失效');
+    expect(modal.textContent).toContain('必须重新登录');
+
+    wrapper.vm.modalState.submitting = true;
+    await nextTick();
+    document.body.querySelector<HTMLButtonElement>('.ui-modal__close')!.click();
+    expect(wrapper.vm.modalState.closeRequests).toBe(0);
+    expect(document.body.querySelector<HTMLSelectElement>('#employee-role-selection')!.disabled).toBe(true);
+
+    wrapper.vm.modalState.submitting = false;
+    await nextTick();
+    document.body.querySelector<HTMLButtonElement>('.ui-modal__close')!.click();
+    expect(wrapper.vm.modalState.closeRequests).toBe(1);
+    wrapper.unmount();
   });
 });
