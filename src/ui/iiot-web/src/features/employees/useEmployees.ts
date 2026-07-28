@@ -59,7 +59,7 @@ export function useEmployees() {
   const permissionGroups = ref<PermissionGroupDto[]>([]);
   const accessTargetId = ref('');
   const onboardForm = reactive({ EmployeeNo: '', RealName: '', Password: '', RoleName: null as string | null });
-  const editForm = reactive({ RealName: '', IsActive: true, RoleName: null as string | null });
+  const editForm = reactive({ RealName: '' });
   const accessForm = reactive({ DeviceIds: [] as string[] });
   const resetPwdForm = reactive({ newPwd: '', confirm: '' });
   const confirmDialog = reactive<EmployeeConfirmDialogState>({
@@ -69,9 +69,6 @@ export function useEmployees() {
     confirmText: '',
     onConfirm: async () => {},
   });
-  const editRoleLoaded = ref(false);
-  const editRoleLoadFailed = ref(false);
-
   const listPage = useListPage<EmployeeListItemDto, { keyword: string }>({
     initialFilter: { keyword: '' },
     initialPageSize: PAGE_SIZE,
@@ -96,10 +93,7 @@ export function useEmployees() {
   const canUpdateAccess = computed(() => authStore.hasPermission(Permissions.Employee.UpdateAccess));
   const canDeactivateEmployee = computed(() => authStore.hasPermission(Permissions.Employee.Deactivate));
   const canTerminateEmployee = computed(() => authStore.hasPermission(Permissions.Employee.Terminate));
-  const canManagePersonalPermissions = computed(() =>
-    authStore.hasPermission(Permissions.Employee.UpdateAccess)
-    && authStore.hasPermission(Permissions.Role.Define),
-  );
+  const canManagePersonalPermissions = computed(() => authStore.isAdmin);
   const deviceNameMap = computed(() => Object.fromEntries(allDevices.value.map((d) => [d.id, d.deviceName])));
   const roleOptions = computed(() => availableRoles.value.map((r) => ({ label: r, value: r })));
 
@@ -190,25 +184,9 @@ export function useEmployees() {
     }
   }
 
-  async function openEditModal(employee: EmployeeListItemDto) {
+  function openEditModal(employee: EmployeeListItemDto) {
     editTarget.value = employee;
-    Object.assign(editForm, { RealName: employee.realName, IsActive: employee.isActive, RoleName: null });
-    editRoleLoaded.value = false;
-    editRoleLoadFailed.value = false;
-    if (!canUpdateAccess.value) {
-      availableRoles.value = [];
-      showEditModal.value = true;
-      return;
-    }
-    try {
-      const [roles, detail] = await Promise.all([getAllRolesApi(), getEmployeeDetailApi(employee.id)]);
-      availableRoles.value = roles.filter((r) => r !== 'Admin');
-      editForm.RoleName = detail.roleNames.find((role) => role !== 'Admin') ?? null;
-      editRoleLoaded.value = true;
-    } catch {
-      availableRoles.value = [];
-      editRoleLoadFailed.value = true;
-    }
+    editForm.RealName = employee.realName;
     showEditModal.value = true;
   }
 
@@ -222,13 +200,7 @@ export function useEmployees() {
       const payload: UpdateProfilePayload = {
         employeeId: editTarget.value.id,
         realName: editForm.RealName,
-        isActive: editForm.IsActive,
       };
-      if (canUpdateAccess.value && editRoleLoaded.value) {
-        payload.roleName = editForm.RoleName ?? '';
-      } else if (canUpdateAccess.value && editRoleLoadFailed.value) {
-        notifyWarning('角色信息未加载成功，本次只保存基础档案');
-      }
       await updateEmployeeProfileApi(editTarget.value.id, payload);
       showEditModal.value = false;
       await fetchList();
@@ -304,6 +276,8 @@ export function useEmployees() {
   }
 
   async function openPersonalPermModal(employee: EmployeeListItemDto) {
+    if (!canManagePersonalPermissions.value) return;
+
     personalPermTarget.value = employee;
     personalPermLoading.value = true;
     personalPermForm.value = [];
@@ -324,6 +298,8 @@ export function useEmployees() {
   }
 
   function togglePersonalPerm(permission: string, checked: boolean) {
+    if (!canManagePersonalPermissions.value) return;
+
     if (checked && !personalPermForm.value.includes(permission)) personalPermForm.value.push(permission);
     if (!checked) {
       const idx = personalPermForm.value.indexOf(permission);
@@ -332,7 +308,8 @@ export function useEmployees() {
   }
 
   async function submitPersonalPerm() {
-    if (!personalPermTarget.value) return;
+    if (!canManagePersonalPermissions.value || !personalPermTarget.value) return;
+
     submitting.value = true;
     try {
       await updateUserPermissionsApi(personalPermTarget.value.id, {
@@ -405,7 +382,6 @@ export function useEmployees() {
     showEditModal,
     editForm,
     editTarget,
-    editRoleLoadFailed,
     showAccessModal,
     accessLoading,
     accessForm,

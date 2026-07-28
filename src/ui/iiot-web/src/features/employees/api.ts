@@ -32,8 +32,6 @@ export interface OnboardEmployeePayload {
 export interface UpdateProfilePayload {
   employeeId: string;
   realName: string;
-  isActive: boolean;
-  roleName?: string | null;
 }
 
 export interface UpdateAccessPayload {
