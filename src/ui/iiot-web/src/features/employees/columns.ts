@@ -8,6 +8,7 @@ interface EmployeeColumnOptions {
   canUpdateEmployee: () => boolean;
   canUpdateAccess: () => boolean;
   canDeactivateEmployee: () => boolean;
+  canResetPassword: () => boolean;
   canTerminateEmployee: () => boolean;
   canManagePersonalPermissions: () => boolean;
   onDetail: (id: string) => void;
@@ -70,7 +71,7 @@ export function createEmployeeColumns(
           options.canUpdateEmployee()
             ? h(UiButton, { size: 'tiny', type: 'info', secondary: true, onClick: () => options.onEdit(row) }, { default: () => '编辑' })
             : null,
-          options.canUpdateEmployee()
+          options.canResetPassword()
             ? h(UiButton, { size: 'tiny', type: 'warning', secondary: true, onClick: () => options.onResetPassword(row) }, { default: () => '重置密码' })
             : null,
           options.canUpdateAccess()

@@ -92,7 +92,14 @@ export function useEmployees() {
   const canUpdateEmployee = computed(() => authStore.hasPermission(Permissions.Employee.Update));
   const canUpdateAccess = computed(() => authStore.hasPermission(Permissions.Employee.UpdateAccess));
   const canDeactivateEmployee = computed(() => authStore.hasPermission(Permissions.Employee.Deactivate));
-  const canTerminateEmployee = computed(() => authStore.hasPermission(Permissions.Employee.Terminate));
+  const canResetPassword = computed(() =>
+    authStore.isAdmin
+    && authStore.hasPermission(Permissions.Employee.Update),
+  );
+  const canTerminateEmployee = computed(() =>
+    authStore.isAdmin
+    && authStore.hasPermission(Permissions.Employee.Terminate),
+  );
   const canManagePersonalPermissions = computed(() => authStore.isAdmin);
   const deviceNameMap = computed(() => Object.fromEntries(allDevices.value.map((d) => [d.id, d.deviceName])));
   const roleOptions = computed(() => availableRoles.value.map((r) => ({ label: r, value: r })));
@@ -252,6 +259,8 @@ export function useEmployees() {
   }
 
   function openResetPwdModal(employee: EmployeeListItemDto) {
+    if (!canResetPassword.value) return;
+
     resetPwdTarget.value = employee;
     resetPwdForm.newPwd = '';
     resetPwdForm.confirm = '';
@@ -259,7 +268,8 @@ export function useEmployees() {
   }
 
   async function submitResetPwd() {
-    if (!resetPwdTarget.value) return;
+    if (!canResetPassword.value || !resetPwdTarget.value) return;
+
     const validationMessage = isResetPasswordInvalid(resetPwdForm.newPwd, resetPwdForm.confirm);
     if (validationMessage) {
       notifyWarning(validationMessage);
@@ -343,12 +353,16 @@ export function useEmployees() {
   }
 
   function handleTerminate(employee: EmployeeListItemDto) {
+    if (!canTerminateEmployee.value) return;
+
     Object.assign(confirmDialog, {
       show: true,
       title: '员工离职销户（不可撤销）',
       desc: `即将永久删除「${employee.realName}（${employee.employeeNo}）」的所有档案，含身份账号与权限数据，此操作不可撤销！`,
       confirmText: '确认离职销户',
       onConfirm: async () => {
+        if (!canTerminateEmployee.value) return;
+
         submitting.value = true;
         try {
           await terminateEmployeeApi(employee.id);
@@ -372,6 +386,7 @@ export function useEmployees() {
     canUpdateEmployee,
     canUpdateAccess,
     canDeactivateEmployee,
+    canResetPassword,
     canTerminateEmployee,
     canManagePersonalPermissions,
     allDevices,
