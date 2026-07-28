@@ -34,6 +34,7 @@ import {
 import {
   EMPLOYEE_ROLE_CLEAR_SELECTION,
   employeeRoleSelectionValue,
+  isAdminLikeRoleName,
   isResetPasswordInvalid,
   normalizeAssignableRoleNames,
   type EmployeeConfirmDialogState,
@@ -52,6 +53,7 @@ const ROLE_SELF_UPDATE_MESSAGE = '不能修改当前登录用户自己的角色'
 const ROLE_NOT_READY_MESSAGE = '员工角色尚未加载完成，请稍后重试';
 const ROLE_SUBMITTING_MESSAGE = '员工角色正在保存，请稍后重试';
 const ROLE_TARGET_INVALID_MESSAGE = '员工角色目标已失效，请重新打开后重试';
+const ROLE_ADMIN_TARGET_MESSAGE = 'Admin 对应人员禁止通过员工角色入口修改';
 const EMPLOYEE_REFRESH_FAILED_MESSAGE = '员工操作已完成，但列表刷新失败，请重新加载页面确认最新状态';
 
 type EmployeePageResponse = Awaited<ReturnType<typeof getEmployeePagedListApi>>;
@@ -622,6 +624,11 @@ export function useEmployees() {
 
       const assignableRoles = normalizeAssignableRoleNames(roles);
       const normalizedCurrentRoles = normalizeCurrentRoleNames(detail.roleNames);
+      if (normalizedCurrentRoles.some(isAdminLikeRoleName)) {
+        notifyWarning(ROLE_ADMIN_TARGET_MESSAGE);
+        showRoleModal.value = false;
+        return;
+      }
       employeeAssignableRoles.value = assignableRoles;
       roleDetail.value = detail;
 

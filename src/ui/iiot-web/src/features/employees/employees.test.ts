@@ -1286,6 +1286,31 @@ describe('employees feature guards', () => {
     actions.unmount();
   });
 
+  it('rejects an Admin-like target after detail loading before role controls become ready', async () => {
+    authMock.state!.permissions = [
+      Permissions.Employee.UpdateAccess,
+      Permissions.Role.Read,
+    ];
+    employeeApiMocks.getAllRolesApi.mockResolvedValue(['RoleAdmin', 'HrAdmin']);
+    employeeApiMocks.getEmployeeDetailApi.mockResolvedValue({
+      ...employee,
+      deviceIds: [],
+      roleNames: [' admin '],
+    });
+    const state = useEmployees();
+
+    await state.openRoleModal(employee);
+    await state.submitRole();
+
+    expect(state.showRoleModal.value).toBe(false);
+    expect(state.roleReady.value).toBe(false);
+    expect(state.roleTarget.value).toBeNull();
+    expect(employeeApiMocks.updateEmployeeRoleApi).not.toHaveBeenCalled();
+    expect(feedbackMocks.notifyWarning).toHaveBeenCalledWith(
+      'Admin 对应人员禁止通过员工角色入口修改',
+    );
+  });
+
   it('initializes zero and single roles, while requiring an explicit choice for legacy role states', async () => {
     authMock.state!.permissions = [
       Permissions.Employee.UpdateAccess,

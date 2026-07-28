@@ -23,6 +23,10 @@ export function employeeRoleSelectionValue(roleName: string): string {
   return `employee-role:value:${encodeURIComponent(roleName)}`;
 }
 
+export function isAdminLikeRoleName(roleName: string): boolean {
+  return roleName.trim().toLowerCase() === 'admin';
+}
+
 export function normalizeAssignableRoleNames(roleNames: readonly string[]): string[] {
   const normalizedRoles: string[] = [];
   const seen = new Set<string>();
@@ -30,7 +34,7 @@ export function normalizeAssignableRoleNames(roleNames: readonly string[]): stri
   for (const roleName of roleNames) {
     const normalizedRoleName = roleName.trim();
     const comparisonKey = normalizedRoleName.toLowerCase();
-    if (!normalizedRoleName || comparisonKey === 'admin' || seen.has(comparisonKey)) {
+    if (!normalizedRoleName || isAdminLikeRoleName(normalizedRoleName) || seen.has(comparisonKey)) {
       continue;
     }
 
