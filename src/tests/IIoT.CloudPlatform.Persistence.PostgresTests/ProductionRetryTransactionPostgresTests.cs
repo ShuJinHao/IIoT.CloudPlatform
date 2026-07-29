@@ -58,7 +58,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
     }
 
     [Fact]
-    public async Task CommitConfirmationLoss_ShouldNotDuplicateOnboardTerminateOrDeviceDelete()
+    public async Task CommitConfirmationLoss_ShouldNotDuplicateOnboardActivateTerminateOrDeviceDelete()
     {
         using var budget = await PostgresTestBudget.CreateAsync(
             fixture,
@@ -69,10 +69,11 @@ public sealed class ProductionRetryTransactionPostgresTests(
             interceptor);
 
         await VerifyOnboardCommitRecoveryAsync(provider, interceptor, budget.Token);
+        await VerifyActivateCommitRecoveryAsync(provider, interceptor, budget.Token);
         await VerifyTerminateCommitRecoveryAsync(provider, interceptor, budget.Token);
         await VerifyDeviceDeleteCommitRecoveryAsync(provider, interceptor, budget.Token);
 
-        Assert.Equal(3, interceptor.ExceptionsThrown);
+        Assert.Equal(4, interceptor.ExceptionsThrown);
     }
 
     [Fact]
@@ -721,6 +722,73 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 cancellationToken));
     }
 
+    private static async Task VerifyActivateCommitRecoveryAsync(
+        ServiceProvider provider,
+        ThrowOnceAfterCommitInterceptor interceptor,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var seed = await SeedEmployeeAsync(
+            services,
+            "ACKACT",
+            accountEnabled: true,
+            employeeActive: true,
+            withSession: true,
+            cancellationToken);
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var originalStamp = await dbContext.Users
+            .AsNoTracking()
+            .Where(user => user.Id == seed.EmployeeId)
+            .Select(user => user.SecurityStamp)
+            .SingleAsync(cancellationToken);
+        var identityStore = CreateIdentityStore(services);
+        var handler = new ActivateEmployeeHandler(
+            new EfRepository<Employee>(dbContext),
+            identityStore,
+            CreateUnitOfWork(dbContext),
+            new HumanSessionRevocationService(dbContext),
+            new AdminTargetGuard(identityStore));
+        string? committedStamp = null;
+
+        interceptor.Arm(async callbackCancellationToken =>
+        {
+            await using var connection = new NpgsqlConnection(
+                dbContext.Database.GetConnectionString());
+            await connection.OpenAsync(callbackCancellationToken);
+            await using var command = new NpgsqlCommand(
+                """
+                select "SecurityStamp"
+                from "AspNetUsers"
+                where "Id" = @employee_id
+                """,
+                connection);
+            command.Parameters.AddWithValue(
+                "employee_id",
+                seed.EmployeeId);
+            committedStamp = (string?)await command.ExecuteScalarAsync(
+                callbackCancellationToken);
+        });
+        var result = await handler.Handle(
+            new ActivateEmployeeCommand(seed.EmployeeId),
+            cancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.False(string.IsNullOrWhiteSpace(committedStamp));
+        dbContext.ChangeTracker.Clear();
+        var persistedStamp = await dbContext.Users
+            .AsNoTracking()
+            .Where(user => user.Id == seed.EmployeeId)
+            .Select(user => user.SecurityStamp)
+            .SingleAsync(cancellationToken);
+        Assert.NotEqual(originalStamp, persistedStamp);
+        Assert.Equal(committedStamp, persistedStamp);
+        Assert.False(await HasActiveHumanSessionAsync(
+            dbContext,
+            seed.EmployeeId,
+            cancellationToken));
+    }
+
     private static async Task VerifyDeviceDeleteCommitRecoveryAsync(
         ServiceProvider provider,
         ThrowOnceAfterCommitInterceptor interceptor,
@@ -1169,24 +1237,35 @@ public sealed class ProductionRetryTransactionPostgresTests(
     {
         private int armed;
         private int exceptionsThrown;
+        private Func<CancellationToken, Task>? afterCommit;
 
         public int ExceptionsThrown => Volatile.Read(ref exceptionsThrown);
 
-        public void Arm() => Volatile.Write(ref armed, 1);
+        public void Arm(
+            Func<CancellationToken, Task>? afterCommitAction = null)
+        {
+            afterCommit = afterCommitAction;
+            Volatile.Write(ref armed, 1);
+        }
 
-        public override Task TransactionCommittedAsync(
+        public override async Task TransactionCommittedAsync(
             DbTransaction transaction,
             TransactionEndEventData eventData,
             CancellationToken cancellationToken = default)
         {
             if (Interlocked.CompareExchange(ref armed, 0, 1) == 1)
             {
+                var callback = afterCommit;
+                afterCommit = null;
+                if (callback is not null)
+                {
+                    await callback(cancellationToken);
+                }
+
                 Interlocked.Increment(ref exceptionsThrown);
                 throw RetryablePostgresException(
                     "simulated commit confirmation loss");
             }
-
-            return Task.CompletedTask;
         }
     }
 

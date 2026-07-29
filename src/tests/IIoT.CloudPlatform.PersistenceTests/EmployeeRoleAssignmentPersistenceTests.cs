@@ -495,6 +495,15 @@ public sealed class EmployeeRoleAssignmentPersistenceTests
             CancellationToken cancellationToken = default)
             => inner.SetEnabledAsync(id, isEnabled, cancellationToken);
 
+        public Task<Result<bool>> ActivateWithSecurityStampAsync(
+            Guid id,
+            string securityStamp,
+            CancellationToken cancellationToken = default)
+            => inner.ActivateWithSecurityStampAsync(
+                id,
+                securityStamp,
+                cancellationToken);
+
         public async Task<Result<bool>> RotateSecurityStampAsync(
             Guid id,
             CancellationToken cancellationToken = default)

@@ -63,6 +63,35 @@ public sealed class IdentityAccountStore(
             : Result.Failure(result.Errors.Select(e => e.Description).ToArray());
     }
 
+    public async Task<Result<bool>> ActivateWithSecurityStampAsync(
+        Guid id,
+        string securityStamp,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(securityStamp);
+        var user = await userManager.FindByIdAsync(id.ToString());
+        if (user is null)
+        {
+            return Result.Success(false);
+        }
+
+        if (user.IsEnabled
+            && string.Equals(
+                user.SecurityStamp,
+                securityStamp,
+                StringComparison.Ordinal))
+        {
+            return Result.Success(true);
+        }
+
+        user.IsEnabled = true;
+        user.SecurityStamp = securityStamp;
+        var result = await userManager.UpdateAsync(user);
+        return result.Succeeded
+            ? Result.Success(true)
+            : Result.Failure(result.Errors.Select(e => e.Description).ToArray());
+    }
+
     public async Task<Result<bool>> RotateSecurityStampAsync(
         Guid id,
         CancellationToken cancellationToken = default)

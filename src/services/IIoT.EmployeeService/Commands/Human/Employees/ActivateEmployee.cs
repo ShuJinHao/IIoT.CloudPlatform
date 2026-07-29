@@ -26,6 +26,7 @@ public sealed class ActivateEmployeeHandler(
         ActivateEmployeeCommand request,
         CancellationToken cancellationToken)
     {
+        var activationSecurityStamp = Guid.NewGuid().ToString("N");
         return await unitOfWork.ExecuteResilientAsync(
             ExecuteTransactionAsync,
             cancellationToken);
@@ -70,18 +71,16 @@ public sealed class ActivateEmployeeHandler(
                 return Result.Failure("员工身份账号启用失败");
             }
 
-            if (!account.IsEnabled)
-            {
-                var identityResult = await identityAccountStore.SetEnabledAsync(
+            var identityResult =
+                await identityAccountStore.ActivateWithSecurityStampAsync(
                     request.EmployeeId,
-                    true,
+                    activationSecurityStamp,
                     transactionCancellationToken);
-                if (!identityResult.IsSuccess || !identityResult.Value)
-                {
-                    await unitOfWork.RollbackAsync(transactionCancellationToken);
-                    return Result.Failure(
-                        identityResult.Errors?.ToArray() ?? ["员工身份账号启用失败"]);
-                }
+            if (!identityResult.IsSuccess || !identityResult.Value)
+            {
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return Result.Failure(
+                    identityResult.Errors?.ToArray() ?? ["员工身份账号启用失败"]);
             }
 
             await sessionRevocationService.RevokeAllAsync(
