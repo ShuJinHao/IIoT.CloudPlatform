@@ -1,6 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using IIoT.Core.Employees.Aggregates.Employees;
+using IIoT.Core.Production.Aggregates.Devices;
 
 namespace IIoT.EntityFrameworkCore.Configuration.Employee;
 
@@ -27,5 +28,10 @@ public class EmployeeDeviceAccessConfiguration : IEntityTypeConfiguration<Employ
         // 4. 业务索引：加速按设备反查“这台机器能被哪些人操作”
         builder.HasIndex(eda => eda.DeviceId)
             .HasDatabaseName("ix_employee_device_accesses_device_id");
+
+        builder.HasOne<Device>()
+            .WithMany()
+            .HasForeignKey(eda => eda.DeviceId)
+            .OnDelete(DeleteBehavior.NoAction);
     }
 }

@@ -2,6 +2,10 @@ namespace IIoT.Services.Contracts.RecordQueries;
 
 public interface IDeviceReadQueryService
 {
+    Task<IReadOnlyList<Guid>> GetExistingIdsAsync(
+        IReadOnlyCollection<Guid> deviceIds,
+        CancellationToken cancellationToken = default);
+
     Task<bool> ExistsAsync(
         Guid deviceId,
         CancellationToken cancellationToken = default);

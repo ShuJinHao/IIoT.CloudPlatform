@@ -1,4 +1,6 @@
 using System.Security.Claims;
+using IIoT.Core.MasterData.Aggregates.MfgProcesses;
+using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.EmployeeService.Commands.Employees;
 using IIoT.EntityFrameworkCore;
 using IIoT.EntityFrameworkCore.Identity;
@@ -288,8 +290,19 @@ public sealed class EmployeeRoleAssignmentPersistenceTests
             "Role Target",
             accountEnabled,
             employeeActive);
-        var deviceId = Guid.NewGuid();
+        var unique = Guid.NewGuid().ToString("N");
+        var process = new MfgProcess(
+            $"ROLE-{unique}",
+            "Role assignment device process");
+        var device = new Device(
+            $"Role assignment device {unique}",
+            $"ROLE-{unique}"[..24],
+            process.Id);
+        var deviceId = device.Id;
         employee.AddDeviceAccess(deviceId);
+        device.ClearDomainEvents();
+        dbContext.MfgProcesses.Add(process);
+        dbContext.Devices.Add(device);
         var applicationUser = dbContext.Users.Local.Single(user => user.Id == employee.Id);
         applicationUser.SecurityStamp = $"stamp-before-{Guid.NewGuid():N}";
         await dbContext.SaveChangesAsync();

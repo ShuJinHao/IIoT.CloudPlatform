@@ -38,4 +38,47 @@ public sealed class PersistenceMigrationShapeContractTests
             "the forward migration may only add the receiver inbox/outbox schema");
     }
 
+    [Fact]
+    public void EmployeeDeviceAccessForeignKeyMigration_ShouldFailOnOrphansWithoutRepairingData()
+    {
+        var migrationsDirectory = CloudRepositoryPath.Find(
+            "src",
+            "infrastructure",
+            "IIoT.EntityFrameworkCore",
+            "Migrations");
+        var migrationFile = Assert.Single(
+            Directory.GetFiles(
+                migrationsDirectory,
+                "*AddEmployeeDeviceAccessDeviceForeignKey*.cs",
+                SearchOption.TopDirectoryOnly),
+            file => !file.EndsWith(".Designer.cs", StringComparison.Ordinal));
+        var source = File.ReadAllText(migrationFile);
+        var forwardMigration = source[..source.IndexOf(
+            "protected override void Down",
+            StringComparison.Ordinal)];
+
+        forwardMigration.Should().Contain("SELECT COUNT(*)");
+        forwardMigration.Should().Contain("LEFT JOIN devices");
+        forwardMigration.Should().Contain("WHERE device.id IS NULL");
+        forwardMigration.Should().Contain("RAISE EXCEPTION");
+        forwardMigration.Should().Contain("发现 %s 条孤儿设备授权");
+        forwardMigration.Should().Contain("migrationBuilder.AddForeignKey(");
+        forwardMigration.Should().Contain("ReferentialAction.NoAction");
+        forwardMigration.IndexOf("SELECT COUNT(*)", StringComparison.Ordinal)
+            .Should().BeLessThan(
+                forwardMigration.IndexOf("migrationBuilder.AddForeignKey(", StringComparison.Ordinal));
+        forwardMigration.Contains(
+                "DELETE FROM employee_device_accesses",
+                StringComparison.OrdinalIgnoreCase)
+            .Should().BeFalse();
+        forwardMigration.Contains(
+                "UPDATE employee_device_accesses",
+                StringComparison.OrdinalIgnoreCase)
+            .Should().BeFalse();
+        forwardMigration.Contains(
+                "INSERT INTO devices",
+                StringComparison.OrdinalIgnoreCase)
+            .Should().BeFalse();
+    }
+
 }

@@ -266,6 +266,13 @@ public sealed class ProductionCommandBehaviorTests
     {
         public bool NameExists { get; init; }
 
+        public Task<IReadOnlyList<Guid>> GetExistingIdsAsync(
+            IReadOnlyCollection<Guid> deviceIds,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<Guid>>([.. deviceIds]);
+        }
+
         public Task<bool> ExistsAsync(Guid deviceId, CancellationToken cancellationToken = default)
         {
             return Task.FromResult(true);

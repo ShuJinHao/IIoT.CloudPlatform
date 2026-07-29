@@ -45,6 +45,10 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
 
     public int SaveChangesResult { get; set; } = 1;
 
+    public int SaveChangesCalls { get; private set; }
+
+    public CancellationToken LastSaveChangesCancellationToken { get; private set; }
+
     public T Add(T entity)
     {
         AddedEntity = entity;
@@ -68,6 +72,9 @@ internal sealed class InMemoryRepository<T> : IRepository<T>
 
     public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        SaveChangesCalls++;
+        LastSaveChangesCancellationToken = cancellationToken;
         return Task.FromResult(SaveChangesResult);
     }
 
@@ -359,6 +366,16 @@ internal sealed class StubAiReadDeviceQueryService : IAiReadDeviceQueryService
 
 internal sealed class StubDeviceReadQueryService : IDeviceReadQueryService
 {
+    public IReadOnlyList<Guid> ExistingDeviceIds { get; set; } = [];
+
+    public Exception? GetExistingIdsException { get; set; }
+
+    public int GetExistingIdsCalls { get; private set; }
+
+    public IReadOnlyCollection<Guid> LastRequestedDeviceIds { get; private set; } = [];
+
+    public CancellationToken LastGetExistingIdsCancellationToken { get; private set; }
+
     public bool Exists { get; set; }
 
     public int ExistsCalls { get; private set; }
@@ -370,6 +387,22 @@ internal sealed class StubDeviceReadQueryService : IDeviceReadQueryService
     public bool CodeExists { get; set; }
 
     public bool NameExists { get; set; }
+
+    public Task<IReadOnlyList<Guid>> GetExistingIdsAsync(
+        IReadOnlyCollection<Guid> deviceIds,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        GetExistingIdsCalls++;
+        LastRequestedDeviceIds = [.. deviceIds];
+        LastGetExistingIdsCancellationToken = cancellationToken;
+        if (GetExistingIdsException is not null)
+        {
+            throw GetExistingIdsException;
+        }
+
+        return Task.FromResult(ExistingDeviceIds);
+    }
 
     public Task<bool> ExistsAsync(Guid deviceId, CancellationToken cancellationToken = default)
     {

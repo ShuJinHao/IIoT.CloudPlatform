@@ -5,6 +5,23 @@ namespace IIoT.EntityFrameworkCore.QueryServices;
 
 public sealed class DeviceReadQueryService(IIoTDbContext dbContext) : IDeviceReadQueryService
 {
+    public async Task<IReadOnlyList<Guid>> GetExistingIdsAsync(
+        IReadOnlyCollection<Guid> deviceIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (deviceIds.Count == 0)
+        {
+            return [];
+        }
+
+        var distinctDeviceIds = deviceIds.Distinct().ToArray();
+        return await dbContext.Devices
+            .AsNoTracking()
+            .Where(device => distinctDeviceIds.Contains(device.Id))
+            .Select(device => device.Id)
+            .ToListAsync(cancellationToken);
+    }
+
     public Task<bool> ExistsAsync(
         Guid deviceId,
         CancellationToken cancellationToken = default)
