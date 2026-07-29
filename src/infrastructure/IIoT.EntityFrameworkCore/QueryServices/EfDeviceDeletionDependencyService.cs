@@ -114,11 +114,13 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
                             transactionCancellationToken);
                         if (remainingImpact.TotalAssociatedRows == 0)
                         {
-                            pendingReplayCleanupImpact =
-                                cleanupAttemptImpact;
-                            pendingReplayCleanupTransactionId =
+                            var cleanupTransactionId =
                                 await GetCurrentTransactionIdAsync(
                                     transactionCancellationToken);
+                            pendingReplayCleanupTransactionId =
+                                cleanupTransactionId;
+                            pendingReplayCleanupImpact =
+                                cleanupAttemptImpact;
                         }
                     }
 
