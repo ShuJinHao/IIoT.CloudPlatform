@@ -1296,11 +1296,24 @@ internal sealed class RecordingUnitOfWork : IUnitOfWork
 {
     public Action? OnCommit { get; set; }
 
+    public int ExecuteResilientCalls { get; private set; }
+
     public int BeginCalls { get; private set; }
 
     public int CommitCalls { get; private set; }
 
     public int RollbackCalls { get; private set; }
+
+    public CancellationToken LastExecuteResilientCancellationToken { get; private set; }
+
+    public async Task<TResult> ExecuteResilientAsync<TResult>(
+        Func<CancellationToken, Task<TResult>> operation,
+        CancellationToken cancellationToken = default)
+    {
+        ExecuteResilientCalls++;
+        LastExecuteResilientCancellationToken = cancellationToken;
+        return await operation(cancellationToken);
+    }
 
     public Task BeginTransactionAsync(CancellationToken cancellationToken = default)
     {

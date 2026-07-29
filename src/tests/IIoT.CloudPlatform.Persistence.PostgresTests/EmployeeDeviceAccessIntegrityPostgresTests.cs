@@ -309,6 +309,75 @@ public sealed class EmployeeDeviceAccessIntegrityPostgresTests(
         }
     }
 
+    [Fact]
+    public async Task Assignment_WithProductionRetryStrategy_ShouldCommitCompleteAccessSet()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        var unique = Guid.NewGuid().ToString("N");
+        var employeeId = Guid.Empty;
+        var processId = Guid.Empty;
+        var deviceId = Guid.Empty;
+
+        try
+        {
+            await using (var seedContext = CreateContext(budget.ConnectionString))
+            {
+                var employee = TestIdentityData.AddEmployeeWithIdentity(
+                    seedContext,
+                    $"E-RETRY-{unique}"[..24],
+                    "Retry strategy device access");
+                var process = new MfgProcess(
+                    $"RETRY-{unique}"[..24],
+                    "Retry strategy device access");
+                var device = new Device(
+                    $"Retry strategy device {unique}",
+                    $"RETRY-{unique}"[..24],
+                    process.Id);
+                employeeId = employee.Id;
+                processId = process.Id;
+                deviceId = device.Id;
+                employee.ClearDomainEvents();
+                device.ClearDomainEvents();
+                seedContext.MfgProcesses.Add(process);
+                seedContext.Devices.Add(device);
+                await seedContext.SaveChangesAsync(budget.Token);
+            }
+
+            await using var assignmentContext =
+                CreateRetryEnabledContext(budget.ConnectionString);
+            Assert.True(
+                assignmentContext.Database.CreateExecutionStrategy().RetriesOnFailure);
+            var handler = new UpdateEmployeeAccessHandler(
+                new EfRepository<Employee>(assignmentContext),
+                new StubAdminTargetGuard(),
+                new DeviceReadQueryService(assignmentContext),
+                new EfUnitOfWork(
+                    assignmentContext,
+                    NullLogger<EfUnitOfWork>.Instance));
+
+            var result = await handler.Handle(
+                new UpdateEmployeeAccessCommand(employeeId, [deviceId]),
+                budget.Token);
+
+            Assert.True(result.IsSuccess);
+            await using var verificationContext = CreateContext(budget.ConnectionString);
+            Assert.True(await verificationContext.Set<EmployeeDeviceAccess>()
+                .AsNoTracking()
+                .AnyAsync(
+                    access => access.EmployeeId == employeeId
+                              && access.DeviceId == deviceId,
+                    budget.Token));
+        }
+        finally
+        {
+            await CleanupAsync(
+                budget.ConnectionString,
+                employeeId,
+                processId,
+                deviceId);
+        }
+    }
+
     private static IIoTDbContext CreateContext(NpgsqlConnection connection)
     {
         var options = new DbContextOptionsBuilder<IIoTDbContext>()
@@ -321,6 +390,19 @@ public sealed class EmployeeDeviceAccessIntegrityPostgresTests(
     {
         var options = new DbContextOptionsBuilder<IIoTDbContext>()
             .UseNpgsql(connectionString)
+            .Options;
+        return new IIoTDbContext(options);
+    }
+
+    private static IIoTDbContext CreateRetryEnabledContext(string connectionString)
+    {
+        var options = new DbContextOptionsBuilder<IIoTDbContext>()
+            .UseNpgsql(
+                connectionString,
+                npgsqlOptions => npgsqlOptions.EnableRetryOnFailure(
+                    3,
+                    TimeSpan.FromMilliseconds(50),
+                    null))
             .Options;
         return new IIoTDbContext(options);
     }

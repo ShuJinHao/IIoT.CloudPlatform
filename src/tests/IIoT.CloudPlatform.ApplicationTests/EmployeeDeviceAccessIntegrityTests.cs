@@ -74,6 +74,10 @@ public sealed class EmployeeDeviceAccessIntegrityTests
         Assert.Equal(1, repository.SaveChangesCalls);
         Assert.Equal(cancellation.Token, deviceQueries.LastGetExistingIdsCancellationToken);
         Assert.Equal(cancellation.Token, repository.LastSaveChangesCancellationToken);
+        Assert.Equal(1, unitOfWork.ExecuteResilientCalls);
+        Assert.Equal(
+            cancellation.Token,
+            unitOfWork.LastExecuteResilientCancellationToken);
         Assert.Equal(1, unitOfWork.BeginCalls);
         Assert.Equal(1, unitOfWork.CommitCalls);
         Assert.Equal(0, unitOfWork.RollbackCalls);
@@ -105,6 +109,7 @@ public sealed class EmployeeDeviceAccessIntegrityTests
         Assert.Empty(employee.DeviceAccesses);
         Assert.Equal(0, deviceQueries.GetExistingIdsCalls);
         Assert.Equal(1, repository.SaveChangesCalls);
+        Assert.Equal(1, unitOfWork.ExecuteResilientCalls);
         Assert.Equal(1, unitOfWork.BeginCalls);
         Assert.Equal(1, unitOfWork.CommitCalls);
         Assert.Equal(0, unitOfWork.RollbackCalls);
@@ -148,6 +153,7 @@ public sealed class EmployeeDeviceAccessIntegrityTests
         Assert.Empty(repository.UpdatedEntities);
         Assert.Equal(0, repository.SaveChangesCalls);
         Assert.Equal(1, deviceQueries.GetExistingIdsCalls);
+        Assert.Equal(1, unitOfWork.ExecuteResilientCalls);
         Assert.Equal(1, unitOfWork.BeginCalls);
         Assert.Equal(0, unitOfWork.CommitCalls);
         Assert.Equal(1, unitOfWork.RollbackCalls);
@@ -183,6 +189,7 @@ public sealed class EmployeeDeviceAccessIntegrityTests
         Assert.Equal(0, deviceQueries.GetExistingIdsCalls);
         Assert.Empty(repository.UpdatedEntities);
         Assert.Equal(0, repository.SaveChangesCalls);
+        Assert.Equal(0, unitOfWork.ExecuteResilientCalls);
         Assert.Equal(0, unitOfWork.BeginCalls);
         Assert.Equal(0, unitOfWork.CommitCalls);
         Assert.Equal(0, unitOfWork.RollbackCalls);
@@ -208,6 +215,7 @@ public sealed class EmployeeDeviceAccessIntegrityTests
         Assert.Equal(1, repository.GetSingleOrDefaultCalls);
         Assert.Equal(0, deviceQueries.GetExistingIdsCalls);
         Assert.Equal(0, repository.SaveChangesCalls);
+        Assert.Equal(1, unitOfWork.ExecuteResilientCalls);
         Assert.Equal(1, unitOfWork.BeginCalls);
         Assert.Equal(0, unitOfWork.CommitCalls);
         Assert.Equal(1, unitOfWork.RollbackCalls);
@@ -245,6 +253,7 @@ public sealed class EmployeeDeviceAccessIntegrityTests
         Assert.Equal([originalDeviceId], employee.DeviceAccesses.Select(access => access.DeviceId));
         Assert.Empty(repository.UpdatedEntities);
         Assert.Equal(0, repository.SaveChangesCalls);
+        Assert.Equal(1, unitOfWork.ExecuteResilientCalls);
         Assert.Equal(1, unitOfWork.BeginCalls);
         Assert.Equal(0, unitOfWork.CommitCalls);
         Assert.Equal(1, unitOfWork.RollbackCalls);

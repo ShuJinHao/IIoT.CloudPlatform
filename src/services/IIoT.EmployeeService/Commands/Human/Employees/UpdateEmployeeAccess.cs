@@ -46,52 +46,60 @@ public class UpdateEmployeeAccessHandler(
                 ?? [AdminTargetProtectionErrors.TargetNotFound]);
         }
 
-        try
+        return await unitOfWork.ExecuteResilientAsync(
+            ExecuteTransactionAsync,
+            cancellationToken);
+
+        async Task<Result<bool>> ExecuteTransactionAsync(
+            CancellationToken transactionCancellationToken)
         {
-            await unitOfWork.BeginTransactionAsync(cancellationToken);
-
-            var employee = await employeeRepository.GetSingleOrDefaultAsync(
-                new EmployeeWithAccessesSpec(request.EmployeeId),
-                cancellationToken);
-
-            if (employee is null)
+            try
             {
-                await unitOfWork.RollbackAsync(cancellationToken);
-                return Result.Failure(AdminTargetProtectionErrors.TargetNotFound);
-            }
+                await unitOfWork.BeginTransactionAsync(transactionCancellationToken);
 
-            var requestedDeviceIds = request.DeviceIds
-                .Distinct()
-                .ToArray();
-            if (requestedDeviceIds.Length > 0)
-            {
-                var formalDeviceIds = await deviceReadQueryService.GetExistingIdsAsync(
-                    requestedDeviceIds,
-                    cancellationToken);
-                if (!formalDeviceIds.ToHashSet().SetEquals(requestedDeviceIds))
+                var employee = await employeeRepository.GetSingleOrDefaultAsync(
+                    new EmployeeWithAccessesSpec(request.EmployeeId),
+                    transactionCancellationToken);
+
+                if (employee is null)
                 {
-                    await unitOfWork.RollbackAsync(cancellationToken);
-                    return Result.Failure(EmployeeAccessErrors.SelectedDeviceNoLongerExists);
+                    await unitOfWork.RollbackAsync(transactionCancellationToken);
+                    return Result.Failure(AdminTargetProtectionErrors.TargetNotFound);
                 }
+
+                var requestedDeviceIds = request.DeviceIds
+                    .Distinct()
+                    .ToArray();
+                if (requestedDeviceIds.Length > 0)
+                {
+                    var formalDeviceIds = await deviceReadQueryService.GetExistingIdsAsync(
+                        requestedDeviceIds,
+                        transactionCancellationToken);
+                    if (!formalDeviceIds.ToHashSet().SetEquals(requestedDeviceIds))
+                    {
+                        await unitOfWork.RollbackAsync(transactionCancellationToken);
+                        return Result.Failure(EmployeeAccessErrors.SelectedDeviceNoLongerExists);
+                    }
+                }
+
+                // 机台管辖权差集更新
+                var existingDeviceIds = employee.DeviceAccesses.Select(d => d.DeviceId).ToList();
+                var devicesToRemove = existingDeviceIds.Except(requestedDeviceIds).ToList();
+                var devicesToAdd = requestedDeviceIds.Except(existingDeviceIds).ToList();
+                foreach (var id in devicesToRemove) employee.RemoveDeviceAccess(id);
+                foreach (var id in devicesToAdd) employee.AddDeviceAccess(id);
+
+                employeeRepository.Update(employee);
+                await employeeRepository.SaveChangesAsync(transactionCancellationToken);
+                await unitOfWork.CommitAsync(transactionCancellationToken);
+
+                return Result.Success(true);
             }
-
-            // 机台管辖权差集更新
-            var existingDeviceIds = employee.DeviceAccesses.Select(d => d.DeviceId).ToList();
-            var devicesToRemove = existingDeviceIds.Except(requestedDeviceIds).ToList();
-            var devicesToAdd = requestedDeviceIds.Except(existingDeviceIds).ToList();
-            foreach (var id in devicesToRemove) employee.RemoveDeviceAccess(id);
-            foreach (var id in devicesToAdd) employee.AddDeviceAccess(id);
-
-            employeeRepository.Update(employee);
-            await employeeRepository.SaveChangesAsync(cancellationToken);
-            await unitOfWork.CommitAsync(cancellationToken);
-
-            return Result.Success(true);
-        }
-        catch
-        {
-            await unitOfWork.RollbackAsync(CancellationToken.None);
-            throw;
+            catch
+            {
+                await unitOfWork.RollbackAsync(CancellationToken.None);
+                throw;
+            }
         }
     }
 }
