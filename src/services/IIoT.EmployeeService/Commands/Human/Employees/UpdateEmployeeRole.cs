@@ -447,6 +447,13 @@ public sealed class UpdateEmployeeRoleHandler(
             return RoleTransactionOutcome.CommitUnknown(baseline.Roles);
         }
 
+        if (SystemRoles.ContainsAdminLike(observation.Roles))
+        {
+            return RoleTransactionOutcome.Conflict(
+                baseline.Roles,
+                observation.Roles);
+        }
+
         if (MatchesRoleTarget(
                 observation,
                 baseline,
@@ -504,6 +511,15 @@ public sealed class UpdateEmployeeRoleHandler(
             .Where(role =>
                 !string.IsNullOrWhiteSpace(role)
                 && !SystemRoles.IsAdminLike(role))
+            .Cast<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(role => role, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private static string[] NormalizeObservedRoles(IEnumerable<string> roles)
+        => roles
+            .Select(role => role?.Trim())
+            .Where(role => !string.IsNullOrWhiteSpace(role))
             .Cast<string>()
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(role => role, StringComparer.OrdinalIgnoreCase)
@@ -647,7 +663,7 @@ public sealed class UpdateEmployeeRoleHandler(
             => new(
                 RoleTransactionOutcomeKind.Conflict,
                 NormalizeAssignableRoles(beforeRoles),
-                NormalizeAssignableRoles(observedRoles),
+                NormalizeObservedRoles(observedRoles),
                 "CommitConflict",
                 [EmployeeRoleUpdateConflictException.PublicMessage]);
 

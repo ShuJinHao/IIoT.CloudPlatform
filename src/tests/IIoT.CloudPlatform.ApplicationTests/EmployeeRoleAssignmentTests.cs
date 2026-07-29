@@ -606,6 +606,64 @@ public sealed class EmployeeRoleAssignmentTests
     }
 
     [Fact]
+    public async Task CommitConfirmationLoss_WithAdminRoleDrift_ShouldConflictAndAuditObservedRole()
+    {
+        var targetId = Guid.NewGuid();
+        var identityStore = CreateIdentityStore(targetId, "ProductionViewer");
+        identityStore.SecurityStampsByUserId[targetId] = "baseline-stamp";
+        var observer = new StubEmployeeMutationObservationReader
+        {
+            ObserveAsyncOverride = (_, _) =>
+            {
+                var current = ObserveCurrent(
+                    identityStore,
+                    targetId,
+                    employeeIsActive: true);
+                return Task.FromResult(
+                    current with
+                    {
+                        Roles = [.. current.Roles, " admin "]
+                    });
+            }
+        };
+        var audit = new RecordingAuditTrailService();
+        var handler = CreateHandler(
+            identityStore,
+            new StubRolePolicyService { Roles = ["ProductionViewer", "RoleAdmin"] },
+            new RecordingUnitOfWork
+            {
+                OnCommit = () => throw new InvalidOperationException(
+                    "commit acknowledgement lost")
+            },
+            new StubHumanSessionRevocationService(),
+            new StubAdminTargetGuard(),
+            Human(Guid.NewGuid(), "HrAdmin"),
+            audit,
+            mutationObservationReader: observer);
+
+        await Assert.ThrowsAsync<EmployeeRoleUpdateConflictException>(() =>
+            handler.Handle(
+                new UpdateEmployeeRoleCommand(targetId, "RoleAdmin"),
+                CancellationToken.None));
+
+        Assert.Equal(1, observer.Calls);
+        var entry = Assert.Single(audit.Entries);
+        Assert.False(entry.Succeeded);
+        Assert.Contains(
+            "\"resultCode\":\"CommitConflict\"",
+            entry.Summary,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "\"admin\"",
+            entry.Summary,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(
+            "\"resultCode\":\"CommitRecovered\"",
+            entry.Summary,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task CommitConfirmationLoss_WithBaselineOnly_ShouldReturnCommitUnknownAndAuditOnce()
     {
         var targetId = Guid.NewGuid();
