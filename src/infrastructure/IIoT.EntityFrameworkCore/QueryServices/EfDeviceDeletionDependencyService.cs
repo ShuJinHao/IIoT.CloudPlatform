@@ -85,9 +85,32 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
                     var remainingImpact = await GetImpactAsync(
                         deviceId,
                         transactionCancellationToken);
+
+                    if (!deletionAttempted)
+                    {
+                        return new DeviceCascadeDeletionResult(
+                            false,
+                            remainingImpact);
+                    }
+
+                    if (remainingImpact.TotalAssociatedRows > 0)
+                    {
+                        await DeleteAssociatedRowsAsync(
+                            deviceId,
+                            transactionCancellationToken);
+                        remainingImpact = await GetImpactAsync(
+                            deviceId,
+                            transactionCancellationToken);
+                    }
+
                     var committedReplayConfirmed =
-                        deletionAttempted
-                        && remainingImpact.TotalAssociatedRows == 0;
+                        remainingImpact.TotalAssociatedRows == 0;
+                    if (committedReplayConfirmed)
+                    {
+                        await transaction.CommitAsync(
+                            transactionCancellationToken);
+                    }
+
                     return new DeviceCascadeDeletionResult(
                         committedReplayConfirmed,
                         committedReplayConfirmed

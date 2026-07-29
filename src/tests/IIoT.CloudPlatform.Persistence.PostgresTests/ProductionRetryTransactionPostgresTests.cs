@@ -165,6 +165,58 @@ public sealed class ProductionRetryTransactionPostgresTests(
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task DeviceDeleteCommitRecovery_ShouldRemoveLateRefreshSessionBeforeSuccess()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        var interceptor = new AddLateRefreshSessionAfterCommitInterceptor(
+            budget.ConnectionString);
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var seeded = await SeedDeviceWithAllDependenciesAsync(
+            services,
+            budget.Token);
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var audit = new RecordingAuditTrailService();
+        var deletionService = new CapturingDeviceDeletionService(
+            new EfDeviceDeletionDependencyService(dbContext));
+        var handler = new DeleteDeviceHandler(
+            HumanAdmin(),
+            new EfRepository<Device>(dbContext),
+            deletionService,
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            audit);
+
+        interceptor.Arm(seeded.DeviceId);
+        var result = await handler.Handle(
+            new DeleteDeviceCommand(seeded.DeviceId),
+            budget.Token);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(result.Value);
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+        Assert.Equal(1, interceptor.LateSessionsInserted);
+        var deletion = Assert.IsType<DeviceCascadeDeletionResult>(
+            deletionService.LastDeletionResult);
+        Assert.True(deletion.DeviceDeleted);
+        Assert.Equal(12, deletion.Impact.TotalAssociatedRows);
+        Assert.Equal(1, deletion.Impact.RefreshTokenSessions);
+        Assert.Single(audit.Entries);
+
+        dbContext.ChangeTracker.Clear();
+        Assert.False(await dbContext.Devices
+            .AsNoTracking()
+            .AnyAsync(
+                device => device.Id == seeded.DeviceId,
+                budget.Token));
+        var remainingImpact = await new EfDeviceDeletionDependencyService(dbContext)
+            .GetImpactAsync(seeded.DeviceId, budget.Token);
+        Assert.Equal(0, remainingImpact.TotalAssociatedRows);
+    }
+
     private static async Task VerifyOnboardRetryAsync(
         ServiceProvider provider,
         ThrowOnceBeforeCommitInterceptor interceptor,
@@ -1210,6 +1262,70 @@ public sealed class ProductionRetryTransactionPostgresTests(
             }
 
             return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class AddLateRefreshSessionAfterCommitInterceptor(
+        string connectionString)
+        : DbTransactionInterceptor
+    {
+        private int armed;
+        private int exceptionsThrown;
+        private int lateSessionsInserted;
+        private Guid deviceId;
+
+        public int ExceptionsThrown => Volatile.Read(ref exceptionsThrown);
+
+        public int LateSessionsInserted => Volatile.Read(
+            ref lateSessionsInserted);
+
+        public void Arm(Guid targetDeviceId)
+        {
+            deviceId = targetDeviceId;
+            Volatile.Write(ref armed, 1);
+        }
+
+        public override async Task TransactionCommittedAsync(
+            DbTransaction transaction,
+            TransactionEndEventData eventData,
+            CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.CompareExchange(ref armed, 0, 1) != 1)
+            {
+                return;
+            }
+
+            await using var insertionConnection =
+                new NpgsqlConnection(connectionString);
+            await insertionConnection.OpenAsync(cancellationToken);
+            await using var command = new NpgsqlCommand(
+                """
+                insert into refresh_token_sessions
+                (
+                    "Id", "ActorType", "SubjectId", "TokenHash",
+                    "CreatedAtUtc", "ExpiresAtUtc"
+                )
+                values
+                (
+                    @id, @actor_type, @subject_id, @token_hash,
+                    now(), now() + interval '1 hour'
+                )
+                """,
+                insertionConnection);
+            command.Parameters.AddWithValue("id", Guid.NewGuid());
+            command.Parameters.AddWithValue(
+                "actor_type",
+                IIoTClaimTypes.EdgeDeviceActor);
+            command.Parameters.AddWithValue("subject_id", deviceId);
+            command.Parameters.AddWithValue(
+                "token_hash",
+                $"tx-late-edge-{Guid.NewGuid():N}");
+            await command.ExecuteNonQueryAsync(cancellationToken);
+
+            Interlocked.Increment(ref lateSessionsInserted);
+            Interlocked.Increment(ref exceptionsThrown);
+            throw RetryablePostgresException(
+                "simulated commit confirmation loss after late edge session");
         }
     }
 

@@ -19,6 +19,7 @@ using IIoT.IdentityService.Commands;
 using IIoT.Infrastructure.Logging;
 using IIoT.Services.CrossCutting.Behaviors;
 using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.Contracts.Events.Capacities;
 using IIoT.SharedKernel.Configuration;
@@ -150,19 +151,88 @@ public sealed class PersistenceBoundaryArchitectureTests
         Assert.Equal("MixedHandler.cs:17", violation);
     }
 
+    [Fact]
+    public void ManualTransactionGuard_ShouldResolveUnitOfWorkReceiverByType()
+    {
+        const string resilientSource =
+            """
+            public sealed class RenamedHandler(IUnitOfWork uow)
+            {
+                public Task<bool> Handle(CancellationToken cancellationToken)
+                {
+                    return uow.ExecuteResilientAsync(
+                        async transactionCancellationToken =>
+                        {
+                            await uow.BeginTransactionAsync(
+                                transactionCancellationToken);
+                            return true;
+                        },
+                        cancellationToken);
+                }
+            }
+            """;
+        const string unguardedSource =
+            """
+            public sealed class RenamedHandler(IUnitOfWork uow)
+            {
+                public Task Handle(CancellationToken cancellationToken)
+                {
+                    return uow.BeginTransactionAsync(cancellationToken);
+                }
+            }
+            """;
+
+        Assert.Empty(FindManualTransactionViolations(
+            resilientSource,
+            "ResilientRenamedHandler.cs"));
+        var violation = Assert.Single(FindManualTransactionViolations(
+            unguardedSource,
+            "UnguardedRenamedHandler.cs"));
+        Assert.Equal("UnguardedRenamedHandler.cs:5", violation);
+    }
+
     private static IEnumerable<string> FindManualTransactionViolations(
         string source,
         string relativePath)
     {
-        var root = CSharpSyntaxTree.ParseText(source).GetRoot();
+        var parseOptions = CSharpParseOptions.Default
+            .WithLanguageVersion(LanguageVersion.Preview);
+        var sourceTree = CSharpSyntaxTree.ParseText(
+            source,
+            parseOptions,
+            relativePath);
+        var globalUsingsTree = CSharpSyntaxTree.ParseText(
+            """
+            global using System;
+            global using System.Threading;
+            global using System.Threading.Tasks;
+            global using IIoT.Services.Contracts.Persistence;
+            """,
+            parseOptions);
+        var compilation = CSharpCompilation.Create(
+            "ManualTransactionGuard",
+            [globalUsingsTree, sourceTree],
+            GetSemanticReferences(),
+            new CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary));
+        var semanticModel = compilation.GetSemanticModel(sourceTree);
+        var unitOfWorkType = compilation.GetTypeByMetadataName(
+            typeof(IUnitOfWork).FullName!);
+        Assert.NotNull(unitOfWorkType);
+        var root = sourceTree.GetRoot();
         foreach (var transactionInvocation in root
                      .DescendantNodes()
                      .OfType<InvocationExpressionSyntax>()
                      .Where(invocation => IsUnitOfWorkInvocation(
                          invocation,
-                         "BeginTransactionAsync")))
+                         "BeginTransactionAsync",
+                         semanticModel,
+                         unitOfWorkType)))
         {
-            if (IsInsideResilientCallback(transactionInvocation))
+            if (IsInsideResilientCallback(
+                    transactionInvocation,
+                    semanticModel,
+                    unitOfWorkType))
             {
                 continue;
             }
@@ -177,7 +247,9 @@ public sealed class PersistenceBoundaryArchitectureTests
     }
 
     private static bool IsInsideResilientCallback(
-        InvocationExpressionSyntax transactionInvocation)
+        InvocationExpressionSyntax transactionInvocation,
+        SemanticModel semanticModel,
+        INamedTypeSymbol unitOfWorkType)
     {
         var hasAnonymousResilientCallback = transactionInvocation
             .Ancestors()
@@ -189,7 +261,9 @@ public sealed class PersistenceBoundaryArchitectureTests
                 }
                 && IsUnitOfWorkInvocation(
                     invocation,
-                    "ExecuteResilientAsync"));
+                    "ExecuteResilientAsync",
+                    semanticModel,
+                    unitOfWorkType));
         if (hasAnonymousResilientCallback)
         {
             return true;
@@ -215,7 +289,9 @@ public sealed class PersistenceBoundaryArchitectureTests
             .Where(invocation => !localFunction.Span.Contains(invocation.Span))
             .Where(invocation => IsUnitOfWorkInvocation(
                 invocation,
-                "ExecuteResilientAsync"))
+                "ExecuteResilientAsync",
+                semanticModel,
+                unitOfWorkType))
             .Any(invocation => invocation.ArgumentList.Arguments.Any(argument =>
                 argument.Expression is IdentifierNameSyntax identifier
                 && string.Equals(
@@ -226,21 +302,51 @@ public sealed class PersistenceBoundaryArchitectureTests
 
     private static bool IsUnitOfWorkInvocation(
         InvocationExpressionSyntax invocation,
-        string methodName)
+        string methodName,
+        SemanticModel semanticModel,
+        INamedTypeSymbol unitOfWorkType)
     {
         return invocation.Expression is MemberAccessExpressionSyntax
         {
-            Expression: IdentifierNameSyntax receiver,
+            Expression: var receiver,
             Name: SimpleNameSyntax method
         }
         && string.Equals(
-            receiver.Identifier.ValueText,
-            "unitOfWork",
-            StringComparison.Ordinal)
-        && string.Equals(
             method.Identifier.ValueText,
             methodName,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal)
+        && IsUnitOfWorkType(
+            semanticModel.GetTypeInfo(receiver).Type,
+            unitOfWorkType);
+    }
+
+    private static bool IsUnitOfWorkType(
+        ITypeSymbol? receiverType,
+        INamedTypeSymbol unitOfWorkType)
+    {
+        return receiverType is not null
+               && (SymbolEqualityComparer.Default.Equals(
+                       receiverType,
+                       unitOfWorkType)
+                   || receiverType.AllInterfaces.Any(candidate =>
+                       SymbolEqualityComparer.Default.Equals(
+                           candidate,
+                           unitOfWorkType)));
+    }
+
+    private static IReadOnlyList<MetadataReference> GetSemanticReferences()
+    {
+        var trustedPlatformAssemblies =
+            (string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES");
+        var referencePaths = (trustedPlatformAssemblies?
+                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+                ?? [])
+            .Append(typeof(IUnitOfWork).Assembly.Location)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        return referencePaths
+            .Select(path => MetadataReference.CreateFromFile(path))
+            .ToArray();
     }
 
     [Fact]
