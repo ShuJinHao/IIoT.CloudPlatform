@@ -207,6 +207,39 @@ public sealed class PersistenceBoundaryArchitectureTests
         Assert.Equal("UnguardedRenamedHandler.cs:5", violation);
     }
 
+    [Fact]
+    public void ManualTransactionGuard_ShouldRejectLocalCallbackAlsoInvokedDirectly()
+    {
+        const string source =
+            """
+            public sealed class ReusedCallbackHandler(IUnitOfWork unitOfWork)
+            {
+                public async Task Handle(CancellationToken cancellationToken)
+                {
+                    await unitOfWork.ExecuteResilientAsync(
+                        ExecuteTransactionAsync,
+                        cancellationToken);
+                    await ExecuteTransactionAsync(cancellationToken);
+
+                    async Task<bool> ExecuteTransactionAsync(
+                        CancellationToken transactionCancellationToken)
+                    {
+                        await unitOfWork.BeginTransactionAsync(
+                            transactionCancellationToken);
+                        return true;
+                    }
+                }
+            }
+            """;
+
+        var violation = Assert.Single(
+            FindManualTransactionViolations(
+                source,
+                "ReusedCallbackHandler.cs"));
+
+        Assert.Equal("ReusedCallbackHandler.cs:13", violation);
+    }
+
     private static IEnumerable<string> FindManualTransactionViolations(
         string source,
         string relativePath)
@@ -298,22 +331,33 @@ public sealed class PersistenceBoundaryArchitectureTests
             return false;
         }
 
-        var callbackName = localFunction.Identifier.ValueText;
-        return containingMethod
+        var localFunctionSymbol =
+            semanticModel.GetDeclaredSymbol(localFunction);
+        if (localFunctionSymbol is null)
+        {
+            return false;
+        }
+
+        var callbackReferences = containingMethod
             .DescendantNodes()
-            .OfType<InvocationExpressionSyntax>()
-            .Where(invocation => !localFunction.Span.Contains(invocation.Span))
-            .Where(invocation => IsUnitOfWorkInvocation(
-                invocation,
-                "ExecuteResilientAsync",
-                semanticModel,
-                unitOfWorkType))
-            .Any(invocation => invocation.ArgumentList.Arguments.Any(argument =>
-                argument.Expression is IdentifierNameSyntax identifier
-                && string.Equals(
-                    identifier.Identifier.ValueText,
-                    callbackName,
-                    StringComparison.Ordinal)));
+            .OfType<IdentifierNameSyntax>()
+            .Where(identifier => !localFunction.Span.Contains(identifier.Span))
+            .Where(identifier => SymbolEqualityComparer.Default.Equals(
+                semanticModel.GetSymbolInfo(identifier).Symbol,
+                localFunctionSymbol))
+            .ToArray();
+        return callbackReferences.Length > 0
+               && callbackReferences.All(identifier =>
+                   identifier.Parent is ArgumentSyntax
+                   {
+                       Parent.Parent:
+                       InvocationExpressionSyntax invocation
+                   }
+                   && IsUnitOfWorkInvocation(
+                       invocation,
+                       "ExecuteResilientAsync",
+                       semanticModel,
+                       unitOfWorkType));
     }
 
     private static bool IsUnitOfWorkInvocation(
