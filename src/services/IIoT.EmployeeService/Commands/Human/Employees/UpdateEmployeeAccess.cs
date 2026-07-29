@@ -53,53 +53,45 @@ public class UpdateEmployeeAccessHandler(
         async Task<Result<bool>> ExecuteTransactionAsync(
             CancellationToken transactionCancellationToken)
         {
-            try
+            await unitOfWork.BeginTransactionAsync(transactionCancellationToken);
+
+            var employee = await employeeRepository.GetSingleOrDefaultAsync(
+                new EmployeeWithAccessesSpec(request.EmployeeId),
+                transactionCancellationToken);
+
+            if (employee is null)
             {
-                await unitOfWork.BeginTransactionAsync(transactionCancellationToken);
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return Result.Failure(AdminTargetProtectionErrors.TargetNotFound);
+            }
 
-                var employee = await employeeRepository.GetSingleOrDefaultAsync(
-                    new EmployeeWithAccessesSpec(request.EmployeeId),
+            var requestedDeviceIds = request.DeviceIds
+                .Distinct()
+                .ToArray();
+            if (requestedDeviceIds.Length > 0)
+            {
+                var formalDeviceIds = await deviceReadQueryService.GetExistingIdsAsync(
+                    requestedDeviceIds,
                     transactionCancellationToken);
-
-                if (employee is null)
+                if (!formalDeviceIds.ToHashSet().SetEquals(requestedDeviceIds))
                 {
                     await unitOfWork.RollbackAsync(transactionCancellationToken);
-                    return Result.Failure(AdminTargetProtectionErrors.TargetNotFound);
+                    return Result.Failure(EmployeeAccessErrors.SelectedDeviceNoLongerExists);
                 }
-
-                var requestedDeviceIds = request.DeviceIds
-                    .Distinct()
-                    .ToArray();
-                if (requestedDeviceIds.Length > 0)
-                {
-                    var formalDeviceIds = await deviceReadQueryService.GetExistingIdsAsync(
-                        requestedDeviceIds,
-                        transactionCancellationToken);
-                    if (!formalDeviceIds.ToHashSet().SetEquals(requestedDeviceIds))
-                    {
-                        await unitOfWork.RollbackAsync(transactionCancellationToken);
-                        return Result.Failure(EmployeeAccessErrors.SelectedDeviceNoLongerExists);
-                    }
-                }
-
-                // 机台管辖权差集更新
-                var existingDeviceIds = employee.DeviceAccesses.Select(d => d.DeviceId).ToList();
-                var devicesToRemove = existingDeviceIds.Except(requestedDeviceIds).ToList();
-                var devicesToAdd = requestedDeviceIds.Except(existingDeviceIds).ToList();
-                foreach (var id in devicesToRemove) employee.RemoveDeviceAccess(id);
-                foreach (var id in devicesToAdd) employee.AddDeviceAccess(id);
-
-                employeeRepository.Update(employee);
-                await employeeRepository.SaveChangesAsync(transactionCancellationToken);
-                await unitOfWork.CommitAsync(transactionCancellationToken);
-
-                return Result.Success(true);
             }
-            catch
-            {
-                await unitOfWork.RollbackAsync(CancellationToken.None);
-                throw;
-            }
+
+            // 机台管辖权差集更新
+            var existingDeviceIds = employee.DeviceAccesses.Select(d => d.DeviceId).ToList();
+            var devicesToRemove = existingDeviceIds.Except(requestedDeviceIds).ToList();
+            var devicesToAdd = requestedDeviceIds.Except(existingDeviceIds).ToList();
+            foreach (var id in devicesToRemove) employee.RemoveDeviceAccess(id);
+            foreach (var id in devicesToAdd) employee.AddDeviceAccess(id);
+
+            employeeRepository.Update(employee);
+            await employeeRepository.SaveChangesAsync(transactionCancellationToken);
+            await unitOfWork.CommitAsync(transactionCancellationToken);
+
+            return Result.Success(true);
         }
     }
 }

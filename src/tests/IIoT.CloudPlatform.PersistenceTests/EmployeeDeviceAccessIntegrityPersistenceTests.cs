@@ -1,10 +1,14 @@
 using System.Data.Common;
+using System.Reflection;
 using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.MasterData.Aggregates.MfgProcesses;
 using IIoT.Core.Production.Aggregates.Devices;
+using IIoT.EntityFrameworkCore.Persistence;
 using IIoT.EntityFrameworkCore.QueryServices;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace IIoT.CloudPlatform.PersistenceTests;
@@ -128,6 +132,35 @@ public sealed class EmployeeDeviceAccessIntegrityPersistenceTests
         Assert.Equal(DeleteBehavior.NoAction, deviceForeignKey.DeleteBehavior);
     }
 
+    [Fact]
+    public async Task RollbackFailure_ShouldReleaseTransactionStateForNextAttempt()
+    {
+        await using var database = await SqliteEfTestDatabase.CreateAsync();
+        await using var dbContext = database.CreateContext();
+        var unitOfWork = new EfUnitOfWork(
+            dbContext,
+            NullLogger<EfUnitOfWork>.Instance);
+        var failedTransaction = new ThrowingRollbackTransaction();
+        var transactionField = typeof(EfUnitOfWork).GetField(
+            "_transaction",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(transactionField);
+        transactionField.SetValue(unitOfWork, failedTransaction);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => unitOfWork.RollbackAsync());
+
+        Assert.Equal(
+            ThrowingRollbackTransaction.FailureMessage,
+            exception.Message);
+        Assert.True(failedTransaction.DisposeAsyncCalled);
+        Assert.Null(transactionField.GetValue(unitOfWork));
+
+        await unitOfWork.BeginTransactionAsync();
+        Assert.NotNull(dbContext.Database.CurrentTransaction);
+        await unitOfWork.RollbackAsync();
+    }
+
     private sealed class DeviceBatchQueryInterceptor : DbCommandInterceptor
     {
         public int BatchQueryCount { get; private set; }
@@ -149,6 +182,58 @@ public sealed class EmployeeDeviceAccessIntegrityPersistenceTests
             }
 
             return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class ThrowingRollbackTransaction : IDbContextTransaction
+    {
+        public const string FailureMessage = "Simulated rollback connection failure.";
+
+        public Guid TransactionId { get; } = Guid.NewGuid();
+
+        public bool SupportsSavepoints => false;
+
+        public bool DisposeAsyncCalled { get; private set; }
+
+        public void Commit() => throw new NotSupportedException();
+
+        public Task CommitAsync(CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public void Rollback() => throw new InvalidOperationException(FailureMessage);
+
+        public Task RollbackAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException(FailureMessage);
+
+        public void CreateSavepoint(string name) => throw new NotSupportedException();
+
+        public Task CreateSavepointAsync(
+            string name,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public void RollbackToSavepoint(string name) => throw new NotSupportedException();
+
+        public Task RollbackToSavepointAsync(
+            string name,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public void ReleaseSavepoint(string name) => throw new NotSupportedException();
+
+        public Task ReleaseSavepointAsync(
+            string name,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public void Dispose()
+        {
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeAsyncCalled = true;
+            return ValueTask.CompletedTask;
         }
     }
 }

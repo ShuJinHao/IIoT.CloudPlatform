@@ -1312,7 +1312,19 @@ internal sealed class RecordingUnitOfWork : IUnitOfWork
     {
         ExecuteResilientCalls++;
         LastExecuteResilientCancellationToken = cancellationToken;
-        return await operation(cancellationToken);
+        try
+        {
+            return await operation(cancellationToken);
+        }
+        catch
+        {
+            if (BeginCalls > CommitCalls + RollbackCalls)
+            {
+                await RollbackAsync(CancellationToken.None);
+            }
+
+            throw;
+        }
     }
 
     public Task BeginTransactionAsync(CancellationToken cancellationToken = default)

@@ -33,7 +33,16 @@ public class EfUnitOfWork(
             {
                 if (_transaction is not null)
                 {
-                    await RollbackAsync(CancellationToken.None);
+                    try
+                    {
+                        await RollbackAsync(CancellationToken.None);
+                    }
+                    catch (Exception rollbackException)
+                    {
+                        logger.LogWarning(
+                            rollbackException,
+                            "Rollback failed while resetting a resilient unit-of-work attempt.");
+                    }
                 }
 
                 // A retry must reload aggregates from the database instead of
@@ -63,14 +72,15 @@ public class EfUnitOfWork(
             return;
         }
 
+        var transaction = _transaction;
+        _transaction = null;
         try
         {
-            await _transaction.CommitAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
         }
         finally
         {
-            await _transaction.DisposeAsync();
-            _transaction = null;
+            await transaction.DisposeAsync();
         }
     }
 
@@ -81,9 +91,22 @@ public class EfUnitOfWork(
             return;
         }
 
-        await _transaction.RollbackAsync(cancellationToken);
-        await _transaction.DisposeAsync();
+        var transaction = _transaction;
         _transaction = null;
-        dbContext.DiscardPendingDomainEvents();
+        try
+        {
+            await transaction.RollbackAsync(cancellationToken);
+        }
+        finally
+        {
+            try
+            {
+                await transaction.DisposeAsync();
+            }
+            finally
+            {
+                dbContext.DiscardPendingDomainEvents();
+            }
+        }
     }
 }
