@@ -240,6 +240,40 @@ public sealed class PersistenceBoundaryArchitectureTests
         Assert.Equal("ReusedCallbackHandler.cs:13", violation);
     }
 
+    [Fact]
+    public void ManualTransactionGuard_ShouldRejectNestedAnonymousCallbackThatEscapes()
+    {
+        const string source =
+            """
+            public sealed class EscapedCallbackHandler(IUnitOfWork unitOfWork)
+            {
+                public async Task Handle(CancellationToken cancellationToken)
+                {
+                    Func<CancellationToken, Task>? escapedCallback = null;
+                    await unitOfWork.ExecuteResilientAsync(
+                        async transactionCancellationToken =>
+                        {
+                            escapedCallback = async nestedCancellationToken =>
+                            {
+                                await unitOfWork.BeginTransactionAsync(
+                                    nestedCancellationToken);
+                            };
+                            return true;
+                        },
+                        cancellationToken);
+                    await escapedCallback!(cancellationToken);
+                }
+            }
+            """;
+
+        var violation = Assert.Single(
+            FindManualTransactionViolations(
+                source,
+                "EscapedCallbackHandler.cs"));
+
+        Assert.Equal("EscapedCallbackHandler.cs:11", violation);
+    }
+
     private static IEnumerable<string> FindManualTransactionViolations(
         string source,
         string relativePath)
@@ -300,28 +334,27 @@ public sealed class PersistenceBoundaryArchitectureTests
         SemanticModel semanticModel,
         INamedTypeSymbol unitOfWorkType)
     {
-        var hasAnonymousResilientCallback = transactionInvocation
+        var containingCallable = transactionInvocation
             .Ancestors()
-            .OfType<AnonymousFunctionExpressionSyntax>()
-            .Any(callback =>
-                callback.Parent is ArgumentSyntax
+            .FirstOrDefault(node =>
+                node is AnonymousFunctionExpressionSyntax
+                    or LocalFunctionStatementSyntax
+                    or MethodDeclarationSyntax);
+        if (containingCallable is AnonymousFunctionExpressionSyntax callback)
+        {
+            return callback.Parent is ArgumentSyntax
                 {
                     Parent.Parent: InvocationExpressionSyntax invocation
                 }
-                && IsUnitOfWorkInvocation(
-                    invocation,
-                    "ExecuteResilientAsync",
-                    semanticModel,
-                    unitOfWorkType));
-        if (hasAnonymousResilientCallback)
-        {
-            return true;
+                   && IsUnitOfWorkInvocation(
+                       invocation,
+                       "ExecuteResilientAsync",
+                       semanticModel,
+                       unitOfWorkType);
         }
 
-        var localFunction = transactionInvocation
-            .Ancestors()
-            .OfType<LocalFunctionStatementSyntax>()
-            .FirstOrDefault();
+        var localFunction =
+            containingCallable as LocalFunctionStatementSyntax;
         var containingMethod = localFunction?
             .Ancestors()
             .OfType<MethodDeclarationSyntax>()
