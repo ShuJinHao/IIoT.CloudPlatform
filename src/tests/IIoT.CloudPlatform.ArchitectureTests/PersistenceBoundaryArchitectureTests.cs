@@ -77,6 +77,11 @@ public sealed class PersistenceBoundaryArchitectureTests
             "DeviceDeletionTransactionLock.AcquireAsync",
             refreshTokenSource,
             StringComparison.Ordinal);
+        Assert.Equal(
+            2,
+            refreshTokenSource.Split(
+                "DeviceDeletionTransactionLock.AcquireAsync",
+                StringSplitOptions.None).Length - 1);
         Assert.True(
             implementationSource.IndexOf(
                 "CreateExecutionStrategy()",

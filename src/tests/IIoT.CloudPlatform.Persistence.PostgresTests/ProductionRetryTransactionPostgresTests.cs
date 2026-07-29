@@ -54,8 +54,12 @@ public sealed class ProductionRetryTransactionPostgresTests(
         await VerifyRoleRetryAsync(provider, interceptor, budget.Token);
         await VerifyEmployeeAccessRetryAsync(provider, interceptor, budget.Token);
         await VerifyDeviceDeleteRetryAsync(provider, interceptor, budget.Token);
+        await VerifyEdgeRotationAsync(
+            provider,
+            interceptor.Arm,
+            budget.Token);
 
-        Assert.Equal(8, interceptor.ExceptionsThrown);
+        Assert.Equal(9, interceptor.ExceptionsThrown);
     }
 
     [Fact]
@@ -73,8 +77,12 @@ public sealed class ProductionRetryTransactionPostgresTests(
         await VerifyActivateCommitRecoveryAsync(provider, interceptor, budget.Token);
         await VerifyTerminateCommitRecoveryAsync(provider, interceptor, budget.Token);
         await VerifyDeviceDeleteCommitRecoveryAsync(provider, interceptor, budget.Token);
+        await VerifyEdgeRotationAsync(
+            provider,
+            () => interceptor.Arm(),
+            budget.Token);
 
-        Assert.Equal(4, interceptor.ExceptionsThrown);
+        Assert.Equal(5, interceptor.ExceptionsThrown);
     }
 
     [Fact]
@@ -271,6 +279,65 @@ public sealed class ProductionRetryTransactionPostgresTests(
         Assert.True(deletionResult.DeviceDeleted);
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => issueTask);
+
+        bootstrapContext.ChangeTracker.Clear();
+        Assert.False(await bootstrapContext.RefreshTokenSessions
+            .AsNoTracking()
+            .AnyAsync(
+                session =>
+                    session.ActorType == IIoTClaimTypes.EdgeDeviceActor
+                    && session.SubjectId == device.Id,
+                budget.Token));
+    }
+
+    [Fact]
+    public async Task EdgeSessionRotationAfterStaleRead_ShouldWaitForDeleteAndLeaveNoOrphan()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        var interceptor = new PauseOnceBeforeCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var bootstrapScope = provider.CreateAsyncScope();
+        var bootstrapContext = bootstrapScope.ServiceProvider
+            .GetRequiredService<IIoTDbContext>();
+        var (process, device) = CreateProcessAndDevice("ROTATERACE");
+        process.ClearDomainEvents();
+        device.ClearDomainEvents();
+        bootstrapContext.MfgProcesses.Add(process);
+        bootstrapContext.Devices.Add(device);
+        await bootstrapContext.SaveChangesAsync(budget.Token);
+        bootstrapContext.ChangeTracker.Clear();
+        var refreshTokenService = new EfRefreshTokenService(
+            bootstrapContext,
+            Options.Create(new RefreshTokenOptions()));
+        var issued = await refreshTokenService.IssueAsync(
+            IIoTClaimTypes.EdgeDeviceActor,
+            device.Id,
+            budget.Token);
+        bootstrapContext.ChangeTracker.Clear();
+
+        await using var deletionScope = provider.CreateAsyncScope();
+        var deletionContext = deletionScope.ServiceProvider
+            .GetRequiredService<IIoTDbContext>();
+        interceptor.Arm();
+        var deletionTask = new EfDeviceDeletionDependencyService(
+                deletionContext)
+            .DeleteCascadeAsync(device.Id, budget.Token);
+        await interceptor.WaitUntilCommitAsync(budget.Token);
+
+        var rotationTask = refreshTokenService.RotateAsync(
+            IIoTClaimTypes.EdgeDeviceActor,
+            issued.Token,
+            budget.Token);
+        await Task.Delay(TimeSpan.FromMilliseconds(100), budget.Token);
+        Assert.False(rotationTask.IsCompleted);
+
+        interceptor.Continue();
+        var deletionResult = await deletionTask;
+        Assert.True(deletionResult.DeviceDeleted);
+        var rotationResult = await rotationTask;
+        Assert.False(rotationResult.IsSuccess);
 
         bootstrapContext.ChangeTracker.Clear();
         Assert.False(await bootstrapContext.RefreshTokenSessions
@@ -682,6 +749,55 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 "DeviceDeletedDomainEvent",
                 device.Id,
                 cancellationToken));
+    }
+
+    private static async Task VerifyEdgeRotationAsync(
+        ServiceProvider provider,
+        Action armCommitFailure,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = provider.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider
+            .GetRequiredService<IIoTDbContext>();
+        var (process, device) = CreateProcessAndDevice("ROTATERETRY");
+        process.ClearDomainEvents();
+        device.ClearDomainEvents();
+        dbContext.MfgProcesses.Add(process);
+        dbContext.Devices.Add(device);
+        await dbContext.SaveChangesAsync(cancellationToken);
+        dbContext.ChangeTracker.Clear();
+        var refreshTokenService = new EfRefreshTokenService(
+            dbContext,
+            Options.Create(new RefreshTokenOptions()));
+        var issued = await refreshTokenService.IssueAsync(
+            IIoTClaimTypes.EdgeDeviceActor,
+            device.Id,
+            cancellationToken);
+        dbContext.ChangeTracker.Clear();
+
+        armCommitFailure();
+        var result = await refreshTokenService.RotateAsync(
+            IIoTClaimTypes.EdgeDeviceActor,
+            issued.Token,
+            cancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(device.Id, result.Value!.SubjectId);
+        dbContext.ChangeTracker.Clear();
+        var sessions = await dbContext.RefreshTokenSessions
+            .AsNoTracking()
+            .Where(session =>
+                session.ActorType == IIoTClaimTypes.EdgeDeviceActor
+                && session.SubjectId == device.Id)
+            .ToListAsync(cancellationToken);
+        Assert.Equal(2, sessions.Count);
+        var original = Assert.Single(
+            sessions,
+            session => session.RevokedReason == "rotated");
+        var replacement = Assert.Single(
+            sessions,
+            session => !session.RevokedAtUtc.HasValue);
+        Assert.Equal(replacement.Id, original.ReplacedByTokenId);
     }
 
     private static async Task VerifyOnboardCommitRecoveryAsync(
