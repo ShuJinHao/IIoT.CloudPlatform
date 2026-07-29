@@ -20,10 +20,12 @@ using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Authorization;
+using IIoT.SharedKernel.Configuration;
 using IIoT.SharedKernel.Result;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -76,13 +78,77 @@ public sealed class ProductionRetryTransactionPostgresTests(
         await VerifyOnboardCommitRecoveryAsync(provider, interceptor, budget.Token);
         await VerifyActivateCommitRecoveryAsync(provider, interceptor, budget.Token);
         await VerifyTerminateCommitRecoveryAsync(provider, interceptor, budget.Token);
+        await VerifyRoleCommitRecoveryAsync(provider, interceptor, budget.Token);
         await VerifyDeviceDeleteCommitRecoveryAsync(provider, interceptor, budget.Token);
         await VerifyEdgeRotationAsync(
             provider,
             () => interceptor.Arm(),
             budget.Token);
 
-        Assert.Equal(5, interceptor.ExceptionsThrown);
+        Assert.Equal(6, interceptor.ExceptionsThrown);
+    }
+
+    [Theory]
+    [InlineData("IIoT.HttpApi")]
+    [InlineData("IIoT.DataWorker")]
+    [InlineData("IIoT.MigrationWorkApp")]
+    public async Task ProductionHostConfiguration_ShouldEnableRetryAgainstRealPostgres(
+        string hostName)
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        var settingsPath = FindRepositoryPath(
+            "src",
+            "hosts",
+            hostName,
+            "appsettings.json");
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(settingsPath)
+            .Build();
+        var retryOptions = configuration
+            .GetRequiredSection(PostgresOptions.SectionName)
+            .Get<PostgresOptions>()!;
+
+        Assert.True(retryOptions.EnableRetry);
+        retryOptions.Validate("Production");
+
+        var options = new DbContextOptionsBuilder<IIoTDbContext>()
+            .UseNpgsql(
+                budget.ConnectionString,
+                npgsql => npgsql
+                    .CommandTimeout(retryOptions.CommandTimeoutSeconds)
+                    .EnableRetryOnFailure(
+                        retryOptions.MaxRetryCount,
+                        TimeSpan.FromSeconds(retryOptions.MaxRetryDelaySeconds),
+                        null))
+            .Options;
+        await using var dbContext = new IIoTDbContext(options);
+
+        Assert.True(dbContext.Database.CreateExecutionStrategy().RetriesOnFailure);
+        Assert.True(await dbContext.Database.CanConnectAsync(budget.Token));
+    }
+
+    [Theory]
+    [InlineData("deactivate")]
+    [InlineData("role-change")]
+    [InlineData("another-activation")]
+    public async Task ActivateCommitConfirmationLoss_WithConcurrentMutation_ShouldConflictWithoutOverwrite(
+        string mutationKind)
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+
+        await VerifyActivateCommitDriftAsync(
+            provider,
+            interceptor,
+            mutationKind,
+            budget.Token);
+
+        Assert.Equal(1, interceptor.ExceptionsThrown);
     }
 
     [Fact]
@@ -668,7 +734,9 @@ public sealed class ProductionRetryTransactionPostgresTests(
             identityStore,
             CreateUnitOfWork(dbContext),
             new HumanSessionRevocationService(dbContext),
-            new AdminTargetGuard(identityStore));
+            new AdminTargetGuard(identityStore),
+            new EmployeeMutationObservationReader(
+                services.GetRequiredService<DbContextOptions<IIoTDbContext>>()));
 
         interceptor.Arm();
         var result = await handler.Handle(
@@ -787,6 +855,8 @@ public sealed class ProductionRetryTransactionPostgresTests(
             new HumanSessionRevocationService(dbContext),
             new AdminTargetGuard(identityStore),
             new EmployeeLookupService(dbContext),
+            new EmployeeMutationObservationReader(
+                services.GetRequiredService<DbContextOptions<IIoTDbContext>>()),
             HumanAdmin(),
             audit);
 
@@ -815,6 +885,78 @@ public sealed class ProductionRetryTransactionPostgresTests(
         Assert.Contains(
             "\"resultCode\":\"Succeeded\"",
             auditEntry.Summary,
+            StringComparison.Ordinal);
+    }
+
+    private static async Task VerifyRoleCommitRecoveryAsync(
+        ServiceProvider provider,
+        ThrowOnceAfterCommitInterceptor interceptor,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var seed = await SeedEmployeeAsync(
+            services,
+            "ACKROLE",
+            accountEnabled: true,
+            employeeActive: true,
+            withSession: true,
+            cancellationToken);
+        var unique = Guid.NewGuid().ToString("N");
+        var oldRole = $"AckOld{unique}"[..30];
+        var newRole = $"AckNew{unique}"[..30];
+        await CreateRoleAsync(services, oldRole);
+        await CreateRoleAsync(services, newRole);
+        var userManager = services.GetRequiredService<UserManager<ApplicationUser>>();
+        var user = (await userManager.FindByIdAsync(
+            seed.EmployeeId.ToString()))!;
+        Assert.True((await userManager.AddToRoleAsync(user, oldRole)).Succeeded);
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        dbContext.ChangeTracker.Clear();
+        var identityStore = CreateIdentityStore(services);
+        var dbContextOptions =
+            services.GetRequiredService<DbContextOptions<IIoTDbContext>>();
+        var handler = new UpdateEmployeeRoleHandler(
+            identityStore,
+            CreateRolePolicyService(services),
+            CreateUnitOfWork(dbContext),
+            new HumanSessionRevocationService(dbContext),
+            new AdminTargetGuard(identityStore),
+            new EmployeeLookupService(dbContext),
+            new EmployeeMutationObservationReader(dbContextOptions),
+            HumanAdmin(),
+            new EfAuditTrailService(
+                dbContextOptions,
+                NullLogger<EfAuditTrailService>.Instance));
+
+        interceptor.Arm();
+        var result = await handler.Handle(
+            new UpdateEmployeeRoleCommand(seed.EmployeeId, newRole),
+            cancellationToken);
+
+        Assert.True(result.IsSuccess);
+        dbContext.ChangeTracker.Clear();
+        Assert.Equal(
+            [newRole],
+            await identityStore.GetRolesAsync(
+                seed.EmployeeId,
+                cancellationToken));
+        var audits = await dbContext.AuditTrails
+            .AsNoTracking()
+            .Where(entry =>
+                entry.OperationType == "Employee.Role.Update"
+                && entry.TargetIdOrKey == seed.EmployeeId.ToString())
+            .ToListAsync(cancellationToken);
+        var audit = Assert.Single(audits);
+        Assert.True(audit.Succeeded);
+        Assert.False(string.IsNullOrWhiteSpace(audit.IdempotencyKey));
+        Assert.Contains(
+            "\"resultCode\":\"CommitRecovered\"",
+            audit.Summary,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "TransactionFailed",
+            audit.Summary,
             StringComparison.Ordinal);
     }
 
@@ -1096,56 +1238,15 @@ public sealed class ProductionRetryTransactionPostgresTests(
             identityStore,
             CreateUnitOfWork(dbContext),
             new HumanSessionRevocationService(dbContext),
-            new AdminTargetGuard(identityStore));
-        string? committedStamp = null;
-        var newerSecurityStamp = $"password-{Guid.NewGuid():N}";
-
-        interceptor.Arm(async callbackCancellationToken =>
-        {
-            await using var connection = new NpgsqlConnection(
-                dbContext.Database.GetConnectionString());
-            await connection.OpenAsync(callbackCancellationToken);
-            await using var command = new NpgsqlCommand(
-                """
-                select "SecurityStamp"
-                from "AspNetUsers"
-                where "Id" = @employee_id
-                """,
-                connection);
-            command.Parameters.AddWithValue(
-                "employee_id",
-                seed.EmployeeId);
-            committedStamp = (string?)await command.ExecuteScalarAsync(
-                callbackCancellationToken);
-
-            await using var updateCommand = new NpgsqlCommand(
-                """
-                update "AspNetUsers"
-                set "SecurityStamp" = @security_stamp,
-                    "ConcurrencyStamp" = @concurrency_stamp
-                where "Id" = @employee_id
-                """,
-                connection);
-            updateCommand.Parameters.AddWithValue(
-                "security_stamp",
-                newerSecurityStamp);
-            updateCommand.Parameters.AddWithValue(
-                "concurrency_stamp",
-                Guid.NewGuid().ToString("N"));
-            updateCommand.Parameters.AddWithValue(
-                "employee_id",
-                seed.EmployeeId);
-            Assert.Equal(
-                1,
-                await updateCommand.ExecuteNonQueryAsync(
-                    callbackCancellationToken));
-        });
+            new AdminTargetGuard(identityStore),
+            new EmployeeMutationObservationReader(
+                services.GetRequiredService<DbContextOptions<IIoTDbContext>>()));
+        interceptor.Arm();
         var result = await handler.Handle(
             new ActivateEmployeeCommand(seed.EmployeeId),
             cancellationToken);
 
         Assert.True(result.IsSuccess);
-        Assert.False(string.IsNullOrWhiteSpace(committedStamp));
         dbContext.ChangeTracker.Clear();
         var persistedStamp = await dbContext.Users
             .AsNoTracking()
@@ -1153,12 +1254,170 @@ public sealed class ProductionRetryTransactionPostgresTests(
             .Select(user => user.SecurityStamp)
             .SingleAsync(cancellationToken);
         Assert.NotEqual(originalStamp, persistedStamp);
-        Assert.NotEqual(committedStamp, persistedStamp);
-        Assert.Equal(newerSecurityStamp, persistedStamp);
         Assert.False(await HasActiveHumanSessionAsync(
             dbContext,
             seed.EmployeeId,
             cancellationToken));
+    }
+
+    private static async Task VerifyActivateCommitDriftAsync(
+        ServiceProvider provider,
+        ThrowOnceAfterCommitInterceptor interceptor,
+        string mutationKind,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var seed = await SeedEmployeeAsync(
+            services,
+            $"DRIFT-{mutationKind}",
+            accountEnabled: false,
+            employeeActive: false,
+            withSession: true,
+            cancellationToken);
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var identityStore = CreateIdentityStore(services);
+        Guid? concurrentRoleId = null;
+        string? concurrentRoleName = null;
+        if (string.Equals(
+                mutationKind,
+                "role-change",
+                StringComparison.Ordinal))
+        {
+            concurrentRoleName = $"Concurrent{Guid.NewGuid():N}"[..30];
+            await CreateRoleAsync(services, concurrentRoleName);
+            concurrentRoleId = await dbContext.Roles
+                .AsNoTracking()
+                .Where(role => role.Name == concurrentRoleName)
+                .Select(role => role.Id)
+                .SingleAsync(cancellationToken);
+        }
+
+        var handler = new ActivateEmployeeHandler(
+            new EfRepository<Employee>(dbContext),
+            identityStore,
+            CreateUnitOfWork(dbContext),
+            new HumanSessionRevocationService(dbContext),
+            new AdminTargetGuard(identityStore),
+            new EmployeeMutationObservationReader(
+                services.GetRequiredService<DbContextOptions<IIoTDbContext>>()));
+        var newerSecurityStamp = $"concurrent-{Guid.NewGuid():N}";
+
+        interceptor.Arm(async callbackCancellationToken =>
+        {
+            await using var connection = new NpgsqlConnection(
+                dbContext.Database.GetConnectionString());
+            await connection.OpenAsync(callbackCancellationToken);
+            await using var transaction =
+                await connection.BeginTransactionAsync(callbackCancellationToken);
+
+            if (string.Equals(
+                    mutationKind,
+                    "deactivate",
+                    StringComparison.Ordinal))
+            {
+                await using var employeeCommand = new NpgsqlCommand(
+                    """
+                    update employees
+                    set is_active = false
+                    where id = @employee_id
+                    """,
+                    connection,
+                    transaction);
+                employeeCommand.Parameters.AddWithValue(
+                    "employee_id",
+                    seed.EmployeeId);
+                Assert.Equal(
+                    1,
+                    await employeeCommand.ExecuteNonQueryAsync(
+                        callbackCancellationToken));
+            }
+
+            if (concurrentRoleId.HasValue)
+            {
+                await using var roleCommand = new NpgsqlCommand(
+                    """
+                    insert into "AspNetUserRoles" ("UserId", "RoleId")
+                    values (@employee_id, @role_id)
+                    """,
+                    connection,
+                    transaction);
+                roleCommand.Parameters.AddWithValue(
+                    "employee_id",
+                    seed.EmployeeId);
+                roleCommand.Parameters.AddWithValue(
+                    "role_id",
+                    concurrentRoleId.Value);
+                Assert.Equal(
+                    1,
+                    await roleCommand.ExecuteNonQueryAsync(
+                        callbackCancellationToken));
+            }
+
+            await using var accountCommand = new NpgsqlCommand(
+                """
+                update "AspNetUsers"
+                set "IsEnabled" = @is_enabled,
+                    "SecurityStamp" = @security_stamp,
+                    "ConcurrencyStamp" = @concurrency_stamp
+                where "Id" = @employee_id
+                """,
+                connection,
+                transaction);
+            var expectedActive = !string.Equals(
+                mutationKind,
+                "deactivate",
+                StringComparison.Ordinal);
+            accountCommand.Parameters.AddWithValue(
+                "is_enabled",
+                expectedActive);
+            accountCommand.Parameters.AddWithValue(
+                "security_stamp",
+                newerSecurityStamp);
+            accountCommand.Parameters.AddWithValue(
+                "concurrency_stamp",
+                Guid.NewGuid().ToString("N"));
+            accountCommand.Parameters.AddWithValue(
+                "employee_id",
+                seed.EmployeeId);
+            Assert.Equal(
+                1,
+                await accountCommand.ExecuteNonQueryAsync(
+                    callbackCancellationToken));
+            await transaction.CommitAsync(callbackCancellationToken);
+        });
+
+        await Assert.ThrowsAsync<EmployeeActivationConflictException>(() =>
+            handler.Handle(
+                new ActivateEmployeeCommand(seed.EmployeeId),
+                cancellationToken));
+
+        dbContext.ChangeTracker.Clear();
+        var persistedEmployee = await dbContext.Employees
+            .AsNoTracking()
+            .SingleAsync(
+                candidate => candidate.Id == seed.EmployeeId,
+                cancellationToken);
+        var persistedAccount = await dbContext.Users
+            .AsNoTracking()
+            .SingleAsync(
+                candidate => candidate.Id == seed.EmployeeId,
+                cancellationToken);
+        var expectedFinalActive = !string.Equals(
+            mutationKind,
+            "deactivate",
+            StringComparison.Ordinal);
+        Assert.Equal(newerSecurityStamp, persistedAccount.SecurityStamp);
+        Assert.Equal(expectedFinalActive, persistedAccount.IsEnabled);
+        Assert.Equal(expectedFinalActive, persistedEmployee.IsActive);
+        if (concurrentRoleName is not null)
+        {
+            Assert.Contains(
+                concurrentRoleName,
+                await identityStore.GetRolesAsync(
+                    seed.EmployeeId,
+                    cancellationToken));
+        }
     }
 
     private static async Task VerifyDeviceDeleteCommitRecoveryAsync(
@@ -1482,6 +1741,26 @@ public sealed class ProductionRetryTransactionPostgresTests(
                     && session.SubjectId == employeeId
                     && !session.RevokedAtUtc.HasValue,
                 cancellationToken);
+
+    private static string FindRepositoryPath(params string[] relativeSegments)
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            var candidate = Path.Combine(
+                current.FullName,
+                Path.Combine(relativeSegments));
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            current = current.Parent;
+        }
+
+        throw new DirectoryNotFoundException(
+            $"Could not locate repository file: {Path.Combine(relativeSegments)}");
+    }
 
     private static ServiceProvider CreateRetryProvider(
         string connectionString,

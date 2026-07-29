@@ -1,7 +1,9 @@
 using IIoT.EmployeeService.Commands.Employees;
 using IIoT.EmployeeService.Validators;
+using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.SharedKernel.Result;
 using Xunit;
@@ -59,7 +61,7 @@ public sealed class EmployeeRoleAssignmentTests
 
         Assert.True(result.IsSuccess);
         Assert.Equal([(targetId, "RoleAdmin")], identityStore.ReplacedRoles);
-        Assert.Equal([targetId], identityStore.RotatedSecurityStampIds);
+        Assert.Equal([targetId], identityStore.StateCompareExchanges.Select(change => change.UserId));
         Assert.Equal([(targetId, "employee-role-changed")], sessions.Revocations);
         Assert.Equal(1, unitOfWork.ExecuteResilientCalls);
         Assert.Equal(1, unitOfWork.BeginCalls);
@@ -99,7 +101,7 @@ public sealed class EmployeeRoleAssignmentTests
         Assert.True(result.IsSuccess);
         Assert.Equal([(targetId, (string?)null)], identityStore.ReplacedRoles);
         Assert.Empty(identityStore.RolesByUserId[targetId]);
-        Assert.Equal([targetId], identityStore.RotatedSecurityStampIds);
+        Assert.Equal([targetId], identityStore.StateCompareExchanges.Select(change => change.UserId));
         Assert.Single(sessions.Revocations);
         Assert.Equal(1, unitOfWork.CommitCalls);
     }
@@ -127,7 +129,7 @@ public sealed class EmployeeRoleAssignmentTests
 
         Assert.True(result.IsSuccess);
         Assert.Empty(identityStore.ReplacedRoles);
-        Assert.Empty(identityStore.RotatedSecurityStampIds);
+        Assert.Empty(identityStore.StateCompareExchanges);
         Assert.Empty(sessions.Revocations);
         Assert.Equal(1, unitOfWork.BeginCalls);
         Assert.Equal(1, unitOfWork.RollbackCalls);
@@ -160,7 +162,7 @@ public sealed class EmployeeRoleAssignmentTests
 
         Assert.False(result.IsSuccess);
         Assert.Empty(identityStore.ReplacedRoles);
-        Assert.Empty(identityStore.RotatedSecurityStampIds);
+        Assert.Empty(identityStore.StateCompareExchanges);
         Assert.Contains(
             "\"resultCode\":\"RoleNameBlank\"",
             Assert.Single(audit.Entries).Summary,
@@ -226,7 +228,7 @@ public sealed class EmployeeRoleAssignmentTests
         Assert.Equal(0, targetGuard.Calls);
         Assert.Equal(0, identityStore.GetRolesCalls);
         Assert.Empty(identityStore.ReplacedRoles);
-        Assert.Empty(identityStore.RotatedSecurityStampIds);
+        Assert.Empty(identityStore.StateCompareExchanges);
         var expectedCode = SystemRoles.IsAdminLike(roleName)
             ? "AdminRoleNotAssignable"
             : "RoleNotFound";
@@ -259,7 +261,7 @@ public sealed class EmployeeRoleAssignmentTests
         Assert.False(result.IsSuccess);
         Assert.Equal(0, targetGuard.Calls);
         Assert.Empty(identityStore.ReplacedRoles);
-        Assert.Empty(identityStore.RotatedSecurityStampIds);
+        Assert.Empty(identityStore.StateCompareExchanges);
         Assert.Contains(
             "\"resultCode\":\"SelfRoleChangeForbidden\"",
             Assert.Single(audit.Entries).Summary,
@@ -292,7 +294,7 @@ public sealed class EmployeeRoleAssignmentTests
 
         Assert.False(result.IsSuccess);
         Assert.Empty(identityStore.ReplacedRoles);
-        Assert.Empty(identityStore.RotatedSecurityStampIds);
+        Assert.Empty(identityStore.StateCompareExchanges);
         Assert.Equal(1, unitOfWork.BeginCalls);
         Assert.Equal(1, unitOfWork.RollbackCalls);
         Assert.Contains(
@@ -327,7 +329,7 @@ public sealed class EmployeeRoleAssignmentTests
 
         Assert.False(result.IsSuccess);
         Assert.Empty(identityStore.ReplacedRoles);
-        Assert.Empty(identityStore.RotatedSecurityStampIds);
+        Assert.Empty(identityStore.StateCompareExchanges);
         Assert.Equal(1, unitOfWork.BeginCalls);
         Assert.Equal(1, unitOfWork.RollbackCalls);
         Assert.Contains(
@@ -419,7 +421,7 @@ public sealed class EmployeeRoleAssignmentTests
     {
         var targetId = Guid.NewGuid();
         var identityStore = CreateIdentityStore(targetId, "ProductionViewer");
-        identityStore.RotateSecurityStampResult = Result.Failure("rotation failed");
+        identityStore.CompareExchangeStateResult = Result.Failure("rotation failed");
         var unitOfWork = new RecordingUnitOfWork();
         var sessions = new StubHumanSessionRevocationService();
         var audit = new RecordingAuditTrailService();
@@ -513,6 +515,262 @@ public sealed class EmployeeRoleAssignmentTests
     }
 
     [Fact]
+    public async Task BaselineReplay_ShouldReuseTargetStampAndWriteOneSuccessAudit()
+    {
+        var targetId = Guid.NewGuid();
+        var identityStore = CreateIdentityStore(targetId, "ProductionViewer");
+        identityStore.SecurityStampsByUserId[targetId] = "baseline-stamp";
+        var audit = new RecordingAuditTrailService();
+        var unitOfWork = new ReplayOnceUnitOfWork(() =>
+        {
+            identityStore.RolesByUserId[targetId] = ["ProductionViewer"];
+            identityStore.SecurityStampsByUserId[targetId] = "baseline-stamp";
+            var account = identityStore.AccountById!;
+            if (!account.IsEnabled)
+            {
+                account.Enable();
+            }
+        });
+        var handler = CreateHandler(
+            identityStore,
+            new StubRolePolicyService { Roles = ["ProductionViewer", "RoleAdmin"] },
+            unitOfWork,
+            new StubHumanSessionRevocationService(),
+            new StubAdminTargetGuard(),
+            Human(Guid.NewGuid(), "HrAdmin"),
+            audit);
+
+        var result = await handler.Handle(
+            new UpdateEmployeeRoleCommand(targetId, "RoleAdmin"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, unitOfWork.CommitCalls);
+        Assert.Equal(2, identityStore.StateCompareExchanges.Count);
+        Assert.Single(
+            identityStore.StateCompareExchanges
+                .Select(change => change.SecurityStamp)
+                .Distinct(StringComparer.Ordinal));
+        var entry = Assert.Single(audit.Entries);
+        Assert.True(entry.Succeeded);
+        Assert.False(string.IsNullOrWhiteSpace(entry.IdempotencyKey));
+        Assert.Contains(
+            "\"resultCode\":\"Succeeded\"",
+            entry.Summary,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CommitConfirmationLoss_WithExactTarget_ShouldRecoverAndAuditOnce()
+    {
+        var targetId = Guid.NewGuid();
+        var identityStore = CreateIdentityStore(targetId, "ProductionViewer");
+        identityStore.SecurityStampsByUserId[targetId] = "baseline-stamp";
+        var unitOfWork = new RecordingUnitOfWork
+        {
+            OnCommit = () => throw new InvalidOperationException("commit acknowledgement lost")
+        };
+        var observer = new StubEmployeeMutationObservationReader
+        {
+            ObserveAsyncOverride = (_, _) => Task.FromResult(
+                ObserveCurrent(identityStore, targetId, employeeIsActive: true))
+        };
+        var audit = new RecordingAuditTrailService();
+        var handler = CreateHandler(
+            identityStore,
+            new StubRolePolicyService { Roles = ["ProductionViewer", "RoleAdmin"] },
+            unitOfWork,
+            new StubHumanSessionRevocationService(),
+            new StubAdminTargetGuard(),
+            Human(Guid.NewGuid(), "HrAdmin"),
+            audit,
+            mutationObservationReader: observer);
+
+        var result = await handler.Handle(
+            new UpdateEmployeeRoleCommand(targetId, "RoleAdmin"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(1, observer.Calls);
+        var entry = Assert.Single(audit.Entries);
+        Assert.True(entry.Succeeded);
+        Assert.False(string.IsNullOrWhiteSpace(entry.IdempotencyKey));
+        Assert.Contains(
+            "\"resultCode\":\"CommitRecovered\"",
+            entry.Summary,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "TransactionFailed",
+            entry.Summary,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CommitConfirmationLoss_WithBaselineOnly_ShouldReturnCommitUnknownAndAuditOnce()
+    {
+        var targetId = Guid.NewGuid();
+        var identityStore = CreateIdentityStore(targetId, "ProductionViewer");
+        identityStore.SecurityStampsByUserId[targetId] = "baseline-stamp";
+        var observer = new StubEmployeeMutationObservationReader
+        {
+            Observation = new EmployeeMutationObservation(
+                EmployeeExists: true,
+                EmployeeIsActive: true,
+                AccountExists: true,
+                AccountIsEnabled: true,
+                AccountSecurityStamp: "baseline-stamp",
+                Roles: ["ProductionViewer"])
+        };
+        var audit = new RecordingAuditTrailService();
+        var handler = CreateHandler(
+            identityStore,
+            new StubRolePolicyService { Roles = ["ProductionViewer", "RoleAdmin"] },
+            new RecordingUnitOfWork
+            {
+                OnCommit = () => throw new InvalidOperationException("commit acknowledgement lost")
+            },
+            new StubHumanSessionRevocationService(),
+            new StubAdminTargetGuard(),
+            Human(Guid.NewGuid(), "HrAdmin"),
+            audit,
+            mutationObservationReader: observer);
+
+        await Assert.ThrowsAsync<EmployeeRoleUpdateCommitUnknownException>(() =>
+            handler.Handle(
+                new UpdateEmployeeRoleCommand(targetId, "RoleAdmin"),
+                CancellationToken.None));
+
+        Assert.Equal(1, observer.Calls);
+        var entry = Assert.Single(audit.Entries);
+        Assert.False(entry.Succeeded);
+        Assert.Contains(
+            "\"resultCode\":\"CommitUnknown\"",
+            entry.Summary,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "TransactionFailed",
+            entry.Summary,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CommitConfirmationLoss_WithDrift_ShouldReturnConflictAndAuditOnce()
+    {
+        var targetId = Guid.NewGuid();
+        var identityStore = CreateIdentityStore(targetId, "ProductionViewer");
+        identityStore.SecurityStampsByUserId[targetId] = "baseline-stamp";
+        var observer = new StubEmployeeMutationObservationReader
+        {
+            Observation = new EmployeeMutationObservation(
+                EmployeeExists: true,
+                EmployeeIsActive: true,
+                AccountExists: true,
+                AccountIsEnabled: false,
+                AccountSecurityStamp: "newer-stamp",
+                Roles: ["DifferentRole"])
+        };
+        var audit = new RecordingAuditTrailService();
+        var handler = CreateHandler(
+            identityStore,
+            new StubRolePolicyService { Roles = ["ProductionViewer", "RoleAdmin"] },
+            new RecordingUnitOfWork
+            {
+                OnCommit = () => throw new InvalidOperationException("commit acknowledgement lost")
+            },
+            new StubHumanSessionRevocationService(),
+            new StubAdminTargetGuard(),
+            Human(Guid.NewGuid(), "HrAdmin"),
+            audit,
+            mutationObservationReader: observer);
+
+        await Assert.ThrowsAsync<EmployeeRoleUpdateConflictException>(() =>
+            handler.Handle(
+                new UpdateEmployeeRoleCommand(targetId, "RoleAdmin"),
+                CancellationToken.None));
+
+        Assert.Equal(1, observer.Calls);
+        var entry = Assert.Single(audit.Entries);
+        Assert.False(entry.Succeeded);
+        Assert.Contains(
+            "\"resultCode\":\"CommitConflict\"",
+            entry.Summary,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CommitObservationFailure_ShouldReturnCommitUnknownWithoutASecondAudit()
+    {
+        var targetId = Guid.NewGuid();
+        var identityStore = CreateIdentityStore(targetId, "ProductionViewer");
+        identityStore.SecurityStampsByUserId[targetId] = "baseline-stamp";
+        var observer = new StubEmployeeMutationObservationReader
+        {
+            ExceptionToThrow = new InvalidOperationException("sensitive observation failure")
+        };
+        var audit = new RecordingAuditTrailService();
+        var handler = CreateHandler(
+            identityStore,
+            new StubRolePolicyService { Roles = ["ProductionViewer", "RoleAdmin"] },
+            new RecordingUnitOfWork
+            {
+                OnCommit = () => throw new InvalidOperationException("commit acknowledgement lost")
+            },
+            new StubHumanSessionRevocationService(),
+            new StubAdminTargetGuard(),
+            Human(Guid.NewGuid(), "HrAdmin"),
+            audit,
+            mutationObservationReader: observer);
+
+        await Assert.ThrowsAsync<EmployeeRoleUpdateCommitUnknownException>(() =>
+            handler.Handle(
+                new UpdateEmployeeRoleCommand(targetId, "RoleAdmin"),
+                CancellationToken.None));
+
+        var entry = Assert.Single(audit.Entries);
+        Assert.DoesNotContain(
+            "sensitive observation failure",
+            entry.Summary,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "sensitive observation failure",
+            entry.FailureReason ?? string.Empty,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CallerCancellationDuringCommit_ShouldNotStartCommitObservation()
+    {
+        var targetId = Guid.NewGuid();
+        var identityStore = CreateIdentityStore(targetId, "ProductionViewer");
+        var observer = new StubEmployeeMutationObservationReader();
+        var audit = new RecordingAuditTrailService();
+        var handler = CreateHandler(
+            identityStore,
+            new StubRolePolicyService { Roles = ["ProductionViewer", "RoleAdmin"] },
+            new RecordingUnitOfWork
+            {
+                OnCommit = () => throw new OperationCanceledException(
+                    new CancellationToken(canceled: true))
+            },
+            new StubHumanSessionRevocationService(),
+            new StubAdminTargetGuard(),
+            Human(Guid.NewGuid(), "HrAdmin"),
+            audit,
+            mutationObservationReader: observer);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            handler.Handle(
+                new UpdateEmployeeRoleCommand(targetId, "RoleAdmin"),
+                CancellationToken.None));
+
+        Assert.Equal(0, observer.Calls);
+        Assert.Contains(
+            "\"resultCode\":\"Canceled\"",
+            Assert.Single(audit.Entries).Summary,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Validator_ShouldRouteRoleInputIntoAuditedHandler()
     {
         var validator = new UpdateEmployeeRoleCommandValidator();
@@ -556,12 +814,13 @@ public sealed class EmployeeRoleAssignmentTests
     private static UpdateEmployeeRoleHandler CreateHandler(
         RecordingIdentityAccountStore identityStore,
         StubRolePolicyService rolePolicyService,
-        RecordingUnitOfWork unitOfWork,
+        IUnitOfWork unitOfWork,
         StubHumanSessionRevocationService sessionRevocationService,
         StubAdminTargetGuard targetGuard,
         TestCurrentUser currentUser,
         RecordingAuditTrailService auditTrailService,
-        StubEmployeeLookupService? employeeLookupService = null)
+        StubEmployeeLookupService? employeeLookupService = null,
+        IEmployeeMutationObservationReader? mutationObservationReader = null)
         => new(
             identityStore,
             rolePolicyService,
@@ -579,6 +838,74 @@ public sealed class EmployeeRoleAssignmentTests
                         DeviceIds: [])
                     : null
             },
+            mutationObservationReader ?? new StubEmployeeMutationObservationReader(),
             currentUser,
             auditTrailService);
+
+    private static EmployeeMutationObservation ObserveCurrent(
+        RecordingIdentityAccountStore identityStore,
+        Guid employeeId,
+        bool employeeIsActive)
+    {
+        identityStore.SecurityStampsByUserId.TryGetValue(
+            employeeId,
+            out var securityStamp);
+        return new EmployeeMutationObservation(
+            EmployeeExists: true,
+            EmployeeIsActive: employeeIsActive,
+            AccountExists: identityStore.AccountById?.Id == employeeId,
+            AccountIsEnabled: identityStore.AccountById?.IsEnabled == true,
+            AccountSecurityStamp: securityStamp,
+            Roles: identityStore.RolesByUserId.TryGetValue(
+                employeeId,
+                out var roles)
+                ? roles.ToArray()
+                : []);
+    }
+
+    private sealed class ReplayOnceUnitOfWork(Action resetAfterFirstAttempt)
+        : IUnitOfWork
+    {
+        private bool firstCommit = true;
+
+        public int CommitCalls { get; private set; }
+
+        public async Task<TResult> ExecuteResilientAsync<TResult>(
+            Func<CancellationToken, Task<TResult>> operation,
+            CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                return await operation(cancellationToken);
+            }
+            catch (RetryOnceException)
+            {
+                resetAfterFirstAttempt();
+                return await operation(cancellationToken);
+            }
+        }
+
+        public Task BeginTransactionAsync(
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task CommitAsync(CancellationToken cancellationToken = default)
+        {
+            CommitCalls++;
+            if (firstCommit)
+            {
+                firstCommit = false;
+                throw new RetryOnceException();
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task RollbackAsync(CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+    }
+
+    private sealed class RetryOnceException : Exception
+    {
+    }
 }

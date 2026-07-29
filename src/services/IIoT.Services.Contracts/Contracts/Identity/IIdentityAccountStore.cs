@@ -17,7 +17,7 @@ public interface IIdentityAccountStore
         string employeeNo,
         CancellationToken cancellationToken = default);
 
-    Task<string?> GetSecurityStampAsync(
+    Task<IdentityAccountStateSnapshot?> GetStateSnapshotAsync(
         Guid id,
         CancellationToken cancellationToken = default);
 
@@ -26,13 +26,11 @@ public interface IIdentityAccountStore
         bool isEnabled,
         CancellationToken cancellationToken = default);
 
-    Task<Result<bool>> ActivateWithSecurityStampAsync(
+    Task<Result<IdentityAccountCompareExchangeOutcome>> CompareExchangeStateAsync(
         Guid id,
+        IdentityAccountStateSnapshot expected,
+        bool isEnabled,
         string securityStamp,
-        CancellationToken cancellationToken = default);
-
-    Task<Result<bool>> RotateSecurityStampAsync(
-        Guid id,
         CancellationToken cancellationToken = default);
 
     Task<Result<bool>> DeleteAsync(
@@ -52,4 +50,14 @@ public interface IIdentityAccountStore
     Task<IList<string>> GetRolesAsync(
         Guid id,
         CancellationToken cancellationToken = default);
+}
+
+public sealed record IdentityAccountStateSnapshot(
+    bool IsEnabled,
+    string? SecurityStamp);
+
+public enum IdentityAccountCompareExchangeOutcome
+{
+    Applied,
+    Conflict
 }

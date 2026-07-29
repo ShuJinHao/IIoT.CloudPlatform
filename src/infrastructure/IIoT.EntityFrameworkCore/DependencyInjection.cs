@@ -29,7 +29,7 @@ public static class DependencyInjection
     {
         var postgresOptions = builder.Configuration.GetRequiredValidatedOptions<PostgresOptions>(
             PostgresOptions.SectionName,
-            static options => options.Validate());
+            options => options.Validate(builder.Environment.EnvironmentName));
 
         builder.AddNpgsqlDbContext<IIoTDbContext>(
             ConnectionResourceNames.IiotDatabase,
@@ -68,6 +68,7 @@ public static class DependencyInjection
         builder.Services.AddScoped(typeof(IRepository<>), typeof(EfRepository<>));
 
         builder.Services.AddScoped<IIdentityAccountStore, IdentityAccountStore>();
+        builder.Services.AddScoped<IEmployeeMutationObservationReader, EmployeeMutationObservationReader>();
         builder.Services.AddScoped<ICloudOidcUserProfileService, CloudOidcUserProfileService>();
         builder.Services.AddScoped<IOidcClientSeeder, OpenIddictClientSeeder>();
         builder.Services.AddScoped<IEmployeeLookupService, EmployeeLookupService>();

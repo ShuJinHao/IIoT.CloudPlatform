@@ -795,6 +795,13 @@ ensure_bootstrap_secret_not_disabled() {
   done
 }
 
+ensure_postgres_retry_enabled() {
+  if [ "${POSTGRES_ENABLE_RETRY:-}" != "true" ]; then
+    printf 'POSTGRES_ENABLE_RETRY must be explicitly set to true for production deployment.\n' >&2
+    exit 64
+  fi
+}
+
 url_host() {
   value=$1
   value=${value#*://}

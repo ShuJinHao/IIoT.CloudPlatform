@@ -167,6 +167,24 @@ public sealed class InfrastructureValueBehaviorTests
     }
 
     [Fact]
+    public void PostgresOptions_ShouldFailClosedWhenProductionRetryIsDisabled()
+    {
+        var options = new PostgresOptions
+        {
+            EnableRetry = false
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => options.Validate("Production"));
+
+        Assert.Contains(
+            "Infrastructure:Postgres:EnableRetry must be true in Production",
+            exception.Message,
+            StringComparison.Ordinal);
+        options.Validate("Development");
+    }
+
+    [Fact]
     public void JwtSettings_ShouldRejectConfiguredSecretShorterThanRuntimeMinimum()
     {
         var options = new JwtSettings

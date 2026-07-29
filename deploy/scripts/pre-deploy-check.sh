@@ -80,6 +80,7 @@ printf 'preflight_cleanup_lock=available path=%s\n' "$POST_RELEASE_CLEANUP_LOCK_
 ensure_required_secret_values_changed
 ensure_required_public_values_changed
 ensure_bootstrap_secret_not_disabled
+ensure_postgres_retry_enabled
 ensure_oidc_http_boundary
 ensure_rate_limit_values_bounded
 require_app_image_values

@@ -385,7 +385,8 @@ public sealed class ApplicationFlowGuardTests
             activateIdentityStore,
             activateUnitOfWork,
             new StubHumanSessionRevocationService(),
-            targetGuard);
+            targetGuard,
+            new StubEmployeeMutationObservationReader());
 
         var terminateRepository = new InMemoryRepository<Employee>
         {
@@ -790,7 +791,8 @@ public sealed class ApplicationFlowGuardTests
             identityStore,
             unitOfWork,
             sessionRevocationService,
-            new StubAdminTargetGuard());
+            new StubAdminTargetGuard(),
+            new StubEmployeeMutationObservationReader());
 
         var result = await handler.Handle(
             new ActivateEmployeeCommand(employeeId),
@@ -798,7 +800,7 @@ public sealed class ApplicationFlowGuardTests
 
         Assert.True(result.IsSuccess);
         Assert.True(employee.IsActive);
-        var activation = Assert.Single(identityStore.SecurityStampActivations);
+        var activation = Assert.Single(identityStore.StateCompareExchanges);
         Assert.Equal(employeeId, activation.UserId);
         Assert.False(string.IsNullOrWhiteSpace(activation.SecurityStamp));
         Assert.Contains(sessionRevocationService.Revocations, revocation =>
@@ -824,7 +826,8 @@ public sealed class ApplicationFlowGuardTests
             },
             unitOfWork,
             sessionRevocationService,
-            new StubAdminTargetGuard());
+            new StubAdminTargetGuard(),
+            new StubEmployeeMutationObservationReader());
 
         var result = await handler.Handle(
             new ActivateEmployeeCommand(employeeId),
@@ -858,7 +861,8 @@ public sealed class ApplicationFlowGuardTests
             identityStore,
             new RecordingUnitOfWork(),
             sessionRevocationService,
-            new StubAdminTargetGuard());
+            new StubAdminTargetGuard(),
+            new StubEmployeeMutationObservationReader());
 
         var first = await handler.Handle(
             new ActivateEmployeeCommand(employeeId),
@@ -872,11 +876,11 @@ public sealed class ApplicationFlowGuardTests
         Assert.True(employee.IsActive);
         Assert.Equal(2, sessionRevocationService.Revocations.Count);
         Assert.All(
-            identityStore.SecurityStampActivations,
+            identityStore.StateCompareExchanges,
             activation => Assert.Equal(employeeId, activation.UserId));
         Assert.Equal(
             2,
-            identityStore.SecurityStampActivations
+            identityStore.StateCompareExchanges
                 .Select(activation => activation.SecurityStamp)
                 .Distinct(StringComparer.Ordinal)
                 .Count());
@@ -893,7 +897,7 @@ public sealed class ApplicationFlowGuardTests
                 IIoT.Core.Identity.Aggregates.IdentityAccounts.IdentityAccount.Create(
                     employeeId,
                     employee.EmployeeNo),
-            ActivateWithSecurityStampResult = Result.Failure("rotation failed")
+            CompareExchangeStateResult = Result.Failure("rotation failed")
         };
         var unitOfWork = new RecordingUnitOfWork();
         var sessionRevocationService = new StubHumanSessionRevocationService();
@@ -902,7 +906,8 @@ public sealed class ApplicationFlowGuardTests
             identityStore,
             unitOfWork,
             sessionRevocationService,
-            new StubAdminTargetGuard());
+            new StubAdminTargetGuard(),
+            new StubEmployeeMutationObservationReader());
 
         var result = await handler.Handle(
             new ActivateEmployeeCommand(employeeId),
@@ -912,6 +917,259 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal(1, unitOfWork.RollbackCalls);
         Assert.Equal(0, unitOfWork.CommitCalls);
         Assert.Empty(sessionRevocationService.Revocations);
+    }
+
+    [Fact]
+    public async Task ActivateEmployeeHandler_ShouldRecoverOnlyTheExactCommitTarget()
+    {
+        var employeeId = Guid.NewGuid();
+        var employee = new Employee(employeeId, "E1010", "Commit Recovery");
+        employee.Deactivate();
+        var account =
+            IIoT.Core.Identity.Aggregates.IdentityAccounts.IdentityAccount.Create(
+                employeeId,
+                employee.EmployeeNo);
+        account.Disable();
+        var identityStore = new RecordingIdentityAccountStore
+        {
+            AccountById = account
+        };
+        identityStore.SecurityStampsByUserId[employeeId] = "baseline-stamp";
+        var observer = new StubEmployeeMutationObservationReader
+        {
+            ObserveAsyncOverride = (_, _) =>
+            {
+                identityStore.SecurityStampsByUserId.TryGetValue(
+                    employeeId,
+                    out var securityStamp);
+                return Task.FromResult(new EmployeeMutationObservation(
+                    EmployeeExists: true,
+                    EmployeeIsActive: employee.IsActive,
+                    AccountExists: true,
+                    AccountIsEnabled: account.IsEnabled,
+                    AccountSecurityStamp: securityStamp,
+                    Roles: []));
+            }
+        };
+        var handler = new ActivateEmployeeHandler(
+            new InMemoryRepository<Employee> { SingleOrDefaultResult = employee },
+            identityStore,
+            new RecordingUnitOfWork
+            {
+                OnCommit = () => throw new InvalidOperationException(
+                    "commit acknowledgement lost")
+            },
+            new StubHumanSessionRevocationService(),
+            new StubAdminTargetGuard(),
+            observer);
+
+        var result = await handler.Handle(
+            new ActivateEmployeeCommand(employeeId),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(1, observer.Calls);
+        Assert.True(employee.IsActive);
+        Assert.True(account.IsEnabled);
+    }
+
+    [Fact]
+    public async Task ActivateEmployeeHandler_ShouldReturnCommitUnknownWhenOnlyBaselineCanBeObserved()
+    {
+        var employeeId = Guid.NewGuid();
+        var employee = new Employee(employeeId, "E1011", "Unknown Commit");
+        employee.Deactivate();
+        var account =
+            IIoT.Core.Identity.Aggregates.IdentityAccounts.IdentityAccount.Create(
+                employeeId,
+                employee.EmployeeNo);
+        account.Disable();
+        var identityStore = new RecordingIdentityAccountStore
+        {
+            AccountById = account
+        };
+        identityStore.SecurityStampsByUserId[employeeId] = "baseline-stamp";
+        var observer = new StubEmployeeMutationObservationReader
+        {
+            Observation = new EmployeeMutationObservation(
+                EmployeeExists: true,
+                EmployeeIsActive: false,
+                AccountExists: true,
+                AccountIsEnabled: false,
+                AccountSecurityStamp: "baseline-stamp",
+                Roles: [])
+        };
+        var handler = new ActivateEmployeeHandler(
+            new InMemoryRepository<Employee> { SingleOrDefaultResult = employee },
+            identityStore,
+            new RecordingUnitOfWork
+            {
+                OnCommit = () => throw new InvalidOperationException(
+                    "commit acknowledgement lost")
+            },
+            new StubHumanSessionRevocationService(),
+            new StubAdminTargetGuard(),
+            observer);
+
+        await Assert.ThrowsAsync<EmployeeActivationCommitUnknownException>(() =>
+            handler.Handle(
+                new ActivateEmployeeCommand(employeeId),
+                CancellationToken.None));
+
+        Assert.Equal(1, observer.Calls);
+    }
+
+    [Fact]
+    public async Task ActivateEmployeeHandler_ShouldReturnConflictWhenCommitObservationHasDrifted()
+    {
+        var employeeId = Guid.NewGuid();
+        var employee = new Employee(employeeId, "E1012", "Concurrent Activation");
+        employee.Deactivate();
+        var account =
+            IIoT.Core.Identity.Aggregates.IdentityAccounts.IdentityAccount.Create(
+                employeeId,
+                employee.EmployeeNo);
+        account.Disable();
+        var identityStore = new RecordingIdentityAccountStore
+        {
+            AccountById = account
+        };
+        identityStore.SecurityStampsByUserId[employeeId] = "baseline-stamp";
+        var observer = new StubEmployeeMutationObservationReader
+        {
+            Observation = new EmployeeMutationObservation(
+                EmployeeExists: true,
+                EmployeeIsActive: true,
+                AccountExists: true,
+                AccountIsEnabled: false,
+                AccountSecurityStamp: "newer-stamp",
+                Roles: ["RoleAdmin"])
+        };
+        var handler = new ActivateEmployeeHandler(
+            new InMemoryRepository<Employee> { SingleOrDefaultResult = employee },
+            identityStore,
+            new RecordingUnitOfWork
+            {
+                OnCommit = () => throw new InvalidOperationException(
+                    "commit acknowledgement lost")
+            },
+            new StubHumanSessionRevocationService(),
+            new StubAdminTargetGuard(),
+            observer);
+
+        await Assert.ThrowsAsync<EmployeeActivationConflictException>(() =>
+            handler.Handle(
+                new ActivateEmployeeCommand(employeeId),
+                CancellationToken.None));
+
+        Assert.Equal(1, observer.Calls);
+    }
+
+    [Fact]
+    public async Task ActivateEmployeeHandler_ShouldFailClosedWhenCommitObservationFails()
+    {
+        var employeeId = Guid.NewGuid();
+        var employee = new Employee(employeeId, "E1013", "Observation Failure");
+        employee.Deactivate();
+        var account =
+            IIoT.Core.Identity.Aggregates.IdentityAccounts.IdentityAccount.Create(
+                employeeId,
+                employee.EmployeeNo);
+        account.Disable();
+        var identityStore = new RecordingIdentityAccountStore
+        {
+            AccountById = account
+        };
+        var observer = new StubEmployeeMutationObservationReader
+        {
+            ExceptionToThrow = new InvalidOperationException(
+                "sensitive observation failure")
+        };
+        var handler = new ActivateEmployeeHandler(
+            new InMemoryRepository<Employee> { SingleOrDefaultResult = employee },
+            identityStore,
+            new RecordingUnitOfWork
+            {
+                OnCommit = () => throw new InvalidOperationException(
+                    "commit acknowledgement lost")
+            },
+            new StubHumanSessionRevocationService(),
+            new StubAdminTargetGuard(),
+            observer);
+
+        await Assert.ThrowsAsync<EmployeeActivationCommitUnknownException>(() =>
+            handler.Handle(
+                new ActivateEmployeeCommand(employeeId),
+                CancellationToken.None));
+
+        Assert.Equal(1, observer.Calls);
+    }
+
+    [Fact]
+    public async Task ActivateEmployeeHandler_ShouldNotObserveAfterCallerCancellation()
+    {
+        var employeeId = Guid.NewGuid();
+        var employee = new Employee(employeeId, "E1014", "Canceled Activation");
+        employee.Deactivate();
+        var account =
+            IIoT.Core.Identity.Aggregates.IdentityAccounts.IdentityAccount.Create(
+                employeeId,
+                employee.EmployeeNo);
+        account.Disable();
+        var observer = new StubEmployeeMutationObservationReader();
+        var handler = new ActivateEmployeeHandler(
+            new InMemoryRepository<Employee> { SingleOrDefaultResult = employee },
+            new RecordingIdentityAccountStore { AccountById = account },
+            new RecordingUnitOfWork
+            {
+                OnCommit = () => throw new OperationCanceledException(
+                    new CancellationToken(canceled: true))
+            },
+            new StubHumanSessionRevocationService(),
+            new StubAdminTargetGuard(),
+            observer);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            handler.Handle(
+                new ActivateEmployeeCommand(employeeId),
+                CancellationToken.None));
+
+        Assert.Equal(0, observer.Calls);
+    }
+
+    [Fact]
+    public async Task ActivateEmployeeHandler_ShouldRejectCompareExchangeConflictBeforeCommit()
+    {
+        var employeeId = Guid.NewGuid();
+        var employee = new Employee(employeeId, "E1015", "CAS Conflict");
+        employee.Deactivate();
+        var account =
+            IIoT.Core.Identity.Aggregates.IdentityAccounts.IdentityAccount.Create(
+                employeeId,
+                employee.EmployeeNo);
+        account.Disable();
+        var identityStore = new RecordingIdentityAccountStore
+        {
+            AccountById = account,
+            CompareExchangeStateResult =
+                Result.Success(IdentityAccountCompareExchangeOutcome.Conflict)
+        };
+        var unitOfWork = new RecordingUnitOfWork();
+        var handler = new ActivateEmployeeHandler(
+            new InMemoryRepository<Employee> { SingleOrDefaultResult = employee },
+            identityStore,
+            unitOfWork,
+            new StubHumanSessionRevocationService(),
+            new StubAdminTargetGuard(),
+            new StubEmployeeMutationObservationReader());
+
+        await Assert.ThrowsAsync<EmployeeActivationConflictException>(() =>
+            handler.Handle(
+                new ActivateEmployeeCommand(employeeId),
+                CancellationToken.None));
+
+        Assert.Equal(1, unitOfWork.RollbackCalls);
+        Assert.Equal(0, unitOfWork.CommitCalls);
     }
 
     [Fact]

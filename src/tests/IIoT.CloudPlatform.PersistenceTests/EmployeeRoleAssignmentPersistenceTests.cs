@@ -12,6 +12,7 @@ using IIoT.Services.CrossCutting.Authorization;
 using IIoT.SharedKernel.Result;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using OpenIddict.Abstractions;
@@ -386,6 +387,8 @@ public sealed class EmployeeRoleAssignmentPersistenceTests
             sessionRevocationService ?? new HumanSessionRevocationService(dbContext),
             new AdminTargetGuard(store),
             new EmployeeLookupService(dbContext),
+            new EmployeeMutationObservationReader(
+                GetOptions(dbContext)),
             new HumanCurrentUser(Guid.NewGuid(), "HrAdmin"),
             auditTrailService ?? new RecordingAuditTrailService());
     }
@@ -395,6 +398,11 @@ public sealed class EmployeeRoleAssignmentPersistenceTests
         => new(
             serviceProvider.GetRequiredService<UserManager<ApplicationUser>>(),
             serviceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>());
+
+    private static DbContextOptions<IIoTDbContext> GetOptions(
+        IIoTDbContext dbContext)
+        => (DbContextOptions<IIoTDbContext>)
+            dbContext.GetService<IDbContextOptions>();
 
     public enum FailureStage
     {
@@ -489,10 +497,10 @@ public sealed class EmployeeRoleAssignmentPersistenceTests
                 CancellationToken cancellationToken = default)
             => inner.GetByEmployeeNoAsync(employeeNo, cancellationToken);
 
-        public Task<string?> GetSecurityStampAsync(
+        public Task<IdentityAccountStateSnapshot?> GetStateSnapshotAsync(
             Guid id,
             CancellationToken cancellationToken = default)
-            => inner.GetSecurityStampAsync(id, cancellationToken);
+            => inner.GetStateSnapshotAsync(id, cancellationToken);
 
         public Task<Result<bool>> SetEnabledAsync(
             Guid id,
@@ -500,20 +508,20 @@ public sealed class EmployeeRoleAssignmentPersistenceTests
             CancellationToken cancellationToken = default)
             => inner.SetEnabledAsync(id, isEnabled, cancellationToken);
 
-        public Task<Result<bool>> ActivateWithSecurityStampAsync(
+        public async Task<Result<IdentityAccountCompareExchangeOutcome>>
+            CompareExchangeStateAsync(
             Guid id,
+            IdentityAccountStateSnapshot expected,
+            bool isEnabled,
             string securityStamp,
             CancellationToken cancellationToken = default)
-            => inner.ActivateWithSecurityStampAsync(
+        {
+            var result = await inner.CompareExchangeStateAsync(
                 id,
+                expected,
+                isEnabled,
                 securityStamp,
                 cancellationToken);
-
-        public async Task<Result<bool>> RotateSecurityStampAsync(
-            Guid id,
-            CancellationToken cancellationToken = default)
-        {
-            var result = await inner.RotateSecurityStampAsync(id, cancellationToken);
             return failStatusVersionRotation && result.IsSuccess
                 ? Result.Failure("injected status version failure")
                 : result;

@@ -3,6 +3,7 @@ using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.SharedKernel.Result;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 
 namespace IIoT.EntityFrameworkCore.Identity;
 
@@ -44,12 +45,17 @@ public sealed class IdentityAccountStore(
         return user is null ? null : Map(user);
     }
 
-    public async Task<string?> GetSecurityStampAsync(
+    public async Task<IdentityAccountStateSnapshot?> GetStateSnapshotAsync(
         Guid id,
         CancellationToken cancellationToken = default)
     {
-        var user = await userManager.FindByIdAsync(id.ToString());
-        return user?.SecurityStamp;
+        return await userManager.Users
+            .AsNoTracking()
+            .Where(user => user.Id == id)
+            .Select(user => new IdentityAccountStateSnapshot(
+                user.IsEnabled,
+                user.SecurityStamp))
+            .SingleOrDefaultAsync(cancellationToken);
     }
 
     public async Task<Result<bool>> SetEnabledAsync(
@@ -71,50 +77,32 @@ public sealed class IdentityAccountStore(
             : Result.Failure(result.Errors.Select(e => e.Description).ToArray());
     }
 
-    public async Task<Result<bool>> ActivateWithSecurityStampAsync(
+    public async Task<Result<IdentityAccountCompareExchangeOutcome>> CompareExchangeStateAsync(
         Guid id,
+        IdentityAccountStateSnapshot expected,
+        bool isEnabled,
         string securityStamp,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(expected);
         ArgumentException.ThrowIfNullOrWhiteSpace(securityStamp);
-        var user = await userManager.FindByIdAsync(id.ToString());
-        if (user is null)
-        {
-            return Result.Success(false);
-        }
+        var nextConcurrencyStamp = Guid.NewGuid().ToString("N");
+        var affected = await userManager.Users
+            .Where(user =>
+                user.Id == id
+                && user.IsEnabled == expected.IsEnabled
+                && user.SecurityStamp == expected.SecurityStamp)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(user => user.IsEnabled, isEnabled)
+                    .SetProperty(user => user.SecurityStamp, securityStamp)
+                    .SetProperty(user => user.ConcurrencyStamp, nextConcurrencyStamp),
+                cancellationToken);
 
-        if (user.IsEnabled
-            && string.Equals(
-                user.SecurityStamp,
-                securityStamp,
-                StringComparison.Ordinal))
-        {
-            return Result.Success(true);
-        }
-
-        user.IsEnabled = true;
-        user.SecurityStamp = securityStamp;
-        var result = await userManager.UpdateAsync(user);
-        return result.Succeeded
-            ? Result.Success(true)
-            : Result.Failure(result.Errors.Select(e => e.Description).ToArray());
-    }
-
-    public async Task<Result<bool>> RotateSecurityStampAsync(
-        Guid id,
-        CancellationToken cancellationToken = default)
-    {
-        var user = await userManager.FindByIdAsync(id.ToString());
-        if (user is null)
-        {
-            return Result.Success(false);
-        }
-
-        user.SecurityStamp = Guid.NewGuid().ToString("N");
-        var result = await userManager.UpdateAsync(user);
-        return result.Succeeded
-            ? Result.Success(true)
-            : Result.Failure(result.Errors.Select(e => e.Description).ToArray());
+        return Result.Success(
+            affected == 1
+                ? IdentityAccountCompareExchangeOutcome.Applied
+                : IdentityAccountCompareExchangeOutcome.Conflict);
     }
 
     public async Task<Result<bool>> DeleteAsync(Guid id, CancellationToken cancellationToken = default)
