@@ -263,8 +263,6 @@ IIOT_WEB_IMAGE=harbor.example.com/iiot/iiot-web:sha-0123456789abcdef
 
 `RATE_LIMIT_CAPACITY_UPLOAD_*`、`RATE_LIMIT_DEVICE_LOG_UPLOAD_*`、`RATE_LIMIT_PASS_STATION_UPLOAD_*` 必须是正整数，且单项不得超过 nginx `edge_upload_limit` 基线 12000 次/分钟；超过该值应先压测并调整 nginx 与应用限流契约，不能只改 `.env` 放大应用侧限流。
 
-`POSTGRES_ENABLE_RETRY=true` 是生产必填值。HttpApi、DataWorker 和 MigrationWorkApp 三个宿主都会显式接收该值；Compose 不提供默认回退，`pre-deploy-check.sh` 也会拒绝缺失、`false` 或其它拼写。三个宿主自身还会在 `Production` 环境拒绝 `Infrastructure:Postgres:EnableRetry=false`，因此绕过 Compose 直接启动同样不能关闭 PostgreSQL retry。
-
 ### 固定 Cloud 管理员账号
 
 当前首部署管理员工号固定为：

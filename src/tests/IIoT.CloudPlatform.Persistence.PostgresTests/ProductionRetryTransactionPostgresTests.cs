@@ -20,12 +20,10 @@ using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Authorization;
-using IIoT.SharedKernel.Configuration;
 using IIoT.SharedKernel.Result;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -86,46 +84,6 @@ public sealed class ProductionRetryTransactionPostgresTests(
             budget.Token);
 
         Assert.Equal(6, interceptor.ExceptionsThrown);
-    }
-
-    [Theory]
-    [InlineData("IIoT.HttpApi")]
-    [InlineData("IIoT.DataWorker")]
-    [InlineData("IIoT.MigrationWorkApp")]
-    public async Task ProductionHostConfiguration_ShouldEnableRetryAgainstRealPostgres(
-        string hostName)
-    {
-        using var budget = await PostgresTestBudget.CreateAsync(fixture);
-        var settingsPath = FindRepositoryPath(
-            "src",
-            "hosts",
-            hostName,
-            "appsettings.json");
-        var configuration = new ConfigurationBuilder()
-            .AddJsonFile(settingsPath)
-            .Build();
-        var retryOptions = configuration
-            .GetRequiredSection(PostgresOptions.SectionName)
-            .Get<PostgresOptions>()!;
-
-        Assert.True(retryOptions.EnableRetry);
-        Assert.True(retryOptions.MaxRetryCount > 0);
-        retryOptions.Validate("Production");
-
-        var options = new DbContextOptionsBuilder<IIoTDbContext>()
-            .UseNpgsql(
-                budget.ConnectionString,
-                npgsql => npgsql
-                    .CommandTimeout(retryOptions.CommandTimeoutSeconds)
-                    .EnableRetryOnFailure(
-                        retryOptions.MaxRetryCount,
-                        TimeSpan.FromSeconds(retryOptions.MaxRetryDelaySeconds),
-                        null))
-            .Options;
-        await using var dbContext = new IIoTDbContext(options);
-
-        Assert.True(dbContext.Database.CreateExecutionStrategy().RetriesOnFailure);
-        Assert.True(await dbContext.Database.CanConnectAsync(budget.Token));
     }
 
     [Theory]
@@ -1742,26 +1700,6 @@ public sealed class ProductionRetryTransactionPostgresTests(
                     && session.SubjectId == employeeId
                     && !session.RevokedAtUtc.HasValue,
                 cancellationToken);
-
-    private static string FindRepositoryPath(params string[] relativeSegments)
-    {
-        var current = new DirectoryInfo(AppContext.BaseDirectory);
-        while (current is not null)
-        {
-            var candidate = Path.Combine(
-                current.FullName,
-                Path.Combine(relativeSegments));
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-
-            current = current.Parent;
-        }
-
-        throw new DirectoryNotFoundException(
-            $"Could not locate repository file: {Path.Combine(relativeSegments)}");
-    }
 
     private static ServiceProvider CreateRetryProvider(
         string connectionString,

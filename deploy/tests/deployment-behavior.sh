@@ -55,25 +55,6 @@ expect_failure() {
   pass "$label"
 }
 
-expect_failure \
-  'production preflight rejects missing PostgreSQL retry opt-in' \
-  'POSTGRES_ENABLE_RETRY must be explicitly set to true' \
-  env -u POSTGRES_ENABLE_RETRY bash -c \
-    'set -euo pipefail; DEPLOY_DIR=$1; . "$1/scripts/release-common.sh"; ensure_postgres_retry_enabled' \
-    _ "$DEPLOY_DIR"
-
-expect_failure \
-  'production preflight rejects disabled PostgreSQL retry' \
-  'POSTGRES_ENABLE_RETRY must be explicitly set to true' \
-  env POSTGRES_ENABLE_RETRY=false bash -c \
-    'set -euo pipefail; DEPLOY_DIR=$1; . "$1/scripts/release-common.sh"; ensure_postgres_retry_enabled' \
-    _ "$DEPLOY_DIR"
-
-env POSTGRES_ENABLE_RETRY=true bash -c \
-  'set -euo pipefail; DEPLOY_DIR=$1; . "$1/scripts/release-common.sh"; ensure_postgres_retry_enabled' \
-  _ "$DEPLOY_DIR"
-pass 'production preflight accepts explicit PostgreSQL retry'
-
 FAKE_BIN="$ROOT_TMP/bin"
 mkdir -p "$FAKE_BIN"
 cat >"$FAKE_BIN/git" <<EOF

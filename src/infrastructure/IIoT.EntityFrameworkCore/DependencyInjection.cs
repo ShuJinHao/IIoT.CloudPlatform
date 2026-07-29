@@ -29,7 +29,7 @@ public static class DependencyInjection
     {
         var postgresOptions = builder.Configuration.GetRequiredValidatedOptions<PostgresOptions>(
             PostgresOptions.SectionName,
-            options => options.Validate(builder.Environment.EnvironmentName));
+            static options => options.Validate());
 
         builder.AddNpgsqlDbContext<IIoTDbContext>(
             ConnectionResourceNames.IiotDatabase,

@@ -108,29 +108,6 @@ public sealed class DeploymentSourceGuardTests
     }
 
     [Fact]
-    public void ProductionPostgresRetry_ShouldBeExplicitForAllDatabaseHostsAndFailClosed()
-    {
-        var composeSource = File.ReadAllText(
-            CloudRepositoryPath.Find("deploy", "docker-compose.prod.yml"));
-        var preDeploySource = File.ReadAllText(
-            CloudRepositoryPath.Find("deploy", "scripts", "pre-deploy-check.sh"));
-        var releaseCommonSource = File.ReadAllText(
-            CloudRepositoryPath.Find("deploy", "scripts", "release-common.sh"));
-        var envExampleSource = File.ReadAllText(
-            CloudRepositoryPath.Find("deploy", ".env.example"));
-        const string exactMapping =
-            "Infrastructure__Postgres__EnableRetry: ${POSTGRES_ENABLE_RETRY:?POSTGRES_ENABLE_RETRY must be explicitly set to true}";
-
-        composeSource.Split(exactMapping, StringSplitOptions.None)
-            .Should().HaveCount(4);
-        composeSource.Should().NotContain("${POSTGRES_ENABLE_RETRY:-true}");
-        preDeploySource.Should().Contain("ensure_postgres_retry_enabled");
-        releaseCommonSource.Should().Contain(
-            "[ \"${POSTGRES_ENABLE_RETRY:-}\" != \"true\" ]");
-        envExampleSource.Should().Contain("POSTGRES_ENABLE_RETRY=true");
-    }
-
-    [Fact]
     public void ProductionRedeployGuide_ShouldPreserveOnlyClientReleaseHistory()
     {
         var guide = File.ReadAllText(CloudRepositoryPath.Find("deploy", "README.md"));

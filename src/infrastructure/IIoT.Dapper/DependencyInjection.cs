@@ -25,14 +25,13 @@ public static class DependencyInjection
     public static void AddDapper(this IHostApplicationBuilder builder)
     {
         SqlMapper.AddTypeHandler(new DateOnlyTypeHandler());
-        var environmentName = builder.Environment.EnvironmentName;
 
         builder.Services.AddSingleton<IDbConnectionFactory>(sp =>
         {
             var config = sp.GetRequiredService<IConfiguration>();
             var postgresOptions = config.GetRequiredValidatedOptions<PostgresOptions>(
                 PostgresOptions.SectionName,
-                options => options.Validate(environmentName));
+                static options => options.Validate());
 
             var connStr = config.GetConnectionString(ConnectionResourceNames.IiotDatabase)
                 ?? throw new InvalidOperationException($"Missing {ConnectionResourceNames.IiotDatabase} connection string.");

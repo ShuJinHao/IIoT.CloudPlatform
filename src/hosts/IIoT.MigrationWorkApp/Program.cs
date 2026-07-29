@@ -8,7 +8,7 @@ using IIoT.SharedKernel.Configuration;
 var builder = Host.CreateApplicationBuilder(args);
 _ = builder.Configuration.GetRequiredValidatedOptions<PostgresOptions>(
     PostgresOptions.SectionName,
-    options => options.Validate(builder.Environment.EnvironmentName));
+    static options => options.Validate());
 var allowIntranetHttpOidc = builder.Configuration[OidcProviderOptions.AllowIntranetHttpOidcEnvironmentVariable];
 if (!string.IsNullOrWhiteSpace(allowIntranetHttpOidc))
 {

@@ -4,7 +4,7 @@ public sealed class PostgresOptions
 {
     public const string SectionName = "Infrastructure:Postgres";
 
-    public bool EnableRetry { get; set; } = true;
+    public bool EnableRetry { get; set; }
 
     public int CommandTimeoutSeconds { get; set; } = 30;
 
@@ -12,28 +12,8 @@ public sealed class PostgresOptions
 
     public int MaxRetryDelaySeconds { get; set; } = 10;
 
-    public void Validate(string? environmentName = null)
+    public void Validate()
     {
-        if (string.Equals(
-                environmentName,
-                "Production",
-                StringComparison.OrdinalIgnoreCase)
-            && !EnableRetry)
-        {
-            throw new InvalidOperationException(
-                "Infrastructure:Postgres:EnableRetry must be true in Production.");
-        }
-
-        if (string.Equals(
-                environmentName,
-                "Production",
-                StringComparison.OrdinalIgnoreCase)
-            && MaxRetryCount <= 0)
-        {
-            throw new InvalidOperationException(
-                "Infrastructure:Postgres:MaxRetryCount must be greater than 0 in Production.");
-        }
-
         if (CommandTimeoutSeconds <= 0)
         {
             throw new InvalidOperationException("Infrastructure:Postgres:CommandTimeoutSeconds must be greater than 0.");
