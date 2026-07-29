@@ -86,6 +86,24 @@ public sealed class ProductionRetryTransactionPostgresTests(
     }
 
     [Fact]
+    public async Task OnboardBlankRoleCommitConfirmationLoss_ShouldReturnOriginalSuccess()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+
+        await VerifyOnboardCommitRecoveryAsync(
+            provider,
+            interceptor,
+            budget.Token,
+            useBlankRoleName: true);
+
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+    }
+
+    [Fact]
     public async Task CallerCancellationDuringCommit_ShouldRollbackWithoutRetry()
     {
         using var budget = await PostgresTestBudget.CreateAsync(fixture);
@@ -883,14 +901,21 @@ public sealed class ProductionRetryTransactionPostgresTests(
     private static async Task VerifyOnboardCommitRecoveryAsync(
         ServiceProvider provider,
         ThrowOnceAfterCommitInterceptor interceptor,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool useBlankRoleName = false)
     {
         await using var scope = provider.CreateAsyncScope();
         var services = scope.ServiceProvider;
         var unique = Guid.NewGuid().ToString("N");
         var employeeNo = $"ACK-ON-{unique}"[..24];
-        var roleName = $"AckOn{unique}"[..28];
-        await CreateRoleAsync(services, roleName);
+        var roleName = useBlankRoleName
+            ? "   "
+            : $"AckOn{unique}"[..28];
+        if (!useBlankRoleName)
+        {
+            await CreateRoleAsync(services, roleName);
+        }
+
         var handler = CreateOnboardHandler(services);
 
         interceptor.Arm();
@@ -915,8 +940,9 @@ public sealed class ProductionRetryTransactionPostgresTests(
             await dbContext.Users.CountAsync(
                 user => user.Id == result.Value,
                 cancellationToken));
+        string[] expectedRoles = useBlankRoleName ? [] : [roleName];
         Assert.Equal(
-            [roleName],
+            expectedRoles,
             await CreateIdentityStore(services).GetRolesAsync(
                 result.Value,
                 cancellationToken));

@@ -186,7 +186,7 @@ public class OnboardEmployeeHandler(
             var roles = await identityAccountStore.GetRolesAsync(
                 sharedId,
                 transactionCancellationToken);
-            var expectedRoles = normalizedRoleName is null
+            var expectedRoles = string.IsNullOrEmpty(normalizedRoleName)
                 ? []
                 : new[] { normalizedRoleName };
             return roles.Count == expectedRoles.Length
