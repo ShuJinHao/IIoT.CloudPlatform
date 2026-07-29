@@ -61,6 +61,7 @@ public sealed class EmployeeRoleAssignmentTests
         Assert.Equal([(targetId, "RoleAdmin")], identityStore.ReplacedRoles);
         Assert.Equal([targetId], identityStore.RotatedSecurityStampIds);
         Assert.Equal([(targetId, "employee-role-changed")], sessions.Revocations);
+        Assert.Equal(1, unitOfWork.ExecuteResilientCalls);
         Assert.Equal(1, unitOfWork.BeginCalls);
         Assert.Equal(1, unitOfWork.CommitCalls);
         Assert.Equal(0, unitOfWork.RollbackCalls);
@@ -128,7 +129,8 @@ public sealed class EmployeeRoleAssignmentTests
         Assert.Empty(identityStore.ReplacedRoles);
         Assert.Empty(identityStore.RotatedSecurityStampIds);
         Assert.Empty(sessions.Revocations);
-        Assert.Equal(0, unitOfWork.BeginCalls);
+        Assert.Equal(1, unitOfWork.BeginCalls);
+        Assert.Equal(1, unitOfWork.RollbackCalls);
         Assert.Contains(
             "\"resultCode\":\"NoChange\"",
             Assert.Single(audit.Entries).Summary,
@@ -291,7 +293,8 @@ public sealed class EmployeeRoleAssignmentTests
         Assert.False(result.IsSuccess);
         Assert.Empty(identityStore.ReplacedRoles);
         Assert.Empty(identityStore.RotatedSecurityStampIds);
-        Assert.Equal(0, unitOfWork.BeginCalls);
+        Assert.Equal(1, unitOfWork.BeginCalls);
+        Assert.Equal(1, unitOfWork.RollbackCalls);
         Assert.Contains(
             "\"resultCode\":\"AdminTargetProtected\"",
             Assert.Single(audit.Entries).Summary,
@@ -325,7 +328,8 @@ public sealed class EmployeeRoleAssignmentTests
         Assert.False(result.IsSuccess);
         Assert.Empty(identityStore.ReplacedRoles);
         Assert.Empty(identityStore.RotatedSecurityStampIds);
-        Assert.Equal(0, unitOfWork.BeginCalls);
+        Assert.Equal(1, unitOfWork.BeginCalls);
+        Assert.Equal(1, unitOfWork.RollbackCalls);
         Assert.Contains(
             "\"resultCode\":\"TargetNotFound\"",
             Assert.Single(audit.Entries).Summary,
@@ -358,7 +362,8 @@ public sealed class EmployeeRoleAssignmentTests
         Assert.Equal(1, employeeLookup.GetByIdCalls);
         Assert.Equal(0, identityStore.GetRolesCalls);
         Assert.Empty(identityStore.ReplacedRoles);
-        Assert.Equal(0, unitOfWork.BeginCalls);
+        Assert.Equal(1, unitOfWork.BeginCalls);
+        Assert.Equal(1, unitOfWork.RollbackCalls);
         Assert.Contains(
             "\"resultCode\":\"TargetNotFound\"",
             Assert.Single(audit.Entries).Summary,

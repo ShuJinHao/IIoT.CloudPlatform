@@ -790,6 +790,8 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
 
     public Dictionary<Guid, IList<string>> RolesByUserId { get; } = [];
 
+    public Dictionary<Guid, string?> SecurityStampsByUserId { get; } = [];
+
     public List<IdentityAccount> CreatedAccounts { get; } = [];
 
     public List<Guid> DeletedIds { get; } = [];
@@ -802,6 +804,9 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
 
     public Result<bool> SetEnabledResult { get; set; } = Result.Success(true);
 
+    public Result<bool> ActivateWithSecurityStampResult { get; set; } =
+        Result.Success(true);
+
     public Result<bool> RotateSecurityStampResult { get; set; } = Result.Success(true);
 
     public Result<bool> DeleteResult { get; set; } = Result.Success(true);
@@ -813,6 +818,8 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
     public List<(Guid UserId, string? RoleName)> ReplacedRoles { get; } = [];
 
     public List<Guid> RotatedSecurityStampIds { get; } = [];
+
+    public List<(Guid UserId, string SecurityStamp)> SecurityStampActivations { get; } = [];
 
     public int GetRolesCalls { get; private set; }
 
@@ -848,6 +855,14 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
                 : null);
     }
 
+    public Task<string?> GetSecurityStampAsync(
+        Guid id,
+        CancellationToken cancellationToken = default)
+    {
+        SecurityStampsByUserId.TryGetValue(id, out var securityStamp);
+        return Task.FromResult(securityStamp);
+    }
+
     public Task<Result<bool>> SetEnabledAsync(
         Guid id,
         bool isEnabled,
@@ -855,6 +870,20 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
     {
         LastSetEnabledId = id;
         LastSetEnabledValue = isEnabled;
+        if (SetEnabledResult.IsSuccess
+            && SetEnabledResult.Value
+            && AccountById?.Id == id)
+        {
+            if (isEnabled)
+            {
+                AccountById.Enable();
+            }
+            else
+            {
+                AccountById.Disable();
+            }
+        }
+
         return Task.FromResult(SetEnabledResult);
     }
 
@@ -865,9 +894,29 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
         if (RotateSecurityStampResult.IsSuccess && RotateSecurityStampResult.Value)
         {
             RotatedSecurityStampIds.Add(id);
+            SecurityStampsByUserId[id] = Guid.NewGuid().ToString("N");
         }
 
         return Task.FromResult(RotateSecurityStampResult);
+    }
+
+    public Task<Result<bool>> ActivateWithSecurityStampAsync(
+        Guid id,
+        string securityStamp,
+        CancellationToken cancellationToken = default)
+    {
+        if (ActivateWithSecurityStampResult.IsSuccess
+            && ActivateWithSecurityStampResult.Value)
+        {
+            SecurityStampActivations.Add((id, securityStamp));
+            SecurityStampsByUserId[id] = securityStamp;
+            if (AccountById?.Id == id)
+            {
+                AccountById.Enable();
+            }
+        }
+
+        return Task.FromResult(ActivateWithSecurityStampResult);
     }
 
     public Task<Result<bool>> DeleteAsync(Guid id, CancellationToken cancellationToken = default)
@@ -884,6 +933,8 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
             {
                 AccountByEmployeeNo = null;
             }
+
+            SecurityStampsByUserId.Remove(id);
         }
 
         return Task.FromResult(DeleteResult);

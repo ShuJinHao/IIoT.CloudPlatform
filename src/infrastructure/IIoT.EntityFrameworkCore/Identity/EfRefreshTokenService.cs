@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using IIoT.EntityFrameworkCore.Persistence;
 using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Result;
 using Microsoft.EntityFrameworkCore;
@@ -39,7 +40,96 @@ public sealed class EfRefreshTokenService(
                 "Human refresh tokens must be issued with an identity status version.");
         }
 
+        if (string.Equals(
+                actorType,
+                IIoTClaimTypes.EdgeDeviceActor,
+                StringComparison.Ordinal))
+        {
+            return await IssueEdgeDeviceAsync(subjectId, cancellationToken);
+        }
+
         return await IssueCoreAsync(actorType, subjectId, null, cancellationToken);
+    }
+
+    private async Task<RefreshTokenEnvelope> IssueEdgeDeviceAsync(
+        Guid subjectId,
+        CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var token = GenerateToken(null);
+        var session = CreateSession(
+            IIoTClaimTypes.EdgeDeviceActor,
+            subjectId,
+            token,
+            now);
+        var envelope = new RefreshTokenEnvelope(token, session.ExpiresAtUtc);
+        var strategy = dbContext.Database.CreateExecutionStrategy();
+
+        return await strategy.ExecuteAsync(
+            ExecuteTransactionAsync,
+            cancellationToken);
+
+        async Task<RefreshTokenEnvelope> ExecuteTransactionAsync(
+            CancellationToken transactionCancellationToken)
+        {
+            try
+            {
+                await using var transaction =
+                    await dbContext.Database.BeginTransactionAsync(
+                        transactionCancellationToken);
+                await DeviceDeletionTransactionLock.AcquireAsync(
+                    dbContext,
+                    subjectId,
+                    transactionCancellationToken);
+
+                var deviceExists = await dbContext.Devices
+                    .AsNoTracking()
+                    .AnyAsync(
+                        device => device.Id == subjectId,
+                        transactionCancellationToken);
+                if (!deviceExists)
+                {
+                    throw new InvalidOperationException(
+                        "Edge device refresh session cannot be issued because the device no longer exists.");
+                }
+
+                var committedSession = await dbContext.RefreshTokenSessions
+                    .AsNoTracking()
+                    .SingleOrDefaultAsync(
+                        candidate => candidate.Id == session.Id,
+                        transactionCancellationToken);
+                if (committedSession is not null)
+                {
+                    if (!string.Equals(
+                            committedSession.ActorType,
+                            session.ActorType,
+                            StringComparison.Ordinal)
+                        || committedSession.SubjectId != session.SubjectId
+                        || !string.Equals(
+                            committedSession.TokenHash,
+                            session.TokenHash,
+                            StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException(
+                            "Edge device refresh session replay state is inconsistent.");
+                    }
+
+                    await transaction.CommitAsync(
+                        transactionCancellationToken);
+                    return envelope;
+                }
+
+                dbContext.RefreshTokenSessions.Add(session);
+                await dbContext.SaveChangesAsync(transactionCancellationToken);
+                await transaction.CommitAsync(transactionCancellationToken);
+                return envelope;
+            }
+            catch
+            {
+                dbContext.ChangeTracker.Clear();
+                throw;
+            }
+        }
     }
 
     private async Task<RefreshTokenEnvelope> IssueCoreAsync(
@@ -66,6 +156,17 @@ public sealed class EfRefreshTokenService(
     {
         var tokenHash = ComputeTokenHash(refreshToken);
         var now = DateTimeOffset.UtcNow;
+
+        if (string.Equals(
+                actorType,
+                IIoTClaimTypes.EdgeDeviceActor,
+                StringComparison.Ordinal))
+        {
+            return await RotateEdgeDeviceAsync(
+                tokenHash,
+                now,
+                cancellationToken);
+        }
 
         var existing = await dbContext.RefreshTokenSessions
             .SingleOrDefaultAsync(
@@ -114,6 +215,153 @@ public sealed class EfRefreshTokenService(
             existing.SubjectId,
             new RefreshTokenEnvelope(replacementToken, replacementSession.ExpiresAtUtc),
             identityStatusVersion));
+    }
+
+    private async Task<Result<RefreshTokenRotationResult>>
+        RotateEdgeDeviceAsync(
+            string tokenHash,
+            DateTimeOffset now,
+            CancellationToken cancellationToken)
+    {
+        var initialSession = await dbContext.RefreshTokenSessions
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                session =>
+                    session.ActorType == IIoTClaimTypes.EdgeDeviceActor
+                    && session.TokenHash == tokenHash,
+                cancellationToken);
+        if (initialSession is null
+            || initialSession.RevokedAtUtc.HasValue
+            || initialSession.ExpiresAtUtc <= now)
+        {
+            return Result.Unauthorized(
+                "Refresh token is invalid or expired.");
+        }
+
+        var replacementToken = GenerateToken(null);
+        var replacementSession = CreateSession(
+            IIoTClaimTypes.EdgeDeviceActor,
+            initialSession.SubjectId,
+            replacementToken,
+            now);
+        var success = Result.Success(new RefreshTokenRotationResult(
+            IIoTClaimTypes.EdgeDeviceActor,
+            initialSession.SubjectId,
+            new RefreshTokenEnvelope(
+                replacementToken,
+                replacementSession.ExpiresAtUtc),
+            null));
+        var strategy = dbContext.Database.CreateExecutionStrategy();
+
+        return await strategy.ExecuteAsync(
+            ExecuteTransactionAsync,
+            cancellationToken);
+
+        async Task<Result<RefreshTokenRotationResult>> ExecuteTransactionAsync(
+            CancellationToken transactionCancellationToken)
+        {
+            try
+            {
+                await using var transaction =
+                    await dbContext.Database.BeginTransactionAsync(
+                        transactionCancellationToken);
+                await DeviceDeletionTransactionLock.AcquireAsync(
+                    dbContext,
+                    initialSession.SubjectId,
+                    transactionCancellationToken);
+
+                var deviceExists = await dbContext.Devices
+                    .AsNoTracking()
+                    .AnyAsync(
+                        device => device.Id == initialSession.SubjectId,
+                        transactionCancellationToken);
+                if (!deviceExists)
+                {
+                    dbContext.ChangeTracker.Clear();
+                    return Result.Unauthorized(
+                        "Refresh token is invalid or expired.");
+                }
+
+                var existing = await dbContext.RefreshTokenSessions
+                    .SingleOrDefaultAsync(
+                        session =>
+                            session.ActorType
+                                == IIoTClaimTypes.EdgeDeviceActor
+                            && session.TokenHash == tokenHash,
+                        transactionCancellationToken);
+                if (existing is null
+                    || existing.SubjectId != initialSession.SubjectId)
+                {
+                    dbContext.ChangeTracker.Clear();
+                    return Result.Unauthorized(
+                        "Refresh token is invalid or expired.");
+                }
+
+                if (existing.RevokedAtUtc.HasValue
+                    || existing.ExpiresAtUtc <= now)
+                {
+                    if (!string.Equals(
+                            existing.RevokedReason,
+                            "rotated",
+                            StringComparison.Ordinal)
+                        || existing.ReplacedByTokenId
+                            != replacementSession.Id)
+                    {
+                        dbContext.ChangeTracker.Clear();
+                        return Result.Unauthorized(
+                            "Refresh token is invalid or expired.");
+                    }
+
+                    var committedReplacement =
+                        await dbContext.RefreshTokenSessions
+                            .AsNoTracking()
+                            .SingleOrDefaultAsync(
+                                session =>
+                                    session.Id == replacementSession.Id,
+                                transactionCancellationToken);
+                    if (committedReplacement is null
+                        || committedReplacement.SubjectId
+                            != replacementSession.SubjectId
+                        || !string.Equals(
+                            committedReplacement.ActorType,
+                            replacementSession.ActorType,
+                            StringComparison.Ordinal)
+                        || !string.Equals(
+                            committedReplacement.TokenHash,
+                            replacementSession.TokenHash,
+                            StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException(
+                            "Edge device refresh rotation replay state is inconsistent.");
+                    }
+
+                    await transaction.CommitAsync(
+                        transactionCancellationToken);
+                    return success;
+                }
+
+                existing.RevokedAtUtc = now;
+                existing.RevokedReason = "rotated";
+                existing.ReplacedByTokenId = replacementSession.Id;
+                dbContext.RefreshTokenSessions.Add(replacementSession);
+                await dbContext.SaveChangesAsync(
+                    transactionCancellationToken);
+                await transaction.CommitAsync(
+                    transactionCancellationToken);
+                return success;
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                dbContext.ChangeTracker.Clear();
+                return Result.Unauthorized(
+                    "Refresh token is invalid or expired.");
+            }
+            catch
+            {
+                dbContext.ChangeTracker.Clear();
+                throw;
+            }
+        }
     }
 
     public async Task RevokeSubjectTokensAsync(

@@ -45,10 +45,10 @@ public class EfUnitOfWork(
                     }
                 }
 
+                dbContext.DiscardPendingDomainEvents();
                 // A retry must reload aggregates from the database instead of
                 // reusing mutations left in the scoped DbContext by the failed attempt.
                 dbContext.ChangeTracker.Clear();
-                dbContext.DiscardPendingDomainEvents();
                 throw;
             }
         }, cancellationToken);

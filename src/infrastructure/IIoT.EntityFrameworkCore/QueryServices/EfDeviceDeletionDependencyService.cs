@@ -1,4 +1,5 @@
 using IIoT.Services.Contracts.Identity;
+using IIoT.EntityFrameworkCore.Persistence;
 using Microsoft.EntityFrameworkCore;
 
 namespace IIoT.EntityFrameworkCore.QueryServices;
@@ -62,36 +63,224 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
         Guid deviceId,
         CancellationToken cancellationToken = default)
     {
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
-        try
-        {
-            await LockDeviceAsync(deviceId, cancellationToken);
-            var impact = await GetImpactAsync(deviceId, cancellationToken);
-            await DeleteAssociatedRowsAsync(deviceId, cancellationToken);
+        DeviceDeletionImpact? lastDeletionAttemptImpact = null;
+        DeviceDeletionImpact? committedReplayCleanupImpact = null;
+        DeviceDeletionImpact? pendingReplayCleanupImpact = null;
+        string? pendingReplayCleanupTransactionId = null;
+        var deletionAttempted = false;
+        var strategy = dbContext.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(
+            ExecuteTransactionAsync,
+            cancellationToken);
 
-            var device = await dbContext.Devices.SingleOrDefaultAsync(device => device.Id == deviceId, cancellationToken);
-            if (device is not null)
+        async Task<DeviceCascadeDeletionResult> ExecuteTransactionAsync(
+            CancellationToken transactionCancellationToken)
+        {
+            try
             {
+                await using var transaction =
+                    await dbContext.Database.BeginTransactionAsync(
+                        transactionCancellationToken);
+                await DeviceDeletionTransactionLock.AcquireAsync(
+                    dbContext,
+                    deviceId,
+                    transactionCancellationToken);
+                await ResolvePendingReplayCleanupAsync(
+                    transactionCancellationToken);
+                var deviceExists = await LockDeviceAsync(
+                    deviceId,
+                    transactionCancellationToken);
+                if (!deviceExists)
+                {
+                    var remainingImpact = await GetImpactAsync(
+                        deviceId,
+                        transactionCancellationToken);
+
+                    if (!deletionAttempted)
+                    {
+                        return new DeviceCascadeDeletionResult(
+                            false,
+                            remainingImpact);
+                    }
+
+                    if (remainingImpact.TotalAssociatedRows > 0)
+                    {
+                        var cleanupAttemptImpact = remainingImpact;
+                        await DeleteAssociatedRowsAsync(
+                            deviceId,
+                            transactionCancellationToken);
+                        remainingImpact = await GetImpactAsync(
+                            deviceId,
+                            transactionCancellationToken);
+                        if (remainingImpact.TotalAssociatedRows == 0)
+                        {
+                            var cleanupTransactionId =
+                                await GetCurrentTransactionIdAsync(
+                                    transactionCancellationToken);
+                            pendingReplayCleanupTransactionId =
+                                cleanupTransactionId;
+                            pendingReplayCleanupImpact =
+                                cleanupAttemptImpact;
+                        }
+                    }
+
+                    var committedReplayConfirmed =
+                        remainingImpact.TotalAssociatedRows == 0;
+                    if (committedReplayConfirmed)
+                    {
+                        await transaction.CommitAsync(
+                            transactionCancellationToken);
+                        CommitPendingReplayCleanup();
+                    }
+
+                    return new DeviceCascadeDeletionResult(
+                        committedReplayConfirmed,
+                        committedReplayConfirmed
+                            ? AddImpacts(
+                                lastDeletionAttemptImpact ?? remainingImpact,
+                                committedReplayCleanupImpact)
+                            : remainingImpact);
+                }
+
+                var impact = await GetImpactAsync(
+                    deviceId,
+                    transactionCancellationToken);
+                lastDeletionAttemptImpact = impact;
+                deletionAttempted = true;
+                await DeleteAssociatedRowsAsync(
+                    deviceId,
+                    transactionCancellationToken);
+
+                var device = await dbContext.Devices.SingleAsync(
+                    candidate => candidate.Id == deviceId,
+                    transactionCancellationToken);
                 device.MarkDeleted();
                 dbContext.Devices.Remove(device);
+
+                var affectedRows = await dbContext.SaveChangesAsync(
+                    transactionCancellationToken);
+                await transaction.CommitAsync(transactionCancellationToken);
+                return new DeviceCascadeDeletionResult(
+                    affectedRows > 0,
+                    impact);
+            }
+            catch
+            {
+                dbContext.DiscardPendingDomainEvents();
+                dbContext.ChangeTracker.Clear();
+                throw;
+            }
+        }
+
+        async Task ResolvePendingReplayCleanupAsync(
+            CancellationToken transactionCancellationToken)
+        {
+            if (pendingReplayCleanupImpact is null)
+            {
+                return;
             }
 
-            var affectedRows = await dbContext.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
-            return new DeviceCascadeDeletionResult(affectedRows > 0 || device is not null, impact);
+            if (string.IsNullOrWhiteSpace(
+                    pendingReplayCleanupTransactionId))
+            {
+                throw new InvalidOperationException(
+                    "Device deletion replay cleanup commit state cannot be verified.");
+            }
+
+            var transactionStatus = await dbContext.Database
+                .SqlQuery<string>($"""
+                    SELECT pg_xact_status(
+                        CAST({pendingReplayCleanupTransactionId} AS xid8)
+                    ) AS "Value"
+                    """)
+                .SingleAsync(transactionCancellationToken);
+            if (string.Equals(
+                    transactionStatus,
+                    "committed",
+                    StringComparison.Ordinal))
+            {
+                committedReplayCleanupImpact =
+                    committedReplayCleanupImpact is null
+                        ? pendingReplayCleanupImpact
+                        : AddImpacts(
+                            committedReplayCleanupImpact,
+                            pendingReplayCleanupImpact);
+            }
+            else if (!string.Equals(
+                         transactionStatus,
+                         "aborted",
+                         StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Device deletion replay cleanup transaction is unexpectedly '{transactionStatus}'.");
+            }
+
+            pendingReplayCleanupImpact = null;
+            pendingReplayCleanupTransactionId = null;
         }
-        catch
+
+        void CommitPendingReplayCleanup()
         {
-            await transaction.RollbackAsync(cancellationToken);
-            throw;
+            if (pendingReplayCleanupImpact is null)
+            {
+                return;
+            }
+
+            committedReplayCleanupImpact =
+                committedReplayCleanupImpact is null
+                    ? pendingReplayCleanupImpact
+                    : AddImpacts(
+                        committedReplayCleanupImpact,
+                        pendingReplayCleanupImpact);
+            pendingReplayCleanupImpact = null;
+            pendingReplayCleanupTransactionId = null;
         }
     }
 
-    private async Task LockDeviceAsync(
+    private async Task<string?> GetCurrentTransactionIdAsync(
+        CancellationToken cancellationToken)
+    {
+        if (!dbContext.Database.IsNpgsql())
+        {
+            return null;
+        }
+
+        return await dbContext.Database
+            .SqlQuery<string>($"""
+                SELECT pg_current_xact_id()::text AS "Value"
+                """)
+            .SingleAsync(cancellationToken);
+    }
+
+    private static DeviceDeletionImpact AddImpacts(
+        DeviceDeletionImpact impact,
+        DeviceDeletionImpact? additionalImpact)
+    {
+        if (additionalImpact is null)
+        {
+            return impact;
+        }
+
+        return new DeviceDeletionImpact(
+            impact.Recipes + additionalImpact.Recipes,
+            impact.Capacities + additionalImpact.Capacities,
+            impact.DeviceLogs + additionalImpact.DeviceLogs,
+            impact.PassStations + additionalImpact.PassStations,
+            impact.ClientStates + additionalImpact.ClientStates,
+            impact.ClientVersionSnapshots + additionalImpact.ClientVersionSnapshots,
+            impact.ClientPluginVersions + additionalImpact.ClientPluginVersions,
+            impact.UploadReceiveRegistrations + additionalImpact.UploadReceiveRegistrations,
+            impact.EmployeeDeviceAccesses + additionalImpact.EmployeeDeviceAccesses,
+            impact.RefreshTokenSessions + additionalImpact.RefreshTokenSessions,
+            impact.RuntimeHeartbeats + additionalImpact.RuntimeHeartbeats,
+            impact.EdgeHostPlcRuntimeStates + additionalImpact.EdgeHostPlcRuntimeStates);
+    }
+
+    private async Task<bool> LockDeviceAsync(
         Guid deviceId,
         CancellationToken cancellationToken)
     {
-        _ = await dbContext.Database
+        var lockedDeviceId = await dbContext.Database
             .SqlQuery<Guid>($"""
                 SELECT id AS "Value"
                 FROM devices
@@ -99,6 +288,7 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
                 FOR UPDATE
                 """)
             .SingleOrDefaultAsync(cancellationToken);
+        return lockedDeviceId == deviceId;
     }
 
     private async Task DeleteAssociatedRowsAsync(

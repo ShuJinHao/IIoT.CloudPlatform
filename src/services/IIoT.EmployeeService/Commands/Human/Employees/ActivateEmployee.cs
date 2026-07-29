@@ -26,57 +26,115 @@ public sealed class ActivateEmployeeHandler(
         ActivateEmployeeCommand request,
         CancellationToken cancellationToken)
     {
-        var targetResult = await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
-            request.EmployeeId,
+        var activationSecurityStamp = Guid.NewGuid().ToString("N");
+        string? baselineSecurityStamp = null;
+        var baselineSecurityStampCaptured = false;
+        var activationCommitAttempted = false;
+        return await unitOfWork.ExecuteResilientAsync(
+            ExecuteTransactionAsync,
             cancellationToken);
-        if (!targetResult.IsSuccess)
-        {
-            return Result.Failure(targetResult.Errors?.ToArray()
-                ?? [AdminTargetProtectionErrors.TargetNotFound]);
-        }
 
-        try
+        async Task<Result> ExecuteTransactionAsync(
+            CancellationToken transactionCancellationToken)
         {
-            await unitOfWork.BeginTransactionAsync(cancellationToken);
+            await unitOfWork.BeginTransactionAsync(transactionCancellationToken);
+
+            var targetResult = await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
+                request.EmployeeId,
+                transactionCancellationToken);
+            if (!targetResult.IsSuccess)
+            {
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return Result.Failure(targetResult.Errors?.ToArray()
+                    ?? [AdminTargetProtectionErrors.TargetNotFound]);
+            }
 
             var employee = await employeeRepository.GetSingleOrDefaultAsync(
                 new EmployeeWithAccessesSpec(request.EmployeeId),
-                cancellationToken);
+                transactionCancellationToken);
             if (employee is null)
             {
-                await unitOfWork.RollbackAsync(cancellationToken);
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
                 return Result.Failure(AdminTargetProtectionErrors.TargetNotFound);
             }
 
+            var employeeWasActive = employee.IsActive;
             if (!employee.IsActive)
             {
                 employee.Activate();
                 employeeRepository.Update(employee);
-                await employeeRepository.SaveChangesAsync(cancellationToken);
+                await employeeRepository.SaveChangesAsync(transactionCancellationToken);
             }
 
-            var identityResult = await identityAccountStore.SetEnabledAsync(
+            var account = await identityAccountStore.GetByIdAsync(
                 request.EmployeeId,
-                true,
-                cancellationToken);
-            if (!identityResult.IsSuccess || !identityResult.Value)
+                transactionCancellationToken);
+            if (account is null)
             {
-                await unitOfWork.RollbackAsync(cancellationToken);
-                return Result.Failure(identityResult.Errors?.ToArray() ?? ["员工身份账号启用失败"]);
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return Result.Failure("员工身份账号启用失败");
+            }
+
+            var currentSecurityStamp =
+                await identityAccountStore.GetSecurityStampAsync(
+                    request.EmployeeId,
+                    transactionCancellationToken);
+            if (!baselineSecurityStampCaptured)
+            {
+                baselineSecurityStamp = currentSecurityStamp;
+                baselineSecurityStampCaptured = true;
+            }
+
+            var matchesActivationStamp = string.Equals(
+                currentSecurityStamp,
+                activationSecurityStamp,
+                StringComparison.Ordinal);
+            var differsFromBaseline = !string.Equals(
+                currentSecurityStamp,
+                baselineSecurityStamp,
+                StringComparison.Ordinal);
+            var loadedFinalState = employeeWasActive && account.IsEnabled;
+            var confirmedActivationReplay =
+                activationCommitAttempted
+                && loadedFinalState
+                && matchesActivationStamp;
+            var newerStatusVersionAfterActivation =
+                activationCommitAttempted
+                && loadedFinalState
+                && differsFromBaseline
+                && !matchesActivationStamp;
+
+            if (!confirmedActivationReplay
+                && !newerStatusVersionAfterActivation)
+            {
+                if (differsFromBaseline && !matchesActivationStamp)
+                {
+                    activationSecurityStamp = Guid.NewGuid().ToString("N");
+                    baselineSecurityStamp = currentSecurityStamp;
+                }
+
+                var identityResult =
+                    await identityAccountStore.ActivateWithSecurityStampAsync(
+                        request.EmployeeId,
+                        activationSecurityStamp,
+                        transactionCancellationToken);
+                if (!identityResult.IsSuccess || !identityResult.Value)
+                {
+                    await unitOfWork.RollbackAsync(transactionCancellationToken);
+                    return Result.Failure(
+                        identityResult.Errors?.ToArray()
+                        ?? ["员工身份账号启用失败"]);
+                }
             }
 
             await sessionRevocationService.RevokeAllAsync(
                 request.EmployeeId,
                 "employee-activated-relogin-required",
-                cancellationToken);
-            await unitOfWork.CommitAsync(cancellationToken);
+                transactionCancellationToken);
+            activationCommitAttempted = true;
+            await unitOfWork.CommitAsync(transactionCancellationToken);
 
             return Result.Success();
-        }
-        catch (Exception)
-        {
-            await unitOfWork.RollbackAsync(cancellationToken);
-            throw;
         }
     }
 }

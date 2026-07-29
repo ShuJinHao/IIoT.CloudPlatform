@@ -302,6 +302,7 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal("New Name", employee.RealName);
         Assert.True(employee.IsActive);
         Assert.Contains(employee, repository.UpdatedEntities);
+        Assert.Equal(1, unitOfWork.ExecuteResilientCalls);
         Assert.Equal(1, unitOfWork.BeginCalls);
         Assert.Equal(1, unitOfWork.CommitCalls);
         Assert.Equal(0, unitOfWork.RollbackCalls);
@@ -430,10 +431,14 @@ public sealed class ApplicationFlowGuardTests
         Assert.Empty(accessRepository.UpdatedEntities);
         Assert.Empty(deactivateRepository.UpdatedEntities);
         Assert.Empty(terminateIdentityStore.DeletedIds);
-        Assert.Equal(0, profileUnitOfWork.BeginCalls);
-        Assert.Equal(0, deactivateUnitOfWork.BeginCalls);
-        Assert.Equal(0, activateUnitOfWork.BeginCalls);
-        Assert.Equal(0, terminateUnitOfWork.BeginCalls);
+        Assert.Equal(1, profileUnitOfWork.BeginCalls);
+        Assert.Equal(1, deactivateUnitOfWork.BeginCalls);
+        Assert.Equal(1, activateUnitOfWork.BeginCalls);
+        Assert.Equal(1, terminateUnitOfWork.BeginCalls);
+        Assert.Equal(1, profileUnitOfWork.RollbackCalls);
+        Assert.Equal(1, deactivateUnitOfWork.RollbackCalls);
+        Assert.Equal(1, activateUnitOfWork.RollbackCalls);
+        Assert.Equal(1, terminateUnitOfWork.RollbackCalls);
     }
 
     [Fact]
@@ -464,6 +469,42 @@ public sealed class ApplicationFlowGuardTests
 
         Assert.False(result.IsSuccess);
         Assert.Null(repository.AddedEntity);
+        Assert.Equal(1, unitOfWork.ExecuteResilientCalls);
+        Assert.Equal(1, unitOfWork.BeginCalls);
+        Assert.Equal(0, unitOfWork.CommitCalls);
+        Assert.Equal(1, unitOfWork.RollbackCalls);
+    }
+
+    [Fact]
+    public async Task OnboardEmployeeHandler_ShouldRollbackWhenPasswordPersistenceFails()
+    {
+        var repository = new InMemoryRepository<Employee>();
+        var passwordService = new StubIdentityPasswordService
+        {
+            SetPasswordResult = Result.Failure("password failed")
+        };
+        var unitOfWork = new RecordingUnitOfWork();
+        var handler = new OnboardEmployeeHandler(
+            new RecordingIdentityAccountStore(),
+            passwordService,
+            new StubRolePolicyService(),
+            repository,
+            unitOfWork,
+            new TestCurrentUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                IsAuthenticated = true
+            },
+            new RecordingPermissionProvider());
+
+        var result = await handler.Handle(
+            new OnboardEmployeeCommand("E1004", "Operator", "Password123!"),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Null(repository.AddedEntity);
+        Assert.Equal(1, passwordService.SetPasswordCalls);
+        Assert.Equal(1, unitOfWork.ExecuteResilientCalls);
         Assert.Equal(1, unitOfWork.BeginCalls);
         Assert.Equal(0, unitOfWork.CommitCalls);
         Assert.Equal(1, unitOfWork.RollbackCalls);
@@ -632,6 +673,10 @@ public sealed class ApplicationFlowGuardTests
         };
         var identityStore = new RecordingIdentityAccountStore
         {
+            AccountById =
+                IIoT.Core.Identity.Aggregates.IdentityAccounts.IdentityAccount.Create(
+                    employeeId,
+                    employee.EmployeeNo),
             SetEnabledResult = Result.Failure("disable failed")
         };
         var unitOfWork = new RecordingUnitOfWork();
@@ -659,7 +704,13 @@ public sealed class ApplicationFlowGuardTests
         {
             SingleOrDefaultResult = employee
         };
-        var identityStore = new RecordingIdentityAccountStore();
+        var identityStore = new RecordingIdentityAccountStore
+        {
+            AccountById =
+                IIoT.Core.Identity.Aggregates.IdentityAccounts.IdentityAccount.Create(
+                    employeeId,
+                    employee.EmployeeNo)
+        };
         var unitOfWork = new RecordingUnitOfWork();
         var sessionRevocationService = new StubHumanSessionRevocationService();
         var handler = new DeactivateEmployeeHandler(
@@ -675,6 +726,7 @@ public sealed class ApplicationFlowGuardTests
         Assert.Contains(sessionRevocationService.Revocations, x =>
             x.SubjectId == employeeId
             && x.Reason == "employee-deactivated");
+        Assert.Equal(1, unitOfWork.ExecuteResilientCalls);
         Assert.Equal(1, unitOfWork.CommitCalls);
     }
 
@@ -685,9 +737,16 @@ public sealed class ApplicationFlowGuardTests
         var employee = new Employee(employeeId, "E1005", "Inactive User");
         employee.Deactivate();
         var sessionRevocationService = new StubHumanSessionRevocationService();
+        var identityStore = new RecordingIdentityAccountStore
+        {
+            AccountById =
+                IIoT.Core.Identity.Aggregates.IdentityAccounts.IdentityAccount.Create(
+                    employeeId,
+                    employee.EmployeeNo)
+        };
         var handler = new DeactivateEmployeeHandler(
             new InMemoryRepository<Employee> { SingleOrDefaultResult = employee },
-            new RecordingIdentityAccountStore(),
+            identityStore,
             new RecordingUnitOfWork(),
             sessionRevocationService,
             new StubAdminTargetGuard());
@@ -715,7 +774,15 @@ public sealed class ApplicationFlowGuardTests
         {
             SingleOrDefaultResult = employee
         };
-        var identityStore = new RecordingIdentityAccountStore();
+        var account =
+            IIoT.Core.Identity.Aggregates.IdentityAccounts.IdentityAccount.Create(
+                employeeId,
+                employee.EmployeeNo);
+        account.Disable();
+        var identityStore = new RecordingIdentityAccountStore
+        {
+            AccountById = account
+        };
         var unitOfWork = new RecordingUnitOfWork();
         var sessionRevocationService = new StubHumanSessionRevocationService();
         var handler = new ActivateEmployeeHandler(
@@ -731,11 +798,13 @@ public sealed class ApplicationFlowGuardTests
 
         Assert.True(result.IsSuccess);
         Assert.True(employee.IsActive);
-        Assert.Equal(employeeId, identityStore.LastSetEnabledId);
-        Assert.True(identityStore.LastSetEnabledValue);
+        var activation = Assert.Single(identityStore.SecurityStampActivations);
+        Assert.Equal(employeeId, activation.UserId);
+        Assert.False(string.IsNullOrWhiteSpace(activation.SecurityStamp));
         Assert.Contains(sessionRevocationService.Revocations, revocation =>
             revocation.SubjectId == employeeId &&
             revocation.Reason == "employee-activated-relogin-required");
+        Assert.Equal(1, unitOfWork.ExecuteResilientCalls);
         Assert.Equal(1, unitOfWork.CommitCalls);
     }
 
@@ -777,9 +846,16 @@ public sealed class ApplicationFlowGuardTests
             SingleOrDefaultResult = employee
         };
         var sessionRevocationService = new StubHumanSessionRevocationService();
+        var identityStore = new RecordingIdentityAccountStore
+        {
+            AccountById =
+                IIoT.Core.Identity.Aggregates.IdentityAccounts.IdentityAccount.Create(
+                    employeeId,
+                    employee.EmployeeNo)
+        };
         var handler = new ActivateEmployeeHandler(
             repository,
-            new RecordingIdentityAccountStore(),
+            identityStore,
             new RecordingUnitOfWork(),
             sessionRevocationService,
             new StubAdminTargetGuard());
@@ -795,6 +871,47 @@ public sealed class ApplicationFlowGuardTests
         Assert.True(second.IsSuccess);
         Assert.True(employee.IsActive);
         Assert.Equal(2, sessionRevocationService.Revocations.Count);
+        Assert.All(
+            identityStore.SecurityStampActivations,
+            activation => Assert.Equal(employeeId, activation.UserId));
+        Assert.Equal(
+            2,
+            identityStore.SecurityStampActivations
+                .Select(activation => activation.SecurityStamp)
+                .Distinct(StringComparer.Ordinal)
+                .Count());
+    }
+
+    [Fact]
+    public async Task ActivateEmployeeHandler_ShouldRollbackWhenStatusVersionRotationFails()
+    {
+        var employeeId = Guid.NewGuid();
+        var employee = new Employee(employeeId, "E1009", "Active User");
+        var identityStore = new RecordingIdentityAccountStore
+        {
+            AccountById =
+                IIoT.Core.Identity.Aggregates.IdentityAccounts.IdentityAccount.Create(
+                    employeeId,
+                    employee.EmployeeNo),
+            ActivateWithSecurityStampResult = Result.Failure("rotation failed")
+        };
+        var unitOfWork = new RecordingUnitOfWork();
+        var sessionRevocationService = new StubHumanSessionRevocationService();
+        var handler = new ActivateEmployeeHandler(
+            new InMemoryRepository<Employee> { SingleOrDefaultResult = employee },
+            identityStore,
+            unitOfWork,
+            sessionRevocationService,
+            new StubAdminTargetGuard());
+
+        var result = await handler.Handle(
+            new ActivateEmployeeCommand(employeeId),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(1, unitOfWork.RollbackCalls);
+        Assert.Equal(0, unitOfWork.CommitCalls);
+        Assert.Empty(sessionRevocationService.Revocations);
     }
 
     [Fact]
@@ -808,6 +925,10 @@ public sealed class ApplicationFlowGuardTests
         };
         var identityStore = new RecordingIdentityAccountStore
         {
+            AccountById =
+                IIoT.Core.Identity.Aggregates.IdentityAccounts.IdentityAccount.Create(
+                    employeeId,
+                    employee.EmployeeNo),
             DeleteResult = Result.Failure("delete failed")
         };
         var unitOfWork = new RecordingUnitOfWork();
@@ -835,7 +956,13 @@ public sealed class ApplicationFlowGuardTests
         {
             SingleOrDefaultResult = employee
         };
-        var identityStore = new RecordingIdentityAccountStore();
+        var identityStore = new RecordingIdentityAccountStore
+        {
+            AccountById =
+                IIoT.Core.Identity.Aggregates.IdentityAccounts.IdentityAccount.Create(
+                    employeeId,
+                    employee.EmployeeNo)
+        };
         var unitOfWork = new RecordingUnitOfWork();
         var sessionRevocationService = new StubHumanSessionRevocationService();
         var handler = new TerminateEmployeeHandler(
@@ -851,6 +978,7 @@ public sealed class ApplicationFlowGuardTests
         Assert.Contains(sessionRevocationService.Revocations, x =>
             x.SubjectId == employeeId
             && x.Reason == "employee-terminated");
+        Assert.Equal(1, unitOfWork.ExecuteResilientCalls);
         Assert.Equal(1, unitOfWork.CommitCalls);
     }
 
