@@ -258,7 +258,7 @@ public sealed class DatabaseInitializationOrchestrator(
     {
         logger.LogInformation("Checking for non-canonical Admin-like identity roles.");
 
-        if (!await IdentityAuthorizationTablesExistAsync(cancellationToken))
+        if (!await IdentityAdminTablesExistAsync(cancellationToken))
         {
             return;
         }
@@ -275,20 +275,64 @@ public sealed class DatabaseInitializationOrchestrator(
     internal async Task EnsureIdentityAuthorizationPreflightAsync(
         CancellationToken cancellationToken)
     {
-        if (!await IdentityAuthorizationTablesExistAsync(cancellationToken))
+        if (!await IdentityAdminTablesExistAsync(cancellationToken))
         {
             logger.LogInformation(
-                "Identity authorization tables do not exist yet; database authorization preflight is empty.");
+                "Identity admin tables do not exist yet; database authorization preflight is empty.");
             return;
         }
 
         await EnsureCanonicalAdminRolePreflightAsync(cancellationToken);
+        await SystemInitData.EnsureSingleAdminAssignmentPreflightAsync(
+            dbContext,
+            cancellationToken);
+
+        if (!await IdentityAuthorizationTablesExistAsync(cancellationToken))
+        {
+            logger.LogInformation(
+                "Identity permission tables do not exist yet; permission-claim preflight is empty.");
+            return;
+        }
 
         var conflicts = await GetPermissionClaimConflictsAsync(cancellationToken);
         if (conflicts.Count > 0)
         {
             throw new InvalidOperationException(
                 BuildPermissionClaimConflictMessage(conflicts));
+        }
+    }
+
+    private async Task<bool> IdentityAdminTablesExistAsync(
+        CancellationToken cancellationToken)
+    {
+        var connection = dbContext.Database.GetDbConnection();
+        var shouldCloseConnection = connection.State != ConnectionState.Open;
+
+        if (shouldCloseConnection)
+        {
+            await connection.OpenAsync(cancellationToken);
+        }
+
+        try
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT
+                    to_regclass('"AspNetRoles"') IS NOT NULL
+                    AND to_regclass('"AspNetUsers"') IS NOT NULL
+                    AND to_regclass('"AspNetUserRoles"') IS NOT NULL;
+                """;
+
+            return Convert.ToBoolean(
+                await command.ExecuteScalarAsync(cancellationToken));
+        }
+        finally
+        {
+            if (shouldCloseConnection)
+            {
+                await connection.CloseAsync();
+            }
         }
     }
 
