@@ -176,7 +176,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
     }
 
     [Fact]
-    public async Task DeviceDeleteCommitRecovery_ShouldRemoveLateRefreshSessionBeforeSuccess()
+    public async Task DeviceDeleteCommitRecovery_ShouldAccumulateRepeatedLateSessionsBeforeSuccess()
     {
         using var budget = await PostgresTestBudget.CreateAsync(fixture);
         var interceptor = new AddLateRefreshSessionAfterCommitInterceptor(
@@ -200,22 +200,22 @@ public sealed class ProductionRetryTransactionPostgresTests(
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
             audit);
 
-        interceptor.Arm(seeded.DeviceId);
+        interceptor.Arm(seeded.DeviceId, commitLosses: 2);
         var result = await handler.Handle(
             new DeleteDeviceCommand(seeded.DeviceId),
             budget.Token);
 
         Assert.True(result.IsSuccess);
         Assert.True(result.Value);
-        Assert.Equal(1, interceptor.ExceptionsThrown);
-        Assert.Equal(1, interceptor.LateSessionsInserted);
+        Assert.Equal(2, interceptor.ExceptionsThrown);
+        Assert.Equal(2, interceptor.LateSessionsInserted);
         var deletion = Assert.IsType<DeviceCascadeDeletionResult>(
             deletionService.LastDeletionResult);
         Assert.True(deletion.DeviceDeleted);
-        Assert.Equal(13, deletion.Impact.TotalAssociatedRows);
-        Assert.Equal(2, deletion.Impact.RefreshTokenSessions);
+        Assert.Equal(14, deletion.Impact.TotalAssociatedRows);
+        Assert.Equal(3, deletion.Impact.RefreshTokenSessions);
         Assert.Contains(
-            "\"refresh_token_sessions\":2",
+            "\"refresh_token_sessions\":3",
             Assert.Single(audit.Entries).Summary,
             StringComparison.Ordinal);
 
@@ -227,6 +227,58 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 budget.Token));
         var remainingImpact = await new EfDeviceDeletionDependencyService(dbContext)
             .GetImpactAsync(seeded.DeviceId, budget.Token);
+        Assert.Equal(0, remainingImpact.TotalAssociatedRows);
+    }
+
+    [Fact]
+    public async Task RolledBackReplayCleanup_ShouldNotDoubleCountLateSession()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        var interceptor = new AddLateRefreshSessionAfterCommitInterceptor(
+            budget.ConnectionString);
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var seeded = await SeedDeviceWithAllDependenciesAsync(
+            services,
+            budget.Token);
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var audit = new RecordingAuditTrailService();
+        var deletionService = new CapturingDeviceDeletionService(
+            new EfDeviceDeletionDependencyService(dbContext));
+        var handler = new DeleteDeviceHandler(
+            HumanAdmin(),
+            new EfRepository<Device>(dbContext),
+            deletionService,
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            audit);
+
+        interceptor.Arm(
+            seeded.DeviceId,
+            failFirstCleanupBeforeCommit: true);
+        var result = await handler.Handle(
+            new DeleteDeviceCommand(seeded.DeviceId),
+            budget.Token);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(result.Value);
+        Assert.Equal(2, interceptor.ExceptionsThrown);
+        Assert.Equal(1, interceptor.LateSessionsInserted);
+        var deletion = Assert.IsType<DeviceCascadeDeletionResult>(
+            deletionService.LastDeletionResult);
+        Assert.Equal(13, deletion.Impact.TotalAssociatedRows);
+        Assert.Equal(2, deletion.Impact.RefreshTokenSessions);
+        Assert.Contains(
+            "\"refresh_token_sessions\":2",
+            Assert.Single(audit.Entries).Summary,
+            StringComparison.Ordinal);
+
+        dbContext.ChangeTracker.Clear();
+        var remainingImpact =
+            await new EfDeviceDeletionDependencyService(dbContext)
+                .GetImpactAsync(seeded.DeviceId, budget.Token);
         Assert.Equal(0, remainingImpact.TotalAssociatedRows);
     }
 
@@ -264,24 +316,38 @@ public sealed class ProductionRetryTransactionPostgresTests(
             .DeleteCascadeAsync(device.Id, budget.Token);
         await interceptor.WaitUntilCommitAsync(budget.Token);
 
+        var refreshApplicationName =
+            $"edge-session-issue-race-{Guid.NewGuid():N}";
+        await using var refreshContext = CreateRetryContext(
+            budget.ConnectionString,
+            refreshApplicationName);
         var refreshTokenService = new EfRefreshTokenService(
-            bootstrapContext,
+            refreshContext,
             Options.Create(new RefreshTokenOptions()));
         var issueTask = refreshTokenService.IssueAsync(
             IIoTClaimTypes.EdgeDeviceActor,
             device.Id,
             budget.Token);
-        await Task.Delay(TimeSpan.FromMilliseconds(100), budget.Token);
-        Assert.False(issueTask.IsCompleted);
+        try
+        {
+            await WaitForLockWaitAsync(
+                budget.ConnectionString,
+                refreshApplicationName,
+                budget.Token);
+            Assert.False(issueTask.IsCompleted);
+        }
+        finally
+        {
+            interceptor.Continue();
+        }
 
-        interceptor.Continue();
         var deletionResult = await deletionTask;
         Assert.True(deletionResult.DeviceDeleted);
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => issueTask);
 
-        bootstrapContext.ChangeTracker.Clear();
-        Assert.False(await bootstrapContext.RefreshTokenSessions
+        refreshContext.ChangeTracker.Clear();
+        Assert.False(await refreshContext.RefreshTokenSessions
             .AsNoTracking()
             .AnyAsync(
                 session =>
@@ -308,14 +374,19 @@ public sealed class ProductionRetryTransactionPostgresTests(
         bootstrapContext.Devices.Add(device);
         await bootstrapContext.SaveChangesAsync(budget.Token);
         bootstrapContext.ChangeTracker.Clear();
+        var refreshApplicationName =
+            $"edge-session-rotate-race-{Guid.NewGuid():N}";
+        await using var refreshContext = CreateRetryContext(
+            budget.ConnectionString,
+            refreshApplicationName);
         var refreshTokenService = new EfRefreshTokenService(
-            bootstrapContext,
+            refreshContext,
             Options.Create(new RefreshTokenOptions()));
         var issued = await refreshTokenService.IssueAsync(
             IIoTClaimTypes.EdgeDeviceActor,
             device.Id,
             budget.Token);
-        bootstrapContext.ChangeTracker.Clear();
+        refreshContext.ChangeTracker.Clear();
 
         await using var deletionScope = provider.CreateAsyncScope();
         var deletionContext = deletionScope.ServiceProvider
@@ -330,17 +401,26 @@ public sealed class ProductionRetryTransactionPostgresTests(
             IIoTClaimTypes.EdgeDeviceActor,
             issued.Token,
             budget.Token);
-        await Task.Delay(TimeSpan.FromMilliseconds(100), budget.Token);
-        Assert.False(rotationTask.IsCompleted);
+        try
+        {
+            await WaitForLockWaitAsync(
+                budget.ConnectionString,
+                refreshApplicationName,
+                budget.Token);
+            Assert.False(rotationTask.IsCompleted);
+        }
+        finally
+        {
+            interceptor.Continue();
+        }
 
-        interceptor.Continue();
         var deletionResult = await deletionTask;
         Assert.True(deletionResult.DeviceDeleted);
         var rotationResult = await rotationTask;
         Assert.False(rotationResult.IsSuccess);
 
-        bootstrapContext.ChangeTracker.Clear();
-        Assert.False(await bootstrapContext.RefreshTokenSessions
+        refreshContext.ChangeTracker.Clear();
+        Assert.False(await refreshContext.RefreshTokenSessions
             .AsNoTracking()
             .AnyAsync(
                 session =>
@@ -1319,6 +1399,87 @@ public sealed class ProductionRetryTransactionPostgresTests(
         return services.BuildServiceProvider();
     }
 
+    private static IIoTDbContext CreateRetryContext(
+        string connectionString,
+        string applicationName)
+    {
+        var namedConnectionString = new NpgsqlConnectionStringBuilder(
+            connectionString)
+        {
+            ApplicationName = applicationName
+        }.ConnectionString;
+        var options = new DbContextOptionsBuilder<IIoTDbContext>()
+            .UseNpgsql(
+                namedConnectionString,
+                npgsql => npgsql.EnableRetryOnFailure(
+                    3,
+                    TimeSpan.FromMilliseconds(50),
+                    null))
+            .Options;
+        return new IIoTDbContext(options);
+    }
+
+    private static async Task WaitForLockWaitAsync(
+        string connectionString,
+        string applicationName,
+        CancellationToken testToken)
+    {
+        using var readinessTimeout =
+            CancellationTokenSource.CreateLinkedTokenSource(testToken);
+        readinessTimeout.CancelAfter(TimeSpan.FromSeconds(10));
+        var readinessToken = readinessTimeout.Token;
+        var observerConnectionString = new NpgsqlConnectionStringBuilder(
+            connectionString)
+        {
+            ApplicationName =
+                $"device-session-lock-observer-{Guid.NewGuid():N}"
+        }.ConnectionString;
+
+        try
+        {
+            await using var observer = new NpgsqlConnection(
+                observerConnectionString);
+            await observer.OpenAsync(readinessToken);
+            while (true)
+            {
+                await using var command = new NpgsqlCommand(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM pg_stat_activity AS activity
+                        WHERE activity.application_name = @application_name
+                          AND activity.state = 'active'
+                          AND activity.wait_event_type = 'Lock'
+                          AND EXISTS (
+                              SELECT 1
+                              FROM pg_locks AS waiting_lock
+                              WHERE waiting_lock.pid = activity.pid
+                                AND NOT waiting_lock.granted
+                          )
+                    )
+                    """,
+                    observer);
+                command.Parameters.AddWithValue(
+                    "application_name",
+                    applicationName);
+                if (await command.ExecuteScalarAsync(readinessToken) is true)
+                {
+                    return;
+                }
+
+                await Task.Delay(
+                    TimeSpan.FromMilliseconds(25),
+                    readinessToken);
+            }
+        }
+        catch (OperationCanceledException)
+            when (!testToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Edge session operation '{applicationName}' did not enter a PostgreSQL lock wait within 10 seconds.");
+        }
+    }
+
     private static ICurrentUser HumanAdmin()
         => new HumanCurrentUser(Guid.NewGuid());
 
@@ -1528,7 +1689,9 @@ public sealed class ProductionRetryTransactionPostgresTests(
         string connectionString)
         : DbTransactionInterceptor
     {
-        private int armed;
+        private int remainingCommitLosses;
+        private int armCleanupFailureAfterCommitLoss;
+        private int failCleanupBeforeCommit;
         private int exceptionsThrown;
         private int lateSessionsInserted;
         private Guid deviceId;
@@ -1538,10 +1701,41 @@ public sealed class ProductionRetryTransactionPostgresTests(
         public int LateSessionsInserted => Volatile.Read(
             ref lateSessionsInserted);
 
-        public void Arm(Guid targetDeviceId)
+        public void Arm(
+            Guid targetDeviceId,
+            int commitLosses = 1,
+            bool failFirstCleanupBeforeCommit = false)
         {
+            ArgumentOutOfRangeException.ThrowIfLessThan(
+                commitLosses,
+                1);
             deviceId = targetDeviceId;
-            Volatile.Write(ref armed, 1);
+            Volatile.Write(
+                ref remainingCommitLosses,
+                commitLosses);
+            Volatile.Write(
+                ref armCleanupFailureAfterCommitLoss,
+                failFirstCleanupBeforeCommit ? 1 : 0);
+        }
+
+        public override ValueTask<InterceptionResult>
+            TransactionCommittingAsync(
+                DbTransaction transaction,
+                TransactionEventData eventData,
+                InterceptionResult result,
+                CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.CompareExchange(
+                    ref failCleanupBeforeCommit,
+                    0,
+                    1) == 1)
+            {
+                Interlocked.Increment(ref exceptionsThrown);
+                throw RetryablePostgresException(
+                    "simulated transient before replay cleanup commit");
+            }
+
+            return ValueTask.FromResult(result);
         }
 
         public override async Task TransactionCommittedAsync(
@@ -1549,9 +1743,22 @@ public sealed class ProductionRetryTransactionPostgresTests(
             TransactionEndEventData eventData,
             CancellationToken cancellationToken = default)
         {
-            if (Interlocked.CompareExchange(ref armed, 0, 1) != 1)
+            while (true)
             {
-                return;
+                var remaining = Volatile.Read(
+                    ref remainingCommitLosses);
+                if (remaining <= 0)
+                {
+                    return;
+                }
+
+                if (Interlocked.CompareExchange(
+                        ref remainingCommitLosses,
+                        remaining - 1,
+                        remaining) == remaining)
+                {
+                    break;
+                }
             }
 
             await using var insertionConnection =
@@ -1583,6 +1790,14 @@ public sealed class ProductionRetryTransactionPostgresTests(
 
             Interlocked.Increment(ref lateSessionsInserted);
             Interlocked.Increment(ref exceptionsThrown);
+            if (Interlocked.CompareExchange(
+                    ref armCleanupFailureAfterCommitLoss,
+                    0,
+                    1) == 1)
+            {
+                Volatile.Write(ref failCleanupBeforeCommit, 1);
+            }
+
             throw RetryablePostgresException(
                 "simulated commit confirmation loss after late edge session");
         }

@@ -64,7 +64,9 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
         CancellationToken cancellationToken = default)
     {
         DeviceDeletionImpact? lastDeletionAttemptImpact = null;
-        DeviceDeletionImpact? replayCleanupAttemptImpact = null;
+        DeviceDeletionImpact? committedReplayCleanupImpact = null;
+        DeviceDeletionImpact? pendingReplayCleanupImpact = null;
+        string? pendingReplayCleanupTransactionId = null;
         var deletionAttempted = false;
         var strategy = dbContext.Database.CreateExecutionStrategy();
         return await strategy.ExecuteAsync(
@@ -82,6 +84,8 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
                 await DeviceDeletionTransactionLock.AcquireAsync(
                     dbContext,
                     deviceId,
+                    transactionCancellationToken);
+                await ResolvePendingReplayCleanupAsync(
                     transactionCancellationToken);
                 var deviceExists = await LockDeviceAsync(
                     deviceId,
@@ -101,13 +105,21 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
 
                     if (remainingImpact.TotalAssociatedRows > 0)
                     {
-                        replayCleanupAttemptImpact = remainingImpact;
+                        var cleanupAttemptImpact = remainingImpact;
                         await DeleteAssociatedRowsAsync(
                             deviceId,
                             transactionCancellationToken);
                         remainingImpact = await GetImpactAsync(
                             deviceId,
                             transactionCancellationToken);
+                        if (remainingImpact.TotalAssociatedRows == 0)
+                        {
+                            pendingReplayCleanupImpact =
+                                cleanupAttemptImpact;
+                            pendingReplayCleanupTransactionId =
+                                await GetCurrentTransactionIdAsync(
+                                    transactionCancellationToken);
+                        }
                     }
 
                     var committedReplayConfirmed =
@@ -116,6 +128,7 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
                     {
                         await transaction.CommitAsync(
                             transactionCancellationToken);
+                        CommitPendingReplayCleanup();
                     }
 
                     return new DeviceCascadeDeletionResult(
@@ -123,7 +136,7 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
                         committedReplayConfirmed
                             ? AddImpacts(
                                 lastDeletionAttemptImpact ?? remainingImpact,
-                                replayCleanupAttemptImpact)
+                                committedReplayCleanupImpact)
                             : remainingImpact);
                 }
 
@@ -156,6 +169,85 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
                 throw;
             }
         }
+
+        async Task ResolvePendingReplayCleanupAsync(
+            CancellationToken transactionCancellationToken)
+        {
+            if (pendingReplayCleanupImpact is null)
+            {
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(
+                    pendingReplayCleanupTransactionId))
+            {
+                throw new InvalidOperationException(
+                    "Device deletion replay cleanup commit state cannot be verified.");
+            }
+
+            var transactionStatus = await dbContext.Database
+                .SqlQuery<string>($"""
+                    SELECT pg_xact_status(
+                        CAST({pendingReplayCleanupTransactionId} AS xid8)
+                    ) AS "Value"
+                    """)
+                .SingleAsync(transactionCancellationToken);
+            if (string.Equals(
+                    transactionStatus,
+                    "committed",
+                    StringComparison.Ordinal))
+            {
+                committedReplayCleanupImpact =
+                    committedReplayCleanupImpact is null
+                        ? pendingReplayCleanupImpact
+                        : AddImpacts(
+                            committedReplayCleanupImpact,
+                            pendingReplayCleanupImpact);
+            }
+            else if (!string.Equals(
+                         transactionStatus,
+                         "aborted",
+                         StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Device deletion replay cleanup transaction is unexpectedly '{transactionStatus}'.");
+            }
+
+            pendingReplayCleanupImpact = null;
+            pendingReplayCleanupTransactionId = null;
+        }
+
+        void CommitPendingReplayCleanup()
+        {
+            if (pendingReplayCleanupImpact is null)
+            {
+                return;
+            }
+
+            committedReplayCleanupImpact =
+                committedReplayCleanupImpact is null
+                    ? pendingReplayCleanupImpact
+                    : AddImpacts(
+                        committedReplayCleanupImpact,
+                        pendingReplayCleanupImpact);
+            pendingReplayCleanupImpact = null;
+            pendingReplayCleanupTransactionId = null;
+        }
+    }
+
+    private async Task<string?> GetCurrentTransactionIdAsync(
+        CancellationToken cancellationToken)
+    {
+        if (!dbContext.Database.IsNpgsql())
+        {
+            return null;
+        }
+
+        return await dbContext.Database
+            .SqlQuery<string>($"""
+                SELECT pg_current_xact_id()::text AS "Value"
+                """)
+            .SingleAsync(cancellationToken);
     }
 
     private static DeviceDeletionImpact AddImpacts(
