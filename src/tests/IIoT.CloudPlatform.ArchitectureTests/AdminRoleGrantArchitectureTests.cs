@@ -91,6 +91,19 @@ public sealed class AdminRoleGrantArchitectureTests
                     "INSERT INTO \"AspNetUserRoles\" (\"UserId\", \"RoleId\") VALUES (@u, @r)";
             }
             """;
+        const string migrationInsertData =
+            """
+            public sealed class RogueMigration
+            {
+                protected void Up(MigrationBuilder migrationBuilder)
+                {
+                    migrationBuilder.InsertData(
+                        table: "AspNetUserRoles",
+                        columns: ["UserId", "RoleId"],
+                        values: new object[] { Guid.NewGuid(), Guid.NewGuid() });
+                }
+            }
+            """;
 
         Assert.Single(FindRoleGrantViolations(
             "src/services/RogueSeeder.cs",
@@ -104,6 +117,9 @@ public sealed class AdminRoleGrantArchitectureTests
         Assert.Single(FindRoleGrantViolations(
             "src/infrastructure/RogueSqlStore.cs",
             rawSqlWrite));
+        Assert.Single(FindRoleGrantViolations(
+            "src/infrastructure/IIoT.EntityFrameworkCore/Migrations/RogueMigration.cs",
+            migrationInsertData));
     }
 
     private static IEnumerable<SourceFile> EnumerateProductionSources(
@@ -120,13 +136,20 @@ public sealed class AdminRoleGrantArchitectureTests
                      SearchOption.AllDirectories))
         {
             var normalized = path.Replace('\\', '/');
+            var isGeneratedMigrationMetadata = normalized.Contains(
+                    "/IIoT.EntityFrameworkCore/Migrations/",
+                    StringComparison.Ordinal)
+                && (normalized.EndsWith(
+                        ".Designer.cs",
+                        StringComparison.Ordinal)
+                    || normalized.EndsWith(
+                        "/IIoTDbContextModelSnapshot.cs",
+                        StringComparison.Ordinal));
             if (normalized.Contains("/src/tests/", StringComparison.Ordinal)
                 || normalized.Contains("/src/testing/", StringComparison.Ordinal)
                 || normalized.Contains("/bin/", StringComparison.Ordinal)
                 || normalized.Contains("/obj/", StringComparison.Ordinal)
-                || normalized.Contains(
-                    "/IIoT.EntityFrameworkCore/Migrations/",
-                    StringComparison.Ordinal))
+                || isGeneratedMigrationMetadata)
             {
                 continue;
             }
@@ -164,6 +187,16 @@ public sealed class AdminRoleGrantArchitectureTests
         foreach (var invocation in root.DescendantNodes()
                      .OfType<InvocationExpressionSyntax>())
         {
+            if (IsUserRoleInsertData(invocation))
+            {
+                var insertLine = invocation.GetLocation()
+                    .GetLineSpan()
+                    .StartLinePosition.Line + 1;
+                yield return
+                    $"{relativePath}:{insertLine}:AspNetUserRolesInsertData";
+                continue;
+            }
+
             if (invocation.Expression is not MemberAccessExpressionSyntax member
                 || member.Name.Identifier.ValueText is not ("Add" or "AddAsync")
                 || !member.Expression.ToString().EndsWith(
@@ -188,13 +221,38 @@ public sealed class AdminRoleGrantArchitectureTests
             yield return $"{relativePath}:IdentityUserRoleConstruction";
         }
 
-        if (source.Replace("\\\"", "\"", StringComparison.Ordinal)
-            .Contains(
-            "INSERT INTO \"AspNetUserRoles\"",
-            StringComparison.OrdinalIgnoreCase))
+        var compactSource = string.Concat(
+                source.Replace("\\\"", "\"", StringComparison.Ordinal)
+                    .Where(character => !char.IsWhiteSpace(character)))
+            .Replace("\"", string.Empty, StringComparison.Ordinal);
+        if (compactSource.Contains(
+                "INSERTINTOAspNetUserRoles",
+                StringComparison.OrdinalIgnoreCase))
         {
             yield return $"{relativePath}:RawAspNetUserRolesInsert";
         }
+    }
+
+    private static bool IsUserRoleInsertData(
+        InvocationExpressionSyntax invocation)
+    {
+        if (invocation.Expression is not MemberAccessExpressionSyntax member
+            || member.Name.Identifier.ValueText != "InsertData")
+        {
+            return false;
+        }
+
+        var arguments = invocation.ArgumentList.Arguments;
+        var tableArgument = arguments.FirstOrDefault(argument =>
+                                argument.NameColon?.Name.Identifier.ValueText
+                                == "table")
+                            ?? arguments.FirstOrDefault();
+        return tableArgument?.Expression is LiteralExpressionSyntax literal
+               && literal.Token.Value is string
+               && string.Equals(
+                   literal.Token.ValueText,
+                   "AspNetUserRoles",
+                   StringComparison.OrdinalIgnoreCase);
     }
 
     private static IReadOnlyList<RoleGrantCall> FindAddToRoleCalls(
