@@ -25,6 +25,9 @@ using IIoT.SharedKernel.Configuration;
 using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Result;
 using MediatR;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -104,31 +107,140 @@ public sealed class PersistenceBoundaryArchitectureTests
         var serviceRoot = CloudRepositoryPath.Find("src", "services");
         var violations = Directory
             .GetFiles(serviceRoot, "*.cs", SearchOption.AllDirectories)
-            .Select(path => new
-            {
-                Path = path,
-                Source = File.ReadAllText(path)
-            })
-            .Where(item => item.Source.Contains(
-                "unitOfWork.BeginTransactionAsync(",
-                StringComparison.Ordinal))
-            .Where(item =>
-            {
-                var resilientIndex = item.Source.IndexOf(
-                    "unitOfWork.ExecuteResilientAsync(",
-                    StringComparison.Ordinal);
-                var transactionIndex = item.Source.IndexOf(
-                    "unitOfWork.BeginTransactionAsync(",
-                    StringComparison.Ordinal);
-                return resilientIndex < 0 || resilientIndex > transactionIndex;
-            })
-            .Select(item => Path.GetRelativePath(serviceRoot, item.Path))
+            .SelectMany(path => FindManualTransactionViolations(
+                File.ReadAllText(path),
+                Path.GetRelativePath(serviceRoot, path)))
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
 
         Assert.True(
             violations.Length == 0,
             $"Manual transactions outside resilient execution strategy: {string.Join(", ", violations)}");
+    }
+
+    [Fact]
+    public void ManualTransactionGuard_ShouldInspectEveryTransactionOccurrence()
+    {
+        const string source =
+            """
+            public sealed class MixedHandler(IUnitOfWork unitOfWork)
+            {
+                public async Task Handle(CancellationToken cancellationToken)
+                {
+                    await unitOfWork.ExecuteResilientAsync(
+                        ExecuteTransactionAsync,
+                        cancellationToken);
+
+                    async Task<bool> ExecuteTransactionAsync(
+                        CancellationToken transactionCancellationToken)
+                    {
+                        await unitOfWork.BeginTransactionAsync(
+                            transactionCancellationToken);
+                        return true;
+                    }
+
+                    await unitOfWork.BeginTransactionAsync(cancellationToken);
+                }
+            }
+            """;
+
+        var violation = Assert.Single(
+            FindManualTransactionViolations(source, "MixedHandler.cs"));
+
+        Assert.Equal("MixedHandler.cs:17", violation);
+    }
+
+    private static IEnumerable<string> FindManualTransactionViolations(
+        string source,
+        string relativePath)
+    {
+        var root = CSharpSyntaxTree.ParseText(source).GetRoot();
+        foreach (var transactionInvocation in root
+                     .DescendantNodes()
+                     .OfType<InvocationExpressionSyntax>()
+                     .Where(invocation => IsUnitOfWorkInvocation(
+                         invocation,
+                         "BeginTransactionAsync")))
+        {
+            if (IsInsideResilientCallback(transactionInvocation))
+            {
+                continue;
+            }
+
+            var line = transactionInvocation
+                .GetLocation()
+                .GetLineSpan()
+                .StartLinePosition
+                .Line + 1;
+            yield return $"{relativePath}:{line}";
+        }
+    }
+
+    private static bool IsInsideResilientCallback(
+        InvocationExpressionSyntax transactionInvocation)
+    {
+        var hasAnonymousResilientCallback = transactionInvocation
+            .Ancestors()
+            .OfType<AnonymousFunctionExpressionSyntax>()
+            .Any(callback =>
+                callback.Parent is ArgumentSyntax
+                {
+                    Parent.Parent: InvocationExpressionSyntax invocation
+                }
+                && IsUnitOfWorkInvocation(
+                    invocation,
+                    "ExecuteResilientAsync"));
+        if (hasAnonymousResilientCallback)
+        {
+            return true;
+        }
+
+        var localFunction = transactionInvocation
+            .Ancestors()
+            .OfType<LocalFunctionStatementSyntax>()
+            .FirstOrDefault();
+        var containingMethod = localFunction?
+            .Ancestors()
+            .OfType<MethodDeclarationSyntax>()
+            .FirstOrDefault();
+        if (localFunction is null || containingMethod is null)
+        {
+            return false;
+        }
+
+        var callbackName = localFunction.Identifier.ValueText;
+        return containingMethod
+            .DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Where(invocation => !localFunction.Span.Contains(invocation.Span))
+            .Where(invocation => IsUnitOfWorkInvocation(
+                invocation,
+                "ExecuteResilientAsync"))
+            .Any(invocation => invocation.ArgumentList.Arguments.Any(argument =>
+                argument.Expression is IdentifierNameSyntax identifier
+                && string.Equals(
+                    identifier.Identifier.ValueText,
+                    callbackName,
+                    StringComparison.Ordinal)));
+    }
+
+    private static bool IsUnitOfWorkInvocation(
+        InvocationExpressionSyntax invocation,
+        string methodName)
+    {
+        return invocation.Expression is MemberAccessExpressionSyntax
+        {
+            Expression: IdentifierNameSyntax receiver,
+            Name: SimpleNameSyntax method
+        }
+        && string.Equals(
+            receiver.Identifier.ValueText,
+            "unitOfWork",
+            StringComparison.Ordinal)
+        && string.Equals(
+            method.Identifier.ValueText,
+            methodName,
+            StringComparison.Ordinal);
     }
 
     [Fact]
