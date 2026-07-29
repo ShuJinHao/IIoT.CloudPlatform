@@ -24,6 +24,16 @@ public sealed class PostgresOptions
                 "Infrastructure:Postgres:EnableRetry must be true in Production.");
         }
 
+        if (string.Equals(
+                environmentName,
+                "Production",
+                StringComparison.OrdinalIgnoreCase)
+            && MaxRetryCount <= 0)
+        {
+            throw new InvalidOperationException(
+                "Infrastructure:Postgres:MaxRetryCount must be greater than 0 in Production.");
+        }
+
         if (CommandTimeoutSeconds <= 0)
         {
             throw new InvalidOperationException("Infrastructure:Postgres:CommandTimeoutSeconds must be greater than 0.");

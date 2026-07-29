@@ -185,6 +185,25 @@ public sealed class InfrastructureValueBehaviorTests
     }
 
     [Fact]
+    public void PostgresOptions_ShouldFailClosedWhenProductionRetryCountIsZero()
+    {
+        var options = new PostgresOptions
+        {
+            EnableRetry = true,
+            MaxRetryCount = 0
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => options.Validate("Production"));
+
+        Assert.Contains(
+            "Infrastructure:Postgres:MaxRetryCount must be greater than 0 in Production",
+            exception.Message,
+            StringComparison.Ordinal);
+        options.Validate("Development");
+    }
+
+    [Fact]
     public void JwtSettings_ShouldRejectConfiguredSecretShorterThanRuntimeMinimum()
     {
         var options = new JwtSettings

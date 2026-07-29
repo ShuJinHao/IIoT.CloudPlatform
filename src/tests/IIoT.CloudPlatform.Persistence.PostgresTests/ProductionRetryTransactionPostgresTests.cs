@@ -109,6 +109,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
             .Get<PostgresOptions>()!;
 
         Assert.True(retryOptions.EnableRetry);
+        Assert.True(retryOptions.MaxRetryCount > 0);
         retryOptions.Validate("Production");
 
         var options = new DbContextOptionsBuilder<IIoTDbContext>()
