@@ -1106,7 +1106,7 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
-    public async Task ActivateEmployeeHandler_ShouldNotObserveAfterCallerCancellation()
+    public async Task ActivateEmployeeHandler_ShouldResolveExactStateAfterCommitCancellation()
     {
         var employeeId = Guid.NewGuid();
         var employee = new Employee(employeeId, "E1014", "Canceled Activation");
@@ -1116,10 +1116,30 @@ public sealed class ApplicationFlowGuardTests
                 employeeId,
                 employee.EmployeeNo);
         account.Disable();
-        var observer = new StubEmployeeMutationObservationReader();
+        var identityStore = new RecordingIdentityAccountStore
+        {
+            AccountById = account
+        };
+        identityStore.SecurityStampsByUserId[employeeId] = "baseline-stamp";
+        var observer = new StubEmployeeMutationObservationReader
+        {
+            ObserveAsyncOverride = (_, _) =>
+            {
+                identityStore.SecurityStampsByUserId.TryGetValue(
+                    employeeId,
+                    out var securityStamp);
+                return Task.FromResult(new EmployeeMutationObservation(
+                    EmployeeExists: true,
+                    EmployeeIsActive: employee.IsActive,
+                    AccountExists: true,
+                    AccountIsEnabled: account.IsEnabled,
+                    AccountSecurityStamp: securityStamp,
+                    Roles: []));
+            }
+        };
         var handler = new ActivateEmployeeHandler(
             new InMemoryRepository<Employee> { SingleOrDefaultResult = employee },
-            new RecordingIdentityAccountStore { AccountById = account },
+            identityStore,
             new RecordingUnitOfWork
             {
                 OnCommit = () => throw new OperationCanceledException(
@@ -1129,12 +1149,12 @@ public sealed class ApplicationFlowGuardTests
             new StubAdminTargetGuard(),
             observer);
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            handler.Handle(
-                new ActivateEmployeeCommand(employeeId),
-                CancellationToken.None));
+        var result = await handler.Handle(
+            new ActivateEmployeeCommand(employeeId),
+            CancellationToken.None);
 
-        Assert.Equal(0, observer.Calls);
+        Assert.True(result.IsSuccess);
+        Assert.Equal(1, observer.Calls);
     }
 
     [Fact]

@@ -738,11 +738,16 @@ public sealed class EmployeeRoleAssignmentTests
     }
 
     [Fact]
-    public async Task CallerCancellationDuringCommit_ShouldNotStartCommitObservation()
+    public async Task CallerCancellationDuringCommit_ShouldResolveExactCommittedState()
     {
         var targetId = Guid.NewGuid();
         var identityStore = CreateIdentityStore(targetId, "ProductionViewer");
-        var observer = new StubEmployeeMutationObservationReader();
+        identityStore.SecurityStampsByUserId[targetId] = "baseline-stamp";
+        var observer = new StubEmployeeMutationObservationReader
+        {
+            ObserveAsyncOverride = (_, _) => Task.FromResult(
+                ObserveCurrent(identityStore, targetId, employeeIsActive: true))
+        };
         var audit = new RecordingAuditTrailService();
         var handler = CreateHandler(
             identityStore,
@@ -758,13 +763,17 @@ public sealed class EmployeeRoleAssignmentTests
             audit,
             mutationObservationReader: observer);
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            handler.Handle(
-                new UpdateEmployeeRoleCommand(targetId, "RoleAdmin"),
-                CancellationToken.None));
+        var result = await handler.Handle(
+            new UpdateEmployeeRoleCommand(targetId, "RoleAdmin"),
+            CancellationToken.None);
 
-        Assert.Equal(0, observer.Calls);
+        Assert.True(result.IsSuccess);
+        Assert.Equal(1, observer.Calls);
         Assert.Contains(
+            "\"resultCode\":\"CommitRecovered\"",
+            Assert.Single(audit.Entries).Summary,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
             "\"resultCode\":\"Canceled\"",
             Assert.Single(audit.Entries).Summary,
             StringComparison.Ordinal);

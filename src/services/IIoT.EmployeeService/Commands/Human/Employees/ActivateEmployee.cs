@@ -39,8 +39,8 @@ public sealed class ActivateEmployeeHandler(
                 ExecuteTransactionAsync,
                 cancellationToken);
         }
-        catch (Exception exception)
-            when (commitAttempted && exception is not OperationCanceledException)
+        catch (Exception)
+            when (commitAttempted)
         {
             outcome = await ResolveCommitAsync(
                 request.EmployeeId,

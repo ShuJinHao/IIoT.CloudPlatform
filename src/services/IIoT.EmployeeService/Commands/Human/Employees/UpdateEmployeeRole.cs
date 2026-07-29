@@ -153,8 +153,8 @@ public sealed class UpdateEmployeeRoleHandler(
                 ExecuteTransactionAsync,
                 cancellationToken);
         }
-        catch (Exception exception)
-            when (commitAttempted && exception is not OperationCanceledException)
+        catch (Exception)
+            when (commitAttempted)
         {
             outcome = await ResolveCommitAsync(
                 request.EmployeeId,
