@@ -123,7 +123,7 @@ public sealed class EfPersistenceBehaviorTests
         {
             [$"ConnectionStrings:{ConnectionResourceNames.IiotDatabase}"] =
                 "Host=127.0.0.1;Port=5432;Database=registration_only;Username=test;Password=test",
-            [$"{PostgresOptions.SectionName}:EnableRetry"] = "false",
+            [$"{PostgresOptions.SectionName}:EnableRetry"] = "true",
             [$"{PostgresOptions.SectionName}:CommandTimeoutSeconds"] = "30",
             [$"{PostgresOptions.SectionName}:MaxRetryCount"] = "0",
             [$"{PostgresOptions.SectionName}:MaxRetryDelaySeconds"] = "1"
