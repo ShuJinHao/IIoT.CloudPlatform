@@ -62,7 +62,7 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
         Guid deviceId,
         CancellationToken cancellationToken = default)
     {
-        DeviceDeletionImpact? firstObservedImpact = null;
+        DeviceDeletionImpact? lastDeletionAttemptImpact = null;
         var deletionAttempted = false;
         var strategy = dbContext.Database.CreateExecutionStrategy();
         return await strategy.ExecuteAsync(
@@ -90,13 +90,15 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
                         && remainingImpact.TotalAssociatedRows == 0;
                     return new DeviceCascadeDeletionResult(
                         committedReplayConfirmed,
-                        firstObservedImpact ?? remainingImpact);
+                        committedReplayConfirmed
+                            ? lastDeletionAttemptImpact ?? remainingImpact
+                            : remainingImpact);
                 }
 
                 var impact = await GetImpactAsync(
                     deviceId,
                     transactionCancellationToken);
-                firstObservedImpact ??= impact;
+                lastDeletionAttemptImpact = impact;
                 deletionAttempted = true;
                 await DeleteAssociatedRowsAsync(
                     deviceId,
@@ -113,7 +115,7 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
                 await transaction.CommitAsync(transactionCancellationToken);
                 return new DeviceCascadeDeletionResult(
                     affectedRows > 0,
-                    firstObservedImpact);
+                    impact);
             }
             catch
             {

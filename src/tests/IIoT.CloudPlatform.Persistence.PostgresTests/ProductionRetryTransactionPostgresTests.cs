@@ -118,6 +118,53 @@ public sealed class ProductionRetryTransactionPostgresTests(
         Assert.False(dbContext.HasPendingDomainEvents);
     }
 
+    [Fact]
+    public async Task RolledBackDeleteAttempt_ShouldAuditImpactObservedByCommittingAttempt()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        var interceptor = new AddDeviceLogBeforeDeleteRetryInterceptor(
+            budget.ConnectionString);
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var (process, device) = CreateProcessAndDevice("IMPACT");
+        process.ClearDomainEvents();
+        device.ClearDomainEvents();
+        dbContext.MfgProcesses.Add(process);
+        dbContext.Devices.Add(device);
+        await dbContext.SaveChangesAsync(budget.Token);
+        dbContext.ChangeTracker.Clear();
+        var audit = new RecordingAuditTrailService();
+        var deletionService = new CapturingDeviceDeletionService(
+            new EfDeviceDeletionDependencyService(dbContext));
+        var handler = new DeleteDeviceHandler(
+            HumanAdmin(),
+            new EfRepository<Device>(dbContext),
+            deletionService,
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            audit);
+
+        interceptor.Arm(device.Id);
+        var result = await handler.Handle(
+            new DeleteDeviceCommand(device.Id),
+            budget.Token);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(result.Value);
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+        var deletion = Assert.IsType<DeviceCascadeDeletionResult>(
+            deletionService.LastDeletionResult);
+        Assert.Equal(1, deletion.Impact.DeviceLogs);
+        Assert.Equal(1, deletion.Impact.TotalAssociatedRows);
+        Assert.Contains(
+            "\"device_logs\":1",
+            Assert.Single(audit.Entries).Summary,
+            StringComparison.Ordinal);
+    }
+
     private static async Task VerifyOnboardRetryAsync(
         ServiceProvider provider,
         ThrowOnceBeforeCommitInterceptor interceptor,
@@ -1088,6 +1135,81 @@ public sealed class ProductionRetryTransactionPostgresTests(
             }
 
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class AddDeviceLogBeforeDeleteRetryInterceptor(
+        string connectionString)
+        : DbTransactionInterceptor
+    {
+        private int armed;
+        private int insertBeforeNextTransaction;
+        private int exceptionsThrown;
+        private Guid deviceId;
+
+        public int ExceptionsThrown => Volatile.Read(ref exceptionsThrown);
+
+        public void Arm(Guid targetDeviceId)
+        {
+            deviceId = targetDeviceId;
+            Volatile.Write(ref armed, 1);
+        }
+
+        public override async ValueTask<InterceptionResult<DbTransaction>>
+            TransactionStartingAsync(
+                DbConnection connection,
+                TransactionStartingEventData eventData,
+                InterceptionResult<DbTransaction> result,
+                CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.CompareExchange(
+                    ref insertBeforeNextTransaction,
+                    0,
+                    1) == 1)
+            {
+                await using var insertionConnection =
+                    new NpgsqlConnection(connectionString);
+                await insertionConnection.OpenAsync(cancellationToken);
+                await using var command = new NpgsqlCommand(
+                    """
+                    insert into device_logs
+                    (
+                        id, device_id, level, message, log_time, received_at,
+                        idempotency_key
+                    )
+                    values
+                    (
+                        @id, @device_id, 'Info', 'added between retry attempts',
+                        now(), now(), @idempotency_key
+                    )
+                    """,
+                    insertionConnection);
+                command.Parameters.AddWithValue("id", Guid.NewGuid());
+                command.Parameters.AddWithValue("device_id", deviceId);
+                command.Parameters.AddWithValue(
+                    "idempotency_key",
+                    Guid.NewGuid().ToString("N"));
+                await command.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            return result;
+        }
+
+        public override ValueTask<InterceptionResult> TransactionCommittingAsync(
+            DbTransaction transaction,
+            TransactionEventData eventData,
+            InterceptionResult result,
+            CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.CompareExchange(ref armed, 0, 1) == 1)
+            {
+                Volatile.Write(ref insertBeforeNextTransaction, 1);
+                Interlocked.Increment(ref exceptionsThrown);
+                throw RetryablePostgresException(
+                    "simulated transient before delete commit");
+            }
+
+            return ValueTask.FromResult(result);
         }
     }
 
