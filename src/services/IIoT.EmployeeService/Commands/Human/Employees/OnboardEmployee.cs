@@ -86,12 +86,11 @@ public class OnboardEmployeeHandler(
                 || employeeById is not null)
             {
                 if (creationAttempted
-                    && await IsCommittedReplayAsync(
+                    && IsCommittedReplay(
                         accountByEmployeeNo,
                         accountById,
                         employeeByEmployeeNo,
-                        employeeById,
-                        transactionCancellationToken))
+                        employeeById))
                 {
                     await unitOfWork.RollbackAsync(transactionCancellationToken);
                     return Result.Success(sharedId);
@@ -149,54 +148,33 @@ public class OnboardEmployeeHandler(
             return Result.Success(sharedId);
         }
 
-        async Task<bool> IsCommittedReplayAsync(
+        bool IsCommittedReplay(
             IdentityAccount? accountByEmployeeNo,
             IdentityAccount? accountById,
             Employee? employeeByEmployeeNo,
-            Employee? employeeById,
-            CancellationToken transactionCancellationToken)
+            Employee? employeeById)
         {
-            if (accountByEmployeeNo is null
-                || accountById is null
-                || employeeByEmployeeNo is null
-                || employeeById is null
-                || accountByEmployeeNo.Id != sharedId
-                || accountById.Id != sharedId
-                || employeeByEmployeeNo.Id != sharedId
-                || employeeById.Id != sharedId
-                || !accountById.IsEnabled
-                || !employeeById.IsActive
-                || !string.Equals(
-                    accountById.EmployeeNo,
-                    normalizedEmployeeNo,
-                    StringComparison.Ordinal)
-                || !string.Equals(
-                    employeeById.EmployeeNo,
-                    normalizedEmployeeNo,
-                    StringComparison.Ordinal)
-                || !string.Equals(
-                    employeeById.RealName,
-                    normalizedRealName,
-                    StringComparison.Ordinal)
-                || employeeById.DeviceAccesses.Count != 0)
-            {
-                return false;
-            }
-
-            var roles = await identityAccountStore.GetRolesAsync(
-                sharedId,
-                transactionCancellationToken);
-            var expectedRoles = string.IsNullOrEmpty(normalizedRoleName)
-                ? []
-                : new[] { normalizedRoleName };
-            return roles.Count == expectedRoles.Length
-                   && roles
-                       .OrderBy(role => role, StringComparer.OrdinalIgnoreCase)
-                       .SequenceEqual(
-                           expectedRoles.OrderBy(
-                               role => role,
-                               StringComparer.OrdinalIgnoreCase),
-                           StringComparer.OrdinalIgnoreCase);
+            // The shared id is private to this handler invocation. Once both
+            // aggregates exist under that id and employee number, the original
+            // transaction committed. Follow-up profile, status, role, or device
+            // access writes must not turn a lost commit acknowledgement into a
+            // false onboarding failure.
+            return accountByEmployeeNo is not null
+                   && accountById is not null
+                   && employeeByEmployeeNo is not null
+                   && employeeById is not null
+                   && accountByEmployeeNo.Id == sharedId
+                   && accountById.Id == sharedId
+                   && employeeByEmployeeNo.Id == sharedId
+                   && employeeById.Id == sharedId
+                   && string.Equals(
+                       accountById.EmployeeNo,
+                       normalizedEmployeeNo,
+                       StringComparison.Ordinal)
+                   && string.Equals(
+                       employeeById.EmployeeNo,
+                       normalizedEmployeeNo,
+                       StringComparison.Ordinal);
         }
     }
 

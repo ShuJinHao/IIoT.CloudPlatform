@@ -104,6 +104,68 @@ public sealed class ProductionRetryTransactionPostgresTests(
     }
 
     [Fact]
+    public async Task OnboardCommitConfirmationLoss_WithFollowUpAccess_ShouldReturnOriginalSuccess()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var unique = Guid.NewGuid().ToString("N");
+        var employeeNo = $"ACK-ACCESS-{unique}"[..24];
+        var (process, device) = CreateProcessAndDevice("ACKACCESS");
+        process.ClearDomainEvents();
+        device.ClearDomainEvents();
+        dbContext.MfgProcesses.Add(process);
+        dbContext.Devices.Add(device);
+        await dbContext.SaveChangesAsync(budget.Token);
+        dbContext.ChangeTracker.Clear();
+
+        interceptor.Arm(async cancellationToken =>
+        {
+            await using var followUpScope = provider.CreateAsyncScope();
+            var followUpContext = followUpScope.ServiceProvider
+                .GetRequiredService<IIoTDbContext>();
+            var employee = await followUpContext.Employees
+                .SingleAsync(
+                    candidate => candidate.EmployeeNo == employeeNo,
+                    cancellationToken);
+            employee.AddDeviceAccess(device.Id);
+            await followUpContext.SaveChangesAsync(cancellationToken);
+        });
+
+        var result = await CreateOnboardHandler(services).Handle(
+            new OnboardEmployeeCommand(
+                employeeNo,
+                "Commit Recovery Follow-up Access",
+                "Retry123!"),
+            budget.Token);
+
+        Assert.True(result.IsSuccess);
+        dbContext.ChangeTracker.Clear();
+        Assert.Equal(
+            1,
+            await dbContext.Set<EmployeeDeviceAccess>()
+                .AsNoTracking()
+                .CountAsync(
+                    access =>
+                        access.EmployeeId == result.Value
+                        && access.DeviceId == device.Id,
+                    budget.Token));
+        Assert.Equal(
+            1,
+            await CountOutboxAsync(
+                dbContext,
+                "EmployeeOnboardedDomainEvent",
+                result.Value,
+                budget.Token));
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+    }
+
+    [Fact]
     public async Task CallerCancellationDuringCommit_ShouldRollbackWithoutRetry()
     {
         using var budget = await PostgresTestBudget.CreateAsync(fixture);
