@@ -2,6 +2,13 @@ namespace IIoT.Services.Contracts.RecordQueries;
 
 public interface IDeviceReadQueryService
 {
+    /// <summary>
+    /// Reads and locks the matching formal device rows for the caller's active transaction.
+    /// </summary>
+    Task<IReadOnlyList<Guid>> GetExistingIdsAsync(
+        IReadOnlyCollection<Guid> deviceIds,
+        CancellationToken cancellationToken = default);
+
     Task<bool> ExistsAsync(
         Guid deviceId,
         CancellationToken cancellationToken = default);

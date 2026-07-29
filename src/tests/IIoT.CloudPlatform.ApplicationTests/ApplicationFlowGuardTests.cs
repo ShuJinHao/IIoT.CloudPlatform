@@ -353,9 +353,12 @@ public sealed class ApplicationFlowGuardTests
         {
             SingleOrDefaultResult = new Employee(employeeId, "A001", "Admin")
         };
+        var accessUnitOfWork = new RecordingUnitOfWork();
         var accessHandler = new UpdateEmployeeAccessHandler(
             accessRepository,
-            targetGuard);
+            targetGuard,
+            new StubDeviceReadQueryService(),
+            accessUnitOfWork);
 
         var deactivateRepository = new InMemoryRepository<Employee>
         {
@@ -866,7 +869,12 @@ public sealed class ApplicationFlowGuardTests
         };
         var handler = new UpdateEmployeeAccessHandler(
             repository,
-            new StubAdminTargetGuard());
+            new StubAdminTargetGuard(),
+            new StubDeviceReadQueryService
+            {
+                ExistingDeviceIds = [updatedDeviceId]
+            },
+            new RecordingUnitOfWork());
 
         var result = await handler.Handle(
             new UpdateEmployeeAccessCommand(employeeId, [updatedDeviceId]),

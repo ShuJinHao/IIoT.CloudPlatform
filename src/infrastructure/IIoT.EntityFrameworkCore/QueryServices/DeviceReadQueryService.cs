@@ -5,6 +5,41 @@ namespace IIoT.EntityFrameworkCore.QueryServices;
 
 public sealed class DeviceReadQueryService(IIoTDbContext dbContext) : IDeviceReadQueryService
 {
+    public async Task<IReadOnlyList<Guid>> GetExistingIdsAsync(
+        IReadOnlyCollection<Guid> deviceIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (deviceIds.Count == 0)
+        {
+            return [];
+        }
+
+        if (dbContext.Database.CurrentTransaction is null)
+        {
+            throw new InvalidOperationException(
+                "Batch device validation requires an active transaction.");
+        }
+
+        var distinctDeviceIds = deviceIds.Distinct().ToArray();
+        if (dbContext.Database.IsNpgsql())
+        {
+            return await dbContext.Database
+                .SqlQuery<Guid>($"""
+                    SELECT id AS "Value"
+                    FROM devices
+                    WHERE id = ANY ({distinctDeviceIds})
+                    FOR KEY SHARE
+                    """)
+                .ToListAsync(cancellationToken);
+        }
+
+        return await dbContext.Devices
+            .AsNoTracking()
+            .Where(device => distinctDeviceIds.Contains(device.Id))
+            .Select(device => device.Id)
+            .ToListAsync(cancellationToken);
+    }
+
     public Task<bool> ExistsAsync(
         Guid deviceId,
         CancellationToken cancellationToken = default)
