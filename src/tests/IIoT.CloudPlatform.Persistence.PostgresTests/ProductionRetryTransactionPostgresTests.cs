@@ -86,6 +86,181 @@ public sealed class ProductionRetryTransactionPostgresTests(
         Assert.Equal(6, interceptor.ExceptionsThrown);
     }
 
+    [Fact]
+    public async Task EmployeeMutationObservation_ShouldUseOneSnapshotAcrossConcurrentMutation()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            new ThrowOnceBeforeCommitInterceptor());
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var seed = await SeedEmployeeAsync(
+            services,
+            "OBS-SNAPSHOT",
+            accountEnabled: true,
+            employeeActive: true,
+            withSession: false,
+            budget.Token);
+        var unique = Guid.NewGuid().ToString("N");
+        var baselineRole = $"ObserveOld{unique}"[..30];
+        var concurrentRole = $"ObserveNew{unique}"[..30];
+        await CreateRoleAsync(services, baselineRole);
+        await CreateRoleAsync(services, concurrentRole);
+        var userManager = services.GetRequiredService<UserManager<ApplicationUser>>();
+        var user = (await userManager.FindByIdAsync(
+            seed.EmployeeId.ToString()))!;
+        var baselineStamp = $"baseline-{Guid.NewGuid():N}";
+        user.SecurityStamp = baselineStamp;
+        Assert.True((await userManager.UpdateAsync(user)).Succeeded);
+        Assert.True((await userManager.AddToRoleAsync(
+            user,
+            baselineRole)).Succeeded);
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var concurrentRoleId = await dbContext.Roles
+            .AsNoTracking()
+            .Where(role => role.Name == concurrentRole)
+            .Select(role => role.Id)
+            .SingleAsync(budget.Token);
+        dbContext.ChangeTracker.Clear();
+
+        var pause = new PauseOnceAfterObservationReadInterceptor();
+        var observationOptions = new DbContextOptionsBuilder<IIoTDbContext>()
+            .UseNpgsql(
+                budget.ConnectionString,
+                npgsql => npgsql.EnableRetryOnFailure(
+                    3,
+                    TimeSpan.FromMilliseconds(50),
+                    null))
+            .AddInterceptors(pause)
+            .Options;
+        var observationTask = new EmployeeMutationObservationReader(
+                observationOptions)
+            .ObserveAsync(seed.EmployeeId, budget.Token);
+        await pause.FirstReadCompleted.Task.WaitAsync(
+            TimeSpan.FromSeconds(5),
+            budget.Token);
+        var concurrentStamp = $"concurrent-{Guid.NewGuid():N}";
+        try
+        {
+            await using var connection = new NpgsqlConnection(
+                budget.ConnectionString);
+            await connection.OpenAsync(budget.Token);
+            await using var transaction =
+                await connection.BeginTransactionAsync(budget.Token);
+
+            await using (var employeeCommand = new NpgsqlCommand(
+                             """
+                             update employees
+                             set is_active = false
+                             where id = @employee_id
+                             """,
+                             connection,
+                             transaction))
+            {
+                employeeCommand.Parameters.AddWithValue(
+                    "employee_id",
+                    seed.EmployeeId);
+                Assert.Equal(
+                    1,
+                    await employeeCommand.ExecuteNonQueryAsync(budget.Token));
+            }
+
+            await using (var accountCommand = new NpgsqlCommand(
+                             """
+                             update "AspNetUsers"
+                             set "IsEnabled" = false,
+                                 "SecurityStamp" = @security_stamp,
+                                 "ConcurrencyStamp" = @concurrency_stamp
+                             where "Id" = @employee_id
+                             """,
+                             connection,
+                             transaction))
+            {
+                accountCommand.Parameters.AddWithValue(
+                    "employee_id",
+                    seed.EmployeeId);
+                accountCommand.Parameters.AddWithValue(
+                    "security_stamp",
+                    concurrentStamp);
+                accountCommand.Parameters.AddWithValue(
+                    "concurrency_stamp",
+                    Guid.NewGuid().ToString("N"));
+                Assert.Equal(
+                    1,
+                    await accountCommand.ExecuteNonQueryAsync(budget.Token));
+            }
+
+            await using (var deleteRolesCommand = new NpgsqlCommand(
+                             """
+                             delete from "AspNetUserRoles"
+                             where "UserId" = @employee_id
+                             """,
+                             connection,
+                             transaction))
+            {
+                deleteRolesCommand.Parameters.AddWithValue(
+                    "employee_id",
+                    seed.EmployeeId);
+                Assert.Equal(
+                    1,
+                    await deleteRolesCommand.ExecuteNonQueryAsync(
+                        budget.Token));
+            }
+
+            await using (var addRoleCommand = new NpgsqlCommand(
+                             """
+                             insert into "AspNetUserRoles" ("UserId", "RoleId")
+                             values (@employee_id, @role_id)
+                             """,
+                             connection,
+                             transaction))
+            {
+                addRoleCommand.Parameters.AddWithValue(
+                    "employee_id",
+                    seed.EmployeeId);
+                addRoleCommand.Parameters.AddWithValue(
+                    "role_id",
+                    concurrentRoleId);
+                Assert.Equal(
+                    1,
+                    await addRoleCommand.ExecuteNonQueryAsync(budget.Token));
+            }
+
+            await transaction.CommitAsync(budget.Token);
+        }
+        finally
+        {
+            pause.Resume();
+        }
+
+        var observation = await observationTask;
+        Assert.True(observation.EmployeeExists);
+        Assert.True(observation.EmployeeIsActive);
+        Assert.True(observation.AccountExists);
+        Assert.True(observation.AccountIsEnabled);
+        Assert.Equal(baselineStamp, observation.AccountSecurityStamp);
+        Assert.Equal([baselineRole], observation.Roles);
+        Assert.Equal(3, pause.ObservationTransactions.Count);
+        var snapshotTransaction = Assert.IsAssignableFrom<DbTransaction>(
+            pause.ObservationTransactions[0]);
+        Assert.All(
+            pause.ObservationTransactions,
+            transaction => Assert.Same(snapshotTransaction, transaction));
+
+        var current = await new EmployeeMutationObservationReader(
+                new DbContextOptionsBuilder<IIoTDbContext>()
+                    .UseNpgsql(budget.ConnectionString)
+                    .Options)
+            .ObserveAsync(seed.EmployeeId, budget.Token);
+        Assert.False(current.EmployeeIsActive);
+        Assert.False(current.AccountIsEnabled);
+        Assert.Equal(concurrentStamp, current.AccountSecurityStamp);
+        Assert.Equal([concurrentRole], current.Roles);
+    }
+
     [Theory]
     [InlineData("deactivate")]
     [InlineData("role-change")]
@@ -1937,6 +2112,39 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 throw RetryablePostgresException(
                     "simulated commit confirmation loss");
             }
+        }
+    }
+
+    private sealed class PauseOnceAfterObservationReadInterceptor
+        : DbCommandInterceptor
+    {
+        private readonly TaskCompletionSource<bool> firstReadCompleted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> resume = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private int pauseClaimed;
+
+        public TaskCompletionSource<bool> FirstReadCompleted =>
+            firstReadCompleted;
+
+        public List<DbTransaction?> ObservationTransactions { get; } = [];
+
+        public void Resume() => resume.TrySetResult(true);
+
+        public override async ValueTask<DbDataReader> ReaderExecutedAsync(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            DbDataReader result,
+            CancellationToken cancellationToken = default)
+        {
+            ObservationTransactions.Add(command.Transaction);
+            if (Interlocked.CompareExchange(ref pauseClaimed, 1, 0) == 0)
+            {
+                firstReadCompleted.TrySetResult(true);
+                await resume.Task.WaitAsync(cancellationToken);
+            }
+
+            return result;
         }
     }
 

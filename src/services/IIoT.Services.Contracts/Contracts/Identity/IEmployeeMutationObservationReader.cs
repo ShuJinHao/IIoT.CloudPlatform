@@ -9,7 +9,8 @@ public sealed record EmployeeMutationObservation(
     IReadOnlyList<string> Roles);
 
 /// <summary>
-/// Reads employee and identity mutation state through a newly-created persistence context.
+/// Reads employee and identity mutation state through a newly-created persistence context
+/// and one consistent database snapshot.
 /// This port is reserved for resolving a transaction whose commit acknowledgement was lost.
 /// </summary>
 public interface IEmployeeMutationObservationReader
