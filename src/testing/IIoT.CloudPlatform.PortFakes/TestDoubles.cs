@@ -804,10 +804,8 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
 
     public Result<bool> SetEnabledResult { get; set; } = Result.Success(true);
 
-    public Result<bool> ActivateWithSecurityStampResult { get; set; } =
-        Result.Success(true);
-
-    public Result<bool> RotateSecurityStampResult { get; set; } = Result.Success(true);
+    public Result<IdentityAccountCompareExchangeOutcome> CompareExchangeStateResult { get; set; } =
+        Result.Success(IdentityAccountCompareExchangeOutcome.Applied);
 
     public Result<bool> DeleteResult { get; set; } = Result.Success(true);
 
@@ -817,9 +815,11 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
 
     public List<(Guid UserId, string? RoleName)> ReplacedRoles { get; } = [];
 
-    public List<Guid> RotatedSecurityStampIds { get; } = [];
-
-    public List<(Guid UserId, string SecurityStamp)> SecurityStampActivations { get; } = [];
+    public List<(
+        Guid UserId,
+        IdentityAccountStateSnapshot Expected,
+        bool IsEnabled,
+        string SecurityStamp)> StateCompareExchanges { get; } = [];
 
     public int GetRolesCalls { get; private set; }
 
@@ -855,12 +855,20 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
                 : null);
     }
 
-    public Task<string?> GetSecurityStampAsync(
+    public Task<IdentityAccountStateSnapshot?> GetStateSnapshotAsync(
         Guid id,
         CancellationToken cancellationToken = default)
     {
+        if (AccountById?.Id != id)
+        {
+            return Task.FromResult<IdentityAccountStateSnapshot?>(null);
+        }
+
         SecurityStampsByUserId.TryGetValue(id, out var securityStamp);
-        return Task.FromResult(securityStamp);
+        return Task.FromResult<IdentityAccountStateSnapshot?>(
+            new IdentityAccountStateSnapshot(
+                AccountById.IsEnabled,
+                securityStamp));
     }
 
     public Task<Result<bool>> SetEnabledAsync(
@@ -887,36 +895,51 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
         return Task.FromResult(SetEnabledResult);
     }
 
-    public Task<Result<bool>> RotateSecurityStampAsync(
+    public Task<Result<IdentityAccountCompareExchangeOutcome>> CompareExchangeStateAsync(
         Guid id,
-        CancellationToken cancellationToken = default)
-    {
-        if (RotateSecurityStampResult.IsSuccess && RotateSecurityStampResult.Value)
-        {
-            RotatedSecurityStampIds.Add(id);
-            SecurityStampsByUserId[id] = Guid.NewGuid().ToString("N");
-        }
-
-        return Task.FromResult(RotateSecurityStampResult);
-    }
-
-    public Task<Result<bool>> ActivateWithSecurityStampAsync(
-        Guid id,
+        IdentityAccountStateSnapshot expected,
+        bool isEnabled,
         string securityStamp,
         CancellationToken cancellationToken = default)
     {
-        if (ActivateWithSecurityStampResult.IsSuccess
-            && ActivateWithSecurityStampResult.Value)
+        if (!CompareExchangeStateResult.IsSuccess
+            || CompareExchangeStateResult.Value != IdentityAccountCompareExchangeOutcome.Applied)
         {
-            SecurityStampActivations.Add((id, securityStamp));
-            SecurityStampsByUserId[id] = securityStamp;
-            if (AccountById?.Id == id)
+            return Task.FromResult(CompareExchangeStateResult);
+        }
+
+        if (AccountById?.Id != id)
+        {
+            return Task.FromResult(
+                Result.Success(IdentityAccountCompareExchangeOutcome.Conflict));
+        }
+
+        SecurityStampsByUserId.TryGetValue(id, out var currentSecurityStamp);
+        if (AccountById.IsEnabled != expected.IsEnabled
+            || !string.Equals(
+                currentSecurityStamp,
+                expected.SecurityStamp,
+                StringComparison.Ordinal))
+        {
+            return Task.FromResult(
+                Result.Success(IdentityAccountCompareExchangeOutcome.Conflict));
+        }
+
+        StateCompareExchanges.Add((id, expected, isEnabled, securityStamp));
+        SecurityStampsByUserId[id] = securityStamp;
+        if (AccountById?.Id == id)
+        {
+            if (isEnabled)
             {
                 AccountById.Enable();
             }
+            else
+            {
+                AccountById.Disable();
+            }
         }
 
-        return Task.FromResult(ActivateWithSecurityStampResult);
+        return Task.FromResult(CompareExchangeStateResult);
     }
 
     public Task<Result<bool>> DeleteAsync(Guid id, CancellationToken cancellationToken = default)
@@ -1008,6 +1031,47 @@ internal sealed class RecordingAuditTrailService : IAuditTrailService
         Entries.Add(entry);
         CancellationTokens.Add(cancellationToken);
         return Task.FromResult(true);
+    }
+}
+
+internal sealed class StubEmployeeMutationObservationReader
+    : IEmployeeMutationObservationReader
+{
+    public EmployeeMutationObservation Observation { get; set; } =
+        new(
+            EmployeeExists: false,
+            EmployeeIsActive: false,
+            AccountExists: false,
+            AccountIsEnabled: false,
+            AccountSecurityStamp: null,
+            Roles: []);
+
+    public Exception? ExceptionToThrow { get; set; }
+
+    public Func<Guid, CancellationToken, Task<EmployeeMutationObservation>>?
+        ObserveAsyncOverride { get; set; }
+
+    public int Calls { get; private set; }
+
+    public CancellationToken LastCancellationToken { get; private set; }
+
+    public Task<EmployeeMutationObservation> ObserveAsync(
+        Guid employeeId,
+        CancellationToken cancellationToken)
+    {
+        Calls++;
+        LastCancellationToken = cancellationToken;
+        if (ExceptionToThrow is not null)
+        {
+            throw ExceptionToThrow;
+        }
+
+        if (ObserveAsyncOverride is not null)
+        {
+            return ObserveAsyncOverride(employeeId, cancellationToken);
+        }
+
+        return Task.FromResult(Observation);
     }
 }
 

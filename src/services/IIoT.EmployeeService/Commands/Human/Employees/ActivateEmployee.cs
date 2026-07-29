@@ -19,22 +19,46 @@ public sealed class ActivateEmployeeHandler(
     IIdentityAccountStore identityAccountStore,
     IUnitOfWork unitOfWork,
     IHumanSessionRevocationService sessionRevocationService,
-    IAdminTargetGuard adminTargetGuard)
+    IAdminTargetGuard adminTargetGuard,
+    IEmployeeMutationObservationReader mutationObservationReader)
     : ICommandHandler<ActivateEmployeeCommand, Result>
 {
+    private static readonly TimeSpan CommitObservationTimeout = TimeSpan.FromSeconds(5);
+
     public async Task<Result> Handle(
         ActivateEmployeeCommand request,
         CancellationToken cancellationToken)
     {
         var activationSecurityStamp = Guid.NewGuid().ToString("N");
-        string? baselineSecurityStamp = null;
-        var baselineSecurityStampCaptured = false;
-        var activationCommitAttempted = false;
-        return await unitOfWork.ExecuteResilientAsync(
-            ExecuteTransactionAsync,
-            cancellationToken);
+        ActivationBaseline? baseline = null;
+        var commitAttempted = false;
+        ActivationTransactionOutcome outcome;
+        try
+        {
+            outcome = await unitOfWork.ExecuteResilientAsync(
+                ExecuteTransactionAsync,
+                cancellationToken);
+        }
+        catch (Exception)
+            when (commitAttempted)
+        {
+            outcome = await ResolveCommitAsync(
+                request.EmployeeId,
+                baseline,
+                activationSecurityStamp);
+        }
 
-        async Task<Result> ExecuteTransactionAsync(
+        return outcome.Kind switch
+        {
+            ActivationTransactionOutcomeKind.Succeeded => Result.Success(),
+            ActivationTransactionOutcomeKind.Conflict =>
+                throw new EmployeeActivationConflictException(),
+            ActivationTransactionOutcomeKind.CommitUnknown =>
+                throw new EmployeeActivationCommitUnknownException(),
+            _ => Result.Failure(outcome.Errors)
+        };
+
+        async Task<ActivationTransactionOutcome> ExecuteTransactionAsync(
             CancellationToken transactionCancellationToken)
         {
             await unitOfWork.BeginTransactionAsync(transactionCancellationToken);
@@ -45,7 +69,8 @@ public sealed class ActivateEmployeeHandler(
             if (!targetResult.IsSuccess)
             {
                 await unitOfWork.RollbackAsync(transactionCancellationToken);
-                return Result.Failure(targetResult.Errors?.ToArray()
+                return ActivationTransactionOutcome.Failure(
+                    targetResult.Errors?.ToArray()
                     ?? [AdminTargetProtectionErrors.TargetNotFound]);
             }
 
@@ -55,10 +80,46 @@ public sealed class ActivateEmployeeHandler(
             if (employee is null)
             {
                 await unitOfWork.RollbackAsync(transactionCancellationToken);
-                return Result.Failure(AdminTargetProtectionErrors.TargetNotFound);
+                return ActivationTransactionOutcome.Failure(
+                    [AdminTargetProtectionErrors.TargetNotFound]);
             }
 
-            var employeeWasActive = employee.IsActive;
+            var accountState = await identityAccountStore.GetStateSnapshotAsync(
+                request.EmployeeId,
+                transactionCancellationToken);
+            if (accountState is null)
+            {
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return ActivationTransactionOutcome.Failure(
+                    ["员工身份账号启用失败"]);
+            }
+
+            var currentRoles = NormalizeRoles(
+                await identityAccountStore.GetRolesAsync(
+                    request.EmployeeId,
+                    transactionCancellationToken));
+            var current = new ActivationBaseline(
+                employee.IsActive,
+                accountState,
+                currentRoles);
+            if (baseline is null)
+            {
+                baseline = current;
+            }
+            else if (MatchesActivationTarget(
+                         current,
+                         baseline,
+                         activationSecurityStamp))
+            {
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return ActivationTransactionOutcome.Success("CommitRecovered");
+            }
+            else if (!MatchesBaseline(current, baseline))
+            {
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return ActivationTransactionOutcome.Conflict();
+            }
+
             if (!employee.IsActive)
             {
                 employee.Activate();
@@ -66,75 +127,179 @@ public sealed class ActivateEmployeeHandler(
                 await employeeRepository.SaveChangesAsync(transactionCancellationToken);
             }
 
-            var account = await identityAccountStore.GetByIdAsync(
+            var identityResult = await identityAccountStore.CompareExchangeStateAsync(
                 request.EmployeeId,
-                transactionCancellationToken);
-            if (account is null)
+                accountState,
+                isEnabled: true,
+                securityStamp: activationSecurityStamp,
+                cancellationToken: transactionCancellationToken);
+            if (!identityResult.IsSuccess)
             {
                 await unitOfWork.RollbackAsync(transactionCancellationToken);
-                return Result.Failure("员工身份账号启用失败");
+                return ActivationTransactionOutcome.Failure(
+                    identityResult.Errors?.ToArray()
+                    ?? ["员工身份账号启用失败"]);
             }
-
-            var currentSecurityStamp =
-                await identityAccountStore.GetSecurityStampAsync(
-                    request.EmployeeId,
-                    transactionCancellationToken);
-            if (!baselineSecurityStampCaptured)
+            if (identityResult.Value != IdentityAccountCompareExchangeOutcome.Applied)
             {
-                baselineSecurityStamp = currentSecurityStamp;
-                baselineSecurityStampCaptured = true;
-            }
-
-            var matchesActivationStamp = string.Equals(
-                currentSecurityStamp,
-                activationSecurityStamp,
-                StringComparison.Ordinal);
-            var differsFromBaseline = !string.Equals(
-                currentSecurityStamp,
-                baselineSecurityStamp,
-                StringComparison.Ordinal);
-            var loadedFinalState = employeeWasActive && account.IsEnabled;
-            var confirmedActivationReplay =
-                activationCommitAttempted
-                && loadedFinalState
-                && matchesActivationStamp;
-            var newerStatusVersionAfterActivation =
-                activationCommitAttempted
-                && loadedFinalState
-                && differsFromBaseline
-                && !matchesActivationStamp;
-
-            if (!confirmedActivationReplay
-                && !newerStatusVersionAfterActivation)
-            {
-                if (differsFromBaseline && !matchesActivationStamp)
-                {
-                    activationSecurityStamp = Guid.NewGuid().ToString("N");
-                    baselineSecurityStamp = currentSecurityStamp;
-                }
-
-                var identityResult =
-                    await identityAccountStore.ActivateWithSecurityStampAsync(
-                        request.EmployeeId,
-                        activationSecurityStamp,
-                        transactionCancellationToken);
-                if (!identityResult.IsSuccess || !identityResult.Value)
-                {
-                    await unitOfWork.RollbackAsync(transactionCancellationToken);
-                    return Result.Failure(
-                        identityResult.Errors?.ToArray()
-                        ?? ["员工身份账号启用失败"]);
-                }
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return ActivationTransactionOutcome.Conflict();
             }
 
             await sessionRevocationService.RevokeAllAsync(
                 request.EmployeeId,
                 "employee-activated-relogin-required",
                 transactionCancellationToken);
-            activationCommitAttempted = true;
+            commitAttempted = true;
             await unitOfWork.CommitAsync(transactionCancellationToken);
 
-            return Result.Success();
+            return ActivationTransactionOutcome.Success("Succeeded");
         }
+    }
+
+    private async Task<ActivationTransactionOutcome> ResolveCommitAsync(
+        Guid employeeId,
+        ActivationBaseline? baseline,
+        string activationSecurityStamp)
+    {
+        if (baseline is null)
+        {
+            return ActivationTransactionOutcome.CommitUnknown();
+        }
+
+        using var timeout = new CancellationTokenSource(CommitObservationTimeout);
+        EmployeeMutationObservation observation;
+        try
+        {
+            observation = await mutationObservationReader.ObserveAsync(
+                employeeId,
+                timeout.Token);
+        }
+        catch
+        {
+            return ActivationTransactionOutcome.CommitUnknown();
+        }
+
+        if (MatchesActivationTarget(
+                observation,
+                baseline,
+                activationSecurityStamp))
+        {
+            return ActivationTransactionOutcome.Success("CommitRecovered");
+        }
+
+        return MatchesBaseline(observation, baseline)
+            ? ActivationTransactionOutcome.CommitUnknown()
+            : ActivationTransactionOutcome.Conflict();
+    }
+
+    private static bool MatchesBaseline(
+        ActivationBaseline current,
+        ActivationBaseline baseline)
+        => current.EmployeeIsActive == baseline.EmployeeIsActive
+           && current.Account.IsEnabled == baseline.Account.IsEnabled
+           && string.Equals(
+               current.Account.SecurityStamp,
+               baseline.Account.SecurityStamp,
+               StringComparison.Ordinal)
+           && RolesAreEquivalent(current.Roles, baseline.Roles);
+
+    private static bool MatchesBaseline(
+        EmployeeMutationObservation observation,
+        ActivationBaseline baseline)
+        => observation.EmployeeExists
+           && observation.AccountExists
+           && observation.EmployeeIsActive == baseline.EmployeeIsActive
+           && observation.AccountIsEnabled == baseline.Account.IsEnabled
+           && string.Equals(
+               observation.AccountSecurityStamp,
+               baseline.Account.SecurityStamp,
+               StringComparison.Ordinal)
+           && RolesAreEquivalent(
+               NormalizeRoles(observation.Roles),
+               baseline.Roles);
+
+    private static bool MatchesActivationTarget(
+        ActivationBaseline current,
+        ActivationBaseline baseline,
+        string activationSecurityStamp)
+        => current.EmployeeIsActive
+           && current.Account.IsEnabled
+           && string.Equals(
+               current.Account.SecurityStamp,
+               activationSecurityStamp,
+               StringComparison.Ordinal)
+           && RolesAreEquivalent(current.Roles, baseline.Roles);
+
+    private static bool MatchesActivationTarget(
+        EmployeeMutationObservation observation,
+        ActivationBaseline baseline,
+        string activationSecurityStamp)
+        => observation.EmployeeExists
+           && observation.AccountExists
+           && observation.EmployeeIsActive
+           && observation.AccountIsEnabled
+           && string.Equals(
+               observation.AccountSecurityStamp,
+               activationSecurityStamp,
+               StringComparison.Ordinal)
+           && RolesAreEquivalent(
+               NormalizeRoles(observation.Roles),
+               baseline.Roles);
+
+    private static string[] NormalizeRoles(IEnumerable<string> roles)
+        => roles
+            .Select(role => role?.Trim())
+            .Where(role => !string.IsNullOrWhiteSpace(role))
+            .Cast<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(role => role, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private static bool RolesAreEquivalent(
+        IReadOnlyCollection<string> left,
+        IReadOnlyCollection<string> right)
+        => left.Count == right.Count
+           && left
+               .OrderBy(role => role, StringComparer.OrdinalIgnoreCase)
+               .SequenceEqual(
+                   right.OrderBy(role => role, StringComparer.OrdinalIgnoreCase),
+                   StringComparer.OrdinalIgnoreCase);
+
+    private sealed record ActivationBaseline(
+        bool EmployeeIsActive,
+        IdentityAccountStateSnapshot Account,
+        string[] Roles);
+
+    private enum ActivationTransactionOutcomeKind
+    {
+        Succeeded,
+        Rejected,
+        Conflict,
+        CommitUnknown
+    }
+
+    private sealed record ActivationTransactionOutcome(
+        ActivationTransactionOutcomeKind Kind,
+        string ResultCode,
+        string[] Errors)
+    {
+        public static ActivationTransactionOutcome Success(string resultCode)
+            => new(ActivationTransactionOutcomeKind.Succeeded, resultCode, []);
+
+        public static ActivationTransactionOutcome Failure(string[] errors)
+            => new(ActivationTransactionOutcomeKind.Rejected, "Rejected", errors);
+
+        public static ActivationTransactionOutcome Conflict()
+            => new(
+                ActivationTransactionOutcomeKind.Conflict,
+                "CommitConflict",
+                [EmployeeActivationConflictException.PublicMessage]);
+
+        public static ActivationTransactionOutcome CommitUnknown()
+            => new(
+                ActivationTransactionOutcomeKind.CommitUnknown,
+                "CommitUnknown",
+                [EmployeeActivationCommitUnknownException.PublicMessage]);
     }
 }

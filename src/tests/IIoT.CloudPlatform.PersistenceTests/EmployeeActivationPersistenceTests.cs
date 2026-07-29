@@ -8,6 +8,7 @@ using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Result;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -16,6 +17,118 @@ namespace IIoT.CloudPlatform.PersistenceTests;
 
 public sealed class EmployeeActivationPersistenceTests
 {
+    [Fact]
+    public async Task IdentityAccountStateCompareExchange_ShouldAdvanceConcurrencyAndRejectStaleBaseline()
+    {
+        using var provider = TestServiceProviders.CreateIdentityServiceProvider();
+        Guid employeeId;
+        string originalConcurrencyStamp;
+        IdentityAccountStateSnapshot baseline;
+        using (var scope = provider.CreateScope())
+        {
+            var services = scope.ServiceProvider;
+            var dbContext = services.GetRequiredService<IIoTDbContext>();
+            var employee = TestIdentityData.AddEmployeeWithIdentity(
+                dbContext,
+                "E-ACTIVATE-CAS",
+                "CAS User",
+                accountEnabled: false,
+                employeeActive: false);
+            employeeId = employee.Id;
+            var user = dbContext.Users.Local.Single(
+                candidate => candidate.Id == employeeId);
+            user.SecurityStamp = $"baseline-{Guid.NewGuid():N}";
+            originalConcurrencyStamp = user.ConcurrencyStamp!;
+            await dbContext.SaveChangesAsync();
+            var store = new IdentityAccountStore(
+                services.GetRequiredService<UserManager<ApplicationUser>>(),
+                services.GetRequiredService<RoleManager<IdentityRole<Guid>>>());
+            baseline = (await store.GetStateSnapshotAsync(employeeId))!;
+            var targetStamp = $"target-{Guid.NewGuid():N}";
+
+            var applied = await store.CompareExchangeStateAsync(
+                employeeId,
+                baseline,
+                isEnabled: true,
+                securityStamp: targetStamp);
+            var stale = await store.CompareExchangeStateAsync(
+                employeeId,
+                baseline,
+                isEnabled: false,
+                securityStamp: $"stale-{Guid.NewGuid():N}");
+
+            Assert.True(applied.IsSuccess);
+            Assert.Equal(
+                IdentityAccountCompareExchangeOutcome.Applied,
+                applied.Value);
+            Assert.True(stale.IsSuccess);
+            Assert.Equal(
+                IdentityAccountCompareExchangeOutcome.Conflict,
+                stale.Value);
+
+            dbContext.ChangeTracker.Clear();
+            var persisted = await dbContext.Users
+                .AsNoTracking()
+                .SingleAsync(candidate => candidate.Id == employeeId);
+            Assert.True(persisted.IsEnabled);
+            Assert.Equal(targetStamp, persisted.SecurityStamp);
+            Assert.NotEqual(
+                originalConcurrencyStamp,
+                persisted.ConcurrencyStamp);
+        }
+    }
+
+    [Fact]
+    public async Task EmployeeMutationObservationReader_ShouldIgnoreTrackedStaleState()
+    {
+        using var provider = TestServiceProviders.CreateIdentityServiceProvider();
+        using var scope = provider.CreateScope();
+        var services = scope.ServiceProvider;
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var employee = TestIdentityData.AddEmployeeWithIdentity(
+            dbContext,
+            "E-ACTIVATE-OBSERVE",
+            "Fresh Observer",
+            accountEnabled: false,
+            employeeActive: false);
+        var employeeId = employee.Id;
+        var trackedUser = dbContext.Users.Local.Single(
+            candidate => candidate.Id == employeeId);
+        trackedUser.SecurityStamp = "tracked-stamp";
+        await dbContext.SaveChangesAsync();
+
+        var dbContextOptions = GetOptions(dbContext);
+        await using (var concurrentContext = new IIoTDbContext(dbContextOptions))
+        {
+            await concurrentContext.Employees
+                .Where(candidate => candidate.Id == employeeId)
+                .ExecuteUpdateAsync(
+                    setters => setters.SetProperty(
+                        candidate => candidate.IsActive,
+                        true));
+            await concurrentContext.Users
+                .Where(candidate => candidate.Id == employeeId)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(candidate => candidate.IsEnabled, true)
+                        .SetProperty(
+                            candidate => candidate.SecurityStamp,
+                            "fresh-stamp"));
+        }
+
+        Assert.False(employee.IsActive);
+        Assert.False(trackedUser.IsEnabled);
+        var observation = await new EmployeeMutationObservationReader(
+                dbContextOptions)
+            .ObserveAsync(employeeId, CancellationToken.None);
+
+        Assert.True(observation.EmployeeExists);
+        Assert.True(observation.EmployeeIsActive);
+        Assert.True(observation.AccountExists);
+        Assert.True(observation.AccountIsEnabled);
+        Assert.Equal("fresh-stamp", observation.AccountSecurityStamp);
+    }
+
     [Fact]
     public async Task ActivateEmployeeHandler_ShouldRollbackEmployeeWhenIdentityIsMissing()
     {
@@ -179,6 +292,13 @@ public sealed class EmployeeActivationPersistenceTests
                 dbContext,
                 NullLogger<EfUnitOfWork>.Instance),
             sessionRevocationService,
-            new StubAdminTargetGuard());
+            new StubAdminTargetGuard(),
+            new EmployeeMutationObservationReader(
+                GetOptions(dbContext)));
     }
+
+    private static DbContextOptions<IIoTDbContext> GetOptions(
+        IIoTDbContext dbContext)
+        => (DbContextOptions<IIoTDbContext>)
+            dbContext.GetService<IDbContextOptions>();
 }

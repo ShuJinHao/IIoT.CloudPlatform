@@ -77,14 +77,27 @@ public sealed class EmployeeRoleAssignmentContractTests
     }
 
     [Fact]
-    public void IdentityStore_ShouldExposeRoleOnlyStatusVersionRotation()
+    public void IdentityStore_ShouldExposeStatusSnapshotAndCompareExchangeOnly()
     {
-        var method = typeof(IIdentityAccountStore).GetMethod(
-            nameof(IIdentityAccountStore.RotateSecurityStampAsync))!;
+        var snapshotMethod = typeof(IIdentityAccountStore).GetMethod(
+            nameof(IIdentityAccountStore.GetStateSnapshotAsync))!;
+        var compareExchangeMethod = typeof(IIdentityAccountStore).GetMethod(
+            nameof(IIdentityAccountStore.CompareExchangeStateAsync))!;
 
         Assert.Equal(
             ["id", "cancellationToken"],
-            method.GetParameters().Select(parameter => parameter.Name));
-        Assert.Equal(typeof(Task<IIoT.SharedKernel.Result.Result<bool>>), method.ReturnType);
+            snapshotMethod.GetParameters().Select(parameter => parameter.Name));
+        Assert.Equal(
+            [
+                "id",
+                "expected",
+                "isEnabled",
+                "securityStamp",
+                "cancellationToken"
+            ],
+            compareExchangeMethod.GetParameters().Select(parameter => parameter.Name));
+        Assert.Null(typeof(IIdentityAccountStore).GetMethod("GetSecurityStampAsync"));
+        Assert.Null(typeof(IIdentityAccountStore).GetMethod("RotateSecurityStampAsync"));
+        Assert.Null(typeof(IIdentityAccountStore).GetMethod("ActivateWithSecurityStampAsync"));
     }
 }

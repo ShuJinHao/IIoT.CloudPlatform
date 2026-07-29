@@ -1,5 +1,6 @@
 using System.Text.Json;
 using IIoT.HttpApi.Infrastructure;
+using IIoT.Services.Contracts;
 using Microsoft.AspNetCore.Http;
 using Xunit;
 
@@ -61,5 +62,64 @@ public sealed class UseCaseExceptionHandlerTests
         Assert.False(handled);
         Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
         Assert.Equal(0, context.Response.Body.Length);
+    }
+
+    [Theory]
+    [InlineData(
+        "role-conflict",
+        StatusCodes.Status409Conflict,
+        EmployeeRoleUpdateConflictException.Code,
+        EmployeeRoleUpdateConflictException.PublicMessage)]
+    [InlineData(
+        "role-unknown",
+        StatusCodes.Status503ServiceUnavailable,
+        EmployeeRoleUpdateCommitUnknownException.Code,
+        EmployeeRoleUpdateCommitUnknownException.PublicMessage)]
+    [InlineData(
+        "activation-conflict",
+        StatusCodes.Status409Conflict,
+        EmployeeActivationConflictException.Code,
+        EmployeeActivationConflictException.PublicMessage)]
+    [InlineData(
+        "activation-unknown",
+        StatusCodes.Status503ServiceUnavailable,
+        EmployeeActivationCommitUnknownException.Code,
+        EmployeeActivationCommitUnknownException.PublicMessage)]
+    public async Task EmployeeMutationCommitExceptions_ShouldExposeOnlyStableProblemDetails(
+        string exceptionKind,
+        int expectedStatus,
+        string expectedCode,
+        string expectedDetail)
+    {
+        var exception = exceptionKind switch
+        {
+            "role-conflict" => (Exception)new EmployeeRoleUpdateConflictException(),
+            "role-unknown" => new EmployeeRoleUpdateCommitUnknownException(),
+            "activation-conflict" => new EmployeeActivationConflictException(),
+            "activation-unknown" => new EmployeeActivationCommitUnknownException(),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(exceptionKind),
+                exceptionKind,
+                null)
+        };
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/api/v1/human/employees/employee-id";
+        context.Response.Body = new MemoryStream();
+
+        var handled = await new UseCaseExceptionHandler()
+            .TryHandleAsync(context, exception, CancellationToken.None);
+
+        Assert.True(handled);
+        Assert.Equal(expectedStatus, context.Response.StatusCode);
+        context.Response.Body.Position = 0;
+        using var document = await JsonDocument.ParseAsync(context.Response.Body);
+        var problem = document.RootElement;
+        Assert.Equal(expectedStatus, problem.GetProperty("status").GetInt32());
+        Assert.Equal(expectedCode, problem.GetProperty("code").GetString());
+        Assert.Equal(expectedDetail, problem.GetProperty("detail").GetString());
+        Assert.DoesNotContain(
+            exception.GetType().FullName!,
+            problem.GetRawText(),
+            StringComparison.Ordinal);
     }
 }
