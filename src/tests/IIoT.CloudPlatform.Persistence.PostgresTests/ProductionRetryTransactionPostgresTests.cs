@@ -26,6 +26,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Npgsql;
 
 namespace IIoT.CloudPlatform.Persistence.PostgresTests;
@@ -203,9 +204,12 @@ public sealed class ProductionRetryTransactionPostgresTests(
         var deletion = Assert.IsType<DeviceCascadeDeletionResult>(
             deletionService.LastDeletionResult);
         Assert.True(deletion.DeviceDeleted);
-        Assert.Equal(12, deletion.Impact.TotalAssociatedRows);
-        Assert.Equal(1, deletion.Impact.RefreshTokenSessions);
-        Assert.Single(audit.Entries);
+        Assert.Equal(13, deletion.Impact.TotalAssociatedRows);
+        Assert.Equal(2, deletion.Impact.RefreshTokenSessions);
+        Assert.Contains(
+            "\"refresh_token_sessions\":2",
+            Assert.Single(audit.Entries).Summary,
+            StringComparison.Ordinal);
 
         dbContext.ChangeTracker.Clear();
         Assert.False(await dbContext.Devices
@@ -216,6 +220,66 @@ public sealed class ProductionRetryTransactionPostgresTests(
         var remainingImpact = await new EfDeviceDeletionDependencyService(dbContext)
             .GetImpactAsync(seeded.DeviceId, budget.Token);
         Assert.Equal(0, remainingImpact.TotalAssociatedRows);
+    }
+
+    [Fact]
+    public async Task EdgeSessionIssueAfterStaleRead_ShouldWaitForDeleteAndLeaveNoOrphan()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        var interceptor = new PauseOnceBeforeCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var bootstrapScope = provider.CreateAsyncScope();
+        var bootstrapContext = bootstrapScope.ServiceProvider
+            .GetRequiredService<IIoTDbContext>();
+        var (process, device) = CreateProcessAndDevice("SESSIONRACE");
+        process.ClearDomainEvents();
+        device.ClearDomainEvents();
+        bootstrapContext.MfgProcesses.Add(process);
+        bootstrapContext.Devices.Add(device);
+        await bootstrapContext.SaveChangesAsync(budget.Token);
+        bootstrapContext.ChangeTracker.Clear();
+
+        Assert.True(await bootstrapContext.Devices
+            .AsNoTracking()
+            .AnyAsync(
+                candidate => candidate.Id == device.Id,
+                budget.Token));
+
+        await using var deletionScope = provider.CreateAsyncScope();
+        var deletionContext = deletionScope.ServiceProvider
+            .GetRequiredService<IIoTDbContext>();
+        interceptor.Arm();
+        var deletionTask = new EfDeviceDeletionDependencyService(
+                deletionContext)
+            .DeleteCascadeAsync(device.Id, budget.Token);
+        await interceptor.WaitUntilCommitAsync(budget.Token);
+
+        var refreshTokenService = new EfRefreshTokenService(
+            bootstrapContext,
+            Options.Create(new RefreshTokenOptions()));
+        var issueTask = refreshTokenService.IssueAsync(
+            IIoTClaimTypes.EdgeDeviceActor,
+            device.Id,
+            budget.Token);
+        await Task.Delay(TimeSpan.FromMilliseconds(100), budget.Token);
+        Assert.False(issueTask.IsCompleted);
+
+        interceptor.Continue();
+        var deletionResult = await deletionTask;
+        Assert.True(deletionResult.DeviceDeleted);
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => issueTask);
+
+        bootstrapContext.ChangeTracker.Clear();
+        Assert.False(await bootstrapContext.RefreshTokenSessions
+            .AsNoTracking()
+            .AnyAsync(
+                session =>
+                    session.ActorType == IIoTClaimTypes.EdgeDeviceActor
+                    && session.SubjectId == device.Id,
+                budget.Token));
     }
 
     private static async Task VerifyOnboardRetryAsync(
@@ -1432,6 +1496,39 @@ public sealed class ProductionRetryTransactionPostgresTests(
             }
 
             return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class PauseOnceBeforeCommitInterceptor
+        : DbTransactionInterceptor
+    {
+        private readonly TaskCompletionSource reachedCommit =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource continueCommit =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int armed;
+
+        public void Arm() => Volatile.Write(ref armed, 1);
+
+        public Task WaitUntilCommitAsync(CancellationToken cancellationToken)
+            => reachedCommit.Task.WaitAsync(cancellationToken);
+
+        public void Continue() => continueCommit.TrySetResult();
+
+        public override async ValueTask<InterceptionResult>
+            TransactionCommittingAsync(
+                DbTransaction transaction,
+                TransactionEventData eventData,
+                InterceptionResult result,
+                CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.CompareExchange(ref armed, 0, 1) == 1)
+            {
+                reachedCommit.TrySetResult();
+                await continueCommit.Task.WaitAsync(cancellationToken);
+            }
+
+            return result;
         }
     }
 

@@ -1,5 +1,7 @@
 using IIoT.EntityFrameworkCore;
 using IIoT.EntityFrameworkCore.Identity;
+using IIoT.Core.MasterData.Aggregates.MfgProcesses;
+using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Services.Contracts.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -48,7 +50,19 @@ public sealed class RefreshTokenSessionLimitTests(
     public async Task IssueAsync_ShouldNotLimitEdgeDeviceSessionsWithHumanLimitConfigured()
     {
         await using var dbContext = await CreateDbContextAsync();
-        var subjectId = Guid.NewGuid();
+        var process = new MfgProcess(
+            $"REFRESH-{Guid.NewGuid():N}"[..24],
+            "Refresh token device");
+        var device = new Device(
+            $"Refresh token device {Guid.NewGuid():N}",
+            $"REFRESH-{Guid.NewGuid():N}"[..24],
+            process.Id);
+        process.ClearDomainEvents();
+        device.ClearDomainEvents();
+        dbContext.MfgProcesses.Add(process);
+        dbContext.Devices.Add(device);
+        await dbContext.SaveChangesAsync();
+        var subjectId = device.Id;
         var service = CreateService(dbContext, humanMaxActiveSessions: 1);
 
         await service.IssueAsync(IIoTClaimTypes.EdgeDeviceActor, subjectId);

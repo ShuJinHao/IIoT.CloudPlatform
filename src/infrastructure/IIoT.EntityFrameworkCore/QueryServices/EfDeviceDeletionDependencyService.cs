@@ -1,4 +1,5 @@
 using IIoT.Services.Contracts.Identity;
+using IIoT.EntityFrameworkCore.Persistence;
 using Microsoft.EntityFrameworkCore;
 
 namespace IIoT.EntityFrameworkCore.QueryServices;
@@ -63,6 +64,7 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
         CancellationToken cancellationToken = default)
     {
         DeviceDeletionImpact? lastDeletionAttemptImpact = null;
+        DeviceDeletionImpact? replayCleanupAttemptImpact = null;
         var deletionAttempted = false;
         var strategy = dbContext.Database.CreateExecutionStrategy();
         return await strategy.ExecuteAsync(
@@ -77,6 +79,10 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
                 await using var transaction =
                     await dbContext.Database.BeginTransactionAsync(
                         transactionCancellationToken);
+                await DeviceDeletionTransactionLock.AcquireAsync(
+                    dbContext,
+                    deviceId,
+                    transactionCancellationToken);
                 var deviceExists = await LockDeviceAsync(
                     deviceId,
                     transactionCancellationToken);
@@ -95,6 +101,7 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
 
                     if (remainingImpact.TotalAssociatedRows > 0)
                     {
+                        replayCleanupAttemptImpact = remainingImpact;
                         await DeleteAssociatedRowsAsync(
                             deviceId,
                             transactionCancellationToken);
@@ -114,7 +121,9 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
                     return new DeviceCascadeDeletionResult(
                         committedReplayConfirmed,
                         committedReplayConfirmed
-                            ? lastDeletionAttemptImpact ?? remainingImpact
+                            ? AddImpacts(
+                                lastDeletionAttemptImpact ?? remainingImpact,
+                                replayCleanupAttemptImpact)
                             : remainingImpact);
                 }
 
@@ -147,6 +156,30 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
                 throw;
             }
         }
+    }
+
+    private static DeviceDeletionImpact AddImpacts(
+        DeviceDeletionImpact impact,
+        DeviceDeletionImpact? additionalImpact)
+    {
+        if (additionalImpact is null)
+        {
+            return impact;
+        }
+
+        return new DeviceDeletionImpact(
+            impact.Recipes + additionalImpact.Recipes,
+            impact.Capacities + additionalImpact.Capacities,
+            impact.DeviceLogs + additionalImpact.DeviceLogs,
+            impact.PassStations + additionalImpact.PassStations,
+            impact.ClientStates + additionalImpact.ClientStates,
+            impact.ClientVersionSnapshots + additionalImpact.ClientVersionSnapshots,
+            impact.ClientPluginVersions + additionalImpact.ClientPluginVersions,
+            impact.UploadReceiveRegistrations + additionalImpact.UploadReceiveRegistrations,
+            impact.EmployeeDeviceAccesses + additionalImpact.EmployeeDeviceAccesses,
+            impact.RefreshTokenSessions + additionalImpact.RefreshTokenSessions,
+            impact.RuntimeHeartbeats + additionalImpact.RuntimeHeartbeats,
+            impact.EdgeHostPlcRuntimeStates + additionalImpact.EdgeHostPlcRuntimeStates);
     }
 
     private async Task<bool> LockDeviceAsync(

@@ -52,6 +52,9 @@ public sealed class PersistenceBoundaryArchitectureTests
             "EfDeviceDeletionDependencyService.cs"));
         var registrationSource = File.ReadAllText(CloudRepositoryPath.Find(
             "src", "infrastructure", "IIoT.EntityFrameworkCore", "DependencyInjection.cs"));
+        var refreshTokenSource = File.ReadAllText(CloudRepositoryPath.Find(
+            "src", "infrastructure", "IIoT.EntityFrameworkCore", "Identity",
+            "EfRefreshTokenService.cs"));
 
         Assert.True(typeof(IDeviceDeletionDependencyQueryService).IsAssignableFrom(
             typeof(IIoT.EntityFrameworkCore.QueryServices.EfDeviceDeletionDependencyService)));
@@ -66,6 +69,14 @@ public sealed class PersistenceBoundaryArchitectureTests
         Assert.Contains("SqlQuery<DeviceDeletionImpactRow>", implementationSource, StringComparison.Ordinal);
         Assert.Contains("ExecuteSqlInterpolatedAsync", implementationSource, StringComparison.Ordinal);
         Assert.Contains("CreateExecutionStrategy()", implementationSource, StringComparison.Ordinal);
+        Assert.Contains(
+            "DeviceDeletionTransactionLock.AcquireAsync",
+            implementationSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "DeviceDeletionTransactionLock.AcquireAsync",
+            refreshTokenSource,
+            StringComparison.Ordinal);
         Assert.True(
             implementationSource.IndexOf(
                 "CreateExecutionStrategy()",
