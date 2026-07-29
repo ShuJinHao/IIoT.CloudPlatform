@@ -28,47 +28,54 @@ public class UpdateEmployeeProfileHandler(
         UpdateEmployeeProfileCommand request,
         CancellationToken cancellationToken)
     {
-        var targetResult = await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
-            request.EmployeeId,
-            cancellationToken);
-        if (!targetResult.IsSuccess)
-        {
-            return Result.Failure(targetResult.Errors?.ToArray()
-                ?? [AdminTargetProtectionErrors.TargetNotFound]);
-        }
-
         var realName = request.RealName?.Trim() ?? string.Empty;
         if (string.IsNullOrEmpty(realName))
         {
             return Result.Failure("员工姓名不能为空");
         }
 
-        try
+        return await unitOfWork.ExecuteResilientAsync(
+            ExecuteTransactionAsync,
+            cancellationToken);
+
+        async Task<Result<bool>> ExecuteTransactionAsync(
+            CancellationToken transactionCancellationToken)
         {
-            await unitOfWork.BeginTransactionAsync(cancellationToken);
+            await unitOfWork.BeginTransactionAsync(transactionCancellationToken);
+
+            var targetResult = await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
+                request.EmployeeId,
+                transactionCancellationToken);
+            if (!targetResult.IsSuccess)
+            {
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return Result.Failure(targetResult.Errors?.ToArray()
+                    ?? [AdminTargetProtectionErrors.TargetNotFound]);
+            }
 
             var employee = await employeeRepository.GetSingleOrDefaultAsync(
                 new EmployeeWithAccessesSpec(request.EmployeeId),
-                cancellationToken);
+                transactionCancellationToken);
 
             if (employee is null)
             {
-                await unitOfWork.RollbackAsync(cancellationToken);
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
                 return Result.Failure(AdminTargetProtectionErrors.TargetNotFound);
+            }
+
+            if (string.Equals(employee.RealName, realName, StringComparison.Ordinal))
+            {
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return Result.Success(true);
             }
 
             employee.Rename(employee.EmployeeNo, realName);
 
             employeeRepository.Update(employee);
-            await employeeRepository.SaveChangesAsync(cancellationToken);
+            await employeeRepository.SaveChangesAsync(transactionCancellationToken);
 
-            await unitOfWork.CommitAsync(cancellationToken);
+            await unitOfWork.CommitAsync(transactionCancellationToken);
             return Result.Success(true);
-        }
-        catch (Exception)
-        {
-            await unitOfWork.RollbackAsync(cancellationToken);
-            throw;
         }
     }
 }

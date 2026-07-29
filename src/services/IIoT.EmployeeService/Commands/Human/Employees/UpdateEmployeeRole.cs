@@ -140,126 +140,21 @@ public sealed class UpdateEmployeeRoleHandler(
                 cancellationToken);
         }
 
-        var targetResult = await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
-            request.EmployeeId,
-            cancellationToken);
-        if (!targetResult.IsSuccess)
-        {
-            var errors = targetResult.Errors?.ToArray()
-                ?? [AdminTargetProtectionErrors.TargetNotFound];
-            var targetRoles = errors.Contains(AdminTargetProtectionErrors.AdminTargetProtected)
-                ? await identityAccountStore.GetRolesAsync(request.EmployeeId, cancellationToken)
-                : [];
-            return await RejectAsync(
-                request,
-                targetRoles,
-                targetRoles,
-                requestedRoleName,
-                canonicalRoleName,
-                errors.Contains(AdminTargetProtectionErrors.TargetNotFound)
-                    ? "TargetNotFound"
-                    : "AdminTargetProtected",
-                errors,
-                cancellationToken);
-        }
-
-        var targetEmployee = await employeeLookupService.GetByIdAsync(
-            request.EmployeeId,
-            cancellationToken);
-        if (targetEmployee is null)
-        {
-            return await RejectAsync(
-                request,
-                [],
-                [],
-                requestedRoleName,
-                canonicalRoleName,
-                "TargetNotFound",
-                [AdminTargetProtectionErrors.TargetNotFound],
-                cancellationToken);
-        }
-
-        var currentRoles = await identityAccountStore.GetRolesAsync(
-            request.EmployeeId,
-            cancellationToken);
-        if (SystemRoles.ContainsAdminLike(currentRoles))
-        {
-            return await RejectAsync(
-                request,
-                currentRoles,
-                currentRoles,
-                requestedRoleName,
-                canonicalRoleName,
-                "AdminTargetProtected",
-                [AdminTargetProtectionErrors.AdminTargetProtected],
-                cancellationToken);
-        }
-
-        var beforeRoles = NormalizeAssignableRoles(currentRoles);
-        string[] afterRoles = canonicalRoleName is null ? [] : [canonicalRoleName];
-        if (RolesAreEquivalent(beforeRoles, afterRoles))
-        {
-            await WriteAuditAsync(
-                request,
-                beforeRoles,
-                afterRoles,
-                requestedRoleName,
-                canonicalRoleName,
-                succeeded: true,
-                resultCode: "NoChange",
-                failureReason: null,
-                cancellationToken);
-            return Result.Success(true);
-        }
-
+        string[]? firstObservedRoles = null;
+        var roleChangeAttempted = false;
+        RoleTransactionOutcome outcome;
         try
         {
-            await unitOfWork.BeginTransactionAsync(cancellationToken);
-
-            var roleResult = await identityAccountStore.ReplaceAssignableRoleAsync(
-                request.EmployeeId,
-                canonicalRoleName,
+            outcome = await unitOfWork.ExecuteResilientAsync(
+                ExecuteTransactionAsync,
                 cancellationToken);
-            if (!roleResult.IsSuccess || !roleResult.Value)
-            {
-                return await RollbackAndRejectAsync(
-                    request,
-                    beforeRoles,
-                    requestedRoleName,
-                    canonicalRoleName,
-                    "RolePersistenceFailed",
-                    roleResult.Errors?.ToArray() ?? ["员工角色写入失败。"],
-                    cancellationToken);
-            }
-
-            var versionResult = await identityAccountStore.RotateSecurityStampAsync(
-                request.EmployeeId,
-                cancellationToken);
-            if (!versionResult.IsSuccess || !versionResult.Value)
-            {
-                return await RollbackAndRejectAsync(
-                    request,
-                    beforeRoles,
-                    requestedRoleName,
-                    canonicalRoleName,
-                    "StatusVersionRotationFailed",
-                    versionResult.Errors?.ToArray() ?? ["身份状态版本轮换失败。"],
-                    cancellationToken);
-            }
-
-            await sessionRevocationService.RevokeAllAsync(
-                request.EmployeeId,
-                "employee-role-changed",
-                cancellationToken);
-            await unitOfWork.CommitAsync(cancellationToken);
         }
         catch (OperationCanceledException)
         {
-            await unitOfWork.RollbackAsync(CancellationToken.None);
             await WriteAuditAsync(
                 request,
-                beforeRoles,
-                beforeRoles,
+                firstObservedRoles ?? [],
+                firstObservedRoles ?? [],
                 requestedRoleName,
                 canonicalRoleName,
                 succeeded: false,
@@ -270,11 +165,10 @@ public sealed class UpdateEmployeeRoleHandler(
         }
         catch (Exception)
         {
-            await unitOfWork.RollbackAsync(CancellationToken.None);
             await WriteAuditAsync(
                 request,
-                beforeRoles,
-                beforeRoles,
+                firstObservedRoles ?? [],
+                firstObservedRoles ?? [],
                 requestedRoleName,
                 canonicalRoleName,
                 succeeded: false,
@@ -286,36 +180,119 @@ public sealed class UpdateEmployeeRoleHandler(
 
         await WriteAuditAsync(
             request,
-            beforeRoles,
-            afterRoles,
+            outcome.BeforeRoles,
+            outcome.AfterRoles,
             requestedRoleName,
             canonicalRoleName,
-            succeeded: true,
-            resultCode: "Succeeded",
-            failureReason: null,
-            CancellationToken.None);
-        return Result.Success(true);
-    }
+            outcome.Succeeded,
+            outcome.ResultCode,
+            outcome.Succeeded
+                ? null
+                : outcome.Errors.FirstOrDefault() ?? "员工角色更新被拒绝。",
+            outcome.Succeeded ? CancellationToken.None : cancellationToken);
+        return outcome.Succeeded
+            ? Result.Success(true)
+            : Result.Failure(outcome.Errors);
 
-    private async Task<Result<bool>> RollbackAndRejectAsync(
-        UpdateEmployeeRoleCommand request,
-        IReadOnlyCollection<string> beforeRoles,
-        string? requestedRoleName,
-        string? canonicalRoleName,
-        string resultCode,
-        string[] errors,
-        CancellationToken cancellationToken)
-    {
-        await unitOfWork.RollbackAsync(cancellationToken);
-        return await RejectAsync(
-            request,
-            beforeRoles,
-            beforeRoles,
-            requestedRoleName,
-            canonicalRoleName,
-            resultCode,
-            errors,
-            cancellationToken);
+        async Task<RoleTransactionOutcome> ExecuteTransactionAsync(
+            CancellationToken transactionCancellationToken)
+        {
+            await unitOfWork.BeginTransactionAsync(transactionCancellationToken);
+
+            var targetResult = await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
+                request.EmployeeId,
+                transactionCancellationToken);
+            if (!targetResult.IsSuccess)
+            {
+                var errors = targetResult.Errors?.ToArray()
+                    ?? [AdminTargetProtectionErrors.TargetNotFound];
+                var targetRoles = errors.Contains(
+                    AdminTargetProtectionErrors.AdminTargetProtected)
+                    ? await identityAccountStore.GetRolesAsync(
+                        request.EmployeeId,
+                        transactionCancellationToken)
+                    : [];
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return RoleTransactionOutcome.Failure(
+                    targetRoles,
+                    errors.Contains(AdminTargetProtectionErrors.TargetNotFound)
+                        ? "TargetNotFound"
+                        : "AdminTargetProtected",
+                    errors);
+            }
+
+            var targetEmployee = await employeeLookupService.GetByIdAsync(
+                request.EmployeeId,
+                transactionCancellationToken);
+            if (targetEmployee is null)
+            {
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return RoleTransactionOutcome.Failure(
+                    [],
+                    "TargetNotFound",
+                    [AdminTargetProtectionErrors.TargetNotFound]);
+            }
+
+            var currentRoles = await identityAccountStore.GetRolesAsync(
+                request.EmployeeId,
+                transactionCancellationToken);
+            if (SystemRoles.ContainsAdminLike(currentRoles))
+            {
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return RoleTransactionOutcome.Failure(
+                    currentRoles,
+                    "AdminTargetProtected",
+                    [AdminTargetProtectionErrors.AdminTargetProtected]);
+            }
+
+            var beforeRoles = NormalizeAssignableRoles(currentRoles);
+            firstObservedRoles ??= beforeRoles;
+            string[] afterRoles = canonicalRoleName is null ? [] : [canonicalRoleName];
+            if (RolesAreEquivalent(beforeRoles, afterRoles))
+            {
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return RoleTransactionOutcome.Success(
+                    firstObservedRoles,
+                    afterRoles,
+                    roleChangeAttempted ? "Succeeded" : "NoChange");
+            }
+
+            roleChangeAttempted = true;
+            var roleResult = await identityAccountStore.ReplaceAssignableRoleAsync(
+                request.EmployeeId,
+                canonicalRoleName,
+                transactionCancellationToken);
+            if (!roleResult.IsSuccess || !roleResult.Value)
+            {
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return RoleTransactionOutcome.Failure(
+                    firstObservedRoles,
+                    "RolePersistenceFailed",
+                    roleResult.Errors?.ToArray() ?? ["员工角色写入失败。"]);
+            }
+
+            var versionResult = await identityAccountStore.RotateSecurityStampAsync(
+                request.EmployeeId,
+                transactionCancellationToken);
+            if (!versionResult.IsSuccess || !versionResult.Value)
+            {
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return RoleTransactionOutcome.Failure(
+                    firstObservedRoles,
+                    "StatusVersionRotationFailed",
+                    versionResult.Errors?.ToArray() ?? ["身份状态版本轮换失败。"]);
+            }
+
+            await sessionRevocationService.RevokeAllAsync(
+                request.EmployeeId,
+                "employee-role-changed",
+                transactionCancellationToken);
+            await unitOfWork.CommitAsync(transactionCancellationToken);
+            return RoleTransactionOutcome.Success(
+                firstObservedRoles,
+                afterRoles,
+                "Succeeded");
+        }
     }
 
     private async Task<Result<bool>> RejectAsync(
@@ -422,6 +399,39 @@ public sealed class UpdateEmployeeRoleHandler(
                    .SequenceEqual(
                        afterRoles.OrderBy(role => role, StringComparer.OrdinalIgnoreCase),
                        StringComparer.OrdinalIgnoreCase);
+    }
+
+    private sealed record RoleTransactionOutcome(
+        bool Succeeded,
+        string[] BeforeRoles,
+        string[] AfterRoles,
+        string ResultCode,
+        string[] Errors)
+    {
+        public static RoleTransactionOutcome Success(
+            IEnumerable<string> beforeRoles,
+            IEnumerable<string> afterRoles,
+            string resultCode)
+            => new(
+                true,
+                NormalizeAssignableRoles(beforeRoles),
+                NormalizeAssignableRoles(afterRoles),
+                resultCode,
+                []);
+
+        public static RoleTransactionOutcome Failure(
+            IEnumerable<string> beforeRoles,
+            string resultCode,
+            string[] errors)
+        {
+            var normalizedRoles = NormalizeAssignableRoles(beforeRoles);
+            return new(
+                false,
+                normalizedRoles,
+                normalizedRoles,
+                resultCode,
+                errors);
+        }
     }
 }
 

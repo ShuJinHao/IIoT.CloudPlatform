@@ -61,6 +61,14 @@ public sealed class PersistenceBoundaryArchitectureTests
 
         Assert.Contains("SqlQuery<DeviceDeletionImpactRow>", implementationSource, StringComparison.Ordinal);
         Assert.Contains("ExecuteSqlInterpolatedAsync", implementationSource, StringComparison.Ordinal);
+        Assert.Contains("CreateExecutionStrategy()", implementationSource, StringComparison.Ordinal);
+        Assert.True(
+            implementationSource.IndexOf(
+                "CreateExecutionStrategy()",
+                StringComparison.Ordinal)
+            < implementationSource.IndexOf(
+                "BeginTransactionAsync(",
+                StringComparison.Ordinal));
         Assert.DoesNotContain("CountTableAsync", implementationSource, StringComparison.Ordinal);
         Assert.DoesNotContain("ExecuteDeleteAsync", implementationSource, StringComparison.Ordinal);
         foreach (var table in new[]
@@ -88,6 +96,39 @@ public sealed class PersistenceBoundaryArchitectureTests
         Assert.Contains("delete from edge_host_plc_runtime_states", deleteSection, StringComparison.Ordinal);
         Assert.DoesNotContain("delete from edge_hosts", deleteSection, StringComparison.Ordinal);
         Assert.DoesNotContain("delete from edge_host_plc_bindings", deleteSection, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BusinessHandlers_ShouldNotOpenManualTransactionsOutsideResilientBoundary()
+    {
+        var serviceRoot = CloudRepositoryPath.Find("src", "services");
+        var violations = Directory
+            .GetFiles(serviceRoot, "*.cs", SearchOption.AllDirectories)
+            .Select(path => new
+            {
+                Path = path,
+                Source = File.ReadAllText(path)
+            })
+            .Where(item => item.Source.Contains(
+                "unitOfWork.BeginTransactionAsync(",
+                StringComparison.Ordinal))
+            .Where(item =>
+            {
+                var resilientIndex = item.Source.IndexOf(
+                    "unitOfWork.ExecuteResilientAsync(",
+                    StringComparison.Ordinal);
+                var transactionIndex = item.Source.IndexOf(
+                    "unitOfWork.BeginTransactionAsync(",
+                    StringComparison.Ordinal);
+                return resilientIndex < 0 || resilientIndex > transactionIndex;
+            })
+            .Select(item => Path.GetRelativePath(serviceRoot, item.Path))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(
+            violations.Length == 0,
+            $"Manual transactions outside resilient execution strategy: {string.Join(", ", violations)}");
     }
 
     [Fact]

@@ -855,6 +855,20 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
     {
         LastSetEnabledId = id;
         LastSetEnabledValue = isEnabled;
+        if (SetEnabledResult.IsSuccess
+            && SetEnabledResult.Value
+            && AccountById?.Id == id)
+        {
+            if (isEnabled)
+            {
+                AccountById.Enable();
+            }
+            else
+            {
+                AccountById.Disable();
+            }
+        }
+
         return Task.FromResult(SetEnabledResult);
     }
 

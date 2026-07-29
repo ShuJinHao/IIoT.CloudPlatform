@@ -62,36 +62,73 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
         Guid deviceId,
         CancellationToken cancellationToken = default)
     {
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
-        try
-        {
-            await LockDeviceAsync(deviceId, cancellationToken);
-            var impact = await GetImpactAsync(deviceId, cancellationToken);
-            await DeleteAssociatedRowsAsync(deviceId, cancellationToken);
+        DeviceDeletionImpact? firstObservedImpact = null;
+        var deletionAttempted = false;
+        var strategy = dbContext.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(
+            ExecuteTransactionAsync,
+            cancellationToken);
 
-            var device = await dbContext.Devices.SingleOrDefaultAsync(device => device.Id == deviceId, cancellationToken);
-            if (device is not null)
+        async Task<DeviceCascadeDeletionResult> ExecuteTransactionAsync(
+            CancellationToken transactionCancellationToken)
+        {
+            try
             {
+                await using var transaction =
+                    await dbContext.Database.BeginTransactionAsync(
+                        transactionCancellationToken);
+                var deviceExists = await LockDeviceAsync(
+                    deviceId,
+                    transactionCancellationToken);
+                if (!deviceExists)
+                {
+                    var remainingImpact = await GetImpactAsync(
+                        deviceId,
+                        transactionCancellationToken);
+                    var committedReplayConfirmed =
+                        deletionAttempted
+                        && remainingImpact.TotalAssociatedRows == 0;
+                    return new DeviceCascadeDeletionResult(
+                        committedReplayConfirmed,
+                        firstObservedImpact ?? remainingImpact);
+                }
+
+                var impact = await GetImpactAsync(
+                    deviceId,
+                    transactionCancellationToken);
+                firstObservedImpact ??= impact;
+                deletionAttempted = true;
+                await DeleteAssociatedRowsAsync(
+                    deviceId,
+                    transactionCancellationToken);
+
+                var device = await dbContext.Devices.SingleAsync(
+                    candidate => candidate.Id == deviceId,
+                    transactionCancellationToken);
                 device.MarkDeleted();
                 dbContext.Devices.Remove(device);
-            }
 
-            var affectedRows = await dbContext.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
-            return new DeviceCascadeDeletionResult(affectedRows > 0 || device is not null, impact);
-        }
-        catch
-        {
-            await transaction.RollbackAsync(cancellationToken);
-            throw;
+                var affectedRows = await dbContext.SaveChangesAsync(
+                    transactionCancellationToken);
+                await transaction.CommitAsync(transactionCancellationToken);
+                return new DeviceCascadeDeletionResult(
+                    affectedRows > 0,
+                    firstObservedImpact);
+            }
+            catch
+            {
+                dbContext.DiscardPendingDomainEvents();
+                dbContext.ChangeTracker.Clear();
+                throw;
+            }
         }
     }
 
-    private async Task LockDeviceAsync(
+    private async Task<bool> LockDeviceAsync(
         Guid deviceId,
         CancellationToken cancellationToken)
     {
-        _ = await dbContext.Database
+        var lockedDeviceId = await dbContext.Database
             .SqlQuery<Guid>($"""
                 SELECT id AS "Value"
                 FROM devices
@@ -99,6 +136,7 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
                 FOR UPDATE
                 """)
             .SingleOrDefaultAsync(cancellationToken);
+        return lockedDeviceId == deviceId;
     }
 
     private async Task DeleteAssociatedRowsAsync(

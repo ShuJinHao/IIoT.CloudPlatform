@@ -36,52 +36,84 @@ public class TerminateEmployeeHandler(
         TerminateEmployeeCommand request,
         CancellationToken cancellationToken)
     {
-        var targetResult = await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
-            request.EmployeeId,
+        var deletionAttempted = false;
+        return await unitOfWork.ExecuteResilientAsync(
+            ExecuteTransactionAsync,
             cancellationToken);
-        if (!targetResult.IsSuccess)
-        {
-            return Result.Failure(targetResult.Errors?.ToArray()
-                ?? [AdminTargetProtectionErrors.TargetNotFound]);
-        }
 
-        try
+        async Task<Result> ExecuteTransactionAsync(
+            CancellationToken transactionCancellationToken)
         {
-            await unitOfWork.BeginTransactionAsync(cancellationToken);
+            await unitOfWork.BeginTransactionAsync(transactionCancellationToken);
+
+            if (!deletionAttempted)
+            {
+                var initialTargetResult =
+                    await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
+                        request.EmployeeId,
+                        transactionCancellationToken);
+                if (!initialTargetResult.IsSuccess)
+                {
+                    await unitOfWork.RollbackAsync(transactionCancellationToken);
+                    return Result.Failure(initialTargetResult.Errors?.ToArray()
+                        ?? [AdminTargetProtectionErrors.TargetNotFound]);
+                }
+            }
+
+            var account = await identityAccountStore.GetByIdAsync(
+                request.EmployeeId,
+                transactionCancellationToken);
 
             var employee = await employeeRepository.GetSingleOrDefaultAsync(
                 new EmployeeWithAccessesSpec(request.EmployeeId),
-                cancellationToken);
+                transactionCancellationToken);
 
-            if (employee is null)
+            if (employee is null || account is null)
             {
-                await unitOfWork.RollbackAsync(cancellationToken);
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                if (deletionAttempted && employee is null && account is null)
+                {
+                    return Result.Success();
+                }
+
                 return Result.Failure(AdminTargetProtectionErrors.TargetNotFound);
             }
 
+            if (deletionAttempted)
+            {
+                var replayTargetResult =
+                    await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
+                        request.EmployeeId,
+                        transactionCancellationToken);
+                if (!replayTargetResult.IsSuccess)
+                {
+                    await unitOfWork.RollbackAsync(transactionCancellationToken);
+                    return Result.Failure(replayTargetResult.Errors?.ToArray()
+                        ?? [AdminTargetProtectionErrors.TargetNotFound]);
+                }
+            }
+
+            deletionAttempted = true;
             employee.Terminate();
             employeeRepository.Delete(employee);
-            await employeeRepository.SaveChangesAsync(cancellationToken);
+            await employeeRepository.SaveChangesAsync(transactionCancellationToken);
 
-            var identityResult = await identityAccountStore.DeleteAsync(request.EmployeeId, cancellationToken);
-            if (!identityResult.IsSuccess)
+            var identityResult = await identityAccountStore.DeleteAsync(
+                request.EmployeeId,
+                transactionCancellationToken);
+            if (!identityResult.IsSuccess || !identityResult.Value)
             {
-                await unitOfWork.RollbackAsync(cancellationToken);
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
                 return Result.Failure(identityResult.Errors?.ToArray() ?? ["账号销毁失败"]);
             }
 
             await sessionRevocationService.RevokeAllAsync(
                 request.EmployeeId,
                 "employee-terminated",
-                cancellationToken);
-            await unitOfWork.CommitAsync(cancellationToken);
+                transactionCancellationToken);
+            await unitOfWork.CommitAsync(transactionCancellationToken);
 
             return Result.Success();
-        }
-        catch (Exception)
-        {
-            await unitOfWork.RollbackAsync(cancellationToken);
-            throw;
         }
     }
 }

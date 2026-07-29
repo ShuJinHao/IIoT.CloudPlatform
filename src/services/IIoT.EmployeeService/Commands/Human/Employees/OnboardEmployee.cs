@@ -1,4 +1,5 @@
 using IIoT.Core.Employees.Aggregates.Employees;
+using IIoT.Core.Employees.Specifications;
 using IIoT.Core.Identity.Aggregates.IdentityAccounts;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.Contracts;
@@ -33,6 +34,8 @@ public class OnboardEmployeeHandler(
         OnboardEmployeeCommand request,
         CancellationToken cancellationToken)
     {
+        var normalizedEmployeeNo = request.EmployeeNo.Trim();
+        var normalizedRealName = request.RealName.Trim();
         var normalizedRoleName = request.RoleName?.Trim();
         if (!string.IsNullOrEmpty(normalizedRoleName))
         {
@@ -53,34 +56,73 @@ public class OnboardEmployeeHandler(
             }
         }
 
-        var existingAccount = await identityAccountStore.GetByEmployeeNoAsync(request.EmployeeNo, cancellationToken);
-        if (existingAccount is not null)
+        var sharedId = Guid.NewGuid();
+        var creationAttempted = false;
+        return await unitOfWork.ExecuteResilientAsync(
+            ExecuteTransactionAsync,
+            cancellationToken);
+
+        async Task<Result<Guid>> ExecuteTransactionAsync(
+            CancellationToken transactionCancellationToken)
         {
-            return Result.Failure("员工账号已存在");
-        }
+            await unitOfWork.BeginTransactionAsync(transactionCancellationToken);
 
-        try
-        {
-            await unitOfWork.BeginTransactionAsync(cancellationToken);
+            var accountByEmployeeNo = await identityAccountStore.GetByEmployeeNoAsync(
+                normalizedEmployeeNo,
+                transactionCancellationToken);
+            var accountById = await identityAccountStore.GetByIdAsync(
+                sharedId,
+                transactionCancellationToken);
+            var employeeByEmployeeNo = await employeeRepository.GetSingleOrDefaultAsync(
+                new EmployeeByEmployeeNoSpec(normalizedEmployeeNo),
+                transactionCancellationToken);
+            var employeeById = await employeeRepository.GetSingleOrDefaultAsync(
+                new EmployeeWithAccessesSpec(sharedId),
+                transactionCancellationToken);
 
-            var sharedId = Guid.NewGuid();
-            var account = IdentityAccount.Create(sharedId, request.EmployeeNo);
+            if (accountByEmployeeNo is not null
+                || accountById is not null
+                || employeeByEmployeeNo is not null
+                || employeeById is not null)
+            {
+                if (creationAttempted
+                    && await IsCommittedReplayAsync(
+                        accountByEmployeeNo,
+                        accountById,
+                        employeeByEmployeeNo,
+                        employeeById,
+                        transactionCancellationToken))
+                {
+                    await unitOfWork.RollbackAsync(transactionCancellationToken);
+                    return Result.Success(sharedId);
+                }
 
-            var identityResult = await identityAccountStore.CreateAsync(account, cancellationToken);
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return accountByEmployeeNo is not null
+                    ? Result.Failure("员工账号已存在")
+                    : Result.Failure("员工入职状态不完整，已停止重试");
+            }
+
+            creationAttempted = true;
+            var account = IdentityAccount.Create(sharedId, normalizedEmployeeNo);
+
+            var identityResult = await identityAccountStore.CreateAsync(
+                account,
+                transactionCancellationToken);
             if (!identityResult.IsSuccess)
             {
-                await unitOfWork.RollbackAsync(cancellationToken);
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
                 return Result.Failure(identityResult.Errors?.ToArray() ?? ["账号创建失败"]);
             }
 
             var passwordResult = await identityPasswordService.SetPasswordAsync(
                 sharedId,
                 request.Password,
-                cancellationToken);
+                transactionCancellationToken);
 
             if (!passwordResult.IsSuccess)
             {
-                await unitOfWork.RollbackAsync(cancellationToken);
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
                 return Result.Failure(passwordResult.Errors?.ToArray() ?? ["密码设置失败"]);
             }
 
@@ -89,27 +131,72 @@ public class OnboardEmployeeHandler(
                 var roleResult = await identityAccountStore.AssignRoleAsync(
                     sharedId,
                     normalizedRoleName,
-                    cancellationToken);
+                    transactionCancellationToken);
 
                 if (!roleResult.IsSuccess)
                 {
-                    await unitOfWork.RollbackAsync(cancellationToken);
+                    await unitOfWork.RollbackAsync(transactionCancellationToken);
                     return Result.Failure(roleResult.Errors?.ToArray() ?? ["角色设置失败"]);
                 }
             }
 
-            var employee = new Employee(sharedId, request.EmployeeNo, request.RealName);
+            var employee = new Employee(sharedId, normalizedEmployeeNo, normalizedRealName);
             employeeRepository.Add(employee);
-            await employeeRepository.SaveChangesAsync(cancellationToken);
+            await employeeRepository.SaveChangesAsync(transactionCancellationToken);
 
-            await unitOfWork.CommitAsync(cancellationToken);
+            await unitOfWork.CommitAsync(transactionCancellationToken);
 
             return Result.Success(sharedId);
         }
-        catch (Exception)
+
+        async Task<bool> IsCommittedReplayAsync(
+            IdentityAccount? accountByEmployeeNo,
+            IdentityAccount? accountById,
+            Employee? employeeByEmployeeNo,
+            Employee? employeeById,
+            CancellationToken transactionCancellationToken)
         {
-            await unitOfWork.RollbackAsync(cancellationToken);
-            throw;
+            if (accountByEmployeeNo is null
+                || accountById is null
+                || employeeByEmployeeNo is null
+                || employeeById is null
+                || accountByEmployeeNo.Id != sharedId
+                || accountById.Id != sharedId
+                || employeeByEmployeeNo.Id != sharedId
+                || employeeById.Id != sharedId
+                || !accountById.IsEnabled
+                || !employeeById.IsActive
+                || !string.Equals(
+                    accountById.EmployeeNo,
+                    normalizedEmployeeNo,
+                    StringComparison.Ordinal)
+                || !string.Equals(
+                    employeeById.EmployeeNo,
+                    normalizedEmployeeNo,
+                    StringComparison.Ordinal)
+                || !string.Equals(
+                    employeeById.RealName,
+                    normalizedRealName,
+                    StringComparison.Ordinal)
+                || employeeById.DeviceAccesses.Count != 0)
+            {
+                return false;
+            }
+
+            var roles = await identityAccountStore.GetRolesAsync(
+                sharedId,
+                transactionCancellationToken);
+            var expectedRoles = normalizedRoleName is null
+                ? []
+                : new[] { normalizedRoleName };
+            return roles.Count == expectedRoles.Length
+                   && roles
+                       .OrderBy(role => role, StringComparer.OrdinalIgnoreCase)
+                       .SequenceEqual(
+                           expectedRoles.OrderBy(
+                               role => role,
+                               StringComparer.OrdinalIgnoreCase),
+                           StringComparer.OrdinalIgnoreCase);
         }
     }
 

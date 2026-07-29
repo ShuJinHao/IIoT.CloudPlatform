@@ -26,25 +26,31 @@ public sealed class ActivateEmployeeHandler(
         ActivateEmployeeCommand request,
         CancellationToken cancellationToken)
     {
-        var targetResult = await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
-            request.EmployeeId,
+        return await unitOfWork.ExecuteResilientAsync(
+            ExecuteTransactionAsync,
             cancellationToken);
-        if (!targetResult.IsSuccess)
-        {
-            return Result.Failure(targetResult.Errors?.ToArray()
-                ?? [AdminTargetProtectionErrors.TargetNotFound]);
-        }
 
-        try
+        async Task<Result> ExecuteTransactionAsync(
+            CancellationToken transactionCancellationToken)
         {
-            await unitOfWork.BeginTransactionAsync(cancellationToken);
+            await unitOfWork.BeginTransactionAsync(transactionCancellationToken);
+
+            var targetResult = await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
+                request.EmployeeId,
+                transactionCancellationToken);
+            if (!targetResult.IsSuccess)
+            {
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return Result.Failure(targetResult.Errors?.ToArray()
+                    ?? [AdminTargetProtectionErrors.TargetNotFound]);
+            }
 
             var employee = await employeeRepository.GetSingleOrDefaultAsync(
                 new EmployeeWithAccessesSpec(request.EmployeeId),
-                cancellationToken);
+                transactionCancellationToken);
             if (employee is null)
             {
-                await unitOfWork.RollbackAsync(cancellationToken);
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
                 return Result.Failure(AdminTargetProtectionErrors.TargetNotFound);
             }
 
@@ -52,31 +58,39 @@ public sealed class ActivateEmployeeHandler(
             {
                 employee.Activate();
                 employeeRepository.Update(employee);
-                await employeeRepository.SaveChangesAsync(cancellationToken);
+                await employeeRepository.SaveChangesAsync(transactionCancellationToken);
             }
 
-            var identityResult = await identityAccountStore.SetEnabledAsync(
+            var account = await identityAccountStore.GetByIdAsync(
                 request.EmployeeId,
-                true,
-                cancellationToken);
-            if (!identityResult.IsSuccess || !identityResult.Value)
+                transactionCancellationToken);
+            if (account is null)
             {
-                await unitOfWork.RollbackAsync(cancellationToken);
-                return Result.Failure(identityResult.Errors?.ToArray() ?? ["员工身份账号启用失败"]);
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return Result.Failure("员工身份账号启用失败");
+            }
+
+            if (!account.IsEnabled)
+            {
+                var identityResult = await identityAccountStore.SetEnabledAsync(
+                    request.EmployeeId,
+                    true,
+                    transactionCancellationToken);
+                if (!identityResult.IsSuccess || !identityResult.Value)
+                {
+                    await unitOfWork.RollbackAsync(transactionCancellationToken);
+                    return Result.Failure(
+                        identityResult.Errors?.ToArray() ?? ["员工身份账号启用失败"]);
+                }
             }
 
             await sessionRevocationService.RevokeAllAsync(
                 request.EmployeeId,
                 "employee-activated-relogin-required",
-                cancellationToken);
-            await unitOfWork.CommitAsync(cancellationToken);
+                transactionCancellationToken);
+            await unitOfWork.CommitAsync(transactionCancellationToken);
 
             return Result.Success();
-        }
-        catch (Exception)
-        {
-            await unitOfWork.RollbackAsync(cancellationToken);
-            throw;
         }
     }
 }
