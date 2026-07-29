@@ -44,6 +44,14 @@ public sealed class IdentityAccountStore(
         return user is null ? null : Map(user);
     }
 
+    public async Task<string?> GetSecurityStampAsync(
+        Guid id,
+        CancellationToken cancellationToken = default)
+    {
+        var user = await userManager.FindByIdAsync(id.ToString());
+        return user?.SecurityStamp;
+    }
+
     public async Task<Result<bool>> SetEnabledAsync(
         Guid id,
         bool isEnabled,

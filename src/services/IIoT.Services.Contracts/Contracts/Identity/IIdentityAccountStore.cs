@@ -17,6 +17,10 @@ public interface IIdentityAccountStore
         string employeeNo,
         CancellationToken cancellationToken = default);
 
+    Task<string?> GetSecurityStampAsync(
+        Guid id,
+        CancellationToken cancellationToken = default);
+
     Task<Result<bool>> SetEnabledAsync(
         Guid id,
         bool isEnabled,

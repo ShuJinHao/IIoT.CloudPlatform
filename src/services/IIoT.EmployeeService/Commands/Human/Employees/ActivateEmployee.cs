@@ -27,6 +27,9 @@ public sealed class ActivateEmployeeHandler(
         CancellationToken cancellationToken)
     {
         var activationSecurityStamp = Guid.NewGuid().ToString("N");
+        string? baselineSecurityStamp = null;
+        var baselineSecurityStampCaptured = false;
+        var activationCommitAttempted = false;
         return await unitOfWork.ExecuteResilientAsync(
             ExecuteTransactionAsync,
             cancellationToken);
@@ -55,6 +58,7 @@ public sealed class ActivateEmployeeHandler(
                 return Result.Failure(AdminTargetProtectionErrors.TargetNotFound);
             }
 
+            var employeeWasActive = employee.IsActive;
             if (!employee.IsActive)
             {
                 employee.Activate();
@@ -71,22 +75,63 @@ public sealed class ActivateEmployeeHandler(
                 return Result.Failure("员工身份账号启用失败");
             }
 
-            var identityResult =
-                await identityAccountStore.ActivateWithSecurityStampAsync(
+            var currentSecurityStamp =
+                await identityAccountStore.GetSecurityStampAsync(
                     request.EmployeeId,
-                    activationSecurityStamp,
                     transactionCancellationToken);
-            if (!identityResult.IsSuccess || !identityResult.Value)
+            if (!baselineSecurityStampCaptured)
             {
-                await unitOfWork.RollbackAsync(transactionCancellationToken);
-                return Result.Failure(
-                    identityResult.Errors?.ToArray() ?? ["员工身份账号启用失败"]);
+                baselineSecurityStamp = currentSecurityStamp;
+                baselineSecurityStampCaptured = true;
+            }
+
+            var matchesActivationStamp = string.Equals(
+                currentSecurityStamp,
+                activationSecurityStamp,
+                StringComparison.Ordinal);
+            var differsFromBaseline = !string.Equals(
+                currentSecurityStamp,
+                baselineSecurityStamp,
+                StringComparison.Ordinal);
+            var loadedFinalState = employeeWasActive && account.IsEnabled;
+            var confirmedActivationReplay =
+                activationCommitAttempted
+                && loadedFinalState
+                && matchesActivationStamp;
+            var newerStatusVersionAfterActivation =
+                activationCommitAttempted
+                && loadedFinalState
+                && differsFromBaseline
+                && !matchesActivationStamp;
+
+            if (!confirmedActivationReplay
+                && !newerStatusVersionAfterActivation)
+            {
+                if (differsFromBaseline && !matchesActivationStamp)
+                {
+                    activationSecurityStamp = Guid.NewGuid().ToString("N");
+                    baselineSecurityStamp = currentSecurityStamp;
+                }
+
+                var identityResult =
+                    await identityAccountStore.ActivateWithSecurityStampAsync(
+                        request.EmployeeId,
+                        activationSecurityStamp,
+                        transactionCancellationToken);
+                if (!identityResult.IsSuccess || !identityResult.Value)
+                {
+                    await unitOfWork.RollbackAsync(transactionCancellationToken);
+                    return Result.Failure(
+                        identityResult.Errors?.ToArray()
+                        ?? ["员工身份账号启用失败"]);
+                }
             }
 
             await sessionRevocationService.RevokeAllAsync(
                 request.EmployeeId,
                 "employee-activated-relogin-required",
                 transactionCancellationToken);
+            activationCommitAttempted = true;
             await unitOfWork.CommitAsync(transactionCancellationToken);
 
             return Result.Success();

@@ -1036,6 +1036,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
             new HumanSessionRevocationService(dbContext),
             new AdminTargetGuard(identityStore));
         string? committedStamp = null;
+        var newerSecurityStamp = $"password-{Guid.NewGuid():N}";
 
         interceptor.Arm(async callbackCancellationToken =>
         {
@@ -1054,6 +1055,28 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 seed.EmployeeId);
             committedStamp = (string?)await command.ExecuteScalarAsync(
                 callbackCancellationToken);
+
+            await using var updateCommand = new NpgsqlCommand(
+                """
+                update "AspNetUsers"
+                set "SecurityStamp" = @security_stamp,
+                    "ConcurrencyStamp" = @concurrency_stamp
+                where "Id" = @employee_id
+                """,
+                connection);
+            updateCommand.Parameters.AddWithValue(
+                "security_stamp",
+                newerSecurityStamp);
+            updateCommand.Parameters.AddWithValue(
+                "concurrency_stamp",
+                Guid.NewGuid().ToString("N"));
+            updateCommand.Parameters.AddWithValue(
+                "employee_id",
+                seed.EmployeeId);
+            Assert.Equal(
+                1,
+                await updateCommand.ExecuteNonQueryAsync(
+                    callbackCancellationToken));
         });
         var result = await handler.Handle(
             new ActivateEmployeeCommand(seed.EmployeeId),
@@ -1068,7 +1091,8 @@ public sealed class ProductionRetryTransactionPostgresTests(
             .Select(user => user.SecurityStamp)
             .SingleAsync(cancellationToken);
         Assert.NotEqual(originalStamp, persistedStamp);
-        Assert.Equal(committedStamp, persistedStamp);
+        Assert.NotEqual(committedStamp, persistedStamp);
+        Assert.Equal(newerSecurityStamp, persistedStamp);
         Assert.False(await HasActiveHumanSessionAsync(
             dbContext,
             seed.EmployeeId,

@@ -489,6 +489,11 @@ public sealed class EmployeeRoleAssignmentPersistenceTests
                 CancellationToken cancellationToken = default)
             => inner.GetByEmployeeNoAsync(employeeNo, cancellationToken);
 
+        public Task<string?> GetSecurityStampAsync(
+            Guid id,
+            CancellationToken cancellationToken = default)
+            => inner.GetSecurityStampAsync(id, cancellationToken);
+
         public Task<Result<bool>> SetEnabledAsync(
             Guid id,
             bool isEnabled,
