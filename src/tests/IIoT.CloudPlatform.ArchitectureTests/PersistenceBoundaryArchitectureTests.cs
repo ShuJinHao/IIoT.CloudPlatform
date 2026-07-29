@@ -274,6 +274,30 @@ public sealed class PersistenceBoundaryArchitectureTests
         Assert.Equal("EscapedCallbackHandler.cs:11", violation);
     }
 
+    [Fact]
+    public void ManualTransactionGuard_ShouldRejectAliasedTransactionMethodGroups()
+    {
+        const string source =
+            """
+            public sealed class AliasedTransactionHandler(IUnitOfWork unitOfWork)
+            {
+                public async Task Handle(CancellationToken cancellationToken)
+                {
+                    Func<CancellationToken, Task> beginTransaction =
+                        unitOfWork.BeginTransactionAsync;
+                    await beginTransaction(cancellationToken);
+                }
+            }
+            """;
+
+        var violation = Assert.Single(
+            FindManualTransactionViolations(
+                source,
+                "AliasedTransactionHandler.cs"));
+
+        Assert.Equal("AliasedTransactionHandler.cs:6", violation);
+    }
+
     private static IEnumerable<string> FindManualTransactionViolations(
         string source,
         string relativePath)
@@ -303,6 +327,29 @@ public sealed class PersistenceBoundaryArchitectureTests
             typeof(IUnitOfWork).FullName!);
         Assert.NotNull(unitOfWorkType);
         var root = sourceTree.GetRoot();
+        foreach (var transactionMethodGroup in root
+                     .DescendantNodes()
+                     .OfType<MemberAccessExpressionSyntax>()
+                     .Where(access => IsUnitOfWorkMethodAccess(
+                         access,
+                         "BeginTransactionAsync",
+                         semanticModel,
+                         unitOfWorkType))
+                     .Where(access =>
+                         access.Parent is not InvocationExpressionSyntax
+                         {
+                             Expression: var invocationExpression
+                         }
+                         || invocationExpression != access))
+        {
+            var line = transactionMethodGroup
+                .GetLocation()
+                .GetLineSpan()
+                .StartLinePosition
+                .Line + 1;
+            yield return $"{relativePath}:{line}";
+        }
+
         foreach (var transactionInvocation in root
                      .DescendantNodes()
                      .OfType<InvocationExpressionSyntax>()
@@ -399,7 +446,21 @@ public sealed class PersistenceBoundaryArchitectureTests
         SemanticModel semanticModel,
         INamedTypeSymbol unitOfWorkType)
     {
-        return invocation.Expression is MemberAccessExpressionSyntax
+        return invocation.Expression is MemberAccessExpressionSyntax methodAccess
+               && IsUnitOfWorkMethodAccess(
+                   methodAccess,
+                   methodName,
+                   semanticModel,
+                   unitOfWorkType);
+    }
+
+    private static bool IsUnitOfWorkMethodAccess(
+        MemberAccessExpressionSyntax methodAccess,
+        string methodName,
+        SemanticModel semanticModel,
+        INamedTypeSymbol unitOfWorkType)
+    {
+        return methodAccess is
         {
             Expression: var receiver,
             Name: SimpleNameSyntax method
