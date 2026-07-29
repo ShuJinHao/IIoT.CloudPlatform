@@ -48,10 +48,12 @@ public sealed class EmployeeDeviceAccessIntegrityTests
         {
             ExistingDeviceIds = [retainedDeviceId, addedDeviceId]
         };
+        var unitOfWork = new RecordingUnitOfWork();
         var handler = new UpdateEmployeeAccessHandler(
             repository,
             new StubAdminTargetGuard(),
-            deviceQueries);
+            deviceQueries,
+            unitOfWork);
         using var cancellation = new CancellationTokenSource();
 
         var result = await handler.Handle(
@@ -72,6 +74,9 @@ public sealed class EmployeeDeviceAccessIntegrityTests
         Assert.Equal(1, repository.SaveChangesCalls);
         Assert.Equal(cancellation.Token, deviceQueries.LastGetExistingIdsCancellationToken);
         Assert.Equal(cancellation.Token, repository.LastSaveChangesCancellationToken);
+        Assert.Equal(1, unitOfWork.BeginCalls);
+        Assert.Equal(1, unitOfWork.CommitCalls);
+        Assert.Equal(0, unitOfWork.RollbackCalls);
     }
 
     [Fact]
@@ -85,10 +90,12 @@ public sealed class EmployeeDeviceAccessIntegrityTests
             SingleOrDefaultResult = employee
         };
         var deviceQueries = new StubDeviceReadQueryService();
+        var unitOfWork = new RecordingUnitOfWork();
         var handler = new UpdateEmployeeAccessHandler(
             repository,
             new StubAdminTargetGuard(),
-            deviceQueries);
+            deviceQueries,
+            unitOfWork);
 
         var result = await handler.Handle(
             new UpdateEmployeeAccessCommand(employeeId, []),
@@ -98,6 +105,9 @@ public sealed class EmployeeDeviceAccessIntegrityTests
         Assert.Empty(employee.DeviceAccesses);
         Assert.Equal(0, deviceQueries.GetExistingIdsCalls);
         Assert.Equal(1, repository.SaveChangesCalls);
+        Assert.Equal(1, unitOfWork.BeginCalls);
+        Assert.Equal(1, unitOfWork.CommitCalls);
+        Assert.Equal(0, unitOfWork.RollbackCalls);
     }
 
     [Fact]
@@ -117,10 +127,12 @@ public sealed class EmployeeDeviceAccessIntegrityTests
         {
             ExistingDeviceIds = [existingDeviceId]
         };
+        var unitOfWork = new RecordingUnitOfWork();
         var handler = new UpdateEmployeeAccessHandler(
             repository,
             new StubAdminTargetGuard(),
-            deviceQueries);
+            deviceQueries,
+            unitOfWork);
 
         var result = await handler.Handle(
             new UpdateEmployeeAccessCommand(
@@ -136,6 +148,9 @@ public sealed class EmployeeDeviceAccessIntegrityTests
         Assert.Empty(repository.UpdatedEntities);
         Assert.Equal(0, repository.SaveChangesCalls);
         Assert.Equal(1, deviceQueries.GetExistingIdsCalls);
+        Assert.Equal(1, unitOfWork.BeginCalls);
+        Assert.Equal(0, unitOfWork.CommitCalls);
+        Assert.Equal(1, unitOfWork.RollbackCalls);
     }
 
     [Fact]
@@ -151,10 +166,12 @@ public sealed class EmployeeDeviceAccessIntegrityTests
             GuardResult = Result.Failure(AdminTargetProtectionErrors.AdminTargetProtected)
         };
         var deviceQueries = new StubDeviceReadQueryService();
+        var unitOfWork = new RecordingUnitOfWork();
         var handler = new UpdateEmployeeAccessHandler(
             repository,
             targetGuard,
-            deviceQueries);
+            deviceQueries,
+            unitOfWork);
 
         var result = await handler.Handle(
             new UpdateEmployeeAccessCommand(employeeId, [Guid.NewGuid()]),
@@ -166,6 +183,9 @@ public sealed class EmployeeDeviceAccessIntegrityTests
         Assert.Equal(0, deviceQueries.GetExistingIdsCalls);
         Assert.Empty(repository.UpdatedEntities);
         Assert.Equal(0, repository.SaveChangesCalls);
+        Assert.Equal(0, unitOfWork.BeginCalls);
+        Assert.Equal(0, unitOfWork.CommitCalls);
+        Assert.Equal(0, unitOfWork.RollbackCalls);
     }
 
     [Fact]
@@ -173,10 +193,12 @@ public sealed class EmployeeDeviceAccessIntegrityTests
     {
         var repository = new InMemoryRepository<Employee>();
         var deviceQueries = new StubDeviceReadQueryService();
+        var unitOfWork = new RecordingUnitOfWork();
         var handler = new UpdateEmployeeAccessHandler(
             repository,
             new StubAdminTargetGuard(),
-            deviceQueries);
+            deviceQueries,
+            unitOfWork);
 
         var result = await handler.Handle(
             new UpdateEmployeeAccessCommand(Guid.NewGuid(), [Guid.NewGuid()]),
@@ -186,6 +208,9 @@ public sealed class EmployeeDeviceAccessIntegrityTests
         Assert.Equal(1, repository.GetSingleOrDefaultCalls);
         Assert.Equal(0, deviceQueries.GetExistingIdsCalls);
         Assert.Equal(0, repository.SaveChangesCalls);
+        Assert.Equal(1, unitOfWork.BeginCalls);
+        Assert.Equal(0, unitOfWork.CommitCalls);
+        Assert.Equal(1, unitOfWork.RollbackCalls);
     }
 
     [Fact]
@@ -204,10 +229,12 @@ public sealed class EmployeeDeviceAccessIntegrityTests
         {
             GetExistingIdsException = new OperationCanceledException(cancellation.Token)
         };
+        var unitOfWork = new RecordingUnitOfWork();
         var handler = new UpdateEmployeeAccessHandler(
             repository,
             new StubAdminTargetGuard(),
-            deviceQueries);
+            deviceQueries,
+            unitOfWork);
 
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
             handler.Handle(
@@ -218,6 +245,9 @@ public sealed class EmployeeDeviceAccessIntegrityTests
         Assert.Equal([originalDeviceId], employee.DeviceAccesses.Select(access => access.DeviceId));
         Assert.Empty(repository.UpdatedEntities);
         Assert.Equal(0, repository.SaveChangesCalls);
+        Assert.Equal(1, unitOfWork.BeginCalls);
+        Assert.Equal(0, unitOfWork.CommitCalls);
+        Assert.Equal(1, unitOfWork.RollbackCalls);
     }
 
     [Fact]

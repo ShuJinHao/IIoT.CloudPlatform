@@ -14,7 +14,25 @@ public sealed class DeviceReadQueryService(IIoTDbContext dbContext) : IDeviceRea
             return [];
         }
 
+        if (dbContext.Database.CurrentTransaction is null)
+        {
+            throw new InvalidOperationException(
+                "Batch device validation requires an active transaction.");
+        }
+
         var distinctDeviceIds = deviceIds.Distinct().ToArray();
+        if (dbContext.Database.IsNpgsql())
+        {
+            return await dbContext.Database
+                .SqlQuery<Guid>($"""
+                    SELECT id AS "Value"
+                    FROM devices
+                    WHERE id = ANY ({distinctDeviceIds})
+                    FOR KEY SHARE
+                    """)
+                .ToListAsync(cancellationToken);
+        }
+
         return await dbContext.Devices
             .AsNoTracking()
             .Where(device => distinctDeviceIds.Contains(device.Id))

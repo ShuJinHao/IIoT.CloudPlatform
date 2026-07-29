@@ -12,6 +12,23 @@ namespace IIoT.CloudPlatform.PersistenceTests;
 public sealed class EmployeeDeviceAccessIntegrityPersistenceTests
 {
     [Fact]
+    public async Task BatchDeviceRead_WithoutTransaction_ShouldFailBeforeQuery()
+    {
+        var interceptor = new DeviceBatchQueryInterceptor();
+        await using var database = await SqliteEfTestDatabase.CreateAsync(interceptor);
+        await using var dbContext = database.CreateContext();
+        var service = new DeviceReadQueryService(dbContext);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.GetExistingIdsAsync([Guid.NewGuid()]));
+
+        Assert.Equal(
+            "Batch device validation requires an active transaction.",
+            exception.Message);
+        Assert.Equal(0, interceptor.BatchQueryCount);
+    }
+
+    [Fact]
     public async Task BatchDeviceRead_ShouldUseOneQueryAndReturnOnlyFormalDeviceIds()
     {
         var interceptor = new DeviceBatchQueryInterceptor();
@@ -39,6 +56,7 @@ public sealed class EmployeeDeviceAccessIntegrityPersistenceTests
         }
 
         await using var queryContext = database.CreateContext();
+        await using var transaction = await queryContext.Database.BeginTransactionAsync();
         var service = new DeviceReadQueryService(queryContext);
         var missingDeviceId = Guid.NewGuid();
 

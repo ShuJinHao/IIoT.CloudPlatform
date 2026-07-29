@@ -65,6 +65,7 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
         await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
         try
         {
+            await LockDeviceAsync(deviceId, cancellationToken);
             var impact = await GetImpactAsync(deviceId, cancellationToken);
             await DeleteAssociatedRowsAsync(deviceId, cancellationToken);
 
@@ -84,6 +85,20 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
             await transaction.RollbackAsync(cancellationToken);
             throw;
         }
+    }
+
+    private async Task LockDeviceAsync(
+        Guid deviceId,
+        CancellationToken cancellationToken)
+    {
+        _ = await dbContext.Database
+            .SqlQuery<Guid>($"""
+                SELECT id AS "Value"
+                FROM devices
+                WHERE id = {deviceId}
+                FOR UPDATE
+                """)
+            .SingleOrDefaultAsync(cancellationToken);
     }
 
     private async Task DeleteAssociatedRowsAsync(

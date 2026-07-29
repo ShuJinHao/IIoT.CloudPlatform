@@ -29,7 +29,8 @@ public static class EmployeeAccessErrors
 public class UpdateEmployeeAccessHandler(
     IRepository<Employee> employeeRepository,
     IAdminTargetGuard adminTargetGuard,
-    IDeviceReadQueryService deviceReadQueryService
+    IDeviceReadQueryService deviceReadQueryService,
+    IUnitOfWork unitOfWork
 ) : ICommandHandler<UpdateEmployeeAccessCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(
@@ -45,37 +46,52 @@ public class UpdateEmployeeAccessHandler(
                 ?? [AdminTargetProtectionErrors.TargetNotFound]);
         }
 
-        var employee = await employeeRepository.GetSingleOrDefaultAsync(
-            new EmployeeWithAccessesSpec(request.EmployeeId),
-            cancellationToken);
-
-        if (employee is null)
-            return Result.Failure(AdminTargetProtectionErrors.TargetNotFound);
-
-        var requestedDeviceIds = request.DeviceIds
-            .Distinct()
-            .ToArray();
-        if (requestedDeviceIds.Length > 0)
+        try
         {
-            var formalDeviceIds = await deviceReadQueryService.GetExistingIdsAsync(
-                requestedDeviceIds,
+            await unitOfWork.BeginTransactionAsync(cancellationToken);
+
+            var employee = await employeeRepository.GetSingleOrDefaultAsync(
+                new EmployeeWithAccessesSpec(request.EmployeeId),
                 cancellationToken);
-            if (!formalDeviceIds.ToHashSet().SetEquals(requestedDeviceIds))
+
+            if (employee is null)
             {
-                return Result.Failure(EmployeeAccessErrors.SelectedDeviceNoLongerExists);
+                await unitOfWork.RollbackAsync(cancellationToken);
+                return Result.Failure(AdminTargetProtectionErrors.TargetNotFound);
             }
+
+            var requestedDeviceIds = request.DeviceIds
+                .Distinct()
+                .ToArray();
+            if (requestedDeviceIds.Length > 0)
+            {
+                var formalDeviceIds = await deviceReadQueryService.GetExistingIdsAsync(
+                    requestedDeviceIds,
+                    cancellationToken);
+                if (!formalDeviceIds.ToHashSet().SetEquals(requestedDeviceIds))
+                {
+                    await unitOfWork.RollbackAsync(cancellationToken);
+                    return Result.Failure(EmployeeAccessErrors.SelectedDeviceNoLongerExists);
+                }
+            }
+
+            // 机台管辖权差集更新
+            var existingDeviceIds = employee.DeviceAccesses.Select(d => d.DeviceId).ToList();
+            var devicesToRemove = existingDeviceIds.Except(requestedDeviceIds).ToList();
+            var devicesToAdd = requestedDeviceIds.Except(existingDeviceIds).ToList();
+            foreach (var id in devicesToRemove) employee.RemoveDeviceAccess(id);
+            foreach (var id in devicesToAdd) employee.AddDeviceAccess(id);
+
+            employeeRepository.Update(employee);
+            await employeeRepository.SaveChangesAsync(cancellationToken);
+            await unitOfWork.CommitAsync(cancellationToken);
+
+            return Result.Success(true);
         }
-
-        // 机台管辖权差集更新
-        var existingDeviceIds = employee.DeviceAccesses.Select(d => d.DeviceId).ToList();
-        var devicesToRemove = existingDeviceIds.Except(requestedDeviceIds).ToList();
-        var devicesToAdd = requestedDeviceIds.Except(existingDeviceIds).ToList();
-        foreach (var id in devicesToRemove) employee.RemoveDeviceAccess(id);
-        foreach (var id in devicesToAdd) employee.AddDeviceAccess(id);
-
-        employeeRepository.Update(employee);
-        await employeeRepository.SaveChangesAsync(cancellationToken);
-
-        return Result.Success(true);
+        catch
+        {
+            await unitOfWork.RollbackAsync(CancellationToken.None);
+            throw;
+        }
     }
 }

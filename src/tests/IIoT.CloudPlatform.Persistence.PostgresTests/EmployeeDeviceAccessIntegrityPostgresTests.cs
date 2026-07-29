@@ -1,12 +1,16 @@
 using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.MasterData.Aggregates.MfgProcesses;
 using IIoT.Core.Production.Aggregates.Devices;
+using IIoT.EmployeeService.Commands.Employees;
 using IIoT.EntityFrameworkCore;
 using IIoT.EntityFrameworkCore.Migrations;
+using IIoT.EntityFrameworkCore.Persistence;
 using IIoT.EntityFrameworkCore.QueryServices;
+using IIoT.EntityFrameworkCore.Repository;
 using IIoT.Services.Contracts.RecordQueries;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Migrations.Operations;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 
 namespace IIoT.CloudPlatform.Persistence.PostgresTests;
@@ -204,6 +208,107 @@ public sealed class EmployeeDeviceAccessIntegrityPostgresTests(
         }
     }
 
+    [Fact]
+    public async Task ConcurrentAssignmentAndDeletion_ShouldSerializeOnFormalDeviceRow()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(60));
+        var unique = Guid.NewGuid().ToString("N");
+        var employeeId = Guid.Empty;
+        var processId = Guid.Empty;
+        var deviceId = Guid.Empty;
+        PausingDeviceReadQueryService? pausingQueries = null;
+
+        try
+        {
+            await using (var seedContext = CreateContext(budget.ConnectionString))
+            {
+                var employee = TestIdentityData.AddEmployeeWithIdentity(
+                    seedContext,
+                    $"E-RACE-{unique}"[..24],
+                    "Concurrent device access");
+                var process = new MfgProcess(
+                    $"RACE-{unique}"[..24],
+                    "Concurrent device access");
+                var device = new Device(
+                    $"Concurrent access device {unique}",
+                    $"RACE-{unique}"[..24],
+                    process.Id);
+                employeeId = employee.Id;
+                processId = process.Id;
+                deviceId = device.Id;
+                employee.ClearDomainEvents();
+                device.ClearDomainEvents();
+                seedContext.MfgProcesses.Add(process);
+                seedContext.Devices.Add(device);
+                await seedContext.SaveChangesAsync(budget.Token);
+            }
+
+            await using var assignmentContext = CreateContext(budget.ConnectionString);
+            pausingQueries = new PausingDeviceReadQueryService(
+                new DeviceReadQueryService(assignmentContext));
+            var handler = new UpdateEmployeeAccessHandler(
+                new EfRepository<Employee>(assignmentContext),
+                new StubAdminTargetGuard(),
+                pausingQueries,
+                new EfUnitOfWork(
+                    assignmentContext,
+                    NullLogger<EfUnitOfWork>.Instance));
+            var assignmentTask = handler.Handle(
+                new UpdateEmployeeAccessCommand(employeeId, [deviceId]),
+                budget.Token);
+            await pausingQueries.WaitUntilLockedAsync(budget.Token);
+
+            var deletionApplicationName =
+                $"employee-access-delete-race-{Guid.NewGuid():N}";
+            var deletionConnectionString = new NpgsqlConnectionStringBuilder(
+                budget.ConnectionString)
+            {
+                ApplicationName = deletionApplicationName
+            }.ConnectionString;
+            await using var deletionContext = CreateContext(deletionConnectionString);
+            var deletionService = new EfDeviceDeletionDependencyService(deletionContext);
+            var deletionTask = deletionService.DeleteCascadeAsync(
+                deviceId,
+                budget.Token);
+
+            await WaitForLockWaitAsync(
+                budget.ConnectionString,
+                deletionApplicationName,
+                budget.Token);
+            Assert.False(deletionTask.IsCompleted);
+
+            pausingQueries.Continue();
+            var assignmentResult = await assignmentTask;
+            var deletionResult = await deletionTask;
+
+            Assert.True(assignmentResult.IsSuccess);
+            Assert.True(deletionResult.DeviceDeleted);
+            Assert.Equal(1, deletionResult.Impact.EmployeeDeviceAccesses);
+
+            await using var verificationContext = CreateContext(budget.ConnectionString);
+            Assert.False(await verificationContext.Devices
+                .AsNoTracking()
+                .AnyAsync(device => device.Id == deviceId, budget.Token));
+            Assert.False(await verificationContext.Set<EmployeeDeviceAccess>()
+                .AsNoTracking()
+                .AnyAsync(
+                    access => access.EmployeeId == employeeId
+                              && access.DeviceId == deviceId,
+                    budget.Token));
+        }
+        finally
+        {
+            pausingQueries?.Continue();
+            await CleanupAsync(
+                budget.ConnectionString,
+                employeeId,
+                processId,
+                deviceId);
+        }
+    }
+
     private static IIoTDbContext CreateContext(NpgsqlConnection connection)
     {
         var options = new DbContextOptionsBuilder<IIoTDbContext>()
@@ -251,6 +356,63 @@ public sealed class EmployeeDeviceAccessIntegrityPostgresTests(
         return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken));
     }
 
+    private static async Task WaitForLockWaitAsync(
+        string connectionString,
+        string applicationName,
+        CancellationToken testToken)
+    {
+        using var readinessTimeout =
+            CancellationTokenSource.CreateLinkedTokenSource(testToken);
+        readinessTimeout.CancelAfter(TimeSpan.FromSeconds(10));
+        var readinessToken = readinessTimeout.Token;
+        var observerConnectionString = new NpgsqlConnectionStringBuilder(
+            connectionString)
+        {
+            ApplicationName =
+                $"employee-access-lock-observer-{Guid.NewGuid():N}"
+        }.ConnectionString;
+
+        try
+        {
+            await using var observer = new NpgsqlConnection(observerConnectionString);
+            await observer.OpenAsync(readinessToken);
+            while (true)
+            {
+                await using var command = new NpgsqlCommand(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM pg_stat_activity AS activity
+                        WHERE activity.application_name = @application_name
+                          AND activity.state = 'active'
+                          AND activity.wait_event_type = 'Lock'
+                          AND EXISTS (
+                              SELECT 1
+                              FROM pg_locks AS waiting_lock
+                              WHERE waiting_lock.pid = activity.pid
+                                AND NOT waiting_lock.granted
+                          )
+                    )
+                    """,
+                    observer);
+                command.Parameters.AddWithValue(
+                    "application_name",
+                    applicationName);
+                if (await command.ExecuteScalarAsync(readinessToken) is true)
+                {
+                    return;
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(25), readinessToken);
+            }
+        }
+        catch (OperationCanceledException) when (!testToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Device deletion '{applicationName}' did not enter a PostgreSQL lock wait within 10 seconds.");
+        }
+    }
+
     private static async Task CleanupAsync(
         string connectionString,
         Guid employeeId,
@@ -278,5 +440,54 @@ public sealed class EmployeeDeviceAccessIntegrityPostgresTests(
         command.Parameters.AddWithValue("device_id", deviceId);
         command.Parameters.AddWithValue("process_id", processId);
         await command.ExecuteNonQueryAsync(cleanup.Token);
+    }
+
+    private sealed class PausingDeviceReadQueryService(
+        DeviceReadQueryService inner) : IDeviceReadQueryService
+    {
+        private readonly TaskCompletionSource locked =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource continueSignal =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<IReadOnlyList<Guid>> GetExistingIdsAsync(
+            IReadOnlyCollection<Guid> deviceIds,
+            CancellationToken cancellationToken = default)
+        {
+            var result = await inner.GetExistingIdsAsync(
+                deviceIds,
+                cancellationToken);
+            locked.TrySetResult();
+            await continueSignal.Task.WaitAsync(cancellationToken);
+            return result;
+        }
+
+        public Task WaitUntilLockedAsync(CancellationToken cancellationToken) =>
+            locked.Task.WaitAsync(cancellationToken);
+
+        public void Continue() => continueSignal.TrySetResult();
+
+        public Task<bool> ExistsAsync(
+            Guid deviceId,
+            CancellationToken cancellationToken = default) =>
+            inner.ExistsAsync(deviceId, cancellationToken);
+
+        public Task<bool> ExistsInProcessAsync(
+            Guid deviceId,
+            Guid processId,
+            CancellationToken cancellationToken = default) =>
+            inner.ExistsInProcessAsync(deviceId, processId, cancellationToken);
+
+        public Task<bool> CodeExistsAsync(
+            string code,
+            Guid? excludingDeviceId = null,
+            CancellationToken cancellationToken = default) =>
+            inner.CodeExistsAsync(code, excludingDeviceId, cancellationToken);
+
+        public Task<bool> NameExistsAsync(
+            string name,
+            Guid? excludingDeviceId = null,
+            CancellationToken cancellationToken = default) =>
+            inner.NameExistsAsync(name, excludingDeviceId, cancellationToken);
     }
 }
