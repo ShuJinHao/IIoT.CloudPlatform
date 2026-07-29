@@ -125,7 +125,7 @@ public sealed class EfPersistenceBehaviorTests
                 "Host=127.0.0.1;Port=5432;Database=registration_only;Username=test;Password=test",
             [$"{PostgresOptions.SectionName}:EnableRetry"] = "true",
             [$"{PostgresOptions.SectionName}:CommandTimeoutSeconds"] = "30",
-            [$"{PostgresOptions.SectionName}:MaxRetryCount"] = "0",
+            [$"{PostgresOptions.SectionName}:MaxRetryCount"] = "1",
             [$"{PostgresOptions.SectionName}:MaxRetryDelaySeconds"] = "1"
         });
         builder.AddEfCore();
