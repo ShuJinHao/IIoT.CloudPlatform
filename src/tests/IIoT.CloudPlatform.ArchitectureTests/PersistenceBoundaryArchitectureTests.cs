@@ -298,6 +298,28 @@ public sealed class PersistenceBoundaryArchitectureTests
         Assert.Equal("AliasedTransactionHandler.cs:6", violation);
     }
 
+    [Fact]
+    public void ManualTransactionGuard_ShouldRejectConditionalAccessTransactions()
+    {
+        const string source =
+            """
+            public sealed class ConditionalTransactionHandler(IUnitOfWork unitOfWork)
+            {
+                public async Task Handle(CancellationToken cancellationToken)
+                {
+                    await unitOfWork?.BeginTransactionAsync(cancellationToken)!;
+                }
+            }
+            """;
+
+        var violation = Assert.Single(
+            FindManualTransactionViolations(
+                source,
+                "ConditionalTransactionHandler.cs"));
+
+        Assert.Equal("ConditionalTransactionHandler.cs:5", violation);
+    }
+
     private static IEnumerable<string> FindManualTransactionViolations(
         string source,
         string relativePath)
@@ -329,18 +351,13 @@ public sealed class PersistenceBoundaryArchitectureTests
         var root = sourceTree.GetRoot();
         foreach (var transactionMethodGroup in root
                      .DescendantNodes()
-                     .OfType<MemberAccessExpressionSyntax>()
-                     .Where(access => IsUnitOfWorkMethodAccess(
-                         access,
+                     .OfType<SimpleNameSyntax>()
+                     .Where(methodReference => IsUnitOfWorkMethodSymbol(
+                         semanticModel.GetSymbolInfo(methodReference).Symbol,
                          "BeginTransactionAsync",
-                         semanticModel,
                          unitOfWorkType))
-                     .Where(access =>
-                         access.Parent is not InvocationExpressionSyntax
-                         {
-                             Expression: var invocationExpression
-                         }
-                         || invocationExpression != access))
+                     .Where(methodReference =>
+                         GetDirectInvocation(methodReference) is null))
         {
             var line = transactionMethodGroup
                 .GetLocation()
@@ -446,32 +463,54 @@ public sealed class PersistenceBoundaryArchitectureTests
         SemanticModel semanticModel,
         INamedTypeSymbol unitOfWorkType)
     {
-        return invocation.Expression is MemberAccessExpressionSyntax methodAccess
-               && IsUnitOfWorkMethodAccess(
-                   methodAccess,
+        var symbolInfo = semanticModel.GetSymbolInfo(invocation);
+        return IsUnitOfWorkMethodSymbol(
+                   symbolInfo.Symbol,
                    methodName,
-                   semanticModel,
+                   unitOfWorkType)
+               || symbolInfo.CandidateSymbols.Any(symbol =>
+                   IsUnitOfWorkMethodSymbol(
+                       symbol,
+                       methodName,
+                       unitOfWorkType));
+    }
+
+    private static bool IsUnitOfWorkMethodSymbol(
+        ISymbol? symbol,
+        string methodName,
+        INamedTypeSymbol unitOfWorkType)
+    {
+        return symbol is IMethodSymbol method
+               && string.Equals(
+                   method.Name,
+                   methodName,
+                   StringComparison.Ordinal)
+               && IsUnitOfWorkType(
+                   (method.ReducedFrom ?? method).ContainingType,
                    unitOfWorkType);
     }
 
-    private static bool IsUnitOfWorkMethodAccess(
-        MemberAccessExpressionSyntax methodAccess,
-        string methodName,
-        SemanticModel semanticModel,
-        INamedTypeSymbol unitOfWorkType)
+    private static InvocationExpressionSyntax? GetDirectInvocation(
+        SimpleNameSyntax methodReference)
     {
-        return methodAccess is
+        return methodReference.Parent switch
         {
-            Expression: var receiver,
-            Name: SimpleNameSyntax method
-        }
-        && string.Equals(
-            method.Identifier.ValueText,
-            methodName,
-            StringComparison.Ordinal)
-        && IsUnitOfWorkType(
-            semanticModel.GetTypeInfo(receiver).Type,
-            unitOfWorkType);
+            MemberAccessExpressionSyntax
+            {
+                Name: var name,
+                Parent: InvocationExpressionSyntax invocation
+            } when name == methodReference
+                   && invocation.Expression == methodReference.Parent
+                => invocation,
+            MemberBindingExpressionSyntax
+            {
+                Name: var name,
+                Parent: InvocationExpressionSyntax invocation
+            } when name == methodReference
+                   && invocation.Expression == methodReference.Parent
+                => invocation,
+            _ => null
+        };
     }
 
     private static bool IsUnitOfWorkType(
