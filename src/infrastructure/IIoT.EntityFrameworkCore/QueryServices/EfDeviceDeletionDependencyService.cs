@@ -67,6 +67,7 @@ public sealed class EfDeviceDeletionDependencyService(
         uint? expectedRowVersion = null)
     {
         DeviceDeletionImpact? lastDeletionAttemptImpact = null;
+        DeviceDeletionImpact? lastCommitAttemptImpact = null;
         DeviceDeletionImpact? committedReplayCleanupImpact = null;
         DeviceDeletionImpact? pendingReplayCleanupImpact = null;
         string? pendingReplayCleanupTransactionId = null;
@@ -79,12 +80,13 @@ public sealed class EfDeviceDeletionDependencyService(
                 ExecuteTransactionAsync,
                 cancellationToken);
         }
-        catch (OperationCanceledException exception)
-            when (cancellationToken.IsCancellationRequested
-                  && commitAttempted)
+        catch (Exception exception)
+            when (commitAttempted
+                  && lastCommitAttemptImpact is not null)
         {
             throw new DeviceDeletionCommitAttemptException(
-                exception);
+                exception,
+                lastCommitAttemptImpact);
         }
 
         async Task<DeviceCascadeDeletionResult> ExecuteTransactionAsync(
@@ -142,8 +144,15 @@ public sealed class EfDeviceDeletionDependencyService(
 
                     var committedReplayConfirmed =
                         remainingImpact.TotalAssociatedRows == 0;
+                    var committedImpact = AddImpacts(
+                        AddImpacts(
+                            lastDeletionAttemptImpact
+                            ?? remainingImpact,
+                            committedReplayCleanupImpact),
+                        pendingReplayCleanupImpact);
                     if (committedReplayConfirmed)
                     {
+                        lastCommitAttemptImpact = committedImpact;
                         commitAttempted = true;
                         await transaction.CommitAsync(
                             transactionCancellationToken);
@@ -153,9 +162,7 @@ public sealed class EfDeviceDeletionDependencyService(
                     return new DeviceCascadeDeletionResult(
                         committedReplayConfirmed,
                         committedReplayConfirmed
-                            ? AddImpacts(
-                                lastDeletionAttemptImpact ?? remainingImpact,
-                                committedReplayCleanupImpact)
+                            ? committedImpact
                             : remainingImpact);
                 }
 
@@ -184,6 +191,7 @@ public sealed class EfDeviceDeletionDependencyService(
 
                 var affectedRows = await dbContext.SaveChangesAsync(
                     transactionCancellationToken);
+                lastCommitAttemptImpact = impact;
                 commitAttempted = true;
                 await transaction.CommitAsync(transactionCancellationToken);
                 return new DeviceCascadeDeletionResult(

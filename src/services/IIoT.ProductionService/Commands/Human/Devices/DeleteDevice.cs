@@ -84,9 +84,9 @@ public class DeleteDeviceHandler(
                 cancellationToken,
                 baseline.Target.RowVersion);
         }
-        catch (DeviceDeletionCommitAttemptException)
+        catch (DeviceDeletionCommitAttemptException exception)
         {
-            deletionResult = await ResolveCommitAsync();
+            deletionResult = await ResolveCommitAsync(exception.Impact);
             commitRecovered = true;
         }
         catch (OperationCanceledException)
@@ -100,7 +100,7 @@ public class DeleteDeviceHandler(
         }
         catch
         {
-            deletionResult = await ResolveCommitAsync();
+            deletionResult = await ResolveCommitAsync(null);
             commitRecovered = true;
         }
 
@@ -136,7 +136,8 @@ public class DeleteDeviceHandler(
 
         return Result.Success(true);
 
-        async Task<DeviceCascadeDeletionResult> ResolveCommitAsync()
+        async Task<DeviceCascadeDeletionResult> ResolveCommitAsync(
+            DeviceDeletionImpact? attemptedImpact)
         {
             var current = await CloudWriteCommitRecovery.TryObserveCommitAsync(
                 token => observationReader.ObserveDeviceAsync(
@@ -156,7 +157,7 @@ public class DeleteDeviceHandler(
             {
                 return new DeviceCascadeDeletionResult(
                     true,
-                    baseline.DeletionImpact);
+                    attemptedImpact ?? baseline.DeletionImpact);
             }
 
             throw new CloudWriteConflictException();

@@ -59,7 +59,11 @@ public sealed record DeviceCascadeDeletionResult(
     DeviceDeletionImpact Impact);
 
 public sealed class DeviceDeletionCommitAttemptException(
-    OperationCanceledException innerException)
+    Exception innerException,
+    DeviceDeletionImpact impact)
     : Exception(
-        "Device deletion was cancelled after the database commit attempt started.",
-        innerException);
+        "Device deletion failed after the database commit attempt started.",
+        innerException)
+{
+    public DeviceDeletionImpact Impact { get; } = impact;
+}

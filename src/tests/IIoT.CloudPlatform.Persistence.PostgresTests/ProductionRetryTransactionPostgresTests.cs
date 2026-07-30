@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Text.Json;
 using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.MasterData.Aggregates.MfgProcesses;
 using IIoT.Core.Production.Aggregates.ClientReleases;
@@ -24,6 +25,7 @@ using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Authorization;
 using IIoT.SharedKernel.Result;
@@ -908,6 +910,9 @@ public sealed class ProductionRetryTransactionPostgresTests(
         await using var scope = provider.CreateAsyncScope();
         var services = scope.ServiceProvider;
         var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var cleanOptions = new DbContextOptionsBuilder<IIoTDbContext>()
+            .UseNpgsql(budget.ConnectionString)
+            .Options;
         var (process, device) = CreateProcessAndDevice("DELCANCEL");
         process.ClearDomainEvents();
         device.ClearDomainEvents();
@@ -916,6 +921,20 @@ public sealed class ProductionRetryTransactionPostgresTests(
         await dbContext.SaveChangesAsync(budget.Token);
         dbContext.ChangeTracker.Clear();
         var audit = new RecordingAuditTrailService();
+        var observationReader = new AfterFirstDeviceObservationReader(
+            new CloudWriteObservationReader(
+                services.GetRequiredService<
+                    DbContextOptions<IIoTDbContext>>()),
+            async () =>
+            {
+                await using var lateContext =
+                    new IIoTDbContext(cleanOptions);
+                lateContext.DeviceClientStates.Add(
+                    new DeviceClientState(
+                        device.Id,
+                        device.Code));
+                await lateContext.SaveChangesAsync(budget.Token);
+            });
         var handler = new DeleteDeviceHandler(
             HumanAdmin(),
             new EfRepository<Device>(dbContext),
@@ -925,9 +944,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 IsAdministrator = true
             },
             audit,
-            new CloudWriteObservationReader(
-                services.GetRequiredService<
-                    DbContextOptions<IIoTDbContext>>()));
+            observationReader);
 
         interceptor.Arm();
         var result = await handler.Handle(
@@ -944,6 +961,16 @@ public sealed class ProductionRetryTransactionPostgresTests(
         Assert.True(auditCancellationToken.CanBeCanceled);
         Assert.False(auditCancellationToken.IsCancellationRequested);
         Assert.NotEqual(cancellation.Token, auditCancellationToken);
+        using (var auditSummary = JsonDocument.Parse(
+                   Assert.Single(audit.ConfirmedEntries).Summary))
+        {
+            Assert.Equal(
+                1,
+                auditSummary.RootElement
+                    .GetProperty("deleted")
+                    .GetProperty("edge_device_client_states")
+                    .GetInt64());
+        }
         dbContext.ChangeTracker.Clear();
         Assert.False(await dbContext.Devices
             .AsNoTracking()
@@ -3309,6 +3336,35 @@ public sealed class ProductionRetryTransactionPostgresTests(
             ConfirmedEntries.Add(entry);
             CancellationTokens.Add(cancellationToken);
             return Task.FromResult(true);
+        }
+    }
+
+    private sealed class AfterFirstDeviceObservationReader(
+        IDeviceWriteObservationReader inner,
+        Func<Task> afterFirstObservation)
+        : IDeviceWriteObservationReader
+    {
+        private int observationCount;
+
+        public async Task<DeviceWriteObservation> ObserveDeviceAsync(
+            Guid deviceId,
+            string deviceName,
+            string clientCode,
+            Guid processId,
+            CancellationToken cancellationToken)
+        {
+            var observation = await inner.ObserveDeviceAsync(
+                deviceId,
+                deviceName,
+                clientCode,
+                processId,
+                cancellationToken);
+            if (Interlocked.Increment(ref observationCount) == 1)
+            {
+                await afterFirstObservation();
+            }
+
+            return observation;
         }
     }
 
