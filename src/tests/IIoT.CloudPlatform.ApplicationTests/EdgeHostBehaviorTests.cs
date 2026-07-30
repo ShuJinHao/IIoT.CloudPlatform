@@ -4,6 +4,7 @@ using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.EdgeHosts;
 using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Core.Production.Contracts.EdgeHosts;
+using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.Commands.EdgeHosts;
 using IIoT.ProductionService.EdgeHosts;
 using IIoT.ProductionService.Queries.EdgeHosts;
@@ -30,9 +31,11 @@ public sealed class EdgeHostBehaviorTests
             StubEdgeHostPlcRuntimeStateStore runtimeStore,
             IUnitOfWork? unitOfWork = null,
             Func<DeviceReportWriteObservation, DeviceReportWriteObservation>?
-                observationTransform = null)
+                observationTransform = null,
+            StubDeviceClientStateStore? clientStateStore = null,
+            TimeProvider? timeProvider = null)
     {
-        var clientStateStore = new StubDeviceClientStateStore();
+        clientStateStore ??= new StubDeviceClientStateStore();
         var observer = new StubDeviceReportWriteObservationReader
         {
             ObservationFactory = (_, _) =>
@@ -65,7 +68,7 @@ public sealed class EdgeHostBehaviorTests
             clientStateStore,
             unitOfWork ?? new RecordingUnitOfWork(),
             observer,
-            TimeProvider.System);
+            timeProvider ?? TimeProvider.System);
     }
 
     [Fact]
@@ -319,6 +322,130 @@ public sealed class EdgeHostBehaviorTests
     }
 
     [Fact]
+    public async Task ReportEdgeHostPlcRuntimeStatesHandler_ShouldAdvanceMigratedSnapshotMarker()
+    {
+        const string legacyMarker =
+            "0000000000000000000000000000000000000000000000000000000000000000";
+        var deviceId = Guid.NewGuid();
+        const string clientCode = "DEV-PLC-MIGRATED";
+        var acceptedAt = DateTime.UtcNow.AddMinutes(-10);
+        var store = new StubEdgeHostPlcRuntimeStateStore();
+        var legacyRuntime = new EdgeHostPlcRuntimeState(
+            deviceId,
+            clientCode,
+            "PLC-01");
+        legacyRuntime.ReplaceReport(
+            "Legacy PLC",
+            true,
+            EdgeHostPlcRuntimeStatus.Connected,
+            acceptedAt);
+        store.States.Add(legacyRuntime);
+        var clientStateStore = new StubDeviceClientStateStore();
+        var clientState = new DeviceClientState(
+            deviceId,
+            clientCode);
+        clientState.ApplyPlcSnapshot(
+            acceptedAt,
+            acceptedAt.AddSeconds(1),
+            legacyMarker);
+        clientStateStore.States.Add(clientState);
+        var handler = CreatePlcReportHandler(
+            deviceId,
+            clientCode,
+            store,
+            observationTransform: observation =>
+                observation.PlcSnapshot is null
+                    ? observation
+                    : observation with
+                    {
+                        PlcSnapshot = observation.PlcSnapshot with
+                        {
+                            ContentSha256 =
+                                EdgeHostPlcRuntimeSnapshotFingerprint.Compute(
+                                    store.States.Select(state =>
+                                        new EdgeHostPlcRuntimeSnapshotContent(
+                                            state.PlcCode,
+                                            state.ReportedPlcName,
+                                            state.IsConnected,
+                                            state.RuntimeStatus,
+                                            state.LastSeenAtUtc,
+                                            state.StationCode,
+                                            state.Protocol,
+                                            state.Address,
+                                            state.LastError)))
+                        }
+                    },
+            clientStateStore: clientStateStore);
+
+        var result = await handler.Handle(
+            new ReportEdgeHostPlcRuntimeStatesCommand(
+                deviceId,
+                clientCode,
+                acceptedAt.AddSeconds(2),
+                [
+                    new EdgeHostPlcRuntimeStateReportItem(
+                        "PLC-01",
+                        "Current PLC",
+                        false,
+                        EdgeHostPlcRuntimeStatus.Disconnected)
+                ]),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(
+            acceptedAt.AddSeconds(2),
+            clientState.PlcSnapshotReportedAtUtc);
+        Assert.NotEqual(
+            legacyMarker,
+            clientState.PlcSnapshotContentSha256);
+        Assert.False(Assert.Single(store.States).IsConnected);
+    }
+
+    [Fact]
+    public async Task ReportEdgeHostPlcRuntimeStatesHandler_ShouldRejectFutureClockSkew()
+    {
+        var deviceId = Guid.NewGuid();
+        var now =
+            new DateTimeOffset(2026, 7, 30, 6, 0, 0, TimeSpan.Zero);
+        var store = new StubEdgeHostPlcRuntimeStateStore();
+        var handler = CreatePlcReportHandler(
+            deviceId,
+            "DEV-PLC-FUTURE",
+            store,
+            timeProvider: new FixedTimeProvider(now));
+        var boundary = new ReportEdgeHostPlcRuntimeStatesCommand(
+            deviceId,
+            "DEV-PLC-FUTURE",
+            now.UtcDateTime.Add(
+                DeviceClientSoftwareStatusResolver.MaximumFutureClockSkew),
+            [
+                new EdgeHostPlcRuntimeStateReportItem(
+                    "PLC-01",
+                    "PLC",
+                    true,
+                    EdgeHostPlcRuntimeStatus.Connected)
+            ]);
+
+        var accepted = await handler.Handle(
+            boundary,
+            CancellationToken.None);
+        var rejected = await handler.Handle(
+            boundary with
+            {
+                ReportedAtUtc =
+                    boundary.ReportedAtUtc.AddTicks(10)
+            },
+            CancellationToken.None);
+
+        Assert.True(accepted.IsSuccess);
+        Assert.Equal(ResultStatus.Invalid, rejected.Status);
+        Assert.Contains(
+            "PLC 状态上报时间超出允许的未来时钟偏差。",
+            rejected.Errors ?? []);
+        Assert.Equal(1, store.SaveChangesCalls);
+    }
+
+    [Fact]
     public async Task ReportEdgeHostPlcRuntimeStatesHandler_PostCommitFailure_ShouldRecoverExactTarget()
     {
         var deviceId = Guid.NewGuid();
@@ -463,6 +590,12 @@ public sealed class EdgeHostBehaviorTests
         Assert.Equal("PLC-CUT", overviewQueryService.LastKeyword);
         Assert.Equal([device.Id], clientStateStore.LastRequestedDeviceIds);
         Assert.Equal([device.Id], runtimeStore.LastRequestedDeviceIds);
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow)
+        : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 
     [Fact]

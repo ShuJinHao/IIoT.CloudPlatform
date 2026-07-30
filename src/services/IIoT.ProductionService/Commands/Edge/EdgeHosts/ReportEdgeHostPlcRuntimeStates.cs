@@ -2,6 +2,7 @@ using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Aggregates.EdgeHosts;
 using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Core.Production.Contracts.EdgeHosts;
+using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.EdgeHosts;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Persistence;
@@ -41,6 +42,9 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
     TimeProvider timeProvider)
     : ICommandHandler<ReportEdgeHostPlcRuntimeStatesCommand, Result<EdgeHostPlcRuntimeStateReportResultDto>>
 {
+    private const string LegacyPlcSnapshotContentMarker =
+        "0000000000000000000000000000000000000000000000000000000000000000";
+
     public async Task<Result<EdgeHostPlcRuntimeStateReportResultDto>> Handle(
         ReportEdgeHostPlcRuntimeStatesCommand request,
         CancellationToken cancellationToken)
@@ -55,6 +59,13 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
         var reportedAtUtc = NormalizeUtc(request.ReportedAtUtc);
         var receivedAtUtc = NormalizeUtc(
             timeProvider.GetUtcNow().UtcDateTime);
+        if (reportedAtUtc > receivedAtUtc.Add(
+                DeviceClientSoftwareStatusResolver.MaximumFutureClockSkew))
+        {
+            return Result.Invalid(
+                "PLC 状态上报时间超出允许的未来时钟偏差。");
+        }
+
         var normalizedReports = NormalizeReports(
             request,
             receivedAtUtc,
@@ -134,7 +145,14 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
                 request.DeviceId,
                 clientCode,
                 callbackToken);
-            var trackedMarker = ToReportState(state);
+            var existingStates =
+                await runtimeStateStore.GetByIdentityAsync(
+                    request.DeviceId,
+                    clientCode,
+                    callbackToken);
+            var trackedMarker = ToReportState(
+                state,
+                existingStates);
             if (trackedMarker != baseline)
             {
                 await unitOfWork.RollbackAsync(callbackToken);
@@ -151,11 +169,6 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
                 clientStateStore.AddState(state);
             }
 
-            var existingStates =
-                await runtimeStateStore.GetByIdentityAsync(
-                    request.DeviceId,
-                    clientCode,
-                    callbackToken);
             var statesByPlcCode = existingStates.ToDictionary(
                 item => item.PlcCode,
                 StringComparer.OrdinalIgnoreCase);
@@ -371,7 +384,8 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
             state.LastError);
 
     private static DeviceReportState? ToReportState(
-        DeviceClientState? state)
+        DeviceClientState? state,
+        IReadOnlyCollection<EdgeHostPlcRuntimeState> runtimeStates)
         => state?.PlcSnapshotReportedAtUtc is null
            || state.PlcSnapshotReceivedAtUtc is null
            || string.IsNullOrWhiteSpace(
@@ -380,7 +394,13 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
             : new DeviceReportState(
                 state.PlcSnapshotReportedAtUtc.Value,
                 state.PlcSnapshotReceivedAtUtc.Value,
-                state.PlcSnapshotContentSha256);
+                string.Equals(
+                    state.PlcSnapshotContentSha256,
+                    LegacyPlcSnapshotContentMarker,
+                    StringComparison.Ordinal)
+                    ? EdgeHostPlcRuntimeSnapshotFingerprint.Compute(
+                        runtimeStates.Select(ToContent))
+                    : state.PlcSnapshotContentSha256);
 
     private static bool MatchesSameReport(
         DeviceReportState? current,
