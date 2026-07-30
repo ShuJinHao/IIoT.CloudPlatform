@@ -318,7 +318,7 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
     }
 
     [Fact]
-    public async Task PlcSnapshotMarkerMigration_ShouldBackfillExistingAndMissingClientStates()
+    public async Task PlcSnapshotMarkerMigration_ShouldFenceEveryRegisteredDevice()
     {
         using var budget = await PostgresTestBudget.CreateAsync(fixture);
         await using var connection =
@@ -356,6 +356,10 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
                 $"Future snapshot {unique}",
                 $"PLC-F-{unique}"[..24],
                 process.Id);
+            var registeredOnlyDevice = new Device(
+                $"Registered only {unique}",
+                $"PLC-R-{unique}"[..24],
+                process.Id);
             var emptySnapshotReceivedAt =
                 DateTime.UtcNow.AddMinutes(-3);
             var existingState = new DeviceClientState(
@@ -386,12 +390,14 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
             missingStateDevice.ClearDomainEvents();
             emptySnapshotDevice.ClearDomainEvents();
             futureSnapshotDevice.ClearDomainEvents();
+            registeredOnlyDevice.ClearDomainEvents();
             dbContext.MfgProcesses.Add(process);
             dbContext.Devices.AddRange(
                 existingStateDevice,
                 missingStateDevice,
                 emptySnapshotDevice,
-                futureSnapshotDevice);
+                futureSnapshotDevice,
+                registeredOnlyDevice);
             dbContext.DeviceClientStates.AddRange(
                 existingState,
                 emptySnapshotState);
@@ -411,6 +417,12 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
                  """,
                 budget.Token);
 
+            var migrationStartedAt = await ExecuteScalarAsync(
+                connection,
+                transaction,
+                "select statement_timestamp()",
+                budget.Token,
+                static value => (DateTime)value!);
             var migration = new AddPlcSnapshotCommitRecoveryMarker();
             var backfillSql = Assert.Single(
                 migration.UpOperations.OfType<SqlOperation>()).Sql;
@@ -419,6 +431,33 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
                 transaction,
                 backfillSql,
                 budget.Token);
+            var migrationCompletedAt = await ExecuteScalarAsync(
+                connection,
+                transaction,
+                "select statement_timestamp()",
+                budget.Token,
+                static value => (DateTime)value!);
+            var migratedDeviceIds = new[]
+            {
+                existingStateDevice.Id,
+                missingStateDevice.Id,
+                emptySnapshotDevice.Id,
+                futureSnapshotDevice.Id,
+                registeredOnlyDevice.Id
+            };
+            dbContext.ChangeTracker.Clear();
+            var firstMarkers = await dbContext.DeviceClientStates
+                .AsNoTracking()
+                .Where(state => migratedDeviceIds.Contains(state.DeviceId))
+                .ToDictionaryAsync(
+                    state => state.DeviceId,
+                    state => new
+                    {
+                        state.PlcSnapshotReportedAtUtc,
+                        state.PlcSnapshotReceivedAtUtc,
+                        state.PlcSnapshotContentSha256
+                    },
+                    budget.Token);
             await ExecuteNonQueryAsync(
                 connection,
                 transaction,
@@ -432,11 +471,12 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
                     state.DeviceId == existingStateDevice.Id
                     || state.DeviceId == missingStateDevice.Id
                     || state.DeviceId == emptySnapshotDevice.Id
-                    || state.DeviceId == futureSnapshotDevice.Id)
+                    || state.DeviceId == futureSnapshotDevice.Id
+                    || state.DeviceId == registeredOnlyDevice.Id)
                 .OrderBy(state => state.DeviceId)
                 .ToListAsync(budget.Token);
 
-            Assert.Equal(4, states.Count);
+            Assert.Equal(5, states.Count);
             var backfilledExisting = Assert.Single(
                 states,
                 state => state.DeviceId == existingStateDevice.Id);
@@ -449,20 +489,36 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
             var backfilledFuture = Assert.Single(
                 states,
                 state => state.DeviceId == futureSnapshotDevice.Id);
-            AssertMarker(
-                backfilledExisting,
-                snapshotReceivedAt);
-            AssertMarker(
-                backfilledMissing,
-                snapshotReceivedAt);
-            AssertMarker(
-                backfilledEmpty,
-                emptySnapshotReceivedAt);
-            AssertMarker(
-                backfilledFuture,
-                futureObservedAt);
+            var backfilledRegisteredOnly = Assert.Single(
+                states,
+                state => state.DeviceId == registeredOnlyDevice.Id);
+            Assert.NotEqual(
+                snapshotReceivedAt,
+                backfilledExisting.PlcSnapshotReportedAtUtc);
+            Assert.NotEqual(
+                futureObservedAt,
+                backfilledFuture.PlcSnapshotReportedAtUtc);
+            foreach (var state in states)
+            {
+                var firstMarker = firstMarkers[state.DeviceId];
+                Assert.Equal(
+                    firstMarker.PlcSnapshotReportedAtUtc,
+                    state.PlcSnapshotReportedAtUtc);
+                Assert.Equal(
+                    firstMarker.PlcSnapshotReceivedAtUtc,
+                    state.PlcSnapshotReceivedAtUtc);
+                Assert.Equal(
+                    firstMarker.PlcSnapshotContentSha256,
+                    state.PlcSnapshotContentSha256);
+                AssertMarker(
+                    state,
+                    migrationStartedAt,
+                    migrationCompletedAt);
+            }
             Assert.Equal("[]", backfilledMissing.VersionLocalIpAddressesJson);
             Assert.Equal("[]", backfilledMissing.RuntimeLocalIpAddressesJson);
+            Assert.Equal("[]", backfilledRegisteredOnly.VersionLocalIpAddressesJson);
+            Assert.Equal("[]", backfilledRegisteredOnly.RuntimeLocalIpAddressesJson);
         }
         finally
         {
@@ -490,15 +546,17 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
 
     private static void AssertMarker(
         DeviceClientState state,
-        DateTime expectedReportedAtUtc)
+        DateTime migrationStartedAt,
+        DateTime migrationCompletedAt)
     {
-        Assert.Equal(
-            new DateTime(
-                expectedReportedAtUtc.Ticks
-                - expectedReportedAtUtc.Ticks % 10,
-                DateTimeKind.Utc),
-            state.PlcSnapshotReportedAtUtc);
         Assert.NotNull(state.PlcSnapshotReceivedAtUtc);
+        Assert.InRange(
+            state.PlcSnapshotReceivedAtUtc.Value,
+            migrationStartedAt,
+            migrationCompletedAt);
+        Assert.Equal(
+            state.PlcSnapshotReceivedAtUtc.Value.AddMinutes(5),
+            state.PlcSnapshotReportedAtUtc);
         Assert.Equal(
             new string('0', 64),
             state.PlcSnapshotContentSha256);

@@ -32,24 +32,25 @@ namespace IIoT.EntityFrameworkCore.Migrations
 
             migrationBuilder.Sql(
                 """
-                with legacy_plc_snapshots as (
+                with migration_fence as (
                     select
-                        runtime.device_id,
-                        upper(trim(runtime.client_code)) as client_code,
-                        min(runtime.created_at_utc) as created_at_utc,
-                        max(runtime.updated_at_utc) as received_at_utc,
-                        greatest(
-                            max(runtime.updated_at_utc),
-                            max(runtime.last_seen_at_utc)) as reported_at_utc,
+                        statement_timestamp() as received_at_utc,
+                        statement_timestamp() + interval '5 minutes'
+                            as reported_at_utc
+                ),
+                registered_device_snapshots as (
+                    select
+                        device.id as device_id,
+                        upper(trim(device.client_code)) as client_code,
+                        fence.received_at_utc,
+                        fence.reported_at_utc,
                         md5(
                             'plc-snapshot:' ||
-                            runtime.device_id::text ||
+                            device.id::text ||
                             ':' ||
-                            upper(trim(runtime.client_code))) as identity_hash
-                    from edge_host_plc_runtime_states runtime
-                    group by
-                        runtime.device_id,
-                        upper(trim(runtime.client_code))
+                            upper(trim(device.client_code))) as identity_hash
+                    from devices device
+                    cross join migration_fence fence
                 )
                 insert into edge_device_client_states (
                     id,
@@ -77,59 +78,35 @@ namespace IIoT.EntityFrameworkCore.Migrations
                     reported_at_utc,
                     received_at_utc,
                     repeat('0', 64),
-                    created_at_utc,
-                    greatest(received_at_utc, reported_at_utc)
-                from legacy_plc_snapshots
+                    received_at_utc,
+                    received_at_utc
+                from registered_device_snapshots
                 on conflict (device_id, client_code) do nothing;
 
-                with legacy_plc_snapshots as (
+                with migration_fence as (
                     select
-                        runtime.device_id,
-                        upper(trim(runtime.client_code)) as client_code,
-                        max(runtime.updated_at_utc) as received_at_utc,
-                        greatest(
-                            max(runtime.updated_at_utc),
-                            max(runtime.last_seen_at_utc)) as reported_at_utc
-                    from edge_host_plc_runtime_states runtime
-                    group by
-                        runtime.device_id,
-                        upper(trim(runtime.client_code))
+                        statement_timestamp() as received_at_utc,
+                        statement_timestamp() + interval '5 minutes'
+                            as reported_at_utc
                 )
                 update edge_device_client_states state
                 set
                     plc_snapshot_reported_at_utc =
                         coalesce(
                             state.plc_snapshot_reported_at_utc,
-                            snapshot.reported_at_utc),
+                            fence.reported_at_utc),
                     plc_snapshot_received_at_utc =
                         coalesce(
                             state.plc_snapshot_received_at_utc,
-                            snapshot.received_at_utc),
+                            fence.received_at_utc),
                     plc_snapshot_content_sha256 =
                         coalesce(
                             state.plc_snapshot_content_sha256,
                             repeat('0', 64))
-                from legacy_plc_snapshots snapshot
-                where state.device_id = snapshot.device_id
-                  and upper(trim(state.client_code)) = snapshot.client_code;
-
-                update edge_device_client_states
-                set
-                    plc_snapshot_reported_at_utc =
-                        coalesce(
-                            plc_snapshot_reported_at_utc,
-                            updated_at_utc),
-                    plc_snapshot_received_at_utc =
-                        coalesce(
-                            plc_snapshot_received_at_utc,
-                            updated_at_utc),
-                    plc_snapshot_content_sha256 =
-                        coalesce(
-                            plc_snapshot_content_sha256,
-                            repeat('0', 64))
-                where plc_snapshot_reported_at_utc is null
-                   or plc_snapshot_received_at_utc is null
-                   or plc_snapshot_content_sha256 is null;
+                from migration_fence fence
+                where state.plc_snapshot_reported_at_utc is null
+                   or state.plc_snapshot_received_at_utc is null
+                   or state.plc_snapshot_content_sha256 is null;
                 """);
         }
 
