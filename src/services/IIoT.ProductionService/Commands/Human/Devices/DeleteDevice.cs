@@ -35,6 +35,9 @@ public class DeleteDeviceHandler(
     IDeviceWriteObservationReader observationReader)
     : ICommandHandler<DeleteDeviceCommand, Result<bool>>
 {
+    private static readonly TimeSpan RecoveredCommitAuditTimeout =
+        TimeSpan.FromSeconds(5);
+
     public async Task<Result<bool>> Handle(
         DeleteDeviceCommand request,
         CancellationToken cancellationToken)
@@ -76,6 +79,7 @@ public class DeleteDeviceHandler(
 
         var auditExecutedAtUtc = DateTime.UtcNow;
         DeviceCascadeDeletionResult deletionResult;
+        var commitRecovered = false;
         try
         {
             deletionResult = await dependencyQueryService.DeleteCascadeAsync(
@@ -86,6 +90,7 @@ public class DeleteDeviceHandler(
         catch (DeviceDeletionCommitAttemptException)
         {
             deletionResult = await ResolveCommitAsync();
+            commitRecovered = true;
         }
         catch (OperationCanceledException)
             when (cancellationToken.IsCancellationRequested)
@@ -99,6 +104,7 @@ public class DeleteDeviceHandler(
         catch
         {
             deletionResult = await ResolveCommitAsync();
+            commitRecovered = true;
         }
 
         if (!deletionResult.DeviceDeleted)
@@ -106,20 +112,28 @@ public class DeleteDeviceHandler(
             throw new CloudWriteCommitUnknownException();
         }
 
-        await auditTrailService.TryWriteAsync(
-            new AuditTrailEntry(
-                ParseActorUserId(currentUser.Id),
-                currentUser.UserName,
-                "Device.Delete",
-                "Device",
-                accessTarget.Id.ToString(),
-                auditExecutedAtUtc,
-                true,
-                BuildDeletionAuditSummary(
-                    accessTarget,
-                    deletionResult.Impact),
-                IdempotencyKey: $"device-delete:{request.DeviceId:N}"),
-            cancellationToken);
+        var auditEntry = new AuditTrailEntry(
+            ParseActorUserId(currentUser.Id),
+            currentUser.UserName,
+            "Device.Delete",
+            "Device",
+            accessTarget.Id.ToString(),
+            auditExecutedAtUtc,
+            true,
+            BuildDeletionAuditSummary(
+                accessTarget,
+                deletionResult.Impact),
+            IdempotencyKey: $"device-delete:{request.DeviceId:N}");
+        if (commitRecovered)
+        {
+            await WriteRecoveredCommitAuditAsync(auditEntry);
+        }
+        else
+        {
+            await auditTrailService.TryWriteAsync(
+                auditEntry,
+                cancellationToken);
+        }
 
         return Result.Success(true);
 
@@ -147,6 +161,27 @@ public class DeleteDeviceHandler(
             }
 
             throw new CloudWriteConflictException();
+        }
+
+        async Task WriteRecoveredCommitAuditAsync(
+            AuditTrailEntry auditEntry)
+        {
+            using var timeout =
+                new CancellationTokenSource(RecoveredCommitAuditTimeout);
+            try
+            {
+                if (!await auditTrailService.TryWriteConfirmedAsync(
+                        auditEntry,
+                        timeout.Token))
+                {
+                    throw new CloudWriteCommitUnknownException();
+                }
+            }
+            catch (OperationCanceledException)
+                when (timeout.IsCancellationRequested)
+            {
+                throw new CloudWriteCommitUnknownException();
+            }
         }
     }
 

@@ -938,6 +938,12 @@ public sealed class ProductionRetryTransactionPostgresTests(
         Assert.True(cancellation.IsCancellationRequested);
         Assert.Equal(1, interceptor.ExceptionsThrown);
         Assert.Single(audit.Entries);
+        Assert.Single(audit.ConfirmedEntries);
+        var auditCancellationToken =
+            Assert.Single(audit.CancellationTokens);
+        Assert.True(auditCancellationToken.CanBeCanceled);
+        Assert.False(auditCancellationToken.IsCancellationRequested);
+        Assert.NotEqual(cancellation.Token, auditCancellationToken);
         dbContext.ChangeTracker.Clear();
         Assert.False(await dbContext.Devices
             .AsNoTracking()
@@ -3209,11 +3215,16 @@ public sealed class ProductionRetryTransactionPostgresTests(
     {
         public List<AuditTrailEntry> Entries { get; } = [];
 
+        public List<AuditTrailEntry> ConfirmedEntries { get; } = [];
+
+        public List<CancellationToken> CancellationTokens { get; } = [];
+
         public Task TryWriteAsync(
             AuditTrailEntry entry,
             CancellationToken cancellationToken = default)
         {
             Entries.Add(entry);
+            CancellationTokens.Add(cancellationToken);
             return Task.CompletedTask;
         }
 
@@ -3222,6 +3233,8 @@ public sealed class ProductionRetryTransactionPostgresTests(
             CancellationToken cancellationToken = default)
         {
             Entries.Add(entry);
+            ConfirmedEntries.Add(entry);
+            CancellationTokens.Add(cancellationToken);
             return Task.FromResult(true);
         }
     }
