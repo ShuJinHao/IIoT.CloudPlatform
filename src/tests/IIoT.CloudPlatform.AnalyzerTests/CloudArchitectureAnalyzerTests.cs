@@ -1,8 +1,10 @@
 using System.Collections.Immutable;
+using System.Reflection;
 using IIoT.CloudPlatform.Analyzers;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Text;
 using Xunit;
 
 namespace IIoT.CloudPlatform.AnalyzerTests;
@@ -99,6 +101,42 @@ public sealed class CloudArchitectureAnalyzerTests
             Assert.True(descriptor.IsEnabledByDefault);
             Assert.Contains(WellKnownDiagnosticTags.NotConfigurable, descriptor.CustomTags);
         });
+    }
+
+    [Fact]
+    public void ManagedReferenceCatalog_RejectsCaseOnlyPathCollision()
+    {
+        var root = Path.GetFullPath(Path.Combine(
+            Path.GetTempPath(),
+            "iiot-cloud-managed-reference-case-fixture"));
+        var sourceProject = Path.Combine(root, "Producer", "Producer.csproj");
+        var compilerReference = Path.Combine(root, "references", "Producer.dll");
+        var forgedResolvedReference = Path.Combine(root, "references", "producer.dll");
+        const string stableIdentity = "Producer/Producer.csproj";
+        var additionalTexts = ImmutableArray.Create<AdditionalText>(
+            new InMemoryAdditionalText(
+                Path.Combine(root, "CloudArchitectureManagedProjectReferences.txt"),
+                $"{compilerReference}\t{sourceProject}\t{stableIdentity}"),
+            new InMemoryAdditionalText(
+                Path.Combine(root, "CloudArchitectureResolvedProjectReferences.txt"),
+                $"{forgedResolvedReference}\t{sourceProject}\t{stableIdentity}"));
+
+        var catalogType = typeof(CloudArchitectureAnalyzer).Assembly.GetType(
+            "IIoT.CloudPlatform.Analyzers.CloudArchitectureManagedReferenceCatalog",
+            throwOnError: true)!;
+        var read = catalogType.GetMethod(
+            "Read",
+            BindingFlags.Static | BindingFlags.NonPublic)!;
+        var catalog = read.Invoke(null, [additionalTexts, CancellationToken.None])!;
+        var valid = (bool)catalogType.GetProperty(
+            "Valid",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(catalog)!;
+        var failure = (string)catalogType.GetProperty(
+            "Failure",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(catalog)!;
+
+        Assert.False(valid);
+        Assert.Equal("compiler-reference-not-resolved-project", failure);
     }
 
     [Fact]
@@ -1990,6 +2028,14 @@ public sealed class CloudArchitectureAnalyzerTests
             .Select(path => MetadataReference.CreateFromFile(path))
             .ToImmutableArray<MetadataReference>();
     });
+
+    private sealed class InMemoryAdditionalText(string path, string content) : AdditionalText
+    {
+        public override string Path { get; } = path;
+
+        public override SourceText GetText(CancellationToken cancellationToken = default) =>
+            SourceText.From(content);
+    }
 
     private static void AssertSingle(ImmutableArray<Diagnostic> diagnostics, string id)
     {

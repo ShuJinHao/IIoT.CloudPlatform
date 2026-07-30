@@ -317,7 +317,7 @@ internal sealed class CloudArchitectureManagedReferenceCatalog
             if (!string.Equals(
                     compilerReference.Value.SourceProjectPath,
                     resolvedProjectReference.SourceProjectPath,
-                    StringComparison.OrdinalIgnoreCase) ||
+                    StringComparison.Ordinal) ||
                 !string.Equals(
                     compilerReference.Value.SourceIdentity,
                     resolvedProjectReference.SourceIdentity,
@@ -338,7 +338,7 @@ internal sealed class CloudArchitectureManagedReferenceCatalog
             compilerReferences.ToImmutableDictionary(
                 static pair => pair.Key,
                 static pair => pair.Value.SourceIdentity,
-                StringComparer.OrdinalIgnoreCase),
+                StringComparer.Ordinal),
             string.Empty);
     }
 
@@ -371,8 +371,9 @@ internal sealed class CloudArchitectureManagedReferenceCatalog
         }
 
         var builder = ImmutableDictionary.CreateBuilder<string, CatalogEntry>(
-            StringComparer.OrdinalIgnoreCase);
-        var sourceProjects = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+            StringComparer.Ordinal);
+        var sourceProjects = ImmutableDictionary.CreateBuilder<string, string>(
+            StringComparer.Ordinal);
         foreach (var line in text.Lines)
         {
             var value = line.ToString();
@@ -410,7 +411,7 @@ internal sealed class CloudArchitectureManagedReferenceCatalog
                 normalizedStableIdentity = normalizedStableIdentity.Substring(2);
             if (!normalizedSourceProjectPath.EndsWith(
                     "/" + normalizedStableIdentity,
-                    StringComparison.OrdinalIgnoreCase))
+                    StringComparison.Ordinal))
             {
                 entries = ImmutableDictionary<string, CatalogEntry>.Empty;
                 failure = role + "-source-project-identity-mismatch";
@@ -421,7 +422,7 @@ internal sealed class CloudArchitectureManagedReferenceCatalog
                 (!string.Equals(
                         existing.SourceProjectPath,
                         normalizedSourceProjectPath,
-                        StringComparison.OrdinalIgnoreCase) ||
+                        StringComparison.Ordinal) ||
                  !string.Equals(existing.SourceIdentity, sourceIdentity, StringComparison.Ordinal)))
             {
                 entries = ImmutableDictionary<string, CatalogEntry>.Empty;
@@ -430,7 +431,7 @@ internal sealed class CloudArchitectureManagedReferenceCatalog
             }
 
             if (sourceProjects.TryGetValue(normalizedSourceProjectPath, out var existingReference) &&
-                !string.Equals(existingReference, normalizedReferencePath, StringComparison.OrdinalIgnoreCase))
+                !string.Equals(existingReference, normalizedReferencePath, StringComparison.Ordinal))
             {
                 entries = ImmutableDictionary<string, CatalogEntry>.Empty;
                 failure = role + "-duplicate-source-project-reference";
