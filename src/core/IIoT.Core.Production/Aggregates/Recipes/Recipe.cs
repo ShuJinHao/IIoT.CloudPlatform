@@ -40,30 +40,46 @@ public class Recipe : BaseEntity<Guid>, IAggregateRoot<Guid>
         Guid processId,
         Guid deviceId,
         string parametersJsonb)
+        : this(
+            Guid.NewGuid(),
+            recipeName,
+            processId,
+            deviceId,
+            parametersJsonb,
+            RecipeVersion.Initial)
     {
-        Id = Guid.NewGuid();
-        RecipeName = NormalizeRequired(recipeName, nameof(recipeName));
-        ProcessId = processId;
-        DeviceId = deviceId;
-        ParametersJsonb = NormalizeRequired(parametersJsonb, nameof(parametersJsonb));
-        Version = RecipeVersion.Initial.Value;
-        Status = RecipeStatus.Active;
+    }
 
-        ValidateInvariants();
-        AddDomainEvent(new RecipeCreatedDomainEvent(Id, RecipeName, Version, ProcessId, DeviceId));
+    public Recipe(
+        Guid id,
+        string recipeName,
+        Guid processId,
+        Guid deviceId,
+        string parametersJsonb)
+        : this(
+            id,
+            recipeName,
+            processId,
+            deviceId,
+            parametersJsonb,
+            RecipeVersion.Initial)
+    {
     }
 
     /// <summary>
-    /// 私有构造,用于 <see cref="CreateNextVersion"/> 派生新版本。
+    /// 私有构造,用于创建初始版本或派生新版本。
     /// </summary>
     private Recipe(
+        Guid id,
         string recipeName,
         Guid processId,
         Guid deviceId,
         string parametersJsonb,
         RecipeVersion version)
     {
-        Id = Guid.NewGuid();
+        if (id == Guid.Empty)
+            throw new ArgumentException("Id 不能为空。", nameof(id));
+        Id = id;
         RecipeName = NormalizeRequired(recipeName, nameof(recipeName));
         ProcessId = processId;
         DeviceId = deviceId;
@@ -116,8 +132,18 @@ public class Recipe : BaseEntity<Guid>, IAggregateRoot<Guid>
     /// 注意:本方法不会副作用地归档当前实例 — 旧版本的归档由用例显式调用 <see cref="Archive"/>。
     /// </summary>
     public Recipe CreateNextVersion(string newVersion, string newParametersJsonb)
+        => CreateNextVersion(
+            Guid.NewGuid(),
+            newVersion,
+            newParametersJsonb);
+
+    public Recipe CreateNextVersion(
+        Guid id,
+        string newVersion,
+        string newParametersJsonb)
     {
         var nextRecipe = new Recipe(
+            id,
             RecipeName,
             ProcessId,
             DeviceId,

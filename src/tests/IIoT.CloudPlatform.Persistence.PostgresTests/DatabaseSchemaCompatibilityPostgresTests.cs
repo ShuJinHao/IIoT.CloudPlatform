@@ -1,6 +1,12 @@
+using IIoT.Core.MasterData.Aggregates.MfgProcesses;
+using IIoT.Core.Production.Aggregates.ClientReleases;
+using IIoT.Core.Production.Aggregates.Devices;
+using IIoT.Core.Production.Aggregates.EdgeHosts;
 using IIoT.EntityFrameworkCore;
+using IIoT.EntityFrameworkCore.Migrations;
 using IIoT.MigrationWorkApp;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Migrations.Operations;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
@@ -210,6 +216,16 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
 
         try
         {
+            await ExecuteNonQueryAsync(
+                connection,
+                transaction,
+                """
+                drop trigger if exists
+                    iiot_fence_legacy_device_client_state_trigger
+                    on devices
+                """,
+                budget.Token);
+
             var unique = Guid.NewGuid().ToString("N");
             var processId = Guid.NewGuid();
             var firstDeviceId = Guid.NewGuid();
@@ -309,6 +325,310 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
         {
             await PostgresTestBudget.RollbackAsync(transaction);
         }
+    }
+
+    [Fact]
+    public async Task PlcSnapshotMarkerMigration_ShouldFenceEveryRegisteredDevice()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        await using var connection =
+            new NpgsqlConnection(budget.ConnectionString);
+        await connection.OpenAsync(budget.Token);
+        await using var transaction =
+            await connection.BeginTransactionAsync(budget.Token);
+        var options = new DbContextOptionsBuilder<IIoTDbContext>()
+            .UseNpgsql(connection)
+            .Options;
+        await using var dbContext = new IIoTDbContext(options);
+        await dbContext.Database.UseTransactionAsync(
+            transaction,
+            budget.Token);
+
+        try
+        {
+            var unique = Guid.NewGuid().ToString("N");
+            var process = new MfgProcess(
+                $"PLC-MIG-{unique}"[..24],
+                "PLC migration marker");
+            var existingStateDevice = new Device(
+                $"Existing state {unique}",
+                $"PLC-E-{unique}"[..24],
+                process.Id);
+            var missingStateDevice = new Device(
+                $"Missing state {unique}",
+                $"PLC-M-{unique}"[..24],
+                process.Id);
+            var emptySnapshotDevice = new Device(
+                $"Empty snapshot {unique}",
+                $"PLC-Z-{unique}"[..24],
+                process.Id);
+            var futureSnapshotDevice = new Device(
+                $"Future snapshot {unique}",
+                $"PLC-F-{unique}"[..24],
+                process.Id);
+            var registeredOnlyDevice = new Device(
+                $"Registered only {unique}",
+                $"PLC-R-{unique}"[..24],
+                process.Id);
+            var emptySnapshotReceivedAt =
+                DateTime.UtcNow.AddMinutes(-3);
+            var existingState = new DeviceClientState(
+                existingStateDevice.Id,
+                existingStateDevice.Code);
+            var emptySnapshotState = new DeviceClientState(
+                emptySnapshotDevice.Id,
+                emptySnapshotDevice.Code,
+                createdAtUtc: emptySnapshotReceivedAt);
+            var olderObservedAt = DateTime.UtcNow.AddMinutes(-10);
+            var latestObservedAt = olderObservedAt.AddMinutes(5);
+            var snapshotReceivedAt = latestObservedAt.AddMinutes(4);
+            var existingRuntime = CreateRuntimeState(
+                existingStateDevice,
+                "PLC-1",
+                latestObservedAt);
+            var missingRuntime = CreateRuntimeState(
+                missingStateDevice,
+                "PLC-2",
+                olderObservedAt);
+            var futureObservedAt = snapshotReceivedAt.AddHours(1);
+            var futureRuntime = CreateRuntimeState(
+                futureSnapshotDevice,
+                "PLC-3",
+                futureObservedAt);
+            process.ClearDomainEvents();
+            existingStateDevice.ClearDomainEvents();
+            missingStateDevice.ClearDomainEvents();
+            emptySnapshotDevice.ClearDomainEvents();
+            futureSnapshotDevice.ClearDomainEvents();
+            registeredOnlyDevice.ClearDomainEvents();
+            dbContext.MfgProcesses.Add(process);
+            dbContext.Devices.AddRange(
+                existingStateDevice,
+                missingStateDevice,
+                emptySnapshotDevice,
+                futureSnapshotDevice,
+                registeredOnlyDevice);
+            dbContext.DeviceClientStates.AddRange(
+                existingState,
+                emptySnapshotState);
+            dbContext.EdgeHostPlcRuntimeStates.AddRange(
+                existingRuntime,
+                missingRuntime,
+                futureRuntime);
+            await dbContext.SaveChangesAsync(budget.Token);
+            await dbContext.Database.ExecuteSqlInterpolatedAsync(
+                $"""
+                 update edge_host_plc_runtime_states
+                 set updated_at_utc = {snapshotReceivedAt}
+                 where device_id in (
+                     {existingStateDevice.Id},
+                     {missingStateDevice.Id},
+                     {futureSnapshotDevice.Id})
+                 """,
+                budget.Token);
+
+            var migrationStartedAt = await ExecuteScalarAsync(
+                connection,
+                transaction,
+                "select statement_timestamp()",
+                budget.Token,
+                static value => (DateTime)value!);
+            var migration = new AddPlcSnapshotCommitRecoveryMarker();
+            var backfillSql = Assert.Single(
+                migration.UpOperations.OfType<SqlOperation>()).Sql;
+            await ExecuteNonQueryAsync(
+                connection,
+                transaction,
+                backfillSql,
+                budget.Token);
+            var migrationCompletedAt = await ExecuteScalarAsync(
+                connection,
+                transaction,
+                "select statement_timestamp()",
+                budget.Token,
+                static value => (DateTime)value!);
+            var migratedDeviceIds = new[]
+            {
+                existingStateDevice.Id,
+                missingStateDevice.Id,
+                emptySnapshotDevice.Id,
+                futureSnapshotDevice.Id,
+                registeredOnlyDevice.Id
+            };
+            dbContext.ChangeTracker.Clear();
+            var firstMarkers = await dbContext.DeviceClientStates
+                .AsNoTracking()
+                .Where(state => migratedDeviceIds.Contains(state.DeviceId))
+                .ToDictionaryAsync(
+                    state => state.DeviceId,
+                    state => new
+                    {
+                        state.PlcSnapshotReportedAtUtc,
+                        state.PlcSnapshotReceivedAtUtc,
+                        state.PlcSnapshotContentSha256
+                    },
+                    budget.Token);
+            await ExecuteNonQueryAsync(
+                connection,
+                transaction,
+                backfillSql,
+                budget.Token);
+
+            dbContext.ChangeTracker.Clear();
+            var states = await dbContext.DeviceClientStates
+                .AsNoTracking()
+                .Where(state =>
+                    state.DeviceId == existingStateDevice.Id
+                    || state.DeviceId == missingStateDevice.Id
+                    || state.DeviceId == emptySnapshotDevice.Id
+                    || state.DeviceId == futureSnapshotDevice.Id
+                    || state.DeviceId == registeredOnlyDevice.Id)
+                .OrderBy(state => state.DeviceId)
+                .ToListAsync(budget.Token);
+
+            Assert.Equal(5, states.Count);
+            var backfilledExisting = Assert.Single(
+                states,
+                state => state.DeviceId == existingStateDevice.Id);
+            var backfilledMissing = Assert.Single(
+                states,
+                state => state.DeviceId == missingStateDevice.Id);
+            var backfilledEmpty = Assert.Single(
+                states,
+                state => state.DeviceId == emptySnapshotDevice.Id);
+            var backfilledFuture = Assert.Single(
+                states,
+                state => state.DeviceId == futureSnapshotDevice.Id);
+            var backfilledRegisteredOnly = Assert.Single(
+                states,
+                state => state.DeviceId == registeredOnlyDevice.Id);
+            Assert.NotEqual(
+                snapshotReceivedAt,
+                backfilledExisting.PlcSnapshotReportedAtUtc);
+            Assert.NotEqual(
+                futureObservedAt,
+                backfilledFuture.PlcSnapshotReportedAtUtc);
+            foreach (var state in states)
+            {
+                var firstMarker = firstMarkers[state.DeviceId];
+                Assert.Equal(
+                    firstMarker.PlcSnapshotReportedAtUtc,
+                    state.PlcSnapshotReportedAtUtc);
+                Assert.Equal(
+                    firstMarker.PlcSnapshotReceivedAtUtc,
+                    state.PlcSnapshotReceivedAtUtc);
+                Assert.Equal(
+                    firstMarker.PlcSnapshotContentSha256,
+                    state.PlcSnapshotContentSha256);
+                AssertMarker(
+                    state,
+                    migrationStartedAt,
+                    migrationCompletedAt);
+            }
+            Assert.Equal("[]", backfilledMissing.VersionLocalIpAddressesJson);
+            Assert.Equal("[]", backfilledMissing.RuntimeLocalIpAddressesJson);
+            Assert.Equal("[]", backfilledRegisteredOnly.VersionLocalIpAddressesJson);
+            Assert.Equal("[]", backfilledRegisteredOnly.RuntimeLocalIpAddressesJson);
+
+            var rolloutLegacyDevice = new Device(
+                $"Rollout legacy {unique}",
+                $"PLC-L-{unique}"[..24],
+                process.Id);
+            var canonicalDevice = new Device(
+                $"Canonical state {unique}",
+                $"PLC-C-{unique}"[..24],
+                process.Id);
+            var canonicalState = new DeviceClientState(
+                canonicalDevice.Id,
+                canonicalDevice.Code);
+            rolloutLegacyDevice.ClearDomainEvents();
+            canonicalDevice.ClearDomainEvents();
+            dbContext.Devices.AddRange(
+                rolloutLegacyDevice,
+                canonicalDevice);
+            dbContext.DeviceClientStates.Add(canonicalState);
+            await dbContext.SaveChangesAsync(budget.Token);
+
+            await ExecuteNonQueryAsync(
+                connection,
+                transaction,
+                """
+                set constraints
+                    iiot_fence_legacy_device_client_state_trigger
+                    immediate
+                """,
+                budget.Token);
+            await ExecuteNonQueryAsync(
+                connection,
+                transaction,
+                """
+                set constraints
+                    iiot_fence_legacy_device_client_state_trigger
+                    deferred
+                """,
+                budget.Token);
+
+            dbContext.ChangeTracker.Clear();
+            var rolloutLegacyState = await dbContext.DeviceClientStates
+                .AsNoTracking()
+                .SingleAsync(
+                    state => state.DeviceId == rolloutLegacyDevice.Id,
+                    budget.Token);
+            var persistedCanonicalState = await dbContext.DeviceClientStates
+                .AsNoTracking()
+                .SingleAsync(
+                    state => state.DeviceId == canonicalDevice.Id,
+                    budget.Token);
+            Assert.Equal(
+                DateTime.MaxValue,
+                rolloutLegacyState.PlcSnapshotReportedAtUtc);
+            Assert.Equal(
+                new string('0', 64),
+                rolloutLegacyState.PlcSnapshotContentSha256);
+            Assert.Null(persistedCanonicalState.PlcSnapshotReportedAtUtc);
+            Assert.Null(persistedCanonicalState.PlcSnapshotReceivedAtUtc);
+            Assert.Null(persistedCanonicalState.PlcSnapshotContentSha256);
+        }
+        finally
+        {
+            await PostgresTestBudget.RollbackAsync(transaction);
+        }
+    }
+
+    private static EdgeHostPlcRuntimeState CreateRuntimeState(
+        Device device,
+        string plcCode,
+        DateTime observedAtUtc)
+    {
+        var state = new EdgeHostPlcRuntimeState(
+            device.Id,
+            device.Code,
+            plcCode,
+            createdAtUtc: observedAtUtc.AddMinutes(-1));
+        state.ReplaceReport(
+            $"Reported {plcCode}",
+            true,
+            EdgeHostPlcRuntimeStatus.Connected,
+            observedAtUtc);
+        return state;
+    }
+
+    private static void AssertMarker(
+        DeviceClientState state,
+        DateTime migrationStartedAt,
+        DateTime migrationCompletedAt)
+    {
+        Assert.NotNull(state.PlcSnapshotReceivedAtUtc);
+        Assert.InRange(
+            state.PlcSnapshotReceivedAtUtc.Value,
+            migrationStartedAt,
+            migrationCompletedAt);
+        Assert.Equal(
+            DateTime.MaxValue,
+            state.PlcSnapshotReportedAtUtc);
+        Assert.Equal(
+            new string('0', 64),
+            state.PlcSnapshotContentSha256);
     }
 
     private static async Task ExecuteNonQueryAsync(

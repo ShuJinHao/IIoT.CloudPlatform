@@ -15,6 +15,7 @@ using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.CrossCutting.Behaviors;
@@ -31,6 +32,47 @@ namespace IIoT.CloudPlatform.WorkflowTests;
 
 public sealed class ClientReleaseBehaviorTests
 {
+    private static ReportDeviceClientVersionHandler CreateVersionHandler(
+        Guid deviceId,
+        string clientCode,
+        InMemoryDeviceClientStateStore store,
+        TimeProvider? timeProvider = null,
+        IUnitOfWork? unitOfWork = null,
+        Func<DeviceReportWriteObservation, DeviceReportWriteObservation>?
+            observationTransform = null)
+        => new(
+            new StubDeviceIdentityQueryService(
+                new DeviceIdentitySnapshot(deviceId, clientCode)),
+            store,
+            unitOfWork ?? new RecordingUnitOfWork(),
+            new InMemoryDeviceReportObservationReader(
+                deviceId,
+                clientCode,
+                store,
+                observationTransform),
+            timeProvider ?? TimeProvider.System);
+
+    private static ReportDeviceRuntimeHeartbeatHandler
+        CreateHeartbeatHandler(
+            Guid deviceId,
+            string clientCode,
+            InMemoryDeviceClientStateStore store,
+            TimeProvider timeProvider,
+            IUnitOfWork? unitOfWork = null,
+            Func<DeviceReportWriteObservation, DeviceReportWriteObservation>?
+                observationTransform = null)
+        => new(
+            new StubDeviceIdentityQueryService(
+                new DeviceIdentitySnapshot(deviceId, clientCode)),
+            store,
+            timeProvider,
+            unitOfWork ?? new RecordingUnitOfWork(),
+            new InMemoryDeviceReportObservationReader(
+                deviceId,
+                clientCode,
+                store,
+                observationTransform));
+
     [Fact]
     public void EdgeReleaseRetentionOptions_ShouldDefaultToThreeVersions()
     {
@@ -1651,8 +1693,9 @@ public sealed class ClientReleaseBehaviorTests
     {
         var deviceId = Guid.NewGuid();
         var clientStateStore = new InMemoryDeviceClientStateStore();
-        var handler = new ReportDeviceClientVersionHandler(
-            new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-001")),
+        var handler = CreateVersionHandler(
+            deviceId,
+            "DEV-001",
             clientStateStore);
 
         var result = await handler.Handle(
@@ -1677,8 +1720,9 @@ public sealed class ClientReleaseBehaviorTests
     {
         var deviceId = Guid.NewGuid();
         var clientStateStore = new InMemoryDeviceClientStateStore();
-        var handler = new ReportDeviceClientVersionHandler(
-            new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-001")),
+        var handler = CreateVersionHandler(
+            deviceId,
+            "DEV-001",
             clientStateStore);
 
         var result = await handler.Handle(
@@ -1708,13 +1752,295 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
+    public async Task ReportDeviceClientVersionHandler_ShouldEnforceMonotonicReports()
+    {
+        var deviceId = Guid.NewGuid();
+        var acceptedAt =
+            new DateTime(2026, 7, 30, 2, 0, 0, DateTimeKind.Utc);
+        var store = new InMemoryDeviceClientStateStore();
+        var handler = CreateVersionHandler(
+            deviceId,
+            "DEV-VERSION-MONOTONIC",
+            store,
+            new FixedTimeProvider(
+                new DateTimeOffset(
+                    2026,
+                    7,
+                    30,
+                    2,
+                    0,
+                    1,
+                    TimeSpan.Zero)));
+        var accepted = new ReportDeviceClientVersionCommand(
+            deviceId,
+            "DEV-VERSION-MONOTONIC",
+            "1.2.0",
+            "1.0.0",
+            [],
+            [],
+            "stable",
+            acceptedAt);
+
+        var first = await handler.Handle(
+            accepted,
+            CancellationToken.None);
+        var duplicate = await handler.Handle(
+            accepted,
+            CancellationToken.None);
+        var stale = await handler.Handle(
+            accepted with
+            {
+                ReportedAtUtc = acceptedAt.AddSeconds(-1)
+            },
+            CancellationToken.None);
+        var conflict = await Assert.ThrowsAsync<
+            CloudWriteConflictException>(() =>
+            handler.Handle(
+                accepted with { HostVersion = "1.2.1" },
+                CancellationToken.None));
+
+        Assert.True(first.IsSuccess);
+        Assert.True(duplicate.IsSuccess);
+        Assert.Equal(ResultStatus.Invalid, stale.Status);
+        Assert.Equal(
+            CloudWriteConflictException.Code,
+            conflict.ProblemCode);
+        Assert.Equal(1, store.SaveChangesCalls);
+        Assert.Equal(
+            "1.2.0",
+            Assert.Single(store.VersionSnapshots).HostVersion);
+    }
+
+    [Fact]
+    public async Task ReportDeviceClientVersionHandler_ShouldRejectFutureClockSkew()
+    {
+        var deviceId = Guid.NewGuid();
+        var utcNow = new DateTimeOffset(
+            2026,
+            7,
+            30,
+            2,
+            0,
+            0,
+            TimeSpan.Zero);
+        var store = new InMemoryDeviceClientStateStore();
+        var handler = CreateVersionHandler(
+            deviceId,
+            "DEV-VERSION-FUTURE",
+            store,
+            new FixedTimeProvider(utcNow));
+        var boundary = new ReportDeviceClientVersionCommand(
+            deviceId,
+            "DEV-VERSION-FUTURE",
+            "1.2.0",
+            "1.0.0",
+            [],
+            [],
+            "stable",
+            utcNow.UtcDateTime.Add(
+                DeviceClientSoftwareStatusResolver.MaximumFutureClockSkew));
+
+        var accepted = await handler.Handle(
+            boundary,
+            CancellationToken.None);
+        var rejected = await handler.Handle(
+            boundary with
+            {
+                ReportedAtUtc = boundary.ReportedAtUtc.AddTicks(10)
+            },
+            CancellationToken.None);
+
+        Assert.True(accepted.IsSuccess);
+        Assert.Equal(ResultStatus.Invalid, rejected.Status);
+        Assert.Equal(1, store.SaveChangesCalls);
+        Assert.Equal(
+            boundary.ReportedAtUtc,
+            Assert.Single(store.VersionSnapshots).ReportedAtUtc);
+    }
+
+    [Fact]
+    public async Task ReportDeviceClientVersionHandler_PostCommitFailure_ShouldRecoverExactTarget()
+    {
+        var deviceId = Guid.NewGuid();
+        var store = new InMemoryDeviceClientStateStore();
+        var unitOfWork = new RecordingUnitOfWork
+        {
+            OnCommit = () => throw new TimeoutException(
+                "simulated commit acknowledgement loss")
+        };
+        var handler = CreateVersionHandler(
+            deviceId,
+            "DEV-VERSION-RECOVERY",
+            store,
+            new FixedTimeProvider(
+                new DateTimeOffset(
+                    2026,
+                    7,
+                    30,
+                    3,
+                    0,
+                    0,
+                    TimeSpan.Zero)),
+            unitOfWork);
+
+        var result = await handler.Handle(
+            new ReportDeviceClientVersionCommand(
+                deviceId,
+                "DEV-VERSION-RECOVERY",
+                "1.2.0",
+                "1.0.0",
+                [],
+                [],
+                "stable",
+                new DateTime(
+                    2026,
+                    7,
+                    30,
+                    2,
+                    59,
+                    0,
+                    DateTimeKind.Utc)),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Single(store.VersionSnapshots);
+        Assert.Single(store.States);
+        Assert.Equal(1, store.SaveChangesCalls);
+    }
+
+    [Fact]
+    public async Task ReportDeviceClientVersionHandler_PostCommitFailure_ShouldRecoverSameReportWithDifferentReceivedAt()
+    {
+        var deviceId = Guid.NewGuid();
+        var store = new InMemoryDeviceClientStateStore();
+        var unitOfWork = new RecordingUnitOfWork
+        {
+            OnCommit = () => throw new TimeoutException(
+                "simulated commit acknowledgement loss")
+        };
+        var handler = CreateVersionHandler(
+            deviceId,
+            "DEV-VERSION-RECEIVED-AT",
+            store,
+            new FixedTimeProvider(
+                new DateTimeOffset(
+                    2026,
+                    7,
+                    30,
+                    3,
+                    15,
+                    0,
+                    TimeSpan.Zero)),
+            unitOfWork,
+            observation => observation.Version is null
+                ? observation
+                : observation with
+                {
+                    Version = observation.Version with
+                    {
+                        ReceivedAtUtc =
+                            observation.Version.ReceivedAtUtc.AddSeconds(1)
+                    }
+                });
+
+        var result = await handler.Handle(
+            new ReportDeviceClientVersionCommand(
+                deviceId,
+                "DEV-VERSION-RECEIVED-AT",
+                "1.2.0",
+                "1.0.0",
+                [],
+                [],
+                "stable",
+                new DateTime(
+                    2026,
+                    7,
+                    30,
+                    3,
+                    14,
+                    0,
+                    DateTimeKind.Utc)),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(
+            new DateTime(
+                2026,
+                7,
+                30,
+                3,
+                15,
+                1,
+                DateTimeKind.Utc),
+            result.Value!.ReceivedAtUtc);
+        Assert.Equal(1, store.SaveChangesCalls);
+    }
+
+    [Fact]
+    public async Task ReportDeviceClientVersionHandler_PostCommitCancellation_ShouldRecoverExactTarget()
+    {
+        var deviceId = Guid.NewGuid();
+        var store = new InMemoryDeviceClientStateStore();
+        using var cancellation = new CancellationTokenSource();
+        var unitOfWork = new RecordingUnitOfWork
+        {
+            OnCommit = () =>
+            {
+                cancellation.Cancel();
+                throw new OperationCanceledException(
+                    cancellation.Token);
+            }
+        };
+        var handler = CreateVersionHandler(
+            deviceId,
+            "DEV-VERSION-CANCEL",
+            store,
+            new FixedTimeProvider(
+                new DateTimeOffset(
+                    2026,
+                    7,
+                    30,
+                    3,
+                    30,
+                    0,
+                    TimeSpan.Zero)),
+            unitOfWork);
+
+        var result = await handler.Handle(
+            new ReportDeviceClientVersionCommand(
+                deviceId,
+                "DEV-VERSION-CANCEL",
+                "1.2.1",
+                "1.0.0",
+                [],
+                [],
+                "stable",
+                new DateTime(
+                    2026,
+                    7,
+                    30,
+                    3,
+                    29,
+                    0,
+                    DateTimeKind.Utc)),
+            cancellation.Token);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(cancellation.IsCancellationRequested);
+        Assert.Single(store.VersionSnapshots);
+        Assert.Single(store.States);
+        Assert.Equal(1, store.SaveChangesCalls);
+    }
+
+    [Fact]
     public async Task ReportDeviceRuntimeHeartbeatHandler_ShouldUpsertLatestRuntimeState()
     {
         var deviceId = Guid.NewGuid();
         var utcNow = new DateTimeOffset(2026, 7, 10, 6, 0, 0, TimeSpan.Zero);
         var clientStateStore = new InMemoryDeviceClientStateStore();
-        var handler = new ReportDeviceRuntimeHeartbeatHandler(
-            new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-001")),
+        var handler = CreateHeartbeatHandler(
+            deviceId,
+            "DEV-001",
             clientStateStore,
             new FixedTimeProvider(utcNow));
 
@@ -1761,8 +2087,9 @@ public sealed class ClientReleaseBehaviorTests
         var deviceId = Guid.NewGuid();
         var utcNow = new DateTimeOffset(2026, 7, 10, 6, 0, 0, TimeSpan.Zero);
         var clientStateStore = new InMemoryDeviceClientStateStore();
-        var handler = new ReportDeviceRuntimeHeartbeatHandler(
-            new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-001")),
+        var handler = CreateHeartbeatHandler(
+            deviceId,
+            "DEV-001",
             clientStateStore,
             new FixedTimeProvider(utcNow));
         var acceptedAt = utcNow.UtcDateTime.AddSeconds(-1);
@@ -1773,15 +2100,21 @@ public sealed class ClientReleaseBehaviorTests
         var stale = await handler.Handle(
             CreateRuntimeHeartbeatCommand(deviceId, "Stopped", acceptedAt.AddSeconds(-1)),
             CancellationToken.None);
-        var conflict = await handler.Handle(
-            CreateRuntimeHeartbeatCommand(deviceId, "Stopped", acceptedAt),
-            CancellationToken.None);
+        var conflict = await Assert.ThrowsAsync<
+            CloudWriteConflictException>(() =>
+            handler.Handle(
+                CreateRuntimeHeartbeatCommand(
+                    deviceId,
+                    "Stopped",
+                    acceptedAt),
+                CancellationToken.None));
 
         Assert.True(accepted.IsSuccess);
         Assert.False(stale.IsSuccess);
         Assert.Equal(ResultStatus.Invalid, stale.Status);
-        Assert.False(conflict.IsSuccess);
-        Assert.Equal(ResultStatus.Invalid, conflict.Status);
+        Assert.Equal(
+            CloudWriteConflictException.Code,
+            conflict.ProblemCode);
         var heartbeat = Assert.Single(clientStateStore.RuntimeHeartbeats);
         Assert.Equal("Running", heartbeat.Status);
         Assert.Equal(acceptedAt, heartbeat.LastHeartbeatAtUtc);
@@ -1794,8 +2127,9 @@ public sealed class ClientReleaseBehaviorTests
         var deviceId = Guid.NewGuid();
         var utcNow = new DateTimeOffset(2026, 7, 10, 6, 0, 0, TimeSpan.Zero);
         var clientStateStore = new InMemoryDeviceClientStateStore();
-        var handler = new ReportDeviceRuntimeHeartbeatHandler(
-            new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-001")),
+        var handler = CreateHeartbeatHandler(
+            deviceId,
+            "DEV-001",
             clientStateStore,
             new FixedTimeProvider(utcNow));
         var command = CreateRuntimeHeartbeatCommand(deviceId, "Running", utcNow.UtcDateTime.AddSeconds(-1));
@@ -1811,13 +2145,135 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
+    public async Task ReportDeviceRuntimeHeartbeatHandler_PostCommitFailure_ShouldRecoverExactTarget()
+    {
+        var deviceId = Guid.NewGuid();
+        var utcNow =
+            new DateTimeOffset(2026, 7, 30, 4, 0, 0, TimeSpan.Zero);
+        var store = new InMemoryDeviceClientStateStore();
+        var handler = CreateHeartbeatHandler(
+            deviceId,
+            "DEV-HEARTBEAT-RECOVERY",
+            store,
+            new FixedTimeProvider(utcNow),
+            new RecordingUnitOfWork
+            {
+                OnCommit = () => throw new TimeoutException(
+                    "simulated commit acknowledgement loss")
+            });
+
+        var result = await handler.Handle(
+            new ReportDeviceRuntimeHeartbeatCommand(
+                deviceId,
+                "DEV-HEARTBEAT-RECOVERY",
+                "runtime-a",
+                "LineA",
+                "1.0.0",
+                "1.0.0",
+                "Running",
+                utcNow.UtcDateTime.AddMinutes(-1),
+                utcNow.UtcDateTime.AddSeconds(-1)),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Single(store.RuntimeHeartbeats);
+        Assert.Single(store.States);
+        Assert.Equal(1, store.SaveChangesCalls);
+    }
+
+    [Fact]
+    public async Task ReportDeviceRuntimeHeartbeatHandler_PostCommitFailure_ShouldRecoverSameReportWithDifferentReceivedAt()
+    {
+        var deviceId = Guid.NewGuid();
+        var utcNow =
+            new DateTimeOffset(2026, 7, 30, 4, 15, 0, TimeSpan.Zero);
+        var store = new InMemoryDeviceClientStateStore();
+        var handler = CreateHeartbeatHandler(
+            deviceId,
+            "DEV-HEARTBEAT-RECEIVED-AT",
+            store,
+            new FixedTimeProvider(utcNow),
+            new RecordingUnitOfWork
+            {
+                OnCommit = () => throw new TimeoutException(
+                    "simulated commit acknowledgement loss")
+            },
+            observation => observation.RuntimeHeartbeat is null
+                ? observation
+                : observation with
+                {
+                    RuntimeHeartbeat =
+                        observation.RuntimeHeartbeat with
+                        {
+                            ReceivedAtUtc =
+                                observation.RuntimeHeartbeat
+                                    .ReceivedAtUtc
+                                    .AddSeconds(1)
+                        }
+                });
+
+        var result = await handler.Handle(
+            new ReportDeviceRuntimeHeartbeatCommand(
+                deviceId,
+                "DEV-HEARTBEAT-RECEIVED-AT",
+                "runtime-a",
+                "LineA",
+                "1.0.0",
+                "1.0.0",
+                "Running",
+                utcNow.UtcDateTime.AddMinutes(-1),
+                utcNow.UtcDateTime.AddSeconds(-1)),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(1, store.SaveChangesCalls);
+    }
+
+    [Fact]
+    public async Task ReportDeviceRuntimeHeartbeatHandler_CallbackCancellation_ShouldPropagate()
+    {
+        var deviceId = Guid.NewGuid();
+        var utcNow =
+            new DateTimeOffset(2026, 7, 30, 4, 30, 0, TimeSpan.Zero);
+        var store = new InMemoryDeviceClientStateStore();
+        var handler = CreateHeartbeatHandler(
+            deviceId,
+            "DEV-HEARTBEAT-CANCEL",
+            store,
+            new FixedTimeProvider(utcNow));
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var exception = await Assert.ThrowsAnyAsync<
+            OperationCanceledException>(() =>
+            handler.Handle(
+                new ReportDeviceRuntimeHeartbeatCommand(
+                    deviceId,
+                    "DEV-HEARTBEAT-CANCEL",
+                    "runtime-a",
+                    null,
+                    "1.0.0",
+                    "1.0.0",
+                    "Running",
+                    utcNow.UtcDateTime.AddMinutes(-1),
+                    utcNow.UtcDateTime.AddSeconds(-1)),
+                cancellation.Token));
+
+        Assert.Equal(
+            cancellation.Token,
+            exception.CancellationToken);
+        Assert.Empty(store.RuntimeHeartbeats);
+    }
+
+    [Fact]
     public async Task ReportDeviceRuntimeHeartbeatHandler_ShouldRejectInvalidTimeRelationships()
     {
         var deviceId = Guid.NewGuid();
         var utcNow = new DateTimeOffset(2026, 7, 10, 6, 0, 0, TimeSpan.Zero);
         var clientStateStore = new InMemoryDeviceClientStateStore();
-        var handler = new ReportDeviceRuntimeHeartbeatHandler(
-            new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-001")),
+        var handler = CreateHeartbeatHandler(
+            deviceId,
+            "DEV-001",
             clientStateStore,
             new FixedTimeProvider(utcNow));
 
@@ -1854,7 +2310,7 @@ public sealed class ClientReleaseBehaviorTests
             typeof(ReportDeviceRuntimeHeartbeatCommand),
             typeof(DistributedLockAttribute)));
 
-        Assert.Equal("iiot:lock:device-runtime-heartbeat:{DeviceId}", attribute.KeyTemplate);
+        Assert.Equal("iiot:lock:device-report:{DeviceId}", attribute.KeyTemplate);
     }
 
     [Fact]
@@ -1863,8 +2319,9 @@ public sealed class ClientReleaseBehaviorTests
         var deviceId = Guid.NewGuid();
         var utcNow = new DateTimeOffset(2026, 7, 10, 6, 0, 0, TimeSpan.Zero);
         var clientStateStore = new InMemoryDeviceClientStateStore();
-        var handler = new ReportDeviceRuntimeHeartbeatHandler(
-            new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-001")),
+        var handler = CreateHeartbeatHandler(
+            deviceId,
+            "DEV-001",
             clientStateStore,
             new FixedTimeProvider(utcNow));
         var lockService = new InMemoryKeyedDistributedLockService();
@@ -1904,7 +2361,7 @@ public sealed class ClientReleaseBehaviorTests
         Assert.Equal("Running", Assert.Single(clientStateStore.States).RuntimeStatus);
         Assert.All(
             lockService.AcquiredResources,
-            resource => Assert.Equal($"iiot:lock:device-runtime-heartbeat:{deviceId}", resource));
+            resource => Assert.Equal($"iiot:lock:device-report:{deviceId}", resource));
     }
 
     private static ReportDeviceRuntimeHeartbeatCommand CreateRuntimeHeartbeatCommand(
@@ -5211,6 +5668,79 @@ public sealed class ClientReleaseBehaviorTests
             SaveChangesCalls++;
             return Task.FromResult(1);
         }
+    }
+
+    private sealed class InMemoryDeviceReportObservationReader(
+        Guid deviceId,
+        string clientCode,
+        InMemoryDeviceClientStateStore store,
+        Func<DeviceReportWriteObservation, DeviceReportWriteObservation>?
+            observationTransform = null)
+        : IDeviceReportWriteObservationReader
+    {
+        public Task<DeviceReportWriteObservation> ObserveReportAsync(
+            Guid requestedDeviceId,
+            string requestedClientCode,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var normalizedClientCode =
+                requestedClientCode.Trim().ToUpperInvariant();
+            var version = store.VersionSnapshots.SingleOrDefault(
+                snapshot =>
+                    snapshot.DeviceId == requestedDeviceId
+                    && snapshot.ClientCode == normalizedClientCode);
+            var heartbeat = store.RuntimeHeartbeats.SingleOrDefault(
+                current =>
+                    current.DeviceId == requestedDeviceId
+                    && current.ClientCode == normalizedClientCode);
+            var observation = new DeviceReportWriteObservation(
+                requestedDeviceId == deviceId,
+                requestedDeviceId == deviceId
+                    ? clientCode
+                    : null,
+                version is null
+                    ? null
+                    : new DeviceReportState(
+                        version.ReportedAtUtc,
+                        version.ReceivedAtUtc,
+                        version.GetContentSha256()),
+                heartbeat is null
+                    ? null
+                    : new DeviceReportState(
+                        heartbeat.LastHeartbeatAtUtc,
+                        heartbeat.UpdatedAtUtc,
+                        heartbeat.GetContentSha256()),
+                null);
+            return Task.FromResult(
+                observationTransform?.Invoke(observation)
+                ?? observation);
+        }
+    }
+
+    private sealed class RecordingUnitOfWork : IUnitOfWork
+    {
+        public Action? OnCommit { get; init; }
+
+        public Task<TResult> ExecuteResilientAsync<TResult>(
+            Func<CancellationToken, Task<TResult>> operation,
+            CancellationToken cancellationToken = default)
+            => operation(cancellationToken);
+
+        public Task BeginTransactionAsync(
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task CommitAsync(
+            CancellationToken cancellationToken = default)
+        {
+            OnCommit?.Invoke();
+            return Task.CompletedTask;
+        }
+
+        public Task RollbackAsync(
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
     }
 
     private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider

@@ -13,13 +13,27 @@ public class MfgProcess : BaseEntity<Guid>, IAggregateRoot<Guid>
     protected MfgProcess() { }
 
     public MfgProcess(string processCode, string processName)
+        : this(Guid.NewGuid(), processCode, processName)
     {
+    }
+
+    public MfgProcess(
+        Guid id,
+        string processCode,
+        string processName)
+    {
+        if (id == Guid.Empty)
+            throw new ArgumentException("Id 不能为空。", nameof(id));
         ArgumentException.ThrowIfNullOrWhiteSpace(processCode);
         ArgumentException.ThrowIfNullOrWhiteSpace(processName);
 
-        Id = Guid.NewGuid();
+        Id = id;
         ProcessCode = processCode.Trim();
         ProcessName = processName.Trim();
+        AddDomainEvent(new Events.MfgProcessCreatedDomainEvent(
+            Id,
+            ProcessCode,
+            ProcessName));
     }
 
     /// <summary>
@@ -62,6 +76,14 @@ public class MfgProcess : BaseEntity<Guid>, IAggregateRoot<Guid>
             oldCode,
             ProcessCode,
             oldName,
+            ProcessName));
+    }
+
+    public void MarkDeleted()
+    {
+        AddDomainEvent(new Events.MfgProcessDeletedDomainEvent(
+            Id,
+            ProcessCode,
             ProcessName));
     }
 }

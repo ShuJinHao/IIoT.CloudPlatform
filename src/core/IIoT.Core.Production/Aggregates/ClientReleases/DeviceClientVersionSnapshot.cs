@@ -1,7 +1,17 @@
 using IIoT.SharedKernel.Domain;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace IIoT.Core.Production.Aggregates.ClientReleases;
+
+public enum DeviceClientVersionReportUpdateResult
+{
+    Applied,
+    Idempotent,
+    Stale,
+    Conflict
+}
 
 /// <summary>
 /// 设备最近一次 Edge 客户端版本上报快照。
@@ -23,7 +33,8 @@ public sealed class DeviceClientVersionSnapshot : BaseEntity<Guid>
         DateTime reportedAtUtc,
         IEnumerable<DeviceClientPluginVersion> installedPlugins,
         IEnumerable<string>? localIpAddresses = null,
-        string? remoteIpAddress = null)
+        string? remoteIpAddress = null,
+        DateTime? receivedAtUtc = null)
     {
         if (deviceId == Guid.Empty)
         {
@@ -40,7 +51,8 @@ public sealed class DeviceClientVersionSnapshot : BaseEntity<Guid>
             reportedAtUtc,
             installedPlugins,
             localIpAddresses,
-            remoteIpAddress);
+            remoteIpAddress,
+            receivedAtUtc);
     }
 
     public Guid DeviceId { get; private set; }
@@ -63,7 +75,7 @@ public sealed class DeviceClientVersionSnapshot : BaseEntity<Guid>
 
     public IReadOnlyCollection<DeviceClientPluginVersion> InstalledPlugins => _installedPlugins.AsReadOnly();
 
-    public void ReplaceReport(
+    public DeviceClientVersionReportUpdateResult ReplaceReport(
         string clientCode,
         string hostVersion,
         string hostApiVersion,
@@ -71,22 +83,73 @@ public sealed class DeviceClientVersionSnapshot : BaseEntity<Guid>
         DateTime reportedAtUtc,
         IEnumerable<DeviceClientPluginVersion> installedPlugins,
         IEnumerable<string>? localIpAddresses = null,
-        string? remoteIpAddress = null)
+        string? remoteIpAddress = null,
+        DateTime? receivedAtUtc = null)
     {
-        ClientCode = NormalizeRequired(clientCode, nameof(clientCode)).ToUpperInvariant();
-        HostVersion = NormalizeRequired(hostVersion, nameof(hostVersion));
-        HostApiVersion = NormalizeRequired(hostApiVersion, nameof(hostApiVersion));
-        Channel = NormalizeRequired(channel, nameof(channel));
-        ReportedAtUtc = reportedAtUtc.Kind == DateTimeKind.Unspecified
+        var normalizedClientCode =
+            NormalizeRequired(clientCode, nameof(clientCode)).ToUpperInvariant();
+        var normalizedHostVersion = NormalizeRequired(hostVersion, nameof(hostVersion));
+        var normalizedHostApiVersion =
+            NormalizeRequired(hostApiVersion, nameof(hostApiVersion));
+        var normalizedChannel = NormalizeRequired(channel, nameof(channel));
+        var normalizedReportedAtUtc = reportedAtUtc.Kind == DateTimeKind.Unspecified
             ? DateTime.SpecifyKind(reportedAtUtc, DateTimeKind.Utc)
             : reportedAtUtc.ToUniversalTime();
-        ReceivedAtUtc = DateTime.UtcNow;
-        LocalIpAddressesJson = SerializeIpAddresses(localIpAddresses);
-        RemoteIpAddress = NormalizeOptional(remoteIpAddress);
+        var normalizedLocalIpAddressesJson = SerializeIpAddresses(localIpAddresses);
+        var normalizedRemoteIpAddress = NormalizeOptional(remoteIpAddress);
+        var normalizedPlugins = installedPlugins
+            .OrderBy(plugin => plugin.ModuleId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(plugin => plugin.Version, StringComparer.Ordinal)
+            .ToArray();
 
+        if (ReportedAtUtc != default)
+        {
+            if (normalizedReportedAtUtc < ReportedAtUtc)
+            {
+                return DeviceClientVersionReportUpdateResult.Stale;
+            }
+
+            if (normalizedReportedAtUtc == ReportedAtUtc)
+            {
+                var incomingHash = ComputeContentSha256(
+                    normalizedClientCode,
+                    normalizedHostVersion,
+                    normalizedHostApiVersion,
+                    normalizedChannel,
+                    normalizedPlugins,
+                    normalizedLocalIpAddressesJson,
+                    normalizedRemoteIpAddress);
+                return string.Equals(
+                    incomingHash,
+                    GetContentSha256(),
+                    StringComparison.Ordinal)
+                    ? DeviceClientVersionReportUpdateResult.Idempotent
+                    : DeviceClientVersionReportUpdateResult.Conflict;
+            }
+        }
+
+        ClientCode = normalizedClientCode;
+        HostVersion = normalizedHostVersion;
+        HostApiVersion = normalizedHostApiVersion;
+        Channel = normalizedChannel;
+        ReportedAtUtc = normalizedReportedAtUtc;
+        ReceivedAtUtc = NormalizeUtc(receivedAtUtc ?? DateTime.UtcNow);
+        LocalIpAddressesJson = normalizedLocalIpAddressesJson;
+        RemoteIpAddress = normalizedRemoteIpAddress;
         _installedPlugins.Clear();
-        _installedPlugins.AddRange(installedPlugins);
+        _installedPlugins.AddRange(normalizedPlugins);
+        return DeviceClientVersionReportUpdateResult.Applied;
     }
+
+    public string GetContentSha256()
+        => ComputeContentSha256(
+            ClientCode,
+            HostVersion,
+            HostApiVersion,
+            Channel,
+            _installedPlugins,
+            LocalIpAddressesJson,
+            RemoteIpAddress);
 
     public IReadOnlyList<string> GetLocalIpAddresses()
     {
@@ -125,9 +188,50 @@ public sealed class DeviceClientVersionSnapshot : BaseEntity<Guid>
             .Select(value => value!)
             .Where(value => value.Length <= 128)
             .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
             .Take(16)
             .ToList();
 
         return JsonSerializer.Serialize(normalized);
     }
+
+    private static string ComputeContentSha256(
+        string clientCode,
+        string hostVersion,
+        string hostApiVersion,
+        string channel,
+        IEnumerable<DeviceClientPluginVersion> installedPlugins,
+        string localIpAddressesJson,
+        string? remoteIpAddress)
+    {
+        var canonical = JsonSerializer.Serialize(new
+        {
+            clientCode,
+            hostVersion,
+            hostApiVersion,
+            channel,
+            localIpAddressesJson,
+            remoteIpAddress,
+            installedPlugins = installedPlugins
+                .OrderBy(plugin => plugin.ModuleId, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(plugin => plugin.Version, StringComparer.Ordinal)
+                .Select(plugin => new
+                {
+                    plugin.ModuleId,
+                    plugin.DisplayName,
+                    plugin.Version,
+                    plugin.HostApiVersion,
+                    plugin.Enabled
+                })
+                .ToArray()
+        });
+        return Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))
+            .ToLowerInvariant();
+    }
+
+    private static DateTime NormalizeUtc(DateTime value)
+        => value.Kind == DateTimeKind.Unspecified
+            ? DateTime.SpecifyKind(value, DateTimeKind.Utc)
+            : value.ToUniversalTime();
 }

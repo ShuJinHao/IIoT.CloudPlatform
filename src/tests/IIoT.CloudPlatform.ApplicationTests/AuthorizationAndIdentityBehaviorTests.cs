@@ -2007,7 +2007,8 @@ public sealed class AuthorizationAndIdentityBehaviorTests
 
         public Task<DeviceCascadeDeletionResult> DeleteCascadeAsync(
             Guid deviceId,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            uint? expectedRowVersion = null)
         {
             return Task.FromResult(new DeviceCascadeDeletionResult(
                 true,

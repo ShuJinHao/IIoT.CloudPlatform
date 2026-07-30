@@ -4,8 +4,10 @@ using IIoT.Core.Production.Specifications.Devices;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.CrossCutting.Persistence;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -15,13 +17,12 @@ namespace IIoT.ProductionService.Commands.Devices;
 [AuthorizeRequirement(DevicePermissions.Delete)]
 [AuthorizeRequirement(DevicePermissions.CascadeDelete)]
 [AdminOnly]
+[DistributedLock("iiot:lock:device-write:{DeviceId}", TimeoutSeconds = 5)]
 public record DeleteDeviceCommand(Guid DeviceId)
     : IHumanCommand<Result<bool>>, IAdminOnlyAuditRequest
 {
     public string AdminAuditOperationType => "Device.Delete";
-
     public string AdminAuditTargetType => "Device";
-
     public string AdminAuditTargetIdOrKey => DeviceId.ToString();
 }
 
@@ -30,49 +31,137 @@ public class DeleteDeviceHandler(
     IRepository<Device> deviceRepository,
     IDeviceDeletionDependencyQueryService dependencyQueryService,
     ICurrentUserDeviceAccessService currentUserDeviceAccessService,
-    IAuditTrailService auditTrailService)
+    IAuditTrailService auditTrailService,
+    IDeviceWriteObservationReader observationReader)
     : ICommandHandler<DeleteDeviceCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(
         DeleteDeviceCommand request,
         CancellationToken cancellationToken)
     {
-        var device = await deviceRepository.GetSingleOrDefaultAsync(
+        var accessTarget = await deviceRepository.GetSingleOrDefaultAsync(
             new DeviceByIdSpec(request.DeviceId),
             cancellationToken);
+        if (accessTarget is null)
+            return await FailAsync(
+                request.DeviceId.ToString(),
+                "目标设备不存在",
+                cancellationToken);
 
-        if (device is null)
-            return await FailAsync(request.DeviceId.ToString(), "目标设备不存在", cancellationToken);
-
-        var deviceAccess = await currentUserDeviceAccessService.EnsureCanAccessDeviceAsync(
-            device.Id,
-            cancellationToken);
+        var deviceAccess =
+            await currentUserDeviceAccessService.EnsureCanAccessDeviceAsync(
+                accessTarget.Id,
+                cancellationToken);
         if (!deviceAccess.IsSuccess)
         {
             return await FailAsync(
-                device.Id.ToString(),
-                deviceAccess.Errors?.FirstOrDefault() ?? "越权：未授权访问该设备",
+                accessTarget.Id.ToString(),
+                deviceAccess.Errors?.FirstOrDefault()
+                ?? "越权：未授权访问该设备",
                 cancellationToken);
         }
 
-        var deletionResult = await dependencyQueryService.DeleteCascadeAsync(
-            request.DeviceId,
+        var baseline = await CloudWriteCommitRecovery.TryObserveAttemptAsync(
+            token => observationReader.ObserveDeviceAsync(
+                accessTarget.Id,
+                accessTarget.DeviceName,
+                accessTarget.Code,
+                accessTarget.ProcessId,
+                token),
             cancellationToken);
+        if (baseline?.Target is null)
+        {
+            throw new CloudWriteCommitUnknownException();
+        }
 
-        await auditTrailService.TryWriteAsync(
-            new AuditTrailEntry(
-                ParseActorUserId(currentUser.Id),
-                currentUser.UserName,
-                "Device.Delete",
-                "Device",
-                device.Id.ToString(),
-                DateTime.UtcNow,
-                deletionResult.DeviceDeleted,
-                BuildDeletionAuditSummary(device, deletionResult.Impact),
-                deletionResult.DeviceDeleted ? null : "设备级联删除未删除设备主数据。"),
-            cancellationToken);
+        var auditExecutedAtUtc = DateTime.UtcNow;
+        DeviceCascadeDeletionResult deletionResult;
+        var commitRecovered = false;
+        try
+        {
+            deletionResult = await dependencyQueryService.DeleteCascadeAsync(
+                request.DeviceId,
+                cancellationToken,
+                baseline.Target.RowVersion);
+        }
+        catch (DeviceDeletionCommitAttemptException exception)
+        {
+            deletionResult = await ResolveCommitAsync(exception.Impact);
+            commitRecovered = true;
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (CloudWriteException)
+        {
+            throw;
+        }
+        catch
+        {
+            deletionResult = await ResolveCommitAsync(null);
+            commitRecovered = true;
+        }
 
-        return Result.Success(deletionResult.DeviceDeleted);
+        if (!deletionResult.DeviceDeleted)
+        {
+            throw new CloudWriteCommitUnknownException();
+        }
+
+        var auditEntry = new AuditTrailEntry(
+            ParseActorUserId(currentUser.Id),
+            currentUser.UserName,
+            "Device.Delete",
+            "Device",
+            accessTarget.Id.ToString(),
+            auditExecutedAtUtc,
+            true,
+            BuildDeletionAuditSummary(
+                accessTarget,
+                deletionResult.Impact),
+            IdempotencyKey: $"device-delete:{request.DeviceId:N}");
+        if (commitRecovered)
+        {
+            await CloudWriteCommitRecovery.ConfirmRecoveredAuditAsync(
+                auditTrailService,
+                auditEntry);
+        }
+        else
+        {
+            await auditTrailService.TryWriteAsync(
+                auditEntry,
+                cancellationToken);
+        }
+
+        return Result.Success(true);
+
+        async Task<DeviceCascadeDeletionResult> ResolveCommitAsync(
+            DeviceDeletionImpact? attemptedImpact)
+        {
+            var current = await CloudWriteCommitRecovery.TryObserveCommitAsync(
+                token => observationReader.ObserveDeviceAsync(
+                    accessTarget.Id,
+                    accessTarget.DeviceName,
+                    accessTarget.Code,
+                    accessTarget.ProcessId,
+                    token));
+            if (current is null
+                || current.Target == baseline.Target)
+            {
+                throw new CloudWriteCommitUnknownException();
+            }
+
+            if (current.Target is null
+                && current.DeletionImpact.TotalAssociatedRows == 0)
+            {
+                return new DeviceCascadeDeletionResult(
+                    true,
+                    attemptedImpact ?? baseline.DeletionImpact);
+            }
+
+            throw new CloudWriteConflictException();
+        }
     }
 
     private async Task<Result<bool>> FailAsync(
@@ -97,17 +186,14 @@ public class DeleteDeviceHandler(
     }
 
     private static Guid? ParseActorUserId(string? rawUserId)
-    {
-        return Guid.TryParse(rawUserId, out var actorUserId)
+        => Guid.TryParse(rawUserId, out var actorUserId)
             ? actorUserId
             : null;
-    }
 
     private static string BuildDeletionAuditSummary(
         Device device,
         DeviceDeletionImpact impact)
-    {
-        return JsonSerializer.Serialize(new
+        => JsonSerializer.Serialize(new
         {
             action = "DeviceCascadeDelete",
             deviceId = device.Id,
@@ -121,14 +207,18 @@ public class DeleteDeviceHandler(
                 device_logs = impact.DeviceLogs,
                 pass_station_records = impact.PassStations,
                 edge_device_client_states = impact.ClientStates,
-                edge_device_client_version_snapshots = impact.ClientVersionSnapshots,
-                edge_device_client_plugin_versions = impact.ClientPluginVersions,
+                edge_device_client_version_snapshots =
+                    impact.ClientVersionSnapshots,
+                edge_device_client_plugin_versions =
+                    impact.ClientPluginVersions,
                 edge_device_runtime_heartbeats = impact.RuntimeHeartbeats,
-                upload_receive_registrations = impact.UploadReceiveRegistrations,
-                employee_device_accesses = impact.EmployeeDeviceAccesses,
+                upload_receive_registrations =
+                    impact.UploadReceiveRegistrations,
+                employee_device_accesses =
+                    impact.EmployeeDeviceAccesses,
                 refresh_token_sessions = impact.RefreshTokenSessions,
-                edge_host_plc_runtime_states = impact.EdgeHostPlcRuntimeStates
+                edge_host_plc_runtime_states =
+                    impact.EdgeHostPlcRuntimeStates
             }
         });
-    }
 }

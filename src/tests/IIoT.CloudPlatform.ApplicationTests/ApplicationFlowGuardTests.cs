@@ -3,13 +3,16 @@ using System.Text;
 using System.Text.Json;
 using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.MasterData.Aggregates.MfgProcesses;
+using IIoT.Core.MasterData.Aggregates.MfgProcesses.Events;
 using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.Devices.Events;
 using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.Core.Production.Aggregates.Recipes.Events;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.EmployeeService.Commands.Employees;
 using IIoT.MasterDataService.Commands.Processes;
+using IIoT.MasterDataService.Caching;
 using IIoT.ProductionService.Commands;
 using IIoT.ProductionService.Commands.Capacities;
 using IIoT.ProductionService.Commands.DeviceLogs;
@@ -33,6 +36,7 @@ using IIoT.Services.CrossCutting.Exceptions;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.Contracts.Events.Capacities;
 using IIoT.Services.Contracts.Events.DeviceLogs;
@@ -48,13 +52,122 @@ namespace IIoT.CloudPlatform.ApplicationTests;
 
 public sealed class ApplicationFlowGuardTests
 {
+    private static StubProcessWriteObservationReader ObserveProcesses(
+        InMemoryRepository<MfgProcess> repository)
+        => new()
+        {
+            ObservationFactory = (processId, processCode) =>
+            {
+                var target = repository.ListResult.SingleOrDefault(
+                    process => process.Id == processId);
+                var owner = repository.ListResult.SingleOrDefault(
+                    process => process.ProcessCode == processCode);
+                return new ProcessWriteObservation(
+                    target is null
+                        ? null
+                        : new ProcessWriteState(
+                            target.Id,
+                            target.ProcessCode,
+                            target.ProcessName,
+                            target.RowVersion),
+                    owner?.Id,
+                    false,
+                    false);
+            }
+        };
+
+    private static StubDeviceWriteObservationReader ObserveDevices(
+        InMemoryRepository<Device> repository,
+        bool processExists = true,
+        DeviceDeletionImpact? impact = null)
+        => new()
+        {
+            ObservationFactory = (
+                deviceId,
+                deviceName,
+                clientCode,
+                _) =>
+            {
+                var devices = repository.ListResult.Count > 0
+                    ? repository.ListResult
+                    : repository.SingleOrDefaultResult is null
+                        ? []
+                        : [repository.SingleOrDefaultResult];
+                var target = devices.SingleOrDefault(
+                    device => device.Id == deviceId);
+                var nameOwner = devices.SingleOrDefault(
+                    device => device.DeviceName == deviceName);
+                var codeOwner = devices.SingleOrDefault(
+                    device => device.Code == clientCode);
+                return new DeviceWriteObservation(
+                    target is null
+                        ? null
+                        : new DeviceWriteState(
+                            target.Id,
+                            target.DeviceName,
+                            target.Code,
+                            target.ProcessId,
+                            target.RowVersion),
+                    nameOwner?.Id,
+                    codeOwner?.Id,
+                    processExists,
+                    impact ?? new DeviceDeletionImpact(
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
+            }
+        };
+
+    private static StubRecipeWriteObservationReader ObserveRecipes(
+        InMemoryRepository<Recipe> repository,
+        bool processExists = true,
+        bool deviceExistsInProcess = true)
+        => new()
+        {
+            ObservationFactory = (
+                recipeId,
+                processId,
+                deviceId,
+                recipeName) =>
+            {
+                var family = repository.ListResult
+                    .Where(recipe =>
+                        recipe.ProcessId == processId
+                        && recipe.DeviceId == deviceId
+                        && recipe.RecipeName == recipeName)
+                    .Select(recipe => new RecipeWriteState(
+                        recipe.Id,
+                        recipe.RecipeName,
+                        recipe.Version,
+                        recipe.ProcessId,
+                        recipe.DeviceId,
+                        recipe.ParametersJsonb,
+                        (int)recipe.Status,
+                        recipe.RowVersion))
+                    .OrderBy(recipe => recipe.Id)
+                    .ToArray();
+                return new RecipeWriteObservation(
+                    family.SingleOrDefault(
+                        recipe => recipe.Id == recipeId),
+                    family,
+                    processExists,
+                    deviceExistsInProcess);
+            }
+        };
+
     [Fact]
     public async Task CreateProcessHandler_ShouldRejectDuplicateProcessCode()
     {
         var repository = new InMemoryRepository<MfgProcess>();
-        var processQueries = new StubProcessReadQueryService { CodeExists = true };
-        var cache = new RecordingCacheService();
-        var handler = new CreateProcessHandler(repository, processQueries, cache);
+        var handler = new CreateProcessHandler(
+            repository,
+            new RecordingUnitOfWork(),
+            new StubProcessWriteObservationReader
+            {
+                ObservationFactory = (_, _) => new ProcessWriteObservation(
+                    null,
+                    Guid.NewGuid(),
+                    false,
+                    false)
+            });
 
         var result = await handler.Handle(
             new CreateProcessCommand(" PROC-001 ", "Injection"),
@@ -64,7 +177,61 @@ public sealed class ApplicationFlowGuardTests
         Assert.NotNull(result.Errors);
         Assert.Single(result.Errors);
         Assert.Null(repository.AddedEntity);
-        Assert.Empty(cache.RemovedKeys);
+    }
+
+    [Fact]
+    public async Task ProcessCacheInvalidation_ShouldBeDrivenByPersistedDomainEvents()
+    {
+        var messageId = Guid.NewGuid();
+        var invalidation =
+            new RecordingIdempotentCacheInvalidationService();
+        var dispatchContext =
+            new StaticDomainEventDispatchContext(messageId);
+        var processId = Guid.NewGuid();
+
+        await new MfgProcessCreatedCacheInvalidationHandler(
+                invalidation,
+                dispatchContext)
+            .Handle(
+                new MfgProcessCreatedDomainEvent(
+                    processId,
+                    "PROC-001",
+                    "Process"),
+                CancellationToken.None);
+        await new MfgProcessRenamedCacheInvalidationHandler(
+                invalidation,
+                dispatchContext)
+            .Handle(
+                new MfgProcessRenamedDomainEvent(
+                    processId,
+                    "PROC-001",
+                    "PROC-002",
+                    "Process",
+                    "Renamed"),
+                CancellationToken.None);
+        await new MfgProcessDeletedCacheInvalidationHandler(
+                invalidation,
+                dispatchContext)
+            .Handle(
+                new MfgProcessDeletedDomainEvent(
+                    processId,
+                    "PROC-002",
+                    "Renamed"),
+                CancellationToken.None);
+
+        Assert.Equal(3, invalidation.Operations.Count);
+        Assert.All(
+            invalidation.Operations,
+            operation =>
+            {
+                Assert.Equal(messageId, operation.OperationId);
+                Assert.Equal(
+                    "mfg-process-change",
+                    operation.OperationScope);
+                Assert.Equal(
+                    [CacheKeys.ProcessesAll()],
+                    operation.Keys);
+            });
     }
 
     [Fact]
@@ -75,6 +242,7 @@ public sealed class ApplicationFlowGuardTests
         var processQueries = new StubProcessReadQueryService { Exists = true };
         var deviceQueries = new StubDeviceReadQueryService();
         var auditTrail = new RecordingAuditTrailService();
+        var clientStateStore = new RecordingDeviceClientStateStore();
         var handler = new RegisterDeviceHandler(
             new TestCurrentUser
             {
@@ -88,7 +256,10 @@ public sealed class ApplicationFlowGuardTests
             repository,
             processQueries,
             deviceQueries,
-            auditTrail);
+            auditTrail,
+            new RecordingUnitOfWork(),
+            ObserveDevices(repository),
+            clientStateStore);
 
         var result = await handler.Handle(
             new RegisterDeviceCommand(
@@ -104,6 +275,12 @@ public sealed class ApplicationFlowGuardTests
         Assert.StartsWith("DEV-", repository.AddedEntity.Code);
         Assert.Equal(repository.AddedEntity.Code, created.Code);
         Assert.Null(repository.AddedEntity.BootstrapSecretHash);
+        var clientState = Assert.Single(clientStateStore.States);
+        Assert.Equal(created.Id, clientState.DeviceId);
+        Assert.Equal(created.Code, clientState.ClientCode);
+        Assert.Null(clientState.PlcSnapshotReportedAtUtc);
+        Assert.Null(clientState.PlcSnapshotReceivedAtUtc);
+        Assert.Null(clientState.PlcSnapshotContentSha256);
         Assert.Contains(repository.AddedEntity.DomainEvents, x =>
             x is DeviceRegisteredDomainEvent registered
             && registered.ProcessId == processId
@@ -133,7 +310,10 @@ public sealed class ApplicationFlowGuardTests
             repository,
             processQueries,
             deviceQueries,
-            auditTrail);
+            auditTrail,
+            new RecordingUnitOfWork(),
+            ObserveDevices(repository),
+            new RecordingDeviceClientStateStore());
 
         var result = await handler.Handle(
             new RegisterDeviceCommand("Injection-01", Guid.NewGuid()),
@@ -170,7 +350,10 @@ public sealed class ApplicationFlowGuardTests
             repository,
             processQueries,
             deviceQueries,
-            auditTrail);
+            auditTrail,
+            new RecordingUnitOfWork(),
+            ObserveDevices(repository),
+            new RecordingDeviceClientStateStore());
 
         var result = await handler.Handle(
             new RegisterDeviceCommand("Injection-01", Guid.NewGuid()),
@@ -203,7 +386,10 @@ public sealed class ApplicationFlowGuardTests
             repository,
             processQueries,
             deviceQueries,
-            auditTrail);
+            auditTrail,
+            new RecordingUnitOfWork(),
+            ObserveDevices(repository),
+            new RecordingDeviceClientStateStore());
 
         var result = await handler.Handle(
             new RegisterDeviceCommand("Injection-01", Guid.NewGuid()),
@@ -234,8 +420,9 @@ public sealed class ApplicationFlowGuardTests
 
         var handler = new UpgradeRecipeVersionHandler(
             repository,
-            new StubRecipeReadQueryService(),
-            new StubCurrentUserDeviceAccessService { IsAdministrator = true });
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            new RecordingUnitOfWork(),
+            ObserveRecipes(repository));
 
         var result = await handler.Handle(
             new UpgradeRecipeVersionCommand(source.Id, "V1.1", "{\"speed\":130}"),
@@ -270,7 +457,9 @@ public sealed class ApplicationFlowGuardTests
         repository.ListResult.Add(recipe);
         var handler = new DeleteRecipeHandler(
             repository,
-            new StubCurrentUserDeviceAccessService { IsAdministrator = true });
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            new RecordingUnitOfWork(),
+            ObserveRecipes(repository));
 
         var result = await handler.Handle(new DeleteRecipeCommand(recipe.Id), CancellationToken.None);
 
@@ -1333,8 +1522,9 @@ public sealed class ApplicationFlowGuardTests
         };
         var handler = new UpdateDeviceProfileHandler(
             repository,
-            new StubDeviceReadQueryService(),
-            new StubCurrentUserDeviceAccessService { IsAdministrator = true });
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            new RecordingUnitOfWork(),
+            ObserveDevices(repository));
 
         var result = await handler.Handle(
             new UpdateDeviceProfileCommand(device.Id, "Device-02"),
@@ -1387,7 +1577,8 @@ public sealed class ApplicationFlowGuardTests
             repository,
             dependencyQuery,
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
-            auditTrail);
+            auditTrail,
+            ObserveDevices(repository, impact: dependencyQuery.Impact));
 
         var result = await handler.Handle(new DeleteDeviceCommand(device.Id), CancellationToken.None);
 
@@ -3029,6 +3220,69 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal(ResultStatus.Unauthorized, wrongSecret.Status);
         Assert.True(validSecret.IsSuccess);
         Assert.Equal(device.Id, validSecret.Value!.DeviceIdentity.Id);
+    }
+
+    private sealed class RecordingDeviceClientStateStore
+        : IDeviceClientStateStore
+    {
+        public List<DeviceClientState> States { get; } = [];
+
+        public Task<DeviceClientVersionSnapshot?>
+            GetVersionSnapshotByDeviceAsync(
+                Guid deviceId,
+                CancellationToken cancellationToken = default)
+            => Task.FromResult<DeviceClientVersionSnapshot?>(null);
+
+        public Task<IReadOnlyList<DeviceClientVersionSnapshot>>
+            GetVersionSnapshotsByDevicesAsync(
+                IReadOnlyCollection<Guid>? deviceIds = null,
+                CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<DeviceClientVersionSnapshot>>([]);
+
+        public Task<EdgeDeviceRuntimeHeartbeat?>
+            GetRuntimeHeartbeatByIdentityAsync(
+                Guid deviceId,
+                string clientCode,
+                CancellationToken cancellationToken = default)
+            => Task.FromResult<EdgeDeviceRuntimeHeartbeat?>(null);
+
+        public Task<DeviceClientState?> GetStateByIdentityAsync(
+            Guid deviceId,
+            string clientCode,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(
+                States.SingleOrDefault(state =>
+                    state.DeviceId == deviceId
+                    && string.Equals(
+                        state.ClientCode,
+                        clientCode.Trim(),
+                        StringComparison.OrdinalIgnoreCase)));
+
+        public Task<IReadOnlyList<DeviceClientState>>
+            GetStatesByDevicesAsync(
+                IReadOnlyCollection<Guid>? deviceIds = null,
+                CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<DeviceClientState>>(
+                States
+                    .Where(state =>
+                        deviceIds is null
+                        || deviceIds.Contains(state.DeviceId))
+                    .ToList());
+
+        public void AddVersionSnapshot(DeviceClientVersionSnapshot snapshot)
+        {
+        }
+
+        public void AddRuntimeHeartbeat(EdgeDeviceRuntimeHeartbeat heartbeat)
+        {
+        }
+
+        public void AddState(DeviceClientState state)
+            => States.Add(state);
+
+        public Task<int> SaveChangesAsync(
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(States.Count);
     }
 
     private static StubEmployeeMutationObservationReader CreateEmployeeObservationReader(

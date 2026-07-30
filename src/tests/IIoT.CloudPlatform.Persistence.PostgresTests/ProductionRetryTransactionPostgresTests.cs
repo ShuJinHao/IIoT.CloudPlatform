@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Text.Json;
 using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.MasterData.Aggregates.MfgProcesses;
 using IIoT.Core.Production.Aggregates.ClientReleases;
@@ -8,16 +9,23 @@ using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.EmployeeService.Commands.Employees;
 using IIoT.EntityFrameworkCore;
 using IIoT.EntityFrameworkCore.Auditing;
+using IIoT.EntityFrameworkCore.ClientReleases;
+using IIoT.EntityFrameworkCore.EdgeHosts;
 using IIoT.EntityFrameworkCore.Identity;
 using IIoT.EntityFrameworkCore.Persistence;
 using IIoT.EntityFrameworkCore.QueryServices;
 using IIoT.EntityFrameworkCore.Repository;
 using IIoT.EntityFrameworkCore.Uploads;
+using IIoT.MasterDataService.Commands.Processes;
+using IIoT.ProductionService.Commands.ClientVersions;
 using IIoT.ProductionService.Commands.Devices;
+using IIoT.ProductionService.Commands.EdgeHosts;
+using IIoT.ProductionService.Commands.Recipes;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Authorization;
 using IIoT.SharedKernel.Result;
@@ -90,6 +98,82 @@ public sealed class ProductionRetryTransactionPostgresTests(
             budget.Token);
 
         Assert.Equal(9, interceptor.ExceptionsThrown);
+    }
+
+    [Fact]
+    public async Task BusinessAggregateWrites_ShouldReplayTransientBeforeCommit()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(90));
+        var interceptor = new ThrowOnceBeforeCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+
+        await VerifyBusinessAggregateWritesAsync(
+            provider,
+            interceptor.Arm,
+            budget.Token);
+
+        Assert.Equal(9, interceptor.ExceptionsThrown);
+    }
+
+    [Fact]
+    public async Task BusinessAggregateWrites_ShouldRecoverCommitConfirmationLoss()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(90));
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+
+        await VerifyBusinessAggregateWritesAsync(
+            provider,
+            () => interceptor.Arm(),
+            budget.Token);
+
+        Assert.Equal(9, interceptor.ExceptionsThrown);
+    }
+
+    [Fact]
+    public async Task EdgeReports_ShouldReplayTransientBeforeCommit()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(60));
+        var interceptor = new ThrowOnceBeforeCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+
+        await VerifyEdgeReportsAsync(
+            provider,
+            interceptor.Arm,
+            budget.Token);
+
+        Assert.Equal(3, interceptor.ExceptionsThrown);
+    }
+
+    [Fact]
+    public async Task EdgeReports_ShouldRecoverCommitConfirmationLoss()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(60));
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+
+        await VerifyEdgeReportsAsync(
+            provider,
+            () => interceptor.Arm(),
+            budget.Token);
+
+        Assert.Equal(3, interceptor.ExceptionsThrown);
     }
 
     [Fact]
@@ -812,6 +896,237 @@ public sealed class ProductionRetryTransactionPostgresTests(
     }
 
     [Fact]
+    public async Task DeviceDeleteCancellationAfterCommit_ShouldRecoverOutsideCallerToken()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        using var cancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(
+                budget.Token);
+        var interceptor = new CancelOnceAfterWriteCommitInterceptor(
+            cancellation);
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var cleanOptions = new DbContextOptionsBuilder<IIoTDbContext>()
+            .UseNpgsql(budget.ConnectionString)
+            .Options;
+        var (process, device) = CreateProcessAndDevice("DELCANCEL");
+        process.ClearDomainEvents();
+        device.ClearDomainEvents();
+        dbContext.MfgProcesses.Add(process);
+        dbContext.Devices.Add(device);
+        await dbContext.SaveChangesAsync(budget.Token);
+        dbContext.ChangeTracker.Clear();
+        var audit = new RecordingAuditTrailService();
+        var observationReader = new AfterFirstDeviceObservationReader(
+            new CloudWriteObservationReader(
+                services.GetRequiredService<
+                    DbContextOptions<IIoTDbContext>>()),
+            async () =>
+            {
+                await using var lateContext =
+                    new IIoTDbContext(cleanOptions);
+                lateContext.DeviceClientStates.Add(
+                    new DeviceClientState(
+                        device.Id,
+                        device.Code));
+                await lateContext.SaveChangesAsync(budget.Token);
+            });
+        var handler = new DeleteDeviceHandler(
+            HumanAdmin(),
+            new EfRepository<Device>(dbContext),
+            new EfDeviceDeletionDependencyService(dbContext),
+            new StubCurrentUserDeviceAccessService
+            {
+                IsAdministrator = true
+            },
+            audit,
+            observationReader);
+
+        interceptor.Arm();
+        var result = await handler.Handle(
+            new DeleteDeviceCommand(device.Id),
+            cancellation.Token);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(cancellation.IsCancellationRequested);
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+        Assert.Single(audit.Entries);
+        Assert.Single(audit.ConfirmedEntries);
+        var auditCancellationToken =
+            Assert.Single(audit.CancellationTokens);
+        Assert.True(auditCancellationToken.CanBeCanceled);
+        Assert.False(auditCancellationToken.IsCancellationRequested);
+        Assert.NotEqual(cancellation.Token, auditCancellationToken);
+        using (var auditSummary = JsonDocument.Parse(
+                   Assert.Single(audit.ConfirmedEntries).Summary))
+        {
+            Assert.Equal(
+                1,
+                auditSummary.RootElement
+                    .GetProperty("deleted")
+                    .GetProperty("edge_device_client_states")
+                    .GetInt64());
+        }
+        dbContext.ChangeTracker.Clear();
+        Assert.False(await dbContext.Devices
+            .AsNoTracking()
+            .AnyAsync(
+                candidate => candidate.Id == device.Id,
+                budget.Token));
+        Assert.Equal(
+            1,
+            await CountOutboxAsync(
+                dbContext,
+                "DeviceDeletedDomainEvent",
+                device.Id,
+                budget.Token));
+    }
+
+    [Fact]
+    public async Task DeviceDeleteCommittedAttemptThenRetryCancellation_ShouldRecoverOutsideCallerToken()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        using var cancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(
+                budget.Token);
+        var interceptor =
+            new CommitThenCancelRetryInterceptor(cancellation);
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var (process, device) = CreateProcessAndDevice("DELRETRYCANCEL");
+        process.ClearDomainEvents();
+        device.ClearDomainEvents();
+        dbContext.MfgProcesses.Add(process);
+        dbContext.Devices.Add(device);
+        await dbContext.SaveChangesAsync(budget.Token);
+        dbContext.ChangeTracker.Clear();
+        var audit = new RecordingAuditTrailService();
+        var handler = new DeleteDeviceHandler(
+            HumanAdmin(),
+            new EfRepository<Device>(dbContext),
+            new EfDeviceDeletionDependencyService(dbContext),
+            new StubCurrentUserDeviceAccessService
+            {
+                IsAdministrator = true
+            },
+            audit,
+            new CloudWriteObservationReader(
+                services.GetRequiredService<
+                    DbContextOptions<IIoTDbContext>>()));
+
+        interceptor.Arm();
+        var result = await handler.Handle(
+            new DeleteDeviceCommand(device.Id),
+            cancellation.Token);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(cancellation.IsCancellationRequested);
+        Assert.Equal(2, interceptor.ExceptionsThrown);
+        Assert.Single(audit.Entries);
+        Assert.Single(audit.ConfirmedEntries);
+        var auditCancellationToken =
+            Assert.Single(audit.CancellationTokens);
+        Assert.True(auditCancellationToken.CanBeCanceled);
+        Assert.False(auditCancellationToken.IsCancellationRequested);
+        Assert.NotEqual(cancellation.Token, auditCancellationToken);
+        dbContext.ChangeTracker.Clear();
+        Assert.False(await dbContext.Devices
+            .AsNoTracking()
+            .AnyAsync(
+                candidate => candidate.Id == device.Id,
+                budget.Token));
+        Assert.Equal(
+            1,
+            await CountOutboxAsync(
+                dbContext,
+                "DeviceDeletedDomainEvent",
+                device.Id,
+                budget.Token));
+    }
+
+    [Fact]
+    public async Task DeviceRegistrationCancellationAfterCommit_ShouldRecoverAndConfirmAuditOutsideCallerToken()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        using var cancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(
+                budget.Token);
+        var interceptor = new CancelOnceAfterWriteCommitInterceptor(
+            cancellation);
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var process = new MfgProcess(
+            $"REGCANCEL-{Guid.NewGuid():N}"[..24],
+            "Registration cancellation process");
+        process.ClearDomainEvents();
+        dbContext.MfgProcesses.Add(process);
+        await dbContext.SaveChangesAsync(budget.Token);
+        dbContext.ChangeTracker.Clear();
+        var audit = new RecordingAuditTrailService();
+        var handler = new RegisterDeviceHandler(
+            HumanAdmin(),
+            new StubCurrentUserDeviceAccessService
+            {
+                IsAdministrator = true
+            },
+            new EfRepository<Device>(dbContext),
+            new ProcessReadQueryService(dbContext),
+            new DeviceReadQueryService(dbContext),
+            audit,
+            CreateUnitOfWork(dbContext),
+            new CloudWriteObservationReader(
+                services.GetRequiredService<
+                    DbContextOptions<IIoTDbContext>>()),
+            new EfDeviceClientStateStore(dbContext));
+
+        interceptor.Arm();
+        var result = await handler.Handle(
+            new RegisterDeviceCommand(
+                $"Registration cancellation {Guid.NewGuid():N}",
+                process.Id),
+            cancellation.Token);
+
+        Assert.True(result.IsSuccess);
+        var created = Assert.IsType<CreateDeviceResultDto>(result.Value);
+        Assert.True(cancellation.IsCancellationRequested);
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+        Assert.Single(audit.Entries);
+        Assert.Single(audit.ConfirmedEntries);
+        var auditCancellationToken =
+            Assert.Single(audit.CancellationTokens);
+        Assert.True(auditCancellationToken.CanBeCanceled);
+        Assert.False(auditCancellationToken.IsCancellationRequested);
+        Assert.NotEqual(cancellation.Token, auditCancellationToken);
+        dbContext.ChangeTracker.Clear();
+        var device = await dbContext.Devices
+            .AsNoTracking()
+            .SingleAsync(
+                candidate => candidate.Id == created.Id,
+                budget.Token);
+        Assert.Equal(created.Code, device.Code);
+        Assert.Equal(process.Id, device.ProcessId);
+        Assert.Equal(
+            1,
+            await CountOutboxAsync(
+                dbContext,
+                "DeviceRegisteredDomainEvent",
+                device.Id,
+                budget.Token));
+    }
+
+    [Fact]
     public async Task RolledBackDeleteAttempt_ShouldAuditImpactObservedByCommittingAttempt()
     {
         using var budget = await PostgresTestBudget.CreateAsync(fixture);
@@ -838,7 +1153,10 @@ public sealed class ProductionRetryTransactionPostgresTests(
             new EfRepository<Device>(dbContext),
             deletionService,
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
-            audit);
+            audit,
+            new CloudWriteObservationReader(
+                services.GetRequiredService<
+                    DbContextOptions<IIoTDbContext>>()));
 
         interceptor.Arm(device.Id);
         var result = await handler.Handle(
@@ -856,6 +1174,67 @@ public sealed class ProductionRetryTransactionPostgresTests(
             "\"device_logs\":1",
             Assert.Single(audit.Entries).Summary,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RolledBackDeleteAttempt_WithConcurrentDeviceMutation_ShouldConflict()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        var interceptor = new ChangeDeviceBeforeDeleteRetryInterceptor(
+            budget.ConnectionString);
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var (process, device) = CreateProcessAndDevice("DELETECAS");
+        process.ClearDomainEvents();
+        device.ClearDomainEvents();
+        dbContext.MfgProcesses.Add(process);
+        dbContext.Devices.Add(device);
+        await dbContext.SaveChangesAsync(budget.Token);
+        dbContext.ChangeTracker.Clear();
+        var observationReader = new CloudWriteObservationReader(
+            services.GetRequiredService<
+                DbContextOptions<IIoTDbContext>>());
+        var baseline = await observationReader.ObserveDeviceAsync(
+            device.Id,
+            device.DeviceName,
+            device.Code,
+            device.ProcessId,
+            budget.Token);
+        var expectedRowVersion = Assert.IsType<DeviceWriteState>(
+            baseline.Target).RowVersion;
+        var changedName = $"Concurrent delete CAS {Guid.NewGuid():N}";
+
+        interceptor.Arm(device.Id, changedName);
+        var exception = await Assert.ThrowsAsync<
+            DeviceDeletionCommitAttemptException>(() =>
+            new EfDeviceDeletionDependencyService(dbContext)
+                .DeleteCascadeAsync(
+                    device.Id,
+                    budget.Token,
+                    expectedRowVersion));
+
+        var conflict = Assert.IsType<CloudWriteConflictException>(
+            exception.InnerException);
+        Assert.Equal(CloudWriteConflictException.Code, conflict.ProblemCode);
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+        dbContext.ChangeTracker.Clear();
+        var persisted = await dbContext.Devices
+            .AsNoTracking()
+            .SingleAsync(
+                candidate => candidate.Id == device.Id,
+                budget.Token);
+        Assert.Equal(changedName, persisted.DeviceName);
+        Assert.Equal(
+            0,
+            await CountOutboxAsync(
+                dbContext,
+                "DeviceDeletedDomainEvent",
+                device.Id,
+                budget.Token));
     }
 
     [Fact]
@@ -881,7 +1260,10 @@ public sealed class ProductionRetryTransactionPostgresTests(
             new EfRepository<Device>(dbContext),
             deletionService,
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
-            audit);
+            audit,
+            new CloudWriteObservationReader(
+                services.GetRequiredService<
+                    DbContextOptions<IIoTDbContext>>()));
 
         interceptor.Arm(seeded.DeviceId, commitLosses: 2);
         var result = await handler.Handle(
@@ -936,7 +1318,10 @@ public sealed class ProductionRetryTransactionPostgresTests(
             new EfRepository<Device>(dbContext),
             deletionService,
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
-            audit);
+            audit,
+            new CloudWriteObservationReader(
+                services.GetRequiredService<
+                    DbContextOptions<IIoTDbContext>>()));
 
         interceptor.Arm(
             seeded.DeviceId,
@@ -1110,6 +1495,435 @@ public sealed class ProductionRetryTransactionPostgresTests(
                     session.ActorType == IIoTClaimTypes.EdgeDeviceActor
                     && session.SubjectId == device.Id,
                 budget.Token));
+    }
+
+    private static async Task VerifyBusinessAggregateWritesAsync(
+        ServiceProvider provider,
+        Action armCommitFailure,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var options = services.GetRequiredService<
+            DbContextOptions<IIoTDbContext>>();
+        var observationReader = new CloudWriteObservationReader(options);
+        var unique = Guid.NewGuid().ToString("N");
+        var access = new StubCurrentUserDeviceAccessService
+        {
+            IsAdministrator = true
+        };
+
+        var processCode = $"TXB1P-{unique[..12]}";
+        armCommitFailure();
+        var createProcess = await new CreateProcessHandler(
+                new EfRepository<MfgProcess>(dbContext),
+                CreateUnitOfWork(dbContext),
+                observationReader)
+            .Handle(
+                new CreateProcessCommand(
+                    processCode,
+                    $"Retry process {unique}"),
+                cancellationToken);
+        Assert.True(createProcess.IsSuccess);
+        var processId = createProcess.Value;
+        dbContext.ChangeTracker.Clear();
+
+        var updatedProcessCode = $"{processCode}-U";
+        armCommitFailure();
+        var updateProcess = await new UpdateProcessHandler(
+                new EfRepository<MfgProcess>(dbContext),
+                CreateUnitOfWork(dbContext),
+                observationReader)
+            .Handle(
+                new UpdateProcessCommand(
+                    processId,
+                    updatedProcessCode,
+                    $"Updated retry process {unique}"),
+                cancellationToken);
+        Assert.True(updateProcess.IsSuccess);
+        dbContext.ChangeTracker.Clear();
+
+        armCommitFailure();
+        var deleteProcess = await new DeleteProcessHandler(
+                new EfRepository<MfgProcess>(dbContext),
+                new ProcessReadQueryService(dbContext),
+                CreateUnitOfWork(dbContext),
+                observationReader)
+            .Handle(
+                new DeleteProcessCommand(processId),
+                cancellationToken);
+        Assert.True(deleteProcess.IsSuccess);
+        dbContext.ChangeTracker.Clear();
+        Assert.False(await dbContext.MfgProcesses
+            .AsNoTracking()
+            .AnyAsync(
+                process => process.Id == processId,
+                cancellationToken));
+        Assert.Equal(
+            1,
+            await CountOutboxAsync(
+                dbContext,
+                "MfgProcessCreatedDomainEvent",
+                processId,
+                cancellationToken));
+        Assert.Equal(
+            1,
+            await CountOutboxAsync(
+                dbContext,
+                "MfgProcessRenamedDomainEvent",
+                processId,
+                cancellationToken));
+        Assert.Equal(
+            1,
+            await CountOutboxAsync(
+                dbContext,
+                "MfgProcessDeletedDomainEvent",
+                processId,
+                cancellationToken));
+
+        var deviceProcess = new MfgProcess(
+            $"TXB1D-{unique[..12]}",
+            $"Device process {unique}");
+        deviceProcess.ClearDomainEvents();
+        dbContext.MfgProcesses.Add(deviceProcess);
+        await dbContext.SaveChangesAsync(cancellationToken);
+        dbContext.ChangeTracker.Clear();
+        var audit = new RecordingAuditTrailService();
+
+        armCommitFailure();
+        var registerDevice = await new RegisterDeviceHandler(
+                HumanAdmin(),
+                access,
+                new EfRepository<Device>(dbContext),
+                new ProcessReadQueryService(dbContext),
+                new DeviceReadQueryService(dbContext),
+                audit,
+                CreateUnitOfWork(dbContext),
+                observationReader,
+                new EfDeviceClientStateStore(dbContext))
+            .Handle(
+                new RegisterDeviceCommand(
+                    $"Retry device {unique}",
+                    deviceProcess.Id),
+                cancellationToken);
+        Assert.True(registerDevice.IsSuccess);
+        var deviceId = registerDevice.Value!.Id;
+        dbContext.ChangeTracker.Clear();
+
+        armCommitFailure();
+        var updateDevice = await new UpdateDeviceProfileHandler(
+                new EfRepository<Device>(dbContext),
+                access,
+                CreateUnitOfWork(dbContext),
+                observationReader)
+            .Handle(
+                new UpdateDeviceProfileCommand(
+                    deviceId,
+                    $"Updated retry device {unique}"),
+                cancellationToken);
+        Assert.True(updateDevice.IsSuccess);
+        dbContext.ChangeTracker.Clear();
+
+        armCommitFailure();
+        var deleteDevice = await new DeleteDeviceHandler(
+                HumanAdmin(),
+                new EfRepository<Device>(dbContext),
+                new EfDeviceDeletionDependencyService(dbContext),
+                access,
+                audit,
+                observationReader)
+            .Handle(
+                new DeleteDeviceCommand(deviceId),
+                cancellationToken);
+        Assert.True(deleteDevice.IsSuccess);
+        dbContext.ChangeTracker.Clear();
+        Assert.False(await dbContext.Devices
+            .AsNoTracking()
+            .AnyAsync(
+                device => device.Id == deviceId,
+                cancellationToken));
+        Assert.Equal(
+            1,
+            await CountOutboxAsync(
+                dbContext,
+                "DeviceRegisteredDomainEvent",
+                deviceId,
+                cancellationToken));
+        Assert.Equal(
+            1,
+            await CountOutboxAsync(
+                dbContext,
+                "DeviceRenamedDomainEvent",
+                deviceId,
+                cancellationToken));
+        Assert.Equal(
+            1,
+            await CountOutboxAsync(
+                dbContext,
+                "DeviceDeletedDomainEvent",
+                deviceId,
+                cancellationToken));
+        Assert.Equal(2, audit.Entries.Count);
+        Assert.Equal(
+            2,
+            audit.Entries
+                .Select(entry => entry.IdempotencyKey)
+                .Distinct(StringComparer.Ordinal)
+                .Count());
+
+        var recipeProcess = new MfgProcess(
+            $"TXB1R-{unique[..12]}",
+            $"Recipe process {unique}");
+        var recipeDevice = new Device(
+            $"Recipe device {unique}",
+            $"TXB1-{unique[..20]}",
+            recipeProcess.Id);
+        recipeProcess.ClearDomainEvents();
+        recipeDevice.ClearDomainEvents();
+        dbContext.MfgProcesses.Add(recipeProcess);
+        dbContext.Devices.Add(recipeDevice);
+        await dbContext.SaveChangesAsync(cancellationToken);
+        dbContext.ChangeTracker.Clear();
+        var recipeName = $"Retry recipe {unique}";
+
+        armCommitFailure();
+        var createRecipe = await new CreateRecipeHandler(
+                new EfRepository<Recipe>(dbContext),
+                access,
+                CreateUnitOfWork(dbContext),
+                observationReader)
+            .Handle(
+                new CreateRecipeCommand(
+                    recipeName,
+                    recipeProcess.Id,
+                    recipeDevice.Id,
+                    """{"speed":1}"""),
+                cancellationToken);
+        Assert.True(createRecipe.IsSuccess);
+        var sourceRecipeId = createRecipe.Value;
+        dbContext.ChangeTracker.Clear();
+
+        armCommitFailure();
+        var upgradeRecipe = await new UpgradeRecipeVersionHandler(
+                new EfRepository<Recipe>(dbContext),
+                access,
+                CreateUnitOfWork(dbContext),
+                observationReader)
+            .Handle(
+                new UpgradeRecipeVersionCommand(
+                    sourceRecipeId,
+                    "V2.0",
+                    """{"speed":2}"""),
+                cancellationToken);
+        Assert.True(upgradeRecipe.IsSuccess);
+        var upgradedRecipeId = upgradeRecipe.Value;
+        dbContext.ChangeTracker.Clear();
+
+        armCommitFailure();
+        var deleteRecipe = await new DeleteRecipeHandler(
+                new EfRepository<Recipe>(dbContext),
+                access,
+                CreateUnitOfWork(dbContext),
+                observationReader)
+            .Handle(
+                new DeleteRecipeCommand(sourceRecipeId),
+                cancellationToken);
+        Assert.True(deleteRecipe.IsSuccess);
+        dbContext.ChangeTracker.Clear();
+        var persistedRecipes = await dbContext.Recipes
+            .AsNoTracking()
+            .Where(recipe =>
+                recipe.ProcessId == recipeProcess.Id
+                && recipe.DeviceId == recipeDevice.Id
+                && recipe.RecipeName == recipeName)
+            .ToListAsync(cancellationToken);
+        var persistedRecipe = Assert.Single(persistedRecipes);
+        Assert.Equal(upgradedRecipeId, persistedRecipe.Id);
+        Assert.Equal("V2.0", persistedRecipe.Version);
+        Assert.Equal(RecipeStatus.Active, persistedRecipe.Status);
+        Assert.Equal(
+            1,
+            await CountOutboxAsync(
+                dbContext,
+                "RecipeCreatedDomainEvent",
+                sourceRecipeId,
+                cancellationToken));
+        Assert.Equal(
+            1,
+            await CountOutboxAsync(
+                dbContext,
+                "RecipeVersionUpgradedDomainEvent",
+                upgradedRecipeId,
+                cancellationToken));
+        Assert.Equal(
+            1,
+            await CountOutboxAsync(
+                dbContext,
+                "RecipeDeletedDomainEvent",
+                sourceRecipeId,
+                cancellationToken));
+    }
+
+    private static async Task VerifyEdgeReportsAsync(
+        ServiceProvider provider,
+        Action armCommitFailure,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var options = services.GetRequiredService<
+            DbContextOptions<IIoTDbContext>>();
+        var observationReader = new CloudWriteObservationReader(options);
+        var unique = Guid.NewGuid().ToString("N");
+        var (process, device) = CreateProcessAndDevice(
+            $"REPORT-{unique[..8]}");
+        process.ClearDomainEvents();
+        device.ClearDomainEvents();
+        dbContext.MfgProcesses.Add(process);
+        dbContext.Devices.Add(device);
+        await dbContext.SaveChangesAsync(cancellationToken);
+        dbContext.ChangeTracker.Clear();
+        var identity = new StubDeviceIdentityQueryService
+        {
+            Exists = true,
+            Snapshot = new DeviceIdentitySnapshot(
+                device.Id,
+                device.Code)
+        };
+        var reportedAtUtc = DateTime.UtcNow
+            .AddSeconds(-5)
+            .AddTicks(7);
+
+        armCommitFailure();
+        var versionResult = await new ReportDeviceClientVersionHandler(
+                identity,
+                new EfDeviceClientStateStore(dbContext),
+                CreateUnitOfWork(dbContext),
+                observationReader,
+                TimeProvider.System)
+            .Handle(
+                new ReportDeviceClientVersionCommand(
+                    device.Id,
+                    device.Code,
+                    "3.1.0",
+                    "3.0",
+                    [
+                        new DeviceClientPluginVersionReportItem(
+                            "ap.runtime",
+                            "AP runtime",
+                            "3.1.0",
+                            "3.0")
+                    ],
+                    ["ap.runtime"],
+                    "stable",
+                    reportedAtUtc,
+                    ["10.0.0.2"],
+                    "192.0.2.2"),
+                cancellationToken);
+        Assert.True(versionResult.IsSuccess);
+        dbContext.ChangeTracker.Clear();
+
+        armCommitFailure();
+        var heartbeatResult = await new ReportDeviceRuntimeHeartbeatHandler(
+                identity,
+                new EfDeviceClientStateStore(dbContext),
+                TimeProvider.System,
+                CreateUnitOfWork(dbContext),
+                observationReader)
+            .Handle(
+                new ReportDeviceRuntimeHeartbeatCommand(
+                    device.Id,
+                    device.Code,
+                    $"runtime-{unique}",
+                    "production",
+                    "3.1.0",
+                    "3.0",
+                    "Running",
+                    reportedAtUtc.AddMinutes(-1),
+                    reportedAtUtc.AddSeconds(1),
+                    ["10.0.0.2"],
+                    "192.0.2.2"),
+                cancellationToken);
+        Assert.True(heartbeatResult.IsSuccess);
+        dbContext.ChangeTracker.Clear();
+
+        armCommitFailure();
+        var plcResult = await new ReportEdgeHostPlcRuntimeStatesHandler(
+                identity,
+                new EfEdgeHostPlcRuntimeStateStore(dbContext),
+                new EfDeviceClientStateStore(dbContext),
+                CreateUnitOfWork(dbContext),
+                observationReader,
+                TimeProvider.System)
+            .Handle(
+                new ReportEdgeHostPlcRuntimeStatesCommand(
+                    device.Id,
+                    device.Code,
+                    reportedAtUtc.AddSeconds(2),
+                    [
+                        new EdgeHostPlcRuntimeStateReportItem(
+                            "PLC-A",
+                            "Line A",
+                            true,
+                            "Connected",
+                            reportedAtUtc.AddSeconds(2),
+                            "S01",
+                            "S7",
+                            "10.0.0.10"),
+                        new EdgeHostPlcRuntimeStateReportItem(
+                            "PLC-B",
+                            "Line B",
+                            false,
+                            "Disconnected",
+                            reportedAtUtc.AddSeconds(2),
+                            "S02",
+                            "ModbusTcp",
+                            "10.0.0.11",
+                            "offline")
+                    ]),
+                cancellationToken);
+        Assert.True(plcResult.IsSuccess);
+        dbContext.ChangeTracker.Clear();
+
+        Assert.Equal(
+            1,
+            await dbContext.DeviceClientVersionSnapshots
+                .AsNoTracking()
+                .CountAsync(
+                    snapshot => snapshot.DeviceId == device.Id,
+                    cancellationToken));
+        Assert.Equal(
+            1,
+            await dbContext.Set<DeviceClientPluginVersion>()
+                .AsNoTracking()
+                .CountAsync(
+                    plugin =>
+                        plugin.DeviceClientVersionSnapshotId
+                        == device.Id,
+                    cancellationToken));
+        Assert.Equal(
+            1,
+            await dbContext.EdgeDeviceRuntimeHeartbeats
+                .AsNoTracking()
+                .CountAsync(
+                    heartbeat => heartbeat.DeviceId == device.Id,
+                    cancellationToken));
+        Assert.Equal(
+            1,
+            await dbContext.DeviceClientStates
+                .AsNoTracking()
+                .CountAsync(
+                    state => state.DeviceId == device.Id,
+                    cancellationToken));
+        Assert.Equal(
+            2,
+            await dbContext.EdgeHostPlcRuntimeStates
+                .AsNoTracking()
+                .CountAsync(
+                    state => state.DeviceId == device.Id,
+                    cancellationToken));
     }
 
     private static async Task VerifyOnboardRetryAsync(
@@ -1575,7 +2389,10 @@ public sealed class ProductionRetryTransactionPostgresTests(
             new EfRepository<Device>(dbContext),
             new EfDeviceDeletionDependencyService(dbContext),
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
-            audit);
+            audit,
+            new CloudWriteObservationReader(
+                services.GetRequiredService<
+                    DbContextOptions<IIoTDbContext>>()));
 
         interceptor.Arm();
         var result = await handler.Handle(
@@ -2158,7 +2975,10 @@ public sealed class ProductionRetryTransactionPostgresTests(
             new EfRepository<Device>(dbContext),
             capturingDeletionService,
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
-            audit);
+            audit,
+            new CloudWriteObservationReader(
+                services.GetRequiredService<
+                    DbContextOptions<IIoTDbContext>>()));
 
         interceptor.Arm();
         var result = await handler.Handle(
@@ -2487,14 +3307,25 @@ public sealed class ProductionRetryTransactionPostgresTests(
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddDbContext<IIoTDbContext>(options =>
+        {
             options
                 .UseNpgsql(
                     connectionString,
                     npgsql => npgsql.EnableRetryOnFailure(
                         3,
                         TimeSpan.FromMilliseconds(50),
-                        null))
-                .AddInterceptors(interceptor));
+                        null));
+            if (interceptor is WriteAwareTransactionInterceptor writeAware)
+            {
+                options.AddInterceptors(
+                    new WriteTrackingCommandInterceptor(writeAware),
+                    interceptor);
+            }
+            else
+            {
+                options.AddInterceptors(interceptor);
+            }
+        });
         services.AddIdentityCore<ApplicationUser>(options =>
             {
                 options.Password.RequiredLength = 8;
@@ -2613,11 +3444,16 @@ public sealed class ProductionRetryTransactionPostgresTests(
     {
         public List<AuditTrailEntry> Entries { get; } = [];
 
+        public List<AuditTrailEntry> ConfirmedEntries { get; } = [];
+
+        public List<CancellationToken> CancellationTokens { get; } = [];
+
         public Task TryWriteAsync(
             AuditTrailEntry entry,
             CancellationToken cancellationToken = default)
         {
             Entries.Add(entry);
+            CancellationTokens.Add(cancellationToken);
             return Task.CompletedTask;
         }
 
@@ -2626,7 +3462,38 @@ public sealed class ProductionRetryTransactionPostgresTests(
             CancellationToken cancellationToken = default)
         {
             Entries.Add(entry);
+            ConfirmedEntries.Add(entry);
+            CancellationTokens.Add(cancellationToken);
             return Task.FromResult(true);
+        }
+    }
+
+    private sealed class AfterFirstDeviceObservationReader(
+        IDeviceWriteObservationReader inner,
+        Func<Task> afterFirstObservation)
+        : IDeviceWriteObservationReader
+    {
+        private int observationCount;
+
+        public async Task<DeviceWriteObservation> ObserveDeviceAsync(
+            Guid deviceId,
+            string deviceName,
+            string clientCode,
+            Guid processId,
+            CancellationToken cancellationToken)
+        {
+            var observation = await inner.ObserveDeviceAsync(
+                deviceId,
+                deviceName,
+                clientCode,
+                processId,
+                cancellationToken);
+            if (Interlocked.Increment(ref observationCount) == 1)
+            {
+                await afterFirstObservation();
+            }
+
+            return observation;
         }
     }
 
@@ -2648,16 +3515,138 @@ public sealed class ProductionRetryTransactionPostgresTests(
 
         public async Task<DeviceCascadeDeletionResult> DeleteCascadeAsync(
             Guid deviceId,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            uint? expectedRowVersion = null)
         {
             LastDeletionResult = await inner.DeleteCascadeAsync(
                 deviceId,
-                cancellationToken);
+                cancellationToken,
+                expectedRowVersion);
             return LastDeletionResult;
         }
     }
 
-    private sealed class ThrowOnceBeforeCommitInterceptor : DbTransactionInterceptor
+    private abstract class WriteAwareTransactionInterceptor
+        : DbTransactionInterceptor
+    {
+        private readonly HashSet<DbTransaction> writeTransactions = [];
+        private readonly object sync = new();
+
+        public void TrackWrite(
+            DbTransaction? transaction,
+            string commandText)
+        {
+            if (transaction is null
+                || !IsWriteCommand(commandText))
+            {
+                return;
+            }
+
+            lock (sync)
+            {
+                writeTransactions.Add(transaction);
+            }
+        }
+
+        protected bool ConsumeWrite(DbTransaction transaction)
+        {
+            lock (sync)
+            {
+                return writeTransactions.Remove(transaction);
+            }
+        }
+
+        private static bool IsWriteCommand(string commandText)
+            => commandText.Contains(
+                   "INSERT INTO",
+                   StringComparison.OrdinalIgnoreCase)
+               || commandText.Contains(
+                   "UPDATE ",
+                   StringComparison.OrdinalIgnoreCase)
+               || commandText.Contains(
+                   "DELETE FROM",
+                   StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class WriteTrackingCommandInterceptor(
+        WriteAwareTransactionInterceptor transactionInterceptor)
+        : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            transactionInterceptor.TrackWrite(
+                command.Transaction,
+                command.CommandText);
+            return result;
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>>
+            ReaderExecutingAsync(
+                DbCommand command,
+                CommandEventData eventData,
+                InterceptionResult<DbDataReader> result,
+                CancellationToken cancellationToken = default)
+        {
+            transactionInterceptor.TrackWrite(
+                command.Transaction,
+                command.CommandText);
+            return ValueTask.FromResult(result);
+        }
+
+        public override InterceptionResult<int> NonQueryExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<int> result)
+        {
+            transactionInterceptor.TrackWrite(
+                command.Transaction,
+                command.CommandText);
+            return result;
+        }
+
+        public override ValueTask<InterceptionResult<int>>
+            NonQueryExecutingAsync(
+                DbCommand command,
+                CommandEventData eventData,
+                InterceptionResult<int> result,
+                CancellationToken cancellationToken = default)
+        {
+            transactionInterceptor.TrackWrite(
+                command.Transaction,
+                command.CommandText);
+            return ValueTask.FromResult(result);
+        }
+
+        public override InterceptionResult<object> ScalarExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<object> result)
+        {
+            transactionInterceptor.TrackWrite(
+                command.Transaction,
+                command.CommandText);
+            return result;
+        }
+
+        public override ValueTask<InterceptionResult<object>>
+            ScalarExecutingAsync(
+                DbCommand command,
+                CommandEventData eventData,
+                InterceptionResult<object> result,
+                CancellationToken cancellationToken = default)
+        {
+            transactionInterceptor.TrackWrite(
+                command.Transaction,
+                command.CommandText);
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class ThrowOnceBeforeCommitInterceptor
+        : WriteAwareTransactionInterceptor
     {
         private int armed;
         private int exceptionsThrown;
@@ -2672,7 +3661,9 @@ public sealed class ProductionRetryTransactionPostgresTests(
             InterceptionResult result,
             CancellationToken cancellationToken = default)
         {
-            if (Interlocked.CompareExchange(ref armed, 0, 1) == 1)
+            var hasWrites = ConsumeWrite(transaction);
+            if (hasWrites
+                && Interlocked.CompareExchange(ref armed, 0, 1) == 1)
             {
                 Interlocked.Increment(ref exceptionsThrown);
                 throw RetryablePostgresException(
@@ -2683,10 +3674,12 @@ public sealed class ProductionRetryTransactionPostgresTests(
         }
     }
 
-    private sealed class ThrowOnceAfterCommitInterceptor : DbTransactionInterceptor
+    private sealed class ThrowOnceAfterCommitInterceptor
+        : WriteAwareTransactionInterceptor
     {
         private int armed;
         private int exceptionsThrown;
+        private int writeCommitPending;
         private Func<CancellationToken, Task>? afterCommit;
 
         public int ExceptionsThrown => Volatile.Read(ref exceptionsThrown);
@@ -2698,12 +3691,29 @@ public sealed class ProductionRetryTransactionPostgresTests(
             Volatile.Write(ref armed, 1);
         }
 
+        public override ValueTask<InterceptionResult>
+            TransactionCommittingAsync(
+                DbTransaction transaction,
+                TransactionEventData eventData,
+                InterceptionResult result,
+                CancellationToken cancellationToken = default)
+        {
+            if (ConsumeWrite(transaction)
+                && Volatile.Read(ref armed) == 1)
+            {
+                Volatile.Write(ref writeCommitPending, 1);
+            }
+
+            return ValueTask.FromResult(result);
+        }
+
         public override async Task TransactionCommittedAsync(
             DbTransaction transaction,
             TransactionEndEventData eventData,
             CancellationToken cancellationToken = default)
         {
-            if (Interlocked.CompareExchange(ref armed, 0, 1) == 1)
+            if (Interlocked.Exchange(ref writeCommitPending, 0) == 1
+                && Interlocked.CompareExchange(ref armed, 0, 1) == 1)
             {
                 var callback = afterCommit;
                 afterCommit = null;
@@ -2716,6 +3726,131 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 throw RetryablePostgresException(
                     "simulated commit confirmation loss");
             }
+        }
+    }
+
+    private sealed class CancelOnceAfterWriteCommitInterceptor(
+        CancellationTokenSource cancellation)
+        : WriteAwareTransactionInterceptor
+    {
+        private int armed;
+        private int writeCommitPending;
+        private int exceptionsThrown;
+
+        public int ExceptionsThrown =>
+            Volatile.Read(ref exceptionsThrown);
+
+        public void Arm() => Volatile.Write(ref armed, 1);
+
+        public override ValueTask<InterceptionResult>
+            TransactionCommittingAsync(
+                DbTransaction transaction,
+                TransactionEventData eventData,
+                InterceptionResult result,
+                CancellationToken cancellationToken = default)
+        {
+            if (ConsumeWrite(transaction)
+                && Volatile.Read(ref armed) == 1)
+            {
+                Volatile.Write(ref writeCommitPending, 1);
+            }
+
+            return ValueTask.FromResult(result);
+        }
+
+        public override Task TransactionCommittedAsync(
+            DbTransaction transaction,
+            TransactionEndEventData eventData,
+            CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Exchange(
+                    ref writeCommitPending,
+                    0) == 1
+                && Interlocked.CompareExchange(
+                    ref armed,
+                    0,
+                    1) == 1)
+            {
+                cancellation.Cancel();
+                Interlocked.Increment(ref exceptionsThrown);
+                throw new OperationCanceledException(
+                    cancellation.Token);
+            }
+
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class CommitThenCancelRetryInterceptor(
+        CancellationTokenSource cancellation)
+        : WriteAwareTransactionInterceptor
+    {
+        private int armed;
+        private int writeCommitPending;
+        private int cancelRetryTransaction;
+        private int exceptionsThrown;
+
+        public int ExceptionsThrown =>
+            Volatile.Read(ref exceptionsThrown);
+
+        public void Arm() => Volatile.Write(ref armed, 1);
+
+        public override ValueTask<InterceptionResult<DbTransaction>>
+            TransactionStartingAsync(
+                DbConnection connection,
+                TransactionStartingEventData eventData,
+                InterceptionResult<DbTransaction> result,
+                CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Exchange(
+                    ref cancelRetryTransaction,
+                    0) == 1)
+            {
+                cancellation.Cancel();
+                Interlocked.Increment(ref exceptionsThrown);
+                throw new OperationCanceledException(
+                    cancellation.Token);
+            }
+
+            return ValueTask.FromResult(result);
+        }
+
+        public override ValueTask<InterceptionResult>
+            TransactionCommittingAsync(
+                DbTransaction transaction,
+                TransactionEventData eventData,
+                InterceptionResult result,
+                CancellationToken cancellationToken = default)
+        {
+            if (ConsumeWrite(transaction)
+                && Volatile.Read(ref armed) == 1)
+            {
+                Volatile.Write(ref writeCommitPending, 1);
+            }
+
+            return ValueTask.FromResult(result);
+        }
+
+        public override Task TransactionCommittedAsync(
+            DbTransaction transaction,
+            TransactionEndEventData eventData,
+            CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Exchange(
+                    ref writeCommitPending,
+                    0) == 1
+                && Interlocked.CompareExchange(
+                    ref armed,
+                    0,
+                    1) == 1)
+            {
+                Volatile.Write(ref cancelRetryTransaction, 1);
+                Interlocked.Increment(ref exceptionsThrown);
+                throw RetryablePostgresException(
+                    "simulated committed delete before retry cancellation");
+            }
+
+            return Task.CompletedTask;
         }
     }
 
@@ -2821,6 +3956,81 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 Interlocked.Increment(ref exceptionsThrown);
                 throw RetryablePostgresException(
                     "simulated transient before delete commit");
+            }
+
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class ChangeDeviceBeforeDeleteRetryInterceptor(
+        string connectionString)
+        : DbTransactionInterceptor
+    {
+        private int armed;
+        private int mutateBeforeNextTransaction;
+        private int exceptionsThrown;
+        private Guid deviceId;
+        private string changedName = string.Empty;
+
+        public int ExceptionsThrown => Volatile.Read(ref exceptionsThrown);
+
+        public void Arm(Guid targetDeviceId, string targetName)
+        {
+            deviceId = targetDeviceId;
+            changedName = targetName;
+            Volatile.Write(ref armed, 1);
+        }
+
+        public override async ValueTask<InterceptionResult<DbTransaction>>
+            TransactionStartingAsync(
+                DbConnection connection,
+                TransactionStartingEventData eventData,
+                InterceptionResult<DbTransaction> result,
+                CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.CompareExchange(
+                    ref mutateBeforeNextTransaction,
+                    0,
+                    1) == 1)
+            {
+                await using var mutationConnection =
+                    new NpgsqlConnection(connectionString);
+                await mutationConnection.OpenAsync(cancellationToken);
+                await using var command = new NpgsqlCommand(
+                    """
+                    update devices
+                    set device_name = @device_name
+                    where id = @device_id
+                    """,
+                    mutationConnection);
+                command.Parameters.AddWithValue(
+                    "device_name",
+                    changedName);
+                command.Parameters.AddWithValue(
+                    "device_id",
+                    deviceId);
+                Assert.Equal(
+                    1,
+                    await command.ExecuteNonQueryAsync(
+                        cancellationToken));
+            }
+
+            return result;
+        }
+
+        public override ValueTask<InterceptionResult>
+            TransactionCommittingAsync(
+                DbTransaction transaction,
+                TransactionEventData eventData,
+                InterceptionResult result,
+                CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.CompareExchange(ref armed, 0, 1) == 1)
+            {
+                Volatile.Write(ref mutateBeforeNextTransaction, 1);
+                Interlocked.Increment(ref exceptionsThrown);
+                throw RetryablePostgresException(
+                    "simulated transient before concurrent delete retry");
             }
 
             return ValueTask.FromResult(result);

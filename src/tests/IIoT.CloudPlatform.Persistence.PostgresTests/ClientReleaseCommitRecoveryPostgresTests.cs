@@ -10,6 +10,7 @@ using IIoT.SharedKernel.Configuration;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
+using Npgsql;
 using Xunit;
 
 namespace IIoT.CloudPlatform.Persistence.PostgresTests;
@@ -382,7 +383,25 @@ public sealed class ClientReleaseCommitRecoveryPostgresFixture : IAsyncLifetime
 {
     private readonly IIoTAppFixture fixture = new(disableDataWorkerOutboxDispatcher: true);
 
-    public Task InitializeAsync() => fixture.StartAsync();
+    public async Task InitializeAsync()
+    {
+        await fixture.StartAsync();
+
+        // General persistence tests seed devices directly. The migration
+        // regression installs and verifies the legacy-writer fence itself.
+        var connectionString = await fixture.GetConnectionStringAsync(
+            ConnectionResourceNames.IiotDatabase);
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            drop trigger if exists
+                iiot_fence_legacy_device_client_state_trigger
+                on devices
+            """,
+            connection);
+        await command.ExecuteNonQueryAsync();
+    }
 
     public Task DisposeAsync() => fixture.DisposeAsync().AsTask();
 

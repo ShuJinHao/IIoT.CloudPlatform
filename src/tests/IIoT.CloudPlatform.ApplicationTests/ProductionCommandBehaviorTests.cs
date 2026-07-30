@@ -4,6 +4,7 @@ using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.ProductionService.Commands.Devices;
 using IIoT.ProductionService.Commands.Recipes;
 using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Repository;
@@ -15,6 +16,73 @@ namespace IIoT.CloudPlatform.ApplicationTests;
 
 public sealed class ProductionCommandBehaviorTests
 {
+    private static StubDeviceWriteObservationReader ObserveDevice(
+        Device device,
+        bool duplicateName = false)
+        => new()
+        {
+            ObservationFactory = (_, deviceName, _, _) =>
+                new DeviceWriteObservation(
+                    new DeviceWriteState(
+                        device.Id,
+                        device.DeviceName,
+                        device.Code,
+                        device.ProcessId,
+                        device.RowVersion),
+                    duplicateName
+                        ? Guid.NewGuid()
+                        : string.Equals(
+                            device.DeviceName,
+                            deviceName,
+                            StringComparison.Ordinal)
+                            ? device.Id
+                            : null,
+                    device.Id,
+                    true,
+                    new DeviceDeletionImpact(
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+        };
+
+    private static StubRecipeWriteObservationReader ObserveRecipe(
+        InMemoryRepository<Recipe> repository)
+        => new()
+        {
+            ObservationFactory = (
+                recipeId,
+                processId,
+                deviceId,
+                recipeName) =>
+            {
+                var recipes = repository.ListResult.Count > 0
+                    ? repository.ListResult
+                    : repository.SingleOrDefaultResult is null
+                        ? []
+                        : [repository.SingleOrDefaultResult];
+                var family = recipes
+                    .Where(recipe =>
+                        recipe.ProcessId == processId
+                        && recipe.DeviceId == deviceId
+                        && recipe.RecipeName == recipeName)
+                    .Select(recipe => new RecipeWriteState(
+                        recipe.Id,
+                        recipe.RecipeName,
+                        recipe.Version,
+                        recipe.ProcessId,
+                        recipe.DeviceId,
+                        recipe.ParametersJsonb,
+                        (int)recipe.Status,
+                        recipe.RowVersion))
+                    .OrderBy(recipe => recipe.Id)
+                    .ToArray();
+                return new RecipeWriteObservation(
+                    family.SingleOrDefault(
+                        recipe => recipe.Id == recipeId),
+                    family,
+                    true,
+                    true);
+            }
+        };
+
     [Fact]
     public async Task UpdateDeviceProfileHandler_ShouldRenameAuthorizedDevice()
     {
@@ -26,8 +94,9 @@ public sealed class ProductionCommandBehaviorTests
         };
         var handler = new UpdateDeviceProfileHandler(
             repository,
-            new StubDeviceReadQueryService(),
-            new StubCurrentUserDeviceAccessService { IsAdministrator = true });
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            new RecordingUnitOfWork(),
+            ObserveDevice(device));
 
         var result = await handler.Handle(
             new UpdateDeviceProfileCommand(device.Id, " Device-02 "),
@@ -48,8 +117,9 @@ public sealed class ProductionCommandBehaviorTests
         };
         var handler = new UpdateDeviceProfileHandler(
             repository,
-            new StubDeviceReadQueryService(),
-            new StubCurrentUserDeviceAccessService { FailureMessage = "forbidden" });
+            new StubCurrentUserDeviceAccessService { FailureMessage = "forbidden" },
+            new RecordingUnitOfWork(),
+            ObserveDevice(device));
 
         var result = await handler.Handle(
             new UpdateDeviceProfileCommand(device.Id, "Device-02"),
@@ -70,8 +140,9 @@ public sealed class ProductionCommandBehaviorTests
         };
         var handler = new UpdateDeviceProfileHandler(
             repository,
-            new StubDeviceReadQueryService { NameExists = true },
-            new StubCurrentUserDeviceAccessService { IsAdministrator = true });
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            new RecordingUnitOfWork(),
+            ObserveDevice(device, duplicateName: true));
 
         var result = await handler.Handle(
             new UpdateDeviceProfileCommand(device.Id, "Device-02"),
@@ -96,8 +167,9 @@ public sealed class ProductionCommandBehaviorTests
         repository.ListResult.Add(source);
         var handler = new UpgradeRecipeVersionHandler(
             repository,
-            new StubRecipeReadQueryService(),
-            new StubCurrentUserDeviceAccessService { IsAdministrator = true });
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            new RecordingUnitOfWork(),
+            ObserveRecipe(repository));
 
         var result = await handler.Handle(
             new UpgradeRecipeVersionCommand(source.Id, "V1.1", "{\"speed\":130}"),
@@ -123,8 +195,47 @@ public sealed class ProductionCommandBehaviorTests
         };
         var handler = new UpgradeRecipeVersionHandler(
             repository,
-            new StubRecipeReadQueryService { VersionExists = true },
-            new StubCurrentUserDeviceAccessService { IsAdministrator = true });
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            new RecordingUnitOfWork(),
+            new StubRecipeWriteObservationReader
+            {
+                ObservationFactory = (
+                    recipeId,
+                    processId,
+                    deviceId,
+                    recipeName) => new RecipeWriteObservation(
+                    new RecipeWriteState(
+                        source.Id,
+                        source.RecipeName,
+                        source.Version,
+                        source.ProcessId,
+                        source.DeviceId,
+                        source.ParametersJsonb,
+                        (int)source.Status,
+                        source.RowVersion),
+                    [
+                        new RecipeWriteState(
+                            source.Id,
+                            source.RecipeName,
+                            source.Version,
+                            source.ProcessId,
+                            source.DeviceId,
+                            source.ParametersJsonb,
+                            (int)source.Status,
+                            source.RowVersion),
+                        new RecipeWriteState(
+                            Guid.NewGuid(),
+                            recipeName,
+                            "V1.1",
+                            processId,
+                            deviceId,
+                            "{}",
+                            (int)RecipeStatus.Archived,
+                            1)
+                    ],
+                    true,
+                    true)
+            });
 
         var result = await handler.Handle(
             new UpgradeRecipeVersionCommand(source.Id, "V1.1", "{\"speed\":130}"),
@@ -134,6 +245,55 @@ public sealed class ProductionCommandBehaviorTests
         Assert.Equal(RecipeStatus.Active, source.Status);
         Assert.Null(repository.AddedEntity);
         Assert.Empty(repository.UpdatedEntities);
+    }
+
+    [Fact]
+    public async Task UpgradeRecipeVersionHandler_ShouldRecoverWhenUnchangedArchivedSiblingIsDeletedAfterCommit()
+    {
+        var processId = Guid.NewGuid();
+        var deviceId = Guid.NewGuid();
+        var source = new Recipe("Recipe-A", processId, deviceId, "{\"speed\":120}");
+        var archivedSibling = source.CreateNextVersion(
+            Guid.NewGuid(),
+            "V0.9",
+            "{\"speed\":90}");
+        archivedSibling.Archive();
+        source.ClearDomainEvents();
+        archivedSibling.ClearDomainEvents();
+        var repository = new InMemoryRepository<Recipe>
+        {
+            SingleOrDefaultResult = source
+        };
+        repository.ListResult.Add(source);
+        repository.ListResult.Add(archivedSibling);
+        var unitOfWork = new RecordingUnitOfWork
+        {
+            OnCommit = () =>
+            {
+                repository.ListResult.Remove(archivedSibling);
+                throw new InvalidOperationException("commit acknowledgement lost");
+            }
+        };
+        var handler = new UpgradeRecipeVersionHandler(
+            repository,
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            unitOfWork,
+            ObserveRecipe(repository));
+
+        var result = await handler.Handle(
+            new UpgradeRecipeVersionCommand(
+                source.Id,
+                "V1.1",
+                "{\"speed\":130}"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(RecipeStatus.Archived, source.Status);
+        Assert.DoesNotContain(archivedSibling, repository.ListResult);
+        Assert.Contains(
+            repository.ListResult,
+            recipe => recipe.Id == result.Value
+                      && recipe.Status == RecipeStatus.Active);
     }
 
     private sealed class InMemoryRepository<T> : IRepository<T>

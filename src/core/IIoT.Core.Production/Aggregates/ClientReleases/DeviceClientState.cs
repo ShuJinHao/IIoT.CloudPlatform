@@ -12,17 +12,21 @@ public sealed class DeviceClientState : BaseEntity<Guid>
     {
     }
 
-    public DeviceClientState(Guid deviceId, string clientCode)
+    public DeviceClientState(
+        Guid deviceId,
+        string clientCode,
+        Guid? id = null,
+        DateTime? createdAtUtc = null)
     {
         if (deviceId == Guid.Empty)
         {
             throw new ArgumentException("DeviceId 不能为空。", nameof(deviceId));
         }
 
-        Id = Guid.NewGuid();
+        Id = id ?? Guid.NewGuid();
         DeviceId = deviceId;
         ClientCode = NormalizeRequired(clientCode, nameof(clientCode)).ToUpperInvariant();
-        CreatedAtUtc = DateTime.UtcNow;
+        CreatedAtUtc = NormalizeUtc(createdAtUtc ?? DateTime.UtcNow);
         UpdatedAtUtc = CreatedAtUtc;
     }
 
@@ -63,6 +67,12 @@ public sealed class DeviceClientState : BaseEntity<Guid>
     public DateTime? LastRuntimeHeartbeatAtUtc { get; private set; }
 
     public DateTime? LastRuntimeStoppedAtUtc { get; private set; }
+
+    public DateTime? PlcSnapshotReportedAtUtc { get; private set; }
+
+    public DateTime? PlcSnapshotReceivedAtUtc { get; private set; }
+
+    public string? PlcSnapshotContentSha256 { get; private set; }
 
     public DateTime CreatedAtUtc { get; private set; }
 
@@ -107,6 +117,18 @@ public sealed class DeviceClientState : BaseEntity<Guid>
             ? NormalizeUtc(heartbeat.LastStoppedAtUtc.Value)
             : null;
         Touch();
+    }
+
+    public void ApplyPlcSnapshot(
+        DateTime reportedAtUtc,
+        DateTime receivedAtUtc,
+        string contentSha256)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentSha256);
+        PlcSnapshotReportedAtUtc = NormalizeUtc(reportedAtUtc);
+        PlcSnapshotReceivedAtUtc = NormalizeUtc(receivedAtUtc);
+        PlcSnapshotContentSha256 = contentSha256.Trim().ToLowerInvariant();
+        UpdatedAtUtc = NormalizeUtc(receivedAtUtc);
     }
 
     public IReadOnlyList<string> GetVersionLocalIpAddresses()

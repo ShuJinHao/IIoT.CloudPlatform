@@ -216,6 +216,40 @@ public sealed class EmployeeWriteCommitRecoveryTests
     }
 
     [Fact]
+    public async Task Profile_AttemptObservation_ShouldPropagateCallbackCancellation()
+    {
+        var employee = new Employee(
+            Guid.NewGuid(),
+            "E-OBSERVE-CANCEL",
+            "Before");
+        using var requestCancellation = new CancellationTokenSource();
+        var observer = new StubEmployeeMutationObservationReader
+        {
+            ObserveAsyncOverride = (_, token) =>
+            {
+                requestCancellation.Cancel();
+                Assert.True(token.IsCancellationRequested);
+                throw new OperationCanceledException(token);
+            }
+        };
+        var unitOfWork = new RecordingUnitOfWork();
+        var handler = new UpdateEmployeeProfileHandler(
+            RepositoryWith(employee),
+            unitOfWork,
+            new StubAdminTargetGuard(),
+            observer);
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => handler.Handle(
+                new UpdateEmployeeProfileCommand(employee.Id, "After"),
+                requestCancellation.Token));
+
+        Assert.Equal(requestCancellation.Token, exception.CancellationToken);
+        Assert.Equal(0, unitOfWork.BeginCalls);
+        Assert.Equal(0, unitOfWork.CommitCalls);
+    }
+
+    [Fact]
     public async Task Profile_PostCommitFailureWithExactTarget_ShouldRecover()
     {
         var employee = new Employee(
