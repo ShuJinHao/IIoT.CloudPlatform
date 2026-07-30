@@ -177,6 +177,37 @@ try {
         throw 'Default source selection included the explicit Quality lane.'
     }
 
+    $architectureTargetOutput = Join-Path $temporaryRoot 'architecture-target.json'
+    & $selector `
+        -RepositoryRoot $root `
+        -ChangedFiles @('Directory.Build.targets') `
+        -OutputPath $architectureTargetOutput `
+        -GitHubOutputPath ''
+    $architectureTarget = Get-Content $architectureTargetOutput -Raw | ConvertFrom-Json
+    if (@($architectureTarget.unclassifiedFiles).Count -ne 0 -or
+        @($architectureTarget.requiredExplicitModes) -contains 'Full' -or
+        @($architectureTarget.selectedDotNetProjects.categories | Where-Object {
+                $_ -notin @('Architecture', 'Security')
+            }).Count -ne 0) {
+        throw 'Cloud architecture build target did not stay in mandatory Architecture/Security validation.'
+    }
+
+    $webOutput = Join-Path $temporaryRoot 'web.json'
+    $webFile = 'src/ui/iiot-web/src/features/devices/DeviceListPage.vue'
+    & $selector `
+        -RepositoryRoot $root `
+        -ChangedFiles @($webFile) `
+        -OutputPath $webOutput `
+        -GitHubOutputPath ''
+    $web = Get-Content $webOutput -Raw | ConvertFrom-Json
+    if ([int]$web.schemaVersion -ne 2 -or
+        -not [bool]$web.web.affected -or
+        [bool]$web.web.full -or
+        @($web.web.changedFiles).Count -ne 1 -or
+        @($web.web.changedFiles) -notcontains $webFile) {
+        throw 'Default Web selection did not preserve the schema v2 affected scope.'
+    }
+
     $utf8Root = Join-Path $temporaryRoot 'utf8-git-paths'
     $utf8Base = New-DynamicRunnerFixture -Root $utf8Root
     Write-FixtureFile `
@@ -227,6 +258,10 @@ try {
             }).Count -ne 0) {
         throw 'Documentation-only changes selected a non-red-line category.'
     }
+    if ([bool]$docs.web.affected -or [bool]$docs.web.full -or
+        @($docs.web.changedFiles).Count -ne 0) {
+        throw 'Documentation-only changes did not preserve an explicit Web no-op scope.'
+    }
     $analyzer = @($docs.selectedDotNetProjects | Where-Object projectName -eq 'IIoT.CloudPlatform.AnalyzerTests')
     if ($analyzer.Count -ne 1 -or
         @($analyzer[0].categories) -notcontains 'Architecture' -or
@@ -246,7 +281,9 @@ try {
         @($manual.unclassifiedFiles).Count -ne 0 -or
         @($manual.selectedDotNetProjects.categories) -notcontains 'Quality' -or
         @($manual.selectedDotNetProjects.categories) -contains 'Business' -or
-        @($manual.selectedDotNetProjects.categories) -contains 'DeploymentContract') {
+        @($manual.selectedDotNetProjects.categories) -contains 'DeploymentContract' -or
+        -not [bool]$manual.web.affected -or
+        -not [bool]$manual.web.full) {
         throw 'Explicit Quality selection did not stay within red-line plus Quality categories.'
     }
 
@@ -458,6 +495,11 @@ if ($selectorText -notmatch "'core\.quotepath=false'" -or
 if ($workflowText -notmatch '\$selectorInputs\.Count\s+-gt\s+0[\s\S]*?Test-CloudCiTestSelection\.ps1') {
     throw 'Cloud default CI does not gate selector behavior tests on affected selector inputs.'
 }
+if ($workflowText -notmatch 'Test-CloudWebValidation\.ps1' -or
+    $workflowText -notmatch 'Invoke-CloudWebValidation\.ps1[\s\S]*?current-web-validation\.json' -or
+    $workflowText -match '(?m)^\s+npm run build\s*$') {
+    throw 'Cloud default CI does not use the unified Web validation/evidence entry.'
+}
 if ($workflowText -notmatch 'git\s+-c\s+core\.quotepath=false\s+diff\s+--name-only' -or
     $workflowText -notmatch '\[Console\]::OutputEncoding\s*=\s*\$utf8' -or
     $workflowText -notmatch '\$OutputEncoding\s*=\s*\$utf8') {
@@ -475,4 +517,4 @@ if ($runnerText -notmatch "ForEach-Object\s*\{\s*\[int\]\`$_\['discovered'\]\s*\
     throw 'Cloud CI discovery aggregation does not safely read ordered result dictionaries.'
 }
 
-Write-Host 'CLOUD_CI_SELECTION_BEHAVIOR_OK positive=1 utf8Paths=1 docs=1 quality=1 deployment=1 deferred=1 dynamic=1 dynamicDeployment=1 retiredBusiness=1 unownedRetired=1 cross=1 negative=1 workflowGate=1 discoveryAggregation=1'
+Write-Host 'CLOUD_CI_SELECTION_BEHAVIOR_OK positive=1 architectureTarget=1 web=1 webNoop=1 utf8Paths=1 docs=1 quality=1 deployment=1 deferred=1 dynamic=1 dynamicDeployment=1 retiredBusiness=1 unownedRetired=1 cross=1 negative=1 workflowGate=1 discoveryAggregation=1'

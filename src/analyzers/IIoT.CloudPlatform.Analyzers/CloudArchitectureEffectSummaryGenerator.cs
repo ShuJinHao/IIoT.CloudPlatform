@@ -119,7 +119,7 @@ internal sealed class CloudArchitectureAssemblyEffectSummary
         return new CloudArchitectureAssemblyEffectSummary(true, builder.ToImmutable(), string.Empty);
     }
 
-    private static CloudArchitectureAssemblyEffectSummary Invalid(string failure) =>
+    internal static CloudArchitectureAssemblyEffectSummary Invalid(string failure) =>
         new(false, ImmutableDictionary<string, CloudArchitectureMethodEffect>.Empty, failure);
 
     private static bool TryGetUniqueMetadataValue(
@@ -255,13 +255,16 @@ internal sealed class CloudArchitectureManagedReferenceCatalog
 
     private CloudArchitectureManagedReferenceCatalog(
         bool valid,
-        ImmutableDictionary<string, string> sourceIdentities)
+        ImmutableDictionary<string, string> sourceIdentities,
+        string failure)
     {
         Valid = valid;
         _sourceIdentities = sourceIdentities;
+        Failure = failure;
     }
 
     internal bool Valid { get; }
+    internal string Failure { get; }
 
     internal static CloudArchitectureManagedReferenceCatalog Read(
         ImmutableArray<AdditionalText> additionalTexts,
@@ -273,13 +276,14 @@ internal sealed class CloudArchitectureManagedReferenceCatalog
                 StringComparison.Ordinal))
             .ToArray();
         if (catalogs.Length != 1)
-            return Invalid();
+            return Invalid("missing-or-duplicate-catalog");
 
         var text = catalogs[0].GetText(cancellationToken);
         if (text is null)
-            return Invalid();
+            return Invalid("unreadable-catalog");
 
         var builder = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+        var sourceProjects = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var line in text.Lines)
         {
             var value = line.ToString();
@@ -287,46 +291,57 @@ internal sealed class CloudArchitectureManagedReferenceCatalog
                 continue;
 
             var parts = value.Split('\t');
-            if (parts.Length != 3 || string.IsNullOrWhiteSpace(parts[1]) ||
+            if (parts.Length != 3 || string.IsNullOrWhiteSpace(parts[0]) ||
+                string.IsNullOrWhiteSpace(parts[1]) ||
                 string.IsNullOrWhiteSpace(parts[2]))
             {
-                return Invalid();
+                return Invalid("invalid-catalog-entry");
             }
 
             string sourceIdentity;
+            string normalizedReferencePath;
+            string normalizedSourceProjectPath;
             try
             {
                 sourceIdentity = CloudArchitectureEffectSummaryFormat.ComputeSourceIdentity(parts[2]);
+                normalizedReferencePath = NormalizeRootedPath(parts[0]);
+                normalizedSourceProjectPath = NormalizeRootedPath(parts[1]);
             }
             catch
             {
-                return Invalid();
+                return Invalid("invalid-catalog-entry");
             }
 
-            foreach (var referencePath in parts.Take(2).Where(static path =>
-                         !string.IsNullOrWhiteSpace(path)))
+            var normalizedStableIdentity = parts[2].Trim().Replace('\\', '/');
+            while (normalizedStableIdentity.StartsWith("./", StringComparison.Ordinal))
+                normalizedStableIdentity = normalizedStableIdentity.Substring(2);
+            if (!normalizedSourceProjectPath.EndsWith(
+                    "/" + normalizedStableIdentity,
+                    StringComparison.OrdinalIgnoreCase))
             {
-                string normalized;
-                try
-                {
-                    normalized = Path.GetFullPath(referencePath).Replace('\\', '/');
-                }
-                catch
-                {
-                    return Invalid();
-                }
-
-                if (builder.TryGetValue(normalized, out var existing) &&
-                    !string.Equals(existing, sourceIdentity, StringComparison.Ordinal))
-                {
-                    return Invalid();
-                }
-
-                builder[normalized] = sourceIdentity;
+                return Invalid("source-project-identity-mismatch");
             }
+
+            if (builder.TryGetValue(normalizedReferencePath, out var existing) &&
+                !string.Equals(existing, sourceIdentity, StringComparison.Ordinal))
+            {
+                return Invalid("conflicting-reference-identity");
+            }
+
+            if (sourceProjects.TryGetValue(normalizedSourceProjectPath, out var existingReference) &&
+                !string.Equals(existingReference, normalizedReferencePath, StringComparison.OrdinalIgnoreCase))
+            {
+                return Invalid("duplicate-source-project-reference");
+            }
+
+            builder[normalizedReferencePath] = sourceIdentity;
+            sourceProjects[normalizedSourceProjectPath] = normalizedReferencePath;
         }
 
-        return new CloudArchitectureManagedReferenceCatalog(true, builder.ToImmutable());
+        return new CloudArchitectureManagedReferenceCatalog(
+            true,
+            builder.ToImmutable(),
+            string.Empty);
     }
 
     internal bool TryGetSourceIdentity(
@@ -345,7 +360,15 @@ internal sealed class CloudArchitectureManagedReferenceCatalog
                     continue;
                 }
 
-                var normalized = Path.GetFullPath(reference.FilePath).Replace('\\', '/');
+                string normalized;
+                try
+                {
+                    normalized = NormalizeRootedPath(reference.FilePath);
+                }
+                catch
+                {
+                    break;
+                }
                 if (_sourceIdentities.TryGetValue(normalized, out sourceIdentity!))
                     return true;
             }
@@ -355,8 +378,16 @@ internal sealed class CloudArchitectureManagedReferenceCatalog
         return false;
     }
 
-    private static CloudArchitectureManagedReferenceCatalog Invalid() =>
-        new(false, ImmutableDictionary<string, string>.Empty);
+    private static string NormalizeRootedPath(string path)
+    {
+        if (!Path.IsPathRooted(path))
+            throw new InvalidOperationException("Managed compiler reference paths must be rooted.");
+
+        return Path.GetFullPath(path).Replace('\\', '/').TrimEnd('/');
+    }
+
+    private static CloudArchitectureManagedReferenceCatalog Invalid(string failure) =>
+        new(false, ImmutableDictionary<string, string>.Empty, failure);
 }
 
 [Generator(LanguageNames.CSharp)]

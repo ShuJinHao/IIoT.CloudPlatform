@@ -51,7 +51,7 @@ jobs:
       - name: Verify .NET SDK
         run: test "$(dotnet --version)" = "10.0.301"
 
-      - name: Select current scope and validate selector only when affected
+      - name: Select current scope and validate selection contracts only when affected
         id: select
         shell: pwsh
         run: |
@@ -68,15 +68,18 @@ jobs:
               '.github/workflows/cloud-ci.yml' `
               'scripts/tests/Select-CloudCiTests.ps1' `
               'scripts/tests/Invoke-CloudCiSelectedTests.ps1' `
-              'scripts/tests/Test-CloudCiTestSelection.ps1'
+              'scripts/tests/Test-CloudCiTestSelection.ps1' `
+              'scripts/tests/Invoke-CloudWebValidation.ps1' `
+              'scripts/tests/Test-CloudWebValidation.ps1'
           )
           if ($LASTEXITCODE -ne 0) {
             throw 'Unable to determine whether the Cloud CI selector changed.'
           }
           if ($selectorInputs.Count -gt 0) {
             ./scripts/tests/Test-CloudCiTestSelection.ps1
+            ./scripts/tests/Test-CloudWebValidation.ps1
           } else {
-            Write-Host 'Cloud CI selector behavior test skipped because selector inputs are unaffected.'
+            Write-Host 'Cloud CI selection contract tests skipped because their inputs are unaffected.'
           }
           ./scripts/tests/Select-CloudCiTests.ps1 `
             -Mode $env:CI_MODE `
@@ -127,30 +130,12 @@ jobs:
           cache: "npm"
           cache-dependency-path: "src/ui/iiot-web/package-lock.json"
 
-      - name: Restore web dependencies
-        if: ${{ steps.select.outputs.web_affected == 'true' }}
-        working-directory: src/ui/iiot-web
-        run: npm ci
-
-      - name: Type-check, build and test affected web scope
-        if: ${{ steps.select.outputs.web_affected == 'true' }}
+      - name: Validate selected Web scope and write exact-SHA evidence
         shell: pwsh
-        working-directory: src/ui/iiot-web
         run: |
-          npm run build
-          if ($LASTEXITCODE -ne 0) { throw 'Cloud Web type-check/build failed.' }
-          $selection = Get-Content ../../../artifacts/ci-selection.json -Raw | ConvertFrom-Json
-          if ([bool]$selection.web.full) {
-            npm run test:unit
-          } else {
-            $files = @($selection.web.changedFiles | ForEach-Object {
-                ([string]$_).Substring('src/ui/iiot-web/'.Length)
-              })
-            if ($files.Count -gt 0) {
-              npx vitest related @files --run --passWithNoTests
-            }
-          }
-          if ($LASTEXITCODE -ne 0) { throw 'Cloud Web selected tests failed.' }
+          ./scripts/tests/Invoke-CloudWebValidation.ps1 `
+            -SelectionPath artifacts/ci-selection.json `
+            -OutputPath artifacts/ci-test-results/current-web-validation.json
 
       - name: Run deployment policy and behavior only when affected
         if: ${{ steps.select.outputs.deployment_affected == 'true' }}

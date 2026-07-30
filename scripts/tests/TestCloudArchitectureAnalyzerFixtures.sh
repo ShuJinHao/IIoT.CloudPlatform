@@ -4,6 +4,14 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 analyzer_project="$repo_root/src/analyzers/IIoT.CloudPlatform.Analyzers/IIoT.CloudPlatform.Analyzers.csproj"
 contracts_project="$repo_root/src/services/IIoT.Services.Contracts/IIoT.Services.Contracts.csproj"
+architecture_targets="$repo_root/Directory.Build.targets"
+if ! grep -Fq 'Include="@(ReferencePathWithRefAssemblies)"' "$architecture_targets" ||
+    ! grep -Fq "ReferencePathWithRefAssemblies.MSBuildSourceProjectFile" "$architecture_targets" ||
+    ! grep -Fq "'%(FullPath)&#x9;%(MSBuildSourceProjectFile)&#x9;%(StableProjectIdentity)'" "$architecture_targets" ||
+    grep -Fq 'Include="@(_ResolvedProjectReferencePaths)"' "$architecture_targets"; then
+    printf 'Cloud architecture target is not bound exclusively to real Csc reference assemblies.\n' >&2
+    exit 1
+fi
 if [[ -n "${CLOUD_ARCH_FIXTURE_ROOT:-}" ]]; then
     fixture_root="$CLOUD_ARCH_FIXTURE_ROOT"
     rm -rf "$fixture_root"
@@ -46,20 +54,20 @@ cat > "$fixture_root/Directory.Build.props" <<EOF
     <CompilerVisibleProperty Include="CloudArchitectureProjectIdentity" />
   </ItemGroup>
   <Target Name="WriteCloudArchitectureManagedProjectReferences"
-          DependsOnTargets="ResolveProjectReferences"
+          DependsOnTargets="FindReferenceAssembliesForReferences"
           BeforeTargets="CoreCompile"
           Condition="'\$(AttachCloudArchitectureAnalyzer)' == 'true'">
     <PropertyGroup>
       <_CloudArchitectureManagedReferencesFile>\$(IntermediateOutputPath)CloudArchitectureManagedProjectReferences.txt</_CloudArchitectureManagedReferencesFile>
     </PropertyGroup>
     <ItemGroup>
-      <_CloudArchitectureManagedReference Include="@(_ResolvedProjectReferencePaths)"
-                                          Condition="'%(MSBuildSourceProjectFile)' != ''">
-        <StableProjectIdentity>\$([MSBuild]::MakeRelative('\$(CloudArchitectureRepositoryRoot)', '%(MSBuildSourceProjectFile)'))</StableProjectIdentity>
+      <_CloudArchitectureManagedReference Include="@(ReferencePathWithRefAssemblies)"
+                                          Condition="'%(ReferencePathWithRefAssemblies.MSBuildSourceProjectFile)' != ''">
+        <StableProjectIdentity>\$([MSBuild]::MakeRelative('\$(CloudArchitectureRepositoryRoot)', '%(ReferencePathWithRefAssemblies.MSBuildSourceProjectFile)'))</StableProjectIdentity>
       </_CloudArchitectureManagedReference>
     </ItemGroup>
     <WriteLinesToFile File="\$(_CloudArchitectureManagedReferencesFile)"
-                      Lines="@(_CloudArchitectureManagedReference->'%(ReferenceAssembly)&#x9;%(FullPath)&#x9;%(StableProjectIdentity)')"
+                      Lines="@(_CloudArchitectureManagedReference->'%(FullPath)&#x9;%(MSBuildSourceProjectFile)&#x9;%(StableProjectIdentity)')"
                       Overwrite="true"
                       WriteOnlyWhenDifferent="true" />
     <ItemGroup>
@@ -109,6 +117,7 @@ build_valid() {
 build_invalid() {
     local project="$1"
     local expected_id="$2"
+    local expected_reason="${3:-}"
     local output
     local status
 
@@ -129,6 +138,77 @@ build_invalid() {
         printf '%s\n' "$output" >&2
         printf 'invalid fixture expected only %s but observed %s: %s\n' \
             "$expected_id" "${actual_ids:-<none>}" "$project" >&2
+        exit 1
+    fi
+    if [[ -n "$expected_reason" ]] &&
+        ! grep -Fq "CLOUDARCH004_REASON=$expected_reason" <<<"$output"; then
+        printf '%s\n' "$output" >&2
+        printf 'invalid fixture did not report stable reason %s: %s\n' \
+            "$expected_reason" "$project" >&2
+        exit 1
+    fi
+}
+
+remove_fixture_build_outputs() {
+    while IFS= read -r output_directory; do
+        rm -rf "$output_directory"
+    done < <(find "$fixture_root" -type d \( -name bin -o -name obj \) -prune -print)
+}
+
+get_architecture_diagnostic_signature() {
+    local output="$1"
+    { grep -E 'error CLOUDARCH[0-9]{3}:' <<<"$output" || true; } |
+        sed -E 's#^.*error (CLOUDARCH[0-9]{3}): (.*) \[[^]]+\.csproj\]$#\1|\2#' |
+        sort
+}
+
+build_cold_and_warm_graph() {
+    local project="$1"
+    local expected_result="$2"
+    local expected_reason="${3:-}"
+    local cold_output
+    local warm_output
+    local cold_status
+    local warm_status
+
+    remove_fixture_build_outputs
+    set +e
+    cold_output="$(dotnet build "$project" -c Release --disable-build-servers --nologo 2>&1)"
+    cold_status=$?
+    warm_output="$(dotnet build "$project" -c Release --disable-build-servers --nologo 2>&1)"
+    warm_status=$?
+    set -e
+
+    if [[ "$expected_result" == 'valid' ]]; then
+        if [[ $cold_status -ne 0 || $warm_status -ne 0 ]] ||
+            grep -Eq 'CLOUDARCH[0-9]{3}' <<<"$cold_output$warm_output"; then
+            printf '%s\n%s\n' "$cold_output" "$warm_output" >&2
+            printf 'cold/warm valid graph did not remain diagnostic-free: %s\n' "$project" >&2
+            exit 1
+        fi
+    else
+        if [[ $cold_status -eq 0 || $warm_status -eq 0 ]]; then
+            printf '%s\n%s\n' "$cold_output" "$warm_output" >&2
+            printf 'cold/warm invalid graph unexpectedly succeeded: %s\n' "$project" >&2
+            exit 1
+        fi
+        if ! grep -Fq "CLOUDARCH004_REASON=$expected_reason" <<<"$cold_output" ||
+            ! grep -Fq "CLOUDARCH004_REASON=$expected_reason" <<<"$warm_output"; then
+            printf '%s\n%s\n' "$cold_output" "$warm_output" >&2
+            printf 'cold/warm invalid graph missed stable reason %s: %s\n' \
+                "$expected_reason" "$project" >&2
+            exit 1
+        fi
+    fi
+
+    local cold_signature
+    local warm_signature
+    cold_signature="$(get_architecture_diagnostic_signature "$cold_output")"
+    warm_signature="$(get_architecture_diagnostic_signature "$warm_output")"
+    if [[ "$cold_signature" != "$warm_signature" ]]; then
+        printf 'cold diagnostics:\n%s\nwarm diagnostics:\n%s\n' \
+            "$cold_signature" "$warm_signature" >&2
+        printf 'cold/warm architecture diagnostics diverged: %s\n' "$project" >&2
         exit 1
     fi
 }
@@ -921,6 +1001,94 @@ public sealed class CorruptSummaryReadPort : IExternalReadPort
 }
 EOF
 
+identity_mismatch_method_id='IdentityMismatchSummary.StaticReader::Read`0()->System.Int32'
+identity_mismatch_effect_digest="$(
+    printf '%s\tsafe' "$identity_mismatch_method_id" | shasum -a 256 | awk '{print $1}'
+)"
+write_project \
+    "IdentityMismatchEffectSummary" \
+    "IIoT.Infrastructure.FixtureIdentityMismatchEffectSummary" \
+    "false"
+cat > "$fixture_root/IdentityMismatchEffectSummary/IdentityMismatchSummary.cs" <<EOF
+[assembly: System.Reflection.AssemblyMetadata(
+    "IIoT.CloudArchitecture.EffectSummary.Manifest",
+    "2|1|$identity_mismatch_effect_digest")]
+[assembly: System.Reflection.AssemblyMetadata(
+    "IIoT.CloudArchitecture.EffectSummary.SourceIdentity",
+    "0000000000000000000000000000000000000000000000000000000000000000")]
+[assembly: System.Reflection.AssemblyMetadata(
+    "IIoT.CloudArchitecture.EffectSummary.Method",
+    "$identity_mismatch_method_id\tsafe")]
+
+namespace IdentityMismatchSummary;
+public static class StaticReader
+{
+    public static int Read() => 1;
+}
+EOF
+
+write_project \
+    "InvalidIdentityMismatchEffectSummary" \
+    "IIoT.Dapper.FixtureIdentityMismatchEffectSummaryInvalid" \
+    "true" \
+    '<ItemGroup><ProjectReference Include="../CrossProjectAiReadContracts/CrossProjectAiReadContracts.csproj" /><ProjectReference Include="../IdentityMismatchEffectSummary/IdentityMismatchEffectSummary.csproj" /></ItemGroup>'
+cat > "$fixture_root/InvalidIdentityMismatchEffectSummary/ExternalReadPort.cs" <<'EOF'
+namespace Fixture;
+public sealed class IdentityMismatchSummaryReadPort : IExternalReadPort
+{
+    public System.Threading.Tasks.Task<int> ReadAsync(
+        System.Threading.CancellationToken cancellationToken)
+        => System.Threading.Tasks.Task.FromResult(IdentityMismatchSummary.StaticReader.Read());
+}
+EOF
+
+method_entry_id='MethodEntrySummary.StaticReader::Other`0()->System.Int32'
+method_entry_effect_digest="$(
+    printf '%s\tsafe' "$method_entry_id" | shasum -a 256 | awk '{print $1}'
+)"
+method_entry_source_identity="$(
+    printf '%s' 'MethodEntryEffectSummary/MethodEntryEffectSummary.csproj' |
+        shasum -a 256 |
+        awk '{print $1}'
+)"
+write_project \
+    "MethodEntryEffectSummary" \
+    "IIoT.Infrastructure.FixtureMethodEntryEffectSummary" \
+    "false"
+cat > "$fixture_root/MethodEntryEffectSummary/MethodEntrySummary.cs" <<EOF
+[assembly: System.Reflection.AssemblyMetadata(
+    "IIoT.CloudArchitecture.EffectSummary.Manifest",
+    "2|1|$method_entry_effect_digest")]
+[assembly: System.Reflection.AssemblyMetadata(
+    "IIoT.CloudArchitecture.EffectSummary.SourceIdentity",
+    "$method_entry_source_identity")]
+[assembly: System.Reflection.AssemblyMetadata(
+    "IIoT.CloudArchitecture.EffectSummary.Method",
+    "$method_entry_id\tsafe")]
+
+namespace MethodEntrySummary;
+public static class StaticReader
+{
+    public static int Other() => 1;
+    public static int Read() => 2;
+}
+EOF
+
+write_project \
+    "InvalidMethodEntryEffectSummary" \
+    "IIoT.Dapper.FixtureMethodEntryEffectSummaryInvalid" \
+    "true" \
+    '<ItemGroup><ProjectReference Include="../CrossProjectAiReadContracts/CrossProjectAiReadContracts.csproj" /><ProjectReference Include="../MethodEntryEffectSummary/MethodEntryEffectSummary.csproj" /></ItemGroup>'
+cat > "$fixture_root/InvalidMethodEntryEffectSummary/ExternalReadPort.cs" <<'EOF'
+namespace Fixture;
+public sealed class MethodEntrySummaryReadPort : IExternalReadPort
+{
+    public System.Threading.Tasks.Task<int> ReadAsync(
+        System.Threading.CancellationToken cancellationToken)
+        => System.Threading.Tasks.Task.FromResult(MethodEntrySummary.StaticReader.Read());
+}
+EOF
+
 write_project \
     "InvalidImplicitAiRead" \
     "IIoT.Dapper.FixtureImplicitAiReadInvalid" \
@@ -1362,6 +1530,34 @@ root = true
 dotnet_diagnostic.CLOUDARCH009.severity = none
 EOF
 
+build_cold_and_warm_graph \
+    "$fixture_root/ValidCrossAssemblySummary/ValidCrossAssemblySummary.csproj" \
+    valid
+build_cold_and_warm_graph \
+    "$fixture_root/InvalidCrossAssemblySummary/InvalidCrossAssemblySummary.csproj" \
+    invalid \
+    external-effect-write
+build_cold_and_warm_graph \
+    "$fixture_root/InvalidMissingEffectSummary/InvalidMissingEffectSummary.csproj" \
+    invalid \
+    external-effect-summary-invalid:missing-or-duplicate-manifest
+build_cold_and_warm_graph \
+    "$fixture_root/InvalidCorruptEffectSummary/InvalidCorruptEffectSummary.csproj" \
+    invalid \
+    external-effect-summary-invalid:count-or-digest-mismatch
+build_cold_and_warm_graph \
+    "$fixture_root/InvalidSpoofedEffectSummary/InvalidSpoofedEffectSummary.csproj" \
+    invalid \
+    external-effect-summary-invalid:missing-or-duplicate-manifest
+build_cold_and_warm_graph \
+    "$fixture_root/InvalidIdentityMismatchEffectSummary/InvalidIdentityMismatchEffectSummary.csproj" \
+    invalid \
+    external-effect-identity-mismatch
+build_cold_and_warm_graph \
+    "$fixture_root/InvalidMethodEntryEffectSummary/InvalidMethodEntryEffectSummary.csproj" \
+    invalid \
+    external-effect-method-entry-missing
+
 dotnet run \
     --project "$fixture_root/ContractsBindingProbe/ContractsBindingProbe.csproj" \
     -c Release \
@@ -1383,7 +1579,7 @@ build_invalid "$fixture_root/Invalid002/Invalid002.csproj" "CLOUDARCH002"
 build_invalid "$fixture_root/Invalid003/Invalid003.csproj" "CLOUDARCH003"
 build_invalid "$fixture_root/Invalid004/Invalid004.csproj" "CLOUDARCH004"
 build_invalid "$fixture_root/InvalidCrossProjectAiRead/InvalidCrossProjectAiRead.csproj" "CLOUDARCH004"
-build_invalid "$fixture_root/InvalidCrossAssemblySummary/InvalidCrossAssemblySummary.csproj" "CLOUDARCH004"
+build_invalid "$fixture_root/InvalidCrossAssemblySummary/InvalidCrossAssemblySummary.csproj" "CLOUDARCH004" "external-effect-write"
 build_invalid "$fixture_root/InvalidCrossAssemblyDispatchSummary/InvalidCrossAssemblyDispatchSummary.csproj" "CLOUDARCH004"
 build_invalid "$fixture_root/InvalidCrossAssemblyVirtualSummary/InvalidCrossAssemblyVirtualSummary.csproj" "CLOUDARCH004"
 build_invalid "$fixture_root/InvalidCrossAssemblyCallbackSummary/InvalidCrossAssemblyCallbackSummary.csproj" "CLOUDARCH004"
@@ -1395,11 +1591,13 @@ build_invalid "$fixture_root/InvalidCrossAssemblyStaticInitializerSummary/Invali
 build_invalid "$fixture_root/InvalidCrossAssemblyDirectStaticFieldSummary/InvalidCrossAssemblyDirectStaticFieldSummary.csproj" "CLOUDARCH004"
 build_invalid "$fixture_root/InvalidCrossAssemblyNativeBoundarySummary/InvalidCrossAssemblyNativeBoundarySummary.csproj" "CLOUDARCH004"
 build_invalid "$fixture_root/InvalidCrossAssemblyOpenDispatchSummary/InvalidCrossAssemblyOpenDispatchSummary.csproj" "CLOUDARCH004"
-build_invalid "$fixture_root/InvalidMissingEffectSummary/InvalidMissingEffectSummary.csproj" "CLOUDARCH004"
+build_invalid "$fixture_root/InvalidMissingEffectSummary/InvalidMissingEffectSummary.csproj" "CLOUDARCH004" "external-effect-summary-invalid:missing-or-duplicate-manifest"
 build_invalid "$fixture_root/InvalidOldEffectSummary/InvalidOldEffectSummary.csproj" "CLOUDARCH004"
-build_invalid "$fixture_root/InvalidSpoofedEffectSummary/InvalidSpoofedEffectSummary.csproj" "CLOUDARCH004"
+build_invalid "$fixture_root/InvalidSpoofedEffectSummary/InvalidSpoofedEffectSummary.csproj" "CLOUDARCH004" "external-effect-summary-invalid:missing-or-duplicate-manifest"
 build_invalid "$fixture_root/InvalidPrecompiledSpoof/InvalidPrecompiledSpoof.csproj" "CLOUDARCH004"
-build_invalid "$fixture_root/InvalidCorruptEffectSummary/InvalidCorruptEffectSummary.csproj" "CLOUDARCH004"
+build_invalid "$fixture_root/InvalidCorruptEffectSummary/InvalidCorruptEffectSummary.csproj" "CLOUDARCH004" "external-effect-summary-invalid:count-or-digest-mismatch"
+build_invalid "$fixture_root/InvalidIdentityMismatchEffectSummary/InvalidIdentityMismatchEffectSummary.csproj" "CLOUDARCH004" "external-effect-identity-mismatch"
+build_invalid "$fixture_root/InvalidMethodEntryEffectSummary/InvalidMethodEntryEffectSummary.csproj" "CLOUDARCH004" "external-effect-method-entry-missing"
 build_invalid "$fixture_root/InvalidImplicitAiRead/InvalidImplicitAiRead.csproj" "CLOUDARCH004"
 build_invalid "$fixture_root/InvalidDefaultInterfaceAiRead/InvalidDefaultInterfaceAiRead.csproj" "CLOUDARCH004"
 build_invalid "$fixture_root/InvalidDefaultInterfaceHandler/InvalidDefaultInterfaceHandler.csproj" "CLOUDARCH004"
@@ -1418,4 +1616,4 @@ build_invalid "$fixture_root/SuppressedNoWarn/SuppressedNoWarn.csproj" "CLOUDARC
 build_invalid "$fixture_root/SuppressedEditorConfig/SuppressedEditorConfig.csproj" "CLOUDARCH009"
 
 printf '%s\n' \
-    'ARCHITECTURE_FIXTURES_OK valid=8 invalid=15 callGraphBypass=20 suppressionBypass=3 contractsMetadataIdentities=9 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010'
+    'ARCHITECTURE_FIXTURES_OK coldWarmGraphs=7 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010'
