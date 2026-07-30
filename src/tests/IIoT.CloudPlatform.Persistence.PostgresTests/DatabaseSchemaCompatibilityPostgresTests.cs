@@ -442,7 +442,10 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
         DateTime expectedReportedAtUtc)
     {
         Assert.Equal(
-            expectedReportedAtUtc,
+            new DateTime(
+                expectedReportedAtUtc.Ticks
+                - expectedReportedAtUtc.Ticks % 10,
+                DateTimeKind.Utc),
             state.PlcSnapshotReportedAtUtc);
         Assert.NotNull(state.PlcSnapshotReceivedAtUtc);
         Assert.Equal(
