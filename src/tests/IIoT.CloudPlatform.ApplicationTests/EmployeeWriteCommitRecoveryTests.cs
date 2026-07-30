@@ -124,6 +124,97 @@ public sealed class EmployeeWriteCommitRecoveryTests
             exception.ProblemCode);
     }
 
+    [Theory]
+    [InlineData("profile")]
+    [InlineData("access")]
+    [InlineData("deactivate")]
+    [InlineData("terminate")]
+    public async Task ExistingEmployeeWrites_ShouldObserveBeforeOpeningWriteTransaction(
+        string operation)
+    {
+        var employee = new Employee(
+            Guid.NewGuid(),
+            $"E-OBSERVE-FIRST-{operation}",
+            "Before");
+        var identityStore = EnabledIdentity(employee, "baseline-stamp");
+        var unitOfWork = new RecordingUnitOfWork();
+        var observedBeforeTransaction = false;
+        var observer = new StubEmployeeMutationObservationReader
+        {
+            ObserveAsyncOverride = (_, _) =>
+            {
+                observedBeforeTransaction = unitOfWork.BeginCalls == 0;
+                return Task.FromResult(Observe(
+                    employee,
+                    accountEnabled: true,
+                    securityStamp: "baseline-stamp"));
+            }
+        };
+
+        switch (operation)
+        {
+            case "profile":
+                await new UpdateEmployeeProfileHandler(
+                        RepositoryWith(employee),
+                        unitOfWork,
+                        new StubAdminTargetGuard(),
+                        observer)
+                    .Handle(
+                        new UpdateEmployeeProfileCommand(employee.Id, "After"),
+                        CancellationToken.None);
+                break;
+            case "access":
+                var deviceId = Guid.NewGuid();
+                await new UpdateEmployeeAccessHandler(
+                        RepositoryWith(employee),
+                        new StubAdminTargetGuard(),
+                        new StubDeviceReadQueryService
+                        {
+                            ExistingDeviceIds = [deviceId]
+                        },
+                        unitOfWork,
+                        observer,
+                        new StubEmployeeMutationVersionStore { Result = 23 })
+                    .Handle(
+                        new UpdateEmployeeAccessCommand(
+                            employee.Id,
+                            [deviceId]),
+                        CancellationToken.None);
+                break;
+            case "deactivate":
+                await new DeactivateEmployeeHandler(
+                        RepositoryWith(employee),
+                        identityStore,
+                        unitOfWork,
+                        new StubHumanSessionRevocationService(),
+                        new StubAdminTargetGuard(),
+                        observer)
+                    .Handle(
+                        new DeactivateEmployeeCommand(employee.Id),
+                        CancellationToken.None);
+                break;
+            case "terminate":
+                await new TerminateEmployeeHandler(
+                        RepositoryWith(employee),
+                        identityStore,
+                        unitOfWork,
+                        new StubHumanSessionRevocationService(),
+                        new StubAdminTargetGuard(),
+                        observer)
+                    .Handle(
+                        new TerminateEmployeeCommand(employee.Id),
+                        CancellationToken.None);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(operation));
+        }
+
+        Assert.True(observedBeforeTransaction);
+        Assert.Equal(1, observer.Calls);
+        Assert.Equal(1, unitOfWork.BeginCalls);
+        Assert.Equal(1, unitOfWork.CommitCalls);
+    }
+
     [Fact]
     public async Task Profile_PostCommitFailureWithExactTarget_ShouldRecover()
     {

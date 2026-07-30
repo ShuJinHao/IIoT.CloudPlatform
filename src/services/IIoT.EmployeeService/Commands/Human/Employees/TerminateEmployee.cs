@@ -68,18 +68,11 @@ public class TerminateEmployeeHandler(
         async Task<Result> ExecuteTransactionAsync(
             CancellationToken transactionCancellationToken)
         {
-            await unitOfWork.BeginTransactionAsync(transactionCancellationToken);
-
-            var current = baseline is null
-                ? await mutationObservationReader.ObserveAsync(
-                    request.EmployeeId,
-                    transactionCancellationToken)
-                : await EmployeeWriteCommitRecovery.TryObserveAsync(
-                    mutationObservationReader,
-                    request.EmployeeId);
+            var current = await EmployeeWriteCommitRecovery.TryObserveAsync(
+                mutationObservationReader,
+                request.EmployeeId);
             if (current is null)
             {
-                await unitOfWork.RollbackAsync(transactionCancellationToken);
                 throw new EmployeeWriteCommitUnknownException();
             }
 
@@ -89,16 +82,16 @@ public class TerminateEmployeeHandler(
             }
             else if (EmployeeWriteCommitRecovery.IsTerminationTarget(current))
             {
-                await unitOfWork.RollbackAsync(transactionCancellationToken);
                 return Result.Success();
             }
             else if (!EmployeeWriteCommitRecovery.MatchesExact(
                          current,
                          baseline))
             {
-                await unitOfWork.RollbackAsync(transactionCancellationToken);
                 throw new EmployeeWriteConflictException();
             }
+
+            await unitOfWork.BeginTransactionAsync(transactionCancellationToken);
 
             var account = await identityAccountStore.GetByIdAsync(
                 request.EmployeeId,

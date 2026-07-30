@@ -60,18 +60,11 @@ public class DeactivateEmployeeHandler(
         async Task<Result> ExecuteTransactionAsync(
             CancellationToken transactionCancellationToken)
         {
-            await unitOfWork.BeginTransactionAsync(transactionCancellationToken);
-
-            var current = baseline is null
-                ? await mutationObservationReader.ObserveAsync(
-                    request.EmployeeId,
-                    transactionCancellationToken)
-                : await EmployeeWriteCommitRecovery.TryObserveAsync(
-                    mutationObservationReader,
-                    request.EmployeeId);
+            var current = await EmployeeWriteCommitRecovery.TryObserveAsync(
+                mutationObservationReader,
+                request.EmployeeId);
             if (current is null)
             {
-                await unitOfWork.RollbackAsync(transactionCancellationToken);
                 throw new EmployeeWriteCommitUnknownException();
             }
 
@@ -81,16 +74,16 @@ public class DeactivateEmployeeHandler(
             }
             else if (MatchesTarget(current))
             {
-                await unitOfWork.RollbackAsync(transactionCancellationToken);
                 return Result.Success();
             }
             else if (!EmployeeWriteCommitRecovery.MatchesExact(
                          current,
                          baseline))
             {
-                await unitOfWork.RollbackAsync(transactionCancellationToken);
                 throw new EmployeeWriteConflictException();
             }
+
+            await unitOfWork.BeginTransactionAsync(transactionCancellationToken);
 
             var employee = await employeeRepository.GetSingleOrDefaultAsync(
                 new EmployeeWithAccessesSpec(request.EmployeeId),
