@@ -59,7 +59,8 @@ public class UpgradeRecipeVersionHandler(
         var recipeName = accessTarget.RecipeName;
         var newRecipeId = Guid.NewGuid();
         IReadOnlyList<RecipeWriteState>? baselineFamily = null;
-        IReadOnlyList<RecipeWriteState>? targetFamily = null;
+        IReadOnlyList<RecipeWriteState>? baselineWrites = null;
+        IReadOnlyList<RecipeWriteState>? targetWrites = null;
         var writeAttempted = false;
         var commitAttempted = false;
         try
@@ -87,7 +88,7 @@ public class UpgradeRecipeVersionHandler(
             CancellationToken callbackToken)
         {
             var current = await ObserveAttemptAsync(callbackToken);
-            if (MatchesFamily(current.Family, targetFamily))
+            if (ContainsStates(current.Family, targetWrites))
             {
                 return Result.Success(newRecipeId);
             }
@@ -118,7 +119,12 @@ public class UpgradeRecipeVersionHandler(
             }
 
             baselineFamily ??= current.Family;
-            if (!MatchesFamily(current.Family, baselineFamily))
+            baselineWrites ??= current.Family
+                .Where(state => state.Status == (int)RecipeStatus.Active)
+                .OrderBy(state => state.Id)
+                .ToArray();
+            if (!ContainsStates(current.Family, baselineWrites)
+                || current.Family.Any(state => state.Id == newRecipeId))
             {
                 throw new CloudWriteConflictException();
             }
@@ -157,19 +163,8 @@ public class UpgradeRecipeVersionHandler(
             recipeRepository.Add(newRecipe);
             await recipeRepository.SaveChangesAsync(callbackToken);
 
-            targetFamily = baselineFamily
-                .Select(state =>
-                {
-                    var active = activeVersions.SingleOrDefault(
-                        recipe => recipe.Id == state.Id);
-                    return active is null
-                        ? state
-                        : state with
-                        {
-                            Status = (int)active.Status,
-                            RowVersion = active.RowVersion
-                        };
-                })
+            targetWrites = activeVersions
+                .Select(ToState)
                 .Append(ToState(newRecipe))
                 .OrderBy(state => state.Id)
                 .ToArray();
@@ -188,15 +183,20 @@ public class UpgradeRecipeVersionHandler(
                     recipeName,
                     token));
             if (current is null
-                || baselineFamily is null
-                || MatchesFamily(current.Family, baselineFamily))
+                || baselineWrites is null)
             {
                 throw new CloudWriteCommitUnknownException();
             }
 
-            if (MatchesFamily(current.Family, targetFamily))
+            if (ContainsStates(current.Family, targetWrites))
             {
                 return Result.Success(newRecipeId);
+            }
+
+            if (ContainsStates(current.Family, baselineWrites)
+                && current.Family.All(state => state.Id != newRecipeId))
+            {
+                throw new CloudWriteCommitUnknownException();
             }
 
             throw new CloudWriteConflictException();
@@ -243,25 +243,19 @@ public class UpgradeRecipeVersionHandler(
                    == recipe.RowVersion);
     }
 
-    private static bool MatchesFamily(
+    private static bool ContainsStates(
         IReadOnlyList<RecipeWriteState> current,
         IReadOnlyList<RecipeWriteState>? expected)
     {
-        if (expected is null
-            || current.Count != expected.Count)
+        if (expected is null)
         {
             return false;
         }
 
-        var orderedCurrent = current
-            .OrderBy(state => state.Id)
-            .ToArray();
-        var orderedExpected = expected
-            .OrderBy(state => state.Id)
-            .ToArray();
-        return orderedCurrent
-            .Zip(orderedExpected)
-            .All(pair => MatchesState(pair.First, pair.Second));
+        var currentById = current.ToDictionary(state => state.Id);
+        return expected.All(state =>
+            currentById.TryGetValue(state.Id, out var candidate)
+            && MatchesState(candidate, state));
     }
 
     private static bool MatchesState(

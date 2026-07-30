@@ -247,6 +247,55 @@ public sealed class ProductionCommandBehaviorTests
         Assert.Empty(repository.UpdatedEntities);
     }
 
+    [Fact]
+    public async Task UpgradeRecipeVersionHandler_ShouldRecoverWhenUnchangedArchivedSiblingIsDeletedAfterCommit()
+    {
+        var processId = Guid.NewGuid();
+        var deviceId = Guid.NewGuid();
+        var source = new Recipe("Recipe-A", processId, deviceId, "{\"speed\":120}");
+        var archivedSibling = source.CreateNextVersion(
+            Guid.NewGuid(),
+            "V0.9",
+            "{\"speed\":90}");
+        archivedSibling.Archive();
+        source.ClearDomainEvents();
+        archivedSibling.ClearDomainEvents();
+        var repository = new InMemoryRepository<Recipe>
+        {
+            SingleOrDefaultResult = source
+        };
+        repository.ListResult.Add(source);
+        repository.ListResult.Add(archivedSibling);
+        var unitOfWork = new RecordingUnitOfWork
+        {
+            OnCommit = () =>
+            {
+                repository.ListResult.Remove(archivedSibling);
+                throw new InvalidOperationException("commit acknowledgement lost");
+            }
+        };
+        var handler = new UpgradeRecipeVersionHandler(
+            repository,
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            unitOfWork,
+            ObserveRecipe(repository));
+
+        var result = await handler.Handle(
+            new UpgradeRecipeVersionCommand(
+                source.Id,
+                "V1.1",
+                "{\"speed\":130}"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(RecipeStatus.Archived, source.Status);
+        Assert.DoesNotContain(archivedSibling, repository.ListResult);
+        Assert.Contains(
+            repository.ListResult,
+            recipe => recipe.Id == result.Value
+                      && recipe.Status == RecipeStatus.Active);
+    }
+
     private sealed class InMemoryRepository<T> : IRepository<T>
         where T : class, IEntity, IAggregateRoot
     {
