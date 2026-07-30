@@ -67,6 +67,7 @@ jobs:
             & git -c core.quotepath=false diff --name-only $baseRef HEAD -- `
               '.github/workflows/cloud-ci.yml' `
               'scripts/tests/Select-CloudCiTests.ps1' `
+              'scripts/tests/internal/CloudArchitectureBuildTargetsContract.psm1' `
               'scripts/tests/Invoke-CloudCiSelectedTests.ps1' `
               'scripts/tests/Test-CloudCiTestSelection.ps1' `
               'scripts/tests/Invoke-CloudWebValidation.ps1' `

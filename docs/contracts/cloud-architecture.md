@@ -4,6 +4,8 @@
 
 Analyzer 项目固定为 `netstandard2.0`，`Microsoft.CodeAnalysis.CSharp` 固定 `5.6.0`。`Directory.Build.props` 仅将它作为 Analyzer 附加到 `IIoT.*` 生产项目；测试项目和 Analyzer 自身不引用其运行时程序集。
 
+`Directory.Build.targets` 的 Analyzer 生产接线属于本契约的一部分：`RunAnalyzers` 与 `RunAnalyzersDuringBuild` 必须在生产条件下同时为 `true`，唯一受管引用 target 必须在 `FindReferenceAssembliesForReferences` 后、`CoreCompile` 前执行，并从 `ReferencePathWithRefAssemblies` 追溯 `MSBuildSourceProjectFile` 后写出 compiler reference、来源 csproj、稳定项目身份三列，再通过 `AdditionalFiles` 交给 Analyzer。selector 与测试共用结构化 XML 契约模块逐节点验证完整语义；条件恒假、旧引用源、输出漂移、接线移除、额外属性/task/target 或仅在注释中保留关键字都必须要求显式 `Full`，不能归类为窄 Architecture/Security。
+
 ## CLOUDARCH001 分层依赖
 
 - `IIoT.SharedKernel*` 不依赖 Core、Service、Infrastructure 或 Host。

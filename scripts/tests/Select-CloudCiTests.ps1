@@ -13,6 +13,11 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+$architectureBuildTargetsContractModule = Join-Path `
+    $PSScriptRoot `
+    'internal/CloudArchitectureBuildTargetsContract.psm1'
+Import-Module $architectureBuildTargetsContractModule -Force -ErrorAction Stop
+
 function ConvertTo-RepositoryPath {
     param([Parameter(Mandatory)][string]$Path)
 
@@ -141,78 +146,6 @@ function Get-GitFileAtRef {
         return $null
     }
     return (($output | ForEach-Object { $_.ToString() }) -join "`n")
-}
-
-function Test-CloudArchitectureBuildTargetsContract {
-    param([Parameter(Mandatory)][string]$Root)
-
-    $path = Join-Path $Root 'Directory.Build.targets'
-    try {
-        $text = Get-Content $path -Raw
-        [xml]$document = $text
-    }
-    catch {
-        return $false
-    }
-
-    $rootChildren = @($document.DocumentElement.ChildNodes |
-        Where-Object NodeType -eq ([Xml.XmlNodeType]::Element))
-    if (@($rootChildren | Where-Object {
-                $_.LocalName -notin @('PropertyGroup', 'ItemGroup', 'Target')
-            }).Count -ne 0) {
-        return $false
-    }
-
-    $targets = @($document.SelectNodes("/*[local-name()='Project']/*[local-name()='Target']"))
-    if ($targets.Count -ne 1 -or
-        [string]$targets[0].GetAttribute('Name') -cne
-            'WriteCloudArchitectureManagedProjectReferences' -or
-        [string]$targets[0].GetAttribute('DependsOnTargets') -cne
-            'FindReferenceAssembliesForReferences' -or
-        [string]$targets[0].GetAttribute('BeforeTargets') -cne 'CoreCompile') {
-        return $false
-    }
-
-    $allowedProperties = @(
-        'CloudArchitectureRepositoryRoot',
-        'CloudArchitectureProjectIdentity',
-        'RunAnalyzers',
-        'RunAnalyzersDuringBuild',
-        '_CloudArchitectureManagedReferencesFile')
-    if (@($document.SelectNodes("//*[local-name()='PropertyGroup']/*") |
-            Where-Object { $_.LocalName -notin $allowedProperties }).Count -ne 0) {
-        return $false
-    }
-
-    $allowedItems = @(
-        'CompilerVisibleProperty',
-        '_CloudArchitectureManagedReference',
-        'AdditionalFiles')
-    if (@($document.SelectNodes("//*[local-name()='ItemGroup']/*") |
-            Where-Object { $_.LocalName -notin $allowedItems }).Count -ne 0) {
-        return $false
-    }
-
-    $targetChildren = @($targets[0].ChildNodes |
-        Where-Object NodeType -eq ([Xml.XmlNodeType]::Element))
-    if (@($targetChildren | Where-Object {
-                $_.LocalName -notin @('PropertyGroup', 'ItemGroup', 'WriteLinesToFile')
-            }).Count -ne 0) {
-        return $false
-    }
-
-    return $text.Contains(
-            'Include="@(ReferencePathWithRefAssemblies)"',
-            [StringComparison]::Ordinal) -and
-        $text.Contains(
-            'ReferencePathWithRefAssemblies.MSBuildSourceProjectFile',
-            [StringComparison]::Ordinal) -and
-        $text.Contains(
-            "'%(FullPath)&#x9;%(MSBuildSourceProjectFile)&#x9;%(StableProjectIdentity)'",
-            [StringComparison]::Ordinal) -and
-        -not $text.Contains(
-            'Include="@(_ResolvedProjectReferencePaths)"',
-            [StringComparison]::Ordinal)
 }
 
 function Get-SolutionProjectPaths {
@@ -679,7 +612,7 @@ if ($Mode -eq 'Quality') {
             continue
         }
         if ($file -ceq 'Directory.Build.targets') {
-            if (Test-CloudArchitectureBuildTargetsContract -Root $root) {
+            if (Test-CloudArchitectureBuildTargetsContract -RepositoryRoot $root) {
                 continue
             }
             $unclassified.Add($file)
