@@ -1,6 +1,12 @@
+using IIoT.Core.MasterData.Aggregates.MfgProcesses;
+using IIoT.Core.Production.Aggregates.ClientReleases;
+using IIoT.Core.Production.Aggregates.Devices;
+using IIoT.Core.Production.Aggregates.EdgeHosts;
 using IIoT.EntityFrameworkCore;
+using IIoT.EntityFrameworkCore.Migrations;
 using IIoT.MigrationWorkApp;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Migrations.Operations;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
@@ -309,6 +315,139 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
         {
             await PostgresTestBudget.RollbackAsync(transaction);
         }
+    }
+
+    [Fact]
+    public async Task PlcSnapshotMarkerMigration_ShouldBackfillExistingAndMissingClientStates()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        await using var connection =
+            new NpgsqlConnection(budget.ConnectionString);
+        await connection.OpenAsync(budget.Token);
+        await using var transaction =
+            await connection.BeginTransactionAsync(budget.Token);
+        var options = new DbContextOptionsBuilder<IIoTDbContext>()
+            .UseNpgsql(connection)
+            .Options;
+        await using var dbContext = new IIoTDbContext(options);
+        await dbContext.Database.UseTransactionAsync(
+            transaction,
+            budget.Token);
+
+        try
+        {
+            var unique = Guid.NewGuid().ToString("N");
+            var process = new MfgProcess(
+                $"PLC-MIG-{unique}"[..24],
+                "PLC migration marker");
+            var existingStateDevice = new Device(
+                $"Existing state {unique}",
+                $"PLC-E-{unique}"[..24],
+                process.Id);
+            var missingStateDevice = new Device(
+                $"Missing state {unique}",
+                $"PLC-M-{unique}"[..24],
+                process.Id);
+            var existingState = new DeviceClientState(
+                existingStateDevice.Id,
+                existingStateDevice.Code);
+            var olderObservedAt = DateTime.UtcNow.AddMinutes(-10);
+            var latestObservedAt = olderObservedAt.AddMinutes(5);
+            var existingRuntime = CreateRuntimeState(
+                existingStateDevice,
+                "PLC-1",
+                latestObservedAt);
+            var missingRuntime = CreateRuntimeState(
+                missingStateDevice,
+                "PLC-2",
+                olderObservedAt);
+            process.ClearDomainEvents();
+            existingStateDevice.ClearDomainEvents();
+            missingStateDevice.ClearDomainEvents();
+            dbContext.MfgProcesses.Add(process);
+            dbContext.Devices.AddRange(
+                existingStateDevice,
+                missingStateDevice);
+            dbContext.DeviceClientStates.Add(existingState);
+            dbContext.EdgeHostPlcRuntimeStates.AddRange(
+                existingRuntime,
+                missingRuntime);
+            await dbContext.SaveChangesAsync(budget.Token);
+
+            var migration = new AddPlcSnapshotCommitRecoveryMarker();
+            var backfillSql = Assert.Single(
+                migration.UpOperations.OfType<SqlOperation>()).Sql;
+            await ExecuteNonQueryAsync(
+                connection,
+                transaction,
+                backfillSql,
+                budget.Token);
+            await ExecuteNonQueryAsync(
+                connection,
+                transaction,
+                backfillSql,
+                budget.Token);
+
+            dbContext.ChangeTracker.Clear();
+            var states = await dbContext.DeviceClientStates
+                .AsNoTracking()
+                .Where(state =>
+                    state.DeviceId == existingStateDevice.Id
+                    || state.DeviceId == missingStateDevice.Id)
+                .OrderBy(state => state.DeviceId)
+                .ToListAsync(budget.Token);
+
+            Assert.Equal(2, states.Count);
+            var backfilledExisting = Assert.Single(
+                states,
+                state => state.DeviceId == existingStateDevice.Id);
+            var backfilledMissing = Assert.Single(
+                states,
+                state => state.DeviceId == missingStateDevice.Id);
+            AssertMarker(
+                backfilledExisting,
+                latestObservedAt);
+            AssertMarker(
+                backfilledMissing,
+                olderObservedAt);
+            Assert.Equal("[]", backfilledMissing.VersionLocalIpAddressesJson);
+            Assert.Equal("[]", backfilledMissing.RuntimeLocalIpAddressesJson);
+        }
+        finally
+        {
+            await PostgresTestBudget.RollbackAsync(transaction);
+        }
+    }
+
+    private static EdgeHostPlcRuntimeState CreateRuntimeState(
+        Device device,
+        string plcCode,
+        DateTime observedAtUtc)
+    {
+        var state = new EdgeHostPlcRuntimeState(
+            device.Id,
+            device.Code,
+            plcCode,
+            createdAtUtc: observedAtUtc.AddMinutes(-1));
+        state.ReplaceReport(
+            $"Reported {plcCode}",
+            true,
+            EdgeHostPlcRuntimeStatus.Connected,
+            observedAtUtc);
+        return state;
+    }
+
+    private static void AssertMarker(
+        DeviceClientState state,
+        DateTime expectedReportedAtUtc)
+    {
+        Assert.Equal(
+            expectedReportedAtUtc,
+            state.PlcSnapshotReportedAtUtc);
+        Assert.NotNull(state.PlcSnapshotReceivedAtUtc);
+        Assert.Equal(
+            new string('0', 64),
+            state.PlcSnapshotContentSha256);
     }
 
     private static async Task ExecuteNonQueryAsync(
