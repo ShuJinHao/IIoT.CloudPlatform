@@ -3,6 +3,7 @@ using IIoT.Core.MasterData.Aggregates.MfgProcesses;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.EmployeeService.Commands.Employees;
 using IIoT.EntityFrameworkCore;
+using IIoT.EntityFrameworkCore.Identity;
 using IIoT.EntityFrameworkCore.Migrations;
 using IIoT.EntityFrameworkCore.Persistence;
 using IIoT.EntityFrameworkCore.QueryServices;
@@ -254,7 +255,9 @@ public sealed class EmployeeDeviceAccessIntegrityPostgresTests(
                 pausingQueries,
                 new EfUnitOfWork(
                     assignmentContext,
-                    NullLogger<EfUnitOfWork>.Instance));
+                    NullLogger<EfUnitOfWork>.Instance),
+                CreateObservationReader(budget.ConnectionString),
+                new EmployeeMutationVersionStore(assignmentContext));
             var assignmentTask = handler.Handle(
                 new UpdateEmployeeAccessCommand(employeeId, [deviceId]),
                 budget.Token);
@@ -353,7 +356,9 @@ public sealed class EmployeeDeviceAccessIntegrityPostgresTests(
                 new DeviceReadQueryService(assignmentContext),
                 new EfUnitOfWork(
                     assignmentContext,
-                    NullLogger<EfUnitOfWork>.Instance));
+                    NullLogger<EfUnitOfWork>.Instance),
+                CreateObservationReader(budget.ConnectionString),
+                new EmployeeMutationVersionStore(assignmentContext));
 
             var result = await handler.Handle(
                 new UpdateEmployeeAccessCommand(employeeId, [deviceId]),
@@ -405,6 +410,15 @@ public sealed class EmployeeDeviceAccessIntegrityPostgresTests(
                     null))
             .Options;
         return new IIoTDbContext(options);
+    }
+
+    private static EmployeeMutationObservationReader CreateObservationReader(
+        string connectionString)
+    {
+        var options = new DbContextOptionsBuilder<IIoTDbContext>()
+            .UseNpgsql(connectionString)
+            .Options;
+        return new EmployeeMutationObservationReader(options);
     }
 
     private static async Task ExecuteNonQueryAsync(

@@ -6,7 +6,13 @@ public sealed record EmployeeMutationObservation(
     bool AccountExists,
     bool AccountIsEnabled,
     string? AccountSecurityStamp,
-    IReadOnlyList<string> Roles);
+    IReadOnlyList<string> Roles,
+    string? EmployeeNo = null,
+    string? EmployeeRealName = null,
+    uint? EmployeeRowVersion = null,
+    IReadOnlyList<Guid>? EmployeeDeviceIds = null,
+    string? AccountEmployeeNo = null,
+    bool HasActiveHumanSessions = false);
 
 /// <summary>
 /// Reads employee and identity mutation state through a newly-created persistence context

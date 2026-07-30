@@ -1075,6 +1075,40 @@ internal sealed class StubEmployeeMutationObservationReader
     }
 }
 
+internal sealed class StubEmployeeMutationVersionStore
+    : IEmployeeMutationVersionStore
+{
+    public uint? Result { get; set; } = 1;
+
+    public Exception? ExceptionToThrow { get; set; }
+
+    public int Calls { get; private set; }
+
+    public Guid? LastEmployeeId { get; private set; }
+
+    public uint? LastExpectedRowVersion { get; private set; }
+
+    public CancellationToken LastCancellationToken { get; private set; }
+
+    public Task<uint?> TryAdvanceAsync(
+        Guid employeeId,
+        uint expectedRowVersion,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Calls++;
+        LastEmployeeId = employeeId;
+        LastExpectedRowVersion = expectedRowVersion;
+        LastCancellationToken = cancellationToken;
+        if (ExceptionToThrow is not null)
+        {
+            throw ExceptionToThrow;
+        }
+
+        return Task.FromResult(Result);
+    }
+}
+
 internal sealed class StubAdminTargetGuard : IAdminTargetGuard
 {
     public Result GuardResult { get; set; } = Result.Success();

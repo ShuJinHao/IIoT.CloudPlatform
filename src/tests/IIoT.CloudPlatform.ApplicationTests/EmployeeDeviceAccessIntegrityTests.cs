@@ -53,7 +53,9 @@ public sealed class EmployeeDeviceAccessIntegrityTests
             repository,
             new StubAdminTargetGuard(),
             deviceQueries,
-            unitOfWork);
+            unitOfWork,
+            new StubEmployeeMutationObservationReader(),
+            new StubEmployeeMutationVersionStore());
         using var cancellation = new CancellationTokenSource();
 
         var result = await handler.Handle(
@@ -99,7 +101,9 @@ public sealed class EmployeeDeviceAccessIntegrityTests
             repository,
             new StubAdminTargetGuard(),
             deviceQueries,
-            unitOfWork);
+            unitOfWork,
+            new StubEmployeeMutationObservationReader(),
+            new StubEmployeeMutationVersionStore());
 
         var result = await handler.Handle(
             new UpdateEmployeeAccessCommand(employeeId, []),
@@ -137,7 +141,9 @@ public sealed class EmployeeDeviceAccessIntegrityTests
             repository,
             new StubAdminTargetGuard(),
             deviceQueries,
-            unitOfWork);
+            unitOfWork,
+            new StubEmployeeMutationObservationReader(),
+            new StubEmployeeMutationVersionStore());
 
         var result = await handler.Handle(
             new UpdateEmployeeAccessCommand(
@@ -177,7 +183,9 @@ public sealed class EmployeeDeviceAccessIntegrityTests
             repository,
             targetGuard,
             deviceQueries,
-            unitOfWork);
+            unitOfWork,
+            new StubEmployeeMutationObservationReader(),
+            new StubEmployeeMutationVersionStore());
 
         var result = await handler.Handle(
             new UpdateEmployeeAccessCommand(employeeId, [Guid.NewGuid()]),
@@ -205,7 +213,9 @@ public sealed class EmployeeDeviceAccessIntegrityTests
             repository,
             new StubAdminTargetGuard(),
             deviceQueries,
-            unitOfWork);
+            unitOfWork,
+            new StubEmployeeMutationObservationReader(),
+            new StubEmployeeMutationVersionStore());
 
         var result = await handler.Handle(
             new UpdateEmployeeAccessCommand(Guid.NewGuid(), [Guid.NewGuid()]),
@@ -242,7 +252,9 @@ public sealed class EmployeeDeviceAccessIntegrityTests
             repository,
             new StubAdminTargetGuard(),
             deviceQueries,
-            unitOfWork);
+            unitOfWork,
+            new StubEmployeeMutationObservationReader(),
+            new StubEmployeeMutationVersionStore());
 
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
             handler.Handle(

@@ -4,6 +4,7 @@ using IIoT.Core.Employees.Specifications;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -21,7 +22,8 @@ public record UpdateEmployeeProfileCommand(
 public class UpdateEmployeeProfileHandler(
     IRepository<Employee> employeeRepository,
     IUnitOfWork unitOfWork,
-    IAdminTargetGuard adminTargetGuard)
+    IAdminTargetGuard adminTargetGuard,
+    IEmployeeMutationObservationReader mutationObservationReader)
     : ICommandHandler<UpdateEmployeeProfileCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(
@@ -34,24 +36,61 @@ public class UpdateEmployeeProfileHandler(
             return Result.Failure("员工姓名不能为空");
         }
 
-        return await unitOfWork.ExecuteResilientAsync(
-            ExecuteTransactionAsync,
+        var targetResult = await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
+            request.EmployeeId,
             cancellationToken);
+        if (!targetResult.IsSuccess)
+        {
+            return Result.Failure(targetResult.Errors?.ToArray()
+                ?? [AdminTargetProtectionErrors.TargetNotFound]);
+        }
+
+        EmployeeMutationObservation? baseline = null;
+        uint? targetRowVersion = null;
+        var commitAttempted = false;
+        try
+        {
+            return await unitOfWork.ExecuteResilientAsync(
+                ExecuteTransactionAsync,
+                cancellationToken);
+        }
+        catch (EmployeeMutationException)
+        {
+            throw;
+        }
+        catch (Exception)
+            when (commitAttempted)
+        {
+            return await ResolveCommitAsync();
+        }
 
         async Task<Result<bool>> ExecuteTransactionAsync(
             CancellationToken transactionCancellationToken)
         {
-            await unitOfWork.BeginTransactionAsync(transactionCancellationToken);
-
-            var targetResult = await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
-                request.EmployeeId,
-                transactionCancellationToken);
-            if (!targetResult.IsSuccess)
+            var current = await EmployeeWriteCommitRecovery.TryObserveAsync(
+                mutationObservationReader,
+                request.EmployeeId);
+            if (current is null)
             {
-                await unitOfWork.RollbackAsync(transactionCancellationToken);
-                return Result.Failure(targetResult.Errors?.ToArray()
-                    ?? [AdminTargetProtectionErrors.TargetNotFound]);
+                throw new EmployeeWriteCommitUnknownException();
             }
+
+            if (baseline is null)
+            {
+                baseline = current;
+            }
+            else if (MatchesTarget(current))
+            {
+                return Result.Success(true);
+            }
+            else if (!EmployeeWriteCommitRecovery.MatchesExact(
+                         current,
+                         baseline))
+            {
+                throw new EmployeeWriteConflictException();
+            }
+
+            await unitOfWork.BeginTransactionAsync(transactionCancellationToken);
 
             var employee = await employeeRepository.GetSingleOrDefaultAsync(
                 new EmployeeWithAccessesSpec(request.EmployeeId),
@@ -74,8 +113,44 @@ public class UpdateEmployeeProfileHandler(
             employeeRepository.Update(employee);
             await employeeRepository.SaveChangesAsync(transactionCancellationToken);
 
+            targetRowVersion = employee.RowVersion;
+            commitAttempted = true;
             await unitOfWork.CommitAsync(transactionCancellationToken);
             return Result.Success(true);
         }
+
+        async Task<Result<bool>> ResolveCommitAsync()
+        {
+            var observation =
+                await EmployeeWriteCommitRecovery.TryObserveAsync(
+                    mutationObservationReader,
+                    request.EmployeeId);
+            if (observation is null
+                || baseline is null
+                || EmployeeWriteCommitRecovery.MatchesExact(
+                    observation,
+                    baseline))
+            {
+                throw new EmployeeWriteCommitUnknownException();
+            }
+
+            if (MatchesTarget(observation))
+            {
+                return Result.Success(true);
+            }
+
+            throw new EmployeeWriteConflictException();
+        }
+
+        bool MatchesTarget(EmployeeMutationObservation observation)
+            => baseline is not null
+               && targetRowVersion.HasValue
+               && EmployeeWriteCommitRecovery.MatchesExact(
+                   observation,
+                   baseline with
+                   {
+                       EmployeeRealName = realName,
+                       EmployeeRowVersion = targetRowVersion
+                   });
     }
 }

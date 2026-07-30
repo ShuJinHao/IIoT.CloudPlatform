@@ -85,6 +85,16 @@ public sealed class UseCaseExceptionHandlerTests
         StatusCodes.Status503ServiceUnavailable,
         EmployeeActivationCommitUnknownException.Code,
         EmployeeActivationCommitUnknownException.PublicMessage)]
+    [InlineData(
+        "write-conflict",
+        StatusCodes.Status409Conflict,
+        EmployeeWriteConflictException.Code,
+        EmployeeWriteConflictException.PublicMessage)]
+    [InlineData(
+        "write-unknown",
+        StatusCodes.Status503ServiceUnavailable,
+        EmployeeWriteCommitUnknownException.Code,
+        EmployeeWriteCommitUnknownException.PublicMessage)]
     public async Task EmployeeMutationCommitExceptions_ShouldExposeOnlyStableProblemDetails(
         string exceptionKind,
         int expectedStatus,
@@ -97,6 +107,8 @@ public sealed class UseCaseExceptionHandlerTests
             "role-unknown" => new EmployeeRoleUpdateCommitUnknownException(),
             "activation-conflict" => new EmployeeActivationConflictException(),
             "activation-unknown" => new EmployeeActivationCommitUnknownException(),
+            "write-conflict" => new EmployeeWriteConflictException(),
+            "write-unknown" => new EmployeeWriteCommitUnknownException(),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(exceptionKind),
                 exceptionKind,

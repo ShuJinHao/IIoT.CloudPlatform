@@ -27,7 +27,8 @@ public class OnboardEmployeeHandler(
     IRepository<Employee> employeeRepository,
     IUnitOfWork unitOfWork,
     ICurrentUser currentUser,
-    IPermissionProvider permissionProvider)
+    IPermissionProvider permissionProvider,
+    IEmployeeMutationObservationReader mutationObservationReader)
     : ICommandHandler<OnboardEmployeeCommand, Result<Guid>>
 {
     public async Task<Result<Guid>> Handle(
@@ -58,13 +59,51 @@ public class OnboardEmployeeHandler(
 
         var sharedId = Guid.NewGuid();
         var creationAttempted = false;
-        return await unitOfWork.ExecuteResilientAsync(
-            ExecuteTransactionAsync,
-            cancellationToken);
+        var commitAttempted = false;
+        try
+        {
+            return await unitOfWork.ExecuteResilientAsync(
+                ExecuteTransactionAsync,
+                cancellationToken);
+        }
+        catch (EmployeeMutationException)
+        {
+            throw;
+        }
+        catch (Exception)
+            when (commitAttempted)
+        {
+            return await ResolveCommitAsync();
+        }
 
         async Task<Result<Guid>> ExecuteTransactionAsync(
             CancellationToken transactionCancellationToken)
         {
+            if (creationAttempted)
+            {
+                var replayObservation =
+                    await EmployeeWriteCommitRecovery.TryObserveAsync(
+                        mutationObservationReader,
+                        sharedId);
+                if (replayObservation is null)
+                {
+                    throw new EmployeeWriteCommitUnknownException();
+                }
+
+                if (EmployeeWriteCommitRecovery.IsOnboardTarget(
+                        replayObservation,
+                        normalizedEmployeeNo))
+                {
+                    return Result.Success(sharedId);
+                }
+
+                if (!EmployeeWriteCommitRecovery.IsAbsentBaseline(
+                        replayObservation))
+                {
+                    throw new EmployeeWriteConflictException();
+                }
+            }
+
             await unitOfWork.BeginTransactionAsync(transactionCancellationToken);
 
             var accountByEmployeeNo = await identityAccountStore.GetByEmployeeNoAsync(
@@ -85,18 +124,12 @@ public class OnboardEmployeeHandler(
                 || employeeByEmployeeNo is not null
                 || employeeById is not null)
             {
-                if (creationAttempted
-                    && IsCommittedReplay(
-                        accountByEmployeeNo,
-                        accountById,
-                        employeeByEmployeeNo,
-                        employeeById))
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                if (creationAttempted)
                 {
-                    await unitOfWork.RollbackAsync(transactionCancellationToken);
-                    return Result.Success(sharedId);
+                    throw new EmployeeWriteConflictException();
                 }
 
-                await unitOfWork.RollbackAsync(transactionCancellationToken);
                 return accountByEmployeeNo is not null
                     ? Result.Failure("员工账号已存在")
                     : Result.Failure("员工入职状态不完整，已停止重试");
@@ -143,38 +176,32 @@ public class OnboardEmployeeHandler(
             employeeRepository.Add(employee);
             await employeeRepository.SaveChangesAsync(transactionCancellationToken);
 
+            commitAttempted = true;
             await unitOfWork.CommitAsync(transactionCancellationToken);
 
             return Result.Success(sharedId);
         }
 
-        bool IsCommittedReplay(
-            IdentityAccount? accountByEmployeeNo,
-            IdentityAccount? accountById,
-            Employee? employeeByEmployeeNo,
-            Employee? employeeById)
+        async Task<Result<Guid>> ResolveCommitAsync()
         {
-            // The shared id is private to this handler invocation. Once both
-            // aggregates exist under that id and employee number, the original
-            // transaction committed. Follow-up profile, status, role, or device
-            // access writes must not turn a lost commit acknowledgement into a
-            // false onboarding failure.
-            return accountByEmployeeNo is not null
-                   && accountById is not null
-                   && employeeByEmployeeNo is not null
-                   && employeeById is not null
-                   && accountByEmployeeNo.Id == sharedId
-                   && accountById.Id == sharedId
-                   && employeeByEmployeeNo.Id == sharedId
-                   && employeeById.Id == sharedId
-                   && string.Equals(
-                       accountById.EmployeeNo,
-                       normalizedEmployeeNo,
-                       StringComparison.Ordinal)
-                   && string.Equals(
-                       employeeById.EmployeeNo,
-                       normalizedEmployeeNo,
-                       StringComparison.Ordinal);
+            var observation =
+                await EmployeeWriteCommitRecovery.TryObserveAsync(
+                    mutationObservationReader,
+                    sharedId);
+            if (observation is null
+                || EmployeeWriteCommitRecovery.IsAbsentBaseline(observation))
+            {
+                throw new EmployeeWriteCommitUnknownException();
+            }
+
+            if (EmployeeWriteCommitRecovery.IsOnboardTarget(
+                    observation,
+                    normalizedEmployeeNo))
+            {
+                return Result.Success(sharedId);
+            }
+
+            throw new EmployeeWriteConflictException();
         }
     }
 

@@ -1,6 +1,8 @@
 using System.Data;
+using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Services.Contracts.Identity;
 using Microsoft.EntityFrameworkCore;
+using OpenIddict.Abstractions;
 
 namespace IIoT.EntityFrameworkCore.Identity;
 
@@ -29,42 +31,94 @@ public sealed class EmployeeMutationObservationReader(
                     isolationLevel,
                     strategyCancellationToken);
 
-            var employeeActive = await context.Employees
+            var employeeRows = await (
+                    from candidate in context.Employees.AsNoTracking()
+                    where candidate.Id == employeeId
+                    join access in context.Set<EmployeeDeviceAccess>().AsNoTracking()
+                        on candidate.Id equals access.EmployeeId into accesses
+                    from access in accesses.DefaultIfEmpty()
+                    select new
+                    {
+                        candidate.EmployeeNo,
+                        candidate.RealName,
+                        candidate.IsActive,
+                        candidate.RowVersion,
+                        DeviceId = access == null
+                            ? (Guid?)null
+                            : access.DeviceId
+                    })
+                .ToListAsync(strategyCancellationToken);
+            var employee = employeeRows.FirstOrDefault();
+            var employeeDeviceIds = employeeRows
+                .Where(row => row.DeviceId.HasValue)
+                .Select(row => row.DeviceId!.Value)
+                .Distinct()
+                .OrderBy(deviceId => deviceId)
+                .ToArray();
+            var accountRows = await (
+                    from user in context.Users.AsNoTracking()
+                    where user.Id == employeeId
+                    join userRole in context.UserRoles.AsNoTracking()
+                        on user.Id equals userRole.UserId into userRoles
+                    from userRole in userRoles.DefaultIfEmpty()
+                    join role in context.Roles.AsNoTracking()
+                        on userRole.RoleId equals role.Id into roles
+                    from role in roles.DefaultIfEmpty()
+                    select new
+                    {
+                        user.UserName,
+                        user.IsEnabled,
+                        user.SecurityStamp,
+                        RoleName = role == null ? null : role.Name
+                    })
+                .ToListAsync(strategyCancellationToken);
+            var account = accountRows.FirstOrDefault();
+            var accountRoles = accountRows
+                .Select(row => row.RoleName)
+                .Where(roleName => !string.IsNullOrWhiteSpace(roleName))
+                .Cast<string>()
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(roleName => roleName, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var subject = employeeId.ToString();
+            var activeSessionMarkers = context.RefreshTokenSessions
                 .AsNoTracking()
-                .Where(employee => employee.Id == employeeId)
-                .Select(employee => (bool?)employee.IsActive)
-                .SingleOrDefaultAsync(strategyCancellationToken);
-            var account = await context.Users
-                .AsNoTracking()
-                .Where(user => user.Id == employeeId)
-                .Select(user => new
-                {
-                    user.IsEnabled,
-                    user.SecurityStamp
-                })
-                .SingleOrDefaultAsync(strategyCancellationToken);
-            var roles = account is null
-                ? []
-                : await context.UserRoles
-                    .AsNoTracking()
-                    .Where(userRole => userRole.UserId == employeeId)
-                    .Join(
-                        context.Roles.AsNoTracking(),
-                        userRole => userRole.RoleId,
-                        role => role.Id,
-                        (_, role) => role.Name!)
-                    .Where(roleName => roleName != null)
-                    .Distinct()
-                    .OrderBy(roleName => roleName)
-                    .ToArrayAsync(strategyCancellationToken);
+                .Where(session =>
+                    session.ActorType == IIoTClaimTypes.HumanActor
+                    && session.SubjectId == employeeId
+                    && !session.RevokedAtUtc.HasValue)
+                .Select(_ => 1)
+                .Concat(
+                    context.OpenIddictTokens
+                        .AsNoTracking()
+                        .Where(token =>
+                            token.Subject == subject
+                            && token.Status != OpenIddictConstants.Statuses.Revoked)
+                        .Select(_ => 1))
+                .Concat(
+                    context.OpenIddictAuthorizations
+                        .AsNoTracking()
+                        .Where(authorization =>
+                            authorization.Subject == subject
+                            && authorization.Status
+                            != OpenIddictConstants.Statuses.Revoked)
+                        .Select(_ => 1));
+            var hasActiveHumanSessions = await activeSessionMarkers
+                .AnyAsync(strategyCancellationToken);
 
             var observation = new EmployeeMutationObservation(
-                EmployeeExists: employeeActive.HasValue,
-                EmployeeIsActive: employeeActive.GetValueOrDefault(),
+                EmployeeExists: employee is not null,
+                EmployeeIsActive: employee?.IsActive ?? false,
                 AccountExists: account is not null,
                 AccountIsEnabled: account?.IsEnabled ?? false,
                 AccountSecurityStamp: account?.SecurityStamp,
-                Roles: roles);
+                Roles: accountRoles,
+                EmployeeNo: employee?.EmployeeNo,
+                EmployeeRealName: employee?.RealName,
+                EmployeeRowVersion: employee?.RowVersion,
+                EmployeeDeviceIds: employeeDeviceIds,
+                AccountEmployeeNo: account?.UserName,
+                HasActiveHumanSessions: hasActiveHumanSessions);
             await snapshot.CommitAsync(strategyCancellationToken);
             return observation;
         }

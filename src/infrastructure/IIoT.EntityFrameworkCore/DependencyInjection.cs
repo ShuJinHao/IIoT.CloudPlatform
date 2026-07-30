@@ -69,6 +69,7 @@ public static class DependencyInjection
 
         builder.Services.AddScoped<IIdentityAccountStore, IdentityAccountStore>();
         builder.Services.AddScoped<IEmployeeMutationObservationReader, EmployeeMutationObservationReader>();
+        builder.Services.AddScoped<IEmployeeMutationVersionStore, EmployeeMutationVersionStore>();
         builder.Services.AddScoped<ICloudOidcUserProfileService, CloudOidcUserProfileService>();
         builder.Services.AddScoped<IOidcClientSeeder, OpenIddictClientSeeder>();
         builder.Services.AddScoped<IEmployeeLookupService, EmployeeLookupService>();
