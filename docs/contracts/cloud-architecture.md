@@ -4,7 +4,7 @@
 
 Analyzer 项目固定为 `netstandard2.0`，`Microsoft.CodeAnalysis.CSharp` 固定 `5.6.0`。`Directory.Build.props` 仅将它作为 Analyzer 附加到 `IIoT.*` 生产项目；测试项目和 Analyzer 自身不引用其运行时程序集。
 
-`Directory.Build.targets` 的 Analyzer 生产接线属于本契约的一部分：`RunAnalyzers` 与 `RunAnalyzersDuringBuild` 必须在生产条件下同时为 `true`，唯一受管引用 target 必须在 `FindReferenceAssembliesForReferences` 后、`CoreCompile` 前执行，并从 `ReferencePathWithRefAssemblies` 追溯 `MSBuildSourceProjectFile` 后写出 compiler reference、来源 csproj、稳定项目身份三列，再通过 `AdditionalFiles` 交给 Analyzer。selector 与测试共用结构化 XML 契约模块逐节点验证完整语义；条件恒假、旧引用源、输出漂移、接线移除、额外属性/task/target 或仅在注释中保留关键字都必须要求显式 `Full`，不能归类为窄 Architecture/Security。
+`Directory.Build.targets` 的 Analyzer 生产接线属于本契约的一部分：`RunAnalyzers` 与 `RunAnalyzersDuringBuild` 必须在生产条件下同时为 `true`，唯一受管引用 target 必须在 `FindReferenceAssembliesForReferences` 后、`CoreCompile` 前执行。target 分别从 `ReferencePathWithRefAssemblies` 写出 C# 编译器实际引用清单、从 `_ResolvedProjectReferencePaths` 写出 MSBuild 已解析 ProjectReference provenance 清单；两份清单都固定为 compiler reference、来源 csproj、稳定项目身份三列，并通过 `AdditionalFiles` 交给 Analyzer 做精确交集。selector 与测试共用结构化 XML 契约模块逐节点验证完整语义；条件恒假、旧引用源、provenance 交叉校验缺失、输出漂移、接线移除、额外属性/task/target 或仅在注释中保留关键字都必须要求显式 `Full`，不能归类为窄 Architecture/Security。
 
 ## CLOUDARCH001 分层依赖
 
@@ -50,7 +50,7 @@ Analyzer 使用 Roslyn `IOperation` 和方法调用图追踪，必须识别字�
 跨项目调用图必须 fail-closed：
 
 - `IReadOnlyQueryPort` 与 `IAiReadScopeAccessor` 只在整个公开能力面递归不暴露可写 capability 时才可作为只读根；返回值、参数、属性、事件、字段、数组、指针、函数指针、delegate、Task/泛型/集合中的仓储、Dapper、Npgsql、EF、ADO.NET 或自定义可写 wrapper 都必须使标记失效。`ISpecification<T>` 是查询值描述，不是跨项目执行端口，不得取得只读标记信任。
-- 每个受管 ProjectReference 都必须从 `FindReferenceAssembliesForReferences` 完成后的真实 `ReferencePathWithRefAssemblies` 生成清单；只有携带 `MSBuildSourceProjectFile` 的 C# 编译器引用才可登记，清单必须绑定 `Csc` 实际读取的 reference assembly `FullPath`、来源 csproj 和稳定仓库相对 csproj 身份，不能同时信任未传给编译器的 `bin` 实现程序集路径。source generator 在程序集写入 schema、条目数、SHA-256、来源身份和每个 method/field effect；消费方只接受当前 schema、唯一 manifest、来源身份匹配且 digest 精确的摘要，旧 schema、缺失/重复/损坏 manifest、手写伪造摘要、非 ProjectReference 预编译引用或未登记引用全部 fail-closed。
+- 每个受管 ProjectReference 都必须同时出现在 `FindReferenceAssembliesForReferences` 完成后的真实 `ReferencePathWithRefAssemblies` 和 `_ResolvedProjectReferencePaths`：前者绑定 `Csc` 实际读取的 reference assembly `FullPath`，后者用 `ReferenceAssembly`（无该值时才回退 `FullPath`）证明它来自真实解析后的 ProjectReference。Analyzer 只信任两份三列清单在 compiler reference、来源 csproj 和稳定仓库相对 csproj 身份上的精确交集；普通 `<Reference>` 手写 `MSBuildSourceProjectFile` 或 `ReferenceSourceTarget` 不能伪造 provenance，也不能信任未传给编译器的 `bin` 实现程序集路径。source generator 在程序集写入 schema、条目数、SHA-256、来源身份和每个 method/field effect；消费方只接受当前 schema、唯一 manifest、来源身份匹配且 digest 精确的摘要，旧 schema、缺失/重复/损坏 manifest、手写伪造摘要、非 ProjectReference 预编译引用或未登记引用全部 fail-closed。
 - `CLOUDARCH004` 对跨程序集摘要拒绝必须在诊断中携带稳定原因码，至少区分 summary 无效、来源身份不匹配、method/field entry 缺失、受管引用目录无效、未登记引用和真实 write effect；这些原因只提高可诊断性，不改变 Error、`NotConfigurable` 或 fail-closed 语义。
 - Analyzer 必须继续追踪受管外部程序集的安全/写 effect；public virtual/interface 等开放分派、未解析生命周期边界和无可信摘要的 `IIoT.*` 调用必须报 `CLOUDARCH004`。摘要不能把开放分派、static initializer、field initializer、callback、command、raw SQL 或写端口伪装成安全调用。
 - 标记端口的真实实现方法仍是新的根；该实现到达 Dapper `Execute*`、EF 写 API、仓储写入或命令发送时必须失败。受管 ProjectReference 中的 public concrete 与 public infrastructure port 也必须由 effect summary 继续分析，不能靠 concrete coupling、命名 allowlist 或兼容 wrapper 绕过调用图。有真实外部调用方的生产 API 不得只为简化 Analyzer 而收窄；但返回 raw database capability 的 public factory 在读端口调用图中属于不可审计的开放分派，经三仓零外部调用证据确认后必须收口为本程序集内部实现，不得通过新增重复 read factory/port 或放宽 open-dispatch 门禁换绿。
