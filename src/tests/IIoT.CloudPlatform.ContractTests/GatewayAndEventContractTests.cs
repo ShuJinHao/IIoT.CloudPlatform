@@ -1,7 +1,10 @@
+using IIoT.Core.MasterData.Aggregates.MfgProcesses.Events;
+using IIoT.DataWorker;
 using IIoT.DataWorker.Consumers;
 using IIoT.DataWorker.Outbox;
 using IIoT.EntityFrameworkCore.Outbox;
 using IIoT.Gateway.Infrastructure;
+using IIoT.MasterDataService.Caching;
 using IIoT.Services.Contracts.Events.Capacities;
 using IIoT.Services.Contracts.Events.DeviceLogs;
 using IIoT.Services.Contracts.Events.PassStations;
@@ -17,6 +20,32 @@ namespace IIoT.CloudPlatform.ContractTests;
 
 public sealed class GatewayAndEventContractTests
 {
+    [Fact]
+    public void DataWorkerMediatRRegistration_ShouldIncludeProcessCacheInvalidationHandlers()
+    {
+        var services = new ServiceCollection();
+
+        services.AddMediatR(DataWorkerMediatRConfiguration.Configure);
+
+        AssertHandler<MfgProcessCreatedDomainEvent,
+            MfgProcessCreatedCacheInvalidationHandler>();
+        AssertHandler<MfgProcessRenamedDomainEvent,
+            MfgProcessRenamedCacheInvalidationHandler>();
+        AssertHandler<MfgProcessDeletedDomainEvent,
+            MfgProcessDeletedCacheInvalidationHandler>();
+
+        void AssertHandler<TEvent, THandler>()
+            where TEvent : INotification
+            where THandler : class, INotificationHandler<TEvent>
+            => Assert.Contains(
+                services,
+                descriptor =>
+                    descriptor.ServiceType
+                    == typeof(INotificationHandler<TEvent>)
+                    && descriptor.ImplementationType
+                    == typeof(THandler));
+    }
+
     [Fact]
     public void AppHostTestingGuard_RequiresAnAlreadyTrustedTestingEnvironment()
     {
