@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
+using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Aggregates.Devices;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
@@ -33,7 +35,8 @@ public class RegisterDeviceHandler(
     IDeviceReadQueryService deviceReadQueryService,
     IAuditTrailService auditTrailService,
     IUnitOfWork unitOfWork,
-    IDeviceWriteObservationReader observationReader
+    IDeviceWriteObservationReader observationReader,
+    IDeviceClientStateStore clientStateStore
 ) : ICommandHandler<RegisterDeviceCommand, Result<CreateDeviceResultDto>>
 {
     public async Task<Result<CreateDeviceResultDto>> Handle(
@@ -73,6 +76,7 @@ public class RegisterDeviceHandler(
             return await FailAsync(request, "设备注册失败：无法生成唯一设备寻址码", cancellationToken);
 
         var deviceId = Guid.NewGuid();
+        var clientStateId = Guid.NewGuid();
         var auditExecutedAtUtc = DateTime.UtcNow;
         var writeAttempted = false;
         var commitAttempted = false;
@@ -163,6 +167,12 @@ public class RegisterDeviceHandler(
                 code,
                 request.ProcessId);
             deviceRepository.Add(device);
+            clientStateStore.AddState(
+                new DeviceClientState(
+                    deviceId,
+                    code,
+                    clientStateId,
+                    auditExecutedAtUtc));
             await deviceRepository.SaveChangesAsync(callbackToken);
             targetRowVersion = device.RowVersion;
             commitAttempted = true;

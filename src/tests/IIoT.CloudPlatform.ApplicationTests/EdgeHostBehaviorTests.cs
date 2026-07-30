@@ -384,7 +384,9 @@ public sealed class EdgeHostBehaviorTests
             new ReportEdgeHostPlcRuntimeStatesCommand(
                 deviceId,
                 clientCode,
-                acceptedAt.AddSeconds(2),
+                DateTime.SpecifyKind(
+                    DateTime.MaxValue,
+                    DateTimeKind.Utc),
                 [
                     new EdgeHostPlcRuntimeStateReportItem(
                         "PLC-01",

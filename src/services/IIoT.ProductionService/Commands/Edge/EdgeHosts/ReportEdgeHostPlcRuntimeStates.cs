@@ -59,13 +59,6 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
         var reportedAtUtc = NormalizeUtc(request.ReportedAtUtc);
         var receivedAtUtc = NormalizeUtc(
             timeProvider.GetUtcNow().UtcDateTime);
-        if (reportedAtUtc > receivedAtUtc.Add(
-                DeviceClientSoftwareStatusResolver.MaximumFutureClockSkew))
-        {
-            return Result.Invalid(
-                "PLC 状态上报时间超出允许的未来时钟偏差。");
-        }
-
         var normalizedReports = NormalizeReports(
             request,
             receivedAtUtc,
@@ -284,6 +277,13 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
                 }
 
                 throw new CloudWriteConflictException();
+            }
+
+            if (reportedAtUtc > receivedAtUtc.Add(
+                    DeviceClientSoftwareStatusResolver.MaximumFutureClockSkew))
+            {
+                return Result.Invalid(
+                    "PLC 状态上报时间超出允许的未来时钟偏差。");
             }
 
             if (current.PlcSnapshot is not null

@@ -9,6 +9,7 @@ using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.Devices.Events;
 using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.Core.Production.Aggregates.Recipes.Events;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.EmployeeService.Commands.Employees;
 using IIoT.MasterDataService.Commands.Processes;
 using IIoT.MasterDataService.Caching;
@@ -241,6 +242,7 @@ public sealed class ApplicationFlowGuardTests
         var processQueries = new StubProcessReadQueryService { Exists = true };
         var deviceQueries = new StubDeviceReadQueryService();
         var auditTrail = new RecordingAuditTrailService();
+        var clientStateStore = new RecordingDeviceClientStateStore();
         var handler = new RegisterDeviceHandler(
             new TestCurrentUser
             {
@@ -256,7 +258,8 @@ public sealed class ApplicationFlowGuardTests
             deviceQueries,
             auditTrail,
             new RecordingUnitOfWork(),
-            ObserveDevices(repository));
+            ObserveDevices(repository),
+            clientStateStore);
 
         var result = await handler.Handle(
             new RegisterDeviceCommand(
@@ -272,6 +275,12 @@ public sealed class ApplicationFlowGuardTests
         Assert.StartsWith("DEV-", repository.AddedEntity.Code);
         Assert.Equal(repository.AddedEntity.Code, created.Code);
         Assert.Null(repository.AddedEntity.BootstrapSecretHash);
+        var clientState = Assert.Single(clientStateStore.States);
+        Assert.Equal(created.Id, clientState.DeviceId);
+        Assert.Equal(created.Code, clientState.ClientCode);
+        Assert.Null(clientState.PlcSnapshotReportedAtUtc);
+        Assert.Null(clientState.PlcSnapshotReceivedAtUtc);
+        Assert.Null(clientState.PlcSnapshotContentSha256);
         Assert.Contains(repository.AddedEntity.DomainEvents, x =>
             x is DeviceRegisteredDomainEvent registered
             && registered.ProcessId == processId
@@ -303,7 +312,8 @@ public sealed class ApplicationFlowGuardTests
             deviceQueries,
             auditTrail,
             new RecordingUnitOfWork(),
-            ObserveDevices(repository));
+            ObserveDevices(repository),
+            new RecordingDeviceClientStateStore());
 
         var result = await handler.Handle(
             new RegisterDeviceCommand("Injection-01", Guid.NewGuid()),
@@ -342,7 +352,8 @@ public sealed class ApplicationFlowGuardTests
             deviceQueries,
             auditTrail,
             new RecordingUnitOfWork(),
-            ObserveDevices(repository));
+            ObserveDevices(repository),
+            new RecordingDeviceClientStateStore());
 
         var result = await handler.Handle(
             new RegisterDeviceCommand("Injection-01", Guid.NewGuid()),
@@ -377,7 +388,8 @@ public sealed class ApplicationFlowGuardTests
             deviceQueries,
             auditTrail,
             new RecordingUnitOfWork(),
-            ObserveDevices(repository));
+            ObserveDevices(repository),
+            new RecordingDeviceClientStateStore());
 
         var result = await handler.Handle(
             new RegisterDeviceCommand("Injection-01", Guid.NewGuid()),
@@ -3208,6 +3220,69 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal(ResultStatus.Unauthorized, wrongSecret.Status);
         Assert.True(validSecret.IsSuccess);
         Assert.Equal(device.Id, validSecret.Value!.DeviceIdentity.Id);
+    }
+
+    private sealed class RecordingDeviceClientStateStore
+        : IDeviceClientStateStore
+    {
+        public List<DeviceClientState> States { get; } = [];
+
+        public Task<DeviceClientVersionSnapshot?>
+            GetVersionSnapshotByDeviceAsync(
+                Guid deviceId,
+                CancellationToken cancellationToken = default)
+            => Task.FromResult<DeviceClientVersionSnapshot?>(null);
+
+        public Task<IReadOnlyList<DeviceClientVersionSnapshot>>
+            GetVersionSnapshotsByDevicesAsync(
+                IReadOnlyCollection<Guid>? deviceIds = null,
+                CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<DeviceClientVersionSnapshot>>([]);
+
+        public Task<EdgeDeviceRuntimeHeartbeat?>
+            GetRuntimeHeartbeatByIdentityAsync(
+                Guid deviceId,
+                string clientCode,
+                CancellationToken cancellationToken = default)
+            => Task.FromResult<EdgeDeviceRuntimeHeartbeat?>(null);
+
+        public Task<DeviceClientState?> GetStateByIdentityAsync(
+            Guid deviceId,
+            string clientCode,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(
+                States.SingleOrDefault(state =>
+                    state.DeviceId == deviceId
+                    && string.Equals(
+                        state.ClientCode,
+                        clientCode.Trim(),
+                        StringComparison.OrdinalIgnoreCase)));
+
+        public Task<IReadOnlyList<DeviceClientState>>
+            GetStatesByDevicesAsync(
+                IReadOnlyCollection<Guid>? deviceIds = null,
+                CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<DeviceClientState>>(
+                States
+                    .Where(state =>
+                        deviceIds is null
+                        || deviceIds.Contains(state.DeviceId))
+                    .ToList());
+
+        public void AddVersionSnapshot(DeviceClientVersionSnapshot snapshot)
+        {
+        }
+
+        public void AddRuntimeHeartbeat(EdgeDeviceRuntimeHeartbeat heartbeat)
+        {
+        }
+
+        public void AddState(DeviceClientState state)
+            => States.Add(state);
+
+        public Task<int> SaveChangesAsync(
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(States.Count);
     }
 
     private static StubEmployeeMutationObservationReader CreateEmployeeObservationReader(

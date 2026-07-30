@@ -32,6 +32,69 @@ namespace IIoT.EntityFrameworkCore.Migrations
 
             migrationBuilder.Sql(
                 """
+                lock table devices in share row exclusive mode;
+
+                create or replace function iiot_fence_legacy_device_client_state()
+                returns trigger
+                language plpgsql
+                as $$
+                declare
+                    normalized_client_code text :=
+                        upper(trim(new.client_code));
+                    identity_hash text :=
+                        md5(
+                            'plc-snapshot:' ||
+                            new.id::text ||
+                            ':' ||
+                            upper(trim(new.client_code)));
+                    fence_received_at_utc timestamp with time zone :=
+                        statement_timestamp();
+                begin
+                    insert into edge_device_client_states (
+                        id,
+                        device_id,
+                        client_code,
+                        version_local_ip_addresses_json,
+                        runtime_local_ip_addresses_json,
+                        plc_snapshot_reported_at_utc,
+                        plc_snapshot_received_at_utc,
+                        plc_snapshot_content_sha256,
+                        created_at_utc,
+                        updated_at_utc)
+                    values (
+                        (
+                            substr(identity_hash, 1, 8) || '-' ||
+                            substr(identity_hash, 9, 4) || '-' ||
+                            substr(identity_hash, 13, 4) || '-' ||
+                            substr(identity_hash, 17, 4) || '-' ||
+                            substr(identity_hash, 21, 12)
+                        )::uuid,
+                        new.id,
+                        normalized_client_code,
+                        '[]'::jsonb,
+                        '[]'::jsonb,
+                        'infinity'::timestamp with time zone,
+                        fence_received_at_utc,
+                        repeat('0', 64),
+                        fence_received_at_utc,
+                        fence_received_at_utc)
+                    on conflict (device_id, client_code) do nothing;
+
+                    return null;
+                end;
+                $$;
+
+                drop trigger if exists
+                    iiot_fence_legacy_device_client_state_trigger
+                    on devices;
+
+                create constraint trigger
+                    iiot_fence_legacy_device_client_state_trigger
+                after insert on devices
+                deferrable initially deferred
+                for each row
+                execute function iiot_fence_legacy_device_client_state();
+
                 with migration_fence as (
                     select
                         statement_timestamp() as received_at_utc,
@@ -113,6 +176,15 @@ namespace IIoT.EntityFrameworkCore.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.Sql(
+                """
+                drop trigger if exists
+                    iiot_fence_legacy_device_client_state_trigger
+                    on devices;
+                drop function if exists
+                    iiot_fence_legacy_device_client_state();
+                """);
+
             migrationBuilder.DropColumn(
                 name: "plc_snapshot_content_sha256",
                 table: "edge_device_client_states");

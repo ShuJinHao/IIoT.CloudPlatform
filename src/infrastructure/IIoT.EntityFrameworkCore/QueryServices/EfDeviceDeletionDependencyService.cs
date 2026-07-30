@@ -165,8 +165,7 @@ public sealed class EfDeviceDeletionDependencyService(
                             : remainingImpact);
                 }
 
-                if (!deletionAttempted
-                    && expectedRowVersion.HasValue
+                if (expectedRowVersion.HasValue
                     && lockedDeviceRowVersion.Value
                     != expectedRowVersion.Value)
                 {

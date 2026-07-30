@@ -216,6 +216,16 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
 
         try
         {
+            await ExecuteNonQueryAsync(
+                connection,
+                transaction,
+                """
+                drop trigger if exists
+                    iiot_fence_legacy_device_client_state_trigger
+                    on devices
+                """,
+                budget.Token);
+
             var unique = Guid.NewGuid().ToString("N");
             var processId = Guid.NewGuid();
             var firstDeviceId = Guid.NewGuid();
@@ -519,6 +529,65 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
             Assert.Equal("[]", backfilledMissing.RuntimeLocalIpAddressesJson);
             Assert.Equal("[]", backfilledRegisteredOnly.VersionLocalIpAddressesJson);
             Assert.Equal("[]", backfilledRegisteredOnly.RuntimeLocalIpAddressesJson);
+
+            var rolloutLegacyDevice = new Device(
+                $"Rollout legacy {unique}",
+                $"PLC-L-{unique}"[..24],
+                process.Id);
+            var canonicalDevice = new Device(
+                $"Canonical state {unique}",
+                $"PLC-C-{unique}"[..24],
+                process.Id);
+            var canonicalState = new DeviceClientState(
+                canonicalDevice.Id,
+                canonicalDevice.Code);
+            rolloutLegacyDevice.ClearDomainEvents();
+            canonicalDevice.ClearDomainEvents();
+            dbContext.Devices.AddRange(
+                rolloutLegacyDevice,
+                canonicalDevice);
+            dbContext.DeviceClientStates.Add(canonicalState);
+            await dbContext.SaveChangesAsync(budget.Token);
+
+            await ExecuteNonQueryAsync(
+                connection,
+                transaction,
+                """
+                set constraints
+                    iiot_fence_legacy_device_client_state_trigger
+                    immediate
+                """,
+                budget.Token);
+            await ExecuteNonQueryAsync(
+                connection,
+                transaction,
+                """
+                set constraints
+                    iiot_fence_legacy_device_client_state_trigger
+                    deferred
+                """,
+                budget.Token);
+
+            dbContext.ChangeTracker.Clear();
+            var rolloutLegacyState = await dbContext.DeviceClientStates
+                .AsNoTracking()
+                .SingleAsync(
+                    state => state.DeviceId == rolloutLegacyDevice.Id,
+                    budget.Token);
+            var persistedCanonicalState = await dbContext.DeviceClientStates
+                .AsNoTracking()
+                .SingleAsync(
+                    state => state.DeviceId == canonicalDevice.Id,
+                    budget.Token);
+            Assert.Equal(
+                DateTime.MaxValue,
+                rolloutLegacyState.PlcSnapshotReportedAtUtc);
+            Assert.Equal(
+                new string('0', 64),
+                rolloutLegacyState.PlcSnapshotContentSha256);
+            Assert.Null(persistedCanonicalState.PlcSnapshotReportedAtUtc);
+            Assert.Null(persistedCanonicalState.PlcSnapshotReceivedAtUtc);
+            Assert.Null(persistedCanonicalState.PlcSnapshotContentSha256);
         }
         finally
         {
