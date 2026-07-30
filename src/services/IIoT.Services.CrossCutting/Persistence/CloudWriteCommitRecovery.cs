@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Auditing;
 
 namespace IIoT.Services.CrossCutting.Persistence;
 
@@ -45,6 +47,32 @@ public static class CloudWriteCommitRecovery
         catch
         {
             return null;
+        }
+    }
+
+    public static async Task ConfirmRecoveredAuditAsync(
+        IAuditTrailService auditTrailService,
+        AuditTrailEntry auditEntry)
+    {
+        ArgumentNullException.ThrowIfNull(auditTrailService);
+        ArgumentNullException.ThrowIfNull(auditEntry);
+        using var timeout = new CancellationTokenSource(ObservationTimeout);
+        try
+        {
+            if (!await auditTrailService.TryWriteConfirmedAsync(
+                    auditEntry,
+                    timeout.Token))
+            {
+                throw new CloudWriteCommitUnknownException();
+            }
+        }
+        catch (CloudWriteException)
+        {
+            throw;
+        }
+        catch
+        {
+            throw new CloudWriteCommitUnknownException();
         }
     }
 

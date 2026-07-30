@@ -35,9 +35,6 @@ public class DeleteDeviceHandler(
     IDeviceWriteObservationReader observationReader)
     : ICommandHandler<DeleteDeviceCommand, Result<bool>>
 {
-    private static readonly TimeSpan RecoveredCommitAuditTimeout =
-        TimeSpan.FromSeconds(5);
-
     public async Task<Result<bool>> Handle(
         DeleteDeviceCommand request,
         CancellationToken cancellationToken)
@@ -126,7 +123,9 @@ public class DeleteDeviceHandler(
             IdempotencyKey: $"device-delete:{request.DeviceId:N}");
         if (commitRecovered)
         {
-            await WriteRecoveredCommitAuditAsync(auditEntry);
+            await CloudWriteCommitRecovery.ConfirmRecoveredAuditAsync(
+                auditTrailService,
+                auditEntry);
         }
         else
         {
@@ -161,27 +160,6 @@ public class DeleteDeviceHandler(
             }
 
             throw new CloudWriteConflictException();
-        }
-
-        async Task WriteRecoveredCommitAuditAsync(
-            AuditTrailEntry auditEntry)
-        {
-            using var timeout =
-                new CancellationTokenSource(RecoveredCommitAuditTimeout);
-            try
-            {
-                if (!await auditTrailService.TryWriteConfirmedAsync(
-                        auditEntry,
-                        timeout.Token))
-                {
-                    throw new CloudWriteCommitUnknownException();
-                }
-            }
-            catch (OperationCanceledException)
-                when (timeout.IsCancellationRequested)
-            {
-                throw new CloudWriteCommitUnknownException();
-            }
         }
     }
 

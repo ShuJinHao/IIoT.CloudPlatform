@@ -960,6 +960,79 @@ public sealed class ProductionRetryTransactionPostgresTests(
     }
 
     [Fact]
+    public async Task DeviceRegistrationCancellationAfterCommit_ShouldRecoverAndConfirmAuditOutsideCallerToken()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        using var cancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(
+                budget.Token);
+        var interceptor = new CancelOnceAfterWriteCommitInterceptor(
+            cancellation);
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var process = new MfgProcess(
+            $"REGCANCEL-{Guid.NewGuid():N}"[..24],
+            "Registration cancellation process");
+        process.ClearDomainEvents();
+        dbContext.MfgProcesses.Add(process);
+        await dbContext.SaveChangesAsync(budget.Token);
+        dbContext.ChangeTracker.Clear();
+        var audit = new RecordingAuditTrailService();
+        var handler = new RegisterDeviceHandler(
+            HumanAdmin(),
+            new StubCurrentUserDeviceAccessService
+            {
+                IsAdministrator = true
+            },
+            new EfRepository<Device>(dbContext),
+            new ProcessReadQueryService(dbContext),
+            new DeviceReadQueryService(dbContext),
+            audit,
+            CreateUnitOfWork(dbContext),
+            new CloudWriteObservationReader(
+                services.GetRequiredService<
+                    DbContextOptions<IIoTDbContext>>()));
+
+        interceptor.Arm();
+        var result = await handler.Handle(
+            new RegisterDeviceCommand(
+                $"Registration cancellation {Guid.NewGuid():N}",
+                process.Id),
+            cancellation.Token);
+
+        Assert.True(result.IsSuccess);
+        var created = Assert.IsType<CreateDeviceResultDto>(result.Value);
+        Assert.True(cancellation.IsCancellationRequested);
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+        Assert.Single(audit.Entries);
+        Assert.Single(audit.ConfirmedEntries);
+        var auditCancellationToken =
+            Assert.Single(audit.CancellationTokens);
+        Assert.True(auditCancellationToken.CanBeCanceled);
+        Assert.False(auditCancellationToken.IsCancellationRequested);
+        Assert.NotEqual(cancellation.Token, auditCancellationToken);
+        dbContext.ChangeTracker.Clear();
+        var device = await dbContext.Devices
+            .AsNoTracking()
+            .SingleAsync(
+                candidate => candidate.Id == created.Id,
+                budget.Token);
+        Assert.Equal(created.Code, device.Code);
+        Assert.Equal(process.Id, device.ProcessId);
+        Assert.Equal(
+            1,
+            await CountOutboxAsync(
+                dbContext,
+                "DeviceRegisteredDomainEvent",
+                device.Id,
+                budget.Token));
+    }
+
+    [Fact]
     public async Task RolledBackDeleteAttempt_ShouldAuditImpactObservedByCommittingAttempt()
     {
         using var budget = await PostgresTestBudget.CreateAsync(fixture);

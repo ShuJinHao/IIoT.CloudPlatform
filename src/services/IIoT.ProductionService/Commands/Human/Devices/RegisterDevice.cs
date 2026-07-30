@@ -76,6 +76,7 @@ public class RegisterDeviceHandler(
         var auditExecutedAtUtc = DateTime.UtcNow;
         var writeAttempted = false;
         var commitAttempted = false;
+        var commitRecovered = false;
         uint? targetRowVersion = null;
         Result<CreateDeviceResultDto> result;
         try
@@ -97,22 +98,33 @@ public class RegisterDeviceHandler(
         catch (Exception) when (commitAttempted)
         {
             result = await ResolveCommitAsync();
+            commitRecovered = true;
         }
 
         if (result.IsSuccess)
         {
-            await auditTrailService.TryWriteAsync(
-                new AuditTrailEntry(
-                    ParseActorUserId(currentUser.Id),
-                    currentUser.UserName,
-                    "Device.Register",
-                    "Device",
-                    deviceId.ToString(),
-                    auditExecutedAtUtc,
-                    true,
-                    $"注册设备 {deviceName}（{code}）到工序 {request.ProcessId}。",
-                    IdempotencyKey: $"device-register:{deviceId:N}"),
-                cancellationToken);
+            var auditEntry = new AuditTrailEntry(
+                ParseActorUserId(currentUser.Id),
+                currentUser.UserName,
+                "Device.Register",
+                "Device",
+                deviceId.ToString(),
+                auditExecutedAtUtc,
+                true,
+                $"注册设备 {deviceName}（{code}）到工序 {request.ProcessId}。",
+                IdempotencyKey: $"device-register:{deviceId:N}");
+            if (commitRecovered)
+            {
+                await CloudWriteCommitRecovery.ConfirmRecoveredAuditAsync(
+                    auditTrailService,
+                    auditEntry);
+            }
+            else
+            {
+                await auditTrailService.TryWriteAsync(
+                    auditEntry,
+                    cancellationToken);
+            }
         }
 
         return result;
