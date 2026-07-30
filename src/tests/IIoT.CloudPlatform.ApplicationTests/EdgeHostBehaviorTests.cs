@@ -328,7 +328,10 @@ public sealed class EdgeHostBehaviorTests
             "0000000000000000000000000000000000000000000000000000000000000000";
         var deviceId = Guid.NewGuid();
         const string clientCode = "DEV-PLC-MIGRATED";
-        var acceptedAt = DateTime.UtcNow.AddMinutes(-10);
+        var rawAcceptedAt = DateTime.UtcNow.AddMinutes(-10);
+        var acceptedAt = new DateTime(
+            rawAcceptedAt.Ticks - rawAcceptedAt.Ticks % 10,
+            DateTimeKind.Utc);
         var store = new StubEdgeHostPlcRuntimeStateStore();
         var legacyRuntime = new EdgeHostPlcRuntimeState(
             deviceId,

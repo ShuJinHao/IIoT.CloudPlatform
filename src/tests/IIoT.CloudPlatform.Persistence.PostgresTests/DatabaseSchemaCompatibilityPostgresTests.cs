@@ -348,9 +348,19 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
                 $"Missing state {unique}",
                 $"PLC-M-{unique}"[..24],
                 process.Id);
+            var emptySnapshotDevice = new Device(
+                $"Empty snapshot {unique}",
+                $"PLC-Z-{unique}"[..24],
+                process.Id);
+            var emptySnapshotReceivedAt =
+                DateTime.UtcNow.AddMinutes(-3);
             var existingState = new DeviceClientState(
                 existingStateDevice.Id,
                 existingStateDevice.Code);
+            var emptySnapshotState = new DeviceClientState(
+                emptySnapshotDevice.Id,
+                emptySnapshotDevice.Code,
+                createdAtUtc: emptySnapshotReceivedAt);
             var olderObservedAt = DateTime.UtcNow.AddMinutes(-10);
             var latestObservedAt = olderObservedAt.AddMinutes(5);
             var snapshotReceivedAt = latestObservedAt.AddMinutes(4);
@@ -365,11 +375,15 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
             process.ClearDomainEvents();
             existingStateDevice.ClearDomainEvents();
             missingStateDevice.ClearDomainEvents();
+            emptySnapshotDevice.ClearDomainEvents();
             dbContext.MfgProcesses.Add(process);
             dbContext.Devices.AddRange(
                 existingStateDevice,
-                missingStateDevice);
-            dbContext.DeviceClientStates.Add(existingState);
+                missingStateDevice,
+                emptySnapshotDevice);
+            dbContext.DeviceClientStates.AddRange(
+                existingState,
+                emptySnapshotState);
             dbContext.EdgeHostPlcRuntimeStates.AddRange(
                 existingRuntime,
                 missingRuntime);
@@ -403,23 +417,30 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
                 .AsNoTracking()
                 .Where(state =>
                     state.DeviceId == existingStateDevice.Id
-                    || state.DeviceId == missingStateDevice.Id)
+                    || state.DeviceId == missingStateDevice.Id
+                    || state.DeviceId == emptySnapshotDevice.Id)
                 .OrderBy(state => state.DeviceId)
                 .ToListAsync(budget.Token);
 
-            Assert.Equal(2, states.Count);
+            Assert.Equal(3, states.Count);
             var backfilledExisting = Assert.Single(
                 states,
                 state => state.DeviceId == existingStateDevice.Id);
             var backfilledMissing = Assert.Single(
                 states,
                 state => state.DeviceId == missingStateDevice.Id);
+            var backfilledEmpty = Assert.Single(
+                states,
+                state => state.DeviceId == emptySnapshotDevice.Id);
             AssertMarker(
                 backfilledExisting,
                 snapshotReceivedAt);
             AssertMarker(
                 backfilledMissing,
                 snapshotReceivedAt);
+            AssertMarker(
+                backfilledEmpty,
+                emptySnapshotReceivedAt);
             Assert.Equal("[]", backfilledMissing.VersionLocalIpAddressesJson);
             Assert.Equal("[]", backfilledMissing.RuntimeLocalIpAddressesJson);
         }

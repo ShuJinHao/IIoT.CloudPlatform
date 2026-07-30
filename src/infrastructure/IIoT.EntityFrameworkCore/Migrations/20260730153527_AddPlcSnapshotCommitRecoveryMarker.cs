@@ -108,6 +108,24 @@ namespace IIoT.EntityFrameworkCore.Migrations
                 from legacy_plc_snapshots snapshot
                 where state.device_id = snapshot.device_id
                   and upper(trim(state.client_code)) = snapshot.client_code;
+
+                update edge_device_client_states
+                set
+                    plc_snapshot_reported_at_utc =
+                        coalesce(
+                            plc_snapshot_reported_at_utc,
+                            updated_at_utc),
+                    plc_snapshot_received_at_utc =
+                        coalesce(
+                            plc_snapshot_received_at_utc,
+                            updated_at_utc),
+                    plc_snapshot_content_sha256 =
+                        coalesce(
+                            plc_snapshot_content_sha256,
+                            repeat('0', 64))
+                where plc_snapshot_reported_at_utc is null
+                   or plc_snapshot_received_at_utc is null
+                   or plc_snapshot_content_sha256 is null;
                 """);
         }
 
