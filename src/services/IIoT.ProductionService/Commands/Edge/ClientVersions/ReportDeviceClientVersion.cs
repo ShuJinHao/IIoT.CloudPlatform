@@ -47,6 +47,13 @@ public sealed class ReportDeviceClientVersionHandler(
         var reportedAtUtc = NormalizeUtc(request.ReportedAtUtc);
         var receivedAtUtc = NormalizeUtc(
             timeProvider.GetUtcNow().UtcDateTime);
+        if (reportedAtUtc > receivedAtUtc.Add(
+                DeviceClientSoftwareStatusResolver.MaximumFutureClockSkew))
+        {
+            return Result.Invalid(
+                "版本上报时间超出允许的未来时钟偏差。");
+        }
+
         var stateId = Guid.NewGuid();
         var enabled = new HashSet<string>(
             request.EnabledPlugins ?? [],

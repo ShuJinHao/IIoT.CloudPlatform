@@ -1812,6 +1812,53 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
+    public async Task ReportDeviceClientVersionHandler_ShouldRejectFutureClockSkew()
+    {
+        var deviceId = Guid.NewGuid();
+        var utcNow = new DateTimeOffset(
+            2026,
+            7,
+            30,
+            2,
+            0,
+            0,
+            TimeSpan.Zero);
+        var store = new InMemoryDeviceClientStateStore();
+        var handler = CreateVersionHandler(
+            deviceId,
+            "DEV-VERSION-FUTURE",
+            store,
+            new FixedTimeProvider(utcNow));
+        var boundary = new ReportDeviceClientVersionCommand(
+            deviceId,
+            "DEV-VERSION-FUTURE",
+            "1.2.0",
+            "1.0.0",
+            [],
+            [],
+            "stable",
+            utcNow.UtcDateTime.Add(
+                DeviceClientSoftwareStatusResolver.MaximumFutureClockSkew));
+
+        var accepted = await handler.Handle(
+            boundary,
+            CancellationToken.None);
+        var rejected = await handler.Handle(
+            boundary with
+            {
+                ReportedAtUtc = boundary.ReportedAtUtc.AddTicks(10)
+            },
+            CancellationToken.None);
+
+        Assert.True(accepted.IsSuccess);
+        Assert.Equal(ResultStatus.Invalid, rejected.Status);
+        Assert.Equal(1, store.SaveChangesCalls);
+        Assert.Equal(
+            boundary.ReportedAtUtc,
+            Assert.Single(store.VersionSnapshots).ReportedAtUtc);
+    }
+
+    [Fact]
     public async Task ReportDeviceClientVersionHandler_PostCommitFailure_ShouldRecoverExactTarget()
     {
         var deviceId = Guid.NewGuid();

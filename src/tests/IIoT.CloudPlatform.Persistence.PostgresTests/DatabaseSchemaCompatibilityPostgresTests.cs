@@ -353,6 +353,7 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
                 existingStateDevice.Code);
             var olderObservedAt = DateTime.UtcNow.AddMinutes(-10);
             var latestObservedAt = olderObservedAt.AddMinutes(5);
+            var snapshotReceivedAt = latestObservedAt.AddMinutes(4);
             var existingRuntime = CreateRuntimeState(
                 existingStateDevice,
                 "PLC-1",
@@ -373,6 +374,15 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
                 existingRuntime,
                 missingRuntime);
             await dbContext.SaveChangesAsync(budget.Token);
+            await dbContext.Database.ExecuteSqlInterpolatedAsync(
+                $"""
+                 update edge_host_plc_runtime_states
+                 set updated_at_utc = {snapshotReceivedAt}
+                 where device_id in (
+                     {existingStateDevice.Id},
+                     {missingStateDevice.Id})
+                 """,
+                budget.Token);
 
             var migration = new AddPlcSnapshotCommitRecoveryMarker();
             var backfillSql = Assert.Single(
@@ -406,10 +416,10 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
                 state => state.DeviceId == missingStateDevice.Id);
             AssertMarker(
                 backfilledExisting,
-                latestObservedAt);
+                snapshotReceivedAt);
             AssertMarker(
                 backfilledMissing,
-                olderObservedAt);
+                snapshotReceivedAt);
             Assert.Equal("[]", backfilledMissing.VersionLocalIpAddressesJson);
             Assert.Equal("[]", backfilledMissing.RuntimeLocalIpAddressesJson);
         }
