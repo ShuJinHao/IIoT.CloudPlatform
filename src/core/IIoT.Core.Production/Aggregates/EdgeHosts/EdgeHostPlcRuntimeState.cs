@@ -1,5 +1,8 @@
 using IIoT.Core.Production.Aggregates.Devices.ValueObjects;
 using IIoT.SharedKernel.Domain;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 
 namespace IIoT.Core.Production.Aggregates.EdgeHosts;
 
@@ -25,19 +28,21 @@ public sealed class EdgeHostPlcRuntimeState : BaseEntity<Guid>
     public EdgeHostPlcRuntimeState(
         Guid deviceId,
         string clientCode,
-        string plcCode)
+        string plcCode,
+        Guid? id = null,
+        DateTime? createdAtUtc = null)
     {
         if (deviceId == Guid.Empty)
         {
             throw new ArgumentException("DeviceId 不能为空。", nameof(deviceId));
         }
 
-        Id = Guid.NewGuid();
+        Id = id ?? Guid.NewGuid();
         DeviceId = deviceId;
         ClientCode = NormalizeClientCode(clientCode);
         PlcCode = NormalizePlcCode(plcCode);
         RuntimeStatus = EdgeHostPlcRuntimeStatus.Unknown;
-        CreatedAtUtc = DateTime.UtcNow;
+        CreatedAtUtc = NormalizeUtc(createdAtUtc ?? DateTime.UtcNow);
         UpdatedAtUtc = CreatedAtUtc;
     }
 
@@ -159,6 +164,44 @@ public sealed class EdgeHostPlcRuntimeState : BaseEntity<Guid>
         => value.Kind == DateTimeKind.Unspecified
             ? DateTime.SpecifyKind(value, DateTimeKind.Utc)
             : value.ToUniversalTime();
+}
+
+public sealed record EdgeHostPlcRuntimeSnapshotContent(
+    string PlcCode,
+    string? ReportedPlcName,
+    bool IsConnected,
+    string RuntimeStatus,
+    DateTime ObservedAtUtc,
+    string? StationCode,
+    string? Protocol,
+    string? Address,
+    string? LastError);
+
+public static class EdgeHostPlcRuntimeSnapshotFingerprint
+{
+    public static string Compute(
+        IEnumerable<EdgeHostPlcRuntimeSnapshotContent> states)
+    {
+        var canonical = JsonSerializer.Serialize(
+            states
+                .OrderBy(state => state.PlcCode, StringComparer.OrdinalIgnoreCase)
+                .Select(state => new
+                {
+                    state.PlcCode,
+                    state.ReportedPlcName,
+                    state.IsConnected,
+                    state.RuntimeStatus,
+                    state.ObservedAtUtc,
+                    state.StationCode,
+                    state.Protocol,
+                    state.Address,
+                    state.LastError
+                })
+                .ToArray());
+        return Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))
+            .ToLowerInvariant();
+    }
 }
 
 public static class EdgeHostPlcRuntimeStatus

@@ -1,9 +1,9 @@
 using IIoT.Core.MasterData.Aggregates.MfgProcesses;
 using IIoT.Core.MasterData.Specifications;
 using IIoT.Services.CrossCutting.Attributes;
-using IIoT.Services.CrossCutting.Caching;
+using IIoT.Services.CrossCutting.Persistence;
 using IIoT.Services.Contracts;
-using IIoT.Services.Contracts.RecordQueries;
+using IIoT.Services.Contracts.Persistence;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -20,8 +20,8 @@ public record UpdateProcessCommand(
 
 public class UpdateProcessHandler(
     IRepository<MfgProcess> processRepository,
-    IProcessReadQueryService processReadQueryService,
-    ICacheService cacheService
+    IUnitOfWork unitOfWork,
+    IProcessWriteObservationReader observationReader
 ) : ICommandHandler<UpdateProcessCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(
@@ -41,35 +41,139 @@ public class UpdateProcessHandler(
             return Result.Failure("工序名称不能为空");
         }
 
-        var process = await processRepository.GetSingleOrDefaultAsync(
-            new MfgProcessByIdSpec(request.ProcessId),
-            cancellationToken);
-
-        if (process is null)
+        ProcessWriteState? baseline = null;
+        uint? targetRowVersion = null;
+        var writeAttempted = false;
+        var commitAttempted = false;
+        try
         {
-            return Result.Failure("未找到目标工序档案");
+            return await unitOfWork.ExecuteResilientAsync(
+                ExecuteTransactionAsync,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested
+                  && !commitAttempted)
+        {
+            throw;
+        }
+        catch (CloudWriteException)
+        {
+            throw;
+        }
+        catch (Exception) when (commitAttempted)
+        {
+            return await ResolveCommitAsync();
         }
 
-        var codeOccupied = await processReadQueryService.CodeExistsAsync(
-            code,
-            request.ProcessId,
-            cancellationToken);
-
-        if (codeOccupied)
+        async Task<Result<bool>> ExecuteTransactionAsync(
+            CancellationToken callbackToken)
         {
-            return Result.Failure($"工序编码 [{code}] 已被其他工序占用");
+            var current = await CloudWriteCommitRecovery.TryObserveAttemptAsync(
+                token => observationReader.ObserveProcessAsync(
+                    request.ProcessId,
+                    code,
+                    token),
+                callbackToken);
+            if (current is null)
+            {
+                throw new CloudWriteCommitUnknownException();
+            }
+
+            if (MatchesTarget(current.Target))
+            {
+                return Result.Success(true);
+            }
+
+            if (current.Target is null)
+            {
+                if (writeAttempted)
+                {
+                    throw new CloudWriteConflictException();
+                }
+
+                return Result.Failure("未找到目标工序档案");
+            }
+
+            if (current.ProcessCodeOwnerId is Guid codeOwnerId
+                && codeOwnerId != request.ProcessId)
+            {
+                if (writeAttempted)
+                {
+                    throw new CloudWriteConflictException();
+                }
+
+                return Result.Failure(
+                    $"工序编码 [{code}] 已被其他工序占用");
+            }
+
+            baseline ??= current.Target;
+            if (!MatchesExact(current.Target, baseline))
+            {
+                throw new CloudWriteConflictException();
+            }
+
+            writeAttempted = true;
+            await unitOfWork.BeginTransactionAsync(callbackToken);
+            var process = await processRepository.GetSingleOrDefaultAsync(
+                new MfgProcessByIdSpec(request.ProcessId),
+                callbackToken);
+            if (process is null
+                || process.RowVersion != baseline.RowVersion)
+            {
+                await unitOfWork.RollbackAsync(callbackToken);
+                throw new CloudWriteConflictException();
+            }
+
+            process.Rename(code, name);
+            processRepository.Update(process);
+            await processRepository.SaveChangesAsync(callbackToken);
+            targetRowVersion = process.RowVersion;
+            commitAttempted = true;
+            await unitOfWork.CommitAsync(callbackToken);
+            return Result.Success(true);
         }
 
-        process.Rename(code, name);
-
-        processRepository.Update(process);
-        var affected = await processRepository.SaveChangesAsync(cancellationToken);
-
-        if (affected > 0)
+        async Task<Result<bool>> ResolveCommitAsync()
         {
-            await cacheService.RemoveAsync(CacheKeys.ProcessesAll(), cancellationToken);
+            var current = await CloudWriteCommitRecovery.TryObserveCommitAsync(
+                token => observationReader.ObserveProcessAsync(
+                    request.ProcessId,
+                    code,
+                    token));
+            if (current is null
+                || baseline is null
+                || MatchesExact(current.Target, baseline))
+            {
+                throw new CloudWriteCommitUnknownException();
+            }
+
+            if (MatchesTarget(current.Target))
+            {
+                return Result.Success(true);
+            }
+
+            throw new CloudWriteConflictException();
         }
 
-        return Result.Success(true);
+        bool MatchesTarget(ProcessWriteState? state)
+            => state is not null
+               && targetRowVersion.HasValue
+               && state.Id == request.ProcessId
+               && state.RowVersion == targetRowVersion.Value
+               && string.Equals(
+                   state.ProcessCode,
+                   code,
+                   StringComparison.Ordinal)
+               && string.Equals(
+                   state.ProcessName,
+                   name,
+                   StringComparison.Ordinal);
     }
+
+    private static bool MatchesExact(
+        ProcessWriteState? current,
+        ProcessWriteState expected)
+        => current is not null
+           && current == expected;
 }

@@ -21,7 +21,8 @@ public interface IDeviceDeletionDependencyQueryService
 
     Task<DeviceCascadeDeletionResult> DeleteCascadeAsync(
         Guid deviceId,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        uint? expectedRowVersion = null);
 }
 
 public sealed record DeviceDeletionImpact(
@@ -56,3 +57,9 @@ public sealed record DeviceDeletionImpact(
 public sealed record DeviceCascadeDeletionResult(
     bool DeviceDeleted,
     DeviceDeletionImpact Impact);
+
+public sealed class DeviceDeletionCommitAttemptException(
+    OperationCanceledException innerException)
+    : Exception(
+        "Device deletion was cancelled after the database commit attempt started.",
+        innerException);

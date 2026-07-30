@@ -66,6 +66,46 @@ public sealed class UseCaseExceptionHandlerTests
 
     [Theory]
     [InlineData(
+        "conflict",
+        StatusCodes.Status409Conflict,
+        CloudWriteConflictException.Code,
+        CloudWriteConflictException.PublicMessage)]
+    [InlineData(
+        "unknown",
+        StatusCodes.Status503ServiceUnavailable,
+        CloudWriteCommitUnknownException.Code,
+        CloudWriteCommitUnknownException.PublicMessage)]
+    public async Task CloudWriteExceptions_ShouldExposeStableProblemDetails(
+        string exceptionKind,
+        int expectedStatus,
+        string expectedCode,
+        string expectedDetail)
+    {
+        var exception = exceptionKind == "conflict"
+            ? (CloudWriteException)new CloudWriteConflictException()
+            : new CloudWriteCommitUnknownException();
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/api/v1/human/processes";
+        context.Response.Body = new MemoryStream();
+
+        var handled = await new UseCaseExceptionHandler()
+            .TryHandleAsync(
+                context,
+                exception,
+                CancellationToken.None);
+
+        Assert.True(handled);
+        Assert.Equal(expectedStatus, context.Response.StatusCode);
+        context.Response.Body.Position = 0;
+        using var document =
+            await JsonDocument.ParseAsync(context.Response.Body);
+        var problem = document.RootElement;
+        Assert.Equal(expectedCode, problem.GetProperty("code").GetString());
+        Assert.Equal(expectedDetail, problem.GetProperty("detail").GetString());
+    }
+
+    [Theory]
+    [InlineData(
         "role-conflict",
         StatusCodes.Status409Conflict,
         EmployeeRoleUpdateConflictException.Code,

@@ -780,6 +780,117 @@ internal sealed class StubRecipeReadQueryService : IRecipeReadQueryService
     }
 }
 
+internal sealed class StubProcessWriteObservationReader
+    : IProcessWriteObservationReader
+{
+    public Func<Guid, string, ProcessWriteObservation> ObservationFactory
+        { get; set; } = (_, _) => new ProcessWriteObservation(
+            null,
+            null,
+            false,
+            false);
+
+    public Task<ProcessWriteObservation> ObserveProcessAsync(
+        Guid processId,
+        string processCode,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(
+            ObservationFactory(processId, processCode));
+    }
+}
+
+internal sealed class StubDeviceWriteObservationReader
+    : IDeviceWriteObservationReader
+{
+    public Func<Guid, string, string, Guid, DeviceWriteObservation>
+        ObservationFactory { get; set; } =
+        (_, _, _, _) => new DeviceWriteObservation(
+            null,
+            null,
+            null,
+            true,
+            new DeviceDeletionImpact(
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0));
+
+    public Task<DeviceWriteObservation> ObserveDeviceAsync(
+        Guid deviceId,
+        string deviceName,
+        string clientCode,
+        Guid processId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(
+            ObservationFactory(
+                deviceId,
+                deviceName,
+                clientCode,
+                processId));
+    }
+}
+
+internal sealed class StubRecipeWriteObservationReader
+    : IRecipeWriteObservationReader
+{
+    public Func<Guid, Guid, Guid, string, RecipeWriteObservation>
+        ObservationFactory { get; set; } =
+        (_, _, _, _) => new RecipeWriteObservation(
+            null,
+            [],
+            true,
+            true);
+
+    public Task<RecipeWriteObservation> ObserveRecipeAsync(
+        Guid recipeId,
+        Guid processId,
+        Guid deviceId,
+        string recipeName,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(
+            ObservationFactory(
+                recipeId,
+                processId,
+                deviceId,
+                recipeName));
+    }
+}
+
+internal sealed class StubDeviceReportWriteObservationReader
+    : IDeviceReportWriteObservationReader
+{
+    public Func<Guid, string, DeviceReportWriteObservation>
+        ObservationFactory { get; set; } =
+        (_, clientCode) => new DeviceReportWriteObservation(
+            true,
+            clientCode,
+            null,
+            null,
+            null);
+
+    public Task<DeviceReportWriteObservation> ObserveReportAsync(
+        Guid deviceId,
+        string clientCode,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(
+            ObservationFactory(deviceId, clientCode));
+    }
+}
+
 internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
 {
     public Result<IdentityAccount> CreateResult { get; set; } = Result.Success(IdentityAccount.Create(Guid.NewGuid(), "E000"));
@@ -1831,7 +1942,8 @@ internal sealed class StubDeviceDeletionDependencyQueryService : IDeviceDeletion
 
     public Task<DeviceCascadeDeletionResult> DeleteCascadeAsync(
         Guid deviceId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        uint? expectedRowVersion = null)
     {
         return Task.FromResult(new DeviceCascadeDeletionResult(CascadeDeleteResult, Impact));
     }

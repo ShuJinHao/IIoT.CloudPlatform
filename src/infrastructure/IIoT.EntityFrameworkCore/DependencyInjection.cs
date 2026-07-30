@@ -88,6 +88,15 @@ public static class DependencyInjection
         builder.Services.AddScoped<IUserQueryService, UserQueryService>();
         builder.Services.AddScoped<IAuditTrailService, Auditing.EfAuditTrailService>();
         builder.Services.AddScoped<IUnitOfWork, EfUnitOfWork>();
+        builder.Services.AddScoped<CloudWriteObservationReader>();
+        builder.Services.AddScoped<IProcessWriteObservationReader>(provider =>
+            provider.GetRequiredService<CloudWriteObservationReader>());
+        builder.Services.AddScoped<IDeviceWriteObservationReader>(provider =>
+            provider.GetRequiredService<CloudWriteObservationReader>());
+        builder.Services.AddScoped<IRecipeWriteObservationReader>(provider =>
+            provider.GetRequiredService<CloudWriteObservationReader>());
+        builder.Services.AddScoped<IDeviceReportWriteObservationReader>(provider =>
+            provider.GetRequiredService<CloudWriteObservationReader>());
         builder.Services.AddScoped<IProcessReadQueryService, QueryServices.ProcessReadQueryService>();
         builder.Services.AddScoped<IAiReadDeviceQueryService, QueryServices.AiReadDeviceQueryService>();
         builder.Services.AddScoped<IClientReleaseHistoryQueryService, QueryServices.ClientReleaseHistoryQueryService>();

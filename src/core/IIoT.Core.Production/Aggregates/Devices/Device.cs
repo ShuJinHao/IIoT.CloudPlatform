@@ -17,7 +17,16 @@ public class Device : BaseEntity<Guid>, IAggregateRoot<Guid>
         string deviceName,
         string code,
         Guid processId)
-        : this(deviceName, DeviceCode.From(code), processId)
+        : this(Guid.NewGuid(), deviceName, DeviceCode.From(code), processId)
+    {
+    }
+
+    public Device(
+        Guid id,
+        string deviceName,
+        string code,
+        Guid processId)
+        : this(id, deviceName, DeviceCode.From(code), processId)
     {
     }
 
@@ -25,12 +34,23 @@ public class Device : BaseEntity<Guid>, IAggregateRoot<Guid>
         string deviceName,
         DeviceCode code,
         Guid processId)
+        : this(Guid.NewGuid(), deviceName, code, processId)
     {
+    }
+
+    public Device(
+        Guid id,
+        string deviceName,
+        DeviceCode code,
+        Guid processId)
+    {
+        if (id == Guid.Empty)
+            throw new ArgumentException("Id 不能为空。", nameof(id));
         ArgumentException.ThrowIfNullOrWhiteSpace(deviceName);
         if (processId == Guid.Empty)
             throw new ArgumentException("ProcessId 不能为空。", nameof(processId));
 
-        Id = Guid.NewGuid();
+        Id = id;
         DeviceName = deviceName.Trim();
         Code = code.Value;
         ProcessId = processId;

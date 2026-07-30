@@ -1,8 +1,9 @@
 using IIoT.Core.MasterData.Aggregates.MfgProcesses;
 using IIoT.Core.MasterData.Specifications;
 using IIoT.Services.CrossCutting.Attributes;
-using IIoT.Services.CrossCutting.Caching;
+using IIoT.Services.CrossCutting.Persistence;
 using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
@@ -17,48 +18,131 @@ public record DeleteProcessCommand(Guid ProcessId) : IHumanCommand<Result<bool>>
 public class DeleteProcessHandler(
     IRepository<MfgProcess> processRepository,
     IProcessReadQueryService processReadQueryService,
-    ICacheService cacheService
+    IUnitOfWork unitOfWork,
+    IProcessWriteObservationReader observationReader
 ) : ICommandHandler<DeleteProcessCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(
         DeleteProcessCommand request,
         CancellationToken cancellationToken)
     {
-        var process = await processRepository.GetSingleOrDefaultAsync(
-            new MfgProcessByIdSpec(request.ProcessId),
-            cancellationToken);
-
-        if (process is null)
+        ProcessWriteState? baseline = null;
+        var writeAttempted = false;
+        var commitAttempted = false;
+        try
         {
-            return Result.Failure("未找到目标工序档案");
+            return await unitOfWork.ExecuteResilientAsync(
+                ExecuteTransactionAsync,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested
+                  && !commitAttempted)
+        {
+            throw;
+        }
+        catch (CloudWriteException)
+        {
+            throw;
+        }
+        catch (Exception) when (commitAttempted)
+        {
+            return await ResolveCommitAsync();
         }
 
-        var hasDevice = await processReadQueryService.HasDevicesAsync(
-            request.ProcessId,
-            cancellationToken);
-
-        if (hasDevice)
+        async Task<Result<bool>> ExecuteTransactionAsync(
+            CancellationToken callbackToken)
         {
-            return Result.Failure("删除失败: 该工序下仍有关联设备，请先迁移或停用设备");
+            var current = await CloudWriteCommitRecovery.TryObserveAttemptAsync(
+                token => observationReader.ObserveProcessAsync(
+                    request.ProcessId,
+                    baseline?.ProcessCode ?? string.Empty,
+                    token),
+                callbackToken);
+            if (current is null)
+            {
+                throw new CloudWriteCommitUnknownException();
+            }
+
+            if (current.Target is null)
+            {
+                if (writeAttempted)
+                {
+                    return Result.Success(true);
+                }
+
+                return Result.Failure("未找到目标工序档案");
+            }
+
+            baseline ??= current.Target;
+            if (current.Target != baseline)
+            {
+                throw new CloudWriteConflictException();
+            }
+
+            if (current.HasDevices)
+            {
+                return Result.Failure(
+                    "删除失败: 该工序下仍有关联设备，请先迁移或停用设备");
+            }
+
+            if (current.HasRecipes)
+            {
+                return Result.Failure(
+                    "删除失败: 该工序下仍有关联配方，请先停用或迁移配方");
+            }
+
+            writeAttempted = true;
+            await unitOfWork.BeginTransactionAsync(callbackToken);
+            var process = await processRepository.GetSingleOrDefaultAsync(
+                new MfgProcessByIdSpec(request.ProcessId),
+                callbackToken);
+            if (process is null
+                || process.RowVersion != baseline.RowVersion)
+            {
+                await unitOfWork.RollbackAsync(callbackToken);
+                throw new CloudWriteConflictException();
+            }
+
+            if (await processReadQueryService.HasDevicesAsync(
+                    request.ProcessId,
+                    callbackToken)
+                || await processReadQueryService.HasRecipesAsync(
+                    request.ProcessId,
+                    callbackToken))
+            {
+                await unitOfWork.RollbackAsync(callbackToken);
+                throw new CloudWriteConflictException();
+            }
+
+            process.MarkDeleted();
+            processRepository.Delete(process);
+            await processRepository.SaveChangesAsync(callbackToken);
+            commitAttempted = true;
+            await unitOfWork.CommitAsync(callbackToken);
+            return Result.Success(true);
         }
 
-        var hasRecipe = await processReadQueryService.HasRecipesAsync(
-            request.ProcessId,
-            cancellationToken);
-
-        if (hasRecipe)
+        async Task<Result<bool>> ResolveCommitAsync()
         {
-            return Result.Failure("删除失败: 该工序下仍有关联配方，请先停用或迁移配方");
+            var current = await CloudWriteCommitRecovery.TryObserveCommitAsync(
+                token => observationReader.ObserveProcessAsync(
+                    request.ProcessId,
+                    baseline?.ProcessCode ?? string.Empty,
+                    token));
+            if (current is null
+                || baseline is null
+                || current.Target == baseline)
+            {
+                throw new CloudWriteCommitUnknownException();
+            }
+
+            if (current.Target is null)
+            {
+                return Result.Success(true);
+            }
+
+            throw new CloudWriteConflictException();
         }
-
-        processRepository.Delete(process);
-        var affected = await processRepository.SaveChangesAsync(cancellationToken);
-
-        if (affected > 0)
-        {
-            await cacheService.RemoveAsync(CacheKeys.ProcessesAll(), cancellationToken);
-        }
-
-        return Result.Success(true);
     }
 }

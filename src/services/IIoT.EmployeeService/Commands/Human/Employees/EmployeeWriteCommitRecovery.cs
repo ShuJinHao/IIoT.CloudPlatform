@@ -6,7 +6,33 @@ internal static class EmployeeWriteCommitRecovery
 {
     private static readonly TimeSpan ObservationTimeout = TimeSpan.FromSeconds(5);
 
-    public static async Task<EmployeeMutationObservation?> TryObserveAsync(
+    public static async Task<EmployeeMutationObservation?> TryObserveAttemptAsync(
+        IEmployeeMutationObservationReader observationReader,
+        Guid employeeId,
+        CancellationToken callbackCancellationToken)
+    {
+        callbackCancellationToken.ThrowIfCancellationRequested();
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
+            callbackCancellationToken);
+        timeout.CancelAfter(ObservationTimeout);
+        try
+        {
+            return await observationReader.ObserveAsync(
+                employeeId,
+                timeout.Token);
+        }
+        catch (OperationCanceledException)
+            when (callbackCancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(callbackCancellationToken);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public static async Task<EmployeeMutationObservation?> TryObserveCommitAsync(
         IEmployeeMutationObservationReader observationReader,
         Guid employeeId)
     {

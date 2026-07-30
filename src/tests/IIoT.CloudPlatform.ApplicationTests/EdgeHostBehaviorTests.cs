@@ -9,6 +9,7 @@ using IIoT.ProductionService.EdgeHosts;
 using IIoT.ProductionService.Queries.EdgeHosts;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.SharedKernel.Domain;
@@ -22,6 +23,47 @@ namespace IIoT.CloudPlatform.ApplicationTests;
 
 public sealed class EdgeHostBehaviorTests
 {
+    private static ReportEdgeHostPlcRuntimeStatesHandler
+        CreatePlcReportHandler(
+            Guid deviceId,
+            string clientCode,
+            StubEdgeHostPlcRuntimeStateStore runtimeStore,
+            IUnitOfWork? unitOfWork = null)
+    {
+        var clientStateStore = new StubDeviceClientStateStore();
+        var observer = new StubDeviceReportWriteObservationReader
+        {
+            ObservationFactory = (_, _) =>
+            {
+                var state = clientStateStore.States.SingleOrDefault();
+                var plcSnapshot =
+                    state?.PlcSnapshotReportedAtUtc is null
+                    || state.PlcSnapshotReceivedAtUtc is null
+                    || string.IsNullOrWhiteSpace(
+                        state.PlcSnapshotContentSha256)
+                        ? null
+                        : new DeviceReportState(
+                            state.PlcSnapshotReportedAtUtc.Value,
+                            state.PlcSnapshotReceivedAtUtc.Value,
+                            state.PlcSnapshotContentSha256);
+                return new DeviceReportWriteObservation(
+                    true,
+                    clientCode,
+                    null,
+                    null,
+                    plcSnapshot);
+            }
+        };
+        return new ReportEdgeHostPlcRuntimeStatesHandler(
+            new StubDeviceIdentityQueryService(
+                new DeviceIdentitySnapshot(deviceId, clientCode)),
+            runtimeStore,
+            clientStateStore,
+            unitOfWork ?? new RecordingUnitOfWork(),
+            observer,
+            TimeProvider.System);
+    }
+
     [Fact]
     public void HumanEdgeHostRequests_ShouldBeReadOnly()
     {
@@ -60,8 +102,9 @@ public sealed class EdgeHostBehaviorTests
     {
         var deviceId = Guid.NewGuid();
         var store = new StubEdgeHostPlcRuntimeStateStore();
-        var handler = new ReportEdgeHostPlcRuntimeStatesHandler(
-            new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-PLCSTATE01")),
+        var handler = CreatePlcReportHandler(
+            deviceId,
+            "DEV-PLCSTATE01",
             store);
         var reportedAtUtc = new DateTime(2026, 7, 3, 9, 0, 0, DateTimeKind.Utc);
 
@@ -111,8 +154,9 @@ public sealed class EdgeHostBehaviorTests
     {
         var deviceId = Guid.NewGuid();
         var store = new StubEdgeHostPlcRuntimeStateStore();
-        var handler = new ReportEdgeHostPlcRuntimeStatesHandler(
-            new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-PLCSTATE02")),
+        var handler = CreatePlcReportHandler(
+            deviceId,
+            "DEV-PLCSTATE02",
             store);
 
         var result = await handler.Handle(
@@ -134,8 +178,9 @@ public sealed class EdgeHostBehaviorTests
     {
         var deviceId = Guid.NewGuid();
         var store = new StubEdgeHostPlcRuntimeStateStore();
-        var handler = new ReportEdgeHostPlcRuntimeStatesHandler(
-            new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-PLCSTATE03")),
+        var handler = CreatePlcReportHandler(
+            deviceId,
+            "DEV-PLCSTATE03",
             store);
 
         var result = await handler.Handle(
@@ -163,8 +208,9 @@ public sealed class EdgeHostBehaviorTests
         var store = new StubEdgeHostPlcRuntimeStateStore();
         store.States.Add(new EdgeHostPlcRuntimeState(deviceId, "DEV-PLCSTATE05", "PLC-KEEP"));
         store.States.Add(new EdgeHostPlcRuntimeState(deviceId, "DEV-PLCSTATE05", "PLC-REMOVED"));
-        var handler = new ReportEdgeHostPlcRuntimeStatesHandler(
-            new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-PLCSTATE05")),
+        var handler = CreatePlcReportHandler(
+            deviceId,
+            "DEV-PLCSTATE05",
             store);
 
         var result = await handler.Handle(
@@ -188,8 +234,9 @@ public sealed class EdgeHostBehaviorTests
         var deviceId = Guid.NewGuid();
         var store = new StubEdgeHostPlcRuntimeStateStore();
         store.States.Add(new EdgeHostPlcRuntimeState(deviceId, "DEV-PLCSTATE06", "PLC-REMOVED"));
-        var handler = new ReportEdgeHostPlcRuntimeStatesHandler(
-            new StubDeviceIdentityQueryService(new DeviceIdentitySnapshot(deviceId, "DEV-PLCSTATE06")),
+        var handler = CreatePlcReportHandler(
+            deviceId,
+            "DEV-PLCSTATE06",
             store);
 
         var result = await handler.Handle(
@@ -204,6 +251,108 @@ public sealed class EdgeHostBehaviorTests
         Assert.Equal(0, result.Value!.ReceivedCount);
         Assert.Empty(store.States);
         Assert.True(store.SaveChangesCalled);
+    }
+
+    [Fact]
+    public async Task ReportEdgeHostPlcRuntimeStatesHandler_ShouldEnforceMonotonicFullSnapshots()
+    {
+        var deviceId = Guid.NewGuid();
+        var store = new StubEdgeHostPlcRuntimeStateStore();
+        var handler = CreatePlcReportHandler(
+            deviceId,
+            "DEV-PLC-MONOTONIC",
+            store);
+        var acceptedAt =
+            new DateTime(2026, 7, 30, 1, 0, 0, DateTimeKind.Utc);
+        var accepted = new ReportEdgeHostPlcRuntimeStatesCommand(
+            deviceId,
+            "DEV-PLC-MONOTONIC",
+            acceptedAt,
+            [
+                new EdgeHostPlcRuntimeStateReportItem(
+                    "PLC-01",
+                    "PLC",
+                    true,
+                    "Connected")
+            ]);
+
+        var first = await handler.Handle(
+            accepted,
+            CancellationToken.None);
+        var duplicate = await handler.Handle(
+            accepted,
+            CancellationToken.None);
+        var stale = await handler.Handle(
+            accepted with
+            {
+                ReportedAtUtc = acceptedAt.AddSeconds(-1)
+            },
+            CancellationToken.None);
+        var conflict = await Assert.ThrowsAsync<
+            CloudWriteConflictException>(() =>
+            handler.Handle(
+                accepted with
+                {
+                    PlcStates =
+                    [
+                        new EdgeHostPlcRuntimeStateReportItem(
+                            "PLC-01",
+                            "PLC",
+                            false,
+                            "Disconnected")
+                    ]
+                },
+                CancellationToken.None));
+
+        Assert.True(first.IsSuccess);
+        Assert.True(duplicate.IsSuccess);
+        Assert.Equal(ResultStatus.Invalid, stale.Status);
+        Assert.Equal(
+            CloudWriteConflictException.Code,
+            conflict.ProblemCode);
+        Assert.True(Assert.Single(store.States).IsConnected);
+        Assert.Equal(1, store.SaveChangesCalls);
+    }
+
+    [Fact]
+    public async Task ReportEdgeHostPlcRuntimeStatesHandler_PostCommitFailure_ShouldRecoverExactTarget()
+    {
+        var deviceId = Guid.NewGuid();
+        var store = new StubEdgeHostPlcRuntimeStateStore();
+        var handler = CreatePlcReportHandler(
+            deviceId,
+            "DEV-PLC-RECOVERY",
+            store,
+            new RecordingUnitOfWork
+            {
+                OnCommit = () => throw new TimeoutException(
+                    "simulated commit acknowledgement loss")
+            });
+
+        var result = await handler.Handle(
+            new ReportEdgeHostPlcRuntimeStatesCommand(
+                deviceId,
+                "DEV-PLC-RECOVERY",
+                new DateTime(
+                    2026,
+                    7,
+                    30,
+                    5,
+                    0,
+                    0,
+                    DateTimeKind.Utc),
+                [
+                    new EdgeHostPlcRuntimeStateReportItem(
+                        "PLC-01",
+                        "PLC",
+                        true,
+                        "Connected")
+                ]),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Single(store.States);
+        Assert.Equal(1, store.SaveChangesCalls);
     }
 
     [Fact]
@@ -541,6 +690,8 @@ public sealed class EdgeHostBehaviorTests
 
         public bool SaveChangesCalled { get; private set; }
 
+        public int SaveChangesCalls { get; private set; }
+
         public IReadOnlyList<Guid>? LastRequestedDeviceIds { get; private set; }
 
         public Task<IReadOnlyList<EdgeHostPlcRuntimeState>> GetByIdentityAsync(
@@ -577,6 +728,7 @@ public sealed class EdgeHostBehaviorTests
         public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
         {
             SaveChangesCalled = true;
+            SaveChangesCalls++;
             return Task.FromResult(1);
         }
     }

@@ -88,6 +88,16 @@ public sealed class DeviceClientStateConfiguration : IEntityTypeConfiguration<De
         builder.Property(state => state.LastRuntimeStoppedAtUtc)
             .HasColumnName("last_runtime_stopped_at_utc");
 
+        builder.Property(state => state.PlcSnapshotReportedAtUtc)
+            .HasColumnName("plc_snapshot_reported_at_utc");
+
+        builder.Property(state => state.PlcSnapshotReceivedAtUtc)
+            .HasColumnName("plc_snapshot_received_at_utc");
+
+        builder.Property(state => state.PlcSnapshotContentSha256)
+            .HasMaxLength(64)
+            .HasColumnName("plc_snapshot_content_sha256");
+
         builder.Property(state => state.CreatedAtUtc)
             .IsRequired()
             .HasColumnName("created_at_utc");

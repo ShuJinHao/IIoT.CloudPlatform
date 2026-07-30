@@ -91,6 +91,9 @@ public sealed class AggregateBehaviorTests
     public void MfgProcess_Rename_ShouldNormalizeAndRaiseEvent_AndSkipSameValues()
     {
         var process = new MfgProcess("Stacking", "叠片工序");
+        Assert.IsType<MfgProcessCreatedDomainEvent>(
+            Assert.Single(process.DomainEvents));
+        process.ClearDomainEvents();
 
         process.Rename(" Stacking ", "叠片工序");
 

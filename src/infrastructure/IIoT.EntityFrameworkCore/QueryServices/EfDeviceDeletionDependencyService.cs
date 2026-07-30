@@ -1,10 +1,12 @@
 using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts;
 using IIoT.EntityFrameworkCore.Persistence;
 using Microsoft.EntityFrameworkCore;
 
 namespace IIoT.EntityFrameworkCore.QueryServices;
 
-public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
+public sealed class EfDeviceDeletionDependencyService(
+    IIoTDbContext dbContext)
     : IDeviceDeletionDependencyQueryService
 {
     public async Task<DeviceDeletionDependencies> GetDependenciesAsync(
@@ -61,23 +63,37 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
 
     public async Task<DeviceCascadeDeletionResult> DeleteCascadeAsync(
         Guid deviceId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        uint? expectedRowVersion = null)
     {
         DeviceDeletionImpact? lastDeletionAttemptImpact = null;
         DeviceDeletionImpact? committedReplayCleanupImpact = null;
         DeviceDeletionImpact? pendingReplayCleanupImpact = null;
         string? pendingReplayCleanupTransactionId = null;
         var deletionAttempted = false;
+        var commitAttempted = false;
         var strategy = dbContext.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(
-            ExecuteTransactionAsync,
-            cancellationToken);
+        try
+        {
+            return await strategy.ExecuteAsync(
+                ExecuteTransactionAsync,
+                cancellationToken);
+        }
+        catch (OperationCanceledException exception)
+            when (cancellationToken.IsCancellationRequested
+                  && commitAttempted)
+        {
+            throw new DeviceDeletionCommitAttemptException(
+                exception);
+        }
 
         async Task<DeviceCascadeDeletionResult> ExecuteTransactionAsync(
             CancellationToken transactionCancellationToken)
         {
+            commitAttempted = false;
             try
             {
+                dbContext.ChangeTracker.Clear();
                 await using var transaction =
                     await dbContext.Database.BeginTransactionAsync(
                         transactionCancellationToken);
@@ -87,10 +103,10 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
                     transactionCancellationToken);
                 await ResolvePendingReplayCleanupAsync(
                     transactionCancellationToken);
-                var deviceExists = await LockDeviceAsync(
+                var lockedDeviceRowVersion = await LockDeviceAsync(
                     deviceId,
                     transactionCancellationToken);
-                if (!deviceExists)
+                if (!lockedDeviceRowVersion.HasValue)
                 {
                     var remainingImpact = await GetImpactAsync(
                         deviceId,
@@ -128,6 +144,7 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
                         remainingImpact.TotalAssociatedRows == 0;
                     if (committedReplayConfirmed)
                     {
+                        commitAttempted = true;
                         await transaction.CommitAsync(
                             transactionCancellationToken);
                         CommitPendingReplayCleanup();
@@ -140,6 +157,14 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
                                 lastDeletionAttemptImpact ?? remainingImpact,
                                 committedReplayCleanupImpact)
                             : remainingImpact);
+                }
+
+                if (!deletionAttempted
+                    && expectedRowVersion.HasValue
+                    && lockedDeviceRowVersion.Value
+                    != expectedRowVersion.Value)
+                {
+                    throw new CloudWriteConflictException();
                 }
 
                 var impact = await GetImpactAsync(
@@ -159,6 +184,7 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
 
                 var affectedRows = await dbContext.SaveChangesAsync(
                     transactionCancellationToken);
+                commitAttempted = true;
                 await transaction.CommitAsync(transactionCancellationToken);
                 return new DeviceCascadeDeletionResult(
                     affectedRows > 0,
@@ -276,19 +302,23 @@ public sealed class EfDeviceDeletionDependencyService(IIoTDbContext dbContext)
             impact.EdgeHostPlcRuntimeStates + additionalImpact.EdgeHostPlcRuntimeStates);
     }
 
-    private async Task<bool> LockDeviceAsync(
+    private async Task<uint?> LockDeviceAsync(
         Guid deviceId,
         CancellationToken cancellationToken)
     {
-        var lockedDeviceId = await dbContext.Database
-            .SqlQuery<Guid>($"""
-                SELECT id AS "Value"
+        var lockedDeviceRowVersion = await dbContext.Database
+            .SqlQuery<string>($"""
+                SELECT xmin::text AS "Value"
                 FROM devices
                 WHERE id = {deviceId}
                 FOR UPDATE
                 """)
             .SingleOrDefaultAsync(cancellationToken);
-        return lockedDeviceId == deviceId;
+        return uint.TryParse(
+            lockedDeviceRowVersion,
+            out var parsedRowVersion)
+            ? parsedRowVersion
+            : null;
     }
 
     private async Task DeleteAssociatedRowsAsync(

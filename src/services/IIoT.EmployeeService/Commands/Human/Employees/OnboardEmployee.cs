@@ -82,9 +82,10 @@ public class OnboardEmployeeHandler(
             if (creationAttempted)
             {
                 var replayObservation =
-                    await EmployeeWriteCommitRecovery.TryObserveAsync(
+                    await EmployeeWriteCommitRecovery.TryObserveAttemptAsync(
                         mutationObservationReader,
-                        sharedId);
+                        sharedId,
+                        transactionCancellationToken);
                 if (replayObservation is null)
                 {
                     throw new EmployeeWriteCommitUnknownException();
@@ -185,7 +186,7 @@ public class OnboardEmployeeHandler(
         async Task<Result<Guid>> ResolveCommitAsync()
         {
             var observation =
-                await EmployeeWriteCommitRecovery.TryObserveAsync(
+                await EmployeeWriteCommitRecovery.TryObserveCommitAsync(
                     mutationObservationReader,
                     sharedId);
             if (observation is null

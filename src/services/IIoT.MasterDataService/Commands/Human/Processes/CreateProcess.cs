@@ -1,8 +1,8 @@
 using IIoT.Core.MasterData.Aggregates.MfgProcesses;
 using IIoT.Services.CrossCutting.Attributes;
-using IIoT.Services.CrossCutting.Caching;
+using IIoT.Services.CrossCutting.Persistence;
 using IIoT.Services.Contracts;
-using IIoT.Services.Contracts.RecordQueries;
+using IIoT.Services.Contracts.Persistence;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -18,8 +18,8 @@ public record CreateProcessCommand(
 
 public class CreateProcessHandler(
     IRepository<MfgProcess> processRepository,
-    IProcessReadQueryService processReadQueryService,
-    ICacheService cacheService
+    IUnitOfWork unitOfWork,
+    IProcessWriteObservationReader observationReader
 ) : ICommandHandler<CreateProcessCommand, Result<Guid>>
 {
     public async Task<Result<Guid>> Handle(
@@ -39,25 +39,108 @@ public class CreateProcessHandler(
             return Result.Failure("工序名称不能为空");
         }
 
-        var codeExists = await processReadQueryService.CodeExistsAsync(
-            code,
-            cancellationToken: cancellationToken);
-
-        if (codeExists)
+        var processId = Guid.NewGuid();
+        uint? targetRowVersion = null;
+        var writeAttempted = false;
+        var commitAttempted = false;
+        try
         {
-            return Result.Failure($"工序创建失败: 编码 [{code}] 已存在");
+            return await unitOfWork.ExecuteResilientAsync(
+                ExecuteTransactionAsync,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested
+                  && !commitAttempted)
+        {
+            throw;
+        }
+        catch (CloudWriteException)
+        {
+            throw;
+        }
+        catch (Exception) when (commitAttempted)
+        {
+            return await ResolveCommitAsync();
         }
 
-        var process = new MfgProcess(code, name);
-
-        processRepository.Add(process);
-        var affected = await processRepository.SaveChangesAsync(cancellationToken);
-
-        if (affected > 0)
+        async Task<Result<Guid>> ExecuteTransactionAsync(
+            CancellationToken callbackToken)
         {
-            await cacheService.RemoveAsync(CacheKeys.ProcessesAll(), cancellationToken);
+            var current = await CloudWriteCommitRecovery.TryObserveAttemptAsync(
+                token => observationReader.ObserveProcessAsync(
+                    processId,
+                    code,
+                    token),
+                callbackToken);
+            if (current is null)
+            {
+                throw new CloudWriteCommitUnknownException();
+            }
+
+            if (MatchesTarget(current))
+            {
+                return Result.Success(processId);
+            }
+
+            if (current.Target is not null
+                || current.ProcessCodeOwnerId is not null)
+            {
+                if (writeAttempted)
+                {
+                    throw new CloudWriteConflictException();
+                }
+
+                return Result.Failure(
+                    $"工序创建失败: 编码 [{code}] 已存在");
+            }
+
+            writeAttempted = true;
+            await unitOfWork.BeginTransactionAsync(callbackToken);
+            var process = new MfgProcess(processId, code, name);
+            processRepository.Add(process);
+            await processRepository.SaveChangesAsync(callbackToken);
+            targetRowVersion = process.RowVersion;
+            commitAttempted = true;
+            await unitOfWork.CommitAsync(callbackToken);
+            return Result.Success(processId);
         }
 
-        return Result.Success(process.Id);
+        async Task<Result<Guid>> ResolveCommitAsync()
+        {
+            var current = await CloudWriteCommitRecovery.TryObserveCommitAsync(
+                token => observationReader.ObserveProcessAsync(
+                    processId,
+                    code,
+                    token));
+            if (current is null
+                || current.Target is null
+                || !targetRowVersion.HasValue)
+            {
+                throw new CloudWriteCommitUnknownException();
+            }
+
+            if (MatchesTarget(current))
+            {
+                return Result.Success(processId);
+            }
+
+            throw new CloudWriteConflictException();
+        }
+
+        bool MatchesTarget(ProcessWriteObservation observation)
+            => observation.Target is not null
+               && observation.Target.Id == processId
+               && string.Equals(
+                   observation.Target.ProcessCode,
+                   code,
+                   StringComparison.Ordinal)
+               && string.Equals(
+                   observation.Target.ProcessName,
+                   name,
+                   StringComparison.Ordinal)
+               && (!targetRowVersion.HasValue
+                   || observation.Target.RowVersion == targetRowVersion.Value)
+               && observation.ProcessCodeOwnerId == processId;
     }
 }

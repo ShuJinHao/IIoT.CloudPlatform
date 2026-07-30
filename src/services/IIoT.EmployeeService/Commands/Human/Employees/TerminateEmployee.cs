@@ -68,9 +68,10 @@ public class TerminateEmployeeHandler(
         async Task<Result> ExecuteTransactionAsync(
             CancellationToken transactionCancellationToken)
         {
-            var current = await EmployeeWriteCommitRecovery.TryObserveAsync(
+            var current = await EmployeeWriteCommitRecovery.TryObserveAttemptAsync(
                 mutationObservationReader,
-                request.EmployeeId);
+                request.EmployeeId,
+                transactionCancellationToken);
             if (current is null)
             {
                 throw new EmployeeWriteCommitUnknownException();
@@ -133,7 +134,7 @@ public class TerminateEmployeeHandler(
         async Task<Result> ResolveCommitAsync()
         {
             var observation =
-                await EmployeeWriteCommitRecovery.TryObserveAsync(
+                await EmployeeWriteCommitRecovery.TryObserveCommitAsync(
                     mutationObservationReader,
                     request.EmployeeId);
             if (observation is null

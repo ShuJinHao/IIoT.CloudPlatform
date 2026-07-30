@@ -1,4 +1,6 @@
 using IIoT.SharedKernel.Domain;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace IIoT.Core.Production.Aggregates.ClientReleases;
@@ -32,14 +34,15 @@ public sealed class EdgeDeviceRuntimeHeartbeat : BaseEntity<Guid>
         DateTime reportedAtUtc,
         IEnumerable<string>? localIpAddresses = null,
         string? remoteIpAddress = null,
-        DateTime? receivedAtUtc = null)
+        DateTime? receivedAtUtc = null,
+        Guid? id = null)
     {
         if (deviceId == Guid.Empty)
         {
             throw new ArgumentException("DeviceId 不能为空。", nameof(deviceId));
         }
 
-        Id = Guid.NewGuid();
+        Id = id ?? Guid.NewGuid();
         DeviceId = deviceId;
         ClientCode = NormalizeRequired(clientCode, nameof(clientCode)).ToUpperInvariant();
         var normalizedReceivedAtUtc = NormalizeUtc(receivedAtUtc ?? DateTime.UtcNow);
@@ -161,6 +164,25 @@ public sealed class EdgeDeviceRuntimeHeartbeat : BaseEntity<Guid>
         {
             return [];
         }
+    }
+
+    public string GetContentSha256()
+    {
+        var canonical = JsonSerializer.Serialize(new
+        {
+            ClientCode,
+            RuntimeInstanceId,
+            MachineProfile,
+            HostVersion,
+            HostApiVersion,
+            Status,
+            StartedAtUtc,
+            LocalIpAddressesJson,
+            RemoteIpAddress
+        });
+        return Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))
+            .ToLowerInvariant();
     }
 
     private bool MatchesCurrentReport(
