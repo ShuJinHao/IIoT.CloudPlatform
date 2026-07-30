@@ -987,6 +987,72 @@ public sealed class ProductionRetryTransactionPostgresTests(
     }
 
     [Fact]
+    public async Task DeviceDeleteCommittedAttemptThenRetryCancellation_ShouldRecoverOutsideCallerToken()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        using var cancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(
+                budget.Token);
+        var interceptor =
+            new CommitThenCancelRetryInterceptor(cancellation);
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var (process, device) = CreateProcessAndDevice("DELRETRYCANCEL");
+        process.ClearDomainEvents();
+        device.ClearDomainEvents();
+        dbContext.MfgProcesses.Add(process);
+        dbContext.Devices.Add(device);
+        await dbContext.SaveChangesAsync(budget.Token);
+        dbContext.ChangeTracker.Clear();
+        var audit = new RecordingAuditTrailService();
+        var handler = new DeleteDeviceHandler(
+            HumanAdmin(),
+            new EfRepository<Device>(dbContext),
+            new EfDeviceDeletionDependencyService(dbContext),
+            new StubCurrentUserDeviceAccessService
+            {
+                IsAdministrator = true
+            },
+            audit,
+            new CloudWriteObservationReader(
+                services.GetRequiredService<
+                    DbContextOptions<IIoTDbContext>>()));
+
+        interceptor.Arm();
+        var result = await handler.Handle(
+            new DeleteDeviceCommand(device.Id),
+            cancellation.Token);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(cancellation.IsCancellationRequested);
+        Assert.Equal(2, interceptor.ExceptionsThrown);
+        Assert.Single(audit.Entries);
+        Assert.Single(audit.ConfirmedEntries);
+        var auditCancellationToken =
+            Assert.Single(audit.CancellationTokens);
+        Assert.True(auditCancellationToken.CanBeCanceled);
+        Assert.False(auditCancellationToken.IsCancellationRequested);
+        Assert.NotEqual(cancellation.Token, auditCancellationToken);
+        dbContext.ChangeTracker.Clear();
+        Assert.False(await dbContext.Devices
+            .AsNoTracking()
+            .AnyAsync(
+                candidate => candidate.Id == device.Id,
+                budget.Token));
+        Assert.Equal(
+            1,
+            await CountOutboxAsync(
+                dbContext,
+                "DeviceDeletedDomainEvent",
+                device.Id,
+                budget.Token));
+    }
+
+    [Fact]
     public async Task DeviceRegistrationCancellationAfterCommit_ShouldRecoverAndConfirmAuditOutsideCallerToken()
     {
         using var budget = await PostgresTestBudget.CreateAsync(fixture);
@@ -3646,6 +3712,79 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 Interlocked.Increment(ref exceptionsThrown);
                 throw new OperationCanceledException(
                     cancellation.Token);
+            }
+
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class CommitThenCancelRetryInterceptor(
+        CancellationTokenSource cancellation)
+        : WriteAwareTransactionInterceptor
+    {
+        private int armed;
+        private int writeCommitPending;
+        private int cancelRetryTransaction;
+        private int exceptionsThrown;
+
+        public int ExceptionsThrown =>
+            Volatile.Read(ref exceptionsThrown);
+
+        public void Arm() => Volatile.Write(ref armed, 1);
+
+        public override ValueTask<InterceptionResult<DbTransaction>>
+            TransactionStartingAsync(
+                DbConnection connection,
+                TransactionStartingEventData eventData,
+                InterceptionResult<DbTransaction> result,
+                CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Exchange(
+                    ref cancelRetryTransaction,
+                    0) == 1)
+            {
+                cancellation.Cancel();
+                Interlocked.Increment(ref exceptionsThrown);
+                throw new OperationCanceledException(
+                    cancellation.Token);
+            }
+
+            return ValueTask.FromResult(result);
+        }
+
+        public override ValueTask<InterceptionResult>
+            TransactionCommittingAsync(
+                DbTransaction transaction,
+                TransactionEventData eventData,
+                InterceptionResult result,
+                CancellationToken cancellationToken = default)
+        {
+            if (ConsumeWrite(transaction)
+                && Volatile.Read(ref armed) == 1)
+            {
+                Volatile.Write(ref writeCommitPending, 1);
+            }
+
+            return ValueTask.FromResult(result);
+        }
+
+        public override Task TransactionCommittedAsync(
+            DbTransaction transaction,
+            TransactionEndEventData eventData,
+            CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Exchange(
+                    ref writeCommitPending,
+                    0) == 1
+                && Interlocked.CompareExchange(
+                    ref armed,
+                    0,
+                    1) == 1)
+            {
+                Volatile.Write(ref cancelRetryTransaction, 1);
+                Interlocked.Increment(ref exceptionsThrown);
+                throw RetryablePostgresException(
+                    "simulated committed delete before retry cancellation");
             }
 
             return Task.CompletedTask;

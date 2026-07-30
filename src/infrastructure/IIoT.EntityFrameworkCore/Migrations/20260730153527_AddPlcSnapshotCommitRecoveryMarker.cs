@@ -38,7 +38,9 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         upper(trim(runtime.client_code)) as client_code,
                         min(runtime.created_at_utc) as created_at_utc,
                         max(runtime.updated_at_utc) as received_at_utc,
-                        max(runtime.updated_at_utc) as reported_at_utc,
+                        greatest(
+                            max(runtime.updated_at_utc),
+                            max(runtime.last_seen_at_utc)) as reported_at_utc,
                         md5(
                             'plc-snapshot:' ||
                             runtime.device_id::text ||
@@ -85,7 +87,9 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         runtime.device_id,
                         upper(trim(runtime.client_code)) as client_code,
                         max(runtime.updated_at_utc) as received_at_utc,
-                        max(runtime.updated_at_utc) as reported_at_utc
+                        greatest(
+                            max(runtime.updated_at_utc),
+                            max(runtime.last_seen_at_utc)) as reported_at_utc
                     from edge_host_plc_runtime_states runtime
                     group by
                         runtime.device_id,

@@ -92,7 +92,6 @@ public sealed class EfDeviceDeletionDependencyService(
         async Task<DeviceCascadeDeletionResult> ExecuteTransactionAsync(
             CancellationToken transactionCancellationToken)
         {
-            commitAttempted = false;
             try
             {
                 dbContext.ChangeTracker.Clear();

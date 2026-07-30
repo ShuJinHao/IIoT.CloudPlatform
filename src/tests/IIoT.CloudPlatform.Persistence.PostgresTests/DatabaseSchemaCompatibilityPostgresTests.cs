@@ -352,6 +352,10 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
                 $"Empty snapshot {unique}",
                 $"PLC-Z-{unique}"[..24],
                 process.Id);
+            var futureSnapshotDevice = new Device(
+                $"Future snapshot {unique}",
+                $"PLC-F-{unique}"[..24],
+                process.Id);
             var emptySnapshotReceivedAt =
                 DateTime.UtcNow.AddMinutes(-3);
             var existingState = new DeviceClientState(
@@ -372,21 +376,29 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
                 missingStateDevice,
                 "PLC-2",
                 olderObservedAt);
+            var futureObservedAt = snapshotReceivedAt.AddHours(1);
+            var futureRuntime = CreateRuntimeState(
+                futureSnapshotDevice,
+                "PLC-3",
+                futureObservedAt);
             process.ClearDomainEvents();
             existingStateDevice.ClearDomainEvents();
             missingStateDevice.ClearDomainEvents();
             emptySnapshotDevice.ClearDomainEvents();
+            futureSnapshotDevice.ClearDomainEvents();
             dbContext.MfgProcesses.Add(process);
             dbContext.Devices.AddRange(
                 existingStateDevice,
                 missingStateDevice,
-                emptySnapshotDevice);
+                emptySnapshotDevice,
+                futureSnapshotDevice);
             dbContext.DeviceClientStates.AddRange(
                 existingState,
                 emptySnapshotState);
             dbContext.EdgeHostPlcRuntimeStates.AddRange(
                 existingRuntime,
-                missingRuntime);
+                missingRuntime,
+                futureRuntime);
             await dbContext.SaveChangesAsync(budget.Token);
             await dbContext.Database.ExecuteSqlInterpolatedAsync(
                 $"""
@@ -394,7 +406,8 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
                  set updated_at_utc = {snapshotReceivedAt}
                  where device_id in (
                      {existingStateDevice.Id},
-                     {missingStateDevice.Id})
+                     {missingStateDevice.Id},
+                     {futureSnapshotDevice.Id})
                  """,
                 budget.Token);
 
@@ -418,11 +431,12 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
                 .Where(state =>
                     state.DeviceId == existingStateDevice.Id
                     || state.DeviceId == missingStateDevice.Id
-                    || state.DeviceId == emptySnapshotDevice.Id)
+                    || state.DeviceId == emptySnapshotDevice.Id
+                    || state.DeviceId == futureSnapshotDevice.Id)
                 .OrderBy(state => state.DeviceId)
                 .ToListAsync(budget.Token);
 
-            Assert.Equal(3, states.Count);
+            Assert.Equal(4, states.Count);
             var backfilledExisting = Assert.Single(
                 states,
                 state => state.DeviceId == existingStateDevice.Id);
@@ -432,6 +446,9 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
             var backfilledEmpty = Assert.Single(
                 states,
                 state => state.DeviceId == emptySnapshotDevice.Id);
+            var backfilledFuture = Assert.Single(
+                states,
+                state => state.DeviceId == futureSnapshotDevice.Id);
             AssertMarker(
                 backfilledExisting,
                 snapshotReceivedAt);
@@ -441,6 +458,9 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
             AssertMarker(
                 backfilledEmpty,
                 emptySnapshotReceivedAt);
+            AssertMarker(
+                backfilledFuture,
+                futureObservedAt);
             Assert.Equal("[]", backfilledMissing.VersionLocalIpAddressesJson);
             Assert.Equal("[]", backfilledMissing.RuntimeLocalIpAddressesJson);
         }
