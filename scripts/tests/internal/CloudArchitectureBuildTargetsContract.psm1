@@ -23,19 +23,31 @@ $script:ExpectedCloudArchitectureBuildTargets = @'
           Condition="'$(_IsCloudProductionProject)' == 'true'">
     <PropertyGroup>
       <_CloudArchitectureManagedReferencesFile>$(IntermediateOutputPath)CloudArchitectureManagedProjectReferences.txt</_CloudArchitectureManagedReferencesFile>
+      <_CloudArchitectureResolvedProjectReferencesFile>$(IntermediateOutputPath)CloudArchitectureResolvedProjectReferences.txt</_CloudArchitectureResolvedProjectReferencesFile>
     </PropertyGroup>
     <ItemGroup>
       <_CloudArchitectureManagedReference Include="@(ReferencePathWithRefAssemblies)"
                                           Condition="'%(ReferencePathWithRefAssemblies.MSBuildSourceProjectFile)' != ''">
         <StableProjectIdentity>$([MSBuild]::MakeRelative('$(CloudArchitectureRepositoryRoot)', '%(ReferencePathWithRefAssemblies.MSBuildSourceProjectFile)'))</StableProjectIdentity>
       </_CloudArchitectureManagedReference>
+      <_CloudArchitectureResolvedProjectReference Include="@(_ResolvedProjectReferencePaths)"
+                                                  Condition="'%(_ResolvedProjectReferencePaths.MSBuildSourceProjectFile)' != ''">
+        <CompilerReferencePath Condition="'%(_ResolvedProjectReferencePaths.ReferenceAssembly)' != ''">%(_ResolvedProjectReferencePaths.ReferenceAssembly)</CompilerReferencePath>
+        <CompilerReferencePath Condition="'%(_ResolvedProjectReferencePaths.ReferenceAssembly)' == ''">%(_ResolvedProjectReferencePaths.FullPath)</CompilerReferencePath>
+        <StableProjectIdentity>$([MSBuild]::MakeRelative('$(CloudArchitectureRepositoryRoot)', '%(_ResolvedProjectReferencePaths.MSBuildSourceProjectFile)'))</StableProjectIdentity>
+      </_CloudArchitectureResolvedProjectReference>
     </ItemGroup>
     <WriteLinesToFile File="$(_CloudArchitectureManagedReferencesFile)"
                       Lines="@(_CloudArchitectureManagedReference->'%(FullPath)&#x9;%(MSBuildSourceProjectFile)&#x9;%(StableProjectIdentity)')"
                       Overwrite="true"
                       WriteOnlyWhenDifferent="true" />
+    <WriteLinesToFile File="$(_CloudArchitectureResolvedProjectReferencesFile)"
+                      Lines="@(_CloudArchitectureResolvedProjectReference->'%(CompilerReferencePath)&#x9;%(MSBuildSourceProjectFile)&#x9;%(StableProjectIdentity)')"
+                      Overwrite="true"
+                      WriteOnlyWhenDifferent="true" />
     <ItemGroup>
       <AdditionalFiles Include="$(_CloudArchitectureManagedReferencesFile)" />
+      <AdditionalFiles Include="$(_CloudArchitectureResolvedProjectReferencesFile)" />
     </ItemGroup>
   </Target>
 

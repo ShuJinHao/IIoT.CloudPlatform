@@ -278,6 +278,7 @@ try {
     $additionalFilesBlock = @'
     <ItemGroup>
       <AdditionalFiles Include="$(_CloudArchitectureManagedReferencesFile)" />
+      <AdditionalFiles Include="$(_CloudArchitectureResolvedProjectReferencesFile)" />
     </ItemGroup>
 '@
 
@@ -320,16 +321,46 @@ try {
             Replace(
                 'ReferencePathWithRefAssemblies.MSBuildSourceProjectFile',
                 'MSBuildSourceProjectFile')
+    $unsafeArchitectureContracts['resolved-project-source-drift'] =
+        $validArchitectureTargets.Replace(
+            '<_CloudArchitectureResolvedProjectReference Include="@(_ResolvedProjectReferencePaths)"',
+            '<_CloudArchitectureResolvedProjectReference Include="@(ReferencePathWithRefAssemblies)"')
+    $unsafeArchitectureContracts['resolved-project-filter-removed'] =
+        $validArchitectureTargets.Replace(
+            @'
+      <_CloudArchitectureResolvedProjectReference Include="@(_ResolvedProjectReferencePaths)"
+                                                  Condition="'%(_ResolvedProjectReferencePaths.MSBuildSourceProjectFile)' != ''">
+'@,
+            @'
+      <_CloudArchitectureResolvedProjectReference Include="@(_ResolvedProjectReferencePaths)">
+'@)
     $unsafeArchitectureContracts['output-columns-drift'] =
         $validArchitectureTargets.Replace(
             '%(FullPath)&#x9;%(MSBuildSourceProjectFile)&#x9;%(StableProjectIdentity)',
             '%(ReferenceAssembly)&#x9;%(FullPath)&#x9;%(StableProjectIdentity)')
+    $unsafeArchitectureContracts['resolved-output-columns-drift'] =
+        $validArchitectureTargets.Replace(
+            '%(CompilerReferencePath)&#x9;%(MSBuildSourceProjectFile)&#x9;%(StableProjectIdentity)',
+            '%(FullPath)&#x9;%(MSBuildSourceProjectFile)&#x9;%(StableProjectIdentity)')
+    $unsafeArchitectureContracts['resolved-reference-assembly-path-removed'] =
+        $validArchitectureTargets.Replace(
+            @'
+        <CompilerReferencePath Condition="'%(_ResolvedProjectReferencePaths.ReferenceAssembly)' != ''">%(_ResolvedProjectReferencePaths.ReferenceAssembly)</CompilerReferencePath>
+        <CompilerReferencePath Condition="'%(_ResolvedProjectReferencePaths.ReferenceAssembly)' == ''">%(_ResolvedProjectReferencePaths.FullPath)</CompilerReferencePath>
+'@,
+            @'
+        <CompilerReferencePath>%(_ResolvedProjectReferencePaths.FullPath)</CompilerReferencePath>
+'@)
     $unsafeArchitectureContracts['additional-files-removed'] =
         $validArchitectureTargets.Replace($additionalFilesBlock, '')
     $unsafeArchitectureContracts['additional-files-wiring-drift'] =
         $validArchitectureTargets.Replace(
             'AdditionalFiles Include="$(_CloudArchitectureManagedReferencesFile)"',
             'AdditionalFiles Include="$(IntermediateOutputPath)other.txt"')
+    $unsafeArchitectureContracts['resolved-additional-files-removed'] =
+        $validArchitectureTargets.Replace(
+            '      <AdditionalFiles Include="$(_CloudArchitectureResolvedProjectReferencesFile)" />',
+            '')
     $unsafeArchitectureContracts['compiler-visible-property-wiring-drift'] =
         $validArchitectureTargets.Replace(
             'CompilerVisibleProperty Include="CloudArchitectureProjectIdentity"',

@@ -158,6 +158,7 @@ internal static class CloudArchitectureEffectSummaryFormat
     internal const string EffectKey = "IIoT.CloudArchitecture.EffectSummary.Method";
     internal const string SourceIdentityKey = "IIoT.CloudArchitecture.EffectSummary.SourceIdentity";
     internal const string ManagedReferencesFileName = "CloudArchitectureManagedProjectReferences.txt";
+    internal const string ResolvedProjectReferencesFileName = "CloudArchitectureResolvedProjectReferences.txt";
 
     internal static string GetMethodId(IMethodSymbol method)
     {
@@ -253,6 +254,18 @@ internal sealed class CloudArchitectureManagedReferenceCatalog
 {
     private readonly ImmutableDictionary<string, string> _sourceIdentities;
 
+    private sealed class CatalogEntry
+    {
+        internal CatalogEntry(string sourceProjectPath, string sourceIdentity)
+        {
+            SourceProjectPath = sourceProjectPath;
+            SourceIdentity = sourceIdentity;
+        }
+
+        internal string SourceProjectPath { get; }
+        internal string SourceIdentity { get; }
+    }
+
     private CloudArchitectureManagedReferenceCatalog(
         bool valid,
         ImmutableDictionary<string, string> sourceIdentities,
@@ -270,19 +283,95 @@ internal sealed class CloudArchitectureManagedReferenceCatalog
         ImmutableArray<AdditionalText> additionalTexts,
         CancellationToken cancellationToken)
     {
-        var catalogs = additionalTexts.Where(static text => string.Equals(
-                Path.GetFileName(text.Path),
+        if (!TryReadCatalog(
+                additionalTexts,
                 CloudArchitectureEffectSummaryFormat.ManagedReferencesFileName,
+                "compiler",
+                cancellationToken,
+                out var compilerReferences,
+                out var compilerFailure))
+        {
+            return Invalid(compilerFailure);
+        }
+
+        if (!TryReadCatalog(
+                additionalTexts,
+                CloudArchitectureEffectSummaryFormat.ResolvedProjectReferencesFileName,
+                "project",
+                cancellationToken,
+                out var resolvedProjectReferences,
+                out var projectFailure))
+        {
+            return Invalid(projectFailure);
+        }
+
+        foreach (var compilerReference in compilerReferences)
+        {
+            if (!resolvedProjectReferences.TryGetValue(
+                    compilerReference.Key,
+                    out var resolvedProjectReference))
+            {
+                return Invalid("compiler-reference-not-resolved-project");
+            }
+
+            if (!string.Equals(
+                    compilerReference.Value.SourceProjectPath,
+                    resolvedProjectReference.SourceProjectPath,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(
+                    compilerReference.Value.SourceIdentity,
+                    resolvedProjectReference.SourceIdentity,
+                    StringComparison.Ordinal))
+            {
+                return Invalid("project-reference-provenance-mismatch");
+            }
+        }
+
+        if (resolvedProjectReferences.Keys.Any(referencePath =>
+                !compilerReferences.ContainsKey(referencePath)))
+        {
+            return Invalid("resolved-project-reference-not-compiler-reference");
+        }
+
+        return new CloudArchitectureManagedReferenceCatalog(
+            true,
+            compilerReferences.ToImmutableDictionary(
+                static pair => pair.Key,
+                static pair => pair.Value.SourceIdentity,
+                StringComparer.OrdinalIgnoreCase),
+            string.Empty);
+    }
+
+    private static bool TryReadCatalog(
+        ImmutableArray<AdditionalText> additionalTexts,
+        string fileName,
+        string role,
+        CancellationToken cancellationToken,
+        out ImmutableDictionary<string, CatalogEntry> entries,
+        out string failure)
+    {
+        var catalogs = additionalTexts.Where(text => string.Equals(
+                Path.GetFileName(text.Path),
+                fileName,
                 StringComparison.Ordinal))
             .ToArray();
         if (catalogs.Length != 1)
-            return Invalid("missing-or-duplicate-catalog");
+        {
+            entries = ImmutableDictionary<string, CatalogEntry>.Empty;
+            failure = role + "-missing-or-duplicate-catalog";
+            return false;
+        }
 
         var text = catalogs[0].GetText(cancellationToken);
         if (text is null)
-            return Invalid("unreadable-catalog");
+        {
+            entries = ImmutableDictionary<string, CatalogEntry>.Empty;
+            failure = role + "-unreadable-catalog";
+            return false;
+        }
 
-        var builder = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+        var builder = ImmutableDictionary.CreateBuilder<string, CatalogEntry>(
+            StringComparer.OrdinalIgnoreCase);
         var sourceProjects = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var line in text.Lines)
         {
@@ -295,7 +384,9 @@ internal sealed class CloudArchitectureManagedReferenceCatalog
                 string.IsNullOrWhiteSpace(parts[1]) ||
                 string.IsNullOrWhiteSpace(parts[2]))
             {
-                return Invalid("invalid-catalog-entry");
+                entries = ImmutableDictionary<string, CatalogEntry>.Empty;
+                failure = role + "-invalid-catalog-entry";
+                return false;
             }
 
             string sourceIdentity;
@@ -309,7 +400,9 @@ internal sealed class CloudArchitectureManagedReferenceCatalog
             }
             catch
             {
-                return Invalid("invalid-catalog-entry");
+                entries = ImmutableDictionary<string, CatalogEntry>.Empty;
+                failure = role + "-invalid-catalog-entry";
+                return false;
             }
 
             var normalizedStableIdentity = parts[2].Trim().Replace('\\', '/');
@@ -319,29 +412,40 @@ internal sealed class CloudArchitectureManagedReferenceCatalog
                     "/" + normalizedStableIdentity,
                     StringComparison.OrdinalIgnoreCase))
             {
-                return Invalid("source-project-identity-mismatch");
+                entries = ImmutableDictionary<string, CatalogEntry>.Empty;
+                failure = role + "-source-project-identity-mismatch";
+                return false;
             }
 
             if (builder.TryGetValue(normalizedReferencePath, out var existing) &&
-                !string.Equals(existing, sourceIdentity, StringComparison.Ordinal))
+                (!string.Equals(
+                        existing.SourceProjectPath,
+                        normalizedSourceProjectPath,
+                        StringComparison.OrdinalIgnoreCase) ||
+                 !string.Equals(existing.SourceIdentity, sourceIdentity, StringComparison.Ordinal)))
             {
-                return Invalid("conflicting-reference-identity");
+                entries = ImmutableDictionary<string, CatalogEntry>.Empty;
+                failure = role + "-conflicting-reference-identity";
+                return false;
             }
 
             if (sourceProjects.TryGetValue(normalizedSourceProjectPath, out var existingReference) &&
                 !string.Equals(existingReference, normalizedReferencePath, StringComparison.OrdinalIgnoreCase))
             {
-                return Invalid("duplicate-source-project-reference");
+                entries = ImmutableDictionary<string, CatalogEntry>.Empty;
+                failure = role + "-duplicate-source-project-reference";
+                return false;
             }
 
-            builder[normalizedReferencePath] = sourceIdentity;
+            builder[normalizedReferencePath] = new CatalogEntry(
+                normalizedSourceProjectPath,
+                sourceIdentity);
             sourceProjects[normalizedSourceProjectPath] = normalizedReferencePath;
         }
 
-        return new CloudArchitectureManagedReferenceCatalog(
-            true,
-            builder.ToImmutable(),
-            string.Empty);
+        entries = builder.ToImmutable();
+        failure = string.Empty;
+        return true;
     }
 
     internal bool TryGetSourceIdentity(

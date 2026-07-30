@@ -8,8 +8,10 @@ architecture_targets="$repo_root/Directory.Build.targets"
 if ! grep -Fq 'Include="@(ReferencePathWithRefAssemblies)"' "$architecture_targets" ||
     ! grep -Fq "ReferencePathWithRefAssemblies.MSBuildSourceProjectFile" "$architecture_targets" ||
     ! grep -Fq "'%(FullPath)&#x9;%(MSBuildSourceProjectFile)&#x9;%(StableProjectIdentity)'" "$architecture_targets" ||
-    grep -Fq 'Include="@(_ResolvedProjectReferencePaths)"' "$architecture_targets"; then
-    printf 'Cloud architecture target is not bound exclusively to real Csc reference assemblies.\n' >&2
+    ! grep -Fq 'Include="@(_ResolvedProjectReferencePaths)"' "$architecture_targets" ||
+    ! grep -Fq "CloudArchitectureResolvedProjectReferences.txt" "$architecture_targets" ||
+    ! grep -Fq "'%(CompilerReferencePath)&#x9;%(MSBuildSourceProjectFile)&#x9;%(StableProjectIdentity)'" "$architecture_targets"; then
+    printf 'Cloud architecture target does not cross-check real Csc references against resolved ProjectReference outputs.\n' >&2
     exit 1
 fi
 if [[ -n "${CLOUD_ARCH_FIXTURE_ROOT:-}" ]]; then
@@ -59,19 +61,31 @@ cat > "$fixture_root/Directory.Build.props" <<EOF
           Condition="'\$(AttachCloudArchitectureAnalyzer)' == 'true'">
     <PropertyGroup>
       <_CloudArchitectureManagedReferencesFile>\$(IntermediateOutputPath)CloudArchitectureManagedProjectReferences.txt</_CloudArchitectureManagedReferencesFile>
+      <_CloudArchitectureResolvedProjectReferencesFile>\$(IntermediateOutputPath)CloudArchitectureResolvedProjectReferences.txt</_CloudArchitectureResolvedProjectReferencesFile>
     </PropertyGroup>
     <ItemGroup>
       <_CloudArchitectureManagedReference Include="@(ReferencePathWithRefAssemblies)"
                                           Condition="'%(ReferencePathWithRefAssemblies.MSBuildSourceProjectFile)' != ''">
         <StableProjectIdentity>\$([MSBuild]::MakeRelative('\$(CloudArchitectureRepositoryRoot)', '%(ReferencePathWithRefAssemblies.MSBuildSourceProjectFile)'))</StableProjectIdentity>
       </_CloudArchitectureManagedReference>
+      <_CloudArchitectureResolvedProjectReference Include="@(_ResolvedProjectReferencePaths)"
+                                                  Condition="'%(_ResolvedProjectReferencePaths.MSBuildSourceProjectFile)' != ''">
+        <CompilerReferencePath Condition="'%(_ResolvedProjectReferencePaths.ReferenceAssembly)' != ''">%(_ResolvedProjectReferencePaths.ReferenceAssembly)</CompilerReferencePath>
+        <CompilerReferencePath Condition="'%(_ResolvedProjectReferencePaths.ReferenceAssembly)' == ''">%(_ResolvedProjectReferencePaths.FullPath)</CompilerReferencePath>
+        <StableProjectIdentity>\$([MSBuild]::MakeRelative('\$(CloudArchitectureRepositoryRoot)', '%(_ResolvedProjectReferencePaths.MSBuildSourceProjectFile)'))</StableProjectIdentity>
+      </_CloudArchitectureResolvedProjectReference>
     </ItemGroup>
     <WriteLinesToFile File="\$(_CloudArchitectureManagedReferencesFile)"
                       Lines="@(_CloudArchitectureManagedReference->'%(FullPath)&#x9;%(MSBuildSourceProjectFile)&#x9;%(StableProjectIdentity)')"
                       Overwrite="true"
                       WriteOnlyWhenDifferent="true" />
+    <WriteLinesToFile File="\$(_CloudArchitectureResolvedProjectReferencesFile)"
+                      Lines="@(_CloudArchitectureResolvedProjectReference->'%(CompilerReferencePath)&#x9;%(MSBuildSourceProjectFile)&#x9;%(StableProjectIdentity)')"
+                      Overwrite="true"
+                      WriteOnlyWhenDifferent="true" />
     <ItemGroup>
       <AdditionalFiles Include="\$(_CloudArchitectureManagedReferencesFile)" />
+      <AdditionalFiles Include="\$(_CloudArchitectureResolvedProjectReferencesFile)" />
     </ItemGroup>
   </Target>
 </Project>
@@ -925,6 +939,11 @@ EOF
 
 precompiled_method_id='PrecompiledSpoof.StaticWriter::Write`0(0:System.Object)->System.Int32'
 precompiled_effect_digest="$(printf '%s\tsafe' "$precompiled_method_id" | shasum -a 256 | awk '{print $1}')"
+precompiled_source_identity="$(
+    printf '%s' 'PrecompiledSpoof/PrecompiledSpoof.csproj' |
+        shasum -a 256 |
+        awk '{print $1}'
+)"
 write_project \
     "PrecompiledSpoof" \
     "IIoT.Infrastructure.FixturePrecompiledSpoof" \
@@ -936,7 +955,7 @@ cat > "$fixture_root/PrecompiledSpoof/PrecompiledSpoof.cs" <<EOF
     "2|1|$precompiled_effect_digest")]
 [assembly: System.Reflection.AssemblyMetadata(
     "IIoT.CloudArchitecture.EffectSummary.SourceIdentity",
-    "0000000000000000000000000000000000000000000000000000000000000000")]
+    "$precompiled_source_identity")]
 [assembly: System.Reflection.AssemblyMetadata(
     "IIoT.CloudArchitecture.EffectSummary.Method",
     "$precompiled_method_id\tsafe")]
@@ -953,10 +972,25 @@ write_project \
     "InvalidPrecompiledSpoof" \
     "IIoT.Dapper.FixturePrecompiledSpoofInvalid" \
     "true" \
-    '<ItemGroup><ProjectReference Include="../CrossProjectAiReadContracts/CrossProjectAiReadContracts.csproj" /><Reference Include="IIoT.Infrastructure.FixturePrecompiledSpoof"><HintPath>../PrecompiledSpoof/bin/Release/net10.0/IIoT.Infrastructure.FixturePrecompiledSpoof.dll</HintPath></Reference></ItemGroup>'
+    '<ItemGroup><ProjectReference Include="../CrossProjectAiReadContracts/CrossProjectAiReadContracts.csproj" /><Reference Include="IIoT.Infrastructure.FixturePrecompiledSpoof"><HintPath>../precompiled/IIoT.Infrastructure.FixturePrecompiledSpoof.dll</HintPath></Reference></ItemGroup>'
 cat > "$fixture_root/InvalidPrecompiledSpoof/ExternalReadPort.cs" <<'EOF'
 namespace Fixture;
 public sealed class PrecompiledSpoofReadPort(object connection) : IExternalReadPort
+{
+    public System.Threading.Tasks.Task<int> ReadAsync(
+        System.Threading.CancellationToken cancellationToken)
+        => System.Threading.Tasks.Task.FromResult(PrecompiledSpoof.StaticWriter.Write(connection));
+}
+EOF
+
+write_project \
+    "InvalidForgedProjectReferenceProvenance" \
+    "IIoT.Dapper.FixtureForgedProjectReferenceProvenanceInvalid" \
+    "true" \
+    "<ItemGroup><ProjectReference Include=\"../CrossProjectAiReadContracts/CrossProjectAiReadContracts.csproj\" /><Reference Include=\"IIoT.Infrastructure.FixturePrecompiledSpoof\"><HintPath>../precompiled/IIoT.Infrastructure.FixturePrecompiledSpoof.dll</HintPath><MSBuildSourceProjectFile>$fixture_root/PrecompiledSpoof/PrecompiledSpoof.csproj</MSBuildSourceProjectFile><ReferenceSourceTarget>ProjectReference</ReferenceSourceTarget></Reference></ItemGroup>"
+cat > "$fixture_root/InvalidForgedProjectReferenceProvenance/ExternalReadPort.cs" <<'EOF'
+namespace Fixture;
+public sealed class ForgedProjectReferenceProvenanceReadPort(object connection) : IExternalReadPort
 {
     public System.Threading.Tasks.Task<int> ReadAsync(
         System.Threading.CancellationToken cancellationToken)
@@ -1530,6 +1564,12 @@ root = true
 dotnet_diagnostic.CLOUDARCH009.severity = none
 EOF
 
+build_valid "$fixture_root/PrecompiledSpoof/PrecompiledSpoof.csproj"
+mkdir -p "$fixture_root/precompiled"
+cp \
+    "$fixture_root/PrecompiledSpoof/bin/Release/net10.0/IIoT.Infrastructure.FixturePrecompiledSpoof.dll" \
+    "$fixture_root/precompiled/IIoT.Infrastructure.FixturePrecompiledSpoof.dll"
+
 build_cold_and_warm_graph \
     "$fixture_root/ValidCrossAssemblySummary/ValidCrossAssemblySummary.csproj" \
     valid
@@ -1557,6 +1597,10 @@ build_cold_and_warm_graph \
     "$fixture_root/InvalidMethodEntryEffectSummary/InvalidMethodEntryEffectSummary.csproj" \
     invalid \
     external-effect-method-entry-missing
+build_cold_and_warm_graph \
+    "$fixture_root/InvalidForgedProjectReferenceProvenance/InvalidForgedProjectReferenceProvenance.csproj" \
+    invalid \
+    external-effect-managed-reference-catalog-invalid:compiler-reference-not-resolved-project
 
 dotnet run \
     --project "$fixture_root/ContractsBindingProbe/ContractsBindingProbe.csproj" \
@@ -1594,7 +1638,8 @@ build_invalid "$fixture_root/InvalidCrossAssemblyOpenDispatchSummary/InvalidCros
 build_invalid "$fixture_root/InvalidMissingEffectSummary/InvalidMissingEffectSummary.csproj" "CLOUDARCH004" "external-effect-summary-invalid:missing-or-duplicate-manifest"
 build_invalid "$fixture_root/InvalidOldEffectSummary/InvalidOldEffectSummary.csproj" "CLOUDARCH004"
 build_invalid "$fixture_root/InvalidSpoofedEffectSummary/InvalidSpoofedEffectSummary.csproj" "CLOUDARCH004" "external-effect-summary-invalid:missing-or-duplicate-manifest"
-build_invalid "$fixture_root/InvalidPrecompiledSpoof/InvalidPrecompiledSpoof.csproj" "CLOUDARCH004"
+build_invalid "$fixture_root/InvalidPrecompiledSpoof/InvalidPrecompiledSpoof.csproj" "CLOUDARCH004" "external-effect-unmanaged-reference"
+build_invalid "$fixture_root/InvalidForgedProjectReferenceProvenance/InvalidForgedProjectReferenceProvenance.csproj" "CLOUDARCH004" "external-effect-managed-reference-catalog-invalid:compiler-reference-not-resolved-project"
 build_invalid "$fixture_root/InvalidCorruptEffectSummary/InvalidCorruptEffectSummary.csproj" "CLOUDARCH004" "external-effect-summary-invalid:count-or-digest-mismatch"
 build_invalid "$fixture_root/InvalidIdentityMismatchEffectSummary/InvalidIdentityMismatchEffectSummary.csproj" "CLOUDARCH004" "external-effect-identity-mismatch"
 build_invalid "$fixture_root/InvalidMethodEntryEffectSummary/InvalidMethodEntryEffectSummary.csproj" "CLOUDARCH004" "external-effect-method-entry-missing"
@@ -1616,4 +1661,4 @@ build_invalid "$fixture_root/SuppressedNoWarn/SuppressedNoWarn.csproj" "CLOUDARC
 build_invalid "$fixture_root/SuppressedEditorConfig/SuppressedEditorConfig.csproj" "CLOUDARCH009"
 
 printf '%s\n' \
-    'ARCHITECTURE_FIXTURES_OK coldWarmGraphs=7 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010'
+    'ARCHITECTURE_FIXTURES_OK coldWarmGraphs=8 diagnostics=CLOUDARCH001,CLOUDARCH002,CLOUDARCH003,CLOUDARCH004,CLOUDARCH005,CLOUDARCH006,CLOUDARCH007,CLOUDARCH008,CLOUDARCH009,CLOUDARCH010'
