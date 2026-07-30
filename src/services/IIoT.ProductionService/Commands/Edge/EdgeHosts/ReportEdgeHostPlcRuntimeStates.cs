@@ -222,7 +222,9 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
                 throw new CloudWriteCommitUnknownException();
             }
 
-            if (current.PlcSnapshot == target)
+            if (MatchesSameReport(
+                    current.PlcSnapshot,
+                    target))
             {
                 return Success();
             }

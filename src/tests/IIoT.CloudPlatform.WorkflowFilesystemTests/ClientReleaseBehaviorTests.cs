@@ -37,7 +37,9 @@ public sealed class ClientReleaseBehaviorTests
         string clientCode,
         InMemoryDeviceClientStateStore store,
         TimeProvider? timeProvider = null,
-        IUnitOfWork? unitOfWork = null)
+        IUnitOfWork? unitOfWork = null,
+        Func<DeviceReportWriteObservation, DeviceReportWriteObservation>?
+            observationTransform = null)
         => new(
             new StubDeviceIdentityQueryService(
                 new DeviceIdentitySnapshot(deviceId, clientCode)),
@@ -46,7 +48,8 @@ public sealed class ClientReleaseBehaviorTests
             new InMemoryDeviceReportObservationReader(
                 deviceId,
                 clientCode,
-                store),
+                store,
+                observationTransform),
             timeProvider ?? TimeProvider.System);
 
     private static ReportDeviceRuntimeHeartbeatHandler
@@ -55,7 +58,9 @@ public sealed class ClientReleaseBehaviorTests
             string clientCode,
             InMemoryDeviceClientStateStore store,
             TimeProvider timeProvider,
-            IUnitOfWork? unitOfWork = null)
+            IUnitOfWork? unitOfWork = null,
+            Func<DeviceReportWriteObservation, DeviceReportWriteObservation>?
+                observationTransform = null)
         => new(
             new StubDeviceIdentityQueryService(
                 new DeviceIdentitySnapshot(deviceId, clientCode)),
@@ -65,7 +70,8 @@ public sealed class ClientReleaseBehaviorTests
             new InMemoryDeviceReportObservationReader(
                 deviceId,
                 clientCode,
-                store));
+                store,
+                observationTransform));
 
     [Fact]
     public void EdgeReleaseRetentionOptions_ShouldDefaultToThreeVersions()
@@ -1856,6 +1862,74 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
+    public async Task ReportDeviceClientVersionHandler_PostCommitFailure_ShouldRecoverSameReportWithDifferentReceivedAt()
+    {
+        var deviceId = Guid.NewGuid();
+        var store = new InMemoryDeviceClientStateStore();
+        var unitOfWork = new RecordingUnitOfWork
+        {
+            OnCommit = () => throw new TimeoutException(
+                "simulated commit acknowledgement loss")
+        };
+        var handler = CreateVersionHandler(
+            deviceId,
+            "DEV-VERSION-RECEIVED-AT",
+            store,
+            new FixedTimeProvider(
+                new DateTimeOffset(
+                    2026,
+                    7,
+                    30,
+                    3,
+                    15,
+                    0,
+                    TimeSpan.Zero)),
+            unitOfWork,
+            observation => observation.Version is null
+                ? observation
+                : observation with
+                {
+                    Version = observation.Version with
+                    {
+                        ReceivedAtUtc =
+                            observation.Version.ReceivedAtUtc.AddSeconds(1)
+                    }
+                });
+
+        var result = await handler.Handle(
+            new ReportDeviceClientVersionCommand(
+                deviceId,
+                "DEV-VERSION-RECEIVED-AT",
+                "1.2.0",
+                "1.0.0",
+                [],
+                [],
+                "stable",
+                new DateTime(
+                    2026,
+                    7,
+                    30,
+                    3,
+                    14,
+                    0,
+                    DateTimeKind.Utc)),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(
+            new DateTime(
+                2026,
+                7,
+                30,
+                3,
+                15,
+                1,
+                DateTimeKind.Utc),
+            result.Value!.ReceivedAtUtc);
+        Assert.Equal(1, store.SaveChangesCalls);
+    }
+
+    [Fact]
     public async Task ReportDeviceClientVersionHandler_PostCommitCancellation_ShouldRecoverExactTarget()
     {
         var deviceId = Guid.NewGuid();
@@ -2057,6 +2131,54 @@ public sealed class ClientReleaseBehaviorTests
         Assert.True(result.IsSuccess);
         Assert.Single(store.RuntimeHeartbeats);
         Assert.Single(store.States);
+        Assert.Equal(1, store.SaveChangesCalls);
+    }
+
+    [Fact]
+    public async Task ReportDeviceRuntimeHeartbeatHandler_PostCommitFailure_ShouldRecoverSameReportWithDifferentReceivedAt()
+    {
+        var deviceId = Guid.NewGuid();
+        var utcNow =
+            new DateTimeOffset(2026, 7, 30, 4, 15, 0, TimeSpan.Zero);
+        var store = new InMemoryDeviceClientStateStore();
+        var handler = CreateHeartbeatHandler(
+            deviceId,
+            "DEV-HEARTBEAT-RECEIVED-AT",
+            store,
+            new FixedTimeProvider(utcNow),
+            new RecordingUnitOfWork
+            {
+                OnCommit = () => throw new TimeoutException(
+                    "simulated commit acknowledgement loss")
+            },
+            observation => observation.RuntimeHeartbeat is null
+                ? observation
+                : observation with
+                {
+                    RuntimeHeartbeat =
+                        observation.RuntimeHeartbeat with
+                        {
+                            ReceivedAtUtc =
+                                observation.RuntimeHeartbeat
+                                    .ReceivedAtUtc
+                                    .AddSeconds(1)
+                        }
+                });
+
+        var result = await handler.Handle(
+            new ReportDeviceRuntimeHeartbeatCommand(
+                deviceId,
+                "DEV-HEARTBEAT-RECEIVED-AT",
+                "runtime-a",
+                "LineA",
+                "1.0.0",
+                "1.0.0",
+                "Running",
+                utcNow.UtcDateTime.AddMinutes(-1),
+                utcNow.UtcDateTime.AddSeconds(-1)),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
         Assert.Equal(1, store.SaveChangesCalls);
     }
 
@@ -5504,7 +5626,9 @@ public sealed class ClientReleaseBehaviorTests
     private sealed class InMemoryDeviceReportObservationReader(
         Guid deviceId,
         string clientCode,
-        InMemoryDeviceClientStateStore store)
+        InMemoryDeviceClientStateStore store,
+        Func<DeviceReportWriteObservation, DeviceReportWriteObservation>?
+            observationTransform = null)
         : IDeviceReportWriteObservationReader
     {
         public Task<DeviceReportWriteObservation> ObserveReportAsync(
@@ -5523,25 +5647,27 @@ public sealed class ClientReleaseBehaviorTests
                 current =>
                     current.DeviceId == requestedDeviceId
                     && current.ClientCode == normalizedClientCode);
+            var observation = new DeviceReportWriteObservation(
+                requestedDeviceId == deviceId,
+                requestedDeviceId == deviceId
+                    ? clientCode
+                    : null,
+                version is null
+                    ? null
+                    : new DeviceReportState(
+                        version.ReportedAtUtc,
+                        version.ReceivedAtUtc,
+                        version.GetContentSha256()),
+                heartbeat is null
+                    ? null
+                    : new DeviceReportState(
+                        heartbeat.LastHeartbeatAtUtc,
+                        heartbeat.UpdatedAtUtc,
+                        heartbeat.GetContentSha256()),
+                null);
             return Task.FromResult(
-                new DeviceReportWriteObservation(
-                    requestedDeviceId == deviceId,
-                    requestedDeviceId == deviceId
-                        ? clientCode
-                        : null,
-                    version is null
-                        ? null
-                        : new DeviceReportState(
-                            version.ReportedAtUtc,
-                            version.ReceivedAtUtc,
-                            version.GetContentSha256()),
-                    heartbeat is null
-                        ? null
-                        : new DeviceReportState(
-                            heartbeat.LastHeartbeatAtUtc,
-                            heartbeat.UpdatedAtUtc,
-                            heartbeat.GetContentSha256()),
-                    null));
+                observationTransform?.Invoke(observation)
+                ?? observation);
         }
     }
 

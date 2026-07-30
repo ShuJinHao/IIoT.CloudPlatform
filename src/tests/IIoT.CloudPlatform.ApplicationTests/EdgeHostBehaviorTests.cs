@@ -28,7 +28,9 @@ public sealed class EdgeHostBehaviorTests
             Guid deviceId,
             string clientCode,
             StubEdgeHostPlcRuntimeStateStore runtimeStore,
-            IUnitOfWork? unitOfWork = null)
+            IUnitOfWork? unitOfWork = null,
+            Func<DeviceReportWriteObservation, DeviceReportWriteObservation>?
+                observationTransform = null)
     {
         var clientStateStore = new StubDeviceClientStateStore();
         var observer = new StubDeviceReportWriteObservationReader
@@ -46,12 +48,14 @@ public sealed class EdgeHostBehaviorTests
                             state.PlcSnapshotReportedAtUtc.Value,
                             state.PlcSnapshotReceivedAtUtc.Value,
                             state.PlcSnapshotContentSha256);
-                return new DeviceReportWriteObservation(
+                var observation = new DeviceReportWriteObservation(
                     true,
                     clientCode,
                     null,
                     null,
                     plcSnapshot);
+                return observationTransform?.Invoke(observation)
+                       ?? observation;
             }
         };
         return new ReportEdgeHostPlcRuntimeStatesHandler(
@@ -339,6 +343,57 @@ public sealed class EdgeHostBehaviorTests
                     30,
                     5,
                     0,
+                    0,
+                    DateTimeKind.Utc),
+                [
+                    new EdgeHostPlcRuntimeStateReportItem(
+                        "PLC-01",
+                        "PLC",
+                        true,
+                        "Connected")
+                ]),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Single(store.States);
+        Assert.Equal(1, store.SaveChangesCalls);
+    }
+
+    [Fact]
+    public async Task ReportEdgeHostPlcRuntimeStatesHandler_PostCommitFailure_ShouldRecoverSameReportWithDifferentReceivedAt()
+    {
+        var deviceId = Guid.NewGuid();
+        var store = new StubEdgeHostPlcRuntimeStateStore();
+        var handler = CreatePlcReportHandler(
+            deviceId,
+            "DEV-PLC-RECEIVED-AT",
+            store,
+            new RecordingUnitOfWork
+            {
+                OnCommit = () => throw new TimeoutException(
+                    "simulated commit acknowledgement loss")
+            },
+            observation => observation.PlcSnapshot is null
+                ? observation
+                : observation with
+                {
+                    PlcSnapshot = observation.PlcSnapshot with
+                    {
+                        ReceivedAtUtc =
+                            observation.PlcSnapshot.ReceivedAtUtc.AddSeconds(1)
+                    }
+                });
+
+        var result = await handler.Handle(
+            new ReportEdgeHostPlcRuntimeStatesCommand(
+                deviceId,
+                "DEV-PLC-RECEIVED-AT",
+                new DateTime(
+                    2026,
+                    7,
+                    30,
+                    5,
+                    15,
                     0,
                     DateTimeKind.Utc),
                 [

@@ -114,13 +114,13 @@ public sealed class ReportDeviceClientVersionHandler(
                 return Result.From(validation);
             }
 
-            if (Matches(current.Version, target))
+            if (MatchesSameReport(current.Version, target))
             {
-                return Success(target.ReceivedAtUtc);
+                return Success(current.Version!.ReceivedAtUtc);
             }
 
             baseline ??= current.Version;
-            if (!Matches(current.Version, baseline))
+            if (current.Version != baseline)
             {
                 throw new CloudWriteConflictException();
             }
@@ -224,14 +224,14 @@ public sealed class ReportDeviceClientVersionHandler(
                     clientCode,
                     token));
             if (current is null
-                || Matches(current.Version, baseline))
+                || current.Version == baseline)
             {
                 throw new CloudWriteCommitUnknownException();
             }
 
-            if (Matches(current.Version, target))
+            if (MatchesSameReport(current.Version, target))
             {
-                return Success(target.ReceivedAtUtc);
+                return Success(current.Version!.ReceivedAtUtc);
             }
 
             throw new CloudWriteConflictException();
@@ -290,10 +290,15 @@ public sealed class ReportDeviceClientVersionHandler(
                 acceptedAtUtc));
     }
 
-    private static bool Matches(
+    private static bool MatchesSameReport(
         DeviceReportState? current,
-        DeviceReportState? expected)
-        => current == expected;
+        DeviceReportState expected)
+        => current is not null
+           && current.ReportedAtUtc == expected.ReportedAtUtc
+           && string.Equals(
+               current.ContentSha256,
+               expected.ContentSha256,
+               StringComparison.Ordinal);
 
     private static DeviceClientPluginVersion ClonePlugin(
         DeviceClientPluginVersion plugin)

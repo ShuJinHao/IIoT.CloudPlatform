@@ -117,7 +117,9 @@ public sealed class ReportDeviceRuntimeHeartbeatHandler(
                 return Result.From(validation);
             }
 
-            if (current.RuntimeHeartbeat == target)
+            if (MatchesSameReport(
+                    current.RuntimeHeartbeat,
+                    target))
             {
                 return Success();
             }
@@ -237,7 +239,9 @@ public sealed class ReportDeviceRuntimeHeartbeatHandler(
                 throw new CloudWriteCommitUnknownException();
             }
 
-            if (current.RuntimeHeartbeat == target)
+            if (MatchesSameReport(
+                    current.RuntimeHeartbeat,
+                    target))
             {
                 return Success();
             }
@@ -310,4 +314,14 @@ public sealed class ReportDeviceRuntimeHeartbeatHandler(
         => new(
             utc.Ticks - utc.Ticks % 10,
             DateTimeKind.Utc);
+
+    private static bool MatchesSameReport(
+        DeviceReportState? current,
+        DeviceReportState expected)
+        => current is not null
+           && current.ReportedAtUtc == expected.ReportedAtUtc
+           && string.Equals(
+               current.ContentSha256,
+               expected.ContentSha256,
+               StringComparison.Ordinal);
 }
