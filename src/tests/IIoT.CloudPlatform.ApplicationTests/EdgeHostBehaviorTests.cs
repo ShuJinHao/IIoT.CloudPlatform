@@ -322,7 +322,7 @@ public sealed class EdgeHostBehaviorTests
     }
 
     [Fact]
-    public async Task ReportEdgeHostPlcRuntimeStatesHandler_ShouldAdvanceMigratedSnapshotMarker()
+    public async Task ReportEdgeHostPlcRuntimeStatesHandler_ShouldKeepMigratedSnapshotFailClosed()
     {
         const string legacyMarker =
             "0000000000000000000000000000000000000000000000000000000000000000";
@@ -348,7 +348,7 @@ public sealed class EdgeHostBehaviorTests
             deviceId,
             clientCode);
         clientState.ApplyPlcSnapshot(
-            acceptedAt,
+            DateTime.SpecifyKind(DateTime.MaxValue, DateTimeKind.Utc),
             acceptedAt.AddSeconds(1),
             legacyMarker);
         clientStateStore.States.Add(clientState);
@@ -388,20 +388,41 @@ public sealed class EdgeHostBehaviorTests
                 [
                     new EdgeHostPlcRuntimeStateReportItem(
                         "PLC-01",
-                        "Current PLC",
-                        false,
-                        EdgeHostPlcRuntimeStatus.Disconnected)
+                        "Legacy PLC",
+                        true,
+                        EdgeHostPlcRuntimeStatus.Connected,
+                        ObservedAtUtc: acceptedAt)
                 ]),
             CancellationToken.None);
+        var conflict = await Assert.ThrowsAsync<
+            CloudWriteConflictException>(() =>
+            handler.Handle(
+                new ReportEdgeHostPlcRuntimeStatesCommand(
+                    deviceId,
+                    clientCode,
+                    acceptedAt.AddSeconds(3),
+                    [
+                        new EdgeHostPlcRuntimeStateReportItem(
+                            "PLC-01",
+                            "Changed PLC",
+                            false,
+                            EdgeHostPlcRuntimeStatus.Disconnected,
+                            ObservedAtUtc: acceptedAt.AddSeconds(3))
+                    ]),
+                CancellationToken.None));
 
         Assert.True(result.IsSuccess);
         Assert.Equal(
-            acceptedAt.AddSeconds(2),
+            DateTime.MaxValue,
             clientState.PlcSnapshotReportedAtUtc);
-        Assert.NotEqual(
+        Assert.Equal(
             legacyMarker,
             clientState.PlcSnapshotContentSha256);
-        Assert.False(Assert.Single(store.States).IsConnected);
+        Assert.Equal(
+            CloudWriteConflictException.Code,
+            conflict.ProblemCode);
+        Assert.True(Assert.Single(store.States).IsConnected);
+        Assert.Equal(0, store.SaveChangesCalls);
     }
 
     [Fact]

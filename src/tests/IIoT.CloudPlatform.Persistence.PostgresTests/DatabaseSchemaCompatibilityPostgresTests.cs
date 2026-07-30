@@ -555,7 +555,7 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
             migrationStartedAt,
             migrationCompletedAt);
         Assert.Equal(
-            state.PlcSnapshotReceivedAtUtc.Value.AddMinutes(5),
+            DateTime.MaxValue,
             state.PlcSnapshotReportedAtUtc);
         Assert.Equal(
             new string('0', 64),

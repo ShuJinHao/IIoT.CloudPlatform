@@ -35,7 +35,7 @@ namespace IIoT.EntityFrameworkCore.Migrations
                 with migration_fence as (
                     select
                         statement_timestamp() as received_at_utc,
-                        statement_timestamp() + interval '5 minutes'
+                        'infinity'::timestamp with time zone
                             as reported_at_utc
                 ),
                 registered_device_snapshots as (
@@ -86,7 +86,7 @@ namespace IIoT.EntityFrameworkCore.Migrations
                 with migration_fence as (
                     select
                         statement_timestamp() as received_at_utc,
-                        statement_timestamp() + interval '5 minutes'
+                        'infinity'::timestamp with time zone
                             as reported_at_utc
                 )
                 update edge_device_client_states state

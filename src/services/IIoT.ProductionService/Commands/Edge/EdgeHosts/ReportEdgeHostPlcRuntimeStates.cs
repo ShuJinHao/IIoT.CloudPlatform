@@ -273,6 +273,20 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
             }
 
             if (current.PlcSnapshot is not null
+                && IsLegacySnapshotFence(current.PlcSnapshot))
+            {
+                if (string.Equals(
+                        current.PlcSnapshot.ContentSha256,
+                        targetHash,
+                        StringComparison.Ordinal))
+                {
+                    return Result.Success();
+                }
+
+                throw new CloudWriteConflictException();
+            }
+
+            if (current.PlcSnapshot is not null
                 && reportedAtUtc < current.PlcSnapshot.ReportedAtUtc)
             {
                 return Result.Invalid(
@@ -406,11 +420,15 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
         DeviceReportState? current,
         DeviceReportState expected)
         => current is not null
-           && current.ReportedAtUtc == expected.ReportedAtUtc
+           && (current.ReportedAtUtc == expected.ReportedAtUtc
+               || IsLegacySnapshotFence(current))
            && string.Equals(
                current.ContentSha256,
                expected.ContentSha256,
                StringComparison.Ordinal);
+
+    private static bool IsLegacySnapshotFence(DeviceReportState state)
+        => state.ReportedAtUtc == DateTime.MaxValue;
 
     private static DateTime NormalizeUtc(DateTime value)
     {
