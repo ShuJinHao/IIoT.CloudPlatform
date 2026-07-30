@@ -37,3 +37,17 @@ public sealed class EmployeeActivationCommitUnknownException()
     public const string PublicMessage = "员工启用提交结果暂时无法确认，请勿重复操作并联系管理员核验。";
     public const string Code = "employee_activation_commit_unknown";
 }
+
+public sealed class EmployeeWriteConflictException()
+    : EmployeeMutationException(PublicMessage, Code)
+{
+    public const string PublicMessage = "员工写入状态已发生变化，请刷新后重试。";
+    public const string Code = "employee_write_conflict";
+}
+
+public sealed class EmployeeWriteCommitUnknownException()
+    : EmployeeMutationException(PublicMessage, Code)
+{
+    public const string PublicMessage = "员工写入提交结果暂时无法确认，请勿重复操作并联系管理员核验。";
+    public const string Code = "employee_write_commit_unknown";
+}

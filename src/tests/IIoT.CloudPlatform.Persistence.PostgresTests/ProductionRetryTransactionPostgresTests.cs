@@ -63,7 +63,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
     }
 
     [Fact]
-    public async Task CommitConfirmationLoss_ShouldNotDuplicateOnboardActivateTerminateOrDeviceDelete()
+    public async Task CommitConfirmationLoss_ShouldNotDuplicateAllEmployeeWritesOrDeviceDelete()
     {
         using var budget = await PostgresTestBudget.CreateAsync(
             fixture,
@@ -74,16 +74,22 @@ public sealed class ProductionRetryTransactionPostgresTests(
             interceptor);
 
         await VerifyOnboardCommitRecoveryAsync(provider, interceptor, budget.Token);
+        await VerifyProfileCommitRecoveryAsync(provider, interceptor, budget.Token);
+        await VerifyDeactivateCommitRecoveryAsync(provider, interceptor, budget.Token);
         await VerifyActivateCommitRecoveryAsync(provider, interceptor, budget.Token);
         await VerifyTerminateCommitRecoveryAsync(provider, interceptor, budget.Token);
         await VerifyRoleCommitRecoveryAsync(provider, interceptor, budget.Token);
+        await VerifyEmployeeAccessCommitRecoveryAsync(
+            provider,
+            interceptor,
+            budget.Token);
         await VerifyDeviceDeleteCommitRecoveryAsync(provider, interceptor, budget.Token);
         await VerifyEdgeRotationAsync(
             provider,
             () => interceptor.Arm(),
             budget.Token);
 
-        Assert.Equal(6, interceptor.ExceptionsThrown);
+        Assert.Equal(9, interceptor.ExceptionsThrown);
     }
 
     [Fact]
@@ -239,10 +245,16 @@ public sealed class ProductionRetryTransactionPostgresTests(
         var observation = await observationTask;
         Assert.True(observation.EmployeeExists);
         Assert.True(observation.EmployeeIsActive);
+        Assert.Equal(seed.EmployeeNo, observation.EmployeeNo);
+        Assert.Equal(seed.RealName, observation.EmployeeRealName);
+        Assert.True(observation.EmployeeRowVersion.HasValue);
+        Assert.Empty(observation.EmployeeDeviceIds ?? []);
         Assert.True(observation.AccountExists);
         Assert.True(observation.AccountIsEnabled);
+        Assert.Equal(seed.EmployeeNo, observation.AccountEmployeeNo);
         Assert.Equal(baselineStamp, observation.AccountSecurityStamp);
         Assert.Equal([baselineRole], observation.Roles);
+        Assert.False(observation.HasActiveHumanSessions);
         Assert.Equal(3, pause.ObservationTransactions.Count);
         var snapshotTransaction = Assert.IsAssignableFrom<DbTransaction>(
             pause.ObservationTransactions[0]);
@@ -282,6 +294,395 @@ public sealed class ProductionRetryTransactionPostgresTests(
             mutationKind,
             budget.Token);
 
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+    }
+
+    [Fact]
+    public async Task ProfileCommitConfirmationLoss_WithConcurrentRename_ShouldConflictWithoutOverwrite()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var seed = await SeedEmployeeAsync(
+            services,
+            "DRIFT-PROFILE",
+            accountEnabled: true,
+            employeeActive: true,
+            withSession: false,
+            budget.Token);
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var identityStore = CreateIdentityStore(services);
+        var handler = new UpdateEmployeeProfileHandler(
+            new EfRepository<Employee>(dbContext),
+            CreateUnitOfWork(dbContext),
+            new AdminTargetGuard(identityStore),
+            CreateEmployeeMutationObserver(services));
+        const string concurrentName = "Concurrent Profile";
+
+        interceptor.Arm(async callbackCancellationToken =>
+        {
+            await using var connection = new NpgsqlConnection(
+                budget.ConnectionString);
+            await connection.OpenAsync(callbackCancellationToken);
+            await using var command = new NpgsqlCommand(
+                """
+                update employees
+                set real_name = @real_name
+                where id = @employee_id
+                """,
+                connection);
+            command.Parameters.AddWithValue("real_name", concurrentName);
+            command.Parameters.AddWithValue("employee_id", seed.EmployeeId);
+            Assert.Equal(
+                1,
+                await command.ExecuteNonQueryAsync(callbackCancellationToken));
+        });
+
+        await Assert.ThrowsAsync<EmployeeWriteConflictException>(() =>
+            handler.Handle(
+                new UpdateEmployeeProfileCommand(
+                    seed.EmployeeId,
+                    "Original Profile Target"),
+                budget.Token));
+
+        dbContext.ChangeTracker.Clear();
+        Assert.Equal(
+            concurrentName,
+            await dbContext.Employees
+                .AsNoTracking()
+                .Where(employee => employee.Id == seed.EmployeeId)
+                .Select(employee => employee.RealName)
+                .SingleAsync(budget.Token));
+        Assert.Equal(
+            1,
+            await CountOutboxAsync(
+                dbContext,
+                "EmployeeRenamedDomainEvent",
+                seed.EmployeeId,
+                budget.Token));
+        Assert.False(dbContext.HasPendingDomainEvents);
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+    }
+
+    [Fact]
+    public async Task AccessCommitConfirmationLoss_WithConcurrentAccessChange_ShouldConflictWithoutOverwrite()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var seed = await SeedEmployeeAsync(
+            services,
+            "DRIFT-ACCESS",
+            accountEnabled: true,
+            employeeActive: true,
+            withSession: false,
+            budget.Token);
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var (requestedProcess, requestedDevice) =
+            CreateProcessAndDevice("DRIFT-ACCESS-REQUEST");
+        var (concurrentProcess, concurrentDevice) =
+            CreateProcessAndDevice("DRIFT-ACCESS-NEW");
+        requestedProcess.ClearDomainEvents();
+        requestedDevice.ClearDomainEvents();
+        concurrentProcess.ClearDomainEvents();
+        concurrentDevice.ClearDomainEvents();
+        dbContext.MfgProcesses.AddRange(
+            requestedProcess,
+            concurrentProcess);
+        dbContext.Devices.AddRange(
+            requestedDevice,
+            concurrentDevice);
+        await dbContext.SaveChangesAsync(budget.Token);
+        dbContext.ChangeTracker.Clear();
+        var identityStore = CreateIdentityStore(services);
+        var handler = new UpdateEmployeeAccessHandler(
+            new EfRepository<Employee>(dbContext),
+            new AdminTargetGuard(identityStore),
+            new DeviceReadQueryService(dbContext),
+            CreateUnitOfWork(dbContext),
+            CreateEmployeeMutationObserver(services),
+            new EmployeeMutationVersionStore(dbContext));
+
+        interceptor.Arm(async callbackCancellationToken =>
+        {
+            await using var connection = new NpgsqlConnection(
+                budget.ConnectionString);
+            await connection.OpenAsync(callbackCancellationToken);
+            await using var transaction =
+                await connection.BeginTransactionAsync(
+                    callbackCancellationToken);
+            await using (var deleteCommand = new NpgsqlCommand(
+                             """
+                             delete from employee_device_accesses
+                             where employee_id = @employee_id
+                             """,
+                             connection,
+                             transaction))
+            {
+                deleteCommand.Parameters.AddWithValue(
+                    "employee_id",
+                    seed.EmployeeId);
+                Assert.Equal(
+                    1,
+                    await deleteCommand.ExecuteNonQueryAsync(
+                        callbackCancellationToken));
+            }
+
+            await using (var insertCommand = new NpgsqlCommand(
+                             """
+                             insert into employee_device_accesses
+                                 (employee_id, device_id)
+                             values (@employee_id, @device_id)
+                             """,
+                             connection,
+                             transaction))
+            {
+                insertCommand.Parameters.AddWithValue(
+                    "employee_id",
+                    seed.EmployeeId);
+                insertCommand.Parameters.AddWithValue(
+                    "device_id",
+                    concurrentDevice.Id);
+                Assert.Equal(
+                    1,
+                    await insertCommand.ExecuteNonQueryAsync(
+                        callbackCancellationToken));
+            }
+
+            await using (var versionCommand = new NpgsqlCommand(
+                             """
+                             update employees
+                             set is_active = is_active
+                             where id = @employee_id
+                             """,
+                             connection,
+                             transaction))
+            {
+                versionCommand.Parameters.AddWithValue(
+                    "employee_id",
+                    seed.EmployeeId);
+                Assert.Equal(
+                    1,
+                    await versionCommand.ExecuteNonQueryAsync(
+                        callbackCancellationToken));
+            }
+
+            await transaction.CommitAsync(callbackCancellationToken);
+        });
+
+        await Assert.ThrowsAsync<EmployeeWriteConflictException>(() =>
+            handler.Handle(
+                new UpdateEmployeeAccessCommand(
+                    seed.EmployeeId,
+                    [requestedDevice.Id]),
+                budget.Token));
+
+        dbContext.ChangeTracker.Clear();
+        Assert.Equal(
+            [concurrentDevice.Id],
+            await dbContext.Set<EmployeeDeviceAccess>()
+                .AsNoTracking()
+                .Where(access => access.EmployeeId == seed.EmployeeId)
+                .OrderBy(access => access.DeviceId)
+                .Select(access => access.DeviceId)
+                .ToArrayAsync(budget.Token));
+        Assert.False(dbContext.HasPendingDomainEvents);
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+    }
+
+    [Fact]
+    public async Task DeactivateCommitConfirmationLoss_WithConcurrentReactivation_ShouldConflictWithoutOverwrite()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(60));
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var seed = await SeedEmployeeAsync(
+            services,
+            "DRIFT-DEACTIVATE",
+            accountEnabled: true,
+            employeeActive: true,
+            withSession: true,
+            budget.Token);
+        var concurrentRole = $"Concurrent{Guid.NewGuid():N}"[..30];
+        await CreateRoleAsync(services, concurrentRole);
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var concurrentRoleId = await dbContext.Roles
+            .AsNoTracking()
+            .Where(role => role.Name == concurrentRole)
+            .Select(role => role.Id)
+            .SingleAsync(budget.Token);
+        var identityStore = CreateIdentityStore(services);
+        var handler = new DeactivateEmployeeHandler(
+            new EfRepository<Employee>(dbContext),
+            identityStore,
+            CreateUnitOfWork(dbContext),
+            new HumanSessionRevocationService(dbContext),
+            new AdminTargetGuard(identityStore),
+            CreateEmployeeMutationObserver(services));
+        var concurrentStamp = $"concurrent-{Guid.NewGuid():N}";
+
+        interceptor.Arm(async callbackCancellationToken =>
+        {
+            await using var connection = new NpgsqlConnection(
+                budget.ConnectionString);
+            await connection.OpenAsync(callbackCancellationToken);
+            await using var transaction =
+                await connection.BeginTransactionAsync(
+                    callbackCancellationToken);
+            await using (var employeeCommand = new NpgsqlCommand(
+                             """
+                             update employees
+                             set is_active = true
+                             where id = @employee_id
+                             """,
+                             connection,
+                             transaction))
+            {
+                employeeCommand.Parameters.AddWithValue(
+                    "employee_id",
+                    seed.EmployeeId);
+                Assert.Equal(
+                    1,
+                    await employeeCommand.ExecuteNonQueryAsync(
+                        callbackCancellationToken));
+            }
+
+            await using (var accountCommand = new NpgsqlCommand(
+                             """
+                             update "AspNetUsers"
+                             set "IsEnabled" = true,
+                                 "SecurityStamp" = @security_stamp,
+                                 "ConcurrencyStamp" = @concurrency_stamp
+                             where "Id" = @employee_id
+                             """,
+                             connection,
+                             transaction))
+            {
+                accountCommand.Parameters.AddWithValue(
+                    "security_stamp",
+                    concurrentStamp);
+                accountCommand.Parameters.AddWithValue(
+                    "concurrency_stamp",
+                    Guid.NewGuid().ToString("N"));
+                accountCommand.Parameters.AddWithValue(
+                    "employee_id",
+                    seed.EmployeeId);
+                Assert.Equal(
+                    1,
+                    await accountCommand.ExecuteNonQueryAsync(
+                        callbackCancellationToken));
+            }
+
+            await using (var roleCommand = new NpgsqlCommand(
+                             """
+                             insert into "AspNetUserRoles" ("UserId", "RoleId")
+                             values (@employee_id, @role_id)
+                             """,
+                             connection,
+                             transaction))
+            {
+                roleCommand.Parameters.AddWithValue(
+                    "employee_id",
+                    seed.EmployeeId);
+                roleCommand.Parameters.AddWithValue(
+                    "role_id",
+                    concurrentRoleId);
+                Assert.Equal(
+                    1,
+                    await roleCommand.ExecuteNonQueryAsync(
+                        callbackCancellationToken));
+            }
+
+            await using (var sessionCommand = new NpgsqlCommand(
+                             """
+                             insert into refresh_token_sessions
+                             (
+                                 "Id", "ActorType", "SubjectId", "TokenHash",
+                                 "CreatedAtUtc", "ExpiresAtUtc"
+                             )
+                             values
+                             (
+                                 @id, @actor_type, @subject_id, @token_hash,
+                                 now(), now() + interval '1 hour'
+                             )
+                             """,
+                             connection,
+                             transaction))
+            {
+                sessionCommand.Parameters.AddWithValue(
+                    "id",
+                    Guid.NewGuid());
+                sessionCommand.Parameters.AddWithValue(
+                    "actor_type",
+                    IIoTClaimTypes.HumanActor);
+                sessionCommand.Parameters.AddWithValue(
+                    "subject_id",
+                    seed.EmployeeId);
+                sessionCommand.Parameters.AddWithValue(
+                    "token_hash",
+                    $"tx-concurrent-human-{Guid.NewGuid():N}");
+                Assert.Equal(
+                    1,
+                    await sessionCommand.ExecuteNonQueryAsync(
+                        callbackCancellationToken));
+            }
+
+            await transaction.CommitAsync(callbackCancellationToken);
+        });
+
+        await Assert.ThrowsAsync<EmployeeWriteConflictException>(() =>
+            handler.Handle(
+                new DeactivateEmployeeCommand(seed.EmployeeId),
+                budget.Token));
+
+        dbContext.ChangeTracker.Clear();
+        Assert.True(await dbContext.Employees
+            .AsNoTracking()
+            .Where(employee => employee.Id == seed.EmployeeId)
+            .Select(employee => employee.IsActive)
+            .SingleAsync(budget.Token));
+        var account = await dbContext.Users
+            .AsNoTracking()
+            .SingleAsync(
+                user => user.Id == seed.EmployeeId,
+                budget.Token);
+        Assert.True(account.IsEnabled);
+        Assert.Equal(concurrentStamp, account.SecurityStamp);
+        Assert.Contains(
+            concurrentRole,
+            await identityStore.GetRolesAsync(
+                seed.EmployeeId,
+                budget.Token));
+        Assert.True(await HasActiveHumanSessionAsync(
+            dbContext,
+            seed.EmployeeId,
+            budget.Token));
+        Assert.Equal(
+            1,
+            await CountOutboxAsync(
+                dbContext,
+                "EmployeeDeactivatedDomainEvent",
+                seed.EmployeeId,
+                budget.Token));
+        Assert.False(dbContext.HasPendingDomainEvents);
         Assert.Equal(1, interceptor.ExceptionsThrown);
     }
 
@@ -366,7 +767,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
     }
 
     [Fact]
-    public async Task CallerCancellationDuringCommit_ShouldRollbackWithoutRetry()
+    public async Task CallerCancellationAtCommitWithBaselineOnly_ShouldBeCommitUnknownWithoutRetry()
     {
         using var budget = await PostgresTestBudget.CreateAsync(fixture);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
@@ -389,14 +790,16 @@ public sealed class ProductionRetryTransactionPostgresTests(
         var handler = new UpdateEmployeeProfileHandler(
             new EfRepository<Employee>(dbContext),
             CreateUnitOfWork(dbContext),
-            new AdminTargetGuard(identityStore));
+            new AdminTargetGuard(identityStore),
+            CreateEmployeeMutationObserver(services));
 
         interceptor.Arm();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+        await Assert.ThrowsAsync<EmployeeWriteCommitUnknownException>(() =>
             handler.Handle(
                 new UpdateEmployeeProfileCommand(seed.EmployeeId, "Canceled Name"),
                 cancellation.Token));
 
+        Assert.True(cancellation.IsCancellationRequested);
         Assert.Equal(1, interceptor.ExceptionsThrown);
         dbContext.ChangeTracker.Clear();
         var employee = await dbContext.Employees
@@ -770,7 +1173,8 @@ public sealed class ProductionRetryTransactionPostgresTests(
         var handler = new UpdateEmployeeProfileHandler(
             new EfRepository<Employee>(dbContext),
             CreateUnitOfWork(dbContext),
-            new AdminTargetGuard(identityStore));
+            new AdminTargetGuard(identityStore),
+            CreateEmployeeMutationObserver(services));
 
         interceptor.Arm();
         var result = await handler.Handle(
@@ -815,7 +1219,8 @@ public sealed class ProductionRetryTransactionPostgresTests(
             identityStore,
             CreateUnitOfWork(dbContext),
             new HumanSessionRevocationService(dbContext),
-            new AdminTargetGuard(identityStore));
+            new AdminTargetGuard(identityStore),
+            CreateEmployeeMutationObserver(services));
 
         interceptor.Arm();
         var result = await handler.Handle(
@@ -923,7 +1328,8 @@ public sealed class ProductionRetryTransactionPostgresTests(
             identityStore,
             CreateUnitOfWork(dbContext),
             new HumanSessionRevocationService(dbContext),
-            new AdminTargetGuard(identityStore));
+            new AdminTargetGuard(identityStore),
+            CreateEmployeeMutationObserver(services));
 
         interceptor.Arm();
         var result = await handler.Handle(
@@ -1092,6 +1498,11 @@ public sealed class ProductionRetryTransactionPostgresTests(
             "TransactionFailed",
             audit.Summary,
             StringComparison.Ordinal);
+        Assert.False(await HasActiveHumanSessionAsync(
+            dbContext,
+            seed.EmployeeId,
+            cancellationToken));
+        Assert.False(dbContext.HasPendingDomainEvents);
     }
 
     private static async Task VerifyEmployeeAccessRetryAsync(
@@ -1121,7 +1532,9 @@ public sealed class ProductionRetryTransactionPostgresTests(
             new EfRepository<Employee>(dbContext),
             new AdminTargetGuard(identityStore),
             new DeviceReadQueryService(dbContext),
-            CreateUnitOfWork(dbContext));
+            CreateUnitOfWork(dbContext),
+            CreateEmployeeMutationObserver(services),
+            new EmployeeMutationVersionStore(dbContext));
 
         interceptor.Arm();
         var result = await handler.Handle(
@@ -1291,6 +1704,168 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 "EmployeeOnboardedDomainEvent",
                 result.Value,
                 cancellationToken));
+        Assert.False(dbContext.HasPendingDomainEvents);
+    }
+
+    private static async Task VerifyProfileCommitRecoveryAsync(
+        ServiceProvider provider,
+        ThrowOnceAfterCommitInterceptor interceptor,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var seed = await SeedEmployeeAsync(
+            services,
+            "ACKPROFILE",
+            accountEnabled: true,
+            employeeActive: true,
+            withSession: false,
+            cancellationToken);
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var identityStore = CreateIdentityStore(services);
+        var handler = new UpdateEmployeeProfileHandler(
+            new EfRepository<Employee>(dbContext),
+            CreateUnitOfWork(dbContext),
+            new AdminTargetGuard(identityStore),
+            CreateEmployeeMutationObserver(services));
+
+        interceptor.Arm();
+        var result = await handler.Handle(
+            new UpdateEmployeeProfileCommand(
+                seed.EmployeeId,
+                "Commit Recovery Profile"),
+            cancellationToken);
+
+        Assert.True(result.IsSuccess);
+        dbContext.ChangeTracker.Clear();
+        Assert.Equal(
+            "Commit Recovery Profile",
+            await dbContext.Employees
+                .AsNoTracking()
+                .Where(employee => employee.Id == seed.EmployeeId)
+                .Select(employee => employee.RealName)
+                .SingleAsync(cancellationToken));
+        Assert.Equal(
+            1,
+            await CountOutboxAsync(
+                dbContext,
+                "EmployeeRenamedDomainEvent",
+                seed.EmployeeId,
+                cancellationToken));
+        Assert.False(dbContext.HasPendingDomainEvents);
+    }
+
+    private static async Task VerifyDeactivateCommitRecoveryAsync(
+        ServiceProvider provider,
+        ThrowOnceAfterCommitInterceptor interceptor,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var seed = await SeedEmployeeAsync(
+            services,
+            "ACKDEACTIVATE",
+            accountEnabled: true,
+            employeeActive: true,
+            withSession: true,
+            cancellationToken);
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var originalStamp = await dbContext.Users
+            .AsNoTracking()
+            .Where(user => user.Id == seed.EmployeeId)
+            .Select(user => user.SecurityStamp)
+            .SingleAsync(cancellationToken);
+        var identityStore = CreateIdentityStore(services);
+        var handler = new DeactivateEmployeeHandler(
+            new EfRepository<Employee>(dbContext),
+            identityStore,
+            CreateUnitOfWork(dbContext),
+            new HumanSessionRevocationService(dbContext),
+            new AdminTargetGuard(identityStore),
+            CreateEmployeeMutationObserver(services));
+
+        interceptor.Arm();
+        var result = await handler.Handle(
+            new DeactivateEmployeeCommand(seed.EmployeeId),
+            cancellationToken);
+
+        Assert.True(result.IsSuccess);
+        dbContext.ChangeTracker.Clear();
+        Assert.False(await dbContext.Employees
+            .AsNoTracking()
+            .Where(employee => employee.Id == seed.EmployeeId)
+            .Select(employee => employee.IsActive)
+            .SingleAsync(cancellationToken));
+        var account = await dbContext.Users
+            .AsNoTracking()
+            .SingleAsync(
+                user => user.Id == seed.EmployeeId,
+                cancellationToken);
+        Assert.False(account.IsEnabled);
+        Assert.NotEqual(originalStamp, account.SecurityStamp);
+        Assert.False(await HasActiveHumanSessionAsync(
+            dbContext,
+            seed.EmployeeId,
+            cancellationToken));
+        Assert.Equal(
+            1,
+            await CountOutboxAsync(
+                dbContext,
+                "EmployeeDeactivatedDomainEvent",
+                seed.EmployeeId,
+                cancellationToken));
+        Assert.False(dbContext.HasPendingDomainEvents);
+    }
+
+    private static async Task VerifyEmployeeAccessCommitRecoveryAsync(
+        ServiceProvider provider,
+        ThrowOnceAfterCommitInterceptor interceptor,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var seed = await SeedEmployeeAsync(
+            services,
+            "ACKACCESS",
+            accountEnabled: true,
+            employeeActive: true,
+            withSession: false,
+            cancellationToken);
+        var dbContext = services.GetRequiredService<IIoTDbContext>();
+        var (process, device) = CreateProcessAndDevice("ACKACCESS");
+        process.ClearDomainEvents();
+        device.ClearDomainEvents();
+        dbContext.MfgProcesses.Add(process);
+        dbContext.Devices.Add(device);
+        await dbContext.SaveChangesAsync(cancellationToken);
+        dbContext.ChangeTracker.Clear();
+        var identityStore = CreateIdentityStore(services);
+        var handler = new UpdateEmployeeAccessHandler(
+            new EfRepository<Employee>(dbContext),
+            new AdminTargetGuard(identityStore),
+            new DeviceReadQueryService(dbContext),
+            CreateUnitOfWork(dbContext),
+            CreateEmployeeMutationObserver(services),
+            new EmployeeMutationVersionStore(dbContext));
+
+        interceptor.Arm();
+        var result = await handler.Handle(
+            new UpdateEmployeeAccessCommand(
+                seed.EmployeeId,
+                [device.Id, device.Id]),
+            cancellationToken);
+
+        Assert.True(result.IsSuccess);
+        dbContext.ChangeTracker.Clear();
+        Assert.Equal(
+            [device.Id],
+            await dbContext.Set<EmployeeDeviceAccess>()
+                .AsNoTracking()
+                .Where(access => access.EmployeeId == seed.EmployeeId)
+                .OrderBy(access => access.DeviceId)
+                .Select(access => access.DeviceId)
+                .ToArrayAsync(cancellationToken));
+        Assert.False(dbContext.HasPendingDomainEvents);
     }
 
     private static async Task VerifyTerminateCommitRecoveryAsync(
@@ -1314,7 +1889,8 @@ public sealed class ProductionRetryTransactionPostgresTests(
             identityStore,
             CreateUnitOfWork(dbContext),
             new HumanSessionRevocationService(dbContext),
-            new AdminTargetGuard(identityStore));
+            new AdminTargetGuard(identityStore),
+            CreateEmployeeMutationObserver(services));
 
         interceptor.Arm();
         var result = await handler.Handle(
@@ -1344,6 +1920,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 "EmployeeTerminatedDomainEvent",
                 seed.EmployeeId,
                 cancellationToken));
+        Assert.False(dbContext.HasPendingDomainEvents);
     }
 
     private static async Task VerifyActivateCommitRecoveryAsync(
@@ -1392,6 +1969,14 @@ public sealed class ProductionRetryTransactionPostgresTests(
             dbContext,
             seed.EmployeeId,
             cancellationToken));
+        Assert.Equal(
+            0,
+            await CountOutboxAsync(
+                dbContext,
+                "EmployeeActivatedDomainEvent",
+                seed.EmployeeId,
+                cancellationToken));
+        Assert.False(dbContext.HasPendingDomainEvents);
     }
 
     private static async Task VerifyActivateCommitDriftAsync(
@@ -1640,7 +2225,8 @@ public sealed class ProductionRetryTransactionPostgresTests(
             new EfRepository<Employee>(dbContext),
             CreateUnitOfWork(dbContext),
             HumanAdmin(),
-            new RecordingPermissionProvider());
+            new RecordingPermissionProvider(),
+            CreateEmployeeMutationObserver(services));
     }
 
     private static IdentityAccountStore CreateIdentityStore(
@@ -1657,6 +2243,24 @@ public sealed class ProductionRetryTransactionPostgresTests(
 
     private static EfUnitOfWork CreateUnitOfWork(IIoTDbContext dbContext)
         => new(dbContext, NullLogger<EfUnitOfWork>.Instance);
+
+    private static EmployeeMutationObservationReader CreateEmployeeMutationObserver(
+        IServiceProvider services)
+    {
+        var connectionString = services
+            .GetRequiredService<IIoTDbContext>()
+            .Database
+            .GetConnectionString();
+        var options = new DbContextOptionsBuilder<IIoTDbContext>()
+            .UseNpgsql(
+                connectionString,
+                npgsql => npgsql.EnableRetryOnFailure(
+                    3,
+                    TimeSpan.FromMilliseconds(50),
+                    null))
+            .Options;
+        return new EmployeeMutationObservationReader(options);
+    }
 
     private static async Task CreateRoleAsync(
         IServiceProvider services,

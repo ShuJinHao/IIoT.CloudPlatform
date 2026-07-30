@@ -29,35 +29,75 @@ public class TerminateEmployeeHandler(
     IIdentityAccountStore identityAccountStore,
     IUnitOfWork unitOfWork,
     IHumanSessionRevocationService sessionRevocationService,
-    IAdminTargetGuard adminTargetGuard)
+    IAdminTargetGuard adminTargetGuard,
+    IEmployeeMutationObservationReader mutationObservationReader)
     : ICommandHandler<TerminateEmployeeCommand, Result>
 {
     public async Task<Result> Handle(
         TerminateEmployeeCommand request,
         CancellationToken cancellationToken)
     {
-        var deletionAttempted = false;
-        return await unitOfWork.ExecuteResilientAsync(
-            ExecuteTransactionAsync,
-            cancellationToken);
+        var targetResult =
+            await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
+                request.EmployeeId,
+                cancellationToken);
+        if (!targetResult.IsSuccess)
+        {
+            return Result.Failure(targetResult.Errors?.ToArray()
+                ?? [AdminTargetProtectionErrors.TargetNotFound]);
+        }
+
+        EmployeeMutationObservation? baseline = null;
+        var commitAttempted = false;
+        try
+        {
+            return await unitOfWork.ExecuteResilientAsync(
+                ExecuteTransactionAsync,
+                cancellationToken);
+        }
+        catch (EmployeeMutationException)
+        {
+            throw;
+        }
+        catch (Exception)
+            when (commitAttempted)
+        {
+            return await ResolveCommitAsync();
+        }
 
         async Task<Result> ExecuteTransactionAsync(
             CancellationToken transactionCancellationToken)
         {
             await unitOfWork.BeginTransactionAsync(transactionCancellationToken);
 
-            if (!deletionAttempted)
+            var current = baseline is null
+                ? await mutationObservationReader.ObserveAsync(
+                    request.EmployeeId,
+                    transactionCancellationToken)
+                : await EmployeeWriteCommitRecovery.TryObserveAsync(
+                    mutationObservationReader,
+                    request.EmployeeId);
+            if (current is null)
             {
-                var initialTargetResult =
-                    await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
-                        request.EmployeeId,
-                        transactionCancellationToken);
-                if (!initialTargetResult.IsSuccess)
-                {
-                    await unitOfWork.RollbackAsync(transactionCancellationToken);
-                    return Result.Failure(initialTargetResult.Errors?.ToArray()
-                        ?? [AdminTargetProtectionErrors.TargetNotFound]);
-                }
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                throw new EmployeeWriteCommitUnknownException();
+            }
+
+            if (baseline is null)
+            {
+                baseline = current;
+            }
+            else if (EmployeeWriteCommitRecovery.IsTerminationTarget(current))
+            {
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return Result.Success();
+            }
+            else if (!EmployeeWriteCommitRecovery.MatchesExact(
+                         current,
+                         baseline))
+            {
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                throw new EmployeeWriteConflictException();
             }
 
             var account = await identityAccountStore.GetByIdAsync(
@@ -71,29 +111,9 @@ public class TerminateEmployeeHandler(
             if (employee is null || account is null)
             {
                 await unitOfWork.RollbackAsync(transactionCancellationToken);
-                if (deletionAttempted && employee is null && account is null)
-                {
-                    return Result.Success();
-                }
-
                 return Result.Failure(AdminTargetProtectionErrors.TargetNotFound);
             }
 
-            if (deletionAttempted)
-            {
-                var replayTargetResult =
-                    await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
-                        request.EmployeeId,
-                        transactionCancellationToken);
-                if (!replayTargetResult.IsSuccess)
-                {
-                    await unitOfWork.RollbackAsync(transactionCancellationToken);
-                    return Result.Failure(replayTargetResult.Errors?.ToArray()
-                        ?? [AdminTargetProtectionErrors.TargetNotFound]);
-                }
-            }
-
-            deletionAttempted = true;
             employee.Terminate();
             employeeRepository.Delete(employee);
             await employeeRepository.SaveChangesAsync(transactionCancellationToken);
@@ -111,9 +131,33 @@ public class TerminateEmployeeHandler(
                 request.EmployeeId,
                 "employee-terminated",
                 transactionCancellationToken);
+            commitAttempted = true;
             await unitOfWork.CommitAsync(transactionCancellationToken);
 
             return Result.Success();
+        }
+
+        async Task<Result> ResolveCommitAsync()
+        {
+            var observation =
+                await EmployeeWriteCommitRecovery.TryObserveAsync(
+                    mutationObservationReader,
+                    request.EmployeeId);
+            if (observation is null
+                || baseline is null
+                || EmployeeWriteCommitRecovery.MatchesExact(
+                    observation,
+                    baseline))
+            {
+                throw new EmployeeWriteCommitUnknownException();
+            }
+
+            if (EmployeeWriteCommitRecovery.IsTerminationTarget(observation))
+            {
+                return Result.Success();
+            }
+
+            throw new EmployeeWriteConflictException();
         }
     }
 }

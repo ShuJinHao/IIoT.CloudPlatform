@@ -292,7 +292,8 @@ public sealed class ApplicationFlowGuardTests
         var handler = new UpdateEmployeeProfileHandler(
             repository,
             unitOfWork,
-            new StubAdminTargetGuard());
+            new StubAdminTargetGuard(),
+            new StubEmployeeMutationObservationReader());
 
         var result = await handler.Handle(
             new UpdateEmployeeProfileCommand(employeeId, " New Name "),
@@ -348,7 +349,8 @@ public sealed class ApplicationFlowGuardTests
         var profileHandler = new UpdateEmployeeProfileHandler(
             profileRepository,
             profileUnitOfWork,
-            targetGuard);
+            targetGuard,
+            new StubEmployeeMutationObservationReader());
 
         var accessRepository = new InMemoryRepository<Employee>
         {
@@ -359,7 +361,9 @@ public sealed class ApplicationFlowGuardTests
             accessRepository,
             targetGuard,
             new StubDeviceReadQueryService(),
-            accessUnitOfWork);
+            accessUnitOfWork,
+            new StubEmployeeMutationObservationReader(),
+            new StubEmployeeMutationVersionStore());
 
         var deactivateRepository = new InMemoryRepository<Employee>
         {
@@ -372,7 +376,8 @@ public sealed class ApplicationFlowGuardTests
             deactivateIdentityStore,
             deactivateUnitOfWork,
             new StubHumanSessionRevocationService(),
-            targetGuard);
+            targetGuard,
+            new StubEmployeeMutationObservationReader());
 
         var activateRepository = new InMemoryRepository<Employee>
         {
@@ -399,7 +404,8 @@ public sealed class ApplicationFlowGuardTests
             terminateIdentityStore,
             terminateUnitOfWork,
             new StubHumanSessionRevocationService(),
-            targetGuard);
+            targetGuard,
+            new StubEmployeeMutationObservationReader());
 
         var profileResult = await profileHandler.Handle(
             new UpdateEmployeeProfileCommand(employeeId, "Changed"),
@@ -432,14 +438,16 @@ public sealed class ApplicationFlowGuardTests
         Assert.Empty(accessRepository.UpdatedEntities);
         Assert.Empty(deactivateRepository.UpdatedEntities);
         Assert.Empty(terminateIdentityStore.DeletedIds);
-        Assert.Equal(1, profileUnitOfWork.BeginCalls);
-        Assert.Equal(1, deactivateUnitOfWork.BeginCalls);
+        Assert.Equal(0, profileUnitOfWork.BeginCalls);
+        Assert.Equal(0, accessUnitOfWork.BeginCalls);
+        Assert.Equal(0, deactivateUnitOfWork.BeginCalls);
         Assert.Equal(1, activateUnitOfWork.BeginCalls);
-        Assert.Equal(1, terminateUnitOfWork.BeginCalls);
-        Assert.Equal(1, profileUnitOfWork.RollbackCalls);
-        Assert.Equal(1, deactivateUnitOfWork.RollbackCalls);
+        Assert.Equal(0, terminateUnitOfWork.BeginCalls);
+        Assert.Equal(0, profileUnitOfWork.RollbackCalls);
+        Assert.Equal(0, accessUnitOfWork.RollbackCalls);
+        Assert.Equal(0, deactivateUnitOfWork.RollbackCalls);
         Assert.Equal(1, activateUnitOfWork.RollbackCalls);
-        Assert.Equal(1, terminateUnitOfWork.RollbackCalls);
+        Assert.Equal(0, terminateUnitOfWork.RollbackCalls);
     }
 
     [Fact]
@@ -462,7 +470,8 @@ public sealed class ApplicationFlowGuardTests
             new RecordingPermissionProvider
             {
                 Permissions = ["Employee.UpdateAccess"]
-            });
+            },
+            new StubEmployeeMutationObservationReader());
 
         var result = await handler.Handle(
             new OnboardEmployeeCommand("E1003", "Operator", "Password123!", "Supervisor"),
@@ -496,7 +505,8 @@ public sealed class ApplicationFlowGuardTests
                 Id = Guid.NewGuid().ToString(),
                 IsAuthenticated = true
             },
-            new RecordingPermissionProvider());
+            new RecordingPermissionProvider(),
+            new StubEmployeeMutationObservationReader());
 
         var result = await handler.Handle(
             new OnboardEmployeeCommand("E1004", "Operator", "Password123!"),
@@ -525,7 +535,8 @@ public sealed class ApplicationFlowGuardTests
             repository,
             unitOfWork,
             new TestCurrentUser { Id = Guid.NewGuid().ToString(), IsAuthenticated = true },
-            new RecordingPermissionProvider());
+            new RecordingPermissionProvider(),
+            new StubEmployeeMutationObservationReader());
 
         var result = await handler.Handle(
             new OnboardEmployeeCommand("E1005", "Operator", "Password123!", "Supervisor"),
@@ -561,7 +572,8 @@ public sealed class ApplicationFlowGuardTests
                 ActorType = IIoTClaimTypes.HumanActor,
                 IsAuthenticated = true
             },
-            new RecordingPermissionProvider());
+            new RecordingPermissionProvider(),
+            new StubEmployeeMutationObservationReader());
 
         var result = await handler.Handle(
             new OnboardEmployeeCommand("E1006", "Protected", "Password123!", roleName),
@@ -600,7 +612,8 @@ public sealed class ApplicationFlowGuardTests
             new RecordingPermissionProvider
             {
                 Permissions = [CloudPermissionCatalog.Employee.UpdateAccess]
-            });
+            },
+            new StubEmployeeMutationObservationReader());
 
         var result = await handler.Handle(
             new OnboardEmployeeCommand(
@@ -641,7 +654,8 @@ public sealed class ApplicationFlowGuardTests
                 ActorType = actorType,
                 IsAuthenticated = true
             },
-            new RecordingPermissionProvider());
+            new RecordingPermissionProvider(),
+            new StubEmployeeMutationObservationReader());
 
         var result = await handler.Handle(
             new OnboardEmployeeCommand(
@@ -678,7 +692,8 @@ public sealed class ApplicationFlowGuardTests
                 IIoT.Core.Identity.Aggregates.IdentityAccounts.IdentityAccount.Create(
                     employeeId,
                     employee.EmployeeNo),
-            SetEnabledResult = Result.Failure("disable failed")
+            CompareExchangeStateResult =
+                Result.Failure("disable failed")
         };
         var unitOfWork = new RecordingUnitOfWork();
         var handler = new DeactivateEmployeeHandler(
@@ -686,7 +701,8 @@ public sealed class ApplicationFlowGuardTests
             identityStore,
             unitOfWork,
             new StubHumanSessionRevocationService(),
-            new StubAdminTargetGuard());
+            new StubAdminTargetGuard(),
+            CreateEmployeeObservationReader(employee, identityStore));
 
         var result = await handler.Handle(new DeactivateEmployeeCommand(employeeId), CancellationToken.None);
 
@@ -719,7 +735,8 @@ public sealed class ApplicationFlowGuardTests
             identityStore,
             unitOfWork,
             sessionRevocationService,
-            new StubAdminTargetGuard());
+            new StubAdminTargetGuard(),
+            CreateEmployeeObservationReader(employee, identityStore));
 
         var result = await handler.Handle(new DeactivateEmployeeCommand(employeeId), CancellationToken.None);
 
@@ -745,12 +762,21 @@ public sealed class ApplicationFlowGuardTests
                     employeeId,
                     employee.EmployeeNo)
         };
+        var observationReader =
+            CreateEmployeeObservationReader(employee, identityStore);
+        var observeCurrent = observationReader.ObserveAsyncOverride!;
+        observationReader.ObserveAsyncOverride = async (id, token) =>
+            (await observeCurrent(id, token)) with
+            {
+                HasActiveHumanSessions = true
+            };
         var handler = new DeactivateEmployeeHandler(
             new InMemoryRepository<Employee> { SingleOrDefaultResult = employee },
             identityStore,
             new RecordingUnitOfWork(),
             sessionRevocationService,
-            new StubAdminTargetGuard());
+            new StubAdminTargetGuard(),
+            observationReader);
 
         var first = await handler.Handle(
             new DeactivateEmployeeCommand(employeeId),
@@ -1215,7 +1241,8 @@ public sealed class ApplicationFlowGuardTests
             identityStore,
             unitOfWork,
             new StubHumanSessionRevocationService(),
-            new StubAdminTargetGuard());
+            new StubAdminTargetGuard(),
+            new StubEmployeeMutationObservationReader());
 
         var result = await handler.Handle(new TerminateEmployeeCommand(employeeId), CancellationToken.None);
 
@@ -1248,7 +1275,8 @@ public sealed class ApplicationFlowGuardTests
             identityStore,
             unitOfWork,
             sessionRevocationService,
-            new StubAdminTargetGuard());
+            new StubAdminTargetGuard(),
+            new StubEmployeeMutationObservationReader());
 
         var result = await handler.Handle(new TerminateEmployeeCommand(employeeId), CancellationToken.None);
 
@@ -1280,7 +1308,9 @@ public sealed class ApplicationFlowGuardTests
             {
                 ExistingDeviceIds = [updatedDeviceId]
             },
-            new RecordingUnitOfWork());
+            new RecordingUnitOfWork(),
+            new StubEmployeeMutationObservationReader(),
+            new StubEmployeeMutationVersionStore());
 
         var result = await handler.Handle(
             new UpdateEmployeeAccessCommand(employeeId, [updatedDeviceId]),
@@ -2999,6 +3029,41 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal(ResultStatus.Unauthorized, wrongSecret.Status);
         Assert.True(validSecret.IsSuccess);
         Assert.Equal(device.Id, validSecret.Value!.DeviceIdentity.Id);
+    }
+
+    private static StubEmployeeMutationObservationReader CreateEmployeeObservationReader(
+        Employee employee,
+        RecordingIdentityAccountStore identityStore)
+    {
+        return new StubEmployeeMutationObservationReader
+        {
+            ObserveAsyncOverride = (_, _) =>
+            {
+                var account = identityStore.AccountById;
+                identityStore.SecurityStampsByUserId.TryGetValue(
+                    employee.Id,
+                    out var securityStamp);
+                identityStore.RolesByUserId.TryGetValue(
+                    employee.Id,
+                    out var roles);
+                return Task.FromResult(new EmployeeMutationObservation(
+                    EmployeeExists: true,
+                    EmployeeIsActive: employee.IsActive,
+                    AccountExists: account is not null,
+                    AccountIsEnabled: account?.IsEnabled ?? false,
+                    AccountSecurityStamp: securityStamp,
+                    Roles: roles?.ToArray() ?? [],
+                    EmployeeNo: employee.EmployeeNo,
+                    EmployeeRealName: employee.RealName,
+                    EmployeeRowVersion: employee.RowVersion,
+                    EmployeeDeviceIds: employee.DeviceAccesses
+                        .Select(access => access.DeviceId)
+                        .OrderBy(deviceId => deviceId)
+                        .ToArray(),
+                    AccountEmployeeNo: account?.EmployeeNo,
+                    HasActiveHumanSessions: false));
+            }
+        };
     }
 
     private static JsonElement JsonPayload(string json)

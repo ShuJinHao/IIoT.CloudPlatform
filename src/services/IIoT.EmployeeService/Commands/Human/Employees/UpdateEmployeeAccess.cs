@@ -3,6 +3,7 @@ using IIoT.Core.Employees.Specifications;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
@@ -30,30 +31,82 @@ public class UpdateEmployeeAccessHandler(
     IRepository<Employee> employeeRepository,
     IAdminTargetGuard adminTargetGuard,
     IDeviceReadQueryService deviceReadQueryService,
-    IUnitOfWork unitOfWork
+    IUnitOfWork unitOfWork,
+    IEmployeeMutationObservationReader mutationObservationReader,
+    IEmployeeMutationVersionStore mutationVersionStore
 ) : ICommandHandler<UpdateEmployeeAccessCommand, Result<bool>>
 {
     public async Task<Result<bool>> Handle(
         UpdateEmployeeAccessCommand request,
         CancellationToken cancellationToken)
     {
-        var targetResult = await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
-            request.EmployeeId,
-            cancellationToken);
+        var requestedDeviceIds = request.DeviceIds
+            .Distinct()
+            .OrderBy(deviceId => deviceId)
+            .ToArray();
+        var targetResult =
+            await adminTargetGuard.EnsureMutableNonAdminTargetAsync(
+                request.EmployeeId,
+                cancellationToken);
         if (!targetResult.IsSuccess)
         {
             return Result.Failure(targetResult.Errors?.ToArray()
                 ?? [AdminTargetProtectionErrors.TargetNotFound]);
         }
 
-        return await unitOfWork.ExecuteResilientAsync(
-            ExecuteTransactionAsync,
-            cancellationToken);
+        EmployeeMutationObservation? baseline = null;
+        uint? targetRowVersion = null;
+        var commitAttempted = false;
+        try
+        {
+            return await unitOfWork.ExecuteResilientAsync(
+                ExecuteTransactionAsync,
+                cancellationToken);
+        }
+        catch (EmployeeMutationException)
+        {
+            throw;
+        }
+        catch (Exception)
+            when (commitAttempted)
+        {
+            return await ResolveCommitAsync();
+        }
 
         async Task<Result<bool>> ExecuteTransactionAsync(
             CancellationToken transactionCancellationToken)
         {
             await unitOfWork.BeginTransactionAsync(transactionCancellationToken);
+
+            var current = baseline is null
+                ? await mutationObservationReader.ObserveAsync(
+                    request.EmployeeId,
+                    transactionCancellationToken)
+                : await EmployeeWriteCommitRecovery.TryObserveAsync(
+                    mutationObservationReader,
+                    request.EmployeeId);
+            if (current is null)
+            {
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                throw new EmployeeWriteCommitUnknownException();
+            }
+
+            if (baseline is null)
+            {
+                baseline = current;
+            }
+            else if (MatchesTarget(current))
+            {
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return Result.Success(true);
+            }
+            else if (!EmployeeWriteCommitRecovery.MatchesExact(
+                         current,
+                         baseline))
+            {
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                throw new EmployeeWriteConflictException();
+            }
 
             var employee = await employeeRepository.GetSingleOrDefaultAsync(
                 new EmployeeWithAccessesSpec(request.EmployeeId),
@@ -65,9 +118,6 @@ public class UpdateEmployeeAccessHandler(
                 return Result.Failure(AdminTargetProtectionErrors.TargetNotFound);
             }
 
-            var requestedDeviceIds = request.DeviceIds
-                .Distinct()
-                .ToArray();
             if (requestedDeviceIds.Length > 0)
             {
                 var formalDeviceIds = await deviceReadQueryService.GetExistingIdsAsync(
@@ -84,14 +134,65 @@ public class UpdateEmployeeAccessHandler(
             var existingDeviceIds = employee.DeviceAccesses.Select(d => d.DeviceId).ToList();
             var devicesToRemove = existingDeviceIds.Except(requestedDeviceIds).ToList();
             var devicesToAdd = requestedDeviceIds.Except(existingDeviceIds).ToList();
+            if (devicesToRemove.Count == 0 && devicesToAdd.Count == 0)
+            {
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                return Result.Success(true);
+            }
+
             foreach (var id in devicesToRemove) employee.RemoveDeviceAccess(id);
             foreach (var id in devicesToAdd) employee.AddDeviceAccess(id);
 
             employeeRepository.Update(employee);
             await employeeRepository.SaveChangesAsync(transactionCancellationToken);
+            targetRowVersion = await mutationVersionStore.TryAdvanceAsync(
+                request.EmployeeId,
+                baseline.EmployeeRowVersion ?? employee.RowVersion,
+                transactionCancellationToken);
+            if (!targetRowVersion.HasValue)
+            {
+                await unitOfWork.RollbackAsync(transactionCancellationToken);
+                throw new EmployeeWriteConflictException();
+            }
+
+            commitAttempted = true;
             await unitOfWork.CommitAsync(transactionCancellationToken);
 
             return Result.Success(true);
         }
+
+        async Task<Result<bool>> ResolveCommitAsync()
+        {
+            var observation =
+                await EmployeeWriteCommitRecovery.TryObserveAsync(
+                    mutationObservationReader,
+                    request.EmployeeId);
+            if (observation is null
+                || baseline is null
+                || EmployeeWriteCommitRecovery.MatchesExact(
+                    observation,
+                    baseline))
+            {
+                throw new EmployeeWriteCommitUnknownException();
+            }
+
+            if (MatchesTarget(observation))
+            {
+                return Result.Success(true);
+            }
+
+            throw new EmployeeWriteConflictException();
+        }
+
+        bool MatchesTarget(EmployeeMutationObservation observation)
+            => baseline is not null
+               && targetRowVersion.HasValue
+               && EmployeeWriteCommitRecovery.MatchesExact(
+                   observation,
+                   baseline with
+                   {
+                       EmployeeDeviceIds = requestedDeviceIds,
+                       EmployeeRowVersion = targetRowVersion
+                   });
     }
 }

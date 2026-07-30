@@ -48,6 +48,20 @@ public sealed class UseCaseExceptionHandler : IExceptionHandler
                 unknown.SafeMessage,
                 httpContext.Request.Path,
                 unknown.ProblemCode),
+            EmployeeWriteConflictException conflict => CreateProblem(
+                StatusCodes.Status409Conflict,
+                "请求冲突",
+                "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/409",
+                conflict.SafeMessage,
+                httpContext.Request.Path,
+                conflict.ProblemCode),
+            EmployeeWriteCommitUnknownException unknown => CreateProblem(
+                StatusCodes.Status503ServiceUnavailable,
+                "服务暂时不可用",
+                "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/503",
+                unknown.SafeMessage,
+                httpContext.Request.Path,
+                unknown.ProblemCode),
             ClientReleasePublishConflictException conflict => CreateProblem(
                 StatusCodes.Status409Conflict,
                 "请求冲突",
