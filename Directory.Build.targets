@@ -14,20 +14,20 @@
   </PropertyGroup>
 
   <Target Name="WriteCloudArchitectureManagedProjectReferences"
-          DependsOnTargets="ResolveProjectReferences"
+          DependsOnTargets="FindReferenceAssembliesForReferences"
           BeforeTargets="CoreCompile"
           Condition="'$(_IsCloudProductionProject)' == 'true'">
     <PropertyGroup>
       <_CloudArchitectureManagedReferencesFile>$(IntermediateOutputPath)CloudArchitectureManagedProjectReferences.txt</_CloudArchitectureManagedReferencesFile>
     </PropertyGroup>
     <ItemGroup>
-      <_CloudArchitectureManagedReference Include="@(_ResolvedProjectReferencePaths)"
-                                          Condition="'%(MSBuildSourceProjectFile)' != ''">
-        <StableProjectIdentity>$([MSBuild]::MakeRelative('$(CloudArchitectureRepositoryRoot)', '%(MSBuildSourceProjectFile)'))</StableProjectIdentity>
+      <_CloudArchitectureManagedReference Include="@(ReferencePathWithRefAssemblies)"
+                                          Condition="'%(ReferencePathWithRefAssemblies.MSBuildSourceProjectFile)' != ''">
+        <StableProjectIdentity>$([MSBuild]::MakeRelative('$(CloudArchitectureRepositoryRoot)', '%(ReferencePathWithRefAssemblies.MSBuildSourceProjectFile)'))</StableProjectIdentity>
       </_CloudArchitectureManagedReference>
     </ItemGroup>
     <WriteLinesToFile File="$(_CloudArchitectureManagedReferencesFile)"
-                      Lines="@(_CloudArchitectureManagedReference->'%(ReferenceAssembly)&#x9;%(FullPath)&#x9;%(StableProjectIdentity)')"
+                      Lines="@(_CloudArchitectureManagedReference->'%(FullPath)&#x9;%(MSBuildSourceProjectFile)&#x9;%(StableProjectIdentity)')"
                       Overwrite="true"
                       WriteOnlyWhenDifferent="true" />
     <ItemGroup>

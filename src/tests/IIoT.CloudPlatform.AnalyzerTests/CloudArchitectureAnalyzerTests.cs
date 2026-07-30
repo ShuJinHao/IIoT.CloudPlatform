@@ -533,6 +533,11 @@ public sealed class CloudArchitectureAnalyzerTests
 
         Assert.Equal(6, diagnostics.Length);
         Assert.All(diagnostics, diagnostic => Assert.Equal("CLOUDARCH004", diagnostic.Id));
+        Assert.All(diagnostics, diagnostic =>
+            Assert.Contains(
+                "CLOUDARCH004_REASON=direct-write-sink",
+                diagnostic.GetMessage(),
+                StringComparison.Ordinal));
 
         var dapper = CreateReference(
             "Dapper",

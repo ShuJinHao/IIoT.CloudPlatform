@@ -8,6 +8,10 @@ $ErrorActionPreference = 'Stop'
 
 $root = (Resolve-Path $RepositoryRoot).Path
 $selector = Join-Path $root 'scripts/tests/Select-CloudCiTests.ps1'
+$architectureBuildTargetsContractModule = Join-Path `
+    $root `
+    'scripts/tests/internal/CloudArchitectureBuildTargetsContract.psm1'
+Import-Module $architectureBuildTargetsContractModule -Force -ErrorAction Stop
 $allowedCategories = @('Architecture', 'Security', 'Business', 'DeploymentContract', 'Quality', 'CrossProject')
 function Assert-ValidCategories([object]$Selection) {
     $invalid = @($Selection.selectedDotNetProjects.categories | Where-Object {
@@ -31,6 +35,49 @@ function Write-FixtureFile {
         $fullPath,
         $Content.Trim() + [Environment]::NewLine,
         [Text.UTF8Encoding]::new($false))
+}
+
+function Assert-ArchitectureBuildTargetsRequiresFull {
+    param(
+        [Parameter(Mandatory)][string]$FixtureRoot,
+        [Parameter(Mandatory)][string]$SelectorPath,
+        [Parameter(Mandatory)][string]$OutputRoot,
+        [Parameter(Mandatory)][string]$CaseName,
+        [Parameter(Mandatory)][string]$Content
+    )
+
+    Write-FixtureFile `
+        -Root $FixtureRoot `
+        -Path 'Directory.Build.targets' `
+        -Content $Content
+    $contract = Test-CloudArchitectureBuildTargetsContract `
+        -RepositoryRoot $FixtureRoot `
+        -PassThru
+    if ([bool]$contract.IsSafe) {
+        throw "Unsafe Cloud architecture target contract was accepted by the shared module: case=$CaseName"
+    }
+
+    $outputPath = Join-Path $OutputRoot "architecture-target-$CaseName.json"
+    $failedClosed = $false
+    try {
+        & $SelectorPath `
+            -RepositoryRoot $FixtureRoot `
+            -ChangedFiles @('Directory.Build.targets') `
+            -OutputPath $outputPath `
+            -GitHubOutputPath ''
+    } catch {
+        $failedClosed = $_.Exception.Message -match 'cannot safely attribute' -and
+            $_.Exception.Message -match 'Directory\.Build\.targets'
+    }
+    if (-not $failedClosed) {
+        throw "Unsafe Cloud architecture target did not fail closed in the selector: case=$CaseName reason=$($contract.Reason)"
+    }
+
+    $selection = Get-Content $outputPath -Raw | ConvertFrom-Json
+    if (@($selection.unclassifiedFiles) -notcontains 'Directory.Build.targets' -or
+        @($selection.requiredExplicitModes) -notcontains 'Full') {
+        throw "Unsafe Cloud architecture target did not require explicit Full: case=$CaseName reason=$($contract.Reason)"
+    }
 }
 
 function Set-FixtureSolution {
@@ -157,6 +204,7 @@ function New-DynamicRunnerFixture {
 
 $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) "cloud-ci-selector-$([Guid]::NewGuid().ToString('N'))"
 [void](New-Item $temporaryRoot -ItemType Directory -Force)
+$architectureContractNegativeCount = 0
 try {
     $positiveOutput = Join-Path $temporaryRoot 'positive.json'
     & $selector `
@@ -175,6 +223,166 @@ try {
     if ($positiveNames -contains 'IIoT.CloudPlatform.EndToEndTests' -or
         @($positive.selectedDotNetProjects.categories) -contains 'Quality') {
         throw 'Default source selection included the explicit Quality lane.'
+    }
+
+    $architectureTargetOutput = Join-Path $temporaryRoot 'architecture-target.json'
+    & $selector `
+        -RepositoryRoot $root `
+        -ChangedFiles @('Directory.Build.targets') `
+        -OutputPath $architectureTargetOutput `
+        -GitHubOutputPath ''
+    $architectureTarget = Get-Content $architectureTargetOutput -Raw | ConvertFrom-Json
+    if (@($architectureTarget.unclassifiedFiles).Count -ne 0 -or
+        @($architectureTarget.requiredExplicitModes) -contains 'Full' -or
+        @($architectureTarget.selectedDotNetProjects.categories | Where-Object {
+                $_ -notin @('Architecture', 'Security')
+            }).Count -ne 0) {
+        throw 'Cloud architecture build target did not stay in mandatory Architecture/Security validation.'
+    }
+
+    $validArchitectureTargets = Get-Content `
+        (Join-Path $root 'Directory.Build.targets') `
+        -Raw
+    $architectureContractRoot = Join-Path $temporaryRoot 'architecture-target-contract'
+    [void](New-DynamicRunnerFixture -Root $architectureContractRoot)
+    Write-FixtureFile `
+        -Root $architectureContractRoot `
+        -Path 'Directory.Build.targets' `
+        -Content $validArchitectureTargets
+    $validArchitectureContract = Test-CloudArchitectureBuildTargetsContract `
+        -RepositoryRoot $architectureContractRoot `
+        -PassThru
+    if (-not [bool]$validArchitectureContract.IsSafe) {
+        throw "Canonical Cloud architecture target contract was rejected: $($validArchitectureContract.Reason)"
+    }
+
+    $analyzerGroup = @'
+  <PropertyGroup Condition="'$(_IsCloudProductionProject)' == 'true'">
+    <RunAnalyzers>true</RunAnalyzers>
+'@
+    $falseAnalyzerGroup = @'
+  <PropertyGroup Condition="'$(_IsCloudProductionProject)' == 'false'">
+    <RunAnalyzers>true</RunAnalyzers>
+'@
+    $targetCondition = @'
+          BeforeTargets="CoreCompile"
+          Condition="'$(_IsCloudProductionProject)' == 'true'">
+'@
+    $targetWithoutCondition = @'
+          BeforeTargets="CoreCompile">
+'@
+    $falseTargetCondition = @'
+          BeforeTargets="CoreCompile"
+          Condition="'$(_IsCloudProductionProject)' == 'false'">
+'@
+    $additionalFilesBlock = @'
+    <ItemGroup>
+      <AdditionalFiles Include="$(_CloudArchitectureManagedReferencesFile)" />
+    </ItemGroup>
+'@
+
+    $unsafeArchitectureContracts = [ordered]@{}
+    $unsafeArchitectureContracts['run-analyzers-disabled'] =
+        $validArchitectureTargets.Replace(
+            '<RunAnalyzers>true</RunAnalyzers>',
+            '<RunAnalyzers>false</RunAnalyzers>')
+    $unsafeArchitectureContracts['run-analyzers-during-build-disabled'] =
+        $validArchitectureTargets.Replace(
+            '<RunAnalyzersDuringBuild>true</RunAnalyzersDuringBuild>',
+            '<RunAnalyzersDuringBuild>false</RunAnalyzersDuringBuild>')
+    $unsafeArchitectureContracts['compiler-item-condition-removed'] =
+        $validArchitectureTargets.Replace(
+            '<ItemGroup Condition="''$(_IsCloudProductionProject)'' == ''true''">',
+            '<ItemGroup>')
+    $unsafeArchitectureContracts['analyzer-property-condition-false'] =
+        $validArchitectureTargets.Replace($analyzerGroup, $falseAnalyzerGroup)
+    $unsafeArchitectureContracts['target-condition-removed'] =
+        $validArchitectureTargets.Replace($targetCondition, $targetWithoutCondition)
+    $unsafeArchitectureContracts['target-condition-false'] =
+        $validArchitectureTargets.Replace($targetCondition, $falseTargetCondition)
+    $unsafeArchitectureContracts['target-name-drift'] =
+        $validArchitectureTargets.Replace(
+            'Name="WriteCloudArchitectureManagedProjectReferences"',
+            'Name="WriteCloudArchitectureReferences"')
+    $unsafeArchitectureContracts['target-dependency-drift'] =
+        $validArchitectureTargets.Replace(
+            'DependsOnTargets="FindReferenceAssembliesForReferences"',
+            'DependsOnTargets="ResolveProjectReferences"')
+    $unsafeArchitectureContracts['target-execution-drift'] =
+        $validArchitectureTargets.Replace(
+            'BeforeTargets="CoreCompile"',
+            'BeforeTargets="Compile"')
+    $unsafeArchitectureContracts['old-reference-source'] =
+        $validArchitectureTargets.
+            Replace(
+                '@(ReferencePathWithRefAssemblies)',
+                '@(_ResolvedProjectReferencePaths)').
+            Replace(
+                'ReferencePathWithRefAssemblies.MSBuildSourceProjectFile',
+                'MSBuildSourceProjectFile')
+    $unsafeArchitectureContracts['output-columns-drift'] =
+        $validArchitectureTargets.Replace(
+            '%(FullPath)&#x9;%(MSBuildSourceProjectFile)&#x9;%(StableProjectIdentity)',
+            '%(ReferenceAssembly)&#x9;%(FullPath)&#x9;%(StableProjectIdentity)')
+    $unsafeArchitectureContracts['additional-files-removed'] =
+        $validArchitectureTargets.Replace($additionalFilesBlock, '')
+    $unsafeArchitectureContracts['additional-files-wiring-drift'] =
+        $validArchitectureTargets.Replace(
+            'AdditionalFiles Include="$(_CloudArchitectureManagedReferencesFile)"',
+            'AdditionalFiles Include="$(IntermediateOutputPath)other.txt"')
+    $unsafeArchitectureContracts['compiler-visible-property-wiring-drift'] =
+        $validArchitectureTargets.Replace(
+            'CompilerVisibleProperty Include="CloudArchitectureProjectIdentity"',
+            'CompilerVisibleProperty Include="CloudArchitectureRepositoryRoot"')
+    $unsafeArchitectureContracts['exec-injected'] =
+        $validArchitectureTargets.Replace(
+            '    <WriteLinesToFile File=',
+            "    <Exec Command=`"true`" />`n    <WriteLinesToFile File=")
+    $unsafeArchitectureContracts['second-target-injected'] =
+        $validArchitectureTargets.Replace(
+            "`n</Project>",
+            "`n  <Target Name=`"SecondTarget`" BeforeTargets=`"CoreCompile`" />`n`n</Project>")
+    $unsafeArchitectureContracts['extra-property-injected'] =
+        $validArchitectureTargets.Replace(
+            '    <RunAnalyzers>true</RunAnalyzers>',
+            "    <RunAnalyzers>true</RunAnalyzers>`n    <RunAnalyzersDuringLiveAnalysis>true</RunAnalyzersDuringLiveAnalysis>")
+    $unsafeArchitectureContracts['comment-only-keyword'] =
+        $validArchitectureTargets.Replace(
+            '    <RunAnalyzersDuringBuild>true</RunAnalyzersDuringBuild>',
+            '    <!-- <RunAnalyzersDuringBuild>true</RunAnalyzersDuringBuild> -->')
+
+    foreach ($caseName in $unsafeArchitectureContracts.Keys) {
+        $content = [string]$unsafeArchitectureContracts[$caseName]
+        if ($content -ceq $validArchitectureTargets) {
+            throw "Cloud architecture target negative fixture did not mutate the canonical contract: case=$caseName"
+        }
+        Assert-ArchitectureBuildTargetsRequiresFull `
+            -FixtureRoot $architectureContractRoot `
+            -SelectorPath $selector `
+            -OutputRoot $temporaryRoot `
+            -CaseName $caseName `
+            -Content $content
+        $architectureContractNegativeCount++
+    }
+    Write-FixtureFile `
+        -Root $architectureContractRoot `
+        -Path 'Directory.Build.targets' `
+        -Content $validArchitectureTargets
+
+    $webOutput = Join-Path $temporaryRoot 'web.json'
+    $webFile = 'src/ui/iiot-web/src/features/devices/DeviceListPage.vue'
+    & $selector `
+        -RepositoryRoot $root `
+        -ChangedFiles @($webFile) `
+        -OutputPath $webOutput `
+        -GitHubOutputPath ''
+    $web = Get-Content $webOutput -Raw | ConvertFrom-Json
+    if ([int]$web.schemaVersion -ne 2 -or
+        -not [bool]$web.web.affected -or
+        [bool]$web.web.full -or
+        @($web.web.changedFiles).Count -ne 1 -or
+        @($web.web.changedFiles) -notcontains $webFile) {
+        throw 'Default Web selection did not preserve the schema v2 affected scope.'
     }
 
     $utf8Root = Join-Path $temporaryRoot 'utf8-git-paths'
@@ -227,6 +435,10 @@ try {
             }).Count -ne 0) {
         throw 'Documentation-only changes selected a non-red-line category.'
     }
+    if ([bool]$docs.web.affected -or [bool]$docs.web.full -or
+        @($docs.web.changedFiles).Count -ne 0) {
+        throw 'Documentation-only changes did not preserve an explicit Web no-op scope.'
+    }
     $analyzer = @($docs.selectedDotNetProjects | Where-Object projectName -eq 'IIoT.CloudPlatform.AnalyzerTests')
     if ($analyzer.Count -ne 1 -or
         @($analyzer[0].categories) -notcontains 'Architecture' -or
@@ -246,7 +458,9 @@ try {
         @($manual.unclassifiedFiles).Count -ne 0 -or
         @($manual.selectedDotNetProjects.categories) -notcontains 'Quality' -or
         @($manual.selectedDotNetProjects.categories) -contains 'Business' -or
-        @($manual.selectedDotNetProjects.categories) -contains 'DeploymentContract') {
+        @($manual.selectedDotNetProjects.categories) -contains 'DeploymentContract' -or
+        -not [bool]$manual.web.affected -or
+        -not [bool]$manual.web.full) {
         throw 'Explicit Quality selection did not stay within red-line plus Quality categories.'
     }
 
@@ -448,6 +662,7 @@ try {
 
 $workflowText = Get-Content (Join-Path $root '.github/workflows/cloud-ci.yml') -Raw
 $selectorText = Get-Content $selector -Raw
+$architectureContractModuleText = Get-Content $architectureBuildTargetsContractModule -Raw
 $runnerText = Get-Content (Join-Path $root 'scripts/tests/Invoke-CloudCiSelectedTests.ps1') -Raw
 if ($selectorText -notmatch "'core\.quotepath=false'" -or
     $selectorText -notmatch 'StandardOutputEncoding\s*=\s*\$utf8' -or
@@ -457,6 +672,16 @@ if ($selectorText -notmatch "'core\.quotepath=false'" -or
 }
 if ($workflowText -notmatch '\$selectorInputs\.Count\s+-gt\s+0[\s\S]*?Test-CloudCiTestSelection\.ps1') {
     throw 'Cloud default CI does not gate selector behavior tests on affected selector inputs.'
+}
+if ($workflowText -notmatch 'scripts/tests/internal/CloudArchitectureBuildTargetsContract\.psm1' -or
+    $selectorText -notmatch 'Import-Module\s+\$architectureBuildTargetsContractModule' -or
+    $architectureContractModuleText -match '\.Contains\(') {
+    throw 'Cloud default CI and selector are not bound to the shared structural architecture target contract.'
+}
+if ($workflowText -notmatch 'Test-CloudWebValidation\.ps1' -or
+    $workflowText -notmatch 'Invoke-CloudWebValidation\.ps1[\s\S]*?current-web-validation\.json' -or
+    $workflowText -match '(?m)^\s+npm run build\s*$') {
+    throw 'Cloud default CI does not use the unified Web validation/evidence entry.'
 }
 if ($workflowText -notmatch 'git\s+-c\s+core\.quotepath=false\s+diff\s+--name-only' -or
     $workflowText -notmatch '\[Console\]::OutputEncoding\s*=\s*\$utf8' -or
@@ -475,4 +700,4 @@ if ($runnerText -notmatch "ForEach-Object\s*\{\s*\[int\]\`$_\['discovered'\]\s*\
     throw 'Cloud CI discovery aggregation does not safely read ordered result dictionaries.'
 }
 
-Write-Host 'CLOUD_CI_SELECTION_BEHAVIOR_OK positive=1 utf8Paths=1 docs=1 quality=1 deployment=1 deferred=1 dynamic=1 dynamicDeployment=1 retiredBusiness=1 unownedRetired=1 cross=1 negative=1 workflowGate=1 discoveryAggregation=1'
+Write-Host "CLOUD_CI_SELECTION_BEHAVIOR_OK positive=1 architectureTarget=1 architectureTargetNegatives=$architectureContractNegativeCount web=1 webNoop=1 utf8Paths=1 docs=1 quality=1 deployment=1 deferred=1 dynamic=1 dynamicDeployment=1 retiredBusiness=1 unownedRetired=1 cross=1 negative=1 workflowGate=1 discoveryAggregation=1"

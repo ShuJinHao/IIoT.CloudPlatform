@@ -1008,7 +1008,7 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             if (!field.IsStatic ||
                 SymbolEqualityComparer.Default.Equals(field.ContainingAssembly, _compilation.Assembly) ||
                 !IsUnclassifiedCloudProductionAssembly(field.ContainingAssembly.Name) ||
-                !IsUnsafeExternalFieldEffect(field))
+                !TryGetUnsafeExternalFieldEffectReason(field, out var failureReason))
             {
                 return;
             }
@@ -1022,7 +1022,9 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
                         caller,
                         fieldReference.Syntax.GetLocation(),
                         isDirectWriteSink: true,
-                        field.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat)));
+                        FormatAiReadSink(
+                            field.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
+                            failureReason)));
             }
         }
 
@@ -2085,24 +2087,73 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             HashSet<IMethodSymbol> visited,
             out string sink)
         {
-            return TryResolvePathSink(edge, visited, IsAiReadSink, out sink);
+            if (TryDescribeAiReadSink(edge, out sink))
+                return true;
+
+            if (!visited.Add(edge.Target) || !_callGraph.TryGetValue(edge.Target, out var children))
+            {
+                sink = string.Empty;
+                return false;
+            }
+
+            foreach (var child in children.OrderBy(static item => item.Location.SourceSpan.Start))
+            {
+                if (TryResolveSink(child, visited, out sink))
+                    return true;
+            }
+
+            sink = string.Empty;
+            return false;
         }
 
-        private bool IsAiReadSink(InvocationEdge edge)
+        private bool TryDescribeAiReadSink(InvocationEdge edge, out string sink)
         {
-            return edge.IsDirectWriteSink ||
-                    (SymbolEqualityComparer.Default.Equals(
-                        edge.Target.ContainingAssembly,
-                        _compilation.Assembly) &&
-                    CloudArchitectureCallSemantics.IsUnresolvedSourceBoundary(edge.Target) &&
-                    !HasResolvedSourceImplementation(edge.Target) &&
-                    !IsReadOnlyQueryPortType(edge.Target.ContainingType)) ||
-                   IsUnclassifiedCrossProjectInterfaceDispatch(edge) ||
-                   (CloudArchitectureCallSemantics.IsOpenDispatch(edge.Target) &&
-                    IsUnclassifiedCloudProductionAssembly(edge.Target.ContainingAssembly.Name) &&
-                    !IsReadOnlyQueryPortType(edge.Target.ContainingType)) ||
-                   (!IsReadOnlyQueryPortType(edge.Target.ContainingType) &&
-                    IsUnsafeExternalEffect(edge.Target));
+            if (edge.IsDirectWriteSink)
+            {
+                sink = edge.TargetDisplay.IndexOf(
+                    "[CLOUDARCH004_REASON=",
+                    StringComparison.Ordinal) >= 0
+                    ? edge.TargetDisplay
+                    : FormatAiReadSink(edge.TargetDisplay, "direct-write-sink");
+                return true;
+            }
+
+            if (SymbolEqualityComparer.Default.Equals(
+                    edge.Target.ContainingAssembly,
+                    _compilation.Assembly) &&
+                CloudArchitectureCallSemantics.IsUnresolvedSourceBoundary(edge.Target) &&
+                !HasResolvedSourceImplementation(edge.Target) &&
+                !IsReadOnlyQueryPortType(edge.Target.ContainingType))
+            {
+                sink = FormatAiReadSink(edge.TargetDisplay, "unresolved-source-boundary");
+                return true;
+            }
+
+            if (IsUnclassifiedCrossProjectInterfaceDispatch(edge))
+            {
+                sink = FormatAiReadSink(
+                    edge.TargetDisplay,
+                    "unclassified-cross-project-interface-dispatch");
+                return true;
+            }
+
+            if (CloudArchitectureCallSemantics.IsOpenDispatch(edge.Target) &&
+                IsUnclassifiedCloudProductionAssembly(edge.Target.ContainingAssembly.Name) &&
+                !IsReadOnlyQueryPortType(edge.Target.ContainingType))
+            {
+                sink = FormatAiReadSink(edge.TargetDisplay, "open-dispatch");
+                return true;
+            }
+
+            if (!IsReadOnlyQueryPortType(edge.Target.ContainingType) &&
+                TryGetUnsafeExternalEffectReason(edge.Target, out var failureReason))
+            {
+                sink = FormatAiReadSink(edge.TargetDisplay, failureReason);
+                return true;
+            }
+
+            sink = string.Empty;
+            return false;
         }
 
         private bool HasResolvedSourceImplementation(IMethodSymbol method)
@@ -2116,38 +2167,84 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
                        !CloudArchitectureCallSemantics.IsUnresolvedSourceBoundary(edge.Target));
         }
 
-        private bool IsUnsafeExternalEffect(IMethodSymbol target)
+        private bool TryGetUnsafeExternalEffectReason(
+            IMethodSymbol target,
+            out string failureReason)
         {
             var assembly = target.ContainingAssembly;
             if (SymbolEqualityComparer.Default.Equals(assembly, _compilation.Assembly) ||
                 !IsUnclassifiedCloudProductionAssembly(assembly.Name))
             {
+                failureReason = string.Empty;
                 return false;
             }
 
             var summary = GetExternalEffectSummary(assembly);
-            return !summary.Valid ||
-                   !summary.Effects.TryGetValue(
-                       CloudArchitectureEffectSummaryFormat.GetMethodId(target),
-                       out var effect) ||
-                   effect == CloudArchitectureMethodEffect.Write;
+            if (!summary.Valid)
+            {
+                failureReason = GetEffectSummaryFailureReason(summary.Failure);
+                return true;
+            }
+
+            if (!summary.Effects.TryGetValue(
+                    CloudArchitectureEffectSummaryFormat.GetMethodId(target),
+                    out var effect))
+            {
+                failureReason = "external-effect-method-entry-missing";
+                return true;
+            }
+
+            if (effect == CloudArchitectureMethodEffect.Write)
+            {
+                failureReason = "external-effect-write";
+                return true;
+            }
+
+            failureReason = string.Empty;
+            return false;
         }
 
-        private bool IsUnsafeExternalFieldEffect(IFieldSymbol field)
+        private bool TryGetUnsafeExternalFieldEffectReason(
+            IFieldSymbol field,
+            out string failureReason)
         {
             var assembly = field.ContainingAssembly;
             var summary = GetExternalEffectSummary(assembly);
-            return !summary.Valid ||
-                   !summary.Effects.TryGetValue(
-                       CloudArchitectureEffectSummaryFormat.GetFieldId(field),
-                       out var effect) ||
-                   effect == CloudArchitectureMethodEffect.Write;
+            if (!summary.Valid)
+            {
+                failureReason = GetEffectSummaryFailureReason(summary.Failure);
+                return true;
+            }
+
+            if (!summary.Effects.TryGetValue(
+                    CloudArchitectureEffectSummaryFormat.GetFieldId(field),
+                    out var effect))
+            {
+                failureReason = "external-effect-field-entry-missing";
+                return true;
+            }
+
+            if (effect == CloudArchitectureMethodEffect.Write)
+            {
+                failureReason = "external-effect-write";
+                return true;
+            }
+
+            failureReason = string.Empty;
+            return false;
         }
 
         private CloudArchitectureAssemblyEffectSummary GetExternalEffectSummary(IAssemblySymbol assembly)
         {
             if (_effectSummaries.TryGetValue(assembly, out var summary))
                 return summary;
+
+            if (!_managedReferences.Valid)
+            {
+                summary = CloudArchitectureAssemblyEffectSummary.Invalid(
+                    "managed-reference-catalog-invalid:" + _managedReferences.Failure);
+                return _effectSummaries.GetOrAdd(assembly, summary);
+            }
 
             var sourceIdentity = _managedReferences.TryGetSourceIdentity(
                 _compilation,
@@ -2158,6 +2255,32 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             summary = CloudArchitectureAssemblyEffectSummary.Read(assembly, sourceIdentity);
             return _effectSummaries.GetOrAdd(assembly, summary);
         }
+
+        private static string GetEffectSummaryFailureReason(string failure)
+        {
+            if (string.Equals(
+                    failure,
+                    "missing-duplicate-or-mismatched-source-identity",
+                    StringComparison.Ordinal))
+            {
+                return "external-effect-identity-mismatch";
+            }
+
+            if (string.Equals(failure, "unmanaged-reference", StringComparison.Ordinal))
+                return "external-effect-unmanaged-reference";
+
+            if (failure.StartsWith(
+                    "managed-reference-catalog-invalid:",
+                    StringComparison.Ordinal))
+            {
+                return "external-effect-" + failure;
+            }
+
+            return "external-effect-summary-invalid:" + failure;
+        }
+
+        private static string FormatAiReadSink(string sink, string failureReason) =>
+            sink + " [CLOUDARCH004_REASON=" + failureReason + "]";
 
         private bool IsUnclassifiedCrossProjectInterfaceDispatch(InvocationEdge edge)
         {

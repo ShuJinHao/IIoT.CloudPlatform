@@ -13,6 +13,11 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+$architectureBuildTargetsContractModule = Join-Path `
+    $PSScriptRoot `
+    'internal/CloudArchitectureBuildTargetsContract.psm1'
+Import-Module $architectureBuildTargetsContractModule -Force -ErrorAction Stop
+
 function ConvertTo-RepositoryPath {
     param([Parameter(Mandatory)][string]$Path)
 
@@ -604,6 +609,14 @@ if ($Mode -eq 'Quality') {
                 $unclassified.Add($file)
                 [void]$requiredExplicitMode.Add('Full')
             }
+            continue
+        }
+        if ($file -ceq 'Directory.Build.targets') {
+            if (Test-CloudArchitectureBuildTargetsContract -RepositoryRoot $root) {
+                continue
+            }
+            $unclassified.Add($file)
+            [void]$requiredExplicitMode.Add('Full')
             continue
         }
         if ($file -match '^(?:global\.json$|Directory\.(?:Build|Packages)\.(?:props|targets)$)') {
