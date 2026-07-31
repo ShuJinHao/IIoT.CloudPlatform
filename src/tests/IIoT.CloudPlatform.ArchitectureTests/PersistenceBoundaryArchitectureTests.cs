@@ -609,6 +609,131 @@ public sealed class PersistenceBoundaryArchitectureTests
     }
 
     [Fact]
+    public void PersistenceInventory_ShouldDiscoverDapperResultReturningWrites()
+    {
+        const string source =
+            """
+            using System.Data;
+            using Dapper;
+
+            public sealed class ReturningDapperWriter(IDbConnection connection)
+            {
+                public async Task WriteAsync(CancellationToken cancellationToken)
+                {
+                    _ = await connection.QuerySingleAsync<int>(
+                        "delete from sample returning id");
+                    _ = await connection.ExecuteScalarAsync<int>(
+                        "update sample set value = 1 returning value");
+                    using var reader = await connection.ExecuteReaderAsync(
+                        "insert into sample(value) values (1) returning value");
+                }
+            }
+            """;
+
+        var inventory = PersistenceWriteInventory.DiscoverSnippet(source);
+        var entry = Assert.Single(inventory.UnclassifiedEntries);
+
+        Assert.Equal(["dapper-write"], entry.SinkKinds);
+        Assert.Empty(inventory.UnresolvedCandidates);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldNotTrustReadOnlyPortForConstantDapperDml()
+    {
+        const string source =
+            """
+            using System.Data;
+            using Dapper;
+            using IIoT.SharedKernel.Architecture;
+
+            public interface IUnsafeQueryPort : IReadOnlyQueryPort
+            {
+                Task<int> ReadAsync(CancellationToken cancellationToken);
+            }
+
+            public sealed class UnsafeQueryPort(IDbConnection connection) : IUnsafeQueryPort
+            {
+                public async Task<int> ReadAsync(CancellationToken cancellationToken)
+                {
+                    var command = new CommandDefinition(
+                        "delete from sample returning id",
+                        cancellationToken: cancellationToken);
+                    return await connection.QuerySingleAsync<int>(command);
+                }
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(source).UnclassifiedEntries);
+
+        Assert.Contains("dapper-write", entry.SinkKinds);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldDiscoverOpenIddictManagerMutations()
+    {
+        const string source =
+            """
+            using OpenIddict.Abstractions;
+
+            public sealed class UnsafeOpenIddictWriter(
+                IOpenIddictAuthorizationManager authorizationManager)
+            {
+                public ValueTask<long> PruneAsync(CancellationToken cancellationToken)
+                    => authorizationManager.PruneAsync(
+                        DateTimeOffset.UtcNow,
+                        cancellationToken);
+
+                public ValueTask<bool> RevokeAsync(
+                    object authorization,
+                    CancellationToken cancellationToken)
+                    => authorizationManager.TryRevokeAsync(
+                        authorization,
+                        cancellationToken);
+
+                public IAsyncEnumerable<object> ReadAsync(
+                    CancellationToken cancellationToken)
+                    => authorizationManager.FindBySubjectAsync(
+                        "subject",
+                        cancellationToken);
+            }
+            """;
+
+        var inventory = PersistenceWriteInventory.DiscoverSnippet(source);
+
+        Assert.Equal(2, inventory.UnclassifiedEntries.Count);
+        Assert.All(
+            inventory.UnclassifiedEntries,
+            entry => Assert.Contains("oidc-write", entry.SinkKinds));
+        Assert.Empty(inventory.UnresolvedCandidates);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldFailClosedForUnknownOpenIddictManagerMethods()
+    {
+        const string source =
+            """
+            using OpenIddict.Abstractions;
+
+            public sealed class FutureOpenIddictWriter(
+                IOpenIddictAuthorizationManager authorizationManager)
+            {
+                public Task WriteAsync(CancellationToken cancellationToken)
+                    => authorizationManager.FutureMutationAsync(cancellationToken);
+            }
+            """;
+
+        var inventory = PersistenceWriteInventory.DiscoverSnippet(source);
+
+        Assert.Empty(inventory.Entries);
+        Assert.Contains(
+            inventory.UnresolvedCandidates,
+            candidate => candidate.Contains(
+                "FutureMutationAsync",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void PersistenceInventory_ShouldDiscoverDapperAndDbCommandWritesBySymbol()
     {
         const string source =

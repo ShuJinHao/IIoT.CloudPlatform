@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Xml.Linq;
+using IIoT.CloudPlatform.Analyzers;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -43,12 +44,6 @@ internal static class PersistenceWriteInventory
             "EnsureCreatedAsync",
             "EnsureDeleted",
             "EnsureDeletedAsync");
-
-    private static readonly ImmutableHashSet<string> DapperCandidateNames =
-        ImmutableHashSet.Create(
-            StringComparer.Ordinal,
-            "Execute",
-            "ExecuteAsync");
 
     // These are read-only allowlists: an unknown future Identity API is
     // deliberately treated as a write until its semantics are reviewed.
@@ -1261,6 +1256,12 @@ internal static class PersistenceWriteInventory
                 continue;
             }
 
+            if (kind == "dapper-write" &&
+                IsProvenReadOnlyDapperInvocation(invocation, semanticModel, callable))
+            {
+                continue;
+            }
+
             sites.Add(new WriteSite(
                 relativePath,
                 GetLine(invocation),
@@ -1434,8 +1435,11 @@ internal static class PersistenceWriteInventory
             return true;
         }
 
-        if ((method.Name is "Execute" or "ExecuteAsync") &&
-            typeName == "Dapper.SqlMapper")
+        if (typeName == "Dapper.SqlMapper" &&
+            method.Parameters.Any(parameter =>
+                (parameter.Name.Equals("sql", StringComparison.OrdinalIgnoreCase) &&
+                 parameter.Type.SpecialType == SpecialType.System_String) ||
+                parameter.Type.ToDisplayString() == "Dapper.CommandDefinition"))
         {
             kind = "dapper-write";
             return true;
@@ -1464,10 +1468,9 @@ internal static class PersistenceWriteInventory
             return true;
         }
 
-        if (namespaceName.StartsWith("OpenIddict", StringComparison.Ordinal) &&
-            (method.Name is "CreateAsync" or "UpdateAsync" or "DeleteAsync"))
+        if (IsOpenIddictMutation(method))
         {
-            kind = "oidc-seed";
+            kind = "oidc-write";
             return true;
         }
 
@@ -1506,6 +1509,244 @@ internal static class PersistenceWriteInventory
         }
 
         return !IdentityManagerReadOnlyMethodNames.Contains(method.Name);
+    }
+
+    private static bool IsProvenReadOnlyDapperInvocation(
+        InvocationExpressionSyntax invocation,
+        SemanticModel semanticModel,
+        IMethodSymbol callable)
+    {
+        if (semanticModel.GetOperation(invocation) is not IInvocationOperation operation)
+        {
+            return false;
+        }
+
+        if (CloudArchitectureAnalyzer.HasCompileTimeReadOnlySql(operation))
+        {
+            return true;
+        }
+
+        if (!CloudArchitectureAnalyzer.IsDapperCommandDefinitionInvocation(operation))
+        {
+            return false;
+        }
+
+        if (TryGetDapperCommandDefinitionSql(
+                operation,
+                semanticModel,
+                new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default),
+                out var sql))
+        {
+            return CloudArchitectureAnalyzer.IsReadOnlySql(sql);
+        }
+
+        return IsDirectReadOnlyQueryPortImplementation(callable);
+    }
+
+    private static bool TryGetDapperCommandDefinitionSql(
+        IOperation operation,
+        SemanticModel semanticModel,
+        ISet<ILocalSymbol> visiting,
+        out string sql)
+    {
+        operation = UnwrapOperationConversion(operation);
+        if (operation.ConstantValue.HasValue &&
+            operation.ConstantValue.Value is string constant)
+        {
+            sql = constant;
+            return true;
+        }
+
+        if (operation is IInvocationOperation invocation)
+        {
+            var commandArgument = invocation.Arguments.FirstOrDefault(argument =>
+                argument.Value.Type?.ToDisplayString() == "Dapper.CommandDefinition");
+            if (commandArgument is not null)
+            {
+                return TryGetDapperCommandDefinitionSql(
+                    commandArgument.Value,
+                    semanticModel,
+                    visiting,
+                    out sql);
+            }
+        }
+
+        if (operation is IObjectCreationOperation creation &&
+            creation.Type?.ToDisplayString() == "Dapper.CommandDefinition")
+        {
+            var sqlArgument = creation.Arguments.FirstOrDefault(argument =>
+                argument.Parameter?.Name.Equals(
+                    "commandText",
+                    StringComparison.OrdinalIgnoreCase) == true) ??
+                creation.Arguments.FirstOrDefault(argument =>
+                    argument.Value.Type?.SpecialType == SpecialType.System_String);
+            if (sqlArgument is not null)
+            {
+                return TryGetDapperCommandDefinitionSql(
+                    sqlArgument.Value,
+                    semanticModel,
+                    visiting,
+                    out sql);
+            }
+        }
+
+        if (operation is ILocalReferenceOperation localReference &&
+            visiting.Add(localReference.Local))
+        {
+            try
+            {
+                var initializer = localReference.Local.DeclaringSyntaxReferences
+                    .Select(reference => reference.GetSyntax())
+                    .OfType<VariableDeclaratorSyntax>()
+                    .Select(declaration => declaration.Initializer?.Value)
+                    .SingleOrDefault(value => value is not null);
+                if (initializer is not null &&
+                    semanticModel.GetOperation(initializer) is { } initializerOperation)
+                {
+                    return TryGetDapperCommandDefinitionSql(
+                        initializerOperation,
+                        semanticModel,
+                        visiting,
+                        out sql);
+                }
+            }
+            finally
+            {
+                visiting.Remove(localReference.Local);
+            }
+        }
+
+        sql = string.Empty;
+        return false;
+    }
+
+    private static IOperation UnwrapOperationConversion(IOperation operation)
+    {
+        while (operation is IConversionOperation conversion)
+        {
+            operation = conversion.Operand;
+        }
+
+        return operation;
+    }
+
+    private static bool IsDirectReadOnlyQueryPortImplementation(IMethodSymbol callable)
+    {
+        var containingType = callable.ContainingType;
+        if (containingType is null)
+        {
+            return false;
+        }
+
+        foreach (var contract in containingType.AllInterfaces.Where(IsReadOnlyQueryPortType))
+        {
+            if (CloudArchitectureAnalyzer.HasWritableCapabilitySurface(contract))
+            {
+                continue;
+            }
+
+            foreach (var contractMethod in contract.GetMembers()
+                         .OfType<IMethodSymbol>())
+            {
+                if (containingType.FindImplementationForInterfaceMember(contractMethod)
+                        is IMethodSymbol implementation &&
+                    SymbolEqualityComparer.Default.Equals(
+                        implementation.OriginalDefinition,
+                        callable.OriginalDefinition))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsReadOnlyQueryPortType(INamedTypeSymbol type)
+        => IsReadOnlyQueryPortMarker(type) ||
+           type.AllInterfaces.Any(IsReadOnlyQueryPortMarker);
+
+    private static bool IsReadOnlyQueryPortMarker(INamedTypeSymbol type)
+        => type.Name == "IReadOnlyQueryPort" &&
+           type.ContainingNamespace.ToDisplayString() ==
+           "IIoT.SharedKernel.Architecture";
+
+    private static bool IsOpenIddictMutation(IMethodSymbol method)
+    {
+        if (!IsOpenIddictManagerOrStoreType(method.ContainingType))
+        {
+            return false;
+        }
+
+        if (method.Name.Contains("Create", StringComparison.Ordinal) ||
+            method.Name.Contains("Delete", StringComparison.Ordinal) ||
+            method.Name.Contains("Prune", StringComparison.Ordinal) ||
+            method.Name.Contains("Purge", StringComparison.Ordinal) ||
+            method.Name.Contains("Redeem", StringComparison.Ordinal) ||
+            method.Name.Contains("Reject", StringComparison.Ordinal) ||
+            method.Name.Contains("Revoke", StringComparison.Ordinal) ||
+            method.Name.Contains("Update", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (method.Name.StartsWith("Add", StringComparison.Ordinal) ||
+            method.Name.StartsWith("Remove", StringComparison.Ordinal) ||
+            method.Name.StartsWith("Replace", StringComparison.Ordinal) ||
+            method.Name.StartsWith("Set", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (method.Name is "Dispose" or "InstantiateAsync" or "PopulateAsync" ||
+            method.Name.StartsWith("Count", StringComparison.Ordinal) ||
+            method.Name.StartsWith("Find", StringComparison.Ordinal) ||
+            method.Name.StartsWith("Get", StringComparison.Ordinal) ||
+            method.Name.StartsWith("Has", StringComparison.Ordinal) ||
+            method.Name.StartsWith("List", StringComparison.Ordinal) ||
+            method.Name.StartsWith("Validate", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsOpenIddictManagerOrStoreType(INamedTypeSymbol? type)
+    {
+        if (type is null)
+        {
+            return false;
+        }
+
+        return EnumerateTypeHierarchy(type).Any(candidate =>
+        {
+            var namespaceName = candidate.ContainingNamespace.ToDisplayString();
+            var isOpenIddictContract = candidate.Name.StartsWith(
+                "IOpenIddict",
+                StringComparison.Ordinal);
+            var isOpenIddictImplementation = candidate.Name.StartsWith(
+                "OpenIddict",
+                StringComparison.Ordinal);
+            return namespaceName.StartsWith("OpenIddict", StringComparison.Ordinal) &&
+                   (isOpenIddictContract || isOpenIddictImplementation) &&
+                   (candidate.Name.Contains("Manager", StringComparison.Ordinal) ||
+                    candidate.Name.Contains("Store", StringComparison.Ordinal));
+        });
+    }
+
+    private static IEnumerable<INamedTypeSymbol> EnumerateTypeHierarchy(
+        INamedTypeSymbol type)
+    {
+        for (var current = type; current is not null; current = current.BaseType)
+        {
+            yield return current;
+        }
+
+        foreach (var contract in type.AllInterfaces)
+        {
+            yield return contract;
+        }
     }
 
     private static bool IsIdentityStoreMutation(IMethodSymbol method)
@@ -1847,15 +2088,16 @@ internal static class PersistenceWriteInventory
             return false;
         }
 
-        var namespaceName = receiverType.ContainingNamespace?.ToDisplayString()
-            ?? string.Empty;
-        return (DapperCandidateNames.Contains(name) &&
+        return (IsDapperExecutionCandidateName(name) &&
                 IsDatabaseConnectionType(receiverType)) ||
                IsIdentityManagerType(receiverType as INamedTypeSymbol) ||
                IsIdentityStoreType(receiverType as INamedTypeSymbol) ||
-               (namespaceName.StartsWith("OpenIddict", StringComparison.Ordinal) &&
-                name is "CreateAsync" or "UpdateAsync" or "DeleteAsync");
+               IsOpenIddictManagerOrStoreType(receiverType as INamedTypeSymbol);
     }
+
+    private static bool IsDapperExecutionCandidateName(string name)
+        => name.StartsWith("Execute", StringComparison.Ordinal) ||
+           name.StartsWith("Query", StringComparison.Ordinal);
 
     private static ITypeSymbol? GetReceiverType(
         SimpleNameSyntax reference,

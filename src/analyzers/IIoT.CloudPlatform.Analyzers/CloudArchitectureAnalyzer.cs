@@ -106,6 +106,7 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             "least",
             "length",
             "lower",
+            "make_interval",
             "max",
             "min",
             "nullif",
@@ -118,10 +119,14 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
     private static readonly ImmutableHashSet<string> SqlStructuralParentheses =
         ImmutableHashSet.Create(
             StringComparer.OrdinalIgnoreCase,
+            "and",
             "as",
             "exists",
             "filter",
+            "from",
             "in",
+            "join",
+            "or",
             "over",
             "values");
 
@@ -237,6 +242,16 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
 
         return false;
     }
+
+    internal static bool HasCompileTimeReadOnlySql(IInvocationOperation invocation)
+        => CompilationState.HasCompileTimeReadOnlySql(invocation);
+
+    internal static bool IsDapperCommandDefinitionInvocation(
+        IInvocationOperation invocation)
+        => CompilationState.IsDapperCommandDefinitionInvocation(invocation);
+
+    internal static bool IsReadOnlySql(string sql)
+        => CompilationState.IsReadOnlySql(sql);
 
     private static bool IsRepositoryApiType(INamedTypeSymbol? type)
     {
@@ -1872,8 +1887,17 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
                 UnwrapConversion(argument.Value).Type?.SpecialType == SpecialType.System_String);
 
             if (sqlArgument is null ||
-                !TryGetConstantString(sqlArgument.Value, out var sql) ||
-                !TryGetSqlCode(sql, out var code))
+                !TryGetConstantString(sqlArgument.Value, out var sql))
+            {
+                return false;
+            }
+
+            return IsReadOnlySql(sql);
+        }
+
+        internal static bool IsReadOnlySql(string sql)
+        {
+            if (!TryGetSqlCode(sql, out var code))
             {
                 return false;
             }

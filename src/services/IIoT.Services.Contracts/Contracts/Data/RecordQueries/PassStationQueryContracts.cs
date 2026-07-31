@@ -104,7 +104,7 @@ public interface IPassStationSchemaProvider : IReadOnlyQueryPort
     PassStationTypeDefinitionDto? Find(string typeKey);
 }
 
-public interface IPassStationRecordQueryService
+public interface IPassStationRecordQueryService : IReadOnlyQueryPort
 {
     Task<(List<PassStationListItemDto> Items, int TotalCount)> GetByConditionAsync(
         PassStationQueryRequest request,

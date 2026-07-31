@@ -1,10 +1,12 @@
+using IIoT.SharedKernel.Architecture;
+
 namespace IIoT.Services.Contracts.RecordQueries;
 
 public sealed record DeviceIdentitySnapshot(
     Guid DeviceId,
     string Code);
 
-public interface IDeviceIdentityQueryService
+public interface IDeviceIdentityQueryService : IReadOnlyQueryPort
 {
     Task<DeviceIdentitySnapshot?> GetByDeviceIdAsync(
         Guid deviceId,
