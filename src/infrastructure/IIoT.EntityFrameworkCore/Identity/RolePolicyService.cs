@@ -145,10 +145,12 @@ public sealed class RolePolicyService(
         var targetPermissions = NormalizePermissions(validation.Permissions);
         RoleWriteSnapshot? baseline = null;
         var targetConcurrencyStamp = Guid.NewGuid().ToString("N");
+        Result<bool>? settledReadOnlyResult = null;
 
         return await ExecuteRecoverableAsync(
             async callbackToken =>
             {
+                settledReadOnlyResult = null;
                 await using var context = _createContext();
                 await using var transaction =
                     await context.Database.BeginTransactionAsync(callbackToken);
@@ -158,7 +160,10 @@ public sealed class RolePolicyService(
                     callbackToken);
                 if (current is null)
                 {
-                    return Result.Failure("角色不存在");
+                    Result<bool> result = Result.Failure("角色不存在");
+                    settledReadOnlyResult = result;
+                    await transaction.CommitAsync(callbackToken);
+                    return result;
                 }
 
                 if (MatchesPermissionsTarget(
@@ -212,7 +217,8 @@ public sealed class RolePolicyService(
                 targetConcurrencyStamp,
                 targetPermissions,
                 token),
-            cancellationToken);
+            cancellationToken,
+            knownResult: () => settledReadOnlyResult);
     }
 
     public async Task<Result<bool>> UpdateUserPersonalPermissionsAsync(
@@ -230,10 +236,12 @@ public sealed class RolePolicyService(
         var targetPermissions = NormalizePermissions(validation.Permissions);
         UserPermissionSnapshot? baseline = null;
         var targetConcurrencyStamp = Guid.NewGuid().ToString("N");
+        Result<bool>? settledReadOnlyResult = null;
 
         return await ExecuteRecoverableAsync(
             async callbackToken =>
             {
+                settledReadOnlyResult = null;
                 await using var context = _createContext();
                 await using var transaction =
                     await context.Database.BeginTransactionAsync(callbackToken);
@@ -243,7 +251,10 @@ public sealed class RolePolicyService(
                     callbackToken);
                 if (current is null)
                 {
-                    return Result.Failure("用户不存在");
+                    Result<bool> result = Result.Failure("用户不存在");
+                    settledReadOnlyResult = result;
+                    await transaction.CommitAsync(callbackToken);
+                    return result;
                 }
 
                 if (MatchesPermissionsTarget(
@@ -297,7 +308,8 @@ public sealed class RolePolicyService(
                 targetConcurrencyStamp,
                 targetPermissions,
                 token),
-            cancellationToken);
+            cancellationToken,
+            knownResult: () => settledReadOnlyResult);
     }
 
     public async Task<List<string>> GetUserPersonalPermissionsAsync(Guid userId)
@@ -318,7 +330,8 @@ public sealed class RolePolicyService(
     private async Task<Result<bool>> ExecuteRecoverableAsync(
         Func<CancellationToken, Task<Result<bool>>> attempt,
         Func<CancellationToken, Task<WriteObservation>> observe,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<Result<bool>?>? knownResult = null)
     {
         try
         {
@@ -339,6 +352,12 @@ public sealed class RolePolicyService(
         }
         catch
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (knownResult?.Invoke() is { } settledResult)
+            {
+                return settledResult;
+            }
+
             using var timeout = new CancellationTokenSource(ObservationTimeout);
             WriteObservation observation;
             try

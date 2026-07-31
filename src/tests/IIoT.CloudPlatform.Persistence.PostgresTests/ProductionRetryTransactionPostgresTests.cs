@@ -718,6 +718,49 @@ public sealed class ProductionRetryTransactionPostgresTests(
     }
 
     [Fact]
+    public async Task RolePolicyMissingEntities_ShouldRemainDeterministicWhenCommitConfirmationIsRepeatedlyLost()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(60));
+        var interceptor = new ThrowEveryCommitConfirmationInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var context = services.GetRequiredService<IIoTDbContext>();
+        var missingRole = $"MissingRole{Guid.NewGuid():N}"[..30];
+        var missingUserId = Guid.NewGuid();
+
+        interceptor.Arm();
+        var roles = CreateRolePolicyService(services);
+        var roleResult = await roles.UpdateRolePermissionsAsync(
+            missingRole,
+            [CloudPermissionCatalog.Device.Read],
+            budget.Token);
+        var userResult = await roles.UpdateUserPersonalPermissionsAsync(
+            missingUserId,
+            [CloudPermissionCatalog.Device.Read],
+            budget.Token);
+
+        Assert.False(roleResult.IsSuccess);
+        Assert.Contains("角色不存在", roleResult.Errors ?? []);
+        Assert.False(userResult.IsSuccess);
+        Assert.Contains("用户不存在", userResult.Errors ?? []);
+        Assert.True(interceptor.ExceptionsThrown > 3);
+        Assert.False(await context.Roles.AsNoTracking().AnyAsync(
+            role => role.NormalizedName == missingRole.ToUpperInvariant(),
+            budget.Token));
+        Assert.False(await context.Users.AsNoTracking().AnyAsync(
+            user => user.Id == missingUserId,
+            budget.Token));
+        Assert.False(await context.UserClaims.AsNoTracking().AnyAsync(
+            claim => claim.UserId == missingUserId,
+            budget.Token));
+    }
+
+    [Fact]
     public async Task IdentityPolicyAndPasswordWrites_ShouldRecoverCommitConfirmationLossExactly()
     {
         using var budget = await PostgresTestBudget.CreateAsync(
