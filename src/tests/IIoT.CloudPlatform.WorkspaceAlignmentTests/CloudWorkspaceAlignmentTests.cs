@@ -154,25 +154,118 @@ public sealed class CloudWorkspaceAlignmentTests : IAsyncLifetime
 
     private async Task SeedClientReleaseVersionsAsync(string channel, string targetRuntime)
     {
-        await _driver.AuthenticateAsAdminAsync();
+        var connectionString = await _fixture.GetConnectionStringAsync(
+            ConnectionResourceNames.IiotDatabase);
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        var componentId = Guid.NewGuid();
+        var createdAtUtc = DateTime.UtcNow;
+        await using (var component = new NpgsqlCommand(
+                         """
+                         insert into edge_client_release_components (
+                             id,
+                             component_kind,
+                             component_key,
+                             display_name,
+                             description,
+                             icon_kind,
+                             accent_color,
+                             channel,
+                             target_runtime,
+                             created_at_utc,
+                             updated_at_utc)
+                         values (
+                             @id,
+                             'Host',
+                             'EdgeHost',
+                             'Edge Host',
+                             null,
+                             null,
+                             null,
+                             @channel,
+                             @targetRuntime,
+                             @createdAtUtc,
+                             @createdAtUtc)
+                         """,
+                         connection,
+                         transaction))
+        {
+            component.Parameters.AddWithValue("id", componentId);
+            component.Parameters.AddWithValue("channel", channel);
+            component.Parameters.AddWithValue("targetRuntime", targetRuntime);
+            component.Parameters.AddWithValue("createdAtUtc", createdAtUtc);
+            await component.ExecuteNonQueryAsync();
+        }
+
         for (var index = 1; index <= 2; index++)
         {
-            await _driver.PostJsonAsync("/api/v1/human/client-releases/host-releases", new
-            {
-                Channel = channel,
-                Version = $"1.0.{index}",
-                HostApiVersion = "1.0.0",
-                TargetRuntime = targetRuntime,
-                TargetFramework = "net10.0",
-                DownloadUrl = $"http://127.0.0.1/non-production/{channel}/1.0.{index}.zip",
-                Sha256 = new string(index == 1 ? 'A' : 'B', 64),
-                PackageSize = 1024 + index,
-                ReleaseNotes = $"workspace alignment release {index}",
-                Status = "Published",
-                Signature = (string?)null,
-                Publisher = "workspace-alignment"
-            });
+            var version = $"1.0.{index}";
+            await using var release = new NpgsqlCommand(
+                """
+                insert into edge_client_release_versions (
+                    id,
+                    component_id,
+                    version,
+                    host_api_version,
+                    min_host_version,
+                    max_host_version,
+                    target_framework,
+                    download_url,
+                    sha256,
+                    package_size,
+                    release_notes,
+                    dependencies_json,
+                    status,
+                    signature,
+                    publisher,
+                    created_at_utc,
+                    published_at_utc,
+                    deleted_at_utc,
+                    deletion_reason,
+                    deletion_failure)
+                values (
+                    @id,
+                    @componentId,
+                    @version,
+                    '1.0.0',
+                    null,
+                    null,
+                    'net10.0',
+                    @downloadUrl,
+                    @sha256,
+                    @packageSize,
+                    @releaseNotes,
+                    '[]'::jsonb,
+                    'Published',
+                    null,
+                    'workspace-alignment',
+                    @createdAtUtc,
+                    @createdAtUtc,
+                    null,
+                    null,
+                    null)
+                """,
+                connection,
+                transaction);
+            release.Parameters.AddWithValue("id", Guid.NewGuid());
+            release.Parameters.AddWithValue("componentId", componentId);
+            release.Parameters.AddWithValue("version", version);
+            release.Parameters.AddWithValue(
+                "downloadUrl",
+                $"http://127.0.0.1/non-production/{channel}/{version}.zip");
+            release.Parameters.AddWithValue(
+                "sha256",
+                new string(index == 1 ? 'A' : 'B', 64));
+            release.Parameters.AddWithValue("packageSize", 1024L + index);
+            release.Parameters.AddWithValue(
+                "releaseNotes",
+                $"workspace alignment release {index}");
+            release.Parameters.AddWithValue("createdAtUtc", createdAtUtc);
+            await release.ExecuteNonQueryAsync();
         }
+
+        await transaction.CommitAsync();
     }
 
     private async Task SeedReadOnlyBusinessDataAsync(

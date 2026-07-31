@@ -59,6 +59,8 @@ public sealed class ClientReleaseComponent : BaseEntity<Guid>, IAggregateRoot<Gu
 
     public DateTime UpdatedAtUtc { get; private set; }
 
+    public uint RowVersion { get; private set; }
+
     public IReadOnlyCollection<ClientReleaseVersion> Versions => _versions.AsReadOnly();
 
     public static ClientReleaseComponent CreateHost(
@@ -265,32 +267,46 @@ public sealed class ClientReleaseComponent : BaseEntity<Guid>, IAggregateRoot<Gu
             string.Equals(item.Version, normalized, StringComparison.OrdinalIgnoreCase));
     }
 
-    public void ChangeVersionStatus(Guid versionId, ClientReleaseStatus status)
+    public void ChangeVersionStatus(
+        Guid versionId,
+        ClientReleaseStatus status,
+        DateTime? changedAtUtc = null)
     {
         var version = FindRequiredVersion(versionId);
-        version.ChangeStatus(status);
-        Touch();
+        version.ChangeStatus(status, changedAtUtc);
+        Touch(changedAtUtc);
     }
 
-    public void MarkVersionDeleted(Guid versionId, string? reason)
+    public void MarkVersionDeleted(
+        Guid versionId,
+        string? reason,
+        DateTime? deletedAtUtc = null,
+        string? deletionReceiptJson = null)
     {
         var version = FindRequiredVersion(versionId);
-        version.MarkDeleted(reason);
-        Touch();
+        version.MarkDeleted(reason, deletedAtUtc, deletionReceiptJson);
+        Touch(deletedAtUtc);
     }
 
-    public void MarkVersionDeleteRequested(Guid versionId)
+    public void MarkVersionDeleteRequested(
+        Guid versionId,
+        DateTime? changedAtUtc = null,
+        string? deletionReceiptJson = null)
     {
         var version = FindRequiredVersion(versionId);
-        version.MarkDeleteRequested();
-        Touch();
+        version.MarkDeleteRequested(deletionReceiptJson);
+        Touch(changedAtUtc);
     }
 
-    public void MarkVersionDeleteFailed(Guid versionId, string failure)
+    public void MarkVersionDeleteFailed(
+        Guid versionId,
+        string failure,
+        DateTime? changedAtUtc = null,
+        string? deletionReceiptJson = null)
     {
         var version = FindRequiredVersion(versionId);
-        version.MarkDeleteFailed(failure);
-        Touch();
+        version.MarkDeleteFailed(failure, deletionReceiptJson);
+        Touch(changedAtUtc);
     }
 
     private ClientReleaseVersion FindRequiredVersion(Guid versionId)
@@ -307,9 +323,9 @@ public sealed class ClientReleaseComponent : BaseEntity<Guid>, IAggregateRoot<Gu
         }
     }
 
-    private void Touch()
+    private void Touch(DateTime? changedAtUtc = null)
     {
-        UpdatedAtUtc = DateTime.UtcNow;
+        UpdatedAtUtc = NormalizeUtc(changedAtUtc ?? DateTime.UtcNow);
     }
 
     private void Validate()
@@ -330,6 +346,16 @@ public sealed class ClientReleaseComponent : BaseEntity<Guid>, IAggregateRoot<Gu
     {
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    internal static DateTime NormalizeUtc(DateTime value)
+    {
+        var utc = value.Kind == DateTimeKind.Utc
+            ? value
+            : DateTime.SpecifyKind(value, DateTimeKind.Utc);
+        return new DateTime(
+            utc.Ticks - utc.Ticks % 10,
+            DateTimeKind.Utc);
     }
 }
 
@@ -423,6 +449,10 @@ public sealed class ClientReleaseVersion : BaseEntity<Guid>
     public string? DeletionReason { get; private set; }
 
     public string? DeletionFailure { get; private set; }
+
+    public string? DeletionReceiptJson { get; private set; }
+
+    public uint RowVersion { get; private set; }
 
     public IReadOnlyCollection<ClientReleaseArtifact> Artifacts => _artifacts.AsReadOnly();
 
@@ -560,7 +590,9 @@ public sealed class ClientReleaseVersion : BaseEntity<Guid>
             artifacts);
     }
 
-    public void ChangeStatus(ClientReleaseStatus status)
+    public void ChangeStatus(
+        ClientReleaseStatus status,
+        DateTime? changedAtUtc = null)
     {
         Status = status;
         if (status != ClientReleaseStatus.Deleted && status != ClientReleaseStatus.DeleteFailed)
@@ -568,32 +600,50 @@ public sealed class ClientReleaseVersion : BaseEntity<Guid>
             DeletedAtUtc = null;
             DeletionReason = null;
             DeletionFailure = null;
+            DeletionReceiptJson = null;
         }
 
         if (status == ClientReleaseStatus.Published && PublishedAtUtc is null)
         {
-            PublishedAtUtc = DateTime.UtcNow;
+            PublishedAtUtc = ClientReleaseComponent.NormalizeUtc(
+                changedAtUtc ?? DateTime.UtcNow);
         }
     }
 
-    public void MarkDeleted(string? reason)
+    public void MarkDeleted(
+        string? reason,
+        DateTime? deletedAtUtc = null,
+        string? deletionReceiptJson = null)
     {
         Status = ClientReleaseStatus.Deleted;
-        DeletedAtUtc = DateTime.UtcNow;
+        DeletedAtUtc = ClientReleaseComponent.NormalizeUtc(
+            deletedAtUtc ?? DateTime.UtcNow);
         DeletionReason = ClientReleaseComponent.NormalizeOptional(reason);
         DeletionFailure = null;
+        DeletionReceiptJson =
+            ClientReleaseComponent.NormalizeOptional(deletionReceiptJson);
     }
 
-    public void MarkDeleteRequested()
+    public void MarkDeleteRequested(string? deletionReceiptJson = null)
     {
         Status = ClientReleaseStatus.DeleteRequested;
+        DeletedAtUtc = null;
+        DeletionReason = null;
         DeletionFailure = null;
+        DeletionReceiptJson =
+            ClientReleaseComponent.NormalizeOptional(deletionReceiptJson);
     }
 
-    public void MarkDeleteFailed(string failure)
+    public void MarkDeleteFailed(
+        string failure,
+        string? deletionReceiptJson = null)
     {
         Status = ClientReleaseStatus.DeleteFailed;
+        DeletedAtUtc = null;
+        DeletionReason = null;
         DeletionFailure = ClientReleaseComponent.NormalizeRequired(failure, nameof(failure));
+        DeletionReceiptJson =
+            ClientReleaseComponent.NormalizeOptional(deletionReceiptJson);
     }
 
     public void ReplaceArtifacts(IEnumerable<ClientReleaseArtifact>? artifacts)
@@ -641,6 +691,7 @@ public sealed class ClientReleaseVersion : BaseEntity<Guid>
             DeletedAtUtc = null;
             DeletionReason = null;
             DeletionFailure = null;
+            DeletionReceiptJson = null;
         }
 
         if (status == ClientReleaseStatus.Published && PublishedAtUtc is null)

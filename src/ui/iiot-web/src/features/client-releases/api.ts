@@ -121,9 +121,6 @@ export const deleteClientReleaseFilesApi = (releaseId: string, reason?: string |
     data: { reason: reason ?? null },
   });
 
-export const updateClientReleaseStatusApi = (releaseId: string, status: string) =>
-  http.put<void>(`${basePath}/${releaseId}/status`, { status });
-
 export interface EdgeBindingSelection {
   moduleId: string;
   deviceId: string;

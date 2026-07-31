@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Aggregates.Devices;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Core.Production.Specifications.ClientReleases;
 using IIoT.Core.Production.Specifications.Devices;
 using IIoT.ProductionService.ClientReleases;
@@ -11,6 +12,8 @@ using IIoT.ProductionService.Security;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Persistence;
+using IIoT.Services.CrossCutting.Persistence;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
@@ -38,7 +41,9 @@ public sealed class GenerateEdgeInstallerPackageHandler(
     IRepository<Device> deviceRepository,
     IReadRepository<ClientReleaseComponent> componentRepository,
     IAuditTrailService auditTrailService,
-    IOptions<EdgeInstallerArtifactOptions> options)
+    IOptions<EdgeInstallerArtifactOptions> options,
+    IUnitOfWork unitOfWork,
+    IClientReleaseWriteObservationReader observationReader)
     : ICommandHandler<GenerateEdgeInstallerPackageCommand, Result<EdgeInstallerPackageDto>>
 {
     private static readonly byte[] InstallerMagic = "IIOTEDG1"u8.ToArray();
@@ -125,11 +130,36 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             return await FailAsync(devices.Error!, cancellationToken);
         }
 
-        var bindings = RotateDeviceSecrets(selections, devices.DevicesById!);
+        var requestedDeviceIds = selections
+            .Select(selection => selection.DeviceId)
+            .OrderBy(deviceId => deviceId)
+            .ToArray();
+        var baselineObservation =
+            await CloudWriteCommitRecovery.TryObserveAttemptAsync(
+                token => observationReader.ObserveDeviceBootstrapAsync(
+                    requestedDeviceIds,
+                    token),
+                cancellationToken)
+            ?? throw new CloudWriteCommitUnknownException();
+        if (baselineObservation.Count != requestedDeviceIds.Length
+            || !LoadedDevicesMatchObservation(
+                devices.DevicesById!,
+                baselineObservation))
+        {
+            throw new CloudWriteConflictException();
+        }
+
+        var secretTargets = CreateDeviceSecretTargets(
+            selections,
+            devices.DevicesById!);
+        var bindings = secretTargets
+            .Select(target => target.Binding)
+            .ToList();
         var bindingBundle = new EdgeBindingBundleDto(
             1,
             publicBaseUrl,
-            DateTime.UtcNow,
+            ClientReleaseWriteCommitRecovery.NormalizeUtc(
+                DateTime.UtcNow),
             bindings);
         Stream packageStream;
         try
@@ -157,14 +187,24 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             return await FailAsync("生成安装包失败：服务器没有读取安装素材或写入临时文件的权限。", cancellationToken);
         }
 
-        var affected = await deviceRepository.SaveChangesAsync(cancellationToken);
-        if (affected <= 0)
+        try
+        {
+            await PersistDeviceSecretsAsync(
+                baselineObservation,
+                secretTargets,
+                cancellationToken);
+            await WriteSuccessAuditAsync(
+                bindings,
+                devices.DevicesById!,
+                bindingBundle.GeneratedAtUtc,
+                cancellationToken);
+        }
+        catch
         {
             await packageStream.DisposeAsync();
-            return await FailAsync("生成安装包失败：保存设备启动凭据失败。", cancellationToken);
+            throw;
         }
 
-        await WriteSuccessAuditAsync(bindings, devices.DevicesById!, cancellationToken);
         var fileName = BuildDownloadFileName(bindings, host.Version.Version);
         return Result.Success(new EdgeInstallerPackageDto(
             fileName,
@@ -542,26 +582,213 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         return DeviceLoadResult.Success(deviceById);
     }
 
-    private List<EdgeBindingItemDto> RotateDeviceSecrets(
+    private static List<DeviceBootstrapSecretTarget>
+        CreateDeviceSecretTargets(
         IReadOnlyList<EdgeBindingSelection> selections,
         IReadOnlyDictionary<Guid, Device> deviceById)
     {
-        var bindings = new List<EdgeBindingItemDto>(selections.Count);
+        var targets =
+            new List<DeviceBootstrapSecretTarget>(selections.Count);
         foreach (var selection in selections)
         {
             var device = deviceById[selection.DeviceId];
             var bootstrapSecret = BootstrapSecretGenerator.Generate();
-            device.SetBootstrapSecretHash(BootstrapSecretHasher.Hash(bootstrapSecret));
-            deviceRepository.Update(device);
-            bindings.Add(new EdgeBindingItemDto(
-                selection.ModuleId,
-                device.Code,
-                bootstrapSecret,
-                device.DeviceName,
-                device.ProcessId));
+            var targetHash = BootstrapSecretHasher.Hash(
+                bootstrapSecret);
+            targets.Add(new DeviceBootstrapSecretTarget(
+                device.Id,
+                targetHash,
+                new EdgeBindingItemDto(
+                    selection.ModuleId,
+                    device.Code,
+                    bootstrapSecret,
+                    device.DeviceName,
+                    device.ProcessId)));
         }
 
-        return bindings;
+        return targets;
+    }
+
+    private async Task PersistDeviceSecretsAsync(
+        IReadOnlyCollection<DeviceBootstrapWriteState> baseline,
+        IReadOnlyCollection<DeviceBootstrapSecretTarget> targets,
+        CancellationToken cancellationToken)
+    {
+        var requestedDeviceIds = targets
+            .Select(target => target.DeviceId)
+            .OrderBy(deviceId => deviceId)
+            .ToArray();
+        var targetHashes = targets.ToDictionary(
+            target => target.DeviceId,
+            target => target.SecretHash);
+        try
+        {
+            await unitOfWork.ExecuteResilientAsync(
+                ExecuteAttemptAsync,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested)
+        {
+            var current =
+                await CloudWriteCommitRecovery.TryObserveCommitAsync(
+                    token => observationReader
+                        .ObserveDeviceBootstrapAsync(
+                            requestedDeviceIds,
+                            token));
+            if (current is not null
+                && ClientReleaseWriteCommitRecovery
+                    .MatchesDeviceBootstrapTarget(
+                        current,
+                        baseline,
+                        targetHashes))
+            {
+                return;
+            }
+
+            throw new OperationCanceledException(cancellationToken);
+        }
+        catch (CloudWriteException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
+        }
+        catch
+        {
+            var current =
+                await CloudWriteCommitRecovery.TryObserveCommitAsync(
+                    token => observationReader
+                        .ObserveDeviceBootstrapAsync(
+                            requestedDeviceIds,
+                            token));
+            if (current is not null
+                && ClientReleaseWriteCommitRecovery
+                    .MatchesDeviceBootstrapTarget(
+                        current,
+                        baseline,
+                        targetHashes))
+            {
+                return;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if (current is null
+                || ClientReleaseWriteCommitRecovery
+                    .MatchesDeviceBootstrapBaseline(
+                        current,
+                        baseline))
+            {
+                throw new CloudWriteCommitUnknownException();
+            }
+
+            if (!ClientReleaseWriteCommitRecovery
+                    .MatchesDeviceBootstrapTarget(
+                        current,
+                        baseline,
+                        targetHashes))
+            {
+                throw new CloudWriteConflictException();
+            }
+        }
+
+        var confirmed =
+            await CloudWriteCommitRecovery.TryObserveCommitAsync(
+                token => observationReader.ObserveDeviceBootstrapAsync(
+                    requestedDeviceIds,
+                    token));
+        if (ClientReleaseWriteCommitRecovery
+            .MatchesDeviceBootstrapTarget(
+                confirmed ?? [],
+                baseline,
+                targetHashes))
+        {
+            return;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        throw ClientReleaseWriteCommitRecovery
+            .MatchesDeviceBootstrapBaseline(confirmed ?? [], baseline)
+            ? new CloudWriteCommitUnknownException()
+            : new CloudWriteConflictException();
+
+        async Task<bool> ExecuteAttemptAsync(
+            CancellationToken callbackCancellationToken)
+        {
+            var current =
+                await CloudWriteCommitRecovery.TryObserveAttemptAsync(
+                    token => observationReader
+                        .ObserveDeviceBootstrapAsync(
+                            requestedDeviceIds,
+                            token),
+                    callbackCancellationToken)
+                ?? throw new CloudWriteCommitUnknownException();
+            if (ClientReleaseWriteCommitRecovery
+                .MatchesDeviceBootstrapTarget(
+                    current,
+                    baseline,
+                    targetHashes))
+            {
+                return true;
+            }
+
+            if (!ClientReleaseWriteCommitRecovery
+                    .MatchesDeviceBootstrapBaseline(
+                        current,
+                        baseline))
+            {
+                throw new CloudWriteConflictException();
+            }
+
+            var devices = await deviceRepository.GetListAsync(
+                new DevicePagedSpec(
+                    0,
+                    0,
+                    requestedDeviceIds.ToList(),
+                    isPaging: false),
+                callbackCancellationToken);
+            if (!LoadedDevicesMatchObservation(devices, baseline))
+            {
+                throw new CloudWriteConflictException();
+            }
+
+            foreach (var device in devices)
+            {
+                device.SetBootstrapSecretHash(
+                    targetHashes[device.Id]);
+            }
+
+            await deviceRepository.SaveChangesAsync(
+                callbackCancellationToken);
+            return true;
+        }
+    }
+
+    private static bool LoadedDevicesMatchObservation(
+        IReadOnlyDictionary<Guid, Device> devices,
+        IReadOnlyCollection<DeviceBootstrapWriteState> observation)
+        => LoadedDevicesMatchObservation(
+            devices.Values.ToArray(),
+            observation);
+
+    private static bool LoadedDevicesMatchObservation(
+        IReadOnlyCollection<Device> devices,
+        IReadOnlyCollection<DeviceBootstrapWriteState> observation)
+    {
+        if (devices.Count != observation.Count)
+        {
+            return false;
+        }
+
+        var observedById = observation.ToDictionary(
+            item => item.DeviceId);
+        return devices.All(device =>
+            observedById.TryGetValue(device.Id, out var observed)
+            && device.DeviceName == observed.DeviceName
+            && device.Code == observed.ClientCode
+            && device.ProcessId == observed.ProcessId
+            && device.BootstrapSecretHash
+            == observed.BootstrapSecretHash
+            && device.RowVersion == observed.RowVersion);
     }
 
     private static string? ValidateArtifactLayout(EdgeInstallerArtifactManifest artifact)
@@ -618,23 +845,33 @@ public sealed class GenerateEdgeInstallerPackageHandler(
     private async Task WriteSuccessAuditAsync(
         IReadOnlyList<EdgeBindingItemDto> bindings,
         IReadOnlyDictionary<Guid, Device> deviceById,
+        DateTime executedAtUtc,
         CancellationToken cancellationToken)
     {
+        var allAuditsConfirmed = true;
         foreach (var binding in bindings)
         {
             var device = deviceById.Values.Single(item => item.Code == binding.ClientCode);
-            await auditTrailService.TryWriteAsync(
-                new AuditTrailEntry(
-                    ClientReleaseAuditActor.ParseId(currentUser.Id),
-                    currentUser.UserName,
-                    "Edge.GenerateInstallerPackage",
-                    "Device",
-                    device.Id.ToString(),
-                    DateTime.UtcNow,
-                    true,
-                    $"生成客户端首装包时更新设备 {device.DeviceName}（{device.Code}）的启动凭据。",
-                    null),
-                cancellationToken);
+            allAuditsConfirmed &=
+                await CloudWriteCommitRecovery.TryConfirmRecoveredAuditAsync(
+                    auditTrailService,
+                    new AuditTrailEntry(
+                        ClientReleaseAuditActor.ParseId(currentUser.Id),
+                        currentUser.UserName,
+                        "Edge.GenerateInstallerPackage",
+                        "Device",
+                        device.Id.ToString(),
+                        executedAtUtc,
+                        true,
+                        $"生成客户端首装包时更新设备 {device.DeviceName}（{device.Code}）的启动凭据。",
+                        null,
+                        $"edge-installer-secret:{executedAtUtc.Ticks:x}:{device.Id:N}"));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!allAuditsConfirmed)
+        {
+            throw new CloudWriteCommitUnknownException();
         }
     }
 
@@ -1117,6 +1354,11 @@ public sealed class GenerateEdgeInstallerPackageHandler(
     private sealed record HostReleaseSelection(
         ClientReleaseComponent Component,
         ClientReleaseVersion Version);
+
+    private sealed record DeviceBootstrapSecretTarget(
+        Guid DeviceId,
+        string SecretHash,
+        EdgeBindingItemDto Binding);
 
     private sealed record PluginReleaseSelection(
         ClientReleaseComponent Component,

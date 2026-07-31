@@ -78,10 +78,6 @@ public sealed record ClientPluginVersionEntryDto(
     string? DeletionFailure,
     bool FilesPresent = true);
 
-public sealed record UpsertClientHostReleaseResultDto(Guid Id);
-
-public sealed record UpsertClientPluginReleaseResultDto(Guid Id);
-
 public sealed record DeviceClientVersionReportResultDto(
     Guid DeviceId,
     DateTime ReceivedAtUtc);

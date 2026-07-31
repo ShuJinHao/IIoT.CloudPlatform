@@ -20,5 +20,9 @@ public sealed class ClientReleaseRetentionPolicyConfiguration : IEntityTypeConfi
         builder.Property(policy => policy.UpdatedAtUtc)
             .IsRequired()
             .HasColumnName("updated_at_utc");
+
+        builder.Property(policy => policy.RowVersion)
+            .HasColumnName("xmin")
+            .IsRowVersion();
     }
 }

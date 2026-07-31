@@ -6,11 +6,12 @@ using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.CrossCutting.Persistence;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace IIoT.ProductionService.Commands.ClientReleases;
@@ -43,7 +44,8 @@ public sealed class HardDeleteClientReleaseComponentHandler(
     IClientReleaseComponentDeletionProcessor deletionProcessor,
     ICurrentUser currentUser,
     IAuditTrailService auditTrailService,
-    ILogger<HardDeleteClientReleaseComponentHandler> logger)
+    IUnitOfWork unitOfWork,
+    IClientReleaseWriteObservationReader observationReader)
     : ICommandHandler<HardDeleteClientReleaseComponentCommand, Result<ClientReleaseComponentHardDeletionResultDto>>
 {
     private const string AuditAction = "ClientRelease.HardDeleteComponent";
@@ -67,6 +69,21 @@ public sealed class HardDeleteClientReleaseComponentHandler(
             .Select(version => version.Version)
             .OrderBy(version => version, StringComparer.OrdinalIgnoreCase)
             .ToList();
+        var baselineObservation =
+            await CloudWriteCommitRecovery
+                .TryObserveOptionalAttemptAsync(
+                token => observationReader.ObserveComponentAsync(
+                    component.Id,
+                    token),
+                cancellationToken)
+            ?? throw new CloudWriteCommitUnknownException();
+        var baseline = baselineObservation.Value
+                       ?? throw new CloudWriteCommitUnknownException();
+        if (ClientReleaseWriteStateFingerprint.ForComponent(component)
+            != baseline)
+        {
+            throw new CloudWriteConflictException();
+        }
 
         // 在锁内重新读取设备快照判断在用，不使用页面加载时的旧结论。
         var inUseReason = await ResolveInUseReasonAsync(component, cancellationToken);
@@ -88,6 +105,9 @@ public sealed class HardDeleteClientReleaseComponentHandler(
         // 文件清理由操作 ID 驱动，可在新进程重试。允许“只有元数据、没有文件”的错误组件。
         var edgeRoot = artifactOptions.Value.ResolveEdgeUpdatesRoot();
         var fileTargets = ClientReleaseComponentRelativePaths.Collect(edgeRoot, component);
+        var deletionId = Guid.NewGuid();
+        var createdAtUtc =
+            ClientReleaseWriteCommitRecovery.NormalizeUtc(DateTime.UtcNow);
         var deletion = new ClientReleaseComponentDeletion(
             component.Id,
             componentKind,
@@ -98,37 +118,93 @@ public sealed class HardDeleteClientReleaseComponentHandler(
             request.Reason,
             ClientReleaseAuditActor.ParseId(currentUser.Id),
             currentUser.UserName,
-            fileTargets);
-
-        deletionStore.Add(deletion);
-        componentRepository.Delete(component);
+            fileTargets,
+            deletionId,
+            createdAtUtc);
+        var expectedDeletion =
+            ClientReleaseWriteStateFingerprint.ForDeletion(deletion);
         try
         {
-            await componentRepository.SaveChangesAsync(cancellationToken);
+            await unitOfWork.ExecuteResilientAsync(
+                ExecuteAttemptAsync,
+                cancellationToken);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested)
         {
-            logger.LogError(
-                new EventId(4602, "ClientReleaseHardDeleteCommitFailure"),
-                "Hard delete release component database commit failed. ComponentKind={ComponentKind} Channel={Channel} ErrorType={ErrorType}.",
-                componentKind,
-                channel,
-                ex.GetType().Name);
-            await WriteRequestAuditAsync(
-                component.Id,
-                componentKind,
-                componentName,
-                channel,
-                versions,
-                succeeded: false,
-                "发布组件元数据删除提交失败，未清理任何文件，请重试永久删除。",
-                CancellationToken.None);
+            var current =
+                await CloudWriteCommitRecovery.TryObserveCommitAsync(
+                    token => observationReader
+                        .ObserveComponentDeletionAsync(
+                            component.Id,
+                            deletionId,
+                            token));
+            if (current is null
+                || !MatchesCommittedTarget(current))
+            {
+                throw new OperationCanceledException(
+                    cancellationToken);
+            }
+        }
+        catch (CloudWriteException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             throw;
+        }
+        catch
+        {
+            var current =
+                await CloudWriteCommitRecovery.TryObserveCommitAsync(
+                    token => observationReader
+                        .ObserveComponentDeletionAsync(
+                            component.Id,
+                            deletionId,
+                            token));
+            if (current is null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw new CloudWriteCommitUnknownException();
+            }
+
+            if (!MatchesCommittedTarget(current))
+            {
+                if (current.Component == baseline
+                    && current.Deletion is null)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    throw new CloudWriteCommitUnknownException();
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                throw new CloudWriteConflictException();
+            }
+        }
+
+        using var deletionLoadTimeout =
+            new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            deletion =
+                await deletionStore.GetByIdAsync(
+                    deletionId,
+                    deletionLoadTimeout.Token);
+        }
+        catch
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new CloudWriteCommitUnknownException();
+        }
+
+        if (deletion is null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new CloudWriteCommitUnknownException();
         }
 
         var cleanup = await deletionProcessor.ProcessAsync(deletion, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!cleanup.Succeeded)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return Result.Invalid(
                 $"发布组件元数据已删除，但发布文件清理未完成（{cleanup.FailureCode}）。请修复后通过永久删除重试入口按操作 ID {deletion.Id} 完成清理。");
         }
@@ -136,6 +212,7 @@ public sealed class HardDeleteClientReleaseComponentHandler(
         // 成功审计未写稳时不得报告永久删除已完成：操作保持 CleanupCompleted，由重试/启动恢复补写审计。
         if (!cleanup.AuditConfirmed)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return Result.Invalid(
                 $"发布文件清理已收敛，但成功审计尚未写稳，永久删除未完成。请通过永久删除重试入口按操作 ID {deletion.Id} 补写审计。");
         }
@@ -144,6 +221,7 @@ public sealed class HardDeleteClientReleaseComponentHandler(
             ? null
             : $"部分文件仍被存活版本 manifest 引用或不在受控范围，已跳过 {cleanup.SkippedPaths.Count} 项。";
 
+        cancellationToken.ThrowIfCancellationRequested();
         return Result.Success(new ClientReleaseComponentHardDeletionResultDto(
             deletion.Id,
             component.Id,
@@ -155,6 +233,64 @@ public sealed class HardDeleteClientReleaseComponentHandler(
             cleanup.DeletedPaths,
             cleanup.SkippedPaths,
             warning));
+
+        async Task<bool> ExecuteAttemptAsync(
+            CancellationToken callbackCancellationToken)
+        {
+            var current =
+                await CloudWriteCommitRecovery.TryObserveAttemptAsync(
+                    token => observationReader
+                        .ObserveComponentDeletionAsync(
+                            component.Id,
+                            deletionId,
+                            token),
+                    callbackCancellationToken)
+                ?? throw new CloudWriteCommitUnknownException();
+            if (MatchesCommittedTarget(current))
+            {
+                return true;
+            }
+
+            if (current.Component != baseline
+                || current.Deletion is not null)
+            {
+                throw new CloudWriteConflictException();
+            }
+
+            var currentComponent =
+                await componentRepository.GetSingleOrDefaultAsync(
+                    new ClientReleaseComponentByComponentIdSpec(
+                        component.Id),
+                    callbackCancellationToken)
+                ?? throw new CloudWriteConflictException();
+            if (ClientReleaseWriteStateFingerprint.ForComponent(
+                    currentComponent) != baseline)
+            {
+                throw new CloudWriteConflictException();
+            }
+
+            if (await deletionStore.GetByIdAsync(
+                    deletionId,
+                    callbackCancellationToken)
+                is not null)
+            {
+                throw new CloudWriteConflictException();
+            }
+
+            deletionStore.Add(deletion);
+            componentRepository.Delete(currentComponent);
+            await componentRepository.SaveChangesAsync(
+                callbackCancellationToken);
+            return true;
+        }
+
+        bool MatchesCommittedTarget(
+            ClientReleaseComponentDeletionWriteObservation current)
+            => current.Component is null
+               && current.Deletion is not null
+               && ClientReleaseWriteCommitRecovery.MatchesDeletionTarget(
+                   current.Deletion,
+                   expectedDeletion);
     }
 
     private async Task<string?> ResolveInUseReasonAsync(

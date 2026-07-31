@@ -44,17 +44,11 @@ public sealed class RetryClientReleaseComponentDeletionHandler(
             return Result.NotFound("删除操作不存在或已完成清理。");
         }
 
-        // 清理失败的 Failed 才需要重置回 Requested；CleanupCompleted 表示审计未写稳，
-        // 直接重放由 processor 补写成功审计后删除操作记录。
-        if (deletion.Status == ClientReleaseComponentDeletionStatus.Failed)
-        {
-            deletion.ResetForRetry();
-            await deletionStore.SaveChangesAsync(cancellationToken);
-        }
-
-        // 成功/失败审计统一由 processor 用操作持久化的管理员身份与删除原因写入。
+        // Failed 的 CAS 重置、CleanupCompleted 的审计补写以及最终操作记录删除
+        // 均由 processor 在 fresh observation 与 execution strategy 中收敛。
         var outcome = await deletionProcessor.ProcessAsync(deletion, cancellationToken);
 
+        cancellationToken.ThrowIfCancellationRequested();
         return Result.Success(new ClientReleaseComponentDeletionRetryResultDto(
             deletion.Id,
             deletion.ComponentId,

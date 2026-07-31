@@ -79,6 +79,22 @@ public sealed class CloudWriteCommitRecoveryTests
                 CreateAuditEntry()));
     }
 
+    [Fact]
+    public async Task BestEffortRecoveredAudit_ShouldUseIndependentBoundedToken()
+    {
+        var audit = new CapturingAuditTrailService();
+
+        var written =
+            await CloudWriteCommitRecovery.TryWriteRecoveredAuditAsync(
+                audit,
+                CreateAuditEntry());
+
+        Assert.True(written);
+        var token = Assert.Single(audit.CancellationTokens);
+        Assert.True(token.CanBeCanceled);
+        Assert.False(token.IsCancellationRequested);
+    }
+
     private static AuditTrailEntry CreateAuditEntry()
         => new(
             null,
@@ -100,7 +116,10 @@ public sealed class CloudWriteCommitRecoveryTests
         public Task TryWriteAsync(
             AuditTrailEntry entry,
             CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
+        {
+            CancellationTokens.Add(cancellationToken);
+            return Task.CompletedTask;
+        }
 
         public Task<bool> TryWriteConfirmedAsync(
             AuditTrailEntry entry,

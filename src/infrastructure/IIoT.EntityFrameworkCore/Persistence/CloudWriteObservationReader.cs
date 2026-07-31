@@ -1,6 +1,7 @@
 using System.Data;
 using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Aggregates.EdgeHosts;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.Contracts.RecordQueries;
@@ -13,7 +14,8 @@ public sealed class CloudWriteObservationReader(
     : IProcessWriteObservationReader,
         IDeviceWriteObservationReader,
         IRecipeWriteObservationReader,
-        IDeviceReportWriteObservationReader
+        IDeviceReportWriteObservationReader,
+        IClientReleaseWriteObservationReader
 {
     public Task<ProcessWriteObservation> ObserveProcessAsync(
         Guid processId,
@@ -224,6 +226,190 @@ public sealed class CloudWriteObservationReader(
             },
             cancellationToken);
 
+    public Task<ClientReleaseVersionWriteState?> ObserveVersionAsync(
+        Guid versionId,
+        CancellationToken cancellationToken)
+        => ObserveConsistentAsync(
+            async (context, token) =>
+            {
+                var component = await context.ClientReleaseComponents
+                    .AsNoTracking()
+                    .Include(current => current.Versions)
+                    .ThenInclude(version => version.Artifacts)
+                    .AsSingleQuery()
+                    .SingleOrDefaultAsync(
+                        current => current.Versions.Any(
+                            version => version.Id == versionId),
+                        token);
+                var version = component?.Versions.SingleOrDefault(
+                    current => current.Id == versionId);
+                return component is null || version is null
+                    ? null
+                    : ClientReleaseWriteStateFingerprint.ForVersion(
+                        component,
+                        version);
+            },
+            cancellationToken);
+
+    public Task<ClientReleaseComponentWriteState?> ObserveComponentAsync(
+        Guid componentId,
+        CancellationToken cancellationToken)
+        => ObserveConsistentAsync(
+            async (context, token) =>
+            {
+                var component = await context.ClientReleaseComponents
+                    .AsNoTracking()
+                    .Include(current => current.Versions)
+                    .ThenInclude(version => version.Artifacts)
+                    .AsSingleQuery()
+                    .SingleOrDefaultAsync(
+                        current => current.Id == componentId,
+                        token);
+                return component is null
+                    ? null
+                    : ClientReleaseWriteStateFingerprint.ForComponent(
+                        component);
+            },
+            cancellationToken);
+
+    public Task<IReadOnlyList<ClientReleaseVersionWriteState>>
+        ObserveVersionsAsync(
+            IReadOnlyCollection<Guid> versionIds,
+            CancellationToken cancellationToken)
+        => ObserveConsistentAsync<IReadOnlyList<
+            ClientReleaseVersionWriteState>>(
+            async (context, token) =>
+            {
+                var requested = versionIds.Distinct().ToArray();
+                if (requested.Length == 0)
+                {
+                    return [];
+                }
+
+                var components = await context.ClientReleaseComponents
+                    .AsNoTracking()
+                    .Where(component => component.Versions.Any(
+                        version => requested.Contains(version.Id)))
+                    .Include(component => component.Versions.Where(
+                        version => requested.Contains(version.Id)))
+                    .ThenInclude(version => version.Artifacts)
+                    .AsSingleQuery()
+                    .ToListAsync(token);
+                return components
+                    .SelectMany(component => component.Versions.Select(
+                        version =>
+                            ClientReleaseWriteStateFingerprint.ForVersion(
+                                component,
+                                version)))
+                    .OrderBy(version => version.VersionId)
+                    .ToArray();
+            },
+            cancellationToken);
+
+    public Task<ClientReleaseComponentDeletionWriteObservation>
+        ObserveComponentDeletionAsync(
+            Guid componentId,
+            Guid deletionId,
+            CancellationToken cancellationToken)
+        => ObserveConsistentAsync(
+            async (context, token) =>
+            {
+                var component = await context.ClientReleaseComponents
+                    .AsNoTracking()
+                    .Include(current => current.Versions)
+                    .ThenInclude(version => version.Artifacts)
+                    .AsSingleQuery()
+                    .SingleOrDefaultAsync(
+                        current => current.Id == componentId,
+                        token);
+                var deletion = await context.ClientReleaseComponentDeletions
+                    .AsNoTracking()
+                    .Include(current => current.Files)
+                    .SingleOrDefaultAsync(
+                        current => current.Id == deletionId,
+                        token);
+                return new ClientReleaseComponentDeletionWriteObservation(
+                    component is null
+                        ? null
+                        : ClientReleaseWriteStateFingerprint.ForComponent(
+                            component),
+                    deletion is null
+                        ? null
+                        : ClientReleaseWriteStateFingerprint.ForDeletion(
+                            deletion));
+            },
+            cancellationToken);
+
+    public Task<ClientReleaseDeletionWriteState?> ObserveDeletionAsync(
+        Guid deletionId,
+        CancellationToken cancellationToken)
+        => ObserveConsistentAsync(
+            async (context, token) =>
+            {
+                var deletion = await context.ClientReleaseComponentDeletions
+                    .AsNoTracking()
+                    .Include(current => current.Files)
+                    .SingleOrDefaultAsync(
+                        current => current.Id == deletionId,
+                        token);
+                return deletion is null
+                    ? null
+                    : ClientReleaseWriteStateFingerprint.ForDeletion(
+                        deletion);
+            },
+            cancellationToken);
+
+    public Task<ClientReleaseRetentionPolicyWriteState?>
+        ObserveRetentionPolicyAsync(
+            CancellationToken cancellationToken)
+        => ObserveConsistentAsync(
+            async (context, token) =>
+            {
+                var policy = await context.ClientReleaseRetentionPolicies
+                    .AsNoTracking()
+                    .SingleOrDefaultAsync(
+                        current =>
+                            current.Id
+                            == ClientReleaseRetentionPolicy.SingletonId,
+                        token);
+                return policy is null
+                    ? null
+                    : new ClientReleaseRetentionPolicyWriteState(
+                        policy.Id,
+                        policy.MaxVersionsPerComponent,
+                        NormalizePostgresUtc(policy.UpdatedAtUtc),
+                        policy.RowVersion);
+            },
+            cancellationToken);
+
+    public Task<IReadOnlyList<DeviceBootstrapWriteState>>
+        ObserveDeviceBootstrapAsync(
+            IReadOnlyCollection<Guid> deviceIds,
+            CancellationToken cancellationToken)
+        => ObserveConsistentAsync<IReadOnlyList<DeviceBootstrapWriteState>>(
+            async (context, token) =>
+            {
+                var requested = deviceIds.Distinct().ToArray();
+                if (requested.Length == 0)
+                {
+                    return [];
+                }
+
+                return await context.Devices
+                    .AsNoTracking()
+                    .Where(device => requested.Contains(device.Id))
+                    .OrderBy(device => device.Id)
+                    .Select(device => new DeviceBootstrapWriteState(
+                        device.Id,
+                        device.DeviceName,
+                        device.Code,
+                        device.ProcessId,
+                        device.BootstrapSecretHash,
+                        device.RowVersion))
+                    .ToListAsync(token);
+            },
+            cancellationToken);
+
     private async Task<T> ObserveConsistentAsync<T>(
         Func<IIoTDbContext, CancellationToken, Task<T>> observeAsync,
         CancellationToken cancellationToken)
@@ -247,6 +433,16 @@ public sealed class CloudWriteObservationReader(
                 return result;
             },
             cancellationToken);
+    }
+
+    private static DateTime NormalizePostgresUtc(DateTime value)
+    {
+        var utc = value.Kind == DateTimeKind.Utc
+            ? value
+            : DateTime.SpecifyKind(value, DateTimeKind.Utc);
+        return new DateTime(
+            utc.Ticks - utc.Ticks % 10,
+            DateTimeKind.Utc);
     }
 
     private static async Task<DeviceDeletionImpact> ReadDeviceDeletionImpactAsync(

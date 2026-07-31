@@ -29,7 +29,6 @@ vi.mock('./api', () => ({
   ...apiMocks,
   getClientReleaseRetentionPolicyApi: vi.fn(),
   updateClientReleaseRetentionPolicyApi: vi.fn(),
-  updateClientReleaseStatusApi: vi.fn(),
   generateEdgeInstallerPackageApi: vi.fn(),
 }));
 

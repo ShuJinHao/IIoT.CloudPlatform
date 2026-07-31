@@ -61,6 +61,10 @@ public sealed class ClientReleaseComponentConfiguration : IEntityTypeConfigurati
             .IsRequired()
             .HasColumnName("updated_at_utc");
 
+        builder.Property(component => component.RowVersion)
+            .HasColumnName("xmin")
+            .IsRowVersion();
+
         builder.HasIndex(component => new
             {
                 component.ComponentKind,
@@ -180,6 +184,14 @@ public sealed class ClientReleaseVersionConfiguration : IEntityTypeConfiguration
         builder.Property(version => version.DeletionFailure)
             .HasColumnType("text")
             .HasColumnName("deletion_failure");
+
+        builder.Property(version => version.DeletionReceiptJson)
+            .HasColumnType("jsonb")
+            .HasColumnName("deletion_receipt_json");
+
+        builder.Property(version => version.RowVersion)
+            .HasColumnName("xmin")
+            .IsRowVersion();
 
         builder.HasIndex(version => new { version.ClientReleaseComponentId, version.Version })
             .IsUnique()
