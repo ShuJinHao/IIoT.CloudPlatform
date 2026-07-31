@@ -92,6 +92,9 @@ public static class DependencyInjection
         builder.Services.AddScoped<IRolePolicyService, RolePolicyService>();
         builder.Services.AddScoped<IUserQueryService, UserQueryService>();
         builder.Services.AddScoped<IAuditTrailService, Auditing.EfAuditTrailService>();
+        builder.Services.AddScoped<
+            IOidcIssuanceAuditTrailService,
+            Auditing.EfOidcIssuanceAuditTrailService>();
         builder.Services.AddScoped<IUnitOfWork, EfUnitOfWork>();
         builder.Services.AddScoped<CloudWriteObservationReader>();
         builder.Services.AddScoped<IProcessWriteObservationReader>(provider =>

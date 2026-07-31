@@ -20,6 +20,7 @@ public sealed class CloudOidcController(
     ICloudOidcUserProfileService profileService,
     ICloudOidcSessionService sessionService,
     IAuditTrailService auditTrailService,
+    IOidcIssuanceAuditTrailService issuanceAuditTrailService,
     IOptions<OidcProviderOptions> options) : Controller
 {
     [AllowAnonymous]
@@ -82,14 +83,11 @@ public sealed class CloudOidcController(
 
         var principal = CreatePrincipal(profile, request.GetScopes());
 
-        await WriteAuditAsync(
+        await WriteIssuanceSuccessAuditAsync(
             CloudOidcDefaults.AuthorizeAuditOperation,
-            profile.UserId,
-            profile.EmployeeNo,
+            profile,
             request.ClientId,
-            true,
             "OIDC authorize 成功。",
-            null,
             cancellationToken);
 
         return SignIn(principal, OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
@@ -159,14 +157,11 @@ public sealed class CloudOidcController(
 
         var principal = CreatePrincipal(profile, authentication.Principal?.GetScopes() ?? []);
 
-        await WriteAuditAsync(
+        await WriteIssuanceSuccessAuditAsync(
             CloudOidcDefaults.TokenAuditOperation,
-            profile.UserId,
-            profile.EmployeeNo,
+            profile,
             request.ClientId,
-            true,
             "OIDC token exchange 成功。",
-            null,
             cancellationToken);
 
         return SignIn(principal, OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
@@ -444,6 +439,28 @@ public sealed class CloudOidcController(
                 succeeded,
                 summary,
                 failureReason),
+            cancellationToken);
+    }
+
+    private Task WriteIssuanceSuccessAuditAsync(
+        string operationType,
+        CloudOidcUserProfile profile,
+        string? clientId,
+        string summary,
+        CancellationToken cancellationToken)
+    {
+        return issuanceAuditTrailService.StageSuccessAsync(
+            new AuditTrailEntry(
+                profile.UserId,
+                profile.EmployeeNo,
+                operationType,
+                "CloudOidc",
+                string.IsNullOrWhiteSpace(clientId)
+                    ? options.Value.AicopilotClientId
+                    : clientId,
+                DateTime.UtcNow,
+                true,
+                summary),
             cancellationToken);
     }
 }

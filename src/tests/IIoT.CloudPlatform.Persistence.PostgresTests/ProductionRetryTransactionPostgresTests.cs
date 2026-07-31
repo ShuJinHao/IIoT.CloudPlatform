@@ -1,3 +1,4 @@
+using System.Data;
 using System.Data.Common;
 using System.Text.Json;
 using IIoT.Core.Employees.Aggregates.Employees;
@@ -1005,6 +1006,368 @@ public sealed class ProductionRetryTransactionPostgresTests(
             await verificationContext.OpenIddictTokens
                 .AsNoTracking()
                 .CountAsync(token => token.Id == tokenId, budget.Token));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OidcIssuanceSuccessAudit_ShouldCommitAtomicallyWithGrant(
+        bool commit)
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var authorizationId = Guid.NewGuid();
+        var subjectId = Guid.NewGuid();
+        var auditKey = $"oidc-issuance-{Guid.NewGuid():N}";
+        await using var context = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-audit-{Guid.NewGuid():N}");
+        var auditTrail = new EfOidcIssuanceAuditTrailService(context);
+        var strategy = context.Database.CreateExecutionStrategy();
+
+        await strategy.ExecuteAsync(
+            async callbackToken =>
+            {
+                await using var transaction =
+                    await context.Database.BeginTransactionAsync(
+                        IsolationLevel.ReadCommitted,
+                        callbackToken);
+                await auditTrail.StageSuccessAsync(
+                    new AuditTrailEntry(
+                        subjectId,
+                        "E-OIDC-AUDIT",
+                        "CloudOidcAuthorize",
+                        "CloudOidc",
+                        "aicopilot",
+                        DateTime.UtcNow,
+                        true,
+                        "OIDC authorize 成功。",
+                        IdempotencyKey: auditKey),
+                    callbackToken);
+                context.OpenIddictAuthorizations.Add(
+                    new OpenIddictEntityFrameworkCoreAuthorization<Guid>
+                    {
+                        Id = authorizationId,
+                        Subject = subjectId.ToString(),
+                        Status = OpenIddictConstants.Statuses.Valid,
+                        Type = "permanent",
+                        ConcurrencyToken = Guid.NewGuid().ToString("N")
+                    });
+                await context.SaveChangesAsync(callbackToken);
+                if (commit)
+                {
+                    await transaction.CommitAsync(callbackToken);
+                }
+                else
+                {
+                    await transaction.RollbackAsync(callbackToken);
+                }
+            },
+            budget.Token);
+
+        await using var verificationContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-audit-verify-{Guid.NewGuid():N}");
+        Assert.Equal(
+            commit ? 1 : 0,
+            await verificationContext.AuditTrails
+                .AsNoTracking()
+                .CountAsync(
+                    audit => audit.IdempotencyKey == auditKey,
+                    budget.Token));
+        Assert.Equal(
+            commit ? 1 : 0,
+            await verificationContext.OpenIddictAuthorizations
+                .AsNoTracking()
+                .CountAsync(
+                    authorization =>
+                        authorization.Id == authorizationId,
+                    budget.Token));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OidcIssuanceLock_ShouldRecoverCommittedResponseAfterAcknowledgementLoss(
+        bool tokenExchange)
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var context = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-commit-recovery-{Guid.NewGuid():N}",
+            new WriteTrackingCommandInterceptor(interceptor),
+            interceptor);
+        var auditTrail =
+            new EfOidcIssuanceAuditTrailService(
+                context,
+                () => CreateRetryContext(
+                    budget.ConnectionString,
+                    $"tx-03b3-oidc-commit-observe-{Guid.NewGuid():N}"));
+        var issuanceLock = new HumanSessionIssuanceLock(
+            context,
+            new HumanSessionIssuanceProcessGate(),
+            auditTrail);
+        var authorizationId = Guid.NewGuid();
+        var tokenId = Guid.NewGuid();
+        var auditKey = $"oidc-commit-recovery-{Guid.NewGuid():N}";
+        var operationAttempts = 0;
+        interceptor.Arm();
+
+        async Task PersistGrantAsync()
+        {
+            Interlocked.Increment(ref operationAttempts);
+            await auditTrail.StageSuccessAsync(
+                new AuditTrailEntry(
+                    Guid.NewGuid(),
+                    "E-OIDC-COMMIT",
+                    tokenExchange
+                        ? "CloudOidcToken"
+                        : "CloudOidcAuthorize",
+                    "CloudOidc",
+                    "aicopilot",
+                    DateTime.UtcNow,
+                    true,
+                    "OIDC issuance 成功。",
+                    IdempotencyKey: auditKey),
+                budget.Token);
+            var authorization =
+                new OpenIddictEntityFrameworkCoreAuthorization<Guid>
+                {
+                    Id = authorizationId,
+                    Subject = Guid.NewGuid().ToString(),
+                    Status = OpenIddictConstants.Statuses.Valid,
+                    Type = "permanent",
+                    ConcurrencyToken = Guid.NewGuid().ToString("N")
+                };
+            context.OpenIddictAuthorizations.Add(authorization);
+            if (tokenExchange)
+            {
+                context.OpenIddictTokens.Add(
+                    new OpenIddictEntityFrameworkCoreToken<Guid>
+                    {
+                        Id = tokenId,
+                        Authorization = authorization,
+                        Subject = authorization.Subject,
+                        Status = OpenIddictConstants.Statuses.Valid,
+                        Type = "access_token",
+                        ConcurrencyToken = Guid.NewGuid().ToString("N")
+                    });
+            }
+
+            await context.SaveChangesAsync(budget.Token);
+        }
+
+        var executed = tokenExchange
+            ? await issuanceLock.TryExecuteTokenExchangeAsync(
+                PersistGrantAsync,
+                budget.Token)
+            : await issuanceLock.TryExecuteAuthorizationAsync(
+                Guid.NewGuid(),
+                PersistGrantAsync,
+                budget.Token);
+
+        Assert.True(executed);
+        Assert.Equal(1, operationAttempts);
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+        await using var verificationContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-commit-recovery-verify-{Guid.NewGuid():N}");
+        Assert.Equal(
+            1,
+            await verificationContext.AuditTrails
+                .AsNoTracking()
+                .CountAsync(
+                    audit => audit.IdempotencyKey == auditKey,
+                    budget.Token));
+        Assert.Equal(
+            1,
+            await verificationContext.OpenIddictAuthorizations
+                .AsNoTracking()
+                .CountAsync(
+                    authorization =>
+                        authorization.Id == authorizationId,
+                    budget.Token));
+        Assert.Equal(
+            tokenExchange ? 1 : 0,
+            await verificationContext.OpenIddictTokens
+                .AsNoTracking()
+                .CountAsync(
+                    token => token.Id == tokenId,
+                    budget.Token));
+    }
+
+    [Fact]
+    public async Task OidcIssuanceLock_ShouldFailClosedWhenCommitObservationFails()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var context = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-observation-failure-{Guid.NewGuid():N}",
+            new WriteTrackingCommandInterceptor(interceptor),
+            interceptor);
+        var realAuditTrail =
+            new EfOidcIssuanceAuditTrailService(context);
+        var auditTrail =
+            new ThrowingObservationOidcIssuanceAuditTrailService(
+                realAuditTrail);
+        var issuanceLock = new HumanSessionIssuanceLock(
+            context,
+            new HumanSessionIssuanceProcessGate(),
+            auditTrail);
+        var authorizationId = Guid.NewGuid();
+        var auditKey = $"oidc-observation-failure-{Guid.NewGuid():N}";
+        interceptor.Arm();
+
+        async Task PersistGrantAsync()
+        {
+            await auditTrail.StageSuccessAsync(
+                new AuditTrailEntry(
+                    Guid.NewGuid(),
+                    "E-OIDC-UNKNOWN",
+                    "CloudOidcToken",
+                    "CloudOidc",
+                    "aicopilot",
+                    DateTime.UtcNow,
+                    true,
+                    "OIDC token exchange 成功。",
+                    IdempotencyKey: auditKey),
+                budget.Token);
+            context.OpenIddictAuthorizations.Add(
+                new OpenIddictEntityFrameworkCoreAuthorization<Guid>
+                {
+                    Id = authorizationId,
+                    Subject = Guid.NewGuid().ToString(),
+                    Status = OpenIddictConstants.Statuses.Valid,
+                    Type = "permanent",
+                    ConcurrencyToken = Guid.NewGuid().ToString("N")
+                });
+            await context.SaveChangesAsync(budget.Token);
+        }
+
+        await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
+            () => issuanceLock.TryExecuteTokenExchangeAsync(
+                PersistGrantAsync,
+                budget.Token));
+
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+        await using var verificationContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-observation-failure-verify-{Guid.NewGuid():N}");
+        Assert.Equal(
+            1,
+            await verificationContext.AuditTrails
+                .AsNoTracking()
+                .CountAsync(
+                    audit => audit.IdempotencyKey == auditKey,
+                    budget.Token));
+        Assert.Equal(
+            1,
+            await verificationContext.OpenIddictAuthorizations
+                .AsNoTracking()
+                .CountAsync(
+                    authorization =>
+                        authorization.Id == authorizationId,
+                    budget.Token));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OidcIssuanceLock_ShouldPropagateCallerCancellationAfterCommit(
+        bool tokenExchange)
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        using var callerCancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(
+                budget.Token);
+        var interceptor =
+            new CancelOnceAfterWriteCommitInterceptor(
+                callerCancellation);
+        await using var context = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-commit-cancel-{Guid.NewGuid():N}",
+            new WriteTrackingCommandInterceptor(interceptor),
+            interceptor);
+        var auditTrail =
+            new EfOidcIssuanceAuditTrailService(context);
+        var issuanceLock = new HumanSessionIssuanceLock(
+            context,
+            new HumanSessionIssuanceProcessGate(),
+            auditTrail);
+        var authorizationId = Guid.NewGuid();
+        var auditKey = $"oidc-commit-cancel-{Guid.NewGuid():N}";
+        interceptor.Arm();
+
+        async Task PersistGrantAsync()
+        {
+            await auditTrail.StageSuccessAsync(
+                new AuditTrailEntry(
+                    Guid.NewGuid(),
+                    "E-OIDC-CANCEL",
+                    tokenExchange
+                        ? "CloudOidcToken"
+                        : "CloudOidcAuthorize",
+                    "CloudOidc",
+                    "aicopilot",
+                    DateTime.UtcNow,
+                    true,
+                    "OIDC issuance 成功。",
+                    IdempotencyKey: auditKey),
+                callerCancellation.Token);
+            context.OpenIddictAuthorizations.Add(
+                new OpenIddictEntityFrameworkCoreAuthorization<Guid>
+                {
+                    Id = authorizationId,
+                    Subject = Guid.NewGuid().ToString(),
+                    Status = OpenIddictConstants.Statuses.Valid,
+                    Type = "permanent",
+                    ConcurrencyToken = Guid.NewGuid().ToString("N")
+                });
+            await context.SaveChangesAsync(
+                callerCancellation.Token);
+        }
+
+        var exception = await Assert.ThrowsAsync<OperationCanceledException>(
+            () => tokenExchange
+                ? issuanceLock.TryExecuteTokenExchangeAsync(
+                    PersistGrantAsync,
+                    callerCancellation.Token)
+                : issuanceLock.TryExecuteAuthorizationAsync(
+                    Guid.NewGuid(),
+                    PersistGrantAsync,
+                    callerCancellation.Token));
+
+        Assert.Equal(
+            callerCancellation.Token,
+            exception.CancellationToken);
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+        await using var verificationContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-commit-cancel-verify-{Guid.NewGuid():N}");
+        Assert.Equal(
+            1,
+            await verificationContext.AuditTrails
+                .AsNoTracking()
+                .CountAsync(
+                    audit => audit.IdempotencyKey == auditKey,
+                    budget.Token));
+        Assert.Equal(
+            1,
+            await verificationContext.OpenIddictAuthorizations
+                .AsNoTracking()
+                .CountAsync(
+                    authorization =>
+                        authorization.Id == authorizationId,
+                    budget.Token));
     }
 
     [Fact]
@@ -5209,6 +5572,21 @@ public sealed class ProductionRetryTransactionPostgresTests(
                     "simulated commit confirmation loss");
             }
         }
+    }
+
+    private sealed class ThrowingObservationOidcIssuanceAuditTrailService(
+        IOidcIssuanceAuditTrailService inner)
+        : IOidcIssuanceAuditTrailService
+    {
+        public Task StageSuccessAsync(
+            AuditTrailEntry entry,
+            CancellationToken cancellationToken = default)
+            => inner.StageSuccessAsync(entry, cancellationToken);
+
+        public Task<bool> IsStagedSuccessCommittedAsync(
+            CancellationToken cancellationToken = default)
+            => throw new TimeoutException(
+                "simulated OIDC commit observation failure");
     }
 
     private sealed class CancelOnceAfterWriteCommitInterceptor(

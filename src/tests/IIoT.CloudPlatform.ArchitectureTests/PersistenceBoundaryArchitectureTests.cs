@@ -538,6 +538,14 @@ public sealed class PersistenceBoundaryArchitectureTests
             CloudRepositoryPath.Find(
                 "src", "infrastructure", "IIoT.EntityFrameworkCore",
                 "DependencyInjection.cs"));
+        var oidcControllerSource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "src", "hosts", "IIoT.HttpApi", "Controllers", "Oidc",
+                "CloudOidcController.cs"));
+        var issuanceAuditSource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "src", "infrastructure", "IIoT.EntityFrameworkCore",
+                "Auditing", "EfOidcIssuanceAuditTrailService.cs"));
 
         Assert.Contains(
             "TryExecuteAuthorizationAsync",
@@ -671,6 +679,39 @@ public sealed class PersistenceBoundaryArchitectureTests
         Assert.Contains(
             "AddSingleton<HumanSessionIssuanceProcessGate>",
             dependencyInjectionSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "IOidcIssuanceAuditTrailService",
+            dependencyInjectionSource,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            3,
+            oidcControllerSource.Split(
+                "WriteIssuanceSuccessAuditAsync",
+                StringSplitOptions.None).Length - 1);
+        Assert.Contains(
+            "StageSuccessAsync",
+            oidcControllerSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Database.CurrentTransaction",
+            issuanceAuditSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "dbContext.SaveChangesAsync",
+            issuanceAuditSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "IsStagedSuccessCommittedAsync",
+            issuanceLockSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "new CancellationTokenSource(TimeSpan.FromSeconds(5))",
+            issuanceLockSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "throw new CloudWriteCommitUnknownException()",
+            issuanceLockSource,
             StringComparison.Ordinal);
     }
 

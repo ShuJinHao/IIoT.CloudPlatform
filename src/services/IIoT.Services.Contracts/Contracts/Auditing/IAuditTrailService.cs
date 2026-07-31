@@ -26,3 +26,13 @@ public interface IAuditTrailService
         AuditTrailEntry entry,
         CancellationToken cancellationToken = default);
 }
+
+public interface IOidcIssuanceAuditTrailService
+{
+    Task StageSuccessAsync(
+        AuditTrailEntry entry,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> IsStagedSuccessCommittedAsync(
+        CancellationToken cancellationToken = default);
+}

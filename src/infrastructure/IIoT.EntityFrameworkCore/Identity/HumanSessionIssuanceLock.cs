@@ -1,6 +1,9 @@
 using System.Data;
 using System.Runtime.ExceptionServices;
+using IIoT.EntityFrameworkCore.Auditing;
 using IIoT.EntityFrameworkCore.Persistence;
+using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Identity;
 using Microsoft.EntityFrameworkCore;
 using OpenIddict.EntityFrameworkCore;
@@ -10,7 +13,8 @@ namespace IIoT.EntityFrameworkCore.Identity;
 public sealed class HumanSessionIssuanceLock(
     IIoTDbContext dbContext,
     IOpenIddictEntityFrameworkCoreContext openIddictContext,
-    HumanSessionIssuanceProcessGate processGate)
+    HumanSessionIssuanceProcessGate processGate,
+    IOidcIssuanceAuditTrailService issuanceAuditTrailService)
     : IHumanSessionIssuanceLock
 {
     private readonly bool _usesNpgsql = dbContext.Database.IsNpgsql();
@@ -22,7 +26,33 @@ public sealed class HumanSessionIssuanceLock(
             dbContext,
             new OpenIddictEntityFrameworkCoreContext<IIoTDbContext>(
                 dbContext),
-            processGate)
+            processGate,
+            new EfOidcIssuanceAuditTrailService(dbContext))
+    {
+    }
+
+    internal HumanSessionIssuanceLock(
+        IIoTDbContext dbContext,
+        IOpenIddictEntityFrameworkCoreContext openIddictContext,
+        HumanSessionIssuanceProcessGate processGate)
+        : this(
+            dbContext,
+            openIddictContext,
+            processGate,
+            new EfOidcIssuanceAuditTrailService(dbContext))
+    {
+    }
+
+    internal HumanSessionIssuanceLock(
+        IIoTDbContext dbContext,
+        HumanSessionIssuanceProcessGate processGate,
+        IOidcIssuanceAuditTrailService issuanceAuditTrailService)
+        : this(
+            dbContext,
+            new OpenIddictEntityFrameworkCoreContext<IIoTDbContext>(
+                dbContext),
+            processGate,
+            issuanceAuditTrailService)
     {
     }
 
@@ -100,28 +130,76 @@ public sealed class HumanSessionIssuanceLock(
                         protectedOperationStarted = true;
                         await operation();
                         callbackToken.ThrowIfCancellationRequested();
-                        await transaction.CommitAsync(callbackToken);
+                        try
+                        {
+                            await transaction.CommitAsync(callbackToken);
+                        }
+                        catch (OperationCanceledException)
+                            when (callbackToken.IsCancellationRequested)
+                        {
+                            throw;
+                        }
+                        catch (Exception exception)
+                        {
+                            throw new CommitAcknowledgementException(
+                                exception);
+                        }
                     }
                     catch (Exception exception)
                         when (protectedOperationStarted
                               && exception is not
-                                  ProtectedOperationException)
+                                  ProtectedOperationException
+                              && exception is not
+                                  CommitAcknowledgementException)
                     {
                         throw new ProtectedOperationException(exception);
                     }
                 },
                 cancellationToken);
         }
+        catch (CommitAcknowledgementException)
+        {
+            var committed = false;
+            using var observationTimeout =
+                new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            try
+            {
+                committed = await issuanceAuditTrailService
+                    .IsStagedSuccessCommittedAsync(
+                        observationTimeout.Token);
+            }
+            catch (Exception)
+            {
+                // The original commit result remains unknown when observation fails.
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if (committed)
+            {
+                return true;
+            }
+
+            throw new CloudWriteCommitUnknownException();
+        }
         catch (ProtectedOperationException exception)
         {
             ExceptionDispatchInfo.Capture(exception.InnerException!).Throw();
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         return true;
     }
 
     private sealed class ProtectedOperationException(Exception innerException)
         : Exception("OIDC issuance failed after the protected operation started.", innerException)
+    {
+    }
+
+    private sealed class CommitAcknowledgementException(
+        Exception innerException)
+        : Exception(
+            "OIDC issuance commit acknowledgement was not received.",
+            innerException)
     {
     }
 }
