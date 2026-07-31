@@ -31,6 +31,10 @@ internal sealed class EdgeReleaseApiKeyConfiguration : IEntityTypeConfiguration<
         builder.Property(x => x.RevokedReason)
             .HasMaxLength(256);
 
+        builder.Property(x => x.RowVersion)
+            .HasColumnName("xmin")
+            .IsRowVersion();
+
         builder.HasIndex(x => x.Name)
             .IsUnique();
         builder.HasIndex(x => x.KeyHash)

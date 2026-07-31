@@ -18,10 +18,14 @@ public sealed class OutboxMessageDispatcher(
 
     public async Task<OutboxDispatchResult> DispatchPendingAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         _options.Validate();
         var strategy = dbContext.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(
-            async () => await DispatchPendingCoreAsync(cancellationToken));
+        var result = await strategy.ExecuteAsync(
+            async callbackToken => await DispatchPendingCoreAsync(callbackToken),
+            cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        return result;
     }
 
     private async Task<OutboxDispatchResult> DispatchPendingCoreAsync(CancellationToken cancellationToken)

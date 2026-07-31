@@ -1,4 +1,5 @@
 ﻿using Dapper;
+using System.Data.Common;
 using Microsoft.Extensions.Logging;
 
 namespace IIoT.Dapper.Initializers;
@@ -14,15 +15,34 @@ namespace IIoT.Dapper.Initializers;
 ///   - 本初始化器负责记录类的 schema (device_logs / hourly_capacity / pass_station_records ...)
 /// 两者边界由 DDD 分层决定,物理上互不相交。
 /// </summary>
-internal sealed class RecordSchemaInitializer(
-    IDbConnectionFactory connectionFactory,
-    ILogger<RecordSchemaInitializer> logger) : IRecordSchemaInitializer
+internal sealed class RecordSchemaInitializer : IRecordSchemaInitializer
 {
     private const string SchemaRelativePath = "Production/Sql/Schemas";
+    private readonly IDbConnectionFactory connectionFactory;
+    private readonly ILogger<RecordSchemaInitializer> logger;
+    private readonly string? schemaDirectoryOverride;
+
+    public RecordSchemaInitializer(
+        IDbConnectionFactory connectionFactory,
+        ILogger<RecordSchemaInitializer> logger)
+        : this(connectionFactory, logger, schemaDirectoryOverride: null)
+    {
+    }
+
+    internal RecordSchemaInitializer(
+        IDbConnectionFactory connectionFactory,
+        ILogger<RecordSchemaInitializer> logger,
+        string? schemaDirectoryOverride)
+    {
+        this.connectionFactory = connectionFactory;
+        this.logger = logger;
+        this.schemaDirectoryOverride = schemaDirectoryOverride;
+    }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
-        var schemaDirectory = Path.Combine(AppContext.BaseDirectory, SchemaRelativePath);
+        var schemaDirectory = schemaDirectoryOverride
+                              ?? Path.Combine(AppContext.BaseDirectory, SchemaRelativePath);
 
         if (!Directory.Exists(schemaDirectory))
         {
@@ -44,21 +64,48 @@ internal sealed class RecordSchemaInitializer(
         logger.LogInformation("发现 {Count} 个 Schema 脚本,开始顺序执行。", scriptFiles.Count);
 
         using var connection = connectionFactory.CreateConnection();
-
-        foreach (var scriptPath in scriptFiles)
+        if (connection is not DbConnection dbConnection)
         {
-            var fileName = Path.GetFileName(scriptPath);
-            var sql = await File.ReadAllTextAsync(scriptPath, cancellationToken);
+            throw new InvalidOperationException(
+                "记录表 Schema 初始化要求支持异步事务的 DbConnection。");
+        }
 
-            if (string.IsNullOrWhiteSpace(sql))
+        if (dbConnection.State != System.Data.ConnectionState.Open)
+        {
+            await dbConnection.OpenAsync(cancellationToken);
+        }
+
+        await using var transaction =
+            await dbConnection.BeginTransactionAsync(cancellationToken);
+
+        try
+        {
+            foreach (var scriptPath in scriptFiles)
             {
-                logger.LogWarning("Schema 脚本为空,跳过: {FileName}", fileName);
-                continue;
+                var fileName = Path.GetFileName(scriptPath);
+                var sql = await File.ReadAllTextAsync(scriptPath, cancellationToken);
+
+                if (string.IsNullOrWhiteSpace(sql))
+                {
+                    logger.LogWarning("Schema 脚本为空,跳过: {FileName}", fileName);
+                    continue;
+                }
+
+                logger.LogInformation("执行 Schema 脚本: {FileName}", fileName);
+                await connection.ExecuteAsync(new CommandDefinition(
+                    sql,
+                    transaction: transaction,
+                    cancellationToken: cancellationToken));
+                logger.LogInformation("Schema 脚本执行完成: {FileName}", fileName);
             }
 
-            logger.LogInformation("执行 Schema 脚本: {FileName}", fileName);
-            await connection.ExecuteAsync(new CommandDefinition(sql, cancellationToken: cancellationToken));
-            logger.LogInformation("Schema 脚本执行完成: {FileName}", fileName);
+            await transaction.CommitAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            throw;
         }
 
         logger.LogInformation("记录表 Schema 初始化全部完成。");

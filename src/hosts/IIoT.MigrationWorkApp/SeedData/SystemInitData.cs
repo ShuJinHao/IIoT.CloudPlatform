@@ -17,6 +17,18 @@ public static class SystemInitData
 {
     internal const long SingleAdminSeedAdvisoryLockKey = 0x49494F545F41444D;
 
+    internal static SeedRetryTarget CreateRetryTarget()
+    {
+        var roleIds = SystemRolePermissionTemplates.Templates.Keys
+            .Append(SystemRoles.Admin)
+            .Distinct(StringComparer.Ordinal)
+            .ToDictionary(
+                roleName => roleName,
+                _ => Guid.NewGuid(),
+                StringComparer.Ordinal);
+        return new SeedRetryTarget(Guid.NewGuid(), roleIds);
+    }
+
     public static async Task SeedAsync(
         IIoTDbContext dbContext,
         UserManager<ApplicationUser> userManager,
@@ -25,35 +37,54 @@ public static class SystemInitData
         CancellationToken cancellationToken = default)
     {
         ValidateRolePermissionTemplates();
-
+        var retryTarget = CreateRetryTarget();
         var strategy = dbContext.Database.CreateExecutionStrategy();
-        await strategy.ExecuteAsync(async () =>
+        await strategy.ExecuteAsync(
+            callbackToken => SeedAttemptAsync(
+                dbContext,
+                userManager,
+                roleManager,
+                configuration,
+                retryTarget,
+                callbackToken),
+            cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    internal static async Task SeedAttemptAsync(
+        IIoTDbContext dbContext,
+        UserManager<ApplicationUser> userManager,
+        RoleManager<IdentityRole<Guid>> roleManager,
+        IConfiguration configuration,
+        SeedRetryTarget retryTarget,
+        CancellationToken cancellationToken)
+    {
+        ValidateRolePermissionTemplates();
+        dbContext.DiscardPendingDomainEvents();
+        dbContext.ChangeTracker.Clear();
+        await using var transaction =
+            await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            await AcquireSingleAdminSeedLockAsync(
+                dbContext,
+                cancellationToken);
+            await SeedCoreAsync(
+                dbContext,
+                userManager,
+                roleManager,
+                configuration,
+                retryTarget,
+                cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            Console.WriteLine("✅ 系统身份角色模板和管理员播种事务提交成功。");
+        }
+        catch
         {
             dbContext.DiscardPendingDomainEvents();
             dbContext.ChangeTracker.Clear();
-            await using var transaction =
-                await dbContext.Database.BeginTransactionAsync(cancellationToken);
-            try
-            {
-                await AcquireSingleAdminSeedLockAsync(
-                    dbContext,
-                    cancellationToken);
-                await SeedCoreAsync(
-                    dbContext,
-                    userManager,
-                    roleManager,
-                    configuration,
-                    cancellationToken);
-                await transaction.CommitAsync(cancellationToken);
-                Console.WriteLine("✅ 系统身份角色模板和管理员播种事务提交成功。");
-            }
-            catch
-            {
-                dbContext.DiscardPendingDomainEvents();
-                dbContext.ChangeTracker.Clear();
-                throw;
-            }
-        });
+            throw;
+        }
     }
 
     private static async Task SeedCoreAsync(
@@ -61,6 +92,7 @@ public static class SystemInitData
         UserManager<ApplicationUser> userManager,
         RoleManager<IdentityRole<Guid>> roleManager,
         IConfiguration configuration,
+        SeedRetryTarget retryTarget,
         CancellationToken cancellationToken)
     {
         var resetPasswordRequested = SeedAdminOptions.IsPasswordResetRequested(configuration);
@@ -102,8 +134,15 @@ public static class SystemInitData
             }
         }
 
-        await EnsureRoleAsync(roleManager, SystemRoles.Admin);
-        await EnsureRolePermissionTemplatesAsync(roleManager);
+        await EnsureRoleAsync(
+            roleManager,
+            SystemRoles.Admin,
+            retryTarget.RoleIds[SystemRoles.Admin],
+            cancellationToken);
+        await EnsureRolePermissionTemplatesAsync(
+            roleManager,
+            retryTarget.RoleIds,
+            cancellationToken);
 
         if (existingAdmin is null)
         {
@@ -112,6 +151,7 @@ public static class SystemInitData
                 userManager,
                 seedAdmin!,
                 targetPassword!,
+                retryTarget.AdminAccountId,
                 cancellationToken);
         }
         else if (resetPasswordRequested)
@@ -304,7 +344,9 @@ public static class SystemInitData
         string employeeNo,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var identityUser = await userManager.FindByNameAsync(employeeNo);
+        cancellationToken.ThrowIfCancellationRequested();
         var normalizedEmployeeNo = employeeNo.ToUpperInvariant();
         var employees = await dbContext.Employees
             .AsNoTracking()
@@ -380,18 +422,27 @@ public static class SystemInitData
     }
 
     private static async Task EnsureRolePermissionTemplatesAsync(
-        RoleManager<IdentityRole<Guid>> roleManager)
+        RoleManager<IdentityRole<Guid>> roleManager,
+        IReadOnlyDictionary<string, Guid> roleIds,
+        CancellationToken cancellationToken)
     {
         foreach (var (roleName, permissions) in SystemRolePermissionTemplates.Templates)
         {
-            var role = await EnsureRoleAsync(roleManager, roleName);
+            var role = await EnsureRoleAsync(
+                roleManager,
+                roleName,
+                roleIds[roleName],
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             var claims = await roleManager.GetClaimsAsync(role);
+            cancellationToken.ThrowIfCancellationRequested();
             var retiredClaims = SelectRetiredDeviceAdminPermissionClaims(
                 roleName,
                 claims);
             foreach (var retiredClaim in retiredClaims)
             {
                 var removeResult = await roleManager.RemoveClaimAsync(role, retiredClaim);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!removeResult.Succeeded)
                 {
                     Console.WriteLine(
@@ -421,6 +472,7 @@ public static class SystemInitData
                 var addResult = await roleManager.AddClaimAsync(
                     role,
                     new Claim(IIoTClaimTypes.Permission, permission));
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!addResult.Succeeded)
                 {
                     Console.WriteLine($"❌ 角色 [{roleName}] 权限 [{permission}] 播种失败！");
@@ -458,16 +510,24 @@ public static class SystemInitData
 
     private static async Task<IdentityRole<Guid>> EnsureRoleAsync(
         RoleManager<IdentityRole<Guid>> roleManager,
-        string roleName)
+        string roleName,
+        Guid roleId,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var role = await roleManager.FindByNameAsync(roleName);
+        cancellationToken.ThrowIfCancellationRequested();
         if (role is not null)
         {
             return role;
         }
 
-        role = new IdentityRole<Guid>(roleName);
+        role = new IdentityRole<Guid>(roleName)
+        {
+            Id = roleId
+        };
         var createResult = await roleManager.CreateAsync(role);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!createResult.Succeeded)
         {
             Console.WriteLine($"❌ 角色 [{roleName}] 创建失败！");
@@ -488,16 +548,19 @@ public static class SystemInitData
         UserManager<ApplicationUser> userManager,
         SeedAdminOptions seedAdmin,
         string targetPassword,
+        Guid targetAccountId,
         CancellationToken cancellationToken)
     {
         var identityUser = new ApplicationUser
         {
-            Id = Guid.NewGuid(),
+            Id = targetAccountId,
             UserName = seedAdmin.EmployeeNo,
             IsEnabled = true
         };
 
+        cancellationToken.ThrowIfCancellationRequested();
         var createResult = await userManager.CreateAsync(identityUser, targetPassword);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!createResult.Succeeded)
         {
             Console.WriteLine($"❌ 账号 [{seedAdmin.EmployeeNo}] 创建失败！");
@@ -512,6 +575,7 @@ public static class SystemInitData
         var addRoleResult = await userManager.AddToRoleAsync(
             identityUser,
             SystemRoles.Admin);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!addRoleResult.Succeeded)
         {
             Console.WriteLine($"❌ 账号 [{seedAdmin.EmployeeNo}] 授予 Admin 角色失败！");
@@ -538,8 +602,10 @@ public static class SystemInitData
         string targetPassword,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var identityUser = await userManager.FindByIdAsync(
             existingAdmin.AccountId.ToString());
+        cancellationToken.ThrowIfCancellationRequested();
         if (identityUser is null)
         {
             throw AdminInvariantFailure(
@@ -580,6 +646,7 @@ public static class SystemInitData
         {
             identityUser.IsEnabled = true;
             var updateResult = await userManager.UpdateAsync(identityUser);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!updateResult.Succeeded)
             {
                 Console.WriteLine($"❌ 账号 [{existingAdmin.EmployeeNo}] 启用失败！");
@@ -596,7 +663,8 @@ public static class SystemInitData
             userManager,
             identityUser,
             targetPassword,
-            existingAdmin.EmployeeNo);
+            existingAdmin.EmployeeNo,
+            cancellationToken);
 
         employee.Activate();
         await dbContext.SaveChangesAsync(cancellationToken);
@@ -642,11 +710,23 @@ public static class SystemInitData
         UserManager<ApplicationUser> userManager,
         ApplicationUser identityUser,
         string targetPassword,
-        string employeeNo)
+        string employeeNo,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (await userManager.CheckPasswordAsync(identityUser, targetPassword))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Console.WriteLine(
+                $"ℹ️ 账号 [{employeeNo}] 已符合目标密码，密码修复幂等跳过。");
+            return;
+        }
+
         if (!string.IsNullOrWhiteSpace(identityUser.PasswordHash))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var removePasswordResult = await userManager.RemovePasswordAsync(identityUser);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!removePasswordResult.Succeeded)
             {
                 Console.WriteLine($"❌ 账号 [{employeeNo}] 移除旧密码失败！");
@@ -659,7 +739,9 @@ public static class SystemInitData
             }
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         var addPasswordResult = await userManager.AddPasswordAsync(identityUser, targetPassword);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!addPasswordResult.Succeeded)
         {
             Console.WriteLine($"❌ 账号 [{employeeNo}] 设置新密码失败！");
@@ -681,4 +763,8 @@ public static class SystemInitData
         string EmployeeNo,
         bool IdentityEnabled,
         bool EmployeeActive);
+
+    internal sealed record SeedRetryTarget(
+        Guid AdminAccountId,
+        IReadOnlyDictionary<string, Guid> RoleIds);
 }

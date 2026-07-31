@@ -1472,7 +1472,9 @@ internal sealed class StubRefreshTokenService : IRefreshTokenService
     }
 }
 
-internal sealed class StubHumanSessionRevocationService : IHumanSessionRevocationService
+internal sealed class StubHumanSessionRevocationService :
+    IHumanSessionRevocationService,
+    IIndependentHumanSessionRevocationService
 {
     public List<(Guid SubjectId, string Reason)> Revocations { get; } = [];
 
@@ -1854,30 +1856,6 @@ internal sealed class RecordingEventPublisher(
         return Task.CompletedTask;
     }
 
-}
-
-internal sealed class RecordingIntegrationEventOutbox(
-    List<string>? callOrder = null,
-    Exception? enqueueException = null) : IIntegrationEventOutbox
-{
-    public IIntegrationEvent? LastEnqueuedEvent { get; private set; }
-
-    public List<IIntegrationEvent> EnqueuedEvents { get; } = [];
-
-    public Task EnqueueAsync(
-        IIntegrationEvent @event,
-        CancellationToken cancellationToken = default)
-    {
-        callOrder?.Add("enqueue");
-        if (enqueueException is not null)
-        {
-            throw enqueueException;
-        }
-
-        LastEnqueuedEvent = @event;
-        EnqueuedEvents.Add(@event);
-        return Task.CompletedTask;
-    }
 }
 
 internal sealed class RecordingUploadReceiveRegistry(

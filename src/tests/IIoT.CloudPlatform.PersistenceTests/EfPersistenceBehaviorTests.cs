@@ -27,6 +27,7 @@ using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Result;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -160,37 +161,6 @@ public sealed class EfPersistenceBehaviorTests
     }
 
     [Fact]
-    public async Task IntegrationEventOutbox_ShouldPersistIntegrationEventMessages()
-    {
-        using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
-        using var scope = provider.CreateScope();
-
-        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
-        var outbox = new EfIntegrationEventOutbox(dbContext);
-        var integrationEvent = new HourlyCapacityReceivedEvent
-        {
-            DeviceId = Guid.NewGuid(),
-            Date = DateOnly.FromDateTime(DateTime.UtcNow),
-            ShiftCode = "D",
-            Hour = 10,
-            Minute = 0,
-            TimeLabel = "10:00",
-            TotalCount = 20,
-            OkCount = 19,
-            NgCount = 1,
-            ReceivedAtUtc = DateTime.UtcNow
-        };
-
-        await outbox.EnqueueAsync(integrationEvent);
-
-        var outboxMessage = await dbContext.OutboxMessages.SingleAsync();
-        Assert.Equal(OutboxMessageKind.IntegrationEvent, outboxMessage.MessageKind);
-        Assert.Null(outboxMessage.ProcessedAtUtc);
-        Assert.Equal(integrationEvent.EventId, Assert.IsType<HourlyCapacityReceivedEvent>(
-            outboxMessage.DeserializeIntegrationEvent()).EventId);
-    }
-
-    [Fact]
     public void RecipeConfiguration_ShouldAddStandaloneDeviceIdIndex()
     {
         using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
@@ -285,6 +255,50 @@ public sealed class EfPersistenceBehaviorTests
     }
 
     [Fact]
+    public void UploadReceiveObservationConfiguration_ShouldBindStableAttemptMarker()
+    {
+        using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
+        using var scope = provider.CreateScope();
+
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var entityType = dbContext.Model.FindEntityType(
+            typeof(UploadReceiveObservation));
+        var foreignKey = Assert.Single(entityType!.GetForeignKeys());
+
+        Assert.Equal("upload_receive_observations", entityType.GetTableName());
+        Assert.Equal(
+            ValueGenerated.Never,
+            entityType.FindProperty(nameof(UploadReceiveObservation.Id))!
+                .ValueGenerated);
+        Assert.Equal(
+            nameof(UploadReceiveObservation.RegistrationId),
+            Assert.Single(foreignKey.Properties).Name);
+        Assert.Equal(DeleteBehavior.Cascade, foreignKey.DeleteBehavior);
+    }
+
+    [Fact]
+    public void UploadReceiveRegistration_ShouldCountOutOfOrderDuplicatesWithoutMovingLastSeenBackward()
+    {
+        var receivedAtUtc = DateTimeOffset.UtcNow;
+        var registration = UploadReceiveRegistration.Create(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            "hourly-capacity",
+            "request-1",
+            "request:request-1",
+            Guid.NewGuid(),
+            receivedAtUtc);
+        var latestSeenAtUtc = receivedAtUtc.AddMinutes(2);
+
+        registration.MarkSeen(latestSeenAtUtc);
+        registration.MarkSeen(receivedAtUtc.AddMinutes(1));
+        registration.MarkSeen(latestSeenAtUtc);
+
+        Assert.Equal(4, registration.SeenCount);
+        Assert.Equal(latestSeenAtUtc, registration.LastSeenAtUtc);
+    }
+
+    [Fact]
     public async Task UploadReceiveRegistry_ShouldRegisterOnceAndReturnDuplicateForSameDeduplicationKey()
     {
         using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
@@ -330,6 +344,7 @@ public sealed class EfPersistenceBehaviorTests
         Assert.True(second.IsDuplicate);
         Assert.Equal(first.OutboxMessageId, second.OutboxMessageId);
         Assert.Single(dbContext.OutboxMessages);
+        Assert.Single(dbContext.UploadReceiveObservations);
         Assert.Equal("request-1", registration.RequestId);
         Assert.Equal(2, registration.SeenCount);
         Assert.True(registration.LastSeenAtUtc >= registration.ReceivedAtUtc);

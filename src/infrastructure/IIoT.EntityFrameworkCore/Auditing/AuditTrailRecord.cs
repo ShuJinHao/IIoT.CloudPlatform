@@ -31,9 +31,13 @@ public sealed class AuditTrailRecord
     }
 
     public static AuditTrailRecord FromEntry(AuditTrailEntry entry)
+        => FromEntry(Guid.NewGuid(), entry);
+
+    public static AuditTrailRecord FromEntry(Guid recordId, AuditTrailEntry entry)
     {
         return new AuditTrailRecord
         {
+            Id = recordId,
             ActorUserId = entry.ActorUserId,
             ActorEmployeeNo = entry.ActorEmployeeNo,
             OperationType = entry.OperationType,

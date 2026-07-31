@@ -25,6 +25,10 @@ public sealed record EdgeReleaseApiKeyValidationResult(
     string Name,
     IReadOnlyList<string> Permissions);
 
+public sealed record EdgeReleaseApiKeyAuditContext(
+    string? ActorEmployeeNo,
+    DateTime ExecutedAtUtc);
+
 public interface IEdgeReleaseApiKeyService
 {
     Task<Result<EdgeReleaseApiKeyCreateResult>> CreateAsync(
@@ -32,6 +36,7 @@ public interface IEdgeReleaseApiKeyService
         IReadOnlyCollection<string>? permissions,
         DateTimeOffset? expiresAtUtc,
         Guid? createdByUserId,
+        EdgeReleaseApiKeyAuditContext auditContext,
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<EdgeReleaseApiKeyListItem>> GetListAsync(
@@ -41,6 +46,7 @@ public interface IEdgeReleaseApiKeyService
         Guid id,
         Guid? revokedByUserId,
         string? reason,
+        EdgeReleaseApiKeyAuditContext auditContext,
         CancellationToken cancellationToken = default);
 
     Task<Result<EdgeReleaseApiKeyValidationResult>> ValidateAsync(

@@ -8,7 +8,7 @@ public sealed class OpenIddictClientSeeder(
     IOpenIddictApplicationManager applicationManager,
     IOptions<OidcProviderOptions> options) : IOidcClientSeeder
 {
-    public async Task EnsureAicopilotClientAsync(CancellationToken cancellationToken = default)
+    public async Task<string> EnsureAicopilotClientAsync(CancellationToken cancellationToken = default)
     {
         var oidcOptions = options.Value;
         var descriptor = CreateDescriptor(oidcOptions);
@@ -19,10 +19,11 @@ public sealed class OpenIddictClientSeeder(
         if (existing is null)
         {
             await applicationManager.CreateAsync(descriptor, cancellationToken);
-            return;
+            return oidcOptions.AicopilotClientId;
         }
 
         await applicationManager.UpdateAsync(existing, descriptor, cancellationToken);
+        return oidcOptions.AicopilotClientId;
     }
 
     private static OpenIddictApplicationDescriptor CreateDescriptor(OidcProviderOptions options)

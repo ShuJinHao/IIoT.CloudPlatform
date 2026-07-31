@@ -17,9 +17,23 @@ using OpenIddict.EntityFrameworkCore.Models;
 
 namespace IIoT.EntityFrameworkCore;
 
-public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)
-    : IdentityDbContext<ApplicationUser, IdentityRole<Guid>, Guid>(options)
+public class IIoTDbContext
+    : IdentityDbContext<ApplicationUser, IdentityRole<Guid>, Guid>
 {
+    public IIoTDbContext(DbContextOptions<IIoTDbContext> options)
+        : base(options)
+    {
+        ContextOptions = options;
+    }
+
+    internal DbContextOptions<IIoTDbContext> ContextOptions { get; }
+
+    internal IIoTDbContext CreateFreshContext()
+        => CreateFreshContextCore();
+
+    protected virtual IIoTDbContext CreateFreshContextCore()
+        => new IIoTDbContext(ContextOptions);
+
     public DbSet<Employee> Employees => Set<Employee>();
     public DbSet<MfgProcess> MfgProcesses => Set<MfgProcess>();
     public DbSet<Device> Devices => Set<Device>();
@@ -35,6 +49,7 @@ public class IIoTDbContext(DbContextOptions<IIoTDbContext> options)
     public DbSet<EdgeReleaseApiKey> EdgeReleaseApiKeys => Set<EdgeReleaseApiKey>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<UploadReceiveRegistration> UploadReceiveRegistrations => Set<UploadReceiveRegistration>();
+    public DbSet<UploadReceiveObservation> UploadReceiveObservations => Set<UploadReceiveObservation>();
     public DbSet<AuditTrailRecord> AuditTrails => Set<AuditTrailRecord>();
     public DbSet<OpenIddictEntityFrameworkCoreApplication<Guid>> OpenIddictApplications => Set<OpenIddictEntityFrameworkCoreApplication<Guid>>();
     public DbSet<OpenIddictEntityFrameworkCoreAuthorization<Guid>> OpenIddictAuthorizations => Set<OpenIddictEntityFrameworkCoreAuthorization<Guid>>();

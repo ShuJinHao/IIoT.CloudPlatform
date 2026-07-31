@@ -26,7 +26,11 @@ builder.AddInfrastructures();
 builder.AddEfCore();
 builder.AddDapper();
 
-builder.Services.AddScoped<IDatabaseInitializationOrchestrator, DatabaseInitializationOrchestrator>();
+builder.Services.AddScoped<IDatabaseInitializationOrchestrator>(services =>
+    new DatabaseInitializationOrchestrator(
+        services.GetRequiredService<IServiceScopeFactory>(),
+        services.GetRequiredService<IConfiguration>(),
+        services.GetRequiredService<ILogger<DatabaseInitializationOrchestrator>>()));
 builder.Services.AddHostedService<Worker>();
 
 var app = builder.Build();

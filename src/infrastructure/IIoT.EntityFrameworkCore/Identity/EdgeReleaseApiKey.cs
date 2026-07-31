@@ -25,6 +25,8 @@ public sealed class EdgeReleaseApiKey
     public Guid? RevokedByUserId { get; set; }
 
     public string? RevokedReason { get; set; }
+
+    public uint RowVersion { get; set; }
 }
 
 public static class EdgeReleaseApiKeyStatuses

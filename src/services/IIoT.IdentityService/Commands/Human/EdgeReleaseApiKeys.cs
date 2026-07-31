@@ -30,24 +30,33 @@ public sealed class CreateEdgeReleaseApiKeyHandler(
         CancellationToken cancellationToken)
     {
         var actorUserId = ParseActorUserId(currentUser.Id);
+        var auditContext = new EdgeReleaseApiKeyAuditContext(
+            currentUser.UserName,
+            DateTime.UtcNow);
         var result = await apiKeyService.CreateAsync(
             request.Name,
             request.Permissions,
             request.ExpiresAtUtc,
             actorUserId,
+            auditContext,
             cancellationToken);
 
-        await auditTrailService.TryWriteAsync(
-            CreateAuditEntry(request, result, actorUserId),
-            cancellationToken);
+        if (!result.IsSuccess)
+        {
+            await auditTrailService.TryWriteAsync(
+                CreateAuditEntry(request, result, actorUserId, auditContext.ExecutedAtUtc),
+                cancellationToken);
+        }
 
+        cancellationToken.ThrowIfCancellationRequested();
         return result;
     }
 
     private AuditTrailEntry CreateAuditEntry(
         CreateEdgeReleaseApiKeyCommand request,
         Result<EdgeReleaseApiKeyCreateResult> result,
-        Guid? actorUserId)
+        Guid? actorUserId,
+        DateTime executedAtUtc)
     {
         var created = result.Value!;
         var target = result.IsSuccess
@@ -63,7 +72,7 @@ public sealed class CreateEdgeReleaseApiKeyHandler(
             "ClientRelease.ApiKey.Create",
             "EdgeReleaseApiKey",
             target,
-            DateTime.UtcNow,
+            executedAtUtc,
             result.IsSuccess,
             summary,
             result.IsSuccess ? null : JoinErrors(result.Errors, "Edge release API key creation failed."));
@@ -87,23 +96,32 @@ public sealed class RevokeEdgeReleaseApiKeyHandler(
         CancellationToken cancellationToken)
     {
         var actorUserId = ParseActorUserId(currentUser.Id);
+        var auditContext = new EdgeReleaseApiKeyAuditContext(
+            currentUser.UserName,
+            DateTime.UtcNow);
         var result = await apiKeyService.RevokeAsync(
             request.Id,
             actorUserId,
             request.Reason,
+            auditContext,
             cancellationToken);
 
-        await auditTrailService.TryWriteAsync(
-            CreateAuditEntry(request, result, actorUserId),
-            cancellationToken);
+        if (!result.IsSuccess)
+        {
+            await auditTrailService.TryWriteAsync(
+                CreateAuditEntry(request, result, actorUserId, auditContext.ExecutedAtUtc),
+                cancellationToken);
+        }
 
+        cancellationToken.ThrowIfCancellationRequested();
         return result;
     }
 
     private AuditTrailEntry CreateAuditEntry(
         RevokeEdgeReleaseApiKeyCommand request,
         Result result,
-        Guid? actorUserId)
+        Guid? actorUserId,
+        DateTime executedAtUtc)
     {
         var reason = string.IsNullOrWhiteSpace(request.Reason)
             ? "not specified"
@@ -118,7 +136,7 @@ public sealed class RevokeEdgeReleaseApiKeyHandler(
             "ClientRelease.ApiKey.Revoke",
             "EdgeReleaseApiKey",
             request.Id.ToString(),
-            DateTime.UtcNow,
+            executedAtUtc,
             result.IsSuccess,
             summary,
             result.IsSuccess ? null : JoinErrors(result.Errors, "Edge release API key revocation failed."));
