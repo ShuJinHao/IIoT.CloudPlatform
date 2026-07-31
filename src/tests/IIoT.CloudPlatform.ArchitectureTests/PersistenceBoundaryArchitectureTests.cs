@@ -45,6 +45,106 @@ namespace IIoT.CloudPlatform.ArchitectureTests;
 public sealed class PersistenceBoundaryArchitectureTests
 {
     [Fact]
+    public void SharedAndMigrationWriteEntrypoints_ShouldHaveExplicitRecoveryClassification()
+    {
+        var entries = new[]
+        {
+            new WriteBoundaryEntry(
+                "src/infrastructure/IIoT.EntityFrameworkCore/Uploads/EfUploadReceiveRegistry.cs",
+                "exact-recovery",
+                ["CreateExecutionStrategy()", "ObserveCommitOutcomeAsync", "callbackToken"]),
+            new WriteBoundaryEntry(
+                "src/infrastructure/IIoT.EntityFrameworkCore/Auditing/EfAuditTrailService.cs",
+                "exact-recovery",
+                ["CreateExecutionStrategy()", "ObserveCommitOutcomeAsync", "recordId"]),
+            new WriteBoundaryEntry(
+                "src/infrastructure/IIoT.EntityFrameworkCore/Identity/EdgeReleaseApiKeyService.cs",
+                "exact-recovery",
+                ["CreateExecutionStrategy()", "ObserveCreateOutcomeAsync", "ObserveRevokeOutcomeAsync"]),
+            new WriteBoundaryEntry(
+                "src/infrastructure/IIoT.EntityFrameworkCore/Identity/EfRefreshTokenService.cs",
+                "exact-recovery",
+                ["CreateExecutionStrategy()", "ObserveRotationOutcomeAsync", "ReplacementSession", "RefreshTokenSubjectTransactionLock"]),
+            new WriteBoundaryEntry(
+                "src/infrastructure/IIoT.EntityFrameworkCore/Identity/IndependentHumanSessionRevocationService.cs",
+                "exact-recovery",
+                ["CreateExecutionStrategy()", "ObserveOutcomeAsync", "callbackToken", "RefreshTokenSubjectTransactionLock"]),
+            new WriteBoundaryEntry(
+                "src/infrastructure/IIoT.EntityFrameworkCore/Outbox/OutboxMessageDispatcher.cs",
+                "stable-idempotent",
+                ["callbackToken", "message.Id", "PublishAsync"]),
+            new WriteBoundaryEntry(
+                "src/infrastructure/IIoT.Dapper/Initializers/RecordSchemaInitializer.cs",
+                "stable-idempotent",
+                ["BeginTransactionAsync", "transaction: transaction", "cancellationToken"]),
+            new WriteBoundaryEntry(
+                "src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs",
+                "exact-recovery",
+                ["ExecuteFreshStageAsync", "CreateAsyncScope", "callbackToken"]),
+            new WriteBoundaryEntry(
+                "src/hosts/IIoT.MigrationWorkApp/SeedData/SystemInitData.cs",
+                "exact-recovery",
+                ["SeedRetryTarget", "CheckPasswordAsync", "SingleAdminSeedAdvisoryLockKey"]),
+            new WriteBoundaryEntry(
+                "src/infrastructure/IIoT.EntityFrameworkCore/Identity/OpenIddictClientSeeder.cs",
+                "stable-idempotent",
+                ["FindByClientIdAsync", "CreateAsync", "UpdateAsync"]),
+            new WriteBoundaryEntry(
+                "src/infrastructure/IIoT.EntityFrameworkCore/Identity/HumanSessionRevocationService.cs",
+                "transaction-participant",
+                ["SaveChangesAsync"]),
+            new WriteBoundaryEntry(
+                "src/infrastructure/IIoT.EntityFrameworkCore/Repository/EfRepository.cs",
+                "transaction-participant",
+                ["SaveChangesAsync"])
+        };
+
+        Assert.Equal(12, entries.Length);
+        Assert.Equal(7, entries.Count(entry => entry.Classification == "exact-recovery"));
+        Assert.Equal(3, entries.Count(entry => entry.Classification == "stable-idempotent"));
+        Assert.Equal(2, entries.Count(entry => entry.Classification == "transaction-participant"));
+
+        foreach (var entry in entries)
+        {
+            var path = CloudRepositoryPath.Find(
+                entry.RelativePath.Split('/', StringSplitOptions.RemoveEmptyEntries));
+            var source = File.ReadAllText(path);
+            foreach (var marker in entry.RequiredMarkers)
+            {
+                Assert.Contains(marker, source, StringComparison.Ordinal);
+            }
+
+            if (entry.Classification == "transaction-participant")
+            {
+                Assert.DoesNotContain("CreateExecutionStrategy()", source, StringComparison.Ordinal);
+            }
+        }
+
+        var employeeMutationFiles = new[]
+        {
+            "UpdateEmployeeRole.cs",
+            "DeactivateEmployee.cs",
+            "TerminateEmployee.cs",
+            "ActivateEmployee.cs"
+        };
+        foreach (var fileName in employeeMutationFiles)
+        {
+            var source = File.ReadAllText(CloudRepositoryPath.Find(
+                "src", "services", "IIoT.EmployeeService", "Commands", "Human",
+                "Employees", fileName));
+            Assert.Contains("ExecuteResilientAsync", source, StringComparison.Ordinal);
+            Assert.Contains("sessionRevocationService.RevokeAllAsync", source, StringComparison.Ordinal);
+        }
+
+        Assert.False(File.Exists(CloudRepositoryPath.Find(
+            "src", "services", "IIoT.Services.Contracts", "Contracts", "Messaging",
+            "IIntegrationEventOutbox.cs")));
+        Assert.False(File.Exists(CloudRepositoryPath.Find(
+            "src", "infrastructure", "IIoT.EntityFrameworkCore", "Outbox",
+            "EfIntegrationEventOutbox.cs")));
+    }
+
+    [Fact]
     public void DeviceCascadeDeletion_ShouldStayOnEfCoreWritePath()
     {
         var implementationSource = File.ReadAllText(CloudRepositoryPath.Find(
@@ -392,6 +492,11 @@ public sealed class PersistenceBoundaryArchitectureTests
             yield return $"{relativePath}:{line}";
         }
     }
+
+    private sealed record WriteBoundaryEntry(
+        string RelativePath,
+        string Classification,
+        IReadOnlyList<string> RequiredMarkers);
 
     private static bool IsInsideResilientCallback(
         InvocationExpressionSyntax transactionInvocation,

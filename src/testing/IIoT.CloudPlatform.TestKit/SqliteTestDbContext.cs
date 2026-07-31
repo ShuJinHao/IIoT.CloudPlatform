@@ -4,9 +4,19 @@ using Microsoft.EntityFrameworkCore.Metadata;
 
 namespace IIoT.CloudPlatform.TestKit;
 
-internal sealed class SqliteTestDbContext(DbContextOptions<IIoTDbContext> options)
-    : IIoTDbContext(options)
+internal sealed class SqliteTestDbContext : IIoTDbContext
 {
+    private readonly DbContextOptions<IIoTDbContext> _options;
+
+    public SqliteTestDbContext(DbContextOptions<IIoTDbContext> options)
+        : base(options)
+    {
+        _options = options;
+    }
+
+    protected override IIoTDbContext CreateFreshContextCore()
+        => new SqliteTestDbContext(_options);
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);

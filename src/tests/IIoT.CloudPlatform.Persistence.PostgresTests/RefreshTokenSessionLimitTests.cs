@@ -33,6 +33,7 @@ public sealed class RefreshTokenSessionLimitTests(
 
         await service.IssueHumanAsync(subjectId, "status-current");
 
+        dbContext.ChangeTracker.Clear();
         var sessions = await dbContext.RefreshTokenSessions
             .Where(x => x.ActorType == IIoTClaimTypes.HumanActor && x.SubjectId == subjectId)
             .ToListAsync();
@@ -68,6 +69,7 @@ public sealed class RefreshTokenSessionLimitTests(
         await service.IssueAsync(IIoTClaimTypes.EdgeDeviceActor, subjectId);
         await service.IssueAsync(IIoTClaimTypes.EdgeDeviceActor, subjectId);
 
+        dbContext.ChangeTracker.Clear();
         var sessions = await dbContext.RefreshTokenSessions
             .Where(x => x.ActorType == IIoTClaimTypes.EdgeDeviceActor && x.SubjectId == subjectId)
             .ToListAsync();
@@ -94,6 +96,7 @@ public sealed class RefreshTokenSessionLimitTests(
         Assert.True(rotationResult.IsSuccess);
         Assert.Equal("status-current", rotationResult.Value!.IdentityStatusVersion);
 
+        dbContext.ChangeTracker.Clear();
         var sessions = await dbContext.RefreshTokenSessions
             .Where(x => x.ActorType == IIoTClaimTypes.HumanActor && x.SubjectId == subjectId)
             .ToListAsync();

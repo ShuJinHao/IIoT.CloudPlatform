@@ -160,37 +160,6 @@ public sealed class EfPersistenceBehaviorTests
     }
 
     [Fact]
-    public async Task IntegrationEventOutbox_ShouldPersistIntegrationEventMessages()
-    {
-        using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
-        using var scope = provider.CreateScope();
-
-        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
-        var outbox = new EfIntegrationEventOutbox(dbContext);
-        var integrationEvent = new HourlyCapacityReceivedEvent
-        {
-            DeviceId = Guid.NewGuid(),
-            Date = DateOnly.FromDateTime(DateTime.UtcNow),
-            ShiftCode = "D",
-            Hour = 10,
-            Minute = 0,
-            TimeLabel = "10:00",
-            TotalCount = 20,
-            OkCount = 19,
-            NgCount = 1,
-            ReceivedAtUtc = DateTime.UtcNow
-        };
-
-        await outbox.EnqueueAsync(integrationEvent);
-
-        var outboxMessage = await dbContext.OutboxMessages.SingleAsync();
-        Assert.Equal(OutboxMessageKind.IntegrationEvent, outboxMessage.MessageKind);
-        Assert.Null(outboxMessage.ProcessedAtUtc);
-        Assert.Equal(integrationEvent.EventId, Assert.IsType<HourlyCapacityReceivedEvent>(
-            outboxMessage.DeserializeIntegrationEvent()).EventId);
-    }
-
-    [Fact]
     public void RecipeConfiguration_ShouldAddStandaloneDeviceIdIndex()
     {
         using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());

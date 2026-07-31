@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using IIoT.EntityFrameworkCore.Persistence;
+using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Result;
 using Microsoft.EntityFrameworkCore;
@@ -14,7 +15,9 @@ public sealed class EfRefreshTokenService(
 {
     private const string SessionLimitRevokedReason = "session-limit";
     private const string HumanTokenVersionPrefix = "h1";
+    private const string RotationRevokedReason = "rotated";
     private readonly RefreshTokenOptions _options = refreshTokenOptions.Value;
+    private readonly Func<IIoTDbContext> _createContext = dbContext.CreateFreshContext;
 
     public Task<RefreshTokenEnvelope> IssueHumanAsync(
         Guid subjectId,
@@ -26,10 +29,11 @@ public sealed class EfRefreshTokenService(
             IIoTClaimTypes.HumanActor,
             subjectId,
             identityStatusVersion,
+            requireDevice: false,
             cancellationToken);
     }
 
-    public async Task<RefreshTokenEnvelope> IssueAsync(
+    public Task<RefreshTokenEnvelope> IssueAsync(
         string actorType,
         Guid subjectId,
         CancellationToken cancellationToken = default)
@@ -40,113 +44,15 @@ public sealed class EfRefreshTokenService(
                 "Human refresh tokens must be issued with an identity status version.");
         }
 
-        if (string.Equals(
+        return IssueCoreAsync(
+            actorType,
+            subjectId,
+            identityStatusVersion: null,
+            requireDevice: string.Equals(
                 actorType,
                 IIoTClaimTypes.EdgeDeviceActor,
-                StringComparison.Ordinal))
-        {
-            return await IssueEdgeDeviceAsync(subjectId, cancellationToken);
-        }
-
-        return await IssueCoreAsync(actorType, subjectId, null, cancellationToken);
-    }
-
-    private async Task<RefreshTokenEnvelope> IssueEdgeDeviceAsync(
-        Guid subjectId,
-        CancellationToken cancellationToken)
-    {
-        var now = DateTimeOffset.UtcNow;
-        var token = GenerateToken(null);
-        var session = CreateSession(
-            IIoTClaimTypes.EdgeDeviceActor,
-            subjectId,
-            token,
-            now);
-        var envelope = new RefreshTokenEnvelope(token, session.ExpiresAtUtc);
-        var strategy = dbContext.Database.CreateExecutionStrategy();
-
-        return await strategy.ExecuteAsync(
-            ExecuteTransactionAsync,
+                StringComparison.Ordinal),
             cancellationToken);
-
-        async Task<RefreshTokenEnvelope> ExecuteTransactionAsync(
-            CancellationToken transactionCancellationToken)
-        {
-            try
-            {
-                await using var transaction =
-                    await dbContext.Database.BeginTransactionAsync(
-                        transactionCancellationToken);
-                await DeviceDeletionTransactionLock.AcquireAsync(
-                    dbContext,
-                    subjectId,
-                    transactionCancellationToken);
-
-                var deviceExists = await dbContext.Devices
-                    .AsNoTracking()
-                    .AnyAsync(
-                        device => device.Id == subjectId,
-                        transactionCancellationToken);
-                if (!deviceExists)
-                {
-                    throw new InvalidOperationException(
-                        "Edge device refresh session cannot be issued because the device no longer exists.");
-                }
-
-                var committedSession = await dbContext.RefreshTokenSessions
-                    .AsNoTracking()
-                    .SingleOrDefaultAsync(
-                        candidate => candidate.Id == session.Id,
-                        transactionCancellationToken);
-                if (committedSession is not null)
-                {
-                    if (!string.Equals(
-                            committedSession.ActorType,
-                            session.ActorType,
-                            StringComparison.Ordinal)
-                        || committedSession.SubjectId != session.SubjectId
-                        || !string.Equals(
-                            committedSession.TokenHash,
-                            session.TokenHash,
-                            StringComparison.Ordinal))
-                    {
-                        throw new InvalidOperationException(
-                            "Edge device refresh session replay state is inconsistent.");
-                    }
-
-                    await transaction.CommitAsync(
-                        transactionCancellationToken);
-                    return envelope;
-                }
-
-                dbContext.RefreshTokenSessions.Add(session);
-                await dbContext.SaveChangesAsync(transactionCancellationToken);
-                await transaction.CommitAsync(transactionCancellationToken);
-                return envelope;
-            }
-            catch
-            {
-                dbContext.ChangeTracker.Clear();
-                throw;
-            }
-        }
-    }
-
-    private async Task<RefreshTokenEnvelope> IssueCoreAsync(
-        string actorType,
-        Guid subjectId,
-        string? identityStatusVersion,
-        CancellationToken cancellationToken)
-    {
-        var now = DateTimeOffset.UtcNow;
-        var token = GenerateToken(identityStatusVersion);
-        var session = CreateSession(actorType, subjectId, token, now);
-
-        await RevokeOverflowHumanSessionsAsync(actorType, subjectId, now, cancellationToken);
-        dbContext.RefreshTokenSessions.Add(session);
-        await dbContext.SaveChangesAsync(cancellationToken);
-
-        return new RefreshTokenEnvelope(token, session.ExpiresAtUtc);
     }
 
     public async Task<Result<RefreshTokenRotationResult>> RotateAsync(
@@ -154,28 +60,39 @@ public sealed class EfRefreshTokenService(
         string refreshToken,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var tokenHash = ComputeTokenHash(refreshToken);
-        var now = DateTimeOffset.UtcNow;
-
-        if (string.Equals(
-                actorType,
-                IIoTClaimTypes.EdgeDeviceActor,
-                StringComparison.Ordinal))
+        var now = NormalizeTimestamp(DateTimeOffset.UtcNow);
+        RefreshTokenSession baseline;
+        try
         {
-            return await RotateEdgeDeviceAsync(
-                tokenHash,
-                now,
-                cancellationToken);
+            await using var preflightContext = _createContext();
+            baseline = await preflightContext.RefreshTokenSessions
+                .AsNoTracking()
+                .SingleOrDefaultAsync(
+                    session => session.ActorType == actorType
+                               && session.TokenHash == tokenHash,
+                    cancellationToken)
+                ?? throw new InvalidRefreshTokenException();
+        }
+        catch (InvalidRefreshTokenException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return InvalidRotationResult();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            throw new CloudWriteCommitUnknownException();
         }
 
-        var existing = await dbContext.RefreshTokenSessions
-            .SingleOrDefaultAsync(
-                x => x.ActorType == actorType && x.TokenHash == tokenHash,
-                cancellationToken);
-
-        if (existing is null || existing.RevokedAtUtc.HasValue || existing.ExpiresAtUtc <= now)
+        if (baseline.RevokedAtUtc.HasValue || baseline.ExpiresAtUtc <= now)
         {
-            return Result.Unauthorized("Refresh token is invalid or expired.");
+            cancellationToken.ThrowIfCancellationRequested();
+            return InvalidRotationResult();
         }
 
         var identityStatusVersion = string.Equals(
@@ -184,184 +101,66 @@ public sealed class EfRefreshTokenService(
             StringComparison.Ordinal)
             ? TryReadHumanIdentityStatusVersion(refreshToken)
             : null;
-        if (string.Equals(actorType, IIoTClaimTypes.HumanActor, StringComparison.Ordinal) &&
-            string.IsNullOrWhiteSpace(identityStatusVersion))
+        if (string.Equals(actorType, IIoTClaimTypes.HumanActor, StringComparison.Ordinal)
+            && string.IsNullOrWhiteSpace(identityStatusVersion))
         {
-            existing.RevokedAtUtc = now;
-            existing.RevokedReason = "status-version-missing";
-            await dbContext.SaveChangesAsync(cancellationToken);
-            return Result.Unauthorized("Refresh token is invalid or expired.");
+            await RevokeInvalidHumanTokenAsync(
+                baseline,
+                now,
+                "status-version-missing",
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return InvalidRotationResult();
         }
 
         var replacementToken = GenerateToken(identityStatusVersion);
-        var replacementSession = CreateSession(actorType, existing.SubjectId, replacementToken, now);
-
-        existing.RevokedAtUtc = now;
-        existing.RevokedReason = "rotated";
-        existing.ReplacedByTokenId = replacementSession.Id;
-
-        dbContext.RefreshTokenSessions.Add(replacementSession);
-        try
-        {
-            await dbContext.SaveChangesAsync(cancellationToken);
-        }
-        catch (DbUpdateConcurrencyException)
-        {
-            return Result.Unauthorized("Refresh token is invalid or expired.");
-        }
-
-        return Result.Success(new RefreshTokenRotationResult(
-            actorType,
-            existing.SubjectId,
-            new RefreshTokenEnvelope(replacementToken, replacementSession.ExpiresAtUtc),
-            identityStatusVersion));
-    }
-
-    private async Task<Result<RefreshTokenRotationResult>>
-        RotateEdgeDeviceAsync(
-            string tokenHash,
-            DateTimeOffset now,
-            CancellationToken cancellationToken)
-    {
-        var initialSession = await dbContext.RefreshTokenSessions
-            .AsNoTracking()
-            .SingleOrDefaultAsync(
-                session =>
-                    session.ActorType == IIoTClaimTypes.EdgeDeviceActor
-                    && session.TokenHash == tokenHash,
-                cancellationToken);
-        if (initialSession is null
-            || initialSession.RevokedAtUtc.HasValue
-            || initialSession.ExpiresAtUtc <= now)
-        {
-            return Result.Unauthorized(
-                "Refresh token is invalid or expired.");
-        }
-
-        var replacementToken = GenerateToken(null);
         var replacementSession = CreateSession(
-            IIoTClaimTypes.EdgeDeviceActor,
-            initialSession.SubjectId,
+            Guid.NewGuid(),
+            actorType,
+            baseline.SubjectId,
             replacementToken,
             now);
+        var target = new RotationTarget(
+            actorType,
+            tokenHash,
+            baseline.Id,
+            baseline.SubjectId,
+            baseline.RowVersion,
+            now,
+            replacementSession);
         var success = Result.Success(new RefreshTokenRotationResult(
-            IIoTClaimTypes.EdgeDeviceActor,
-            initialSession.SubjectId,
-            new RefreshTokenEnvelope(
-                replacementToken,
-                replacementSession.ExpiresAtUtc),
-            null));
-        var strategy = dbContext.Database.CreateExecutionStrategy();
+            actorType,
+            baseline.SubjectId,
+            new RefreshTokenEnvelope(replacementToken, replacementSession.ExpiresAtUtc),
+            identityStatusVersion));
 
-        return await strategy.ExecuteAsync(
-            ExecuteTransactionAsync,
-            cancellationToken);
-
-        async Task<Result<RefreshTokenRotationResult>> ExecuteTransactionAsync(
-            CancellationToken transactionCancellationToken)
+        Result<RefreshTokenRotationResult> result;
+        try
         {
-            try
-            {
-                await using var transaction =
-                    await dbContext.Database.BeginTransactionAsync(
-                        transactionCancellationToken);
-                await DeviceDeletionTransactionLock.AcquireAsync(
-                    dbContext,
-                    initialSession.SubjectId,
-                    transactionCancellationToken);
-
-                var deviceExists = await dbContext.Devices
-                    .AsNoTracking()
-                    .AnyAsync(
-                        device => device.Id == initialSession.SubjectId,
-                        transactionCancellationToken);
-                if (!deviceExists)
-                {
-                    dbContext.ChangeTracker.Clear();
-                    return Result.Unauthorized(
-                        "Refresh token is invalid or expired.");
-                }
-
-                var existing = await dbContext.RefreshTokenSessions
-                    .SingleOrDefaultAsync(
-                        session =>
-                            session.ActorType
-                                == IIoTClaimTypes.EdgeDeviceActor
-                            && session.TokenHash == tokenHash,
-                        transactionCancellationToken);
-                if (existing is null
-                    || existing.SubjectId != initialSession.SubjectId)
-                {
-                    dbContext.ChangeTracker.Clear();
-                    return Result.Unauthorized(
-                        "Refresh token is invalid or expired.");
-                }
-
-                if (existing.RevokedAtUtc.HasValue
-                    || existing.ExpiresAtUtc <= now)
-                {
-                    if (!string.Equals(
-                            existing.RevokedReason,
-                            "rotated",
-                            StringComparison.Ordinal)
-                        || existing.ReplacedByTokenId
-                            != replacementSession.Id)
-                    {
-                        dbContext.ChangeTracker.Clear();
-                        return Result.Unauthorized(
-                            "Refresh token is invalid or expired.");
-                    }
-
-                    var committedReplacement =
-                        await dbContext.RefreshTokenSessions
-                            .AsNoTracking()
-                            .SingleOrDefaultAsync(
-                                session =>
-                                    session.Id == replacementSession.Id,
-                                transactionCancellationToken);
-                    if (committedReplacement is null
-                        || committedReplacement.SubjectId
-                            != replacementSession.SubjectId
-                        || !string.Equals(
-                            committedReplacement.ActorType,
-                            replacementSession.ActorType,
-                            StringComparison.Ordinal)
-                        || !string.Equals(
-                            committedReplacement.TokenHash,
-                            replacementSession.TokenHash,
-                            StringComparison.Ordinal))
-                    {
-                        throw new InvalidOperationException(
-                            "Edge device refresh rotation replay state is inconsistent.");
-                    }
-
-                    await transaction.CommitAsync(
-                        transactionCancellationToken);
-                    return success;
-                }
-
-                existing.RevokedAtUtc = now;
-                existing.RevokedReason = "rotated";
-                existing.ReplacedByTokenId = replacementSession.Id;
-                dbContext.RefreshTokenSessions.Add(replacementSession);
-                await dbContext.SaveChangesAsync(
-                    transactionCancellationToken);
-                await transaction.CommitAsync(
-                    transactionCancellationToken);
-                return success;
-            }
-            catch (DbUpdateConcurrencyException)
-            {
-                dbContext.ChangeTracker.Clear();
-                return Result.Unauthorized(
-                    "Refresh token is invalid or expired.");
-            }
-            catch
-            {
-                dbContext.ChangeTracker.Clear();
-                throw;
-            }
+            await using var strategyContext = _createContext();
+            var strategy = strategyContext.Database.CreateExecutionStrategy();
+            result = await strategy.ExecuteAsync(
+                callbackToken => RotateAttemptAsync(
+                    target,
+                    success,
+                    callbackToken),
+                cancellationToken);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (CompetingRefreshTokenRotationException)
+        {
+            result = InvalidRotationResult();
+        }
+        catch
+        {
+            result = await ObserveRotationOutcomeAsync(target, success);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return result;
     }
 
     public async Task RevokeSubjectTokensAsync(
@@ -370,58 +169,431 @@ public sealed class EfRefreshTokenService(
         string reason,
         CancellationToken cancellationToken = default)
     {
-        var now = DateTimeOffset.UtcNow;
-        var sessions = await dbContext.RefreshTokenSessions
-            .Where(x =>
-                x.ActorType == actorType &&
-                x.SubjectId == subjectId &&
-                !x.RevokedAtUtc.HasValue &&
-                x.ExpiresAtUtc > now)
-            .ToListAsync(cancellationToken);
-
-        foreach (var session in sessions)
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        cancellationToken.ThrowIfCancellationRequested();
+        var revokedAtUtc = NormalizeTimestamp(DateTimeOffset.UtcNow);
+        IReadOnlyList<RevocationSessionTarget> targets;
+        try
         {
-            session.RevokedAtUtc = now;
-            session.RevokedReason = reason;
+            await using var preflightContext = _createContext();
+            targets = await preflightContext.RefreshTokenSessions
+                .AsNoTracking()
+                .Where(session =>
+                    session.ActorType == actorType
+                    && session.SubjectId == subjectId
+                    && !session.RevokedAtUtc.HasValue
+                    && session.ExpiresAtUtc > revokedAtUtc)
+                .OrderBy(session => session.Id)
+                .Select(session => new RevocationSessionTarget(
+                    session.Id,
+                    session.RowVersion))
+                .ToListAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            throw new CloudWriteCommitUnknownException();
         }
 
-        if (sessions.Count > 0)
+        if (targets.Count == 0)
         {
-            await dbContext.SaveChangesAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return;
+        }
+
+        var target = new SubjectRevocationTarget(
+            actorType,
+            subjectId,
+            reason.Trim(),
+            revokedAtUtc,
+            targets);
+        try
+        {
+            await using var strategyContext = _createContext();
+            var strategy = strategyContext.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(
+                callbackToken => RevokeSubjectAttemptAsync(target, callbackToken),
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (CloudWriteConflictException)
+        {
+            throw;
+        }
+        catch
+        {
+            await ObserveSubjectRevocationOutcomeAsync(target);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    private async Task<RefreshTokenEnvelope> IssueCoreAsync(
+        string actorType,
+        Guid subjectId,
+        string? identityStatusVersion,
+        bool requireDevice,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var now = NormalizeTimestamp(DateTimeOffset.UtcNow);
+        var token = GenerateToken(identityStatusVersion);
+        var session = CreateSession(
+            Guid.NewGuid(),
+            actorType,
+            subjectId,
+            token,
+            now);
+        var envelope = new RefreshTokenEnvelope(token, session.ExpiresAtUtc);
+        try
+        {
+            await using var strategyContext = _createContext();
+            var strategy = strategyContext.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(
+                callbackToken => IssueAttemptAsync(
+                    session,
+                    requireDevice,
+                    callbackToken),
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (RefreshTokenSubjectUnavailableException)
+        {
+            throw new InvalidOperationException(
+                "Edge device refresh session cannot be issued because the device no longer exists.");
+        }
+        catch (CloudWriteConflictException)
+        {
+            throw;
+        }
+        catch
+        {
+            await ObserveIssueOutcomeAsync(session);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return envelope;
+    }
+
+    private async Task IssueAttemptAsync(
+        RefreshTokenSession target,
+        bool requireDevice,
+        CancellationToken cancellationToken)
+    {
+        await using var context = _createContext();
+        await using var transaction =
+            await context.Database.BeginTransactionAsync(cancellationToken);
+
+        if (requireDevice)
+        {
+            await DeviceDeletionTransactionLock.AcquireAsync(
+                context,
+                target.SubjectId,
+                cancellationToken);
+            if (!await context.Devices
+                    .AsNoTracking()
+                    .AnyAsync(device => device.Id == target.SubjectId, cancellationToken))
+            {
+                throw new RefreshTokenSubjectUnavailableException();
+            }
+        }
+        else if (string.Equals(
+                     target.ActorType,
+                     IIoTClaimTypes.HumanActor,
+                     StringComparison.Ordinal))
+        {
+            await RefreshTokenSubjectTransactionLock.AcquireAsync(
+                context,
+                target.SubjectId,
+                cancellationToken);
+        }
+
+        var committed = await context.RefreshTokenSessions
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                session => session.Id == target.Id,
+                cancellationToken);
+        if (committed is not null)
+        {
+            if (!MatchesSession(committed, target))
+            {
+                throw new CloudWriteConflictException();
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return;
+        }
+
+        if (await context.RefreshTokenSessions
+                .AsNoTracking()
+                .AnyAsync(
+                    session => session.TokenHash == target.TokenHash,
+                    cancellationToken))
+        {
+            throw new CloudWriteConflictException();
+        }
+
+        if (string.Equals(
+                target.ActorType,
+                IIoTClaimTypes.HumanActor,
+                StringComparison.Ordinal))
+        {
+            await RevokeOverflowHumanSessionsAsync(
+                context,
+                target.SubjectId,
+                target.CreatedAtUtc,
+                cancellationToken);
+        }
+
+        context.RefreshTokenSessions.Add(target);
+        await context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    private async Task<Result<RefreshTokenRotationResult>> RotateAttemptAsync(
+        RotationTarget target,
+        Result<RefreshTokenRotationResult> success,
+        CancellationToken cancellationToken)
+    {
+        await using var context = _createContext();
+        await using var transaction =
+            await context.Database.BeginTransactionAsync(cancellationToken);
+
+        if (string.Equals(
+                target.ActorType,
+                IIoTClaimTypes.EdgeDeviceActor,
+                StringComparison.Ordinal))
+        {
+            await DeviceDeletionTransactionLock.AcquireAsync(
+                context,
+                target.SubjectId,
+                cancellationToken);
+            if (!await context.Devices
+                    .AsNoTracking()
+                    .AnyAsync(device => device.Id == target.SubjectId, cancellationToken))
+            {
+                throw new CompetingRefreshTokenRotationException();
+            }
+        }
+        else if (string.Equals(
+                     target.ActorType,
+                     IIoTClaimTypes.HumanActor,
+                     StringComparison.Ordinal))
+        {
+            await RefreshTokenSubjectTransactionLock.AcquireAsync(
+                context,
+                target.SubjectId,
+                cancellationToken);
+        }
+
+        var source = await context.RefreshTokenSessions
+            .SingleOrDefaultAsync(
+                session => session.ActorType == target.ActorType
+                           && session.TokenHash == target.SourceTokenHash,
+                cancellationToken);
+        if (source is null || source.Id != target.SourceSessionId)
+        {
+            throw new CompetingRefreshTokenRotationException();
+        }
+
+        if (source.RevokedAtUtc.HasValue || source.ExpiresAtUtc <= target.RotatedAtUtc)
+        {
+            if (!MatchesRotationSource(source, target))
+            {
+                throw new CompetingRefreshTokenRotationException();
+            }
+
+            var replacement = await context.RefreshTokenSessions
+                .AsNoTracking()
+                .SingleOrDefaultAsync(
+                    session => session.Id == target.ReplacementSession.Id,
+                    cancellationToken);
+            if (replacement is null || !MatchesSession(replacement, target.ReplacementSession))
+            {
+                throw new CloudWriteCommitUnknownException();
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return success;
+        }
+
+        if (source.RowVersion != target.SourceRowVersion)
+        {
+            throw new CompetingRefreshTokenRotationException();
+        }
+
+        source.RevokedAtUtc = target.RotatedAtUtc;
+        source.RevokedReason = RotationRevokedReason;
+        source.ReplacedByTokenId = target.ReplacementSession.Id;
+        context.RefreshTokenSessions.Add(target.ReplacementSession);
+        try
+        {
+            await context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return success;
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw new CompetingRefreshTokenRotationException();
+        }
+    }
+
+    private async Task RevokeSubjectAttemptAsync(
+        SubjectRevocationTarget target,
+        CancellationToken cancellationToken)
+    {
+        await using var context = _createContext();
+        await using var transaction =
+            await context.Database.BeginTransactionAsync(cancellationToken);
+        if (string.Equals(
+                target.ActorType,
+                IIoTClaimTypes.EdgeDeviceActor,
+                StringComparison.Ordinal))
+        {
+            await DeviceDeletionTransactionLock.AcquireAsync(
+                context,
+                target.SubjectId,
+                cancellationToken);
+        }
+        else if (string.Equals(
+                     target.ActorType,
+                     IIoTClaimTypes.HumanActor,
+                     StringComparison.Ordinal))
+        {
+            await RefreshTokenSubjectTransactionLock.AcquireAsync(
+                context,
+                target.SubjectId,
+                cancellationToken);
+        }
+
+        var targetIds = target.Sessions.Select(session => session.Id).ToArray();
+        var currentTargetIds = await context.RefreshTokenSessions
+            .AsNoTracking()
+            .Where(session =>
+                session.ActorType == target.ActorType
+                && session.SubjectId == target.SubjectId
+                && !session.RevokedAtUtc.HasValue
+                && session.ExpiresAtUtc > target.RevokedAtUtc)
+            .OrderBy(session => session.Id)
+            .Select(session => session.Id)
+            .ToArrayAsync(cancellationToken);
+        if (currentTargetIds.Any(id => !targetIds.Contains(id)))
+        {
+            throw new CloudWriteConflictException();
+        }
+
+        var sessions = await context.RefreshTokenSessions
+            .Where(session => targetIds.Contains(session.Id))
+            .ToListAsync(cancellationToken);
+        if (sessions.Count != targetIds.Length)
+        {
+            throw new CloudWriteConflictException();
+        }
+
+        foreach (var sessionTarget in target.Sessions)
+        {
+            var session = sessions.Single(candidate => candidate.Id == sessionTarget.Id);
+            if (MatchesRevocationTarget(session, target))
+            {
+                continue;
+            }
+
+            if (session.RowVersion != sessionTarget.RowVersion
+                || session.RevokedAtUtc.HasValue
+                || !string.Equals(session.ActorType, target.ActorType, StringComparison.Ordinal)
+                || session.SubjectId != target.SubjectId)
+            {
+                throw new CloudWriteConflictException();
+            }
+
+            session.RevokedAtUtc = target.RevokedAtUtc;
+            session.RevokedReason = target.Reason;
+        }
+
+        try
+        {
+            await context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw new CloudWriteConflictException();
+        }
+    }
+
+    private async Task RevokeInvalidHumanTokenAsync(
+        RefreshTokenSession baseline,
+        DateTimeOffset revokedAtUtc,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        var target = new SubjectRevocationTarget(
+            baseline.ActorType,
+            baseline.SubjectId,
+            reason,
+            revokedAtUtc,
+            [new RevocationSessionTarget(baseline.Id, baseline.RowVersion)]);
+        try
+        {
+            await using var strategyContext = _createContext();
+            var strategy = strategyContext.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(
+                callbackToken => RevokeSubjectAttemptAsync(target, callbackToken),
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (CloudWriteConflictException)
+        {
+            return;
+        }
+        catch
+        {
+            await ObserveSubjectRevocationOutcomeAsync(target);
         }
     }
 
     private async Task RevokeOverflowHumanSessionsAsync(
-        string actorType,
+        IIoTDbContext context,
         Guid subjectId,
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        if (!string.Equals(actorType, IIoTClaimTypes.HumanActor, StringComparison.Ordinal) ||
-            _options.HumanMaxActiveSessions <= 0)
+        if (_options.HumanMaxActiveSessions <= 0)
         {
             return;
         }
 
-        var activeQuery = dbContext.RefreshTokenSessions
-            .Where(x =>
-                x.ActorType == actorType &&
-                x.SubjectId == subjectId &&
-                !x.RevokedAtUtc.HasValue &&
-                x.ExpiresAtUtc > now);
-
-        var overflowCount = await activeQuery.CountAsync(cancellationToken) - _options.HumanMaxActiveSessions + 1;
+        var activeQuery = context.RefreshTokenSessions
+            .Where(session =>
+                session.ActorType == IIoTClaimTypes.HumanActor
+                && session.SubjectId == subjectId
+                && !session.RevokedAtUtc.HasValue
+                && session.ExpiresAtUtc > now);
+        var overflowCount = await activeQuery.CountAsync(cancellationToken)
+                            - _options.HumanMaxActiveSessions
+                            + 1;
         if (overflowCount <= 0)
         {
             return;
         }
 
         var sessionsToRevoke = await activeQuery
-            .OrderBy(x => x.CreatedAtUtc)
-            .ThenBy(x => x.Id)
+            .OrderBy(session => session.CreatedAtUtc)
+            .ThenBy(session => session.Id)
             .Take(overflowCount)
             .ToListAsync(cancellationToken);
-
         foreach (var session in sessionsToRevoke)
         {
             session.RevokedAtUtc = now;
@@ -429,29 +601,188 @@ public sealed class EfRefreshTokenService(
         }
     }
 
+    private async Task ObserveIssueOutcomeAsync(RefreshTokenSession target)
+    {
+        using var observationTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            await using var context = _createContext();
+            var committed = await context.RefreshTokenSessions
+                .AsNoTracking()
+                .SingleOrDefaultAsync(
+                    session => session.Id == target.Id,
+                    observationTimeout.Token);
+            if (committed is null)
+            {
+                throw new CloudWriteCommitUnknownException();
+            }
+
+            if (!MatchesSession(committed, target))
+            {
+                throw new CloudWriteConflictException();
+            }
+        }
+        catch (CloudWriteException)
+        {
+            throw;
+        }
+        catch
+        {
+            throw new CloudWriteCommitUnknownException();
+        }
+    }
+
+    private async Task<Result<RefreshTokenRotationResult>> ObserveRotationOutcomeAsync(
+        RotationTarget target,
+        Result<RefreshTokenRotationResult> success)
+    {
+        using var observationTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            await using var context = _createContext();
+            var source = await context.RefreshTokenSessions
+                .AsNoTracking()
+                .SingleOrDefaultAsync(
+                    session => session.Id == target.SourceSessionId,
+                    observationTimeout.Token);
+            if (source is null)
+            {
+                return InvalidRotationResult();
+            }
+
+            if (MatchesRotationSource(source, target))
+            {
+                var replacement = await context.RefreshTokenSessions
+                    .AsNoTracking()
+                    .SingleOrDefaultAsync(
+                        session => session.Id == target.ReplacementSession.Id,
+                        observationTimeout.Token);
+                if (replacement is not null
+                    && MatchesSession(replacement, target.ReplacementSession))
+                {
+                    return success;
+                }
+
+                throw new CloudWriteCommitUnknownException();
+            }
+
+            if (source.RevokedAtUtc.HasValue
+                || source.RowVersion != target.SourceRowVersion)
+            {
+                return InvalidRotationResult();
+            }
+
+            throw new CloudWriteCommitUnknownException();
+        }
+        catch (CloudWriteException)
+        {
+            throw;
+        }
+        catch
+        {
+            throw new CloudWriteCommitUnknownException();
+        }
+    }
+
+    private async Task ObserveSubjectRevocationOutcomeAsync(
+        SubjectRevocationTarget target)
+    {
+        using var observationTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            await using var context = _createContext();
+            var targetIds = target.Sessions.Select(session => session.Id).ToArray();
+            var sessions = await context.RefreshTokenSessions
+                .AsNoTracking()
+                .Where(session => targetIds.Contains(session.Id))
+                .ToListAsync(observationTimeout.Token);
+            if (sessions.Count != targetIds.Length)
+            {
+                throw new CloudWriteConflictException();
+            }
+
+            foreach (var sessionTarget in target.Sessions)
+            {
+                var session = sessions.Single(candidate => candidate.Id == sessionTarget.Id);
+                if (MatchesRevocationTarget(session, target))
+                {
+                    continue;
+                }
+
+                if (!session.RevokedAtUtc.HasValue
+                    && session.RowVersion == sessionTarget.RowVersion)
+                {
+                    throw new CloudWriteCommitUnknownException();
+                }
+
+                throw new CloudWriteConflictException();
+            }
+        }
+        catch (CloudWriteException)
+        {
+            throw;
+        }
+        catch
+        {
+            throw new CloudWriteCommitUnknownException();
+        }
+    }
+
     private RefreshTokenSession CreateSession(
+        Guid sessionId,
         string actorType,
         Guid subjectId,
         string token,
         DateTimeOffset now)
-    {
-        return new RefreshTokenSession
+        => new()
         {
-            Id = Guid.NewGuid(),
+            Id = sessionId,
             ActorType = actorType,
             SubjectId = subjectId,
             TokenHash = ComputeTokenHash(token),
             CreatedAtUtc = now,
-            ExpiresAtUtc = now.AddDays(ResolveTtlDays(actorType))
+            ExpiresAtUtc = NormalizeTimestamp(now.AddDays(ResolveTtlDays(actorType)))
         };
-    }
 
     private int ResolveTtlDays(string actorType)
-    {
-        return string.Equals(actorType, IIoTClaimTypes.EdgeDeviceActor, StringComparison.Ordinal)
+        => string.Equals(actorType, IIoTClaimTypes.EdgeDeviceActor, StringComparison.Ordinal)
             ? _options.EdgeBootstrapTtlDays
             : _options.HumanTtlDays;
-    }
+
+    private static bool MatchesSession(
+        RefreshTokenSession persisted,
+        RefreshTokenSession target)
+        => persisted.Id == target.Id
+           && string.Equals(persisted.ActorType, target.ActorType, StringComparison.Ordinal)
+           && persisted.SubjectId == target.SubjectId
+           && string.Equals(persisted.TokenHash, target.TokenHash, StringComparison.Ordinal)
+           && persisted.CreatedAtUtc == target.CreatedAtUtc
+           && persisted.ExpiresAtUtc == target.ExpiresAtUtc
+           && persisted.RevokedAtUtc == target.RevokedAtUtc
+           && string.Equals(persisted.RevokedReason, target.RevokedReason, StringComparison.Ordinal)
+           && persisted.ReplacedByTokenId == target.ReplacedByTokenId;
+
+    private static bool MatchesRotationSource(
+        RefreshTokenSession source,
+        RotationTarget target)
+        => source.Id == target.SourceSessionId
+           && source.SubjectId == target.SubjectId
+           && string.Equals(source.ActorType, target.ActorType, StringComparison.Ordinal)
+           && string.Equals(source.TokenHash, target.SourceTokenHash, StringComparison.Ordinal)
+           && source.RevokedAtUtc == target.RotatedAtUtc
+           && string.Equals(source.RevokedReason, RotationRevokedReason, StringComparison.Ordinal)
+           && source.ReplacedByTokenId == target.ReplacementSession.Id;
+
+    private static bool MatchesRevocationTarget(
+        RefreshTokenSession session,
+        SubjectRevocationTarget target)
+        => string.Equals(session.ActorType, target.ActorType, StringComparison.Ordinal)
+           && session.SubjectId == target.SubjectId
+           && session.RevokedAtUtc == target.RevokedAtUtc
+           && string.Equals(session.RevokedReason, target.Reason, StringComparison.Ordinal);
+
+    private static Result<RefreshTokenRotationResult> InvalidRotationResult()
+        => Result.Unauthorized("Refresh token is invalid or expired.");
 
     private static string GenerateToken(string? identityStatusVersion)
     {
@@ -472,10 +803,10 @@ public sealed class EfRefreshTokenService(
     private static string? TryReadHumanIdentityStatusVersion(string token)
     {
         var segments = token.Split('.', 3, StringSplitOptions.None);
-        if (segments.Length != 3 ||
-            !string.Equals(segments[0], HumanTokenVersionPrefix, StringComparison.Ordinal) ||
-            string.IsNullOrWhiteSpace(segments[1]) ||
-            string.IsNullOrWhiteSpace(segments[2]))
+        if (segments.Length != 3
+            || !string.Equals(segments[0], HumanTokenVersionPrefix, StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(segments[1])
+            || string.IsNullOrWhiteSpace(segments[2]))
         {
             return null;
         }
@@ -500,7 +831,41 @@ public sealed class EfRefreshTokenService(
     }
 
     private static string ComputeTokenHash(string token)
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+
+    private static DateTimeOffset NormalizeTimestamp(DateTimeOffset value)
     {
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+        var utc = value.ToUniversalTime();
+        return new DateTimeOffset(utc.Ticks - utc.Ticks % 10, TimeSpan.Zero);
+    }
+
+    private sealed record RotationTarget(
+        string ActorType,
+        string SourceTokenHash,
+        Guid SourceSessionId,
+        Guid SubjectId,
+        uint SourceRowVersion,
+        DateTimeOffset RotatedAtUtc,
+        RefreshTokenSession ReplacementSession);
+
+    private sealed record RevocationSessionTarget(Guid Id, uint RowVersion);
+
+    private sealed record SubjectRevocationTarget(
+        string ActorType,
+        Guid SubjectId,
+        string Reason,
+        DateTimeOffset RevokedAtUtc,
+        IReadOnlyList<RevocationSessionTarget> Sessions);
+
+    private sealed class InvalidRefreshTokenException : Exception
+    {
+    }
+
+    private sealed class CompetingRefreshTokenRotationException : Exception
+    {
+    }
+
+    private sealed class RefreshTokenSubjectUnavailableException : Exception
+    {
     }
 }

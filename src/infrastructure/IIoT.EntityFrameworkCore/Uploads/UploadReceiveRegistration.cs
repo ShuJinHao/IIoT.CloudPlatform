@@ -30,25 +30,46 @@ public sealed class UploadReceiveRegistration
         string? requestId,
         string deduplicationKey,
         Guid outboxMessageId)
+        => Create(
+            Guid.NewGuid(),
+            deviceId,
+            messageType,
+            requestId,
+            deduplicationKey,
+            outboxMessageId,
+            DateTimeOffset.UtcNow);
+
+    public static UploadReceiveRegistration Create(
+        Guid registrationId,
+        Guid deviceId,
+        string messageType,
+        string? requestId,
+        string deduplicationKey,
+        Guid outboxMessageId,
+        DateTimeOffset receivedAtUtc)
     {
-        var now = DateTimeOffset.UtcNow;
         return new UploadReceiveRegistration
         {
-            Id = Guid.NewGuid(),
+            Id = registrationId,
             DeviceId = deviceId,
             MessageType = messageType,
             RequestId = requestId,
             DeduplicationKey = deduplicationKey,
             OutboxMessageId = outboxMessageId,
-            ReceivedAtUtc = now,
-            LastSeenAtUtc = now,
+            ReceivedAtUtc = receivedAtUtc,
+            LastSeenAtUtc = receivedAtUtc,
             SeenCount = 1
         };
     }
 
-    public void MarkSeen()
+    public void MarkSeen(DateTimeOffset seenAtUtc)
     {
-        LastSeenAtUtc = DateTimeOffset.UtcNow;
+        if (seenAtUtc <= LastSeenAtUtc)
+        {
+            return;
+        }
+
+        LastSeenAtUtc = seenAtUtc;
         SeenCount++;
     }
 }

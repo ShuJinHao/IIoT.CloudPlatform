@@ -24,6 +24,7 @@ using IIoT.ProductionService.Commands.Recipes;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Events.Capacities;
 using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.Contracts.RecordQueries;
@@ -36,6 +37,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using OpenIddict.Abstractions;
+using OpenIddict.EntityFrameworkCore.Models;
 
 namespace IIoT.CloudPlatform.Persistence.PostgresTests;
 
@@ -174,6 +177,595 @@ public sealed class ProductionRetryTransactionPostgresTests(
             budget.Token);
 
         Assert.Equal(3, interceptor.ExceptionsThrown);
+    }
+
+    [Fact]
+    public async Task UploadRegistrationAndOutbox_ShouldRecoverCommitLossAsOneLogicalMessage()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var registry = new EfUploadReceiveRegistry(dbContext);
+        var deviceId = Guid.NewGuid();
+        var requestId = $"upload-{Guid.NewGuid():N}";
+        var deduplicationKey = $"request:{requestId}";
+        var integrationEvent = new HourlyCapacityReceivedEvent
+        {
+            DeviceId = deviceId,
+            Date = DateOnly.FromDateTime(DateTime.UtcNow),
+            ShiftCode = "D",
+            Hour = 10,
+            Minute = 30,
+            TimeLabel = "10:30",
+            TotalCount = 12,
+            OkCount = 11,
+            NgCount = 1,
+            PlcName = "TX-03B3",
+            OccurredAtUtc = DateTimeOffset.UtcNow.AddTicks(7),
+            ReceivedAtUtc = DateTime.UtcNow
+        };
+
+        interceptor.Arm();
+        var registered = await registry.RegisterAndEnqueueAsync(
+            deviceId,
+            "hourly-capacity",
+            requestId,
+            deduplicationKey,
+            integrationEvent,
+            budget.Token);
+        var duplicate = await registry.RegisterAndEnqueueAsync(
+            deviceId,
+            "hourly-capacity",
+            requestId,
+            deduplicationKey,
+            integrationEvent with
+            {
+                EventId = Guid.NewGuid(),
+                OccurredAtUtc = DateTimeOffset.UtcNow
+            },
+            budget.Token);
+
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+        Assert.False(registered.IsDuplicate);
+        Assert.True(duplicate.IsDuplicate);
+        Assert.Equal(registered.OutboxMessageId, duplicate.OutboxMessageId);
+
+        dbContext.ChangeTracker.Clear();
+        var registration = await dbContext.UploadReceiveRegistrations
+            .AsNoTracking()
+            .SingleAsync(
+                candidate =>
+                    candidate.DeviceId == deviceId
+                    && candidate.MessageType == "hourly-capacity"
+                    && candidate.DeduplicationKey == deduplicationKey,
+                budget.Token);
+        var outbox = await dbContext.OutboxMessages
+            .AsNoTracking()
+            .SingleAsync(
+                candidate => candidate.Id == registered.OutboxMessageId,
+                budget.Token);
+        Assert.Equal(outbox.Id, registration.OutboxMessageId);
+        Assert.Equal(2, registration.SeenCount);
+        Assert.Equal(0, outbox.OccurredAtUtc.UtcTicks % TimeSpan.TicksPerMicrosecond);
+        Assert.Equal(
+            1,
+            await dbContext.OutboxMessages
+                .AsNoTracking()
+                .CountAsync(
+                    candidate => candidate.Id == registered.OutboxMessageId,
+                    budget.Token));
+    }
+
+    [Fact]
+    public async Task SharedPersistenceWrites_ShouldReplayTransientBeforeCommitWithoutDuplicates()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(60));
+        var interceptor = new ThrowOnceBeforeCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var registry = new EfUploadReceiveRegistry(dbContext);
+        var apiKeys = new EdgeReleaseApiKeyService(dbContext);
+        var refreshTokens = new EfRefreshTokenService(
+            dbContext,
+            Options.Create(new RefreshTokenOptions()));
+        var deviceId = Guid.NewGuid();
+        var deduplicationKey = $"request:{Guid.NewGuid():N}";
+
+        interceptor.Arm();
+        var upload = await registry.RegisterAndEnqueueAsync(
+            deviceId,
+            "hourly-capacity",
+            deduplicationKey,
+            deduplicationKey,
+            new HourlyCapacityReceivedEvent
+            {
+                DeviceId = deviceId,
+                Date = DateOnly.FromDateTime(DateTime.UtcNow),
+                ShiftCode = "D",
+                Hour = 11,
+                Minute = 0,
+                TimeLabel = "11:00",
+                TotalCount = 10,
+                OkCount = 10,
+                NgCount = 0,
+                ReceivedAtUtc = DateTime.UtcNow
+            },
+            budget.Token);
+        interceptor.Arm();
+        var apiKey = await apiKeys.CreateAsync(
+            $"tx-03b3-retry-{Guid.NewGuid():N}",
+            [ClientReleasePermissions.Read],
+            DateTimeOffset.UtcNow.AddDays(30),
+            Guid.NewGuid(),
+            new EdgeReleaseApiKeyAuditContext(
+                "tx-03b3-admin",
+                DateTime.UtcNow),
+            budget.Token);
+        var subjectId = Guid.NewGuid();
+        interceptor.Arm();
+        await refreshTokens.IssueHumanAsync(
+            subjectId,
+            $"identity-{Guid.NewGuid():N}",
+            budget.Token);
+
+        Assert.Equal(3, interceptor.ExceptionsThrown);
+        Assert.True(apiKey.IsSuccess);
+        dbContext.ChangeTracker.Clear();
+        Assert.Equal(
+            1,
+            await dbContext.UploadReceiveRegistrations
+                .AsNoTracking()
+                .CountAsync(
+                    registration =>
+                        registration.DeviceId == deviceId
+                        && registration.DeduplicationKey == deduplicationKey,
+                    budget.Token));
+        Assert.Equal(
+            1,
+            await dbContext.OutboxMessages
+                .AsNoTracking()
+                .CountAsync(message => message.Id == upload.OutboxMessageId, budget.Token));
+        Assert.Equal(
+            1,
+            await dbContext.EdgeReleaseApiKeys
+                .AsNoTracking()
+                .CountAsync(key => key.Id == apiKey.Value!.Id, budget.Token));
+        Assert.Equal(
+            1,
+            await dbContext.RefreshTokenSessions
+                .AsNoTracking()
+                .CountAsync(
+                    session =>
+                        session.ActorType == IIoTClaimTypes.HumanActor
+                        && session.SubjectId == subjectId,
+                    budget.Token));
+    }
+
+    [Fact]
+    public async Task EdgeReleaseApiKeyLifecycle_ShouldRecoverCommitLossWithoutPersistingPlaintext()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var service = new EdgeReleaseApiKeyService(dbContext);
+        var actorId = Guid.NewGuid();
+        var name = $"tx-03b3-{Guid.NewGuid():N}";
+        var auditContext = new EdgeReleaseApiKeyAuditContext(
+            "tx-03b3-admin",
+            DateTime.UtcNow);
+
+        interceptor.Arm();
+        var created = await service.CreateAsync(
+            name,
+            [ClientReleasePermissions.Read, ClientReleasePermissions.Publish],
+            DateTimeOffset.UtcNow.AddDays(30),
+            actorId,
+            auditContext,
+            budget.Token);
+        Assert.True(created.IsSuccess);
+        var plaintext = created.Value!.ApiKey;
+
+        interceptor.Arm();
+        var validated = await service.ValidateAsync(plaintext, budget.Token);
+        Assert.True(validated.IsSuccess);
+        var concurrentValidations = await Task.WhenAll(
+            service.ValidateAsync(plaintext, budget.Token),
+            service.ValidateAsync(plaintext, budget.Token));
+        Assert.All(
+            concurrentValidations,
+            validation => Assert.True(validation.IsSuccess));
+
+        interceptor.Arm();
+        var revoked = await service.RevokeAsync(
+            created.Value.Id,
+            actorId,
+            "rotation",
+            auditContext with { ExecutedAtUtc = DateTime.UtcNow },
+            budget.Token);
+        Assert.True(revoked.IsSuccess);
+        Assert.Equal(3, interceptor.ExceptionsThrown);
+
+        dbContext.ChangeTracker.Clear();
+        var key = await dbContext.EdgeReleaseApiKeys
+            .AsNoTracking()
+            .SingleAsync(
+                candidate => candidate.Id == created.Value.Id,
+                budget.Token);
+        var audits = await dbContext.AuditTrails
+            .AsNoTracking()
+            .Where(record =>
+                record.TargetType == "EdgeReleaseApiKey"
+                && record.TargetIdOrKey == created.Value.Id.ToString())
+            .OrderBy(record => record.OperationType)
+            .ToListAsync(budget.Token);
+        Assert.Equal(EdgeReleaseApiKeyStatuses.Revoked, key.Status);
+        Assert.NotNull(key.LastUsedAtUtc);
+        Assert.DoesNotContain(plaintext, key.KeyHash, StringComparison.Ordinal);
+        Assert.DoesNotContain(plaintext, key.PermissionsJson, StringComparison.Ordinal);
+        Assert.Equal(2, audits.Count);
+        Assert.All(
+            audits,
+            audit =>
+            {
+                Assert.DoesNotContain(plaintext, audit.Summary, StringComparison.Ordinal);
+                Assert.DoesNotContain(
+                    plaintext,
+                    audit.FailureReason ?? string.Empty,
+                    StringComparison.Ordinal);
+            });
+    }
+
+    [Fact]
+    public async Task HumanRefreshRotation_ShouldRecoverCommitLossAndRejectSourceReplay()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var service = new EfRefreshTokenService(
+            dbContext,
+            Options.Create(new RefreshTokenOptions()));
+        var subjectId = Guid.NewGuid();
+
+        interceptor.Arm();
+        var issued = await service.IssueHumanAsync(
+            subjectId,
+            $"identity-{Guid.NewGuid():N}",
+            budget.Token);
+        interceptor.Arm();
+        var rotated = await service.RotateAsync(
+            IIoTClaimTypes.HumanActor,
+            issued.Token,
+            budget.Token);
+        var competing = await service.RotateAsync(
+            IIoTClaimTypes.HumanActor,
+            issued.Token,
+            budget.Token);
+
+        Assert.True(rotated.IsSuccess);
+        Assert.False(competing.IsSuccess);
+        Assert.Equal(2, interceptor.ExceptionsThrown);
+        dbContext.ChangeTracker.Clear();
+        var sessions = await dbContext.RefreshTokenSessions
+            .AsNoTracking()
+            .Where(session =>
+                session.ActorType == IIoTClaimTypes.HumanActor
+                && session.SubjectId == subjectId)
+            .OrderBy(session => session.CreatedAtUtc)
+            .ToListAsync(budget.Token);
+        Assert.Equal(2, sessions.Count);
+        Assert.Single(sessions, session => session.RevokedReason == "rotated");
+        Assert.Single(sessions, session => !session.RevokedAtUtc.HasValue);
+    }
+
+    [Fact]
+    public async Task ConcurrentHumanSessionIssue_ShouldSerializeSessionLimit()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            new ThrowOnceBeforeCommitInterceptor());
+        await using var firstScope = provider.CreateAsyncScope();
+        await using var secondScope = provider.CreateAsyncScope();
+        var options = Options.Create(new RefreshTokenOptions
+        {
+            HumanMaxActiveSessions = 1
+        });
+        var firstService = new EfRefreshTokenService(
+            firstScope.ServiceProvider.GetRequiredService<IIoTDbContext>(),
+            options);
+        var secondService = new EfRefreshTokenService(
+            secondScope.ServiceProvider.GetRequiredService<IIoTDbContext>(),
+            options);
+        var subjectId = Guid.NewGuid();
+
+        await Task.WhenAll(
+            firstService.IssueHumanAsync(
+                subjectId,
+                $"identity-{Guid.NewGuid():N}",
+                budget.Token),
+            secondService.IssueHumanAsync(
+                subjectId,
+                $"identity-{Guid.NewGuid():N}",
+                budget.Token));
+
+        await using var verificationScope = provider.CreateAsyncScope();
+        var dbContext = verificationScope.ServiceProvider
+            .GetRequiredService<IIoTDbContext>();
+        var sessions = await dbContext.RefreshTokenSessions
+            .AsNoTracking()
+            .Where(session =>
+                session.ActorType == IIoTClaimTypes.HumanActor
+                && session.SubjectId == subjectId)
+            .ToListAsync(budget.Token);
+        Assert.Equal(2, sessions.Count);
+        Assert.Single(sessions, session => !session.RevokedAtUtc.HasValue);
+        Assert.Single(sessions, session => session.RevokedReason == "session-limit");
+    }
+
+    [Fact]
+    public async Task IndependentHumanSessionRevocation_ShouldRecoverCommitLossExactly()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var refreshTokens = new EfRefreshTokenService(
+            dbContext,
+            Options.Create(new RefreshTokenOptions()));
+        var subjectId = Guid.NewGuid();
+        await refreshTokens.IssueHumanAsync(
+            subjectId,
+            $"identity-{Guid.NewGuid():N}",
+            budget.Token);
+        await refreshTokens.IssueHumanAsync(
+            subjectId,
+            $"identity-{Guid.NewGuid():N}",
+            budget.Token);
+        var authorization = new OpenIddictEntityFrameworkCoreAuthorization<Guid>
+        {
+            Id = Guid.NewGuid(),
+            Subject = subjectId.ToString(),
+            Status = OpenIddictConstants.Statuses.Valid,
+            Type = "permanent",
+            ConcurrencyToken = Guid.NewGuid().ToString("N")
+        };
+        var oidcToken = new OpenIddictEntityFrameworkCoreToken<Guid>
+        {
+            Id = Guid.NewGuid(),
+            Authorization = authorization,
+            Subject = subjectId.ToString(),
+            Status = OpenIddictConstants.Statuses.Valid,
+            Type = "authorization_code",
+            ConcurrencyToken = Guid.NewGuid().ToString("N")
+        };
+        dbContext.OpenIddictAuthorizations.Add(authorization);
+        dbContext.OpenIddictTokens.Add(oidcToken);
+        await dbContext.SaveChangesAsync(budget.Token);
+        dbContext.ChangeTracker.Clear();
+        var revocation = new IndependentHumanSessionRevocationService(dbContext);
+
+        interceptor.Arm();
+        await revocation.RevokeAllAsync(
+            subjectId,
+            "manual-revoke",
+            budget.Token);
+
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+        dbContext.ChangeTracker.Clear();
+        var sessions = await dbContext.RefreshTokenSessions
+            .AsNoTracking()
+            .Where(session =>
+                session.ActorType == IIoTClaimTypes.HumanActor
+                && session.SubjectId == subjectId)
+            .ToListAsync(budget.Token);
+        Assert.Equal(2, sessions.Count);
+        Assert.All(
+            sessions,
+            session =>
+            {
+                Assert.NotNull(session.RevokedAtUtc);
+                Assert.Equal("manual-revoke", session.RevokedReason);
+            });
+        Assert.Equal(
+            OpenIddictConstants.Statuses.Revoked,
+            (await dbContext.OpenIddictAuthorizations
+                .AsNoTracking()
+                .SingleAsync(
+                    candidate => candidate.Id == authorization.Id,
+                    budget.Token)).Status);
+        Assert.Equal(
+            OpenIddictConstants.Statuses.Revoked,
+            (await dbContext.OpenIddictTokens
+                .AsNoTracking()
+                .SingleAsync(
+                    candidate => candidate.Id == oidcToken.Id,
+                    budget.Token)).Status);
+    }
+
+    [Fact]
+    public async Task IndependentHumanSessionRevocation_WithPostCommitDrift_ShouldConflictWithoutOverwrite()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var refreshTokens = new EfRefreshTokenService(
+            dbContext,
+            Options.Create(new RefreshTokenOptions()));
+        var subjectId = Guid.NewGuid();
+        await refreshTokens.IssueHumanAsync(
+            subjectId,
+            $"identity-{Guid.NewGuid():N}",
+            budget.Token);
+        var revocation = new IndependentHumanSessionRevocationService(dbContext);
+
+        interceptor.Arm(async callbackToken =>
+        {
+            await using var concurrentScope = provider.CreateAsyncScope();
+            var concurrentContext = concurrentScope.ServiceProvider
+                .GetRequiredService<IIoTDbContext>();
+            var session = await concurrentContext.RefreshTokenSessions
+                .SingleAsync(
+                    candidate =>
+                        candidate.ActorType == IIoTClaimTypes.HumanActor
+                        && candidate.SubjectId == subjectId,
+                    callbackToken);
+            session.RevokedReason = "concurrent-security-action";
+            await concurrentContext.SaveChangesAsync(callbackToken);
+        });
+
+        await Assert.ThrowsAsync<CloudWriteConflictException>(
+            () => revocation.RevokeAllAsync(
+                subjectId,
+                "manual-revoke",
+                budget.Token));
+
+        dbContext.ChangeTracker.Clear();
+        var persisted = await dbContext.RefreshTokenSessions
+            .AsNoTracking()
+            .SingleAsync(
+                candidate =>
+                    candidate.ActorType == IIoTClaimTypes.HumanActor
+                    && candidate.SubjectId == subjectId,
+                budget.Token);
+        Assert.Equal("concurrent-security-action", persisted.RevokedReason);
+    }
+
+    [Fact]
+    public async Task ApiKeyCreateCancellationAfterCommit_ShouldPropagateAndKeepOneRecoverableTarget()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var service = new EdgeReleaseApiKeyService(dbContext);
+        using var callerCancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(budget.Token);
+        var name = $"tx-03b3-cancel-{Guid.NewGuid():N}";
+
+        interceptor.Arm(_ =>
+        {
+            callerCancellation.Cancel();
+            return Task.CompletedTask;
+        });
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => service.CreateAsync(
+                name,
+                [ClientReleasePermissions.Read],
+                DateTimeOffset.UtcNow.AddDays(30),
+                Guid.NewGuid(),
+                new EdgeReleaseApiKeyAuditContext(
+                    "tx-03b3-admin",
+                    DateTime.UtcNow),
+                callerCancellation.Token));
+
+        Assert.Equal(callerCancellation.Token, exception.CancellationToken);
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+        dbContext.ChangeTracker.Clear();
+        var key = await dbContext.EdgeReleaseApiKeys
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.Name == name, budget.Token);
+        Assert.Equal(
+            1,
+            await dbContext.AuditTrails
+                .AsNoTracking()
+                .CountAsync(
+                    audit =>
+                        audit.OperationType == "ClientRelease.ApiKey.Create"
+                        && audit.TargetIdOrKey == key.Id.ToString(),
+                    budget.Token));
+    }
+
+    [Fact]
+    public async Task ApiKeyCreateObservationFailure_ShouldReturnCommitUnknownAndKeepCommittedTarget()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var commitLoss = new ThrowOnceAfterCommitInterceptor();
+        var observationFailure = new FailReadsInterceptor(
+            "edge_release_api_keys");
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            commitLoss,
+            observationFailure);
+        await using var scope = provider.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var service = new EdgeReleaseApiKeyService(dbContext);
+        var name = $"tx-03b3-observe-{Guid.NewGuid():N}";
+        commitLoss.Arm(_ =>
+        {
+            observationFailure.Enable();
+            return Task.CompletedTask;
+        });
+
+        await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
+            () => service.CreateAsync(
+                name,
+                [ClientReleasePermissions.Read],
+                DateTimeOffset.UtcNow.AddDays(30),
+                Guid.NewGuid(),
+                new EdgeReleaseApiKeyAuditContext(
+                    "tx-03b3-admin",
+                    DateTime.UtcNow),
+                budget.Token));
+
+        Assert.Equal(1, commitLoss.ExceptionsThrown);
+        await using var verificationContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-observation-verify-{Guid.NewGuid():N}");
+        var key = await verificationContext.EdgeReleaseApiKeys
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.Name == name, budget.Token);
+        Assert.Equal(
+            1,
+            await verificationContext.AuditTrails
+                .AsNoTracking()
+                .CountAsync(
+                    audit =>
+                        audit.OperationType == "ClientRelease.ApiKey.Create"
+                        && audit.TargetIdOrKey == key.Id.ToString(),
+                    budget.Token));
     }
 
     [Fact]
@@ -3302,7 +3894,8 @@ public sealed class ProductionRetryTransactionPostgresTests(
 
     private static ServiceProvider CreateRetryProvider(
         string connectionString,
-        DbTransactionInterceptor interceptor)
+        DbTransactionInterceptor interceptor,
+        params IInterceptor[] additionalInterceptors)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -3324,6 +3917,11 @@ public sealed class ProductionRetryTransactionPostgresTests(
             else
             {
                 options.AddInterceptors(interceptor);
+            }
+
+            if (additionalInterceptors.Length > 0)
+            {
+                options.AddInterceptors(additionalInterceptors);
             }
         });
         services.AddIdentityCore<ApplicationUser>(options =>
@@ -3641,6 +4239,33 @@ public sealed class ProductionRetryTransactionPostgresTests(
             transactionInterceptor.TrackWrite(
                 command.Transaction,
                 command.CommandText);
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class FailReadsInterceptor(string tableFragment)
+        : DbCommandInterceptor
+    {
+        private int enabled;
+
+        public void Enable() => Volatile.Write(ref enabled, 1);
+
+        public override ValueTask<InterceptionResult<DbDataReader>>
+            ReaderExecutingAsync(
+                DbCommand command,
+                CommandEventData eventData,
+                InterceptionResult<DbDataReader> result,
+                CancellationToken cancellationToken = default)
+        {
+            if (Volatile.Read(ref enabled) == 1
+                && command.CommandText.Contains(
+                    tableFragment,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "simulated observation read failure");
+            }
+
             return ValueTask.FromResult(result);
         }
     }

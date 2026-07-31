@@ -55,6 +55,15 @@ public sealed class OutboxMessage
     }
 
     public static OutboxMessage FromIntegrationEvent(IIntegrationEvent integrationEvent)
+        => FromIntegrationEvent(
+            integrationEvent,
+            Guid.NewGuid(),
+            DateTimeOffset.UtcNow);
+
+    public static OutboxMessage FromIntegrationEvent(
+        IIntegrationEvent integrationEvent,
+        Guid messageId,
+        DateTimeOffset fallbackOccurredAtUtc)
     {
         ArgumentNullException.ThrowIfNull(integrationEvent);
 
@@ -64,14 +73,39 @@ public sealed class OutboxMessage
 
         return new OutboxMessage
         {
-            Id = Guid.NewGuid(),
+            Id = messageId,
             MessageKind = OutboxMessageKind.IntegrationEvent,
             EventType = eventType,
             Payload = JsonSerializer.Serialize(integrationEvent, integrationEvent.GetType(), SerializerOptions),
-            OccurredAtUtc = integrationEvent.OccurredAtUtc == default
-                ? DateTimeOffset.UtcNow
-                : integrationEvent.OccurredAtUtc
+            OccurredAtUtc = NormalizePostgresTimestamp(
+                integrationEvent.OccurredAtUtc == default
+                    ? fallbackOccurredAtUtc
+                    : integrationEvent.OccurredAtUtc)
         };
+    }
+
+    internal static DateTimeOffset NormalizePostgresTimestamp(DateTimeOffset value)
+    {
+        var utcValue = value.ToUniversalTime();
+        return new DateTimeOffset(
+            utcValue.Ticks - utcValue.Ticks % TimeSpan.TicksPerMicrosecond,
+            TimeSpan.Zero);
+    }
+
+    internal static bool JsonPayloadEquals(string persisted, string target)
+    {
+        try
+        {
+            using var persistedDocument = JsonDocument.Parse(persisted);
+            using var targetDocument = JsonDocument.Parse(target);
+            return JsonElement.DeepEquals(
+                persistedDocument.RootElement,
+                targetDocument.RootElement);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     public IDomainEvent DeserializeDomainEvent()

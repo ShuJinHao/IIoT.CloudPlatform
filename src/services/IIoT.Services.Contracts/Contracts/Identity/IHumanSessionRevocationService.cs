@@ -7,3 +7,11 @@ public interface IHumanSessionRevocationService
         string reason,
         CancellationToken cancellationToken = default);
 }
+
+public interface IIndependentHumanSessionRevocationService
+{
+    Task RevokeAllAsync(
+        Guid subjectId,
+        string reason,
+        CancellationToken cancellationToken = default);
+}

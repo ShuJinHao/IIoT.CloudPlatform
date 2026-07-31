@@ -21,41 +21,30 @@ internal sealed class EfAuditTrailService(
         AuditTrailEntry entry,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        var recordId = Guid.NewGuid();
         var idempotencyKey = NormalizeIdempotencyKey(entry.IdempotencyKey);
         entry = entry with
         {
             IdempotencyKey = idempotencyKey,
             ExecutedAtUtc = NormalizePostgresTimestamp(entry.ExecutedAtUtc)
         };
+        bool persisted;
         try
         {
-            await using var dbContext = new IIoTDbContext(dbContextOptions);
-            if (idempotencyKey is not null)
-            {
-                var existing = await dbContext.AuditTrails
-                    .AsNoTracking()
-                    .SingleOrDefaultAsync(
-                        record => record.IdempotencyKey == idempotencyKey,
-                        cancellationToken);
-                if (existing is not null)
-                {
-                    return MatchesIdempotentEntry(existing, entry, idempotencyKey);
-                }
-            }
-
-            dbContext.AuditTrails.Add(AuditTrailRecord.FromEntry(entry));
-            await dbContext.SaveChangesAsync(cancellationToken);
-            return true;
+            await using var strategyContext = new IIoTDbContext(dbContextOptions);
+            var strategy = strategyContext.Database.CreateExecutionStrategy();
+            persisted = await strategy.ExecuteAsync(
+                callbackToken => WriteAttemptAsync(
+                    recordId,
+                    entry,
+                    idempotencyKey,
+                    callbackToken),
+                cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
-        }
-        catch (DbUpdateException) when (idempotencyKey is not null)
-        {
-            // 两个实例可能同时观察到“尚不存在”并竞争插入。唯一索引负责最终仲裁；
-            // 写入端收到异常后用全新 DbContext 读取胜出的记录，精确一致才视为幂等成功。
-            return await VerifyExistingIdempotentEntryAsync(entry, idempotencyKey, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -63,29 +52,51 @@ internal sealed class EfAuditTrailService(
                 PersistenceFailed,
                 "Audit trail persistence failed; ErrorType={ErrorType}.",
                 ex.GetType().Name);
-            return false;
+            persisted = await ObserveCommitOutcomeAsync(recordId, entry, idempotencyKey);
         }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return persisted;
     }
 
-    private async Task<bool> VerifyExistingIdempotentEntryAsync(
+    private async Task<bool> WriteAttemptAsync(
+        Guid recordId,
         AuditTrailEntry entry,
-        string idempotencyKey,
+        string? idempotencyKey,
         CancellationToken cancellationToken)
     {
+        await using var dbContext = new IIoTDbContext(dbContextOptions);
+        var existing = await FindExistingAsync(
+            dbContext,
+            recordId,
+            idempotencyKey,
+            cancellationToken);
+        if (existing is not null)
+        {
+            return MatchesIdempotentEntry(existing, entry, idempotencyKey);
+        }
+
+        dbContext.AuditTrails.Add(AuditTrailRecord.FromEntry(recordId, entry));
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
+    private async Task<bool> ObserveCommitOutcomeAsync(
+        Guid recordId,
+        AuditTrailEntry entry,
+        string? idempotencyKey)
+    {
+        using var observationTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         try
         {
             await using var verifyContext = new IIoTDbContext(dbContextOptions);
-            var existing = await verifyContext.AuditTrails
-                .AsNoTracking()
-                .SingleOrDefaultAsync(
-                    record => record.IdempotencyKey == idempotencyKey,
-                    cancellationToken);
+            var existing = await FindExistingAsync(
+                verifyContext,
+                recordId,
+                idempotencyKey,
+                observationTimeout.Token);
             return existing is not null
                    && MatchesIdempotentEntry(existing, entry, idempotencyKey);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
         }
         catch (Exception ex)
         {
@@ -97,10 +108,31 @@ internal sealed class EfAuditTrailService(
         }
     }
 
+    private static async Task<AuditTrailRecord?> FindExistingAsync(
+        IIoTDbContext dbContext,
+        Guid recordId,
+        string? idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        if (idempotencyKey is not null)
+        {
+            return await dbContext.AuditTrails
+                .AsNoTracking()
+                .SingleOrDefaultAsync(
+                    record => record.Id == recordId
+                              || record.IdempotencyKey == idempotencyKey,
+                    cancellationToken);
+        }
+
+        return await dbContext.AuditTrails
+            .AsNoTracking()
+            .SingleOrDefaultAsync(record => record.Id == recordId, cancellationToken);
+    }
+
     private static bool MatchesIdempotentEntry(
         AuditTrailRecord existing,
         AuditTrailEntry candidate,
-        string idempotencyKey)
+        string? idempotencyKey)
         => string.Equals(existing.IdempotencyKey, idempotencyKey, StringComparison.Ordinal)
            && existing.ActorUserId == candidate.ActorUserId
            && string.Equals(existing.ActorEmployeeNo, candidate.ActorEmployeeNo, StringComparison.Ordinal)

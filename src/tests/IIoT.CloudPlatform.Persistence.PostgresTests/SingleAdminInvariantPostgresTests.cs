@@ -122,6 +122,45 @@ public sealed class SingleAdminInvariantPostgresTests(
     }
 
     [Fact]
+    public async Task PasswordRepairCommitConfirmationLoss_ShouldConfirmTargetWithoutSecondAdmin()
+    {
+        using var budget = CreateBudget(TimeSpan.FromSeconds(45));
+        await ResetDataAsync(budget.Token);
+        await RunSeedAsync(
+            CreateSeedConfiguration(
+                "ADMIN-ACK",
+                InitialPassword,
+                "Commit Recovery Admin"),
+            budget.Token);
+        var before = await ReadStateAsync(budget.Token);
+        await DisableAdminAsync(before.Admin!.AccountId, budget.Token);
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+
+        await RunSeedAsync(
+            CreateSeedConfiguration(
+                "ADMIN-ACK",
+                ResetPassword,
+                "Ignored Name",
+                resetPassword: true),
+            budget.Token,
+            interceptor);
+
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+        var after = await ReadStateAsync(budget.Token);
+        Assert.Equal(1, after.AdminCount);
+        Assert.Equal(1, after.UserCount);
+        Assert.Equal(1, after.EmployeeCount);
+        Assert.Equal(before.Admin.AccountId, after.Admin!.AccountId);
+        Assert.Equal("Commit Recovery Admin", after.Admin.RealName);
+        Assert.True(after.Admin.IdentityEnabled);
+        Assert.True(after.Admin.EmployeeActive);
+        Assert.True(await PasswordMatchesAsync(
+            after.Admin.AccountId,
+            ResetPassword,
+            budget.Token));
+    }
+
+    [Fact]
     public async Task ConcurrentSeeds_ShouldWaitOnAdvisoryLockAndCreateOneAdmin()
     {
         using var budget = CreateBudget(TimeSpan.FromSeconds(45));
@@ -863,6 +902,33 @@ public sealed class SingleAdminInvariantPostgresTests(
             }
 
             return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class ThrowOnceAfterCommitInterceptor
+        : DbTransactionInterceptor
+    {
+        private int armed = 1;
+        private int exceptionsThrown;
+
+        public int ExceptionsThrown => Volatile.Read(ref exceptionsThrown);
+
+        public override Task TransactionCommittedAsync(
+            DbTransaction transaction,
+            TransactionEndEventData eventData,
+            CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.CompareExchange(ref armed, 0, 1) == 1)
+            {
+                Interlocked.Increment(ref exceptionsThrown);
+                throw new PostgresException(
+                    "simulated seed commit confirmation loss",
+                    "ERROR",
+                    "ERROR",
+                    PostgresErrorCodes.SerializationFailure);
+            }
+
+            return Task.CompletedTask;
         }
     }
 

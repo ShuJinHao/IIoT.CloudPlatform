@@ -3,6 +3,7 @@ using IIoT.EntityFrameworkCore.Identity;
 using IIoT.IdentityService.Commands;
 using IIoT.Infrastructure.Authentication;
 using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Result;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,7 +25,8 @@ public sealed class EdgeReleaseApiKeyPersistenceTests
             "edge-deploy",
             null,
             DateTimeOffset.UtcNow.AddDays(30),
-            Guid.NewGuid());
+            Guid.NewGuid(),
+            new EdgeReleaseApiKeyAuditContext("release-admin", DateTime.UtcNow));
 
         Assert.True(created.IsSuccess);
         Assert.StartsWith("iiot_edge_release_", created.Value!.ApiKey, StringComparison.Ordinal);
@@ -35,6 +37,7 @@ public sealed class EdgeReleaseApiKeyPersistenceTests
         Assert.DoesNotContain(created.Value.ApiKey, row.PermissionsJson, StringComparison.Ordinal);
 
         var validation = await service.ValidateAsync(created.Value.ApiKey);
+        dbContext.ChangeTracker.Clear();
 
         Assert.True(validation.IsSuccess);
         Assert.Equal(created.Value.Id, validation.Value!.Id);
@@ -56,10 +59,15 @@ public sealed class EdgeReleaseApiKeyPersistenceTests
             "edge-deploy",
             [ClientReleasePermissions.Read, ClientReleasePermissions.Publish],
             DateTimeOffset.UtcNow.AddDays(30),
-            Guid.NewGuid());
+            Guid.NewGuid(),
+            new EdgeReleaseApiKeyAuditContext("release-admin", DateTime.UtcNow));
         Assert.True(created.IsSuccess);
 
-        var revoked = await service.RevokeAsync(created.Value!.Id, Guid.NewGuid(), "rotation");
+        var revoked = await service.RevokeAsync(
+            created.Value!.Id,
+            Guid.NewGuid(),
+            "rotation",
+            new EdgeReleaseApiKeyAuditContext("release-admin", DateTime.UtcNow));
         var validation = await service.ValidateAsync(created.Value.ApiKey);
 
         Assert.True(revoked.IsSuccess);
@@ -95,15 +103,20 @@ public sealed class EdgeReleaseApiKeyPersistenceTests
             CancellationToken.None);
         Assert.True(revoked.IsSuccess, string.Join("; ", revoked.Errors ?? []));
 
-        Assert.Equal(2, auditTrail.Entries.Count);
-        Assert.Contains(auditTrail.Entries, entry =>
+        Assert.Empty(auditTrail.Entries);
+        var persistedAudits = await dbContext.AuditTrails
+            .AsNoTracking()
+            .OrderBy(entry => entry.ExecutedAtUtc)
+            .ToListAsync();
+        Assert.Equal(2, persistedAudits.Count);
+        Assert.Contains(persistedAudits, entry =>
             entry.ActorUserId == actorUserId
             && entry.ActorEmployeeNo == "release-admin"
             && entry.OperationType == "ClientRelease.ApiKey.Create"
             && entry.TargetType == "EdgeReleaseApiKey"
             && entry.TargetIdOrKey == created.Value.Id.ToString()
             && entry.Succeeded);
-        Assert.Contains(auditTrail.Entries, entry =>
+        Assert.Contains(persistedAudits, entry =>
             entry.ActorUserId == actorUserId
             && entry.OperationType == "ClientRelease.ApiKey.Revoke"
             && entry.TargetIdOrKey == created.Value.Id.ToString()

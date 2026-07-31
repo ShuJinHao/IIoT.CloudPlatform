@@ -294,6 +294,9 @@ public sealed class CloudOidcPersistenceTests
             IIoTClaimTypes.HumanActor,
             legacyToken);
 
+        dbContext.ChangeTracker.Clear();
+        session = await dbContext.RefreshTokenSessions.SingleAsync(
+            candidate => candidate.Id == session.Id);
         Assert.False(result.IsSuccess);
         Assert.Equal("status-version-missing", session.RevokedReason);
         Assert.NotNull(session.RevokedAtUtc);

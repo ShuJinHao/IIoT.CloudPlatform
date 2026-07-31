@@ -13,7 +13,7 @@ public sealed class RefreshHumanIdentityHandler(
     IPermissionProvider permissionProvider,
     IJwtTokenGenerator jwtTokenGenerator,
     IRefreshTokenService refreshTokenService,
-    IHumanSessionRevocationService sessionRevocationService,
+    IIndependentHumanSessionRevocationService sessionRevocationService,
     ICloudOidcUserProfileService profileService)
     : ICommandHandler<RefreshHumanIdentityCommand, Result<HumanIdentitySessionResult>>
 {

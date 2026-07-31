@@ -9,7 +9,9 @@ using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace IIoT.MigrationWorkApp;
 
@@ -18,16 +20,51 @@ public interface IDatabaseInitializationOrchestrator
     Task InitializeAsync(CancellationToken cancellationToken);
 }
 
-public sealed class DatabaseInitializationOrchestrator(
-    IIoTDbContext dbContext,
-    UserManager<ApplicationUser> userManager,
-    RoleManager<IdentityRole<Guid>> roleManager,
-    IOidcClientSeeder oidcClientSeeder,
-    IRecordSchemaInitializer recordSchemaInitializer,
-    IConfiguration configuration,
-    ILogger<DatabaseInitializationOrchestrator> logger)
+public sealed class DatabaseInitializationOrchestrator
     : IDatabaseInitializationOrchestrator
 {
+    private readonly IIoTDbContext dbContext;
+    private readonly UserManager<ApplicationUser> userManager;
+    private readonly RoleManager<IdentityRole<Guid>> roleManager;
+    private readonly IOidcClientSeeder oidcClientSeeder;
+    private readonly IRecordSchemaInitializer recordSchemaInitializer;
+    private readonly IConfiguration configuration;
+    private readonly ILogger<DatabaseInitializationOrchestrator> logger;
+    private readonly IServiceScopeFactory? scopeFactory;
+
+    public DatabaseInitializationOrchestrator(
+        IIoTDbContext dbContext,
+        UserManager<ApplicationUser> userManager,
+        RoleManager<IdentityRole<Guid>> roleManager,
+        IOidcClientSeeder oidcClientSeeder,
+        IRecordSchemaInitializer recordSchemaInitializer,
+        IConfiguration configuration,
+        ILogger<DatabaseInitializationOrchestrator> logger)
+    {
+        this.dbContext = dbContext;
+        this.userManager = userManager;
+        this.roleManager = roleManager;
+        this.oidcClientSeeder = oidcClientSeeder;
+        this.recordSchemaInitializer = recordSchemaInitializer;
+        this.configuration = configuration;
+        this.logger = logger;
+    }
+
+    public DatabaseInitializationOrchestrator(
+        IServiceScopeFactory scopeFactory,
+        IConfiguration configuration,
+        ILogger<DatabaseInitializationOrchestrator> logger)
+    {
+        this.scopeFactory = scopeFactory;
+        this.configuration = configuration;
+        this.logger = logger;
+        dbContext = null!;
+        userManager = null!;
+        roleManager = null!;
+        oidcClientSeeder = null!;
+        recordSchemaInitializer = null!;
+    }
+
     private const string DuplicateNormalizedDeviceCodeCheckSql =
         """
         SELECT normalized_code, duplicate_count
@@ -134,16 +171,32 @@ public sealed class DatabaseInitializationOrchestrator(
     {
         logger.LogInformation("开始应用 EF Core 迁移。");
 
-        var strategy = dbContext.Database.CreateExecutionStrategy();
-        await strategy.ExecuteAsync(async () =>
-        {
-            await EnsureIdentityAuthorizationPreflightAsync(cancellationToken);
-            await dbContext.Database.MigrateAsync(cancellationToken);
-            await EnsureIdentitySchemaCompatibilityAsync(cancellationToken);
-            await EnsureDeviceCodeSchemaCompatibilityAsync(cancellationToken);
-        });
+        await ExecuteFreshStageAsync(
+            static (attempt, callbackToken) =>
+                attempt.RunEfMigrationsAttemptAsync(callbackToken),
+            cancellationToken);
 
         logger.LogInformation("EF Core 迁移完成。");
+    }
+
+    private async Task RunEfMigrationsAttemptAsync(CancellationToken cancellationToken)
+    {
+        await EnsureIdentityAuthorizationPreflightAsync(cancellationToken);
+        await dbContext.Database.MigrateAsync(cancellationToken);
+        await using var transaction =
+            await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        await EnsureIdentitySchemaCompatibilityAsync(cancellationToken);
+        await EnsureDeviceCodeSchemaCompatibilityAsync(cancellationToken);
+
+        var pendingMigrations = await dbContext.Database
+            .GetPendingMigrationsAsync(cancellationToken);
+        if (pendingMigrations.Any())
+        {
+            throw new InvalidOperationException(
+                "EF Core migration postcondition failed: pending migrations remain.");
+        }
+
+        await transaction.CommitAsync(cancellationToken);
     }
 
     internal async Task EnsureDeviceCodeSchemaCompatibilityAsync(CancellationToken cancellationToken)
@@ -175,6 +228,7 @@ public sealed class DatabaseInitializationOrchestrator(
         try
         {
             using var command = connection.CreateCommand();
+            command.Transaction = dbContext.Database.CurrentTransaction?.GetDbTransaction();
             command.CommandText = DuplicateNormalizedDeviceCodeCheckSql;
 
             var conflicts = new List<NormalizedClientCodeConflict>();
@@ -316,6 +370,7 @@ public sealed class DatabaseInitializationOrchestrator(
         try
         {
             using var command = connection.CreateCommand();
+            command.Transaction = dbContext.Database.CurrentTransaction?.GetDbTransaction();
             command.CommandText =
                 """
                 SELECT
@@ -350,6 +405,7 @@ public sealed class DatabaseInitializationOrchestrator(
         try
         {
             using var command = connection.CreateCommand();
+            command.Transaction = dbContext.Database.CurrentTransaction?.GetDbTransaction();
             command.CommandText =
                 """
                 SELECT
@@ -386,6 +442,7 @@ public sealed class DatabaseInitializationOrchestrator(
         try
         {
             using var command = connection.CreateCommand();
+            command.Transaction = dbContext.Database.CurrentTransaction?.GetDbTransaction();
             command.CommandText = AdminLikeRolePreflightSql;
 
             var conflicts = new List<AdminLikeRoleConflict>();
@@ -434,6 +491,7 @@ public sealed class DatabaseInitializationOrchestrator(
         try
         {
             using var command = connection.CreateCommand();
+            command.Transaction = dbContext.Database.CurrentTransaction?.GetDbTransaction();
             command.CommandText = PermissionClaimPreflightSql;
 
             var conflicts = new List<PermissionClaimConflict>();
@@ -522,31 +580,67 @@ public sealed class DatabaseInitializationOrchestrator(
     private async Task InitializeRecordSchemasAsync(CancellationToken cancellationToken)
     {
         logger.LogInformation("开始初始化记录表 schema。");
-        await recordSchemaInitializer.InitializeAsync(cancellationToken);
+        await ExecuteFreshStageAsync(
+            static (attempt, callbackToken) =>
+                attempt.InitializeRecordSchemasAttemptAsync(callbackToken),
+            cancellationToken);
         logger.LogInformation("记录表 schema 初始化完成。");
+    }
+
+    private async Task InitializeRecordSchemasAttemptAsync(
+        CancellationToken cancellationToken)
+    {
+        await recordSchemaInitializer.InitializeAsync(cancellationToken);
+        if (!await RecordTablesExistAsync(cancellationToken))
+        {
+            throw new InvalidOperationException(
+                "Record schema postcondition failed: one or more required tables are missing.");
+        }
     }
 
     private async Task EnsureRecordSchemaCompatibilityAsync(CancellationToken cancellationToken)
     {
         logger.LogInformation("Checking record-table compatibility before Timescale conversion.");
 
+        await ExecuteFreshStageAsync(
+            static (attempt, callbackToken) =>
+                attempt.EnsureRecordSchemaCompatibilityAttemptAsync(callbackToken),
+            cancellationToken);
+    }
+
+    private async Task EnsureRecordSchemaCompatibilityAttemptAsync(
+        CancellationToken cancellationToken)
+    {
+        await using var transaction =
+            await dbContext.Database.BeginTransactionAsync(cancellationToken);
         await dbContext.Database.ExecuteSqlRawAsync(
             NormalizeHourlyCapacityPrimaryKeySql,
             cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     private async Task InitializeTimescaleDbAsync(CancellationToken cancellationToken)
     {
         logger.LogInformation("开始初始化 TimescaleDB。");
 
-        var strategy = dbContext.Database.CreateExecutionStrategy();
-        await strategy.ExecuteAsync(async () =>
-        {
-            await dbContext.Database.ExecuteSqlRawAsync(
-                "CREATE EXTENSION IF NOT EXISTS timescaledb;",
-                cancellationToken);
+        await ExecuteFreshStageAsync(
+            static (attempt, callbackToken) =>
+                attempt.InitializeTimescaleDbAttemptAsync(callbackToken),
+            cancellationToken);
 
-            await dbContext.Database.ExecuteSqlRawAsync(@"
+        logger.LogInformation("TimescaleDB 初始化完成。");
+    }
+
+    private async Task InitializeTimescaleDbAttemptAsync(
+        CancellationToken cancellationToken)
+    {
+        await using var transaction =
+            await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        await dbContext.Database.ExecuteSqlRawAsync(
+            "CREATE EXTENSION IF NOT EXISTS timescaledb;",
+            cancellationToken);
+
+        await dbContext.Database.ExecuteSqlRawAsync(@"
                 DO $$
                 BEGIN
                     IF NOT EXISTS (
@@ -556,9 +650,9 @@ public sealed class DatabaseInitializationOrchestrator(
                         PERFORM create_hypertable('pass_station_records', 'completed_time');
                     END IF;
                 END $$;",
-                cancellationToken);
+            cancellationToken);
 
-            await dbContext.Database.ExecuteSqlRawAsync(@"
+        await dbContext.Database.ExecuteSqlRawAsync(@"
                 DO $$
                 BEGIN
                     IF NOT EXISTS (
@@ -568,9 +662,9 @@ public sealed class DatabaseInitializationOrchestrator(
                         PERFORM create_hypertable('device_logs', 'log_time');
                     END IF;
                 END $$;",
-                cancellationToken);
+            cancellationToken);
 
-            await dbContext.Database.ExecuteSqlRawAsync(@"
+        await dbContext.Database.ExecuteSqlRawAsync(@"
                 DO $$
                 BEGIN
                     IF NOT EXISTS (
@@ -582,21 +676,23 @@ public sealed class DatabaseInitializationOrchestrator(
                         PERFORM create_hypertable('hourly_capacity', 'date');
                     END IF;
                 END $$;",
-                cancellationToken);
-
-        });
-
-        logger.LogInformation("TimescaleDB 初始化完成。");
+            cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     private async Task SeedSystemDataAsync(CancellationToken cancellationToken)
     {
         logger.LogInformation("开始播种系统初始化数据。");
-        await SystemInitData.SeedAsync(
-            dbContext,
-            userManager,
-            roleManager,
-            configuration,
+        var retryTarget = SystemInitData.CreateRetryTarget();
+        await ExecuteFreshStageAsync(
+            (attempt, callbackToken) =>
+                SystemInitData.SeedAttemptAsync(
+                    attempt.dbContext,
+                    attempt.userManager,
+                    attempt.roleManager,
+                    attempt.configuration,
+                    retryTarget,
+                    callbackToken),
             cancellationToken);
         logger.LogInformation("系统初始化数据播种完成。");
     }
@@ -604,8 +700,102 @@ public sealed class DatabaseInitializationOrchestrator(
     private async Task SeedOidcClientsAsync(CancellationToken cancellationToken)
     {
         logger.LogInformation("开始播种 OIDC client 配置。");
-        await oidcClientSeeder.EnsureAicopilotClientAsync(cancellationToken);
+        await ExecuteFreshStageAsync(
+            static (attempt, callbackToken) =>
+                attempt.SeedOidcClientsAttemptAsync(callbackToken),
+            cancellationToken);
         logger.LogInformation("OIDC client 配置播种完成。");
+    }
+
+    private async Task SeedOidcClientsAttemptAsync(
+        CancellationToken cancellationToken)
+    {
+        await using var transaction =
+            await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        var clientId = await oidcClientSeeder
+            .EnsureAicopilotClientAsync(cancellationToken);
+        var exists = await dbContext.OpenIddictApplications
+            .AsNoTracking()
+            .AnyAsync(
+                application => application.ClientId == clientId,
+                cancellationToken);
+        if (!exists)
+        {
+            throw new InvalidOperationException(
+                "OIDC client seed postcondition failed: configured ClientId is missing.");
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    private async Task<bool> RecordTablesExistAsync(
+        CancellationToken cancellationToken)
+    {
+        var connection = dbContext.Database.GetDbConnection();
+        var shouldCloseConnection = connection.State != ConnectionState.Open;
+        if (shouldCloseConnection)
+        {
+            await connection.OpenAsync(cancellationToken);
+        }
+
+        try
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = dbContext.Database.CurrentTransaction?.GetDbTransaction();
+            command.CommandText =
+                """
+                SELECT
+                    to_regclass('device_logs') IS NOT NULL
+                    AND to_regclass('hourly_capacity') IS NOT NULL
+                    AND to_regclass('pass_station_records') IS NOT NULL;
+                """;
+            return Convert.ToBoolean(
+                await command.ExecuteScalarAsync(cancellationToken));
+        }
+        finally
+        {
+            if (shouldCloseConnection)
+            {
+                await connection.CloseAsync();
+            }
+        }
+    }
+
+    private async Task ExecuteFreshStageAsync(
+        Func<DatabaseInitializationOrchestrator, CancellationToken, Task> stage,
+        CancellationToken cancellationToken)
+    {
+        if (scopeFactory is null)
+        {
+            var strategy = dbContext.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(
+                callbackToken => stage(this, callbackToken),
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return;
+        }
+
+        await using var strategyScope = scopeFactory.CreateAsyncScope();
+        var strategyContext = strategyScope.ServiceProvider
+            .GetRequiredService<IIoTDbContext>();
+        var executionStrategy = strategyContext.Database.CreateExecutionStrategy();
+        await executionStrategy.ExecuteAsync(
+            async callbackToken =>
+            {
+                await using var attemptScope = scopeFactory.CreateAsyncScope();
+                var attemptServices = attemptScope.ServiceProvider;
+                var attempt = new DatabaseInitializationOrchestrator(
+                    attemptServices.GetRequiredService<IIoTDbContext>(),
+                    attemptServices.GetRequiredService<UserManager<ApplicationUser>>(),
+                    attemptServices.GetRequiredService<RoleManager<IdentityRole<Guid>>>(),
+                    attemptServices.GetRequiredService<IOidcClientSeeder>(),
+                    attemptServices.GetRequiredService<IRecordSchemaInitializer>(),
+                    configuration,
+                    logger);
+                await stage(attempt, callbackToken);
+            },
+            cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
     }
 
     private sealed record NormalizedClientCodeConflict(
