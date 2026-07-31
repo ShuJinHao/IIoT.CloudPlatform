@@ -358,14 +358,16 @@ public sealed class EdgeReleaseApiKeyService(IIoTDbContext dbContext) : IEdgeRel
         if (!entity!.LastUsedAtUtc.HasValue || entity.LastUsedAtUtc.Value < usedAtUtc)
         {
             var entityId = entity.Id;
+            var baselineRowVersion = entity.RowVersion;
+            var baselineLastUsedAtUtc = entity.LastUsedAtUtc;
             await context.EdgeReleaseApiKeys
                 .Where(key =>
                     key.Id == entityId
                     && key.KeyHash == keyHash
                     && key.Status == EdgeReleaseApiKeyStatuses.Active
                     && !key.RevokedAtUtc.HasValue
-                    && key.ExpiresAtUtc > usedAtUtc
-                    && (!key.LastUsedAtUtc.HasValue || key.LastUsedAtUtc.Value < usedAtUtc))
+                    && key.RowVersion == baselineRowVersion
+                    && key.LastUsedAtUtc == baselineLastUsedAtUtc)
                 .ExecuteUpdateAsync(
                     updates => updates.SetProperty(
                         key => key.LastUsedAtUtc,
