@@ -530,6 +530,14 @@ public sealed class PersistenceBoundaryArchitectureTests
             CloudRepositoryPath.Find(
                 "src", "infrastructure", "IIoT.EntityFrameworkCore",
                 "Identity", "HumanSessionIssuanceLock.cs"));
+        var processGateSource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "src", "infrastructure", "IIoT.EntityFrameworkCore",
+                "Identity", "HumanSessionTokenExchangeProcessGate.cs"));
+        var dependencyInjectionSource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "src", "infrastructure", "IIoT.EntityFrameworkCore",
+                "DependencyInjection.cs"));
 
         Assert.Contains(
             "AcquireAuthorizationAsync",
@@ -550,6 +558,22 @@ public sealed class PersistenceBoundaryArchitectureTests
         Assert.Contains(
             "AcquireOidcTokenExchangeAsync",
             issuanceLockSource,
+            StringComparison.Ordinal);
+        var processGateIndex = issuanceLockSource.IndexOf(
+            "tokenExchangeProcessGate.EnterAsync",
+            StringComparison.Ordinal);
+        var databaseLeaseIndex = issuanceLockSource.IndexOf(
+            "var databaseLease = await AcquireAsync",
+            StringComparison.Ordinal);
+        Assert.True(processGateIndex >= 0);
+        Assert.True(databaseLeaseIndex > processGateIndex);
+        Assert.Contains(
+            "SemaphoreSlim(1, 1)",
+            processGateSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AddSingleton<HumanSessionTokenExchangeProcessGate>",
+            dependencyInjectionSource,
             StringComparison.Ordinal);
     }
 

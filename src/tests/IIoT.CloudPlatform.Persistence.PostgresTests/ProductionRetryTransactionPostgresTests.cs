@@ -923,7 +923,9 @@ public sealed class ProductionRetryTransactionPostgresTests(
         await using var issuanceContext = CreateRetryContext(
             budget.ConnectionString,
             $"tx-03b3-oidc-issuance-{Guid.NewGuid():N}");
-        var issuanceLock = new HumanSessionIssuanceLock(issuanceContext);
+        var issuanceLock = new HumanSessionIssuanceLock(
+            issuanceContext,
+            new HumanSessionTokenExchangeProcessGate());
         var revocationApplicationName =
             $"tx-03b3-oidc-revoke-{Guid.NewGuid():N}";
         await using var revocationContext = CreateRetryContext(
@@ -999,6 +1001,68 @@ public sealed class ProductionRetryTransactionPostgresTests(
             await verificationContext.OpenIddictTokens
                 .AsNoTracking()
                 .CountAsync(token => token.Id == tokenId, budget.Token));
+    }
+
+    [Fact]
+    public async Task TokenExchangeProcessGate_ShouldQueueBeforeOpeningAnotherDatabaseConnection()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var processGate = new HumanSessionTokenExchangeProcessGate();
+        var holderApplicationName =
+            $"tx-03b3-token-holder-{Guid.NewGuid():N}";
+        var waiterApplicationName =
+            $"tx-03b3-token-waiter-{Guid.NewGuid():N}";
+        await using var holderContext = CreateRetryContext(
+            budget.ConnectionString,
+            holderApplicationName);
+        await using var waiterContext = CreateRetryContext(
+            budget.ConnectionString,
+            waiterApplicationName);
+        var holder = new HumanSessionIssuanceLock(
+            holderContext,
+            processGate);
+        var waiter = new HumanSessionIssuanceLock(
+            waiterContext,
+            processGate);
+        IAsyncDisposable? holderLease =
+            await holder.AcquireTokenExchangeAsync(budget.Token);
+
+        try
+        {
+            var waiterTask = waiter
+                .AcquireTokenExchangeAsync(budget.Token)
+                .AsTask();
+            await WaitForProcessGateWaiterAsync(
+                processGate,
+                budget.Token);
+
+            Assert.Equal(
+                0,
+                await CountPostgresSessionsAsync(
+                    budget.ConnectionString,
+                    waiterApplicationName,
+                    budget.Token));
+
+            await holderLease.DisposeAsync();
+            holderLease = null;
+            await using var waiterLease = await waiterTask.WaitAsync(
+                budget.Token);
+            Assert.Equal(
+                1,
+                await CountPostgresSessionsAsync(
+                    budget.ConnectionString,
+                    waiterApplicationName,
+                    budget.Token));
+        }
+        finally
+        {
+            if (holderLease is not null)
+            {
+                await holderLease.DisposeAsync();
+            }
+        }
     }
 
     [Fact]
@@ -4290,6 +4354,56 @@ public sealed class ProductionRetryTransactionPostgresTests(
                     null))
             .Options;
         return new IIoTDbContext(options);
+    }
+
+    private static async Task WaitForProcessGateWaiterAsync(
+        HumanSessionTokenExchangeProcessGate processGate,
+        CancellationToken testToken)
+    {
+        using var readinessTimeout =
+            CancellationTokenSource.CreateLinkedTokenSource(testToken);
+        readinessTimeout.CancelAfter(TimeSpan.FromSeconds(10));
+        try
+        {
+            while (processGate.WaitingCount == 0)
+            {
+                readinessTimeout.Token.ThrowIfCancellationRequested();
+                await Task.Yield();
+            }
+        }
+        catch (OperationCanceledException)
+            when (!testToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                "Token-exchange operation did not enter the process gate within 10 seconds.");
+        }
+    }
+
+    private static async Task<int> CountPostgresSessionsAsync(
+        string connectionString,
+        string applicationName,
+        CancellationToken cancellationToken)
+    {
+        var observerConnectionString = new NpgsqlConnectionStringBuilder(
+            connectionString)
+        {
+            ApplicationName =
+                $"token-process-gate-observer-{Guid.NewGuid():N}"
+        }.ConnectionString;
+        await using var observer = new NpgsqlConnection(
+            observerConnectionString);
+        await observer.OpenAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            """
+            select count(*)::integer
+            from pg_stat_activity
+            where application_name = @application_name
+            """,
+            observer);
+        command.Parameters.AddWithValue(
+            "application_name",
+            applicationName);
+        return (int)(await command.ExecuteScalarAsync(cancellationToken))!;
     }
 
     private static async Task WaitForLockWaitAsync(

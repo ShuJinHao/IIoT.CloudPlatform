@@ -6,10 +6,13 @@ using Microsoft.EntityFrameworkCore.Storage;
 
 namespace IIoT.EntityFrameworkCore.Identity;
 
-public sealed class HumanSessionIssuanceLock(IIoTDbContext dbContext)
+public sealed class HumanSessionIssuanceLock(
+    IIoTDbContext dbContext,
+    HumanSessionTokenExchangeProcessGate tokenExchangeProcessGate)
     : IHumanSessionIssuanceLock
 {
     private readonly Func<IIoTDbContext> _createContext = dbContext.CreateFreshContext;
+    private readonly bool _usesNpgsql = dbContext.Database.IsNpgsql();
 
     public ValueTask<IAsyncDisposable> AcquireAuthorizationAsync(
         Guid subjectId,
@@ -22,11 +25,30 @@ public sealed class HumanSessionIssuanceLock(IIoTDbContext dbContext)
                     token),
             cancellationToken);
 
-    public ValueTask<IAsyncDisposable> AcquireTokenExchangeAsync(
+    public async ValueTask<IAsyncDisposable> AcquireTokenExchangeAsync(
         CancellationToken cancellationToken = default)
-        => AcquireAsync(
-            RefreshTokenSubjectTransactionLock.AcquireOidcTokenExchangeAsync,
+    {
+        if (!_usesNpgsql)
+        {
+            return NoopLease.Instance;
+        }
+
+        var processLease = await tokenExchangeProcessGate.EnterAsync(
             cancellationToken);
+        try
+        {
+            var databaseLease = await AcquireAsync(
+                RefreshTokenSubjectTransactionLock
+                    .AcquireOidcTokenExchangeAsync,
+                cancellationToken);
+            return new CompositeLease(databaseLease, processLease);
+        }
+        catch
+        {
+            await processLease.DisposeAsync();
+            throw;
+        }
+    }
 
     private async ValueTask<IAsyncDisposable> AcquireAsync(
         Func<IIoTDbContext, CancellationToken, Task> acquire,
@@ -81,6 +103,38 @@ public sealed class HumanSessionIssuanceLock(IIoTDbContext dbContext)
             if (currentContext is not null)
             {
                 await currentContext.DisposeAsync();
+            }
+        }
+    }
+
+    private sealed class CompositeLease(
+        IAsyncDisposable databaseLease,
+        IAsyncDisposable processLease) : IAsyncDisposable
+    {
+        private IAsyncDisposable? _databaseLease = databaseLease;
+        private IAsyncDisposable? _processLease = processLease;
+
+        public async ValueTask DisposeAsync()
+        {
+            var currentDatabaseLease = Interlocked.Exchange(
+                ref _databaseLease,
+                null);
+            var currentProcessLease = Interlocked.Exchange(
+                ref _processLease,
+                null);
+            try
+            {
+                if (currentDatabaseLease is not null)
+                {
+                    await currentDatabaseLease.DisposeAsync();
+                }
+            }
+            finally
+            {
+                if (currentProcessLease is not null)
+                {
+                    await currentProcessLease.DisposeAsync();
+                }
             }
         }
     }
