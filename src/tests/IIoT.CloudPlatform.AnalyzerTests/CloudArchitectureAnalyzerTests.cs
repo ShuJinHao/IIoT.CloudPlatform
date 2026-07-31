@@ -712,7 +712,7 @@ public sealed class CloudArchitectureAnalyzerTests
     {
         var dapper = CreateReference(
             "Dapper",
-            "namespace Dapper { public readonly struct CommandDefinition { public CommandDefinition(string sql) { } } public static class SqlMapper { public static int Query(object db, CommandDefinition command) => 1; } }");
+            "namespace Dapper { public enum CommandFlags { Buffered = 1 } public readonly struct CommandDefinition { public CommandDefinition(string sql, object? parameters = null, System.Data.IDbTransaction? transaction = null, int? timeout = null, System.Data.CommandType? commandType = null, CommandFlags flags = CommandFlags.Buffered, System.Threading.CancellationToken cancellationToken = default) { } } public static class SqlMapper { public static int Query(object db, CommandDefinition command) => 1; } }");
         var source = AiReadPrelude + AuthorizedQuery + """
             public interface IUnsafeQueryPort
                 : IIoT.SharedKernel.Architecture.IReadOnlyQueryPort
@@ -747,6 +747,63 @@ public sealed class CloudArchitectureAnalyzerTests
         Assert.Contains(
             diagnostics,
             diagnostic => diagnostic.Id == "CLOUDARCH004");
+    }
+
+    [Fact]
+    public async Task SameNamedReadOnlyCommandFromDifferentAssembly_FailsClosed()
+    {
+        var dapper = CreateReference(
+            "Dapper",
+            "namespace Dapper { public enum CommandFlags { Buffered = 1 } public readonly struct CommandDefinition { public CommandDefinition(string sql, object? parameters = null, System.Data.IDbTransaction? transaction = null, int? timeout = null, System.Data.CommandType? commandType = null, CommandFlags flags = CommandFlags.Buffered, System.Threading.CancellationToken cancellationToken = default) { } } public static class SqlMapper { public static int Query(object db, CommandDefinition command) => 1; } }");
+        var source = AiReadPrelude + AuthorizedQuery + """
+            namespace IIoT.Dapper
+            {
+                internal readonly struct ReadOnlyCommandDefinition
+                {
+                    private readonly global::Dapper.CommandDefinition command;
+                    public ReadOnlyCommandDefinition(
+                        string sql,
+                        object? parameters = null,
+                        System.Data.IDbTransaction? transaction = null,
+                        int? timeout = null,
+                        System.Data.CommandType? commandType = null,
+                        global::Dapper.CommandFlags flags =
+                            global::Dapper.CommandFlags.Buffered,
+                        System.Threading.CancellationToken cancellationToken = default)
+                        => command = new global::Dapper.CommandDefinition(
+                            sql,
+                            parameters,
+                            transaction,
+                            timeout,
+                            commandType,
+                            flags,
+                            cancellationToken);
+                    public static implicit operator global::Dapper.CommandDefinition(
+                        ReadOnlyCommandDefinition value) => value.command;
+                }
+            }
+
+            public sealed class Handler(object db)
+                : IIoT.SharedKernel.Messaging.IQueryHandler<Query, int>
+            {
+                public System.Threading.Tasks.Task<int> Handle(
+                    Query request,
+                    System.Threading.CancellationToken token)
+                {
+                    var command = new IIoT.Dapper.ReadOnlyCommandDefinition(
+                        request.ToString()!);
+                    return System.Threading.Tasks.Task.FromResult(
+                        Dapper.SqlMapper.Query(db, command));
+                }
+            }
+            """;
+
+        var diagnostics = await AnalyzeAsync(
+            "IIoT.ProductionService.Fixture.ReadOnlyCommandImpostor",
+            [source],
+            dapper);
+
+        AssertSingleById(diagnostics, "CLOUDARCH004");
     }
 
     [Fact]

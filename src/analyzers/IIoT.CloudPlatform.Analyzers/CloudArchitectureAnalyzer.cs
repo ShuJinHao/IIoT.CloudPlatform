@@ -1811,11 +1811,64 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
         private static bool IsValidatedReadOnlyCommand(IOperation operation)
         {
             operation = UnwrapConversion(operation);
-            return string.Equals(
-                operation.Type?.ToDisplayString(
-                    SymbolDisplayFormat.CSharpErrorMessageFormat),
-                "IIoT.Dapper.ReadOnlyCommandDefinition",
-                StringComparison.Ordinal);
+            if (operation.Type is not INamedTypeSymbol type ||
+                !string.Equals(
+                    type.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
+                    "IIoT.Dapper.ReadOnlyCommandDefinition",
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    type.ContainingAssembly.Identity.Name,
+                    "IIoT.Dapper",
+                    StringComparison.Ordinal) ||
+                type.TypeKind != TypeKind.Struct ||
+                !type.IsReadOnly ||
+                type.DeclaredAccessibility != Accessibility.Internal ||
+                !type.Locations.Any(static location => location.IsInSource))
+            {
+                return false;
+            }
+
+            var fields = type.GetMembers()
+                .OfType<IFieldSymbol>()
+                .Where(static field => !field.IsStatic)
+                .ToArray();
+            if (fields.Length != 1 ||
+                !fields[0].IsReadOnly ||
+                fields[0].DeclaredAccessibility != Accessibility.Private ||
+                !string.Equals(
+                    fields[0].Type.ToDisplayString(
+                        SymbolDisplayFormat.CSharpErrorMessageFormat),
+                    "Dapper.CommandDefinition",
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var constructors = type.InstanceConstructors
+                .Where(static constructor => !constructor.IsImplicitlyDeclared)
+                .ToArray();
+            if (constructors.Length != 1 ||
+                constructors[0].Parameters.Length != 7 ||
+                constructors[0].Parameters[0].Type.SpecialType !=
+                    SpecialType.System_String)
+            {
+                return false;
+            }
+
+            var conversions = type.GetMembers("op_Implicit")
+                .OfType<IMethodSymbol>()
+                .Where(method =>
+                    method.Parameters.Length == 1 &&
+                    SymbolEqualityComparer.Default.Equals(
+                        method.Parameters[0].Type,
+                        type) &&
+                    string.Equals(
+                        method.ReturnType.ToDisplayString(
+                            SymbolDisplayFormat.CSharpErrorMessageFormat),
+                        "Dapper.CommandDefinition",
+                        StringComparison.Ordinal))
+                .ToArray();
+            return conversions.Length == 1;
         }
 
         private static IOperation UnwrapConversion(IOperation operation)

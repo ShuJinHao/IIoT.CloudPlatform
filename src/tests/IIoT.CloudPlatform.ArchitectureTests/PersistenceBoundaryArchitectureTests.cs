@@ -748,6 +748,63 @@ public sealed class PersistenceBoundaryArchitectureTests
         Assert.Contains("dapper-write", entry.SinkKinds);
     }
 
+    [Fact]
+    public void PersistenceInventory_ShouldRejectSameNamedReadOnlyCommandImpostors()
+    {
+        const string source =
+            """
+            using System.Data;
+            using Dapper;
+
+            namespace IIoT.Dapper
+            {
+                internal readonly struct ReadOnlyCommandDefinition
+                {
+                    private readonly global::Dapper.CommandDefinition command;
+
+                    public ReadOnlyCommandDefinition(
+                        string commandText,
+                        object? parameters = null,
+                        IDbTransaction? transaction = null,
+                        int? commandTimeout = null,
+                        CommandType? commandType = null,
+                        global::Dapper.CommandFlags flags =
+                            global::Dapper.CommandFlags.Buffered,
+                        CancellationToken cancellationToken = default)
+                        => command = new global::Dapper.CommandDefinition(
+                            commandText,
+                            parameters,
+                            transaction,
+                            commandTimeout,
+                            commandType,
+                            flags,
+                            cancellationToken);
+
+                    public static implicit operator global::Dapper.CommandDefinition(
+                        ReadOnlyCommandDefinition value) => value.command;
+                }
+            }
+
+            public sealed class UnsafeQuery(IDbConnection connection)
+            {
+                public Task<int> ReadAsync(
+                    string sql,
+                    CancellationToken cancellationToken)
+                {
+                    var command = new IIoT.Dapper.ReadOnlyCommandDefinition(
+                        sql,
+                        cancellationToken: cancellationToken);
+                    return connection.QuerySingleAsync<int>(command);
+                }
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(source).UnclassifiedEntries);
+
+        Assert.Contains("dapper-write", entry.SinkKinds);
+    }
+
     [Theory]
     [InlineData("delete from sample returning id")]
     [InlineData("select dangerous_side_effect()")]
