@@ -2893,7 +2893,118 @@ public sealed class ClientReleaseBehaviorTests
                 $"client-release-package-delete:{version.Id:N}",
                 audit.IdempotencyKey);
             Assert.Equal(version.DeletedAtUtc, audit.ExecutedAtUtc);
+            Assert.NotNull(version.DeletionReceiptJson);
+            var expectedDeletedPath =
+                "installers/stable/1.2.5/installer-artifact.json";
+            Assert.Contains(
+                expectedDeletedPath,
+                retry.Value!.DeletedPaths);
+            using var auditSummary = JsonDocument.Parse(audit.Summary);
+            Assert.Contains(
+                auditSummary.RootElement
+                    .GetProperty("deletedPaths")
+                    .EnumerateArray()
+                    .Select(item => item.GetString()),
+                path => string.Equals(
+                    path,
+                    expectedDeletedPath,
+                    StringComparison.Ordinal));
             Assert.False(File.Exists(manifestPath));
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteClientReleasePackageHandler_NoFileRetryWithReason_ShouldRepairStableAudit()
+    {
+        var edgeRoot = CreateTempDirectory(
+            "iiot-delete-release-no-file-audit-repair");
+        try
+        {
+            var missingManifestPath = Path.Combine(
+                edgeRoot,
+                "installers",
+                "stable",
+                "1.2.6",
+                "installer-artifact.json");
+            var component = CreateHostComponent(
+                "stable",
+                "1.2.6",
+                "1.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/installers/stable/1.2.6/installer-artifact.json",
+                new string('a', 64),
+                2,
+                "no-file audit repair",
+                ClientReleaseStatus.Published);
+            var version = SingleVersion(component);
+            var repository =
+                new InMemoryRepository<ClientReleaseComponent>();
+            repository.Items.Add(component);
+            var rejectedAudit = new ConfirmedAuditBarrier(
+                confirmed: false);
+            var firstHandler = new DeleteClientReleasePackageHandler(
+                Options.Create(new EdgeInstallerArtifactOptions
+                {
+                    RootPath = Path.Combine(edgeRoot, "installers")
+                }),
+                repository,
+                new InMemoryDeviceClientStateStore(),
+                new TestCurrentUser(),
+                rejectedAudit,
+                NullLogger<DeleteClientReleasePackageHandler>.Instance,
+                new RecordingUnitOfWork(),
+                new InMemoryClientReleaseWriteObservationReader(
+                    repository));
+            var command = new DeleteClientReleasePackageCommand(
+                version.Id,
+                "caller reason must not replace the no-file target");
+
+            var firstHandling = firstHandler.Handle(
+                command,
+                CancellationToken.None);
+            await rejectedAudit.AuditEntered.WaitAsync(
+                TimeSpan.FromSeconds(5));
+            Assert.Equal(ClientReleaseStatus.Deleted, version.Status);
+            Assert.False(File.Exists(missingManifestPath));
+            rejectedAudit.Release();
+            await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
+                () => firstHandling);
+
+            var repairedAudit = new RecordingAuditTrailService();
+            var retryHandler = new DeleteClientReleasePackageHandler(
+                Options.Create(new EdgeInstallerArtifactOptions
+                {
+                    RootPath = Path.Combine(edgeRoot, "installers")
+                }),
+                repository,
+                new InMemoryDeviceClientStateStore(),
+                new TestCurrentUser(),
+                repairedAudit,
+                NullLogger<DeleteClientReleasePackageHandler>.Instance,
+                new RecordingUnitOfWork(),
+                new InMemoryClientReleaseWriteObservationReader(
+                    repository));
+
+            var retry = await retryHandler.Handle(
+                command,
+                CancellationToken.None);
+
+            Assert.True(retry.IsSuccess);
+            Assert.False(retry.Value!.FilesDeleted);
+            Assert.Empty(retry.Value.DeletedPaths);
+            Assert.Equal(version.DeletionReason, retry.Value.Warning);
+            var audit = Assert.Single(repairedAudit.Entries);
+            Assert.True(audit.Succeeded);
+            using var summary = JsonDocument.Parse(audit.Summary);
+            Assert.Empty(
+                summary.RootElement
+                    .GetProperty("deletedPaths")
+                    .EnumerateArray());
         }
         finally
         {

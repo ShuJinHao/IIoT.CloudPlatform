@@ -280,10 +280,11 @@ public sealed class ClientReleaseComponent : BaseEntity<Guid>, IAggregateRoot<Gu
     public void MarkVersionDeleted(
         Guid versionId,
         string? reason,
-        DateTime? deletedAtUtc = null)
+        DateTime? deletedAtUtc = null,
+        string? deletionReceiptJson = null)
     {
         var version = FindRequiredVersion(versionId);
-        version.MarkDeleted(reason, deletedAtUtc);
+        version.MarkDeleted(reason, deletedAtUtc, deletionReceiptJson);
         Touch(deletedAtUtc);
     }
 
@@ -447,6 +448,8 @@ public sealed class ClientReleaseVersion : BaseEntity<Guid>
 
     public string? DeletionFailure { get; private set; }
 
+    public string? DeletionReceiptJson { get; private set; }
+
     public uint RowVersion { get; private set; }
 
     public IReadOnlyCollection<ClientReleaseArtifact> Artifacts => _artifacts.AsReadOnly();
@@ -595,6 +598,7 @@ public sealed class ClientReleaseVersion : BaseEntity<Guid>
             DeletedAtUtc = null;
             DeletionReason = null;
             DeletionFailure = null;
+            DeletionReceiptJson = null;
         }
 
         if (status == ClientReleaseStatus.Published && PublishedAtUtc is null)
@@ -606,13 +610,16 @@ public sealed class ClientReleaseVersion : BaseEntity<Guid>
 
     public void MarkDeleted(
         string? reason,
-        DateTime? deletedAtUtc = null)
+        DateTime? deletedAtUtc = null,
+        string? deletionReceiptJson = null)
     {
         Status = ClientReleaseStatus.Deleted;
         DeletedAtUtc = ClientReleaseComponent.NormalizeUtc(
             deletedAtUtc ?? DateTime.UtcNow);
         DeletionReason = ClientReleaseComponent.NormalizeOptional(reason);
         DeletionFailure = null;
+        DeletionReceiptJson =
+            ClientReleaseComponent.NormalizeOptional(deletionReceiptJson);
     }
 
     public void MarkDeleteRequested()
@@ -621,6 +628,7 @@ public sealed class ClientReleaseVersion : BaseEntity<Guid>
         DeletedAtUtc = null;
         DeletionReason = null;
         DeletionFailure = null;
+        DeletionReceiptJson = null;
     }
 
     public void MarkDeleteFailed(string failure)
@@ -629,6 +637,7 @@ public sealed class ClientReleaseVersion : BaseEntity<Guid>
         DeletedAtUtc = null;
         DeletionReason = null;
         DeletionFailure = ClientReleaseComponent.NormalizeRequired(failure, nameof(failure));
+        DeletionReceiptJson = null;
     }
 
     public void ReplaceArtifacts(IEnumerable<ClientReleaseArtifact>? artifacts)
@@ -676,6 +685,7 @@ public sealed class ClientReleaseVersion : BaseEntity<Guid>
             DeletedAtUtc = null;
             DeletionReason = null;
             DeletionFailure = null;
+            DeletionReceiptJson = null;
         }
 
         if (status == ClientReleaseStatus.Published && PublishedAtUtc is null)

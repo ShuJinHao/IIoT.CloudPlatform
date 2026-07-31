@@ -49,6 +49,8 @@ public sealed class DeleteClientReleasePackageHandler(
     : ICommandHandler<DeleteClientReleasePackageCommand, Result<ClientReleaseFileDeletionResultDto>>
 {
     private const string AuditAction = "ClientRelease.DeletePackage";
+    private const string NoFilesDeletionReason =
+        "发布文件未找到或不在受控发布目录下，已移出可分发 catalog，历史更新内容保留。";
     private static readonly TimeSpan PostCommitFinalizationTimeout =
         TimeSpan.FromSeconds(30);
 
@@ -140,23 +142,27 @@ public sealed class DeleteClientReleasePackageHandler(
         var deletedAtUtc =
             ClientReleaseWriteCommitRecovery.NormalizeUtc(DateTime.UtcNow);
         var deletionReason = plan.Targets.Count == 0
-            ? "发布文件未找到或不在受控发布目录下，已移出可分发 catalog，历史更新内容保留。"
+            ? NoFilesDeletionReason
             : string.IsNullOrWhiteSpace(request.Reason)
                 ? "管理员删除发布包。"
                 : request.Reason.Trim();
 
         if (baseline.Status == ClientReleaseStatus.Deleted)
         {
-            var requestedReason = string.IsNullOrWhiteSpace(request.Reason)
-                ? null
-                : request.Reason.Trim();
+            var receipt = ClientReleasePackageDeletionReceipt.Parse(
+                baseline.DeletionReceiptJson)
+                ?? throw new CloudWriteCommitUnknownException();
+            var expectedReason = receipt.DeletedPaths.Count == 0
+                ? NoFilesDeletionReason
+                : string.IsNullOrWhiteSpace(request.Reason)
+                    ? "管理员删除发布包。"
+                    : request.Reason.Trim();
             if (baseline.DeletedAtUtc is null
                 || baseline.DeletionFailure is not null
-                || (requestedReason is not null
-                    && !string.Equals(
-                        baseline.DeletionReason,
-                        requestedReason,
-                        StringComparison.Ordinal)))
+                || !string.Equals(
+                    baseline.DeletionReason,
+                    expectedReason,
+                    StringComparison.Ordinal))
             {
                 throw new CloudWriteConflictException();
             }
@@ -168,34 +174,40 @@ public sealed class DeleteClientReleasePackageHandler(
                 component.Channel,
                 version.Version,
                 succeeded: true,
-                [],
-                plan.SkippedPaths,
-                baseline.DeletionReason,
+                receipt.DeletedPaths,
+                receipt.SkippedPaths,
+                receipt.Warning,
                 baseline.DeletedAtUtc.Value,
                 cancellationToken);
             return BuildSuccess(
-                filesDeleted: false,
-                [],
-                plan.SkippedPaths,
-                baseline.DeletionReason);
+                receipt.DeletedPaths.Count > 0,
+                receipt.DeletedPaths,
+                receipt.SkippedPaths,
+                receipt.Warning);
         }
 
         if (plan.Targets.Count == 0)
         {
+            var receipt = ClientReleasePackageDeletionReceipt.Create(
+                [],
+                plan.SkippedPaths,
+                deletionReason);
             await PersistVersionTargetAsync(
                 baseline,
                 ClientReleaseStatus.Deleted,
                 deletedAtUtc,
                 deletionReason,
                 null,
+                receipt.Json,
                 (currentComponent, currentVersion) =>
                     currentComponent.MarkVersionDeleted(
                         currentVersion.Id,
                         deletionReason,
-                        deletedAtUtc),
+                        deletedAtUtc,
+                        receipt.Json),
                 cancellationToken);
             return await FinalizePostCommitAsync(
-                async _ =>
+                async finalizationToken =>
                 {
                     await WriteAuditAsync(
                         version.Id,
@@ -204,16 +216,16 @@ public sealed class DeleteClientReleasePackageHandler(
                         component.Channel,
                         version.Version,
                         succeeded: true,
-                        [],
-                        plan.SkippedPaths,
-                        deletionReason,
+                        receipt.DeletedPaths,
+                        receipt.SkippedPaths,
+                        receipt.Warning,
                         deletedAtUtc,
-                        cancellationToken);
+                        finalizationToken);
                     return BuildSuccess(
                         filesDeleted: false,
-                        [],
-                        plan.SkippedPaths,
-                        deletionReason);
+                        receipt.DeletedPaths,
+                        receipt.SkippedPaths,
+                        receipt.Warning);
                 },
                 cancellationToken);
         }
@@ -221,6 +233,7 @@ public sealed class DeleteClientReleasePackageHandler(
         var deleteRequested = await PersistVersionTargetAsync(
             baseline,
             ClientReleaseStatus.DeleteRequested,
+            null,
             null,
             null,
             null,
@@ -244,22 +257,29 @@ public sealed class DeleteClientReleasePackageHandler(
                         target.Delete();
                     }
 
+                    var warning = plan.SkippedPaths.Count == 0
+                        ? null
+                        : $"部分文件仍被 manifest 引用或不在受控范围，已跳过 {plan.SkippedPaths.Count} 项。";
+                    var receipt =
+                        ClientReleasePackageDeletionReceipt.Create(
+                            deletedPaths,
+                            plan.SkippedPaths,
+                            warning);
                     await PersistVersionTargetAsync(
                         deleteRequested,
                         ClientReleaseStatus.Deleted,
                         deletedAtUtc,
                         deletionReason,
                         null,
+                        receipt.Json,
                         (currentComponent, currentVersion) =>
                             currentComponent.MarkVersionDeleted(
                                 currentVersion.Id,
                                 deletionReason,
-                                deletedAtUtc),
+                                deletedAtUtc,
+                                receipt.Json),
                         finalizationToken);
 
-                    var warning = plan.SkippedPaths.Count == 0
-                        ? null
-                        : $"部分文件仍被 manifest 引用或不在受控范围，已跳过 {plan.SkippedPaths.Count} 项。";
                     await WriteAuditAsync(
                         version.Id,
                         componentKind,
@@ -267,17 +287,17 @@ public sealed class DeleteClientReleasePackageHandler(
                         component.Channel,
                         version.Version,
                         succeeded: true,
-                        deletedPaths,
-                        plan.SkippedPaths,
-                        warning,
+                        receipt.DeletedPaths,
+                        receipt.SkippedPaths,
+                        receipt.Warning,
                         deletedAtUtc,
                         cancellationToken);
 
                     return BuildSuccess(
                         deletedPaths.Count > 0,
-                        deletedPaths,
-                        plan.SkippedPaths,
-                        warning);
+                        receipt.DeletedPaths,
+                        receipt.SkippedPaths,
+                        receipt.Warning);
                 }
                 catch (Exception ex) when (ex is
                     IOException or
@@ -293,6 +313,7 @@ public sealed class DeleteClientReleasePackageHandler(
                         null,
                         null,
                         ex.Message,
+                        null,
                         (currentComponent, currentVersion) =>
                             currentComponent.MarkVersionDeleteFailed(
                                 currentVersion.Id,
@@ -374,6 +395,7 @@ public sealed class DeleteClientReleasePackageHandler(
             DateTime? deletedAtUtc,
             string? deletionReason,
             string? deletionFailure,
+            string? deletionReceiptJson,
             Action<ClientReleaseComponent, ClientReleaseVersion> mutate,
             CancellationToken cancellationToken)
     {
@@ -394,7 +416,8 @@ public sealed class DeleteClientReleasePackageHandler(
                     targetStatus,
                     deletedAtUtc,
                     deletionReason,
-                    deletionFailure))
+                    deletionFailure,
+                    deletionReceiptJson))
             {
                 return current;
             }
@@ -425,7 +448,8 @@ public sealed class DeleteClientReleasePackageHandler(
                 targetStatus,
                 deletedAtUtc,
                 deletionReason,
-                deletionFailure))
+                deletionFailure,
+                deletionReceiptJson))
         {
             return confirmed;
         }
@@ -459,7 +483,8 @@ public sealed class DeleteClientReleasePackageHandler(
                     targetStatus,
                     deletedAtUtc,
                     deletionReason,
-                    deletionFailure))
+                    deletionFailure,
+                    deletionReceiptJson))
             {
                 return true;
             }
@@ -501,7 +526,8 @@ public sealed class DeleteClientReleasePackageHandler(
                     targetStatus,
                     deletedAtUtc,
                     deletionReason,
-                    deletionFailure))
+                    deletionFailure,
+                    deletionReceiptJson))
             {
                 return current;
             }
@@ -547,7 +573,9 @@ public sealed class DeleteClientReleasePackageHandler(
                 componentKind,
                 componentName,
                 channel,
-                version
+                version,
+                deletedPaths,
+                skippedPaths
             })
             : JsonSerializer.Serialize(new
             {
@@ -594,6 +622,81 @@ public sealed class DeleteClientReleasePackageHandler(
             entry);
         cancellationToken.ThrowIfCancellationRequested();
     }
+}
+
+internal sealed class ClientReleasePackageDeletionReceipt
+{
+    private static readonly JsonSerializerOptions JsonOptions =
+        new(JsonSerializerDefaults.Web);
+
+    private ClientReleasePackageDeletionReceipt(
+        IReadOnlyList<string> deletedPaths,
+        IReadOnlyList<string> skippedPaths,
+        string? warning)
+    {
+        DeletedPaths = NormalizePaths(deletedPaths);
+        SkippedPaths = NormalizePaths(skippedPaths);
+        Warning = string.IsNullOrWhiteSpace(warning)
+            ? null
+            : warning.Trim();
+        Json = JsonSerializer.Serialize(
+            new ReceiptPayload(DeletedPaths, SkippedPaths, Warning),
+            JsonOptions);
+    }
+
+    public IReadOnlyList<string> DeletedPaths { get; }
+
+    public IReadOnlyList<string> SkippedPaths { get; }
+
+    public string? Warning { get; }
+
+    public string Json { get; }
+
+    public static ClientReleasePackageDeletionReceipt Create(
+        IReadOnlyList<string> deletedPaths,
+        IReadOnlyList<string> skippedPaths,
+        string? warning)
+        => new(deletedPaths, skippedPaths, warning);
+
+    public static ClientReleasePackageDeletionReceipt? Parse(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            var payload = JsonSerializer.Deserialize<ReceiptPayload>(
+                json,
+                JsonOptions);
+            return payload?.DeletedPaths is null
+                   || payload.SkippedPaths is null
+                ? null
+                : new ClientReleasePackageDeletionReceipt(
+                    payload.DeletedPaths,
+                    payload.SkippedPaths,
+                    payload.Warning);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static IReadOnlyList<string> NormalizePaths(
+        IEnumerable<string> paths)
+        => paths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => path.Replace('\\', '/'))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+
+    private sealed record ReceiptPayload(
+        IReadOnlyList<string> DeletedPaths,
+        IReadOnlyList<string> SkippedPaths,
+        string? Warning);
 }
 
 internal sealed class ClientReleaseFileDeletionPlan

@@ -185,6 +185,10 @@ public sealed class ClientReleaseVersionConfiguration : IEntityTypeConfiguration
             .HasColumnType("text")
             .HasColumnName("deletion_failure");
 
+        builder.Property(version => version.DeletionReceiptJson)
+            .HasColumnType("jsonb")
+            .HasColumnName("deletion_receipt_json");
+
         builder.Property(version => version.RowVersion)
             .HasColumnName("xmin")
             .IsRowVersion();

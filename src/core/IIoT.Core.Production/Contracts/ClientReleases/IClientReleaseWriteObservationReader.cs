@@ -15,7 +15,8 @@ public sealed record ClientReleaseVersionWriteState(
     DateTime? PublishedAtUtc,
     DateTime? DeletedAtUtc,
     string? DeletionReason,
-    string? DeletionFailure);
+    string? DeletionFailure,
+    string? DeletionReceiptJson);
 
 public sealed record ClientReleaseComponentWriteState(
     Guid ComponentId,
@@ -157,7 +158,10 @@ public static class ClientReleaseWriteStateFingerprint
             NormalizeUtc(version.PublishedAtUtc),
             NormalizeUtc(version.DeletedAtUtc),
             version.DeletionReason,
-            version.DeletionFailure);
+            version.DeletionFailure,
+            version.DeletionReceiptJson is null
+                ? null
+                : CanonicalizeJson(version.DeletionReceiptJson));
 
     public static ClientReleaseComponentWriteState ForComponent(
         ClientReleaseComponent component)

@@ -12,7 +12,8 @@ internal static class ClientReleaseWriteCommitRecovery
         ClientReleaseStatus status,
         DateTime? deletedAtUtc = null,
         string? deletionReason = null,
-        string? deletionFailure = null)
+        string? deletionFailure = null,
+        string? deletionReceiptJson = null)
         => current.ComponentId == baseline.ComponentId
            && current.VersionId == baseline.VersionId
            && string.Equals(
@@ -29,7 +30,10 @@ internal static class ClientReleaseWriteCommitRecovery
            && string.Equals(
                current.DeletionFailure,
                NormalizeOptional(deletionFailure),
-               StringComparison.Ordinal);
+               StringComparison.Ordinal)
+           && JsonEqualsNullable(
+               current.DeletionReceiptJson,
+               NormalizeOptional(deletionReceiptJson));
 
     public static bool MatchesDeletionTarget(
         ClientReleaseDeletionWriteState current,
