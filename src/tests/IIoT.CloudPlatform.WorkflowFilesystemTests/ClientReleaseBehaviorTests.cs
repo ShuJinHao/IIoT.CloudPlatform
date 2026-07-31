@@ -2808,6 +2808,239 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
+    public async Task DeleteClientReleasePackageHandler_AlreadyDeletedRetry_ShouldRepairMissingSuccessAudit()
+    {
+        var edgeRoot = CreateTempDirectory(
+            "iiot-delete-release-audit-repair");
+        try
+        {
+            var manifestPath = Path.Combine(
+                edgeRoot,
+                "installers",
+                "stable",
+                "1.2.5",
+                "installer-artifact.json");
+            WriteFile(manifestPath, "{}");
+            var component = CreateHostComponent(
+                "stable",
+                "1.2.5",
+                "1.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/installers/stable/1.2.5/installer-artifact.json",
+                ClientReleaseFileFacts.ComputeSha256(manifestPath),
+                new FileInfo(manifestPath).Length,
+                "delete audit repair",
+                ClientReleaseStatus.Published);
+            var version = SingleVersion(component);
+            var repository =
+                new InMemoryRepository<ClientReleaseComponent>();
+            repository.Items.Add(component);
+            var rejectedAudit = new ConfirmedAuditBarrier(
+                confirmed: false);
+            var firstHandler = new DeleteClientReleasePackageHandler(
+                Options.Create(new EdgeInstallerArtifactOptions
+                {
+                    RootPath = Path.Combine(edgeRoot, "installers")
+                }),
+                repository,
+                new InMemoryDeviceClientStateStore(),
+                new TestCurrentUser(),
+                rejectedAudit,
+                NullLogger<DeleteClientReleasePackageHandler>.Instance,
+                new RecordingUnitOfWork(),
+                new InMemoryClientReleaseWriteObservationReader(
+                    repository));
+
+            var firstHandling = firstHandler.Handle(
+                new DeleteClientReleasePackageCommand(
+                    version.Id,
+                    "repair missing audit"),
+                CancellationToken.None);
+            await rejectedAudit.AuditEntered.WaitAsync(
+                TimeSpan.FromSeconds(5));
+            Assert.Equal(ClientReleaseStatus.Deleted, version.Status);
+            Assert.False(File.Exists(manifestPath));
+            rejectedAudit.Release();
+            await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
+                () => firstHandling);
+
+            var repairedAudit = new RecordingAuditTrailService();
+            var retryHandler = new DeleteClientReleasePackageHandler(
+                Options.Create(new EdgeInstallerArtifactOptions
+                {
+                    RootPath = Path.Combine(edgeRoot, "installers")
+                }),
+                repository,
+                new InMemoryDeviceClientStateStore(),
+                new TestCurrentUser(),
+                repairedAudit,
+                NullLogger<DeleteClientReleasePackageHandler>.Instance,
+                new RecordingUnitOfWork(),
+                new InMemoryClientReleaseWriteObservationReader(
+                    repository));
+
+            var retry = await retryHandler.Handle(
+                new DeleteClientReleasePackageCommand(
+                    version.Id,
+                    "repair missing audit"),
+                CancellationToken.None);
+
+            Assert.True(retry.IsSuccess);
+            var audit = Assert.Single(repairedAudit.Entries);
+            Assert.True(audit.Succeeded);
+            Assert.Equal(
+                $"client-release-package-delete:{version.Id:N}",
+                audit.IdempotencyKey);
+            Assert.Equal(version.DeletedAtUtc, audit.ExecutedAtUtc);
+            Assert.False(File.Exists(manifestPath));
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteClientReleasePackageHandler_NoFileCancellationBeforeMetadataCommit_ShouldNotMutate()
+    {
+        var edgeRoot = CreateTempDirectory(
+            "iiot-delete-release-no-file-cancel");
+        try
+        {
+            var component = CreateHostComponent(
+                "stable",
+                "1.2.6",
+                "1.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/installers/stable/1.2.6/installer-artifact.json",
+                new string('a', 64),
+                2,
+                "no-file cancellation",
+                ClientReleaseStatus.Published);
+            var version = SingleVersion(component);
+            var repository =
+                new InMemoryRepository<ClientReleaseComponent>();
+            repository.Items.Add(component);
+            var auditTrail = new RecordingAuditTrailService();
+            using var cancellation = new CancellationTokenSource();
+            var handler = new DeleteClientReleasePackageHandler(
+                Options.Create(new EdgeInstallerArtifactOptions
+                {
+                    RootPath = Path.Combine(edgeRoot, "installers")
+                }),
+                repository,
+                new InMemoryDeviceClientStateStore(),
+                new TestCurrentUser(),
+                auditTrail,
+                NullLogger<DeleteClientReleasePackageHandler>.Instance,
+                new RecordingUnitOfWork
+                {
+                    BeforeOperationAsync = _ =>
+                    {
+                        cancellation.Cancel();
+                        return Task.CompletedTask;
+                    }
+                },
+                new InMemoryClientReleaseWriteObservationReader(
+                    repository));
+
+            var exception =
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                    () => handler.Handle(
+                        new DeleteClientReleasePackageCommand(version.Id),
+                        cancellation.Token));
+
+            Assert.Equal(cancellation.Token, exception.CancellationToken);
+            Assert.Equal(ClientReleaseStatus.Published, version.Status);
+            Assert.Null(version.DeletedAtUtc);
+            Assert.Empty(auditTrail.Entries);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task ClientReleaseRetentionService_Retry_ShouldRecomputeInUseTargetFromFreshSnapshot()
+    {
+        var component = ClientReleaseComponent.CreateHost(
+            "stable",
+            "win-x64");
+        foreach (var versionText in new[]
+                 {
+                     "1.0.0",
+                     "1.0.1",
+                     "1.0.2",
+                     "1.0.3"
+                 })
+        {
+            component.UpsertHostVersion(
+                versionText,
+                "1.0.0",
+                "net10.0",
+                $"/edge-updates/installers/stable/{versionText}/installer-artifact.json",
+                new string(versionText[^1], 64),
+                1024,
+                $"retention {versionText}",
+                ClientReleaseStatus.Published,
+                null,
+                "IIoT");
+        }
+
+        var oldest = component.Versions.Single(
+            version => version.Version == "1.0.0");
+        var componentRepository =
+            new InMemoryRepository<ClientReleaseComponent>();
+        componentRepository.Items.Add(component);
+        var policyRepository =
+            new InMemoryRepository<ClientReleaseRetentionPolicy>();
+        var clientStateStore = new InMemoryDeviceClientStateStore();
+        var replay = new ReplayOnceUnitOfWork(() =>
+        {
+            component.ChangeVersionStatus(
+                oldest.Id,
+                ClientReleaseStatus.Published);
+            clientStateStore.VersionSnapshots.Add(
+                new DeviceClientVersionSnapshot(
+                    Guid.NewGuid(),
+                    "RETENTION-001",
+                    oldest.Version,
+                    oldest.HostApiVersion,
+                    component.Channel,
+                    DateTime.UtcNow,
+                    []));
+        });
+        var service = new ClientReleaseRetentionService(
+            policyRepository,
+            componentRepository,
+            clientStateStore,
+            Options.Create(new EdgeReleaseRetentionOptions
+            {
+                MaxVersionsPerComponent = 3
+            }),
+            replay,
+            new InMemoryClientReleaseWriteObservationReader(
+                componentRepository));
+
+        await service.ApplyHostPolicyAsync(
+            component.Channel,
+            component.TargetRuntime,
+            CancellationToken.None);
+
+        Assert.Equal(2, replay.Attempts);
+        Assert.Equal(ClientReleaseStatus.Deprecated, oldest.Status);
+        Assert.Equal(
+            3,
+            component.Versions.Count(
+                version =>
+                    version.Status
+                    == ClientReleaseStatus.Published));
+    }
+
+    [Fact]
     public async Task DeleteClientReleasePackageHandler_ConcurrentDriftAfterFilesRemoved_ShouldConflict()
     {
         var edgeRoot = CreateTempDirectory(
@@ -6764,6 +6997,39 @@ public sealed class ClientReleaseBehaviorTests
             OnCommit?.Invoke();
             return Task.CompletedTask;
         }
+
+        public Task RollbackAsync(
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+    }
+
+    private sealed class ReplayOnceUnitOfWork(
+        Action betweenAttempts) : IUnitOfWork
+    {
+        public int Attempts { get; private set; }
+
+        public async Task<TResult> ExecuteResilientAsync<TResult>(
+            Func<CancellationToken, Task<TResult>> operation,
+            CancellationToken cancellationToken = default)
+        {
+            _ = await ExecuteAttemptAsync();
+            betweenAttempts();
+            return await ExecuteAttemptAsync();
+
+            async Task<TResult> ExecuteAttemptAsync()
+            {
+                Attempts++;
+                return await operation(cancellationToken);
+            }
+        }
+
+        public Task BeginTransactionAsync(
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task CommitAsync(
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
 
         public Task RollbackAsync(
             CancellationToken cancellationToken = default)

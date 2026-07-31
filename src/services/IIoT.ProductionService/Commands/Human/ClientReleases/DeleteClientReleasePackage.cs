@@ -161,7 +161,18 @@ public sealed class DeleteClientReleasePackageHandler(
                 throw new CloudWriteConflictException();
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
+            await WriteAuditAsync(
+                version.Id,
+                componentKind,
+                componentName,
+                component.Channel,
+                version.Version,
+                succeeded: true,
+                [],
+                plan.SkippedPaths,
+                baseline.DeletionReason,
+                baseline.DeletedAtUtc.Value,
+                cancellationToken);
             return BuildSuccess(
                 filesDeleted: false,
                 [],
@@ -171,21 +182,21 @@ public sealed class DeleteClientReleasePackageHandler(
 
         if (plan.Targets.Count == 0)
         {
-            return await FinalizePostCommitAsync(
-                async finalizationToken =>
-                {
-                    await PersistVersionTargetAsync(
-                        baseline,
-                        ClientReleaseStatus.Deleted,
-                        deletedAtUtc,
+            await PersistVersionTargetAsync(
+                baseline,
+                ClientReleaseStatus.Deleted,
+                deletedAtUtc,
+                deletionReason,
+                null,
+                (currentComponent, currentVersion) =>
+                    currentComponent.MarkVersionDeleted(
+                        currentVersion.Id,
                         deletionReason,
-                        null,
-                        (currentComponent, currentVersion) =>
-                            currentComponent.MarkVersionDeleted(
-                                currentVersion.Id,
-                                deletionReason,
-                                deletedAtUtc),
-                        finalizationToken);
+                        deletedAtUtc),
+                cancellationToken);
+            return await FinalizePostCommitAsync(
+                async _ =>
+                {
                     await WriteAuditAsync(
                         version.Id,
                         componentKind,
@@ -529,16 +540,25 @@ public sealed class DeleteClientReleasePackageHandler(
         DateTime executedAtUtc,
         CancellationToken cancellationToken)
     {
-        var summary = JsonSerializer.Serialize(new
-        {
-            action = AuditAction,
-            componentKind,
-            componentName,
-            channel,
-            version,
-            deletedPaths,
-            skippedPaths
-        });
+        var summary = succeeded
+            ? JsonSerializer.Serialize(new
+            {
+                action = AuditAction,
+                componentKind,
+                componentName,
+                channel,
+                version
+            })
+            : JsonSerializer.Serialize(new
+            {
+                action = AuditAction,
+                componentKind,
+                componentName,
+                channel,
+                version,
+                deletedPaths,
+                skippedPaths
+            });
 
         var entry = new AuditTrailEntry(
                 ClientReleaseAuditActor.ParseId(currentUser.Id),

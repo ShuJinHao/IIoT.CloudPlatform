@@ -79,66 +79,10 @@ public sealed class ClientReleaseRetentionService(
         string targetRuntime,
         CancellationToken cancellationToken)
     {
-        var maxVersions =
-            await GetMaxVersionsPerComponentAsync(cancellationToken);
-        var component = await componentRepository.GetSingleOrDefaultAsync(
-            new ClientReleaseComponentsForRetentionSpec(
-                componentKind,
-                componentKey,
-                channel,
-                targetRuntime),
-            cancellationToken);
-        if (component is null)
-        {
-            return;
-        }
-
-        var ordered = component.Versions
-            .Where(release => release.Status == ClientReleaseStatus.Published)
-            .OrderByDescending(release => release.Version, VersionComparer)
-            .ThenByDescending(release => release.PublishedAtUtc ?? release.CreatedAtUtc)
-            .ToList();
-
-        if (ordered.Count <= maxVersions)
-        {
-            return;
-        }
-
-        var snapshots = await clientStateStore.GetVersionSnapshotsByDevicesAsync(cancellationToken: cancellationToken);
-        var targets = ordered
-            .Skip(maxVersions)
-            .ToDictionary(
-                release => release.Id,
-                release => componentKind
-                           == ClientReleaseComponentKind.Host
-                    ? IsHostInUse(component, release, snapshots)
-                        ? ClientReleaseStatus.Deprecated
-                        : ClientReleaseStatus.Archived
-                    : IsPluginInUse(component, release, snapshots)
-                        ? ClientReleaseStatus.Deprecated
-                        : ClientReleaseStatus.Archived);
-        if (targets.Count == 0)
-        {
-            return;
-        }
-
-        var baseline =
-            await CloudWriteCommitRecovery.TryObserveAttemptAsync(
-                token => observationReader.ObserveVersionsAsync(
-                    targets.Keys.ToArray(),
-                    token),
-                cancellationToken)
-            ?? throw new CloudWriteCommitUnknownException();
-        if (baseline.Count != targets.Count)
-        {
-            throw new CloudWriteConflictException();
-        }
-
-        var baselineById = baseline.ToDictionary(
-            state => state.VersionId);
         var changedAtUtc =
             ClientReleaseWriteCommitRecovery.NormalizeUtc(
                 DateTime.UtcNow);
+        RetentionWritePlan? lastWritePlan = null;
         try
         {
             await unitOfWork.ExecuteResilientAsync(
@@ -148,7 +92,15 @@ public sealed class ClientReleaseRetentionService(
         catch (OperationCanceledException)
             when (cancellationToken.IsCancellationRequested)
         {
-            throw;
+            if (lastWritePlan is not null)
+            {
+                _ = await CloudWriteCommitRecovery.TryObserveCommitAsync(
+                    token => observationReader.ObserveVersionsAsync(
+                        lastWritePlan.VersionIds,
+                        token));
+            }
+
+            throw new OperationCanceledException(cancellationToken);
         }
         catch (CloudWriteException)
         {
@@ -156,17 +108,19 @@ public sealed class ClientReleaseRetentionService(
         }
         catch
         {
+            var plan = lastWritePlan
+                       ?? throw new CloudWriteCommitUnknownException();
             var current =
                 await CloudWriteCommitRecovery.TryObserveCommitAsync(
                     token => observationReader.ObserveVersionsAsync(
-                        targets.Keys.ToArray(),
+                        plan.VersionIds,
                         token));
-            if (current is null || MatchesBaseline(current))
+            if (current is null || MatchesBaseline(plan, current))
             {
                 throw new CloudWriteCommitUnknownException();
             }
 
-            if (MatchesTarget(current))
+            if (MatchesTarget(plan, current))
             {
                 return;
             }
@@ -177,23 +131,29 @@ public sealed class ClientReleaseRetentionService(
         async Task<bool> ExecuteAttemptAsync(
             CancellationToken callbackCancellationToken)
         {
-            var current =
-                await CloudWriteCommitRecovery.TryObserveAttemptAsync(
-                    token => observationReader.ObserveVersionsAsync(
-                        targets.Keys.ToArray(),
-                        token),
-                    callbackCancellationToken)
-                ?? throw new CloudWriteCommitUnknownException();
-            if (MatchesTarget(current))
+            if (lastWritePlan is not null)
             {
-                return true;
+                var prior =
+                    await CloudWriteCommitRecovery.TryObserveAttemptAsync(
+                        token => observationReader.ObserveVersionsAsync(
+                            lastWritePlan.VersionIds,
+                            token),
+                        callbackCancellationToken)
+                    ?? throw new CloudWriteCommitUnknownException();
+                if (MatchesTarget(lastWritePlan, prior))
+                {
+                    return true;
+                }
+
+                if (!MatchesBaseline(lastWritePlan, prior))
+                {
+                    throw new CloudWriteConflictException();
+                }
             }
 
-            if (!MatchesBaseline(current))
-            {
-                throw new CloudWriteConflictException();
-            }
-
+            var maxVersions =
+                await GetMaxVersionsPerComponentAsync(
+                    callbackCancellationToken);
             var attemptComponent =
                 await componentRepository.GetSingleOrDefaultAsync(
                     new ClientReleaseComponentsForRetentionSpec(
@@ -201,8 +161,73 @@ public sealed class ClientReleaseRetentionService(
                         componentKey,
                         channel,
                         targetRuntime),
+                    callbackCancellationToken);
+            if (attemptComponent is null)
+            {
+                lastWritePlan = null;
+                return true;
+            }
+
+            var ordered = attemptComponent.Versions
+                .Where(release =>
+                    release.Status == ClientReleaseStatus.Published)
+                .OrderByDescending(
+                    release => release.Version,
+                    VersionComparer)
+                .ThenByDescending(
+                    release =>
+                        release.PublishedAtUtc
+                        ?? release.CreatedAtUtc)
+                .ToList();
+            if (ordered.Count <= maxVersions)
+            {
+                lastWritePlan = null;
+                return true;
+            }
+
+            var snapshots =
+                await clientStateStore
+                    .GetVersionSnapshotsByDevicesAsync(
+                        cancellationToken:
+                        callbackCancellationToken);
+            var targets = ordered
+                .Skip(maxVersions)
+                .ToDictionary(
+                    release => release.Id,
+                    release => componentKind
+                               == ClientReleaseComponentKind.Host
+                        ? IsHostInUse(
+                            attemptComponent,
+                            release,
+                            snapshots)
+                            ? ClientReleaseStatus.Deprecated
+                            : ClientReleaseStatus.Archived
+                        : IsPluginInUse(
+                            attemptComponent,
+                            release,
+                            snapshots)
+                            ? ClientReleaseStatus.Deprecated
+                            : ClientReleaseStatus.Archived);
+            if (targets.Count == 0)
+            {
+                lastWritePlan = null;
+                return true;
+            }
+
+            var baseline =
+                await CloudWriteCommitRecovery.TryObserveAttemptAsync(
+                    token => observationReader.ObserveVersionsAsync(
+                        targets.Keys.ToArray(),
+                        token),
                     callbackCancellationToken)
-                ?? throw new CloudWriteConflictException();
+                ?? throw new CloudWriteCommitUnknownException();
+            if (baseline.Count != targets.Count)
+            {
+                throw new CloudWriteConflictException();
+            }
+
+            var baselineById = baseline.ToDictionary(
+                state => state.VersionId);
             foreach (var (versionId, targetStatus) in targets)
             {
                 var version = attemptComponent.FindVersion(versionId)
@@ -221,48 +246,53 @@ public sealed class ClientReleaseRetentionService(
                     changedAtUtc);
             }
 
+            lastWritePlan = new RetentionWritePlan(
+                baselineById,
+                targets);
             await componentRepository.SaveChangesAsync(
                 callbackCancellationToken);
             return true;
         }
+    }
 
-        bool MatchesBaseline(
-            IReadOnlyCollection<ClientReleaseVersionWriteState> current)
-            => current.Count == baseline.Count
-               && current.All(state =>
-                   baselineById.TryGetValue(
-                       state.VersionId,
-                       out var expected)
-                   && state == expected);
+    private static bool MatchesBaseline(
+        RetentionWritePlan plan,
+        IReadOnlyCollection<ClientReleaseVersionWriteState> current)
+        => current.Count == plan.BaselineById.Count
+           && current.All(state =>
+               plan.BaselineById.TryGetValue(
+                   state.VersionId,
+                   out var expected)
+               && state == expected);
 
-        bool MatchesTarget(
-            IReadOnlyCollection<ClientReleaseVersionWriteState> current)
+    private static bool MatchesTarget(
+        RetentionWritePlan plan,
+        IReadOnlyCollection<ClientReleaseVersionWriteState> current)
+    {
+        if (current.Count != plan.Targets.Count)
         {
-            if (current.Count != targets.Count)
+            return false;
+        }
+
+        foreach (var state in current)
+        {
+            if (!plan.BaselineById.TryGetValue(
+                    state.VersionId,
+                    out var original)
+                || !plan.Targets.TryGetValue(
+                    state.VersionId,
+                    out var targetStatus)
+                || !ClientReleaseWriteCommitRecovery
+                    .MatchesVersionTarget(
+                        state,
+                        original,
+                        targetStatus))
             {
                 return false;
             }
-
-            foreach (var state in current)
-            {
-                if (!baselineById.TryGetValue(
-                        state.VersionId,
-                        out var original)
-                    || !targets.TryGetValue(
-                        state.VersionId,
-                        out var targetStatus)
-                    || !ClientReleaseWriteCommitRecovery
-                        .MatchesVersionTarget(
-                            state,
-                            original,
-                            targetStatus))
-                {
-                    return false;
-                }
-            }
-
-            return true;
         }
+
+        return true;
     }
 
     private static bool IsHostInUse(
@@ -288,5 +318,16 @@ public sealed class ClientReleaseRetentionService(
                 && string.Equals(plugin.Version, release.Version, StringComparison.OrdinalIgnoreCase)
                 && (string.IsNullOrWhiteSpace(plugin.HostApiVersion)
                     || string.Equals(plugin.HostApiVersion, release.HostApiVersion, StringComparison.OrdinalIgnoreCase))));
+    }
+
+    private sealed record RetentionWritePlan(
+        IReadOnlyDictionary<Guid, ClientReleaseVersionWriteState>
+            BaselineById,
+        IReadOnlyDictionary<Guid, ClientReleaseStatus> Targets)
+    {
+        public Guid[] VersionIds { get; } =
+            Targets.Keys
+                .OrderBy(id => id)
+                .ToArray();
     }
 }
