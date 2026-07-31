@@ -195,6 +195,38 @@ public sealed class EfPersistenceBehaviorTests
         });
 
         builder.AddEfCore();
+
+        using var provider = builder.Services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+
+        Assert.False(dbContext.Database.CreateExecutionStrategy().RetriesOnFailure);
+    }
+
+    [Fact]
+    public void AddEfCore_ShouldEnableRetryingExecutionStrategyInProduction()
+    {
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        {
+            EnvironmentName = Environments.Production
+        });
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [$"ConnectionStrings:{ConnectionResourceNames.IiotDatabase}"] =
+                "Host=127.0.0.1;Port=5432;Database=retry_guard;Username=test;Password=test",
+            [$"{PostgresOptions.SectionName}:EnableRetry"] = "true",
+            [$"{PostgresOptions.SectionName}:CommandTimeoutSeconds"] = "30",
+            [$"{PostgresOptions.SectionName}:MaxRetryCount"] = "3",
+            [$"{PostgresOptions.SectionName}:MaxRetryDelaySeconds"] = "10"
+        });
+
+        builder.AddEfCore();
+
+        using var provider = builder.Services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+
+        Assert.True(dbContext.Database.CreateExecutionStrategy().RetriesOnFailure);
     }
 
     [Fact]

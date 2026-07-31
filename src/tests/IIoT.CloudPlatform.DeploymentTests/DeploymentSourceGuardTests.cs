@@ -377,11 +377,18 @@ public sealed class DeploymentSourceGuardTests
         string serviceBlock,
         string environmentVariable)
     {
-        serviceBlock.Should().Contain($"{environmentVariable}: Production");
         Regex.Matches(
                 serviceBlock,
+                $"(?m)^\\s{{6}}{Regex.Escape(environmentVariable)}: Production\\s*$")
+            .Count.Should().Be(1);
+        Regex.Matches(
+                serviceBlock,
+                "(?m)^\\s{6}Infrastructure__Postgres__EnableRetry:.*$")
+            .Count.Should().Be(1);
+        Regex.IsMatch(
+                serviceBlock,
                 "(?m)^\\s{6}Infrastructure__Postgres__EnableRetry: \\\"true\\\"\\s*$")
-            .Should().HaveCount(1);
+            .Should().BeTrue();
     }
 
     private static string GetComposeServiceBlock(string composeSource, string serviceName)
