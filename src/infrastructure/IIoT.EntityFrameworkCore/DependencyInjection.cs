@@ -97,6 +97,8 @@ public static class DependencyInjection
             provider.GetRequiredService<CloudWriteObservationReader>());
         builder.Services.AddScoped<IDeviceReportWriteObservationReader>(provider =>
             provider.GetRequiredService<CloudWriteObservationReader>());
+        builder.Services.AddScoped<IClientReleaseWriteObservationReader>(provider =>
+            provider.GetRequiredService<CloudWriteObservationReader>());
         builder.Services.AddScoped<IProcessReadQueryService, QueryServices.ProcessReadQueryService>();
         builder.Services.AddScoped<IAiReadDeviceQueryService, QueryServices.AiReadDeviceQueryService>();
         builder.Services.AddScoped<IClientReleaseHistoryQueryService, QueryServices.ClientReleaseHistoryQueryService>();

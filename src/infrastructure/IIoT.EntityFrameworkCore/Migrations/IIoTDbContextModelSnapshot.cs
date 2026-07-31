@@ -204,6 +204,12 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .HasColumnType("character varying(64)")
                         .HasColumnName("icon_kind");
 
+                    b.Property<uint>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.Property<string>("TargetRuntime")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -283,6 +289,12 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)")
                         .HasColumnName("requested_by_user_name");
+
+                    b.Property<uint>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.Property<int>("RetryCount")
                         .HasColumnType("integer")
@@ -370,6 +382,12 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("max_versions_per_component");
 
+                    b.Property<uint>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.Property<DateTime>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at_utc");
@@ -448,6 +466,12 @@ namespace IIoT.EntityFrameworkCore.Migrations
                     b.Property<string>("ReleaseNotes")
                         .HasColumnType("text")
                         .HasColumnName("release_notes");
+
+                    b.Property<uint>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.Property<string>("Sha256")
                         .IsRequired()

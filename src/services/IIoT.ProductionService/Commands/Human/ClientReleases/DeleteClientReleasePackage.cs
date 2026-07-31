@@ -7,7 +7,9 @@ using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.CrossCutting.Attributes;
+using IIoT.Services.CrossCutting.Persistence;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -41,7 +43,9 @@ public sealed class DeleteClientReleasePackageHandler(
     IDeviceClientStateStore clientStateStore,
     ICurrentUser currentUser,
     IAuditTrailService auditTrailService,
-    ILogger<DeleteClientReleasePackageHandler> logger)
+    ILogger<DeleteClientReleasePackageHandler> logger,
+    IUnitOfWork unitOfWork,
+    IClientReleaseWriteObservationReader observationReader)
     : ICommandHandler<DeleteClientReleasePackageCommand, Result<ClientReleaseFileDeletionResultDto>>
 {
     private const string AuditAction = "ClientRelease.DeletePackage";
@@ -64,164 +68,147 @@ public sealed class DeleteClientReleasePackageHandler(
             return Result.NotFound("发布版本不存在。");
         }
 
-        return component.ComponentKind == ClientReleaseComponentKind.Host
-            ? await DeleteHostFilesAsync(component, version, request.Reason, cancellationToken)
-            : await DeletePluginFilesAsync(component, version, request.Reason, cancellationToken);
-    }
+        var baselineObservation =
+            await CloudWriteCommitRecovery
+                .TryObserveOptionalAttemptAsync(
+            token => observationReader.ObserveVersionAsync(
+                request.ReleaseId,
+                token),
+            cancellationToken);
+        var baseline = baselineObservation?.Value
+                       ?? throw new CloudWriteCommitUnknownException();
 
-    private async Task<Result<ClientReleaseFileDeletionResultDto>> DeleteHostFilesAsync(
-        ClientReleaseComponent component,
-        ClientReleaseVersion release,
-        string? reason,
-        CancellationToken cancellationToken)
-    {
+        if (ClientReleaseWriteStateFingerprint.ForVersion(
+                component,
+                version) != baseline)
+        {
+            throw new CloudWriteConflictException();
+        }
+
         var snapshots = await clientStateStore.GetVersionSnapshotsByDevicesAsync(cancellationToken: cancellationToken);
-        var inUse = snapshots.Any(snapshot =>
-            string.Equals(snapshot.HostVersion, release.Version, StringComparison.OrdinalIgnoreCase));
+        var isHost =
+            component.ComponentKind == ClientReleaseComponentKind.Host;
+        var inUse = isHost
+            ? snapshots.Any(snapshot =>
+                string.Equals(
+                    snapshot.HostVersion,
+                    version.Version,
+                    StringComparison.OrdinalIgnoreCase))
+            : snapshots.Any(snapshot =>
+                snapshot.InstalledPlugins.Any(plugin =>
+                    string.Equals(
+                        plugin.ModuleId,
+                        component.ComponentKey,
+                        StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(
+                        plugin.Version,
+                        version.Version,
+                        StringComparison.OrdinalIgnoreCase)));
         if (inUse)
         {
-            const string inUseReason = "已有设备当前宿主版本等于目标版本，禁止物理删除发布文件。";
+            var inUseReason = isHost
+                ? "已有设备当前宿主版本等于目标版本，禁止物理删除发布文件。"
+                : "已有设备当前插件版本等于目标版本，禁止物理删除发布文件。";
             await WriteAuditAsync(
-                release.Id,
-                "Host",
-                "Edge Host",
+                version.Id,
+                isHost ? "Host" : "Plugin",
+                isHost ? "Edge Host" : component.ComponentKey,
                 component.Channel,
-                release.Version,
+                version.Version,
                 succeeded: false,
                 [],
                 [],
                 inUseReason,
+                DateTime.UtcNow,
                 cancellationToken);
             return Result.Invalid(inUseReason);
         }
 
         var edgeRoot = artifactOptions.Value.ResolveEdgeUpdatesRoot();
-        var plan = ClientReleaseFileDeletionPlan.ForRelease(edgeRoot, component, release);
-        return await ExecuteDeletionAsync(
+        var plan = ClientReleaseFileDeletionPlan.ForRelease(
+            edgeRoot,
             component,
-            release,
-            "Host",
-            "Edge Host",
-            plan,
-            () => component.MarkVersionDeleteRequested(release.Id),
-            deleteReason => component.MarkVersionDeleted(release.Id, reason ?? deleteReason),
-            failure => component.MarkVersionDeleteFailed(release.Id, failure),
-            () => componentRepository.SaveChangesAsync(cancellationToken),
-            cancellationToken);
-    }
+            version);
+        var componentKind = isHost ? "Host" : "Plugin";
+        var componentName =
+            isHost ? "Edge Host" : component.ComponentKey;
+        var deleteRequestedAtUtc =
+            ClientReleaseWriteCommitRecovery.NormalizeUtc(DateTime.UtcNow);
+        var deletedAtUtc =
+            ClientReleaseWriteCommitRecovery.NormalizeUtc(DateTime.UtcNow);
+        var deletionReason = plan.Targets.Count == 0
+            ? "发布文件未找到或不在受控发布目录下，已移出可分发 catalog，历史更新内容保留。"
+            : string.IsNullOrWhiteSpace(request.Reason)
+                ? "管理员删除发布包。"
+                : request.Reason.Trim();
 
-    private async Task<Result<ClientReleaseFileDeletionResultDto>> DeletePluginFilesAsync(
-        ClientReleaseComponent component,
-        ClientReleaseVersion release,
-        string? reason,
-        CancellationToken cancellationToken)
-    {
-        var snapshots = await clientStateStore.GetVersionSnapshotsByDevicesAsync(cancellationToken: cancellationToken);
-        var inUse = snapshots.Any(snapshot => snapshot.InstalledPlugins.Any(plugin =>
-            string.Equals(plugin.ModuleId, component.ComponentKey, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(plugin.Version, release.Version, StringComparison.OrdinalIgnoreCase)));
-        if (inUse)
+        if (baseline.Status == ClientReleaseStatus.Deleted)
         {
-            const string inUseReason = "已有设备当前插件版本等于目标版本，禁止物理删除发布文件。";
-            await WriteAuditAsync(
-                release.Id,
-                "Plugin",
-                component.ComponentKey,
-                component.Channel,
-                release.Version,
-                succeeded: false,
+            var requestedReason = string.IsNullOrWhiteSpace(request.Reason)
+                ? null
+                : request.Reason.Trim();
+            if (baseline.DeletedAtUtc is null
+                || baseline.DeletionFailure is not null
+                || (requestedReason is not null
+                    && !string.Equals(
+                        baseline.DeletionReason,
+                        requestedReason,
+                        StringComparison.Ordinal)))
+            {
+                throw new CloudWriteConflictException();
+            }
+
+            return BuildSuccess(
+                filesDeleted: false,
                 [],
-                [],
-                inUseReason,
-                cancellationToken);
-            return Result.Invalid(inUseReason);
+                plan.SkippedPaths,
+                baseline.DeletionReason);
         }
 
-        var edgeRoot = artifactOptions.Value.ResolveEdgeUpdatesRoot();
-        var plan = ClientReleaseFileDeletionPlan.ForRelease(edgeRoot, component, release);
-        return await ExecuteDeletionAsync(
-            component,
-            release,
-            "Plugin",
-            component.ComponentKey,
-            plan,
-            () => component.MarkVersionDeleteRequested(release.Id),
-            deleteReason => component.MarkVersionDeleted(release.Id, reason ?? deleteReason),
-            failure => component.MarkVersionDeleteFailed(release.Id, failure),
-            () => componentRepository.SaveChangesAsync(cancellationToken),
-            cancellationToken);
-    }
-
-    private async Task<Result<ClientReleaseFileDeletionResultDto>> ExecuteDeletionAsync(
-        ClientReleaseComponent component,
-        ClientReleaseVersion release,
-        string componentKind,
-        string componentName,
-        ClientReleaseFileDeletionPlan plan,
-        Action markDeleteRequested,
-        Action<string?> markDeleted,
-        Action<string> markDeleteFailed,
-        Func<Task> saveStatusAsync,
-        CancellationToken cancellationToken)
-    {
-        return await ExecuteDeletionCoreAsync(
-            release.Id,
-            componentKind,
-            componentName,
-            component.Channel,
-            release.Version,
-            markDeleteRequested,
-            markDeleted,
-            markDeleteFailed,
-            plan,
-            saveStatusAsync,
-            cancellationToken);
-    }
-
-    private async Task<Result<ClientReleaseFileDeletionResultDto>> ExecuteDeletionCoreAsync(
-        Guid releaseId,
-        string componentKind,
-        string componentName,
-        string channel,
-        string version,
-        Action markDeleteRequested,
-        Action<string?> markDeleted,
-        Action<string> markDeleteFailed,
-        ClientReleaseFileDeletionPlan plan,
-        Func<Task> saveStatusAsync,
-        CancellationToken cancellationToken)
-    {
         if (plan.Targets.Count == 0)
         {
-            const string reason = "发布文件未找到或不在受控发布目录下，已移出可分发 catalog，历史更新内容保留。";
-            markDeleted(reason);
-            await saveStatusAsync();
+            await PersistVersionTargetAsync(
+                baseline,
+                ClientReleaseStatus.Deleted,
+                deletedAtUtc,
+                deletionReason,
+                null,
+                (currentComponent, currentVersion) =>
+                    currentComponent.MarkVersionDeleted(
+                        currentVersion.Id,
+                        deletionReason,
+                        deletedAtUtc),
+                cancellationToken);
             await WriteAuditAsync(
-                releaseId,
+                version.Id,
                 componentKind,
                 componentName,
-                channel,
-                version,
+                component.Channel,
+                version.Version,
                 succeeded: true,
                 [],
                 plan.SkippedPaths,
-                reason,
+                deletionReason,
+                deletedAtUtc,
                 cancellationToken);
-            return Result.Success(new ClientReleaseFileDeletionResultDto(
-                releaseId,
-                componentKind,
-                componentName,
-                channel,
-                version,
-                false,
+            return BuildSuccess(
+                filesDeleted: false,
                 [],
                 plan.SkippedPaths,
-                reason));
+                deletionReason);
         }
 
-        // 先把目标版本置为 DeleteRequested 并持久化，使其立即退出活动 catalog，再执行物理删除。
-        markDeleteRequested();
-        await saveStatusAsync();
+        var deleteRequested = await PersistVersionTargetAsync(
+            baseline,
+            ClientReleaseStatus.DeleteRequested,
+            null,
+            null,
+            null,
+            (currentComponent, currentVersion) =>
+                currentComponent.MarkVersionDeleteRequested(
+                    currentVersion.Id,
+                    deleteRequestedAtUtc),
+            cancellationToken);
 
         var deletedPaths = new List<string>();
         try
@@ -234,57 +221,233 @@ public sealed class DeleteClientReleasePackageHandler(
                 target.Delete();
             }
 
-            markDeleted("管理员删除发布包。");
-            await saveStatusAsync();
+            await PersistVersionTargetAsync(
+                deleteRequested,
+                ClientReleaseStatus.Deleted,
+                deletedAtUtc,
+                deletionReason,
+                null,
+                (currentComponent, currentVersion) =>
+                    currentComponent.MarkVersionDeleted(
+                        currentVersion.Id,
+                        deletionReason,
+                        deletedAtUtc),
+                cancellationToken);
 
             var warning = plan.SkippedPaths.Count == 0
                 ? null
                 : $"部分文件仍被 manifest 引用或不在受控范围，已跳过 {plan.SkippedPaths.Count} 项。";
             await WriteAuditAsync(
-                releaseId,
+                version.Id,
                 componentKind,
                 componentName,
-                channel,
-                version,
+                component.Channel,
+                version.Version,
                 succeeded: true,
                 deletedPaths,
                 plan.SkippedPaths,
                 warning,
+                deletedAtUtc,
                 cancellationToken);
 
-            return Result.Success(new ClientReleaseFileDeletionResultDto(
-                releaseId,
-                componentKind,
-                componentName,
-                channel,
-                version,
+            return BuildSuccess(
                 deletedPaths.Count > 0,
                 deletedPaths,
                 plan.SkippedPaths,
-                warning));
+                warning);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            markDeleteFailed(ex.Message);
-            await saveStatusAsync();
+            var failureAtUtc =
+                ClientReleaseWriteCommitRecovery.NormalizeUtc(
+                    DateTime.UtcNow);
+            await PersistVersionTargetAsync(
+                deleteRequested,
+                ClientReleaseStatus.DeleteFailed,
+                null,
+                null,
+                ex.Message,
+                (currentComponent, currentVersion) =>
+                    currentComponent.MarkVersionDeleteFailed(
+                        currentVersion.Id,
+                        ex.Message,
+                        failureAtUtc),
+                cancellationToken);
             logger.LogError(
                 new EventId(4603, "ClientReleaseDeletePackageFailure"),
                 "Delete release package files failed. ComponentKind={ComponentKind} Channel={Channel} ErrorType={ErrorType}.",
                 componentKind,
-                channel,
+                component.Channel,
                 ex.GetType().Name);
             await WriteAuditAsync(
-                releaseId,
+                version.Id,
                 componentKind,
                 componentName,
-                channel,
-                version,
+                component.Channel,
+                version.Version,
                 succeeded: false,
                 deletedPaths,
                 plan.SkippedPaths,
                 ex.Message,
+                failureAtUtc,
                 cancellationToken);
             return Result.Invalid($"删除发布包失败: {ex.Message}");
+        }
+
+        Result<ClientReleaseFileDeletionResultDto> BuildSuccess(
+            bool filesDeleted,
+            IReadOnlyList<string> deletedPaths,
+            IReadOnlyList<string> skippedPaths,
+            string? warning)
+            => Result.Success(new ClientReleaseFileDeletionResultDto(
+                version.Id,
+                componentKind,
+                componentName,
+                component.Channel,
+                version.Version,
+                filesDeleted,
+                deletedPaths,
+                skippedPaths,
+                warning));
+    }
+
+    private async Task<ClientReleaseVersionWriteState>
+        PersistVersionTargetAsync(
+            ClientReleaseVersionWriteState baseline,
+            ClientReleaseStatus targetStatus,
+            DateTime? deletedAtUtc,
+            string? deletionReason,
+            string? deletionFailure,
+            Action<ClientReleaseComponent, ClientReleaseVersion> mutate,
+            CancellationToken cancellationToken)
+    {
+        try
+        {
+            await unitOfWork.ExecuteResilientAsync(
+                ExecuteAttemptAsync,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (CloudWriteException)
+        {
+            throw;
+        }
+        catch
+        {
+            return await ResolveCommitAsync();
+        }
+
+        var confirmedObservation =
+            await CloudWriteCommitRecovery
+                .TryObserveOptionalAttemptAsync(
+                token => observationReader.ObserveVersionAsync(
+                    baseline.VersionId,
+                    token),
+                cancellationToken);
+        var confirmed = confirmedObservation?.Value;
+        if (confirmed is not null
+            && ClientReleaseWriteCommitRecovery.MatchesVersionTarget(
+                confirmed,
+                baseline,
+                targetStatus,
+                deletedAtUtc,
+                deletionReason,
+                deletionFailure))
+        {
+            return confirmed;
+        }
+
+        if (confirmed == baseline)
+        {
+            throw new CloudWriteCommitUnknownException();
+        }
+
+        throw confirmed is null
+            ? new CloudWriteCommitUnknownException()
+            : new CloudWriteConflictException();
+
+        async Task<bool> ExecuteAttemptAsync(
+            CancellationToken callbackCancellationToken)
+        {
+            var currentObservation =
+                await CloudWriteCommitRecovery
+                    .TryObserveOptionalAttemptAsync(
+                    token => observationReader.ObserveVersionAsync(
+                        baseline.VersionId,
+                        token),
+                    callbackCancellationToken)
+                ?? throw new CloudWriteCommitUnknownException();
+            var current = currentObservation.Value
+                          ?? throw new CloudWriteCommitUnknownException();
+            if (ClientReleaseWriteCommitRecovery.MatchesVersionTarget(
+                    current,
+                    baseline,
+                    targetStatus,
+                    deletedAtUtc,
+                    deletionReason,
+                    deletionFailure))
+            {
+                return true;
+            }
+
+            if (current != baseline)
+            {
+                throw new CloudWriteConflictException();
+            }
+
+            var currentComponent =
+                await componentRepository.GetSingleOrDefaultAsync(
+                    new ClientReleaseComponentByVersionIdSpec(
+                        baseline.VersionId),
+                    callbackCancellationToken)
+                ?? throw new CloudWriteConflictException();
+            var currentVersion =
+                currentComponent.FindVersion(baseline.VersionId)
+                ?? throw new CloudWriteConflictException();
+            if (ClientReleaseWriteStateFingerprint.ForVersion(
+                    currentComponent,
+                    currentVersion) != baseline)
+            {
+                throw new CloudWriteConflictException();
+            }
+
+            mutate(currentComponent, currentVersion);
+            await componentRepository.SaveChangesAsync(
+                callbackCancellationToken);
+            return true;
+        }
+
+        async Task<ClientReleaseVersionWriteState> ResolveCommitAsync()
+        {
+            var currentObservation =
+                await CloudWriteCommitRecovery
+                    .TryObserveOptionalCommitAsync(
+                    token => observationReader.ObserveVersionAsync(
+                        baseline.VersionId,
+                        token));
+            var current = currentObservation?.Value;
+            if (current is not null
+                && ClientReleaseWriteCommitRecovery.MatchesVersionTarget(
+                    current,
+                    baseline,
+                    targetStatus,
+                    deletedAtUtc,
+                    deletionReason,
+                    deletionFailure))
+            {
+                return current;
+            }
+
+            if (current is null || current == baseline)
+            {
+                throw new CloudWriteCommitUnknownException();
+            }
+
+            throw new CloudWriteConflictException();
         }
     }
 
@@ -298,6 +461,7 @@ public sealed class DeleteClientReleasePackageHandler(
         IReadOnlyList<string> deletedPaths,
         IReadOnlyList<string> skippedPaths,
         string? failureOrWarning,
+        DateTime executedAtUtc,
         CancellationToken cancellationToken)
     {
         var summary = JsonSerializer.Serialize(new
@@ -311,18 +475,29 @@ public sealed class DeleteClientReleasePackageHandler(
             skippedPaths
         });
 
-        await auditTrailService.TryWriteAsync(
-            new AuditTrailEntry(
+        var entry = new AuditTrailEntry(
                 ClientReleaseAuditActor.ParseId(currentUser.Id),
                 currentUser.UserName,
                 AuditAction,
                 "ClientRelease",
                 releaseId.ToString(),
-                DateTime.UtcNow,
+                ClientReleaseWriteCommitRecovery.NormalizeUtc(
+                    executedAtUtc),
                 succeeded,
                 summary,
-                succeeded ? null : failureOrWarning),
-            cancellationToken);
+                succeeded ? null : failureOrWarning,
+                succeeded
+                    ? $"client-release-package-delete:{releaseId:N}"
+                    : null);
+        if (succeeded)
+        {
+            await CloudWriteCommitRecovery.ConfirmRecoveredAuditAsync(
+                auditTrailService,
+                entry);
+            return;
+        }
+
+        await auditTrailService.TryWriteAsync(entry, cancellationToken);
     }
 }
 

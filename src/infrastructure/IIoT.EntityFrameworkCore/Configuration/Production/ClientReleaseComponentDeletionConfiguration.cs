@@ -84,6 +84,10 @@ public sealed class ClientReleaseComponentDeletionConfiguration : IEntityTypeCon
         builder.Property(deletion => deletion.CleanupCompletedAtUtc)
             .HasColumnName("cleanup_completed_at_utc");
 
+        builder.Property(deletion => deletion.RowVersion)
+            .HasColumnName("xmin")
+            .IsRowVersion();
+
         builder.HasIndex(deletion => deletion.Status)
             .HasDatabaseName("ix_edge_client_release_component_deletions_status");
 

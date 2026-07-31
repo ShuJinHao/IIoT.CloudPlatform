@@ -8,6 +8,7 @@ using IIoT.Core.Employees.Aggregates.Employees;
 using IIoT.Core.MasterData.Aggregates.MfgProcesses;
 using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Aggregates.Devices;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Core.Production.Aggregates.Devices.Events;
 using IIoT.Core.Production.Aggregates.Recipes;
 using IIoT.Core.Production.Aggregates.Recipes.Events;
@@ -36,6 +37,7 @@ using IIoT.Services.CrossCutting.Exceptions;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.Contracts.Events.Capacities;
 using IIoT.Services.Contracts.Events.DeviceLogs;
@@ -623,11 +625,380 @@ public sealed class InstallerPackageWorkflowTests
         }
     }
 
+    [Fact]
+    public async Task GenerateEdgeInstallerPackageHandler_TransientReplay_ShouldReuseExactSecretTarget()
+    {
+        var oldSecret = BootstrapSecretGenerator.Generate();
+        var device = new Device(
+            "正极模切客户端",
+            "DEV-REPLAY0001",
+            Guid.NewGuid());
+        device.SetBootstrapSecretHash(
+            BootstrapSecretHasher.Hash(oldSecret));
+        var oldHash = device.BootstrapSecretHash;
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.Add(device);
+        var edgeRoot = CreateInstallerArtifactFixture(
+            "stable",
+            "1.2.0");
+        var componentRepository =
+            CreatePublishedReleaseComponentRepository(edgeRoot);
+        string? firstTargetHash = null;
+        var unitOfWork = new InstallerFaultingUnitOfWork
+        {
+            RetryFirstAfterOperationFailure = true,
+            AfterOperationAsync = (attempt, _) =>
+            {
+                if (attempt == 1)
+                {
+                    firstTargetHash = device.BootstrapSecretHash;
+                    device.SetBootstrapSecretHash(oldHash!);
+                    throw new TimeoutException(
+                        "simulated transient before commit");
+                }
+
+                return Task.CompletedTask;
+            }
+        };
+        var auditTrail = new RecordingAuditTrailService();
+        try
+        {
+            var handler = CreateInstallerPackageHandler(
+                deviceRepository,
+                componentRepository,
+                GetInstallerRoot(edgeRoot),
+                auditTrail,
+                unitOfWork);
+
+            var result = await handler.Handle(
+                new GenerateEdgeInstallerPackageCommand(
+                    [new EdgeBindingSelection(
+                        PrimaryModuleId,
+                        device.Id)],
+                    HostVersion: "1.2.0",
+                    BaseUrl: "http://cloud.local"),
+                CancellationToken.None);
+
+            Assert.True(result.IsSuccess);
+            Assert.Equal(2, unitOfWork.Attempts);
+            Assert.Equal(2, deviceRepository.SaveChangesCalls);
+            Assert.NotEqual(oldHash, device.BootstrapSecretHash);
+            Assert.Equal(firstTargetHash, device.BootstrapSecretHash);
+            await using var package = result.Value!.Content;
+            var secret = await ReadInstallerBootstrapSecretAsync(package);
+            Assert.True(BootstrapSecretHasher.Verify(
+                secret,
+                device.BootstrapSecretHash!));
+            Assert.Single(
+                auditTrail.Entries,
+                entry =>
+                    entry.OperationType
+                    == "Edge.GenerateInstallerPackage"
+                    && entry.Succeeded);
+        }
+        finally
+        {
+            if (Directory.Exists(edgeRoot))
+            {
+                Directory.Delete(edgeRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GenerateEdgeInstallerPackageHandler_PostCommitFailure_ShouldRecoverExactSecretTarget()
+    {
+        var oldSecret = BootstrapSecretGenerator.Generate();
+        var device = new Device(
+            "正极模切客户端",
+            "DEV-COMMIT0001",
+            Guid.NewGuid());
+        device.SetBootstrapSecretHash(
+            BootstrapSecretHasher.Hash(oldSecret));
+        var oldHash = device.BootstrapSecretHash;
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.Add(device);
+        var edgeRoot = CreateInstallerArtifactFixture(
+            "stable",
+            "1.2.0");
+        var componentRepository =
+            CreatePublishedReleaseComponentRepository(edgeRoot);
+        var unitOfWork = new InstallerFaultingUnitOfWork
+        {
+            AfterOperationAsync = (_, _) =>
+                throw new TimeoutException(
+                    "simulated commit confirmation loss")
+        };
+        var auditTrail = new RecordingAuditTrailService();
+        try
+        {
+            var handler = CreateInstallerPackageHandler(
+                deviceRepository,
+                componentRepository,
+                GetInstallerRoot(edgeRoot),
+                auditTrail,
+                unitOfWork);
+
+            var result = await handler.Handle(
+                new GenerateEdgeInstallerPackageCommand(
+                    [new EdgeBindingSelection(
+                        PrimaryModuleId,
+                        device.Id)],
+                    HostVersion: "1.2.0",
+                    BaseUrl: "http://cloud.local"),
+                CancellationToken.None);
+
+            Assert.True(result.IsSuccess);
+            Assert.Equal(1, unitOfWork.Attempts);
+            Assert.NotEqual(oldHash, device.BootstrapSecretHash);
+            await using var package = result.Value!.Content;
+            var secret = await ReadInstallerBootstrapSecretAsync(package);
+            Assert.True(BootstrapSecretHasher.Verify(
+                secret,
+                device.BootstrapSecretHash!));
+            Assert.Single(
+                auditTrail.Entries,
+                entry =>
+                    entry.OperationType
+                    == "Edge.GenerateInstallerPackage"
+                    && entry.Succeeded);
+        }
+        finally
+        {
+            if (Directory.Exists(edgeRoot))
+            {
+                Directory.Delete(edgeRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GenerateEdgeInstallerPackageHandler_ConcurrentSecretDriftAfterFailure_ShouldConflict()
+    {
+        var device = new Device(
+            "正极模切客户端",
+            "DEV-CONFLICT01",
+            Guid.NewGuid());
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.Add(device);
+        var edgeRoot = CreateInstallerArtifactFixture(
+            "stable",
+            "1.2.0");
+        var componentRepository =
+            CreatePublishedReleaseComponentRepository(edgeRoot);
+        var concurrentHash = BootstrapSecretHasher.Hash(
+            BootstrapSecretGenerator.Generate());
+        var unitOfWork = new InstallerFaultingUnitOfWork
+        {
+            AfterOperationAsync = (_, _) =>
+            {
+                device.SetBootstrapSecretHash(concurrentHash);
+                throw new TimeoutException(
+                    "simulated failure after concurrent secret rotation");
+            }
+        };
+        try
+        {
+            var handler = CreateInstallerPackageHandler(
+                deviceRepository,
+                componentRepository,
+                GetInstallerRoot(edgeRoot),
+                new RecordingAuditTrailService(),
+                unitOfWork);
+
+            await Assert.ThrowsAsync<CloudWriteConflictException>(
+                () => handler.Handle(
+                    new GenerateEdgeInstallerPackageCommand(
+                        [new EdgeBindingSelection(
+                            PrimaryModuleId,
+                            device.Id)],
+                        HostVersion: "1.2.0",
+                        BaseUrl: "http://cloud.local"),
+                    CancellationToken.None));
+
+            Assert.Equal(concurrentHash, device.BootstrapSecretHash);
+        }
+        finally
+        {
+            if (Directory.Exists(edgeRoot))
+            {
+                Directory.Delete(edgeRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GenerateEdgeInstallerPackageHandler_BaselineOnlyAfterFailure_ShouldReturnUnknown()
+    {
+        var oldSecret = BootstrapSecretGenerator.Generate();
+        var device = new Device(
+            "正极模切客户端",
+            "DEV-UNKNOWN001",
+            Guid.NewGuid());
+        device.SetBootstrapSecretHash(
+            BootstrapSecretHasher.Hash(oldSecret));
+        var oldHash = device.BootstrapSecretHash;
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.Add(device);
+        var edgeRoot = CreateInstallerArtifactFixture(
+            "stable",
+            "1.2.0");
+        var componentRepository =
+            CreatePublishedReleaseComponentRepository(edgeRoot);
+        var unitOfWork = new InstallerFaultingUnitOfWork
+        {
+            BeforeOperationAsync = (_, _) =>
+                throw new TimeoutException(
+                    "simulated failure before persistence")
+        };
+        try
+        {
+            var handler = CreateInstallerPackageHandler(
+                deviceRepository,
+                componentRepository,
+                GetInstallerRoot(edgeRoot),
+                new RecordingAuditTrailService(),
+                unitOfWork);
+
+            await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
+                () => handler.Handle(
+                    new GenerateEdgeInstallerPackageCommand(
+                        [new EdgeBindingSelection(
+                            PrimaryModuleId,
+                            device.Id)],
+                        HostVersion: "1.2.0",
+                        BaseUrl: "http://cloud.local"),
+                    CancellationToken.None));
+
+            Assert.Equal(oldHash, device.BootstrapSecretHash);
+        }
+        finally
+        {
+            if (Directory.Exists(edgeRoot))
+            {
+                Directory.Delete(edgeRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GenerateEdgeInstallerPackageHandler_CallbackCancellation_ShouldPropagateWithoutRotatingSecret()
+    {
+        var oldSecret = BootstrapSecretGenerator.Generate();
+        var device = new Device(
+            "正极模切客户端",
+            "DEV-CANCEL0001",
+            Guid.NewGuid());
+        device.SetBootstrapSecretHash(
+            BootstrapSecretHasher.Hash(oldSecret));
+        var oldHash = device.BootstrapSecretHash;
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.Add(device);
+        var edgeRoot = CreateInstallerArtifactFixture(
+            "stable",
+            "1.2.0");
+        var componentRepository =
+            CreatePublishedReleaseComponentRepository(edgeRoot);
+        using var cancellation = new CancellationTokenSource();
+        var unitOfWork = new InstallerFaultingUnitOfWork
+        {
+            BeforeOperationAsync = (_, _) =>
+            {
+                cancellation.Cancel();
+                return Task.CompletedTask;
+            }
+        };
+        try
+        {
+            var handler = CreateInstallerPackageHandler(
+                deviceRepository,
+                componentRepository,
+                GetInstallerRoot(edgeRoot),
+                new RecordingAuditTrailService(),
+                unitOfWork);
+
+            var exception =
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                    () => handler.Handle(
+                        new GenerateEdgeInstallerPackageCommand(
+                            [new EdgeBindingSelection(
+                                PrimaryModuleId,
+                                device.Id)],
+                            HostVersion: "1.2.0",
+                            BaseUrl: "http://cloud.local"),
+                        cancellation.Token));
+
+            Assert.Equal(cancellation.Token, exception.CancellationToken);
+            Assert.Equal(oldHash, device.BootstrapSecretHash);
+        }
+        finally
+        {
+            if (Directory.Exists(edgeRoot))
+            {
+                Directory.Delete(edgeRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GenerateEdgeInstallerPackageHandler_ObservationFailure_ShouldReturnCommitUnknown()
+    {
+        var device = new Device(
+            "正极模切客户端",
+            "DEV-OBSERVE001",
+            Guid.NewGuid());
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.Add(device);
+        var edgeRoot = CreateInstallerArtifactFixture(
+            "stable",
+            "1.2.0");
+        var componentRepository =
+            CreatePublishedReleaseComponentRepository(edgeRoot);
+        var observer =
+            new InstallerClientReleaseWriteObservationReader(
+                deviceRepository)
+            {
+                ExceptionToThrow =
+                    new IOException("simulated observation failure")
+            };
+        try
+        {
+            var handler = CreateInstallerPackageHandler(
+                deviceRepository,
+                componentRepository,
+                GetInstallerRoot(edgeRoot),
+                new RecordingAuditTrailService(),
+                observationReader: observer);
+
+            await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
+                () => handler.Handle(
+                    new GenerateEdgeInstallerPackageCommand(
+                        [new EdgeBindingSelection(
+                            PrimaryModuleId,
+                            device.Id)],
+                        HostVersion: "1.2.0",
+                        BaseUrl: "http://cloud.local"),
+                    CancellationToken.None));
+
+            Assert.Null(device.BootstrapSecretHash);
+            Assert.Equal(0, deviceRepository.SaveChangesCalls);
+        }
+        finally
+        {
+            if (Directory.Exists(edgeRoot))
+            {
+                Directory.Delete(edgeRoot, recursive: true);
+            }
+        }
+    }
+
     private static GenerateEdgeInstallerPackageHandler CreateInstallerPackageHandler(
         InMemoryRepository<Device> deviceRepository,
         InMemoryRepository<ClientReleaseComponent> componentRepository,
         string artifactRoot,
-        RecordingAuditTrailService auditTrail)
+        RecordingAuditTrailService auditTrail,
+        IUnitOfWork? unitOfWork = null,
+        IClientReleaseWriteObservationReader? observationReader = null)
     {
         return new GenerateEdgeInstallerPackageHandler(
             new TestCurrentUser
@@ -641,7 +1012,153 @@ public sealed class InstallerPackageWorkflowTests
             deviceRepository,
             componentRepository,
             auditTrail,
-            Options.Create(new EdgeInstallerArtifactOptions { RootPath = artifactRoot }));
+            Options.Create(new EdgeInstallerArtifactOptions
+            {
+                RootPath = artifactRoot
+            }),
+            unitOfWork ?? new RecordingUnitOfWork(),
+            observationReader
+            ?? new InstallerClientReleaseWriteObservationReader(
+                deviceRepository));
+    }
+
+    private sealed class InstallerFaultingUnitOfWork : IUnitOfWork
+    {
+        public int Attempts { get; private set; }
+
+        public bool RetryFirstAfterOperationFailure { get; init; }
+
+        public Func<int, CancellationToken, Task>? BeforeOperationAsync
+        {
+            get;
+            init;
+        }
+
+        public Func<int, CancellationToken, Task>? AfterOperationAsync
+        {
+            get;
+            init;
+        }
+
+        public async Task<TResult> ExecuteResilientAsync<TResult>(
+            Func<CancellationToken, Task<TResult>> operation,
+            CancellationToken cancellationToken = default)
+        {
+            while (true)
+            {
+                Attempts += 1;
+                if (BeforeOperationAsync is not null)
+                {
+                    await BeforeOperationAsync(
+                        Attempts,
+                        cancellationToken);
+                }
+
+                var result = await operation(cancellationToken);
+                try
+                {
+                    if (AfterOperationAsync is not null)
+                    {
+                        await AfterOperationAsync(
+                            Attempts,
+                            cancellationToken);
+                    }
+
+                    return result;
+                }
+                catch when (
+                    RetryFirstAfterOperationFailure
+                    && Attempts == 1)
+                {
+                }
+            }
+        }
+
+        public Task BeginTransactionAsync(
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task CommitAsync(
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task RollbackAsync(
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+    }
+
+    private sealed class InstallerClientReleaseWriteObservationReader(
+        InMemoryRepository<Device> deviceRepository)
+        : IClientReleaseWriteObservationReader
+    {
+        public Exception? ExceptionToThrow { get; init; }
+
+        public Task<ClientReleaseVersionWriteState?> ObserveVersionAsync(
+            Guid versionId,
+            CancellationToken cancellationToken)
+            => Task.FromResult<ClientReleaseVersionWriteState?>(null);
+
+        public Task<IReadOnlyList<ClientReleaseVersionWriteState>>
+            ObserveVersionsAsync(
+                IReadOnlyCollection<Guid> versionIds,
+                CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<
+                ClientReleaseVersionWriteState>>([]);
+
+        public Task<ClientReleaseComponentWriteState?>
+            ObserveComponentAsync(
+                Guid componentId,
+                CancellationToken cancellationToken)
+            => Task.FromResult<ClientReleaseComponentWriteState?>(null);
+
+        public Task<ClientReleaseComponentDeletionWriteObservation>
+            ObserveComponentDeletionAsync(
+                Guid componentId,
+                Guid deletionId,
+                CancellationToken cancellationToken)
+            => Task.FromResult(
+                new ClientReleaseComponentDeletionWriteObservation(
+                    null,
+                    null));
+
+        public Task<ClientReleaseDeletionWriteState?>
+            ObserveDeletionAsync(
+                Guid deletionId,
+                CancellationToken cancellationToken)
+            => Task.FromResult<ClientReleaseDeletionWriteState?>(null);
+
+        public Task<ClientReleaseRetentionPolicyWriteState?>
+            ObserveRetentionPolicyAsync(
+                CancellationToken cancellationToken)
+            => Task.FromResult<
+                ClientReleaseRetentionPolicyWriteState?>(null);
+
+        public Task<IReadOnlyList<DeviceBootstrapWriteState>>
+            ObserveDeviceBootstrapAsync(
+                IReadOnlyCollection<Guid> deviceIds,
+                CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (ExceptionToThrow is not null)
+            {
+                throw ExceptionToThrow;
+            }
+
+            var requested = deviceIds.ToHashSet();
+            IReadOnlyList<DeviceBootstrapWriteState> result =
+                deviceRepository.ListResult
+                    .Where(device => requested.Contains(device.Id))
+                    .OrderBy(device => device.Id)
+                    .Select(device => new DeviceBootstrapWriteState(
+                        device.Id,
+                        device.DeviceName,
+                        device.Code,
+                        device.ProcessId,
+                        device.BootstrapSecretHash,
+                        device.RowVersion))
+                    .ToList();
+            return Task.FromResult(result);
+        }
     }
 
     private static InMemoryRepository<ClientReleaseComponent> CreatePublishedReleaseComponentRepository(
@@ -871,6 +1388,27 @@ public sealed class InstallerPackageWorkflowTests
         Assert.InRange(payloadLength, 1, package.Length - 16);
         var payloadStart = package.Length - 16 - (int)payloadLength;
         return package.AsSpan(payloadStart, (int)payloadLength).ToArray();
+    }
+
+    private static async Task<string> ReadInstallerBootstrapSecretAsync(
+        Stream package)
+    {
+        using var buffer = new MemoryStream();
+        await package.CopyToAsync(buffer);
+        var payload = ReadInstallerPayload(buffer.ToArray());
+        using var archive = new ZipArchive(
+            new MemoryStream(payload),
+            ZipArchiveMode.Read);
+        using var binding = JsonDocument.Parse(
+            ReadZipEntryText(
+                archive,
+                "launcher/iiot-binding.json"));
+        return binding.RootElement
+                   .GetProperty("bindings")[0]
+                   .GetProperty("bootstrapSecret")
+                   .GetString()
+               ?? throw new InvalidDataException(
+                   "Generated installer binding is missing bootstrapSecret.");
     }
 
     private static void WriteFixtureFile(string artifactDirectory, string relativePath, string content)

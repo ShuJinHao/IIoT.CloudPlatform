@@ -122,17 +122,6 @@ public sealed class HumanClientReleaseController : ApiControllerBase
             cancellationToken));
     }
 
-    [HttpPut("{releaseId:guid}/status")]
-    public async Task<IActionResult> UpdateReleaseStatus(
-        [FromRoute] Guid releaseId,
-        [FromBody] UpdateClientReleaseStatusRequest request,
-        CancellationToken cancellationToken)
-    {
-        return ReturnResult(await Sender.Send(
-            new UpdateClientReleaseStatusCommand(releaseId, request.Status),
-            cancellationToken));
-    }
-
     [HttpPost("installer-package")]
     public async Task<IActionResult> GenerateInstallerPackage(
         [FromBody] GenerateEdgeInstallerPackageCommand command,
@@ -168,28 +157,7 @@ public sealed class HumanClientReleaseController : ApiControllerBase
         return ReturnResult(result);
     }
 
-    [HttpPost("host-releases")]
-    public async Task<IActionResult> UpsertHostRelease(
-        [FromBody] UpsertClientHostReleaseCommand command,
-        CancellationToken cancellationToken)
-    {
-        return ReturnResult(
-            await Sender.Send(command, cancellationToken),
-            result => $"/api/v1/human/client-releases/host-releases/{result.Id}");
-    }
-
-    [HttpPost("plugin-releases")]
-    public async Task<IActionResult> UpsertPluginRelease(
-        [FromBody] UpsertClientPluginReleaseCommand command,
-        CancellationToken cancellationToken)
-    {
-        return ReturnResult(
-            await Sender.Send(command, cancellationToken),
-            result => $"/api/v1/human/client-releases/plugin-releases/{result.Id}");
-    }
 }
-
-public sealed record UpdateClientReleaseStatusRequest(string Status);
 
 public sealed record DeleteClientReleasePackageRequest(string? Reason);
 

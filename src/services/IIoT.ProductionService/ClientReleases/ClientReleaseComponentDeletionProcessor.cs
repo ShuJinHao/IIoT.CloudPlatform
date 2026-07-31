@@ -5,7 +5,10 @@ using System.Text.Json;
 using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Core.Production.Specifications.ClientReleases;
+using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
+using IIoT.Services.Contracts.Persistence;
+using IIoT.Services.CrossCutting.Persistence;
 using IIoT.SharedKernel.Repository;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -34,7 +37,9 @@ public sealed class ClientReleaseComponentDeletionProcessor(
     IRepository<ClientReleaseComponent> componentRepository,
     IClientReleaseComponentDeletionStore deletionStore,
     IAuditTrailService auditTrailService,
-    ILogger<ClientReleaseComponentDeletionProcessor> logger)
+    ILogger<ClientReleaseComponentDeletionProcessor> logger,
+    IUnitOfWork unitOfWork,
+    IClientReleaseWriteObservationReader observationReader)
     : IClientReleaseComponentDeletionProcessor
 {
     private const string AuditAction = "ClientRelease.HardDeleteComponent";
@@ -50,6 +55,46 @@ public sealed class ClientReleaseComponentDeletionProcessor(
         ClientReleaseComponentDeletion deletion,
         CancellationToken cancellationToken)
     {
+        var baseline = await ObserveExistingAsync(
+            deletion.Id,
+            cancellationToken);
+        if (ClientReleaseWriteStateFingerprint.ForDeletion(deletion)
+            != baseline)
+        {
+            throw new CloudWriteConflictException();
+        }
+
+        if (deletion.Status
+            == ClientReleaseComponentDeletionStatus.Failed)
+        {
+            var resetAtUtc =
+                ClientReleaseWriteCommitRecovery.NormalizeUtc(
+                    DateTime.UtcNow);
+            var resetTarget = baseline with
+            {
+                Status =
+                    ClientReleaseComponentDeletionStatus.Requested,
+                FailureCode = null,
+                CleanupResultJson = null,
+                CleanupCompletedAtUtc = null,
+                UpdatedAtUtc = resetAtUtc,
+                RowVersion = 0
+            };
+            await PersistDeletionTargetAsync(
+                baseline,
+                resetTarget,
+                current => current.ResetForRetry(resetAtUtc),
+                cancellationToken);
+            deletion =
+                await deletionStore.GetByIdAsync(
+                    deletion.Id,
+                    cancellationToken)
+                ?? throw new CloudWriteCommitUnknownException();
+            baseline = await ObserveExistingAsync(
+                deletion.Id,
+                cancellationToken);
+        }
+
         // CleanupCompleted 的文件系统结果已经持久化。恢复/重试只能补写同一条成功审计，
         // 不能再次扫描当前文件系统重新计算结果，否则崩溃窗口会产生不同摘要和重复审计。
         if (deletion.Status == ClientReleaseComponentDeletionStatus.CleanupCompleted)
@@ -114,11 +159,38 @@ public sealed class ClientReleaseComponentDeletionProcessor(
         }
 
         // 第一阶段：清理收敛落库，操作进入 CleanupCompleted（审计待写）。
-        deletion.MarkCleanupCompleted(
+        var completedAtUtc =
+            ClientReleaseWriteCommitRecovery.NormalizeUtc(
+                DateTime.UtcNow);
+        var cleanupResultJson = JsonSerializer.Serialize(
+            new ClientReleaseComponentDeletionCleanupResult(
+                [.. outcome.DeletedPaths],
+                [.. outcome.SkippedPaths],
+                outcome.ManifestChanged));
+        var cleanupTarget = baseline with
+        {
+            Status =
+                ClientReleaseComponentDeletionStatus.CleanupCompleted,
+            FailureCode = null,
+            CleanupResultJson = cleanupResultJson,
+            CleanupCompletedAtUtc = completedAtUtc,
+            UpdatedAtUtc = completedAtUtc,
+            RowVersion = 0
+        };
+        await PersistDeletionTargetAsync(
+            baseline,
+            cleanupTarget,
+            current => current.MarkCleanupCompleted(
             outcome.DeletedPaths,
             outcome.SkippedPaths,
-            outcome.ManifestChanged);
-        await deletionStore.SaveChangesAsync(cancellationToken);
+                outcome.ManifestChanged,
+                completedAtUtc),
+            cancellationToken);
+        deletion =
+            await deletionStore.GetByIdAsync(
+                deletion.Id,
+                cancellationToken)
+            ?? throw new CloudWriteCommitUnknownException();
 
         return await ConfirmSuccessAndRemoveAsync(deletion, outcome, cancellationToken);
     }
@@ -128,9 +200,41 @@ public sealed class ClientReleaseComponentDeletionProcessor(
         ClientReleaseComponentDeletionOutcome outcome,
         CancellationToken cancellationToken)
     {
-        deletion.MarkFailed(outcome.FailureCode ?? FailureCleanupStateInvalid);
-        await deletionStore.SaveChangesAsync(cancellationToken);
-        await WriteAuditAsync(deletion, outcome, succeeded: false, CancellationToken.None);
+        var baseline = await ObserveExistingAsync(
+            deletion.Id,
+            cancellationToken);
+        var failedAtUtc =
+            ClientReleaseWriteCommitRecovery.NormalizeUtc(
+                DateTime.UtcNow);
+        var failureCode =
+            outcome.FailureCode ?? FailureCleanupStateInvalid;
+        var failedTarget = baseline with
+        {
+            Status = ClientReleaseComponentDeletionStatus.Failed,
+            FailureCode = failureCode,
+            RetryCount = baseline.RetryCount + 1,
+            CleanupResultJson = null,
+            CleanupCompletedAtUtc = null,
+            UpdatedAtUtc = failedAtUtc,
+            RowVersion = 0
+        };
+        await PersistDeletionTargetAsync(
+            baseline,
+            failedTarget,
+            current => current.MarkFailed(
+                failureCode,
+                failedAtUtc),
+            cancellationToken);
+        deletion =
+            await deletionStore.GetByIdAsync(
+                deletion.Id,
+                cancellationToken)
+            ?? throw new CloudWriteCommitUnknownException();
+        await WriteAuditAsync(
+            deletion,
+            outcome,
+            succeeded: false,
+            CancellationToken.None);
         return outcome;
     }
 
@@ -152,9 +256,247 @@ public sealed class ClientReleaseComponentDeletionProcessor(
             return outcome with { AuditConfirmed = false };
         }
 
-        deletionStore.Remove(deletion);
-        await deletionStore.SaveChangesAsync(cancellationToken);
+        await RemoveDeletionAsync(deletion, cancellationToken);
         return outcome with { AuditConfirmed = true };
+    }
+
+    private async Task<ClientReleaseDeletionWriteState>
+        ObserveExistingAsync(
+            Guid deletionId,
+            CancellationToken cancellationToken)
+    {
+        var observation =
+            await CloudWriteCommitRecovery
+                .TryObserveOptionalAttemptAsync(
+                    token => observationReader.ObserveDeletionAsync(
+                        deletionId,
+                        token),
+                    cancellationToken)
+            ?? throw new CloudWriteCommitUnknownException();
+        return observation.Value
+               ?? throw new CloudWriteCommitUnknownException();
+    }
+
+    private async Task PersistDeletionTargetAsync(
+        ClientReleaseDeletionWriteState baseline,
+        ClientReleaseDeletionWriteState target,
+        Action<ClientReleaseComponentDeletion> mutate,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await unitOfWork.ExecuteResilientAsync(
+                ExecuteAttemptAsync,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (CloudWriteException)
+        {
+            throw;
+        }
+        catch
+        {
+            await ResolveCommitAsync();
+            return;
+        }
+
+        var confirmed =
+            await CloudWriteCommitRecovery
+                .TryObserveOptionalAttemptAsync(
+                    token => observationReader.ObserveDeletionAsync(
+                        baseline.Id,
+                        token),
+                    cancellationToken)
+            ?? throw new CloudWriteCommitUnknownException();
+        if (confirmed.Value is not null
+            && ClientReleaseWriteCommitRecovery
+                .MatchesDeletionTarget(
+                    confirmed.Value,
+                    target))
+        {
+            return;
+        }
+
+        throw confirmed.Value == baseline
+            ? new CloudWriteCommitUnknownException()
+            : new CloudWriteConflictException();
+
+        async Task<bool> ExecuteAttemptAsync(
+            CancellationToken callbackCancellationToken)
+        {
+            var currentObservation =
+                await CloudWriteCommitRecovery
+                    .TryObserveOptionalAttemptAsync(
+                        token => observationReader
+                            .ObserveDeletionAsync(
+                                baseline.Id,
+                                token),
+                        callbackCancellationToken)
+                ?? throw new CloudWriteCommitUnknownException();
+            var current = currentObservation.Value
+                          ?? throw new CloudWriteConflictException();
+            if (ClientReleaseWriteCommitRecovery
+                .MatchesDeletionTarget(current, target))
+            {
+                return true;
+            }
+
+            if (current != baseline)
+            {
+                throw new CloudWriteConflictException();
+            }
+
+            var tracked =
+                await deletionStore.GetByIdAsync(
+                    baseline.Id,
+                    callbackCancellationToken)
+                ?? throw new CloudWriteConflictException();
+            if (ClientReleaseWriteStateFingerprint.ForDeletion(
+                    tracked) != baseline)
+            {
+                throw new CloudWriteConflictException();
+            }
+
+            mutate(tracked);
+            await deletionStore.SaveChangesAsync(
+                callbackCancellationToken);
+            return true;
+        }
+
+        async Task ResolveCommitAsync()
+        {
+            var currentObservation =
+                await CloudWriteCommitRecovery
+                    .TryObserveOptionalCommitAsync(
+                        token => observationReader
+                            .ObserveDeletionAsync(
+                                baseline.Id,
+                                token))
+                ?? throw new CloudWriteCommitUnknownException();
+            var current = currentObservation.Value;
+            if (current is not null
+                && ClientReleaseWriteCommitRecovery
+                    .MatchesDeletionTarget(current, target))
+            {
+                return;
+            }
+
+            if (current is null || current == baseline)
+            {
+                throw new CloudWriteCommitUnknownException();
+            }
+
+            throw new CloudWriteConflictException();
+        }
+    }
+
+    private async Task RemoveDeletionAsync(
+        ClientReleaseComponentDeletion deletion,
+        CancellationToken cancellationToken)
+    {
+        var baseline = await ObserveExistingAsync(
+            deletion.Id,
+            cancellationToken);
+        if (ClientReleaseWriteStateFingerprint.ForDeletion(deletion)
+            != baseline)
+        {
+            throw new CloudWriteConflictException();
+        }
+
+        try
+        {
+            await unitOfWork.ExecuteResilientAsync(
+                ExecuteAttemptAsync,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (CloudWriteException)
+        {
+            throw;
+        }
+        catch
+        {
+            var current =
+                await CloudWriteCommitRecovery
+                    .TryObserveOptionalCommitAsync(
+                        token => observationReader
+                            .ObserveDeletionAsync(
+                                deletion.Id,
+                                token))
+                ?? throw new CloudWriteCommitUnknownException();
+            if (current.Value is null)
+            {
+                return;
+            }
+
+            throw current.Value == baseline
+                ? new CloudWriteCommitUnknownException()
+                : new CloudWriteConflictException();
+        }
+
+        var confirmed =
+            await CloudWriteCommitRecovery
+                .TryObserveOptionalAttemptAsync(
+                    token => observationReader.ObserveDeletionAsync(
+                        deletion.Id,
+                        token),
+                    cancellationToken)
+            ?? throw new CloudWriteCommitUnknownException();
+        if (confirmed.Value is null)
+        {
+            return;
+        }
+
+        throw confirmed.Value == baseline
+            ? new CloudWriteCommitUnknownException()
+            : new CloudWriteConflictException();
+
+        async Task<bool> ExecuteAttemptAsync(
+            CancellationToken callbackCancellationToken)
+        {
+            var current =
+                await CloudWriteCommitRecovery
+                    .TryObserveOptionalAttemptAsync(
+                        token => observationReader
+                            .ObserveDeletionAsync(
+                                deletion.Id,
+                                token),
+                        callbackCancellationToken)
+                ?? throw new CloudWriteCommitUnknownException();
+            if (current.Value is null)
+            {
+                return true;
+            }
+
+            if (current.Value != baseline)
+            {
+                throw new CloudWriteConflictException();
+            }
+
+            var tracked =
+                await deletionStore.GetByIdAsync(
+                    deletion.Id,
+                    callbackCancellationToken)
+                ?? throw new CloudWriteConflictException();
+            if (ClientReleaseWriteStateFingerprint.ForDeletion(
+                    tracked) != baseline)
+            {
+                throw new CloudWriteConflictException();
+            }
+
+            deletionStore.Remove(tracked);
+            await deletionStore.SaveChangesAsync(
+                callbackCancellationToken);
+            return true;
+        }
     }
 
     /// <summary>
@@ -182,7 +524,9 @@ public sealed class ClientReleaseComponentDeletionProcessor(
                 succeeded,
                 summary,
                 succeeded ? null : outcome.FailureCode,
-                succeeded ? $"{SuccessAuditIdempotencyKeyPrefix}{deletion.Id:N}" : null),
+                succeeded
+                    ? $"{SuccessAuditIdempotencyKeyPrefix}{deletion.Id:N}"
+                    : $"client-release-hard-delete-failed:{deletion.Id:N}:{deletion.RetryCount}"),
             cancellationToken);
     }
 

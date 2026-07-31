@@ -251,10 +251,7 @@ public sealed class ClientReleaseBehaviorTests
             [typeof(GetDeviceClientVersionInventoryQuery)] = ClientReleasePermissions.Read,
             [typeof(GetClientReleaseRetentionPolicyQuery)] = ClientReleasePermissions.Read,
             [typeof(GenerateEdgeInstallerPackageCommand)] = ClientReleasePermissions.GenerateInstaller,
-            [typeof(UpsertClientHostReleaseCommand)] = ClientReleasePermissions.Manage,
-            [typeof(UpsertClientPluginReleaseCommand)] = ClientReleasePermissions.Manage,
             [typeof(ArchiveClientReleaseCommand)] = ClientReleasePermissions.Manage,
-            [typeof(UpdateClientReleaseStatusCommand)] = ClientReleasePermissions.Manage,
             [typeof(UpdateClientReleaseRetentionPolicyCommand)] = ClientReleasePermissions.Manage
         };
 
@@ -1610,85 +1607,6 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
-    public async Task UpsertClientHostReleaseHandler_ShouldCreateReleaseRecord()
-    {
-        var repository = new InMemoryRepository<ClientReleaseComponent>();
-        var handler = new UpsertClientHostReleaseHandler(repository, new NoopRetentionService());
-
-        var result = await handler.Handle(
-            new UpsertClientHostReleaseCommand(
-                "stable",
-                "1.2.0",
-                "1.0.0",
-                "win-x64",
-                "net10.0",
-                "https://example.test/releases/host.zip",
-                new string('a', 64),
-                1024,
-                "release notes",
-                "Published",
-                null,
-                "IIoT"),
-            CancellationToken.None);
-
-        Assert.True(result.IsSuccess);
-        Assert.NotNull(repository.AddedEntity);
-        var version = SingleVersion(repository.AddedEntity!);
-        Assert.Equal("1.2.0", version.Version);
-        Assert.Equal("release notes", version.ReleaseNotes);
-        Assert.Equal(ClientReleaseStatus.Published, version.Status);
-        Assert.NotNull(version.PublishedAtUtc);
-    }
-
-    [Fact]
-    public void UpsertClientReleaseValidators_ShouldRejectPublishedReleaseWithoutNotes()
-    {
-        var hostResult = new UpsertClientHostReleaseCommandValidator().Validate(
-            new UpsertClientHostReleaseCommand(
-                "stable",
-                "1.2.0",
-                "1.0.0",
-                "win-x64",
-                "net10.0",
-                "https://example.test/releases/host.zip",
-                new string('a', 64),
-                1024,
-                null,
-                "Published",
-                null,
-                "IIoT"));
-
-        Assert.False(hostResult.IsValid);
-        Assert.Contains(hostResult.Errors, error => error.PropertyName == nameof(UpsertClientHostReleaseCommand.ReleaseNotes));
-
-        var pluginResult = new UpsertClientPluginReleaseCommandValidator().Validate(
-            new UpsertClientPluginReleaseCommand(
-                "Homogenization",
-                "匀浆",
-                null,
-                null,
-                null,
-                "stable",
-                "1.2.0",
-                "1.0.0",
-                "1.0.0",
-                "99.0.0",
-                "win-x64",
-                "net10.0",
-                "https://example.test/releases/host.zip#moduleId=Homogenization",
-                new string('b', 64),
-                1024,
-                " ",
-                "[]",
-                "Published",
-                null,
-                "IIoT"));
-
-        Assert.False(pluginResult.IsValid);
-        Assert.Contains(pluginResult.Errors, error => error.PropertyName == nameof(UpsertClientPluginReleaseCommand.ReleaseNotes));
-    }
-
-    [Fact]
     public async Task ReportDeviceClientVersionHandler_ShouldRejectMismatchedClientCode()
     {
         var deviceId = Guid.NewGuid();
@@ -2384,6 +2302,318 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
+    public async Task ArchiveClientReleaseHandler_PostCommitFailure_ShouldRecoverExactTarget()
+    {
+        var component = CreateHostComponent(
+            "stable",
+            "1.0.0",
+            "1.0.0",
+            "win-x64",
+            "net10.0",
+            "/edge-updates/installers/stable/1.0.0/installer-artifact.json",
+            new string('a', 64),
+            1024,
+            "archive recovery",
+            ClientReleaseStatus.Published);
+        var version = SingleVersion(component);
+        var repository = new InMemoryRepository<ClientReleaseComponent>();
+        repository.Items.Add(component);
+        var observationReader =
+            new InMemoryClientReleaseWriteObservationReader(repository);
+        var handler = new ArchiveClientReleaseHandler(
+            repository,
+            new RecordingUnitOfWork
+            {
+                AfterOperationAsync = _ => throw new TimeoutException(
+                    "simulated commit confirmation loss")
+            },
+            observationReader);
+
+        var result = await handler.Handle(
+            new ArchiveClientReleaseCommand(version.Id),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(ClientReleaseStatus.Archived, version.Status);
+    }
+
+    [Fact]
+    public async Task ArchiveClientReleaseHandler_BaselineOnlyAfterFailure_ShouldReturnCommitUnknown()
+    {
+        var component = CreateHostComponent(
+            "stable",
+            "1.0.1",
+            "1.0.0",
+            "win-x64",
+            "net10.0",
+            "/edge-updates/installers/stable/1.0.1/installer-artifact.json",
+            new string('b', 64),
+            1024,
+            "archive unknown",
+            ClientReleaseStatus.Published);
+        var version = SingleVersion(component);
+        var repository = new InMemoryRepository<ClientReleaseComponent>();
+        repository.Items.Add(component);
+        var handler = new ArchiveClientReleaseHandler(
+            repository,
+            new RecordingUnitOfWork
+            {
+                BeforeOperationAsync = _ => throw new TimeoutException(
+                    "simulated failure before persistence")
+            },
+            new InMemoryClientReleaseWriteObservationReader(repository));
+
+        var exception =
+            await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
+                () => handler.Handle(
+                    new ArchiveClientReleaseCommand(version.Id),
+                    CancellationToken.None));
+
+        Assert.Equal(
+            CloudWriteCommitUnknownException.Code,
+            exception.ProblemCode);
+        Assert.Equal(ClientReleaseStatus.Published, version.Status);
+    }
+
+    [Fact]
+    public async Task ArchiveClientReleaseHandler_ConcurrentDriftAfterFailure_ShouldConflict()
+    {
+        var component = CreateHostComponent(
+            "stable",
+            "1.0.2",
+            "1.0.0",
+            "win-x64",
+            "net10.0",
+            "/edge-updates/installers/stable/1.0.2/installer-artifact.json",
+            new string('c', 64),
+            1024,
+            "archive conflict",
+            ClientReleaseStatus.Published);
+        var version = SingleVersion(component);
+        var repository = new InMemoryRepository<ClientReleaseComponent>();
+        repository.Items.Add(component);
+        var handler = new ArchiveClientReleaseHandler(
+            repository,
+            new RecordingUnitOfWork
+            {
+                AfterOperationAsync = _ =>
+                {
+                    component.ChangeVersionStatus(
+                        version.Id,
+                        ClientReleaseStatus.Deprecated);
+                    throw new TimeoutException(
+                        "simulated failure after concurrent drift");
+                }
+            },
+            new InMemoryClientReleaseWriteObservationReader(repository));
+
+        var exception =
+            await Assert.ThrowsAsync<CloudWriteConflictException>(
+                () => handler.Handle(
+                    new ArchiveClientReleaseCommand(version.Id),
+                    CancellationToken.None));
+
+        Assert.Equal(
+            CloudWriteConflictException.Code,
+            exception.ProblemCode);
+        Assert.Equal(ClientReleaseStatus.Deprecated, version.Status);
+    }
+
+    [Fact]
+    public async Task ArchiveClientReleaseHandler_CallbackCancellation_ShouldPropagate()
+    {
+        var component = CreateHostComponent(
+            "stable",
+            "1.0.3",
+            "1.0.0",
+            "win-x64",
+            "net10.0",
+            "/edge-updates/installers/stable/1.0.3/installer-artifact.json",
+            new string('d', 64),
+            1024,
+            "archive cancellation",
+            ClientReleaseStatus.Published);
+        var version = SingleVersion(component);
+        var repository = new InMemoryRepository<ClientReleaseComponent>();
+        repository.Items.Add(component);
+        using var cancellation = new CancellationTokenSource();
+        var handler = new ArchiveClientReleaseHandler(
+            repository,
+            new RecordingUnitOfWork
+            {
+                BeforeOperationAsync = _ =>
+                {
+                    cancellation.Cancel();
+                    return Task.CompletedTask;
+                }
+            },
+            new InMemoryClientReleaseWriteObservationReader(repository));
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => handler.Handle(
+                new ArchiveClientReleaseCommand(version.Id),
+                cancellation.Token));
+
+        Assert.Equal(cancellation.Token, exception.CancellationToken);
+        Assert.Equal(ClientReleaseStatus.Published, version.Status);
+    }
+
+    [Fact]
+    public async Task ArchiveClientReleaseHandler_ObservationFailure_ShouldReturnCommitUnknown()
+    {
+        var component = CreateHostComponent(
+            "stable",
+            "1.0.4",
+            "1.0.0",
+            "win-x64",
+            "net10.0",
+            "/edge-updates/installers/stable/1.0.4/installer-artifact.json",
+            new string('e', 64),
+            1024,
+            "archive observation",
+            ClientReleaseStatus.Published);
+        var version = SingleVersion(component);
+        var repository = new InMemoryRepository<ClientReleaseComponent>();
+        repository.Items.Add(component);
+        var observationReader =
+            new InMemoryClientReleaseWriteObservationReader(repository)
+            {
+                FailureFactory = (operation, _) =>
+                    operation == "version"
+                        ? new IOException("simulated observation failure")
+                        : null
+            };
+        var handler = new ArchiveClientReleaseHandler(
+            repository,
+            new RecordingUnitOfWork(),
+            observationReader);
+
+        await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
+            () => handler.Handle(
+                new ArchiveClientReleaseCommand(version.Id),
+                CancellationToken.None));
+
+        Assert.Equal(ClientReleaseStatus.Published, version.Status);
+    }
+
+    [Fact]
+    public async Task UpdateRetentionPolicyHandler_PostCommitFailure_ShouldRecoverExactTarget()
+    {
+        var policyRepository =
+            new InMemoryRepository<ClientReleaseRetentionPolicy>();
+        var handler = new UpdateClientReleaseRetentionPolicyHandler(
+            policyRepository,
+            new InMemoryRepository<ClientReleaseComponent>(),
+            new NoopRetentionService(),
+            new RecordingUnitOfWork
+            {
+                AfterOperationAsync = _ => throw new TimeoutException(
+                    "simulated commit confirmation loss")
+            },
+            new InMemoryClientReleaseWriteObservationReader(
+                policyRepository: policyRepository));
+
+        var result = await handler.Handle(
+            new UpdateClientReleaseRetentionPolicyCommand(5),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(
+            5,
+            Assert.Single(policyRepository.Items)
+                .MaxVersionsPerComponent);
+    }
+
+    [Fact]
+    public async Task UpdateRetentionPolicyHandler_BaselineOnlyAfterFailure_ShouldReturnCommitUnknown()
+    {
+        var policyRepository =
+            new InMemoryRepository<ClientReleaseRetentionPolicy>();
+        var handler = new UpdateClientReleaseRetentionPolicyHandler(
+            policyRepository,
+            new InMemoryRepository<ClientReleaseComponent>(),
+            new NoopRetentionService(),
+            new RecordingUnitOfWork
+            {
+                BeforeOperationAsync = _ => throw new TimeoutException(
+                    "simulated failure before persistence")
+            },
+            new InMemoryClientReleaseWriteObservationReader(
+                policyRepository: policyRepository));
+
+        await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
+            () => handler.Handle(
+                new UpdateClientReleaseRetentionPolicyCommand(5),
+                CancellationToken.None));
+
+        Assert.Empty(policyRepository.Items);
+    }
+
+    [Fact]
+    public async Task UpdateRetentionPolicyHandler_ConcurrentDriftAfterFailure_ShouldConflict()
+    {
+        var policyRepository =
+            new InMemoryRepository<ClientReleaseRetentionPolicy>();
+        var handler = new UpdateClientReleaseRetentionPolicyHandler(
+            policyRepository,
+            new InMemoryRepository<ClientReleaseComponent>(),
+            new NoopRetentionService(),
+            new RecordingUnitOfWork
+            {
+                AfterOperationAsync = _ =>
+                {
+                    Assert.Single(policyRepository.Items).Update(
+                        9,
+                        DateTime.UtcNow.AddMinutes(1));
+                    throw new TimeoutException(
+                        "simulated failure after concurrent drift");
+                }
+            },
+            new InMemoryClientReleaseWriteObservationReader(
+                policyRepository: policyRepository));
+
+        await Assert.ThrowsAsync<CloudWriteConflictException>(
+            () => handler.Handle(
+                new UpdateClientReleaseRetentionPolicyCommand(5),
+                CancellationToken.None));
+
+        Assert.Equal(
+            9,
+            Assert.Single(policyRepository.Items)
+                .MaxVersionsPerComponent);
+    }
+
+    [Fact]
+    public async Task UpdateRetentionPolicyHandler_CallbackCancellation_ShouldPropagate()
+    {
+        var policyRepository =
+            new InMemoryRepository<ClientReleaseRetentionPolicy>();
+        using var cancellation = new CancellationTokenSource();
+        var handler = new UpdateClientReleaseRetentionPolicyHandler(
+            policyRepository,
+            new InMemoryRepository<ClientReleaseComponent>(),
+            new NoopRetentionService(),
+            new RecordingUnitOfWork
+            {
+                BeforeOperationAsync = _ =>
+                {
+                    cancellation.Cancel();
+                    return Task.CompletedTask;
+                }
+            },
+            new InMemoryClientReleaseWriteObservationReader(
+                policyRepository: policyRepository));
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => handler.Handle(
+                new UpdateClientReleaseRetentionPolicyCommand(5),
+                cancellation.Token));
+
+        Assert.Equal(cancellation.Token, exception.CancellationToken);
+        Assert.Empty(policyRepository.Items);
+    }
+
+    [Fact]
     public async Task DeviceInventory_ShouldSeparateInstallStatusFromRuntimeHeartbeat()
     {
         var processId = Guid.NewGuid();
@@ -2474,7 +2704,10 @@ public sealed class ClientReleaseBehaviorTests
                 clientStateStore,
                 new TestCurrentUser(),
                 auditTrail,
-                NullLogger<DeleteClientReleasePackageHandler>.Instance);
+                NullLogger<DeleteClientReleasePackageHandler>.Instance,
+                new RecordingUnitOfWork(),
+                new InMemoryClientReleaseWriteObservationReader(
+                    componentRepository));
 
             var result = await handler.Handle(
                 new DeleteClientReleasePackageCommand(hostRelease.Id),
@@ -2486,6 +2719,291 @@ public sealed class ClientReleaseBehaviorTests
             Assert.Contains(auditTrail.Entries, entry =>
                 entry.OperationType == "ClientRelease.DeletePackage"
                 && !entry.Succeeded);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteClientReleasePackageHandler_CommitLosses_ShouldRecoverExactStateAndAuditOnce()
+    {
+        var edgeRoot = CreateTempDirectory(
+            "iiot-delete-release-commit-recovery");
+        try
+        {
+            var manifestPath = Path.Combine(
+                edgeRoot,
+                "installers",
+                "stable",
+                "1.2.0",
+                "installer-artifact.json");
+            WriteFile(manifestPath, "{}");
+            var component = CreateHostComponent(
+                "stable",
+                "1.2.0",
+                "1.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/installers/stable/1.2.0/installer-artifact.json",
+                ClientReleaseFileFacts.ComputeSha256(manifestPath),
+                new FileInfo(manifestPath).Length,
+                "delete recovery",
+                ClientReleaseStatus.Published);
+            var version = SingleVersion(component);
+            var repository =
+                new InMemoryRepository<ClientReleaseComponent>();
+            repository.Items.Add(component);
+            var auditTrail = new RecordingAuditTrailService();
+            var failures = 0;
+            var handler = new DeleteClientReleasePackageHandler(
+                Options.Create(new EdgeInstallerArtifactOptions
+                {
+                    RootPath = Path.Combine(edgeRoot, "installers")
+                }),
+                repository,
+                new InMemoryDeviceClientStateStore(),
+                new TestCurrentUser(),
+                auditTrail,
+                NullLogger<DeleteClientReleasePackageHandler>.Instance,
+                new RecordingUnitOfWork
+                {
+                    AfterOperationAsync = _ =>
+                    {
+                        failures += 1;
+                        throw new TimeoutException(
+                            "simulated commit confirmation loss");
+                    }
+                },
+                new InMemoryClientReleaseWriteObservationReader(
+                    repository));
+
+            var result = await handler.Handle(
+                new DeleteClientReleasePackageCommand(
+                    version.Id,
+                    "obsolete release"),
+                CancellationToken.None);
+
+            Assert.True(result.IsSuccess);
+            Assert.Equal(2, failures);
+            Assert.Equal(ClientReleaseStatus.Deleted, version.Status);
+            Assert.Equal("obsolete release", version.DeletionReason);
+            Assert.False(Directory.Exists(
+                Path.GetDirectoryName(manifestPath)!));
+            var audit = Assert.Single(
+                auditTrail.Entries,
+                entry =>
+                    entry.OperationType
+                    == "ClientRelease.DeletePackage"
+                    && entry.Succeeded);
+            Assert.Equal(
+                $"client-release-package-delete:{version.Id:N}",
+                audit.IdempotencyKey);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteClientReleasePackageHandler_ConcurrentDriftAfterFilesRemoved_ShouldConflict()
+    {
+        var edgeRoot = CreateTempDirectory(
+            "iiot-delete-release-conflict");
+        try
+        {
+            var manifestPath = Path.Combine(
+                edgeRoot,
+                "installers",
+                "stable",
+                "1.2.1",
+                "installer-artifact.json");
+            WriteFile(manifestPath, "{}");
+            var component = CreateHostComponent(
+                "stable",
+                "1.2.1",
+                "1.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/installers/stable/1.2.1/installer-artifact.json",
+                ClientReleaseFileFacts.ComputeSha256(manifestPath),
+                new FileInfo(manifestPath).Length,
+                "delete conflict",
+                ClientReleaseStatus.Published);
+            var version = SingleVersion(component);
+            var repository =
+                new InMemoryRepository<ClientReleaseComponent>();
+            repository.Items.Add(component);
+            var transition = 0;
+            var handler = new DeleteClientReleasePackageHandler(
+                Options.Create(new EdgeInstallerArtifactOptions
+                {
+                    RootPath = Path.Combine(edgeRoot, "installers")
+                }),
+                repository,
+                new InMemoryDeviceClientStateStore(),
+                new TestCurrentUser(),
+                new RecordingAuditTrailService(),
+                NullLogger<DeleteClientReleasePackageHandler>.Instance,
+                new RecordingUnitOfWork
+                {
+                    AfterOperationAsync = _ =>
+                    {
+                        transition += 1;
+                        if (transition == 2)
+                        {
+                            component.ChangeVersionStatus(
+                                version.Id,
+                                ClientReleaseStatus.Deprecated);
+                            throw new TimeoutException(
+                                "simulated failure after concurrent drift");
+                        }
+
+                        return Task.CompletedTask;
+                    }
+                },
+                new InMemoryClientReleaseWriteObservationReader(
+                    repository));
+
+            await Assert.ThrowsAsync<CloudWriteConflictException>(
+                () => handler.Handle(
+                    new DeleteClientReleasePackageCommand(version.Id),
+                    CancellationToken.None));
+
+            Assert.Equal(ClientReleaseStatus.Deprecated, version.Status);
+            Assert.False(Directory.Exists(
+                Path.GetDirectoryName(manifestPath)!));
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteClientReleasePackageHandler_BaselineOnlyAfterFailure_ShouldKeepFilesAndReturnUnknown()
+    {
+        var edgeRoot = CreateTempDirectory(
+            "iiot-delete-release-unknown");
+        try
+        {
+            var manifestPath = Path.Combine(
+                edgeRoot,
+                "installers",
+                "stable",
+                "1.2.2",
+                "installer-artifact.json");
+            WriteFile(manifestPath, "{}");
+            var component = CreateHostComponent(
+                "stable",
+                "1.2.2",
+                "1.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/installers/stable/1.2.2/installer-artifact.json",
+                ClientReleaseFileFacts.ComputeSha256(manifestPath),
+                new FileInfo(manifestPath).Length,
+                "delete unknown",
+                ClientReleaseStatus.Published);
+            var version = SingleVersion(component);
+            var repository =
+                new InMemoryRepository<ClientReleaseComponent>();
+            repository.Items.Add(component);
+            var handler = new DeleteClientReleasePackageHandler(
+                Options.Create(new EdgeInstallerArtifactOptions
+                {
+                    RootPath = Path.Combine(edgeRoot, "installers")
+                }),
+                repository,
+                new InMemoryDeviceClientStateStore(),
+                new TestCurrentUser(),
+                new RecordingAuditTrailService(),
+                NullLogger<DeleteClientReleasePackageHandler>.Instance,
+                new RecordingUnitOfWork
+                {
+                    BeforeOperationAsync = _ =>
+                        throw new TimeoutException(
+                            "simulated failure before persistence")
+                },
+                new InMemoryClientReleaseWriteObservationReader(
+                    repository));
+
+            await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
+                () => handler.Handle(
+                    new DeleteClientReleasePackageCommand(version.Id),
+                    CancellationToken.None));
+
+            Assert.Equal(ClientReleaseStatus.Published, version.Status);
+            Assert.True(File.Exists(manifestPath));
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteClientReleasePackageHandler_CallbackCancellation_ShouldPropagateWithoutDeletingFiles()
+    {
+        var edgeRoot = CreateTempDirectory(
+            "iiot-delete-release-cancel");
+        try
+        {
+            var manifestPath = Path.Combine(
+                edgeRoot,
+                "installers",
+                "stable",
+                "1.2.3",
+                "installer-artifact.json");
+            WriteFile(manifestPath, "{}");
+            var component = CreateHostComponent(
+                "stable",
+                "1.2.3",
+                "1.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/installers/stable/1.2.3/installer-artifact.json",
+                ClientReleaseFileFacts.ComputeSha256(manifestPath),
+                new FileInfo(manifestPath).Length,
+                "delete cancellation",
+                ClientReleaseStatus.Published);
+            var version = SingleVersion(component);
+            var repository =
+                new InMemoryRepository<ClientReleaseComponent>();
+            repository.Items.Add(component);
+            using var cancellation = new CancellationTokenSource();
+            var handler = new DeleteClientReleasePackageHandler(
+                Options.Create(new EdgeInstallerArtifactOptions
+                {
+                    RootPath = Path.Combine(edgeRoot, "installers")
+                }),
+                repository,
+                new InMemoryDeviceClientStateStore(),
+                new TestCurrentUser(),
+                new RecordingAuditTrailService(),
+                NullLogger<DeleteClientReleasePackageHandler>.Instance,
+                new RecordingUnitOfWork
+                {
+                    BeforeOperationAsync = _ =>
+                    {
+                        cancellation.Cancel();
+                        return Task.CompletedTask;
+                    }
+                },
+                new InMemoryClientReleaseWriteObservationReader(
+                    repository));
+
+            var exception =
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                    () => handler.Handle(
+                        new DeleteClientReleasePackageCommand(version.Id),
+                        cancellation.Token));
+
+            Assert.Equal(cancellation.Token, exception.CancellationToken);
+            Assert.Equal(ClientReleaseStatus.Published, version.Status);
+            Assert.True(File.Exists(manifestPath));
         }
         finally
         {
@@ -2522,23 +3040,188 @@ public sealed class ClientReleaseBehaviorTests
             componentRepository.Items.Add(component);
             var deletionStore = new InMemoryClientReleaseComponentDeletionStore();
             var auditTrail = new RecordingAuditTrailService();
+            var commitFailureCount = 0;
+            var unitOfWork = new RecordingUnitOfWork
+            {
+                AfterOperationAsync = _ =>
+                {
+                    commitFailureCount += 1;
+                    if (commitFailureCount == 1)
+                    {
+                        throw new TimeoutException(
+                            "simulated metadata commit confirmation loss");
+                    }
+
+                    return Task.CompletedTask;
+                }
+            };
             var handler = CreateHardDeleteHandler(
                 edgeRoot,
                 componentRepository,
                 deletionStore,
-                auditTrail);
+                auditTrail,
+                unitOfWork: unitOfWork);
 
             var result = await handler.Handle(
                 new HardDeleteClientReleaseComponentCommand(component.Id, "错误工序"),
                 CancellationToken.None);
 
             Assert.True(result.IsSuccess);
+            Assert.True(commitFailureCount >= 3);
             Assert.Empty(componentRepository.Items);
             Assert.Empty(deletionStore.Items);
             Assert.False(Directory.Exists(moduleDirectory));
-            Assert.Contains(auditTrail.Entries, entry =>
+            Assert.Single(auditTrail.Entries, entry =>
                 entry.OperationType == "ClientRelease.HardDeleteComponent"
                 && entry.Succeeded);
+            Assert.DoesNotContain(auditTrail.Entries, entry =>
+                entry.OperationType == "ClientRelease.HardDeleteComponent"
+                && !entry.Succeeded);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task HardDeleteClientReleaseComponentHandler_ConcurrentDeletionDriftAfterCommitFailure_ShouldConflictWithoutCleanup()
+    {
+        var edgeRoot = CreateTempDirectory(
+            "iiot-hard-delete-metadata-conflict");
+        try
+        {
+            const string moduleId = "DieCutting";
+            var moduleDirectory = Path.Combine(
+                edgeRoot,
+                "plugins",
+                "stable",
+                moduleId);
+            var packagePath = Path.Combine(
+                moduleDirectory,
+                "1.0.0",
+                "die-cutting.zip");
+            var (packageSha, packageSize) =
+                WriteFactFile(packagePath, "plugin-package");
+            var component = CreatePluginComponent(
+                moduleId,
+                "模切",
+                "stable",
+                "1.0.0",
+                "1.0.0",
+                "1.0.0",
+                "2.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/plugins/stable/DieCutting/1.0.0/die-cutting.zip",
+                packageSha,
+                packageSize,
+                "concurrent metadata drift",
+                ClientReleaseStatus.Published);
+            var componentRepository =
+                new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(component);
+            var deletionStore =
+                new InMemoryClientReleaseComponentDeletionStore();
+            var auditTrail = new RecordingAuditTrailService();
+            var unitOfWork = new RecordingUnitOfWork
+            {
+                AfterOperationAsync = _ =>
+                {
+                    Assert.Single(deletionStore.Items).MarkFailed(
+                        "ConcurrentDeletionMutation");
+                    throw new TimeoutException(
+                        "simulated failure after concurrent deletion mutation");
+                }
+            };
+            var handler = CreateHardDeleteHandler(
+                edgeRoot,
+                componentRepository,
+                deletionStore,
+                auditTrail,
+                unitOfWork: unitOfWork);
+
+            await Assert.ThrowsAsync<CloudWriteConflictException>(
+                () => handler.Handle(
+                    new HardDeleteClientReleaseComponentCommand(
+                        component.Id,
+                        "concurrent metadata drift"),
+                    CancellationToken.None));
+
+            Assert.Empty(componentRepository.Items);
+            Assert.Equal(
+                ClientReleaseComponentDeletionStatus.Failed,
+                Assert.Single(deletionStore.Items).Status);
+            Assert.True(File.Exists(packagePath));
+            Assert.Empty(auditTrail.Entries);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task HardDeleteClientReleaseComponentHandler_BaselineOnlyAfterFailure_ShouldReturnUnknownWithoutSideEffects()
+    {
+        var edgeRoot = CreateTempDirectory(
+            "iiot-hard-delete-metadata-unknown");
+        try
+        {
+            const string moduleId = "DieCutting";
+            var packagePath = Path.Combine(
+                edgeRoot,
+                "plugins",
+                "stable",
+                moduleId,
+                "1.0.0",
+                "die-cutting.zip");
+            var (packageSha, packageSize) =
+                WriteFactFile(packagePath, "plugin-package");
+            var component = CreatePluginComponent(
+                moduleId,
+                "模切",
+                "stable",
+                "1.0.0",
+                "1.0.0",
+                "1.0.0",
+                "2.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/plugins/stable/DieCutting/1.0.0/die-cutting.zip",
+                packageSha,
+                packageSize,
+                "baseline unknown",
+                ClientReleaseStatus.Published);
+            var componentRepository =
+                new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(component);
+            var deletionStore =
+                new InMemoryClientReleaseComponentDeletionStore();
+            var auditTrail = new RecordingAuditTrailService();
+            var handler = CreateHardDeleteHandler(
+                edgeRoot,
+                componentRepository,
+                deletionStore,
+                auditTrail,
+                unitOfWork: new RecordingUnitOfWork
+                {
+                    BeforeOperationAsync = _ =>
+                        throw new TimeoutException(
+                            "simulated failure before persistence")
+                });
+
+            await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
+                () => handler.Handle(
+                    new HardDeleteClientReleaseComponentCommand(
+                        component.Id,
+                        "baseline unknown"),
+                    CancellationToken.None));
+
+            Assert.Single(componentRepository.Items);
+            Assert.Empty(deletionStore.Items);
+            Assert.True(File.Exists(packagePath));
+            Assert.Empty(auditTrail.Entries);
         }
         finally
         {
@@ -3191,6 +3874,11 @@ public sealed class ClientReleaseBehaviorTests
             var crashingProcessor = new CancellationAfterCommitProcessor(
                 CreateDeletionProcessor(edgeRoot, committedComponentRepository, deletionStore, auditTrail),
                 () => throw new InvalidOperationException("模拟进程中断"));
+            var commitUnitOfWork = new RecordingUnitOfWork();
+            var commitObservation =
+                new InMemoryClientReleaseWriteObservationReader(
+                    committedComponentRepository,
+                    deletionStore);
             var firstHandler = new HardDeleteClientReleaseComponentHandler(
                 Options.Create(new EdgeInstallerArtifactOptions { RootPath = Path.Combine(edgeRoot, "installers") }),
                 committedComponentRepository,
@@ -3199,7 +3887,8 @@ public sealed class ClientReleaseBehaviorTests
                 crashingProcessor,
                 new TestCurrentUser(),
                 auditTrail,
-                NullLogger<HardDeleteClientReleaseComponentHandler>.Instance);
+                commitUnitOfWork,
+                commitObservation);
 
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 firstHandler.Handle(
@@ -3277,12 +3966,19 @@ public sealed class ClientReleaseBehaviorTests
                 new EdgeInstallerArtifactOptions { RootPath = Path.Combine(edgeRoot, "installers") });
             var commitCount = 0;
             var cancellation = new CancellationTokenSource();
+            var unitOfWork = new RecordingUnitOfWork();
+            var observationReader =
+                new InMemoryClientReleaseWriteObservationReader(
+                    componentRepository,
+                    deletionStore);
             var processor = new ClientReleaseComponentDeletionProcessor(
                 processorOptions,
                 componentRepository,
                 deletionStore,
                 auditTrail,
-                NullLogger<ClientReleaseComponentDeletionProcessor>.Instance);
+                NullLogger<ClientReleaseComponentDeletionProcessor>.Instance,
+                unitOfWork,
+                observationReader);
             var handler = new HardDeleteClientReleaseComponentHandler(
                 processorOptions,
                 componentRepository,
@@ -3299,7 +3995,8 @@ public sealed class ClientReleaseBehaviorTests
                 }),
                 new TestCurrentUser(),
                 auditTrail,
-                NullLogger<HardDeleteClientReleaseComponentHandler>.Instance);
+                unitOfWork,
+                observationReader);
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
                 handler.Handle(
@@ -4321,6 +5018,11 @@ public sealed class ClientReleaseBehaviorTests
             var crashingProcessor = new CancellationAfterCommitProcessor(
                 CreateDeletionProcessor(edgeRoot, componentRepository, deletionStore, auditTrail),
                 () => throw new InvalidOperationException("模拟进程中断"));
+            var commitUnitOfWork = new RecordingUnitOfWork();
+            var commitObservation =
+                new InMemoryClientReleaseWriteObservationReader(
+                    componentRepository,
+                    deletionStore);
             var firstHandler = new HardDeleteClientReleaseComponentHandler(
                 Options.Create(new EdgeInstallerArtifactOptions { RootPath = Path.Combine(edgeRoot, "installers") }),
                 componentRepository,
@@ -4329,7 +5031,8 @@ public sealed class ClientReleaseBehaviorTests
                 crashingProcessor,
                 new TestCurrentUser(),
                 auditTrail,
-                NullLogger<HardDeleteClientReleaseComponentHandler>.Instance);
+                commitUnitOfWork,
+                commitObservation);
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 firstHandler.Handle(
                     new HardDeleteClientReleaseComponentCommand(component.Id, "持久化后祖先被替换"),
@@ -4415,6 +5118,11 @@ public sealed class ClientReleaseBehaviorTests
             var crashingProcessor = new CancellationAfterCommitProcessor(
                 CreateDeletionProcessor(edgeRoot, componentRepository, deletionStore, auditTrail),
                 () => throw new InvalidOperationException("模拟进程中断"));
+            var commitUnitOfWork = new RecordingUnitOfWork();
+            var commitObservation =
+                new InMemoryClientReleaseWriteObservationReader(
+                    componentRepository,
+                    deletionStore);
             var firstHandler = new HardDeleteClientReleaseComponentHandler(
                 Options.Create(new EdgeInstallerArtifactOptions { RootPath = Path.Combine(edgeRoot, "installers") }),
                 componentRepository,
@@ -4423,7 +5131,8 @@ public sealed class ClientReleaseBehaviorTests
                 crashingProcessor,
                 new TestCurrentUser(),
                 auditTrail,
-                NullLogger<HardDeleteClientReleaseComponentHandler>.Instance);
+                commitUnitOfWork,
+                commitObservation);
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 firstHandler.Handle(
                     new HardDeleteClientReleaseComponentCommand(component.Id, "持久化后文件被替换"),
@@ -5722,10 +6431,35 @@ public sealed class ClientReleaseBehaviorTests
     {
         public Action? OnCommit { get; init; }
 
-        public Task<TResult> ExecuteResilientAsync<TResult>(
+        public Func<CancellationToken, Task>? BeforeOperationAsync
+        {
+            get;
+            init;
+        }
+
+        public Func<CancellationToken, Task>? AfterOperationAsync
+        {
+            get;
+            init;
+        }
+
+        public async Task<TResult> ExecuteResilientAsync<TResult>(
             Func<CancellationToken, Task<TResult>> operation,
             CancellationToken cancellationToken = default)
-            => operation(cancellationToken);
+        {
+            if (BeforeOperationAsync is not null)
+            {
+                await BeforeOperationAsync(cancellationToken);
+            }
+
+            var result = await operation(cancellationToken);
+            if (AfterOperationAsync is not null)
+            {
+                await AfterOperationAsync(cancellationToken);
+            }
+
+            return result;
+        }
 
         public Task BeginTransactionAsync(
             CancellationToken cancellationToken = default)
@@ -5872,17 +6606,34 @@ public sealed class ClientReleaseBehaviorTests
         InMemoryRepository<ClientReleaseComponent> componentRepository,
         InMemoryClientReleaseComponentDeletionStore deletionStore,
         IAuditTrailService auditTrail,
-        IDeviceClientStateStore? clientStateStore = null)
+        IDeviceClientStateStore? clientStateStore = null,
+        IUnitOfWork? unitOfWork = null)
     {
+        unitOfWork ??= new RecordingUnitOfWork();
+        var observationReader =
+            new InMemoryClientReleaseWriteObservationReader(
+                componentRepository,
+                deletionStore);
         return new HardDeleteClientReleaseComponentHandler(
             Options.Create(new EdgeInstallerArtifactOptions { RootPath = Path.Combine(edgeRoot, "installers") }),
             componentRepository,
             clientStateStore ?? new InMemoryDeviceClientStateStore(),
             deletionStore,
-            CreateDeletionProcessor(edgeRoot, componentRepository, deletionStore, auditTrail),
+            new ClientReleaseComponentDeletionProcessor(
+                Options.Create(new EdgeInstallerArtifactOptions
+                {
+                    RootPath = Path.Combine(edgeRoot, "installers")
+                }),
+                componentRepository,
+                deletionStore,
+                auditTrail,
+                NullLogger<ClientReleaseComponentDeletionProcessor>.Instance,
+                unitOfWork,
+                observationReader),
             new TestCurrentUser(),
             auditTrail,
-            NullLogger<HardDeleteClientReleaseComponentHandler>.Instance);
+            unitOfWork,
+            observationReader);
     }
 
     private static ClientReleaseComponentDeletionProcessor CreateDeletionProcessor(
@@ -5891,12 +6642,17 @@ public sealed class ClientReleaseBehaviorTests
         InMemoryClientReleaseComponentDeletionStore deletionStore,
         IAuditTrailService auditTrail)
     {
+        var unitOfWork = new RecordingUnitOfWork();
         return new ClientReleaseComponentDeletionProcessor(
             Options.Create(new EdgeInstallerArtifactOptions { RootPath = Path.Combine(edgeRoot, "installers") }),
             componentRepository,
             deletionStore,
             auditTrail,
-            NullLogger<ClientReleaseComponentDeletionProcessor>.Instance);
+            NullLogger<ClientReleaseComponentDeletionProcessor>.Instance,
+            unitOfWork,
+            new InMemoryClientReleaseWriteObservationReader(
+                componentRepository,
+                deletionStore));
     }
 
     private static RetryClientReleaseComponentDeletionHandler CreateRetryHandler(
@@ -5967,6 +6723,168 @@ public sealed class ClientReleaseBehaviorTests
             => SaveChangesAsyncOverride is not null
                 ? SaveChangesAsyncOverride(cancellationToken)
                 : Task.FromResult(1);
+    }
+
+    private sealed class InMemoryClientReleaseWriteObservationReader(
+        InMemoryRepository<ClientReleaseComponent>? componentRepository = null,
+        InMemoryClientReleaseComponentDeletionStore? deletionStore = null,
+        InMemoryRepository<ClientReleaseRetentionPolicy>? policyRepository = null,
+        InMemoryRepository<Device>? deviceRepository = null)
+        : IClientReleaseWriteObservationReader
+    {
+        private int observationCount;
+
+        public Func<string, int, Exception?>? FailureFactory
+        {
+            get;
+            init;
+        }
+
+        public Task<ClientReleaseVersionWriteState?> ObserveVersionAsync(
+            Guid versionId,
+            CancellationToken cancellationToken)
+        {
+            BeforeObservation("version", cancellationToken);
+            var component = componentRepository?.Items.SingleOrDefault(
+                current => current.Versions.Any(
+                    version => version.Id == versionId));
+            var version = component?.FindVersion(versionId);
+            return Task.FromResult(
+                component is null || version is null
+                    ? null
+                    : ClientReleaseWriteStateFingerprint.ForVersion(
+                        component,
+                        version));
+        }
+
+        public Task<IReadOnlyList<ClientReleaseVersionWriteState>>
+            ObserveVersionsAsync(
+                IReadOnlyCollection<Guid> versionIds,
+                CancellationToken cancellationToken)
+        {
+            BeforeObservation("versions", cancellationToken);
+            var requested = versionIds.ToHashSet();
+            IReadOnlyList<ClientReleaseVersionWriteState> result =
+                (componentRepository?.Items
+                     ?? [])
+                .SelectMany(component => component.Versions
+                    .Where(version => requested.Contains(version.Id))
+                    .Select(version =>
+                        ClientReleaseWriteStateFingerprint.ForVersion(
+                            component,
+                            version)))
+                .OrderBy(version => version.VersionId)
+                .ToList();
+            return Task.FromResult(result);
+        }
+
+        public Task<ClientReleaseComponentWriteState?>
+            ObserveComponentAsync(
+                Guid componentId,
+                CancellationToken cancellationToken)
+        {
+            BeforeObservation("component", cancellationToken);
+            var component = componentRepository?.Items.SingleOrDefault(
+                current => current.Id == componentId);
+            return Task.FromResult(
+                component is null
+                    ? null
+                    : ClientReleaseWriteStateFingerprint.ForComponent(
+                        component));
+        }
+
+        public Task<ClientReleaseComponentDeletionWriteObservation>
+            ObserveComponentDeletionAsync(
+                Guid componentId,
+                Guid deletionId,
+                CancellationToken cancellationToken)
+        {
+            BeforeObservation("component-deletion", cancellationToken);
+            var component = componentRepository?.Items.SingleOrDefault(
+                current => current.Id == componentId);
+            var deletion = deletionStore?.Items.SingleOrDefault(
+                current => current.Id == deletionId);
+            return Task.FromResult(
+                new ClientReleaseComponentDeletionWriteObservation(
+                    component is null
+                        ? null
+                        : ClientReleaseWriteStateFingerprint
+                            .ForComponent(component),
+                    deletion is null
+                        ? null
+                        : ClientReleaseWriteStateFingerprint
+                            .ForDeletion(deletion)));
+        }
+
+        public Task<ClientReleaseDeletionWriteState?>
+            ObserveDeletionAsync(
+                Guid deletionId,
+                CancellationToken cancellationToken)
+        {
+            BeforeObservation("deletion", cancellationToken);
+            var deletion = deletionStore?.Items.SingleOrDefault(
+                current => current.Id == deletionId);
+            return Task.FromResult(
+                deletion is null
+                    ? null
+                    : ClientReleaseWriteStateFingerprint.ForDeletion(
+                        deletion));
+        }
+
+        public Task<ClientReleaseRetentionPolicyWriteState?>
+            ObserveRetentionPolicyAsync(
+                CancellationToken cancellationToken)
+        {
+            BeforeObservation("retention-policy", cancellationToken);
+            var policy = policyRepository?.Items.SingleOrDefault(
+                current =>
+                    current.Id
+                    == ClientReleaseRetentionPolicy.SingletonId);
+            return Task.FromResult(
+                policy is null
+                    ? null
+                    : new ClientReleaseRetentionPolicyWriteState(
+                        policy.Id,
+                        policy.MaxVersionsPerComponent,
+                        ClientReleaseWriteCommitRecovery.NormalizeUtc(
+                            policy.UpdatedAtUtc),
+                        policy.RowVersion));
+        }
+
+        public Task<IReadOnlyList<DeviceBootstrapWriteState>>
+            ObserveDeviceBootstrapAsync(
+                IReadOnlyCollection<Guid> deviceIds,
+                CancellationToken cancellationToken)
+        {
+            BeforeObservation("device-bootstrap", cancellationToken);
+            var requested = deviceIds.ToHashSet();
+            IReadOnlyList<DeviceBootstrapWriteState> result =
+                (deviceRepository?.Items ?? [])
+                .Where(device => requested.Contains(device.Id))
+                .OrderBy(device => device.Id)
+                .Select(device => new DeviceBootstrapWriteState(
+                    device.Id,
+                    device.DeviceName,
+                    device.Code,
+                    device.ProcessId,
+                    device.BootstrapSecretHash,
+                    device.RowVersion))
+                .ToList();
+            return Task.FromResult(result);
+        }
+
+        private void BeforeObservation(
+            string operation,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var count = Interlocked.Increment(ref observationCount);
+            var exception = FailureFactory?.Invoke(operation, count);
+            if (exception is not null)
+            {
+                throw exception;
+            }
+        }
     }
 
     private sealed class StubClientReleaseHistoryQueryService(

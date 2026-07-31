@@ -26,9 +26,11 @@ public sealed class ClientReleaseComponentDeletion : BaseEntity<Guid>
         string? reason,
         Guid? requestedByUserId,
         string? requestedByUserName,
-        IEnumerable<ClientReleaseComponentDeletionFileTarget> fileTargets)
+        IEnumerable<ClientReleaseComponentDeletionFileTarget> fileTargets,
+        Guid? deletionId = null,
+        DateTime? createdAtUtc = null)
     {
-        Id = Guid.NewGuid();
+        Id = deletionId ?? Guid.NewGuid();
         ComponentId = componentId;
         ComponentKind = ClientReleaseComponent.NormalizeRequired(componentKind, nameof(componentKind));
         ComponentKey = ClientReleaseComponent.NormalizeRequired(componentKey, nameof(componentKey));
@@ -41,7 +43,8 @@ public sealed class ClientReleaseComponentDeletion : BaseEntity<Guid>
         RequestedByUserName = ClientReleaseComponent.NormalizeOptional(requestedByUserName);
         Status = ClientReleaseComponentDeletionStatus.Requested;
         RetryCount = 0;
-        CreatedAtUtc = DateTime.UtcNow;
+        CreatedAtUtc = ClientReleaseComponent.NormalizeUtc(
+            createdAtUtc ?? DateTime.UtcNow);
         UpdatedAtUtc = CreatedAtUtc;
         foreach (var target in fileTargets
                      .DistinctBy(target => target.RelativePath, StringComparer.Ordinal)
@@ -88,16 +91,21 @@ public sealed class ClientReleaseComponentDeletion : BaseEntity<Guid>
 
     public DateTime? CleanupCompletedAtUtc { get; private set; }
 
+    public uint RowVersion { get; private set; }
+
     public IReadOnlyCollection<ClientReleaseComponentDeletionFile> Files => _files.AsReadOnly();
 
-    public void MarkFailed(string failureCode)
+    public void MarkFailed(
+        string failureCode,
+        DateTime? failedAtUtc = null)
     {
         Status = ClientReleaseComponentDeletionStatus.Failed;
         FailureCode = ClientReleaseComponent.NormalizeRequired(failureCode, nameof(failureCode));
         CleanupResultJson = null;
         CleanupCompletedAtUtc = null;
         RetryCount += 1;
-        UpdatedAtUtc = DateTime.UtcNow;
+        UpdatedAtUtc = ClientReleaseComponent.NormalizeUtc(
+            failedAtUtc ?? DateTime.UtcNow);
     }
 
     /// <summary>
@@ -106,7 +114,8 @@ public sealed class ClientReleaseComponentDeletion : BaseEntity<Guid>
     public void MarkCleanupCompleted(
         IReadOnlyList<string> deletedPaths,
         IReadOnlyList<string> skippedPaths,
-        bool manifestChanged)
+        bool manifestChanged,
+        DateTime? completedAtUtc = null)
     {
         if (Status == ClientReleaseComponentDeletionStatus.CleanupCompleted
             && CleanupResultJson is not null
@@ -115,7 +124,8 @@ public sealed class ClientReleaseComponentDeletion : BaseEntity<Guid>
             return;
         }
 
-        var completedAtUtc = DateTime.UtcNow;
+        var completedAt = ClientReleaseComponent.NormalizeUtc(
+            completedAtUtc ?? DateTime.UtcNow);
         Status = ClientReleaseComponentDeletionStatus.CleanupCompleted;
         FailureCode = null;
         CleanupResultJson = System.Text.Json.JsonSerializer.Serialize(
@@ -123,8 +133,8 @@ public sealed class ClientReleaseComponentDeletion : BaseEntity<Guid>
                 [.. deletedPaths],
                 [.. skippedPaths],
                 manifestChanged));
-        CleanupCompletedAtUtc = completedAtUtc;
-        UpdatedAtUtc = completedAtUtc;
+        CleanupCompletedAtUtc = completedAt;
+        UpdatedAtUtc = completedAt;
     }
 
     public bool TryGetCleanupResult(out ClientReleaseComponentDeletionCleanupResult? result)
@@ -151,13 +161,14 @@ public sealed class ClientReleaseComponentDeletion : BaseEntity<Guid>
         }
     }
 
-    public void ResetForRetry()
+    public void ResetForRetry(DateTime? resetAtUtc = null)
     {
         Status = ClientReleaseComponentDeletionStatus.Requested;
         FailureCode = null;
         CleanupResultJson = null;
         CleanupCompletedAtUtc = null;
-        UpdatedAtUtc = DateTime.UtcNow;
+        UpdatedAtUtc = ClientReleaseComponent.NormalizeUtc(
+            resetAtUtc ?? DateTime.UtcNow);
     }
 }
 

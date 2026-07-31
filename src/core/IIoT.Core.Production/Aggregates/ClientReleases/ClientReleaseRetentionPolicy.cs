@@ -13,11 +13,14 @@ public sealed class ClientReleaseRetentionPolicy : BaseEntity<Guid>, IAggregateR
     {
     }
 
-    public ClientReleaseRetentionPolicy(int maxVersionsPerComponent)
+    public ClientReleaseRetentionPolicy(
+        int maxVersionsPerComponent,
+        DateTime? updatedAtUtc = null)
     {
         Id = SingletonId;
         MaxVersionsPerComponent = maxVersionsPerComponent;
-        UpdatedAtUtc = DateTime.UtcNow;
+        UpdatedAtUtc = ClientReleaseComponent.NormalizeUtc(
+            updatedAtUtc ?? DateTime.UtcNow);
         Validate();
     }
 
@@ -25,10 +28,15 @@ public sealed class ClientReleaseRetentionPolicy : BaseEntity<Guid>, IAggregateR
 
     public DateTime UpdatedAtUtc { get; private set; }
 
-    public void Update(int maxVersionsPerComponent)
+    public uint RowVersion { get; private set; }
+
+    public void Update(
+        int maxVersionsPerComponent,
+        DateTime? updatedAtUtc = null)
     {
         MaxVersionsPerComponent = maxVersionsPerComponent;
-        UpdatedAtUtc = DateTime.UtcNow;
+        UpdatedAtUtc = ClientReleaseComponent.NormalizeUtc(
+            updatedAtUtc ?? DateTime.UtcNow);
         Validate();
     }
 

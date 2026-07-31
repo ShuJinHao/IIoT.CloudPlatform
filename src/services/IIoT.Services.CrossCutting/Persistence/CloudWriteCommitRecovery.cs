@@ -50,6 +50,53 @@ public static class CloudWriteCommitRecovery
         }
     }
 
+    public static async Task<CloudWriteOptionalObservation<T>?>
+        TryObserveOptionalAttemptAsync<T>(
+            Func<CancellationToken, Task<T?>> observeAsync,
+            CancellationToken callbackCancellationToken)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(observeAsync);
+        callbackCancellationToken.ThrowIfCancellationRequested();
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
+            callbackCancellationToken);
+        timeout.CancelAfter(ObservationTimeout);
+        try
+        {
+            return new CloudWriteOptionalObservation<T>(
+                await observeAsync(timeout.Token));
+        }
+        catch (OperationCanceledException)
+            when (callbackCancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(
+                callbackCancellationToken);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public static async Task<CloudWriteOptionalObservation<T>?>
+        TryObserveOptionalCommitAsync<T>(
+            Func<CancellationToken, Task<T?>> observeAsync)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(observeAsync);
+        using var timeout = new CancellationTokenSource(
+            ObservationTimeout);
+        try
+        {
+            return new CloudWriteOptionalObservation<T>(
+                await observeAsync(timeout.Token));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public static async Task ConfirmRecoveredAuditAsync(
         IAuditTrailService auditTrailService,
         AuditTrailEntry auditEntry)
@@ -95,3 +142,6 @@ public static class CloudWriteCommitRecovery
         }
     }
 }
+
+public sealed record CloudWriteOptionalObservation<T>(T? Value)
+    where T : class;
