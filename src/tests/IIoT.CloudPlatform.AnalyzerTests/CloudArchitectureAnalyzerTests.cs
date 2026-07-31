@@ -1288,7 +1288,8 @@ public sealed class CloudArchitectureAnalyzerTests
                     _ = Dapper.SqlMapper.Query(db, "SELECT mutate_business_state()");
                     _ = Dapper.SqlMapper.Query(db, "SELECT \"mutate_business_state\"()");
                     _ = Dapper.SqlMapper.Query(db, "SELECT \"custom_schema\".\"mutate_business_state\"()");
-                    _ = Dapper.SqlMapper.Query(db, "SELECT COUNT(*), LOWER('SAFE') FROM devices");
+                    _ = Dapper.SqlMapper.Query(db, "SELECT lower(1)");
+                    _ = Dapper.SqlMapper.Query(db, "SELECT pg_catalog.count(*) FROM devices");
                     _ = Dapper.SqlMapper.Query(db, "SELECT \"column\" FROM devices");
                     return System.Threading.Tasks.Task.FromResult(1);
                 }
@@ -1300,7 +1301,7 @@ public sealed class CloudArchitectureAnalyzerTests
             [source],
             dapper);
 
-        Assert.Equal(6, diagnostics.Length);
+        Assert.Equal(7, diagnostics.Length);
         Assert.All(diagnostics, diagnostic => Assert.Equal("CLOUDARCH004", diagnostic.Id));
     }
 

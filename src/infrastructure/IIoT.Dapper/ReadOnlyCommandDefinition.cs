@@ -17,12 +17,20 @@ internal readonly struct ReadOnlyCommandDefinition
         CommandFlags flags = CommandFlags.Buffered,
         CancellationToken cancellationToken = default)
     {
+        if (commandType is not null and not CommandType.Text)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(commandType),
+                commandType,
+                "Read-only commands must use CommandType.Text.");
+        }
+
         _command = new CommandDefinition(
             ReadOnlySqlGuard.Require(commandText),
             parameters,
             transaction,
             commandTimeout,
-            commandType,
+            CommandType.Text,
             flags,
             cancellationToken);
     }

@@ -751,6 +751,10 @@ public sealed class PersistenceBoundaryArchitectureTests
     [Theory]
     [InlineData("delete from sample returning id")]
     [InlineData("select dangerous_side_effect()")]
+    [InlineData("select lower(value::text) from sample")]
+    [InlineData("select public.lower(value::text) from sample")]
+    [InlineData("select pg_catalog.upper(value::integer) from sample")]
+    [InlineData("select pg_catalog.sum(value::bigint) from sample")]
     [InlineData("select 1; delete from sample")]
     public void ReadOnlyCommandDefinition_ShouldRejectUnprovenSql(string sql)
     {
@@ -769,6 +773,24 @@ public sealed class PersistenceBoundaryArchitectureTests
             ]));
 
         Assert.IsType<InvalidOperationException>(exception.InnerException);
+    }
+
+    [Fact]
+    public void ReadOnlyCommandDefinition_ShouldRejectStoredProcedures()
+    {
+        var exception = Assert.Throws<System.Reflection.TargetInvocationException>(
+            () => GetReadOnlyCommandConstructor().Invoke(
+            [
+                "select_apply",
+                null,
+                null,
+                null,
+                System.Data.CommandType.StoredProcedure,
+                global::Dapper.CommandFlags.Buffered,
+                CancellationToken.None
+            ]));
+
+        Assert.IsType<ArgumentOutOfRangeException>(exception.InnerException);
     }
 
     [Fact]
@@ -792,6 +814,12 @@ public sealed class PersistenceBoundaryArchitectureTests
     [InlineData("select 1")]
     [InlineData("with sample as (select 1) select * from sample")]
     [InlineData("select * from sample where id = any(@Ids)")]
+    [InlineData("select pg_catalog.count(*) from sample")]
+    [InlineData("select pg_catalog.upper(name::text) from sample")]
+    [InlineData("select pg_catalog.min(name::text) from sample")]
+    [InlineData("select pg_catalog.sum(value::integer) from sample")]
+    [InlineData("select pg_catalog.max(seen_at::timestamptz) from sample")]
+    [InlineData("select pg_catalog.make_interval(hours => hour::integer, mins => minute::integer) from sample")]
     public void ReadOnlySqlGuard_ShouldAcceptProvenReadOnlySql(string sql)
     {
         Assert.Equal(sql, ReadOnlySqlGuard.Require(sql));

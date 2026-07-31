@@ -43,7 +43,7 @@ internal sealed class AiProductionRecordQueryService(IDbConnectionFactory connec
             OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY
             """;
         var countSql = $"""
-            SELECT COUNT(*)
+            SELECT pg_catalog.count(*)
             FROM pass_station_records r
             INNER JOIN devices d ON r.device_id = d.id
             {conditions}

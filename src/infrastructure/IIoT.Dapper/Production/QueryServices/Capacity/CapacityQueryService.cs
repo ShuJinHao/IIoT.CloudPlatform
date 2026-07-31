@@ -80,7 +80,9 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
                     h.ok_count,
                     h.ng_count,
                     h.plc_name,
-                    (h.date::timestamp + make_interval(hours => h.hour, mins => h.minute)) AS bucket_time
+                    (h.date::timestamp + pg_catalog.make_interval(
+                        hours => h.hour::integer,
+                        mins => h.minute::integer)) AS bucket_time
                 FROM hourly_capacity h
                 WHERE h.device_id = @DeviceId
                   AND h.date >= @StartDate
@@ -142,10 +144,10 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
             SELECT
                 h.hour                               AS Hour,
                 h.minute                             AS Minute,
-                MIN(h.time_label)                    AS TimeLabel,
-                COALESCE(SUM(h.total_count), 0)::bigint AS TotalCount,
-                COALESCE(SUM(h.ok_count),    0)::bigint AS OkCount,
-                COALESCE(SUM(h.ng_count),    0)::bigint AS NgCount
+                pg_catalog.min(h.time_label::text) AS TimeLabel,
+                COALESCE(pg_catalog.sum(h.total_count::integer), 0)::bigint AS TotalCount,
+                COALESCE(pg_catalog.sum(h.ok_count::integer),    0)::bigint AS OkCount,
+                COALESCE(pg_catalog.sum(h.ng_count::integer),    0)::bigint AS NgCount
             FROM hourly_capacity h
             INNER JOIN devices d ON h.device_id = d.id
             {conditions}
@@ -173,9 +175,9 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
         const string sql = @"
             SELECT
                 h.shift_code                    AS ShiftCode,
-                COALESCE(SUM(h.total_count), 0) AS TotalCount,
-                COALESCE(SUM(h.ok_count),    0) AS OkCount,
-                COALESCE(SUM(h.ng_count),    0) AS NgCount
+                COALESCE(pg_catalog.sum(h.total_count::integer), 0) AS TotalCount,
+                COALESCE(pg_catalog.sum(h.ok_count::integer),    0) AS OkCount,
+                COALESCE(pg_catalog.sum(h.ng_count::integer),    0) AS NgCount
             FROM hourly_capacity h
             WHERE h.device_id = @DeviceId
               AND h.date = @Date
@@ -228,9 +230,9 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
             SELECT
                 h.date                          AS Date,
                 h.shift_code                    AS ShiftCode,
-                COALESCE(SUM(h.total_count), 0) AS TotalCount,
-                COALESCE(SUM(h.ok_count),    0) AS OkCount,
-                COALESCE(SUM(h.ng_count),    0) AS NgCount
+                COALESCE(pg_catalog.sum(h.total_count::integer), 0) AS TotalCount,
+                COALESCE(pg_catalog.sum(h.ok_count::integer),    0) AS OkCount,
+                COALESCE(pg_catalog.sum(h.ng_count::integer),    0) AS NgCount
                 {plcSelect}
             FROM hourly_capacity h
             WHERE h.device_id = @DeviceId
@@ -326,13 +328,10 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
                 h.device_id    AS DeviceId,
                 d.device_name  AS DeviceName,
                 h.date         AS Date,
-                COALESCE(SUM(h.total_count), 0) AS TotalCount,
-                COALESCE(SUM(h.ok_count),    0) AS OkCount,
-                COALESCE(SUM(h.ng_count),    0) AS NgCount,
-                CASE WHEN SUM(h.total_count) > 0
-                     THEN ROUND(SUM(h.ok_count) * 100.0 / SUM(h.total_count), 2)
-                     ELSE 0 END AS OkRate,
-                MAX(h.reported_at) AS ReportedAt
+                COALESCE(pg_catalog.sum(h.total_count::integer), 0) AS TotalCount,
+                COALESCE(pg_catalog.sum(h.ok_count::integer),    0) AS OkCount,
+                COALESCE(pg_catalog.sum(h.ng_count::integer),    0) AS NgCount,
+                pg_catalog.max(h.reported_at::timestamptz) AS ReportedAt
             FROM hourly_capacity h
             INNER JOIN devices d ON h.device_id = d.id
             {conditions}
@@ -341,7 +340,7 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
             OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY";
 
         var countSql = $@"
-            SELECT COUNT(*) FROM (
+            SELECT pg_catalog.count(*) FROM (
                 SELECT h.device_id, h.date
                 FROM hourly_capacity h
                 {conditions}
@@ -361,10 +360,37 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
             parameters,
             cancellationToken: cancellationToken);
 
-        var items = (await connection.QueryAsync<DailyCapacityPagedItemDto>(dataCmd)).ToList();
+        var rows = await connection.QueryAsync<DailyCapacityPagedRow>(dataCmd);
+        var items = rows
+            .Select(row => new DailyCapacityPagedItemDto(
+                row.DeviceId,
+                row.DeviceName,
+                row.Date,
+                row.TotalCount,
+                row.OkCount,
+                row.NgCount,
+                row.TotalCount > 0
+                    ? decimal.Round(
+                        row.OkCount * 100m / row.TotalCount,
+                        2,
+                        MidpointRounding.AwayFromZero)
+                    : 0m,
+                row.ReportedAt))
+            .ToList();
         var totalCount = await connection.ExecuteScalarAsync<int>(countCmd);
 
         return (items, totalCount);
+    }
+
+    private sealed class DailyCapacityPagedRow
+    {
+        public Guid DeviceId { get; set; }
+        public string DeviceName { get; set; } = string.Empty;
+        public DateOnly Date { get; set; }
+        public long TotalCount { get; set; }
+        public long OkCount { get; set; }
+        public long NgCount { get; set; }
+        public DateTime ReportedAt { get; set; }
     }
 
     // 合并白班/夜班汇总结果。

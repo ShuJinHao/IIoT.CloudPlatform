@@ -42,7 +42,8 @@ internal sealed class PassStationRecordQueryService(IDbConnectionFactory connect
             OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY
             """;
 
-        var countSql = $"SELECT COUNT(*) FROM pass_station_records {conditions}";
+        var countSql =
+            $"SELECT pg_catalog.count(*) FROM pass_station_records {conditions}";
 
         var rows = (await connection.QueryAsync<PassStationRecordRow>(
             new ReadOnlyCommandDefinition(

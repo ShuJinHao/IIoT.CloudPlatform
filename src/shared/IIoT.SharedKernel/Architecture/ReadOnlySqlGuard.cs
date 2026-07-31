@@ -31,37 +31,13 @@ public static class ReadOnlySqlGuard
         "(?<![\\w$\\\"])(?<name>(?:[A-Za-z_][A-Za-z0-9_$]*|\\\"[^\\\"]*\\\")(?:\\s*\\.\\s*(?:[A-Za-z_][A-Za-z0-9_$]*|\\\"[^\\\"]*\\\"))?)\\s*\\(",
         RegexOptions.CultureInvariant);
 
-    private static readonly HashSet<string> ProvenReadOnlySqlFunctions = new(
-        StringComparer.OrdinalIgnoreCase)
-    {
-        "abs",
-        "avg",
-        "ceil",
-        "ceiling",
-        "char_length",
-        "coalesce",
-        "concat",
-        "count",
-        "date_part",
-        "date_trunc",
-        "extract",
-        "floor",
-        "greatest",
-        "json_array_length",
-        "jsonb_array_length",
-        "least",
-        "length",
-        "lower",
-        "make_interval",
-        "max",
-        "min",
-        "nullif",
-        "round",
-        "row_number",
-        "sum",
-        "trim",
-        "upper"
-    };
+    private static readonly Regex QualifiedColumnCast = new(
+        @"^\s*(?:[A-Za-z_][A-Za-z0-9_$]*\s*\.\s*)?[A-Za-z_][A-Za-z0-9_$]*\s*::\s*(?<type>text|integer|timestamptz)\s*$",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    private static readonly Regex MakeIntervalArguments = new(
+        @"^\s*hours\s*=>\s*(?:[A-Za-z_][A-Za-z0-9_$]*\s*\.\s*)?[A-Za-z_][A-Za-z0-9_$]*\s*::\s*integer\s*,\s*mins\s*=>\s*(?:[A-Za-z_][A-Za-z0-9_$]*\s*\.\s*)?[A-Za-z_][A-Za-z0-9_$]*\s*::\s*integer\s*$",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static readonly HashSet<string> SqlStructuralParentheses = new(
         StringComparer.OrdinalIgnoreCase)
@@ -70,13 +46,19 @@ public static class ReadOnlySqlGuard
         "and",
         "any",
         "as",
+        "coalesce",
         "exists",
+        "extract",
         "filter",
         "from",
+        "greatest",
         "in",
         "join",
+        "least",
+        "nullif",
         "or",
         "over",
+        "trim",
         "values"
     };
 
@@ -145,15 +127,78 @@ public static class ReadOnlySqlGuard
                 continue;
             }
 
-            // PostgreSQL permits user-defined SELECT functions to mutate state.
-            if (name.IndexOf('.') >= 0 ||
-                name.IndexOf('"') >= 0 ||
-                !ProvenReadOnlySqlFunctions.Contains(name))
+            if (!TryGetFunctionArguments(
+                    code,
+                    match.Index + match.Length,
+                    out var arguments) ||
+                !HasProvenPgCatalogSignature(name, arguments))
             {
                 return true;
             }
         }
 
+        return false;
+    }
+
+    private static bool HasProvenPgCatalogSignature(
+        string qualifiedName,
+        string arguments)
+    {
+        const string prefix = "pg_catalog.";
+        if (!qualifiedName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
+            qualifiedName.IndexOf('"') >= 0)
+        {
+            return false;
+        }
+
+        var functionName = qualifiedName.Substring(prefix.Length);
+        if (functionName.Equals("count", StringComparison.OrdinalIgnoreCase))
+        {
+            return arguments.Trim() == "*";
+        }
+
+        if (functionName.Equals("make_interval", StringComparison.OrdinalIgnoreCase))
+        {
+            return MakeIntervalArguments.IsMatch(arguments);
+        }
+
+        var argument = QualifiedColumnCast.Match(arguments);
+        if (!argument.Success)
+        {
+            return false;
+        }
+
+        var castType = argument.Groups["type"].Value;
+        return (functionName.Equals("upper", StringComparison.OrdinalIgnoreCase) &&
+                castType.Equals("text", StringComparison.OrdinalIgnoreCase)) ||
+               (functionName.Equals("min", StringComparison.OrdinalIgnoreCase) &&
+                castType.Equals("text", StringComparison.OrdinalIgnoreCase)) ||
+               (functionName.Equals("sum", StringComparison.OrdinalIgnoreCase) &&
+                castType.Equals("integer", StringComparison.OrdinalIgnoreCase)) ||
+               (functionName.Equals("max", StringComparison.OrdinalIgnoreCase) &&
+                castType.Equals("timestamptz", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool TryGetFunctionArguments(
+        string code,
+        int argumentStart,
+        out string arguments)
+    {
+        var depth = 1;
+        for (var index = argumentStart; index < code.Length; index++)
+        {
+            if (code[index] == '(')
+            {
+                depth++;
+            }
+            else if (code[index] == ')' && --depth == 0)
+            {
+                arguments = code.Substring(argumentStart, index - argumentStart);
+                return true;
+            }
+        }
+
+        arguments = string.Empty;
         return false;
     }
 

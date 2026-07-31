@@ -25,7 +25,8 @@ internal class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : I
 
         if (normalizedLevels is { Count: > 0 })
         {
-            conditions += " AND upper(l.level) = ANY(@Levels)";
+            conditions +=
+                " AND pg_catalog.upper(l.level::text) = ANY(@Levels)";
             parameters.Add("Levels", normalizedLevels.ToArray());
         }
         else if (!string.IsNullOrWhiteSpace(level))
@@ -68,7 +69,7 @@ internal class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : I
             OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY";
 
         var countSql = $@"
-            SELECT COUNT(*)
+            SELECT pg_catalog.count(*)
             FROM device_logs l
             {conditions}";
 
@@ -105,7 +106,8 @@ internal class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : I
 
         using var connection = connectionFactory.CreateConnection();
 
-        var conditions = "WHERE upper(l.level) = ANY(@Levels)";
+        var conditions =
+            "WHERE pg_catalog.upper(l.level::text) = ANY(@Levels)";
         var parameters = new DynamicParameters();
         parameters.Add("Levels", normalizedLevels.ToArray());
         parameters.Add("Limit", limit);
@@ -158,7 +160,9 @@ internal class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : I
 
         using var connection = connectionFactory.CreateConnection();
 
-        var conditions = "WHERE l.log_time >= @WindowStart AND upper(l.level) = ANY(@Levels)";
+        var conditions =
+            "WHERE l.log_time >= @WindowStart " +
+            "AND pg_catalog.upper(l.level::text) = ANY(@Levels)";
         var parameters = new DynamicParameters();
         parameters.Add("WindowStart", windowStart);
         parameters.Add("Levels", normalizedLevels.ToArray());
@@ -176,7 +180,7 @@ internal class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : I
         }
 
         var sql = $@"
-            SELECT COUNT(*)::int
+            SELECT pg_catalog.count(*)::int
             FROM device_logs l
             INNER JOIN devices d ON l.device_id = d.id
             {conditions}";

@@ -7,6 +7,7 @@ using IIoT.Dapper.Production.Repositories.Capacities;
 using IIoT.Dapper.Production.Repositories.DeviceLogs;
 using IIoT.Dapper.Production.Repositories.PassStations;
 using IIoT.Dapper.TypeHandlers;
+using IIoT.SharedKernel.Paging;
 using Npgsql;
 
 namespace IIoT.CloudPlatform.Persistence.PostgresTests;
@@ -108,6 +109,31 @@ public sealed class CapacityPersistencePostgresTests(
                 endTime,
                 cancellationToken: budget.Token);
             Assert.Equal(["CP07", "CP09"], hourlyRange.Select(item => item.PlcName));
+
+            var hourlyAggregate = Assert.Single(
+                await queryService.GetHourlyAggregateAsync(
+                    date,
+                    deviceIds: [device.DeviceId],
+                    cancellationToken: budget.Token));
+            Assert.Equal(10, hourlyAggregate.TotalCount);
+            Assert.Equal("10:00-10:30", hourlyAggregate.TimeLabel);
+
+            var daily = await queryService.GetSummaryByDeviceIdAsync(
+                device.DeviceId,
+                date,
+                cancellationToken: budget.Token);
+            Assert.NotNull(daily);
+            Assert.Equal(10, daily.TotalCount);
+
+            var paged = await queryService.GetDailyPagedAsync(
+                new Pagination { PageNumber = 1, PageSize = 10 },
+                date,
+                deviceIds: [device.DeviceId],
+                cancellationToken: budget.Token);
+            var pagedItem = Assert.Single(paged.Items);
+            Assert.Equal(1, paged.TotalCount);
+            Assert.Equal(10, pagedItem.TotalCount);
+            Assert.Equal(90m, pagedItem.OkRate);
 
             var aggregate = Assert.Single(
                 await queryService.GetSummaryRangeAsync(
