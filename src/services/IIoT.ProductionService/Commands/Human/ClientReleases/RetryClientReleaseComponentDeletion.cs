@@ -48,6 +48,7 @@ public sealed class RetryClientReleaseComponentDeletionHandler(
         // 均由 processor 在 fresh observation 与 execution strategy 中收敛。
         var outcome = await deletionProcessor.ProcessAsync(deletion, cancellationToken);
 
+        cancellationToken.ThrowIfCancellationRequested();
         return Result.Success(new ClientReleaseComponentDeletionRetryResultDto(
             deletion.Id,
             deletion.ComponentId,

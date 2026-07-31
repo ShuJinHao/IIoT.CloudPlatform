@@ -101,25 +101,50 @@ public static class CloudWriteCommitRecovery
         IAuditTrailService auditTrailService,
         AuditTrailEntry auditEntry)
     {
+        if (!await TryConfirmRecoveredAuditAsync(
+                auditTrailService,
+                auditEntry))
+        {
+            throw new CloudWriteCommitUnknownException();
+        }
+    }
+
+    public static async Task<bool> TryConfirmRecoveredAuditAsync(
+        IAuditTrailService auditTrailService,
+        AuditTrailEntry auditEntry)
+    {
         ArgumentNullException.ThrowIfNull(auditTrailService);
         ArgumentNullException.ThrowIfNull(auditEntry);
         using var timeout = new CancellationTokenSource(ObservationTimeout);
         try
         {
-            if (!await auditTrailService.TryWriteConfirmedAsync(
-                    auditEntry,
-                    timeout.Token))
-            {
-                throw new CloudWriteCommitUnknownException();
-            }
-        }
-        catch (CloudWriteException)
-        {
-            throw;
+            return await auditTrailService.TryWriteConfirmedAsync(
+                auditEntry,
+                timeout.Token);
         }
         catch
         {
-            throw new CloudWriteCommitUnknownException();
+            return false;
+        }
+    }
+
+    public static async Task<bool> TryWriteRecoveredAuditAsync(
+        IAuditTrailService auditTrailService,
+        AuditTrailEntry auditEntry)
+    {
+        ArgumentNullException.ThrowIfNull(auditTrailService);
+        ArgumentNullException.ThrowIfNull(auditEntry);
+        using var timeout = new CancellationTokenSource(ObservationTimeout);
+        try
+        {
+            await auditTrailService.TryWriteAsync(
+                auditEntry,
+                timeout.Token);
+            return true;
+        }
+        catch
+        {
+            return false;
         }
     }
 

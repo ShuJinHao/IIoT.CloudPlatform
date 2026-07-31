@@ -132,10 +132,23 @@ public sealed class HardDeleteClientReleaseComponentHandler(
         catch (OperationCanceledException)
             when (cancellationToken.IsCancellationRequested)
         {
-            throw;
+            var current =
+                await CloudWriteCommitRecovery.TryObserveCommitAsync(
+                    token => observationReader
+                        .ObserveComponentDeletionAsync(
+                            component.Id,
+                            deletionId,
+                            token));
+            if (current is null
+                || !MatchesCommittedTarget(current))
+            {
+                throw new OperationCanceledException(
+                    cancellationToken);
+            }
         }
         catch (CloudWriteException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             throw;
         }
         catch
@@ -149,6 +162,7 @@ public sealed class HardDeleteClientReleaseComponentHandler(
                             token));
             if (current is null)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 throw new CloudWriteCommitUnknownException();
             }
 
@@ -157,21 +171,40 @@ public sealed class HardDeleteClientReleaseComponentHandler(
                 if (current.Component == baseline
                     && current.Deletion is null)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     throw new CloudWriteCommitUnknownException();
                 }
+                cancellationToken.ThrowIfCancellationRequested();
                 throw new CloudWriteConflictException();
             }
         }
 
-        deletion =
-            await deletionStore.GetByIdAsync(
-                deletionId,
-                cancellationToken)
-            ?? throw new CloudWriteCommitUnknownException();
+        using var deletionLoadTimeout =
+            new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            deletion =
+                await deletionStore.GetByIdAsync(
+                    deletionId,
+                    deletionLoadTimeout.Token);
+        }
+        catch
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new CloudWriteCommitUnknownException();
+        }
+
+        if (deletion is null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new CloudWriteCommitUnknownException();
+        }
 
         var cleanup = await deletionProcessor.ProcessAsync(deletion, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!cleanup.Succeeded)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return Result.Invalid(
                 $"发布组件元数据已删除，但发布文件清理未完成（{cleanup.FailureCode}）。请修复后通过永久删除重试入口按操作 ID {deletion.Id} 完成清理。");
         }
@@ -179,6 +212,7 @@ public sealed class HardDeleteClientReleaseComponentHandler(
         // 成功审计未写稳时不得报告永久删除已完成：操作保持 CleanupCompleted，由重试/启动恢复补写审计。
         if (!cleanup.AuditConfirmed)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return Result.Invalid(
                 $"发布文件清理已收敛，但成功审计尚未写稳，永久删除未完成。请通过永久删除重试入口按操作 ID {deletion.Id} 补写审计。");
         }
@@ -187,6 +221,7 @@ public sealed class HardDeleteClientReleaseComponentHandler(
             ? null
             : $"部分文件仍被存活版本 manifest 引用或不在受控范围，已跳过 {cleanup.SkippedPaths.Count} 项。";
 
+        cancellationToken.ThrowIfCancellationRequested();
         return Result.Success(new ClientReleaseComponentHardDeletionResultDto(
             deletion.Id,
             component.Id,

@@ -3012,6 +3012,82 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
+    public async Task DeleteClientReleasePackageHandler_CancellationDuringRecoveredAudit_ShouldPropagateAfterCommittedCleanup()
+    {
+        var edgeRoot = CreateTempDirectory(
+            "iiot-delete-release-audit-cancel");
+        try
+        {
+            var manifestPath = Path.Combine(
+                edgeRoot,
+                "installers",
+                "stable",
+                "1.2.4",
+                "installer-artifact.json");
+            WriteFile(manifestPath, "{}");
+            var component = CreateHostComponent(
+                "stable",
+                "1.2.4",
+                "1.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/installers/stable/1.2.4/installer-artifact.json",
+                ClientReleaseFileFacts.ComputeSha256(manifestPath),
+                new FileInfo(manifestPath).Length,
+                "delete audit cancellation",
+                ClientReleaseStatus.Published);
+            var version = SingleVersion(component);
+            var repository =
+                new InMemoryRepository<ClientReleaseComponent>();
+            repository.Items.Add(component);
+            using var cancellation = new CancellationTokenSource();
+            var auditTrail = new ConfirmedAuditBarrier();
+            var handler = new DeleteClientReleasePackageHandler(
+                Options.Create(new EdgeInstallerArtifactOptions
+                {
+                    RootPath = Path.Combine(edgeRoot, "installers")
+                }),
+                repository,
+                new InMemoryDeviceClientStateStore(),
+                new TestCurrentUser(),
+                auditTrail,
+                NullLogger<DeleteClientReleasePackageHandler>.Instance,
+                new RecordingUnitOfWork(),
+                new InMemoryClientReleaseWriteObservationReader(
+                    repository));
+
+            var handling = handler.Handle(
+                new DeleteClientReleasePackageCommand(
+                    version.Id,
+                    "delete audit cancellation"),
+                cancellation.Token);
+
+            await auditTrail.AuditEntered.WaitAsync(
+                TimeSpan.FromSeconds(5));
+            Assert.Equal(ClientReleaseStatus.Deleted, version.Status);
+            Assert.False(File.Exists(manifestPath));
+
+            cancellation.Cancel();
+            auditTrail.Release();
+            var exception =
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                    () => handling);
+
+            Assert.Equal(cancellation.Token, exception.CancellationToken);
+            var audit = Assert.Single(auditTrail.Entries);
+            Assert.True(audit.Succeeded);
+            Assert.Equal(
+                $"client-release-package-delete:{version.Id:N}",
+                audit.IdempotencyKey);
+            Assert.False(File.Exists(manifestPath));
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
     public async Task HardDeleteClientReleaseComponentHandler_ShouldDeletePluginMetadataAndFiles()
     {
         var edgeRoot = CreateTempDirectory("iiot-hard-delete-plugin-root");
@@ -3077,6 +3153,202 @@ public sealed class ClientReleaseBehaviorTests
             Assert.DoesNotContain(auditTrail.Entries, entry =>
                 entry.OperationType == "ClientRelease.HardDeleteComponent"
                 && !entry.Succeeded);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task HardDeleteClientReleaseComponentHandler_CancellationDuringSuccessAudit_ShouldPropagateAfterConfirmedOrPendingFinalization(
+        bool auditConfirmed)
+    {
+        var edgeRoot = CreateTempDirectory(
+            auditConfirmed
+                ? "iiot-hard-delete-confirmed-audit-cancel"
+                : "iiot-hard-delete-pending-audit-cancel");
+        try
+        {
+            const string moduleId = "DieCutting";
+            var moduleDirectory = Path.Combine(
+                edgeRoot,
+                "plugins",
+                "stable",
+                moduleId);
+            var packagePath = Path.Combine(
+                moduleDirectory,
+                "1.0.0",
+                "die-cutting.zip");
+            var (packageSha, packageSize) =
+                WriteFactFile(packagePath, "plugin-package");
+            var component = CreatePluginComponent(
+                moduleId,
+                "模切",
+                "stable",
+                "1.0.0",
+                "1.0.0",
+                "1.0.0",
+                "2.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/plugins/stable/DieCutting/1.0.0/die-cutting.zip",
+                packageSha,
+                packageSize,
+                "success audit cancellation",
+                ClientReleaseStatus.Published);
+            var componentRepository =
+                new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(component);
+            var deletionStore =
+                new InMemoryClientReleaseComponentDeletionStore();
+            using var cancellation = new CancellationTokenSource();
+            var auditTrail = new ConfirmedAuditBarrier(
+                auditConfirmed);
+            var handler = CreateHardDeleteHandler(
+                edgeRoot,
+                componentRepository,
+                deletionStore,
+                auditTrail);
+
+            var handling = handler.Handle(
+                new HardDeleteClientReleaseComponentCommand(
+                    component.Id,
+                    "success audit cancellation"),
+                cancellation.Token);
+
+            await auditTrail.AuditEntered.WaitAsync(
+                TimeSpan.FromSeconds(5));
+            Assert.Empty(componentRepository.Items);
+            Assert.False(Directory.Exists(moduleDirectory));
+            Assert.Equal(
+                ClientReleaseComponentDeletionStatus.CleanupCompleted,
+                Assert.Single(deletionStore.Items).Status);
+
+            cancellation.Cancel();
+            auditTrail.Release();
+            var exception =
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                    () => handling);
+
+            Assert.Equal(cancellation.Token, exception.CancellationToken);
+            var audit = Assert.Single(auditTrail.Entries);
+            Assert.True(audit.Succeeded);
+            Assert.StartsWith(
+                "client-release-hard-delete-completed:",
+                audit.IdempotencyKey,
+                StringComparison.Ordinal);
+            if (auditConfirmed)
+            {
+                Assert.Empty(deletionStore.Items);
+            }
+            else
+            {
+                Assert.Equal(
+                    ClientReleaseComponentDeletionStatus.CleanupCompleted,
+                    Assert.Single(deletionStore.Items).Status);
+            }
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task HardDeleteClientReleaseComponentHandler_CancellationDuringFailureAudit_ShouldPropagateAfterPersistingRecoverableFailure()
+    {
+        var edgeRoot = CreateTempDirectory(
+            "iiot-hard-delete-failure-audit-cancel");
+        try
+        {
+            const string moduleId = "DieCutting";
+            var moduleDirectory = Path.Combine(
+                edgeRoot,
+                "plugins",
+                "stable",
+                moduleId);
+            var packagePath = Path.Combine(
+                moduleDirectory,
+                "1.0.0",
+                "die-cutting.zip");
+            var (packageSha, packageSize) =
+                WriteFactFile(packagePath, "plugin-package");
+            var component = CreatePluginComponent(
+                moduleId,
+                "模切",
+                "stable",
+                "1.0.0",
+                "1.0.0",
+                "1.0.0",
+                "2.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/plugins/stable/DieCutting/1.0.0/die-cutting.zip",
+                packageSha,
+                packageSize,
+                "failure audit cancellation",
+                ClientReleaseStatus.Published);
+            var componentRepository =
+                new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(component);
+            var deletionStore =
+                new InMemoryClientReleaseComponentDeletionStore();
+            using var cancellation = new CancellationTokenSource();
+            var auditTrail = new ConfirmedAuditBarrier();
+            var innerProcessor = CreateDeletionProcessor(
+                edgeRoot,
+                componentRepository,
+                deletionStore,
+                auditTrail);
+            var processor = new CancellationAfterCommitProcessor(
+                innerProcessor,
+                () => File.WriteAllText(
+                    packagePath,
+                    "tampered-after-metadata-commit"));
+            var handler = CreateHardDeleteHandler(
+                edgeRoot,
+                componentRepository,
+                deletionStore,
+                auditTrail,
+                deletionProcessor: processor);
+
+            var handling = handler.Handle(
+                new HardDeleteClientReleaseComponentCommand(
+                    component.Id,
+                    "failure audit cancellation"),
+                cancellation.Token);
+
+            await auditTrail.AuditEntered.WaitAsync(
+                TimeSpan.FromSeconds(5));
+            Assert.Empty(componentRepository.Items);
+            Assert.True(File.Exists(packagePath));
+            var operation = Assert.Single(deletionStore.Items);
+            Assert.Equal(
+                ClientReleaseComponentDeletionStatus.Failed,
+                operation.Status);
+
+            cancellation.Cancel();
+            auditTrail.Release();
+            var exception =
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                    () => handling);
+
+            Assert.Equal(cancellation.Token, exception.CancellationToken);
+            Assert.Equal(
+                ClientReleaseComponentDeletionStatus.Failed,
+                operation.Status);
+            var audit = Assert.Single(auditTrail.Entries);
+            Assert.False(audit.Succeeded);
+            Assert.StartsWith(
+                "client-release-hard-delete-failed:",
+                audit.IdempotencyKey,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                auditTrail.Entries,
+                entry => entry.Succeeded);
         }
         finally
         {
@@ -3931,7 +4203,7 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
-    public async Task HardDeleteClientReleaseComponentHandler_ShouldLeavePendingOperation_WhenCancelledAfterCommit()
+    public async Task HardDeleteClientReleaseComponentHandler_ShouldFinishPostCommitCleanupBeforePropagatingCancellation()
     {
         var edgeRoot = CreateTempDirectory("iiot-hard-delete-cancel-after-commit-root");
         try
@@ -4003,25 +4275,15 @@ public sealed class ClientReleaseBehaviorTests
                     new HardDeleteClientReleaseComponentCommand(component.Id, "提交后取消"),
                     cancellation.Token));
 
-            // 数据库提交发生在取消之前：组件已删、操作已持久化，文件清理被中断，等启动恢复或管理员重试。
+            // 数据库提交发生在取消之前：后续文件清理、成功审计和操作记录删除使用
+            // 有界独立 token 完成，随后才传播原始 caller token。
             Assert.True(committed);
             Assert.Empty(componentRepository.Items);
-            var operation = Assert.Single(deletionStore.Items);
-            Assert.Equal(ClientReleaseComponentDeletionStatus.Requested, operation.Status);
-
-            var recoveryProcessor = CreateDeletionProcessor(
-                edgeRoot,
-                new InMemoryRepository<ClientReleaseComponent>(),
-                deletionStore,
-                auditTrail);
-            var retry = await CreateRetryHandler(deletionStore, recoveryProcessor).Handle(
-                new RetryClientReleaseComponentDeletionCommand(operation.Id),
-                CancellationToken.None);
-
-            Assert.True(retry.IsSuccess);
-            Assert.True(retry.Value!.Succeeded);
             Assert.False(Directory.Exists(moduleDirectory));
             Assert.Empty(deletionStore.Items);
+            Assert.Single(
+                auditTrail.Entries,
+                entry => entry.Succeeded);
         }
         finally
         {
@@ -6125,6 +6387,37 @@ public sealed class ClientReleaseBehaviorTests
         }
     }
 
+    private sealed class ConfirmedAuditBarrier(
+        bool confirmed = true) : IAuditTrailService
+    {
+        private readonly TaskCompletionSource auditEntered =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public List<AuditTrailEntry> Entries { get; } = [];
+
+        public Task AuditEntered => auditEntered.Task;
+
+        public void Release()
+            => release.TrySetResult();
+
+        public Task TryWriteAsync(
+            AuditTrailEntry entry,
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public async Task<bool> TryWriteConfirmedAsync(
+            AuditTrailEntry entry,
+            CancellationToken cancellationToken = default)
+        {
+            Entries.Add(entry);
+            auditEntered.TrySetResult();
+            await release.Task.WaitAsync(cancellationToken);
+            return confirmed;
+        }
+    }
+
     private sealed class NotObservedReleaseReader : IClientReleaseVersionObservationReader
     {
         public Task<IReadOnlyList<ClientReleaseVersionObservation>> ObserveAsync(
@@ -6607,7 +6900,8 @@ public sealed class ClientReleaseBehaviorTests
         InMemoryClientReleaseComponentDeletionStore deletionStore,
         IAuditTrailService auditTrail,
         IDeviceClientStateStore? clientStateStore = null,
-        IUnitOfWork? unitOfWork = null)
+        IUnitOfWork? unitOfWork = null,
+        IClientReleaseComponentDeletionProcessor? deletionProcessor = null)
     {
         unitOfWork ??= new RecordingUnitOfWork();
         var observationReader =
@@ -6619,7 +6913,7 @@ public sealed class ClientReleaseBehaviorTests
             componentRepository,
             clientStateStore ?? new InMemoryDeviceClientStateStore(),
             deletionStore,
-            new ClientReleaseComponentDeletionProcessor(
+            deletionProcessor ?? new ClientReleaseComponentDeletionProcessor(
                 Options.Create(new EdgeInstallerArtifactOptions
                 {
                     RootPath = Path.Combine(edgeRoot, "installers")

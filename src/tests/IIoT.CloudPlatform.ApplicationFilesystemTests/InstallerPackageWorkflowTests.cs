@@ -35,6 +35,7 @@ using IIoT.ProductionService.Validators;
 using IIoT.Services.CrossCutting.Caching;
 using IIoT.Services.CrossCutting.Exceptions;
 using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.Persistence;
@@ -941,6 +942,96 @@ public sealed class InstallerPackageWorkflowTests
     }
 
     [Fact]
+    public async Task GenerateEdgeInstallerPackageHandler_CancellationDuringRecoveredAudits_ShouldAuditEveryCommittedSecretAndDisposePackage()
+    {
+        var firstDevice = new Device(
+            "正极模切客户端",
+            "DEV-AUDIT00001",
+            Guid.NewGuid());
+        var secondDevice = new Device(
+            "负极模切客户端",
+            "DEV-AUDIT00002",
+            Guid.NewGuid());
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.Add(firstDevice);
+        deviceRepository.Add(secondDevice);
+        var edgeRoot = CreateInstallerArtifactFixture(
+            "stable",
+            "1.2.0");
+        var componentRepository =
+            CreatePublishedReleaseComponentRepository(edgeRoot);
+        using var cancellation = new CancellationTokenSource();
+        var auditTrail = new ConfirmedAuditBarrier();
+        var preexistingPackages = Directory
+            .EnumerateFiles(
+                Path.GetTempPath(),
+                "iiot-edge-installer-*.exe",
+                SearchOption.TopDirectoryOnly)
+            .ToHashSet(StringComparer.Ordinal);
+        try
+        {
+            var handler = CreateInstallerPackageHandler(
+                deviceRepository,
+                componentRepository,
+                GetInstallerRoot(edgeRoot),
+                auditTrail);
+
+            var handling = handler.Handle(
+                new GenerateEdgeInstallerPackageCommand(
+                    [
+                        new EdgeBindingSelection(
+                            PrimaryModuleId,
+                            firstDevice.Id),
+                        new EdgeBindingSelection(
+                            SecondaryModuleId,
+                            secondDevice.Id)
+                    ],
+                    HostVersion: "1.2.0",
+                    BaseUrl: "http://cloud.local"),
+                cancellation.Token);
+
+            await auditTrail.FirstAuditEntered.WaitAsync(
+                TimeSpan.FromSeconds(5));
+            var packagePath = Assert.Single(
+                Directory
+                    .EnumerateFiles(
+                        Path.GetTempPath(),
+                        "iiot-edge-installer-*.exe",
+                        SearchOption.TopDirectoryOnly),
+                path => !preexistingPackages.Contains(path));
+
+            cancellation.Cancel();
+            auditTrail.Release();
+            var exception =
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                    () => handling);
+
+            Assert.Equal(cancellation.Token, exception.CancellationToken);
+            Assert.NotNull(firstDevice.BootstrapSecretHash);
+            Assert.NotNull(secondDevice.BootstrapSecretHash);
+            Assert.Equal(2, auditTrail.Entries.Count);
+            Assert.Equal(
+                2,
+                auditTrail.Entries
+                    .Select(entry => entry.IdempotencyKey)
+                    .Distinct(StringComparer.Ordinal)
+                    .Count());
+            Assert.All(
+                auditTrail.Entries,
+                entry => Assert.True(entry.Succeeded));
+            Assert.False(File.Exists(packagePath));
+        }
+        finally
+        {
+            auditTrail.Release();
+            if (Directory.Exists(edgeRoot))
+            {
+                Directory.Delete(edgeRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task GenerateEdgeInstallerPackageHandler_ObservationFailure_ShouldReturnCommitUnknown()
     {
         var device = new Device(
@@ -996,7 +1087,7 @@ public sealed class InstallerPackageWorkflowTests
         InMemoryRepository<Device> deviceRepository,
         InMemoryRepository<ClientReleaseComponent> componentRepository,
         string artifactRoot,
-        RecordingAuditTrailService auditTrail,
+        IAuditTrailService auditTrail,
         IUnitOfWork? unitOfWork = null,
         IClientReleaseWriteObservationReader? observationReader = null)
     {
@@ -1020,6 +1111,40 @@ public sealed class InstallerPackageWorkflowTests
             observationReader
             ?? new InstallerClientReleaseWriteObservationReader(
                 deviceRepository));
+    }
+
+    private sealed class ConfirmedAuditBarrier : IAuditTrailService
+    {
+        private readonly TaskCompletionSource firstAuditEntered =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public List<AuditTrailEntry> Entries { get; } = [];
+
+        public Task FirstAuditEntered => firstAuditEntered.Task;
+
+        public void Release()
+            => release.TrySetResult();
+
+        public Task TryWriteAsync(
+            AuditTrailEntry entry,
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public async Task<bool> TryWriteConfirmedAsync(
+            AuditTrailEntry entry,
+            CancellationToken cancellationToken = default)
+        {
+            Entries.Add(entry);
+            if (Entries.Count == 1)
+            {
+                firstAuditEntered.TrySetResult();
+                await release.Task.WaitAsync(cancellationToken);
+            }
+
+            return true;
+        }
     }
 
     private sealed class InstallerFaultingUnitOfWork : IUnitOfWork

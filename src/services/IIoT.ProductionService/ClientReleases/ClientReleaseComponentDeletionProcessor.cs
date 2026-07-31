@@ -44,6 +44,8 @@ public sealed class ClientReleaseComponentDeletionProcessor(
 {
     private const string AuditAction = "ClientRelease.HardDeleteComponent";
     private const string SuccessAuditIdempotencyKeyPrefix = "client-release-hard-delete-completed:";
+    private static readonly TimeSpan PostCommitFinalizationTimeout =
+        TimeSpan.FromSeconds(30);
     public const string FailureCleanupStateInvalid = "CleanupStateInvalid";
 
     private static readonly JsonSerializerOptions AuditJsonOptions = new()
@@ -52,6 +54,33 @@ public sealed class ClientReleaseComponentDeletionProcessor(
     };
 
     public async Task<ClientReleaseComponentDeletionOutcome> ProcessAsync(
+        ClientReleaseComponentDeletion deletion,
+        CancellationToken cancellationToken)
+    {
+        using var finalizationTimeout =
+            new CancellationTokenSource(PostCommitFinalizationTimeout);
+        try
+        {
+            var outcome = await ProcessCoreAsync(
+                deletion,
+                finalizationTimeout.Token);
+            cancellationToken.ThrowIfCancellationRequested();
+            return outcome;
+        }
+        catch (OperationCanceledException)
+            when (finalizationTimeout.IsCancellationRequested)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new CloudWriteCommitUnknownException();
+        }
+        catch
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
+        }
+    }
+
+    private async Task<ClientReleaseComponentDeletionOutcome> ProcessCoreAsync(
         ClientReleaseComponentDeletion deletion,
         CancellationToken cancellationToken)
     {
@@ -233,8 +262,7 @@ public sealed class ClientReleaseComponentDeletionProcessor(
         await WriteAuditAsync(
             deletion,
             outcome,
-            succeeded: false,
-            CancellationToken.None);
+            succeeded: false);
         return outcome;
     }
 
@@ -246,7 +274,10 @@ public sealed class ClientReleaseComponentDeletionProcessor(
         // 第二阶段：成功审计写稳后才删除操作记录。审计未写稳则操作保持 CleanupCompleted，
         // 由启动恢复或管理员重试直接使用持久化清理结果补写；数据库唯一幂等键保证并发/崩溃
         // 重放只有一条成功审计。审计未确认时调用方不得报告删除已完成。
-        var auditPersisted = await WriteAuditAsync(deletion, outcome, succeeded: true, CancellationToken.None);
+        var auditPersisted = await WriteAuditAsync(
+            deletion,
+            outcome,
+            succeeded: true);
         if (!auditPersisted)
         {
             logger.LogWarning(
@@ -506,14 +537,14 @@ public sealed class ClientReleaseComponentDeletionProcessor(
     private async Task<bool> WriteAuditAsync(
         ClientReleaseComponentDeletion deletion,
         ClientReleaseComponentDeletionOutcome outcome,
-        bool succeeded,
-        CancellationToken cancellationToken)
+        bool succeeded)
     {
         var summary = BuildBoundedSummary(deletion, outcome);
         var executedAtUtc = succeeded
             ? deletion.CleanupCompletedAtUtc ?? deletion.UpdatedAtUtc
             : deletion.UpdatedAtUtc;
-        return await auditTrailService.TryWriteConfirmedAsync(
+        return await CloudWriteCommitRecovery.TryConfirmRecoveredAuditAsync(
+            auditTrailService,
             new AuditTrailEntry(
                 deletion.RequestedByUserId,
                 deletion.RequestedByUserName,
@@ -526,8 +557,7 @@ public sealed class ClientReleaseComponentDeletionProcessor(
                 succeeded ? null : outcome.FailureCode,
                 succeeded
                     ? $"{SuccessAuditIdempotencyKeyPrefix}{deletion.Id:N}"
-                    : $"client-release-hard-delete-failed:{deletion.Id:N}:{deletion.RetryCount}"),
-            cancellationToken);
+                    : $"client-release-hard-delete-failed:{deletion.Id:N}:{deletion.RetryCount}"));
     }
 
     /// <summary>

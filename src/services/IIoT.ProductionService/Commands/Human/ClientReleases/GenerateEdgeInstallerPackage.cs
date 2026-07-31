@@ -630,10 +630,27 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         catch (OperationCanceledException)
             when (cancellationToken.IsCancellationRequested)
         {
-            throw;
+            var current =
+                await CloudWriteCommitRecovery.TryObserveCommitAsync(
+                    token => observationReader
+                        .ObserveDeviceBootstrapAsync(
+                            requestedDeviceIds,
+                            token));
+            if (current is not null
+                && ClientReleaseWriteCommitRecovery
+                    .MatchesDeviceBootstrapTarget(
+                        current,
+                        baseline,
+                        targetHashes))
+            {
+                return;
+            }
+
+            throw new OperationCanceledException(cancellationToken);
         }
         catch (CloudWriteException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             throw;
         }
         catch
@@ -644,6 +661,17 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                         .ObserveDeviceBootstrapAsync(
                             requestedDeviceIds,
                             token));
+            if (current is not null
+                && ClientReleaseWriteCommitRecovery
+                    .MatchesDeviceBootstrapTarget(
+                        current,
+                        baseline,
+                        targetHashes))
+            {
+                return;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
             if (current is null
                 || ClientReleaseWriteCommitRecovery
                     .MatchesDeviceBootstrapBaseline(
@@ -661,28 +689,25 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             {
                 throw new CloudWriteConflictException();
             }
-
-            return;
         }
 
         var confirmed =
-            await CloudWriteCommitRecovery.TryObserveAttemptAsync(
+            await CloudWriteCommitRecovery.TryObserveCommitAsync(
                 token => observationReader.ObserveDeviceBootstrapAsync(
                     requestedDeviceIds,
-                    token),
-                cancellationToken)
-            ?? throw new CloudWriteCommitUnknownException();
+                    token));
         if (ClientReleaseWriteCommitRecovery
             .MatchesDeviceBootstrapTarget(
-                confirmed,
+                confirmed ?? [],
                 baseline,
                 targetHashes))
         {
             return;
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         throw ClientReleaseWriteCommitRecovery
-            .MatchesDeviceBootstrapBaseline(confirmed, baseline)
+            .MatchesDeviceBootstrapBaseline(confirmed ?? [], baseline)
             ? new CloudWriteCommitUnknownException()
             : new CloudWriteConflictException();
 
@@ -823,23 +848,30 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         DateTime executedAtUtc,
         CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
+        var allAuditsConfirmed = true;
         foreach (var binding in bindings)
         {
             var device = deviceById.Values.Single(item => item.Code == binding.ClientCode);
-            await CloudWriteCommitRecovery.ConfirmRecoveredAuditAsync(
-                auditTrailService,
-                new AuditTrailEntry(
-                    ClientReleaseAuditActor.ParseId(currentUser.Id),
-                    currentUser.UserName,
-                    "Edge.GenerateInstallerPackage",
-                    "Device",
-                    device.Id.ToString(),
-                    executedAtUtc,
-                    true,
-                    $"生成客户端首装包时更新设备 {device.DeviceName}（{device.Code}）的启动凭据。",
-                    null,
-                    $"edge-installer-secret:{executedAtUtc.Ticks:x}:{device.Id:N}"));
+            allAuditsConfirmed &=
+                await CloudWriteCommitRecovery.TryConfirmRecoveredAuditAsync(
+                    auditTrailService,
+                    new AuditTrailEntry(
+                        ClientReleaseAuditActor.ParseId(currentUser.Id),
+                        currentUser.UserName,
+                        "Edge.GenerateInstallerPackage",
+                        "Device",
+                        device.Id.ToString(),
+                        executedAtUtc,
+                        true,
+                        $"生成客户端首装包时更新设备 {device.DeviceName}（{device.Code}）的启动凭据。",
+                        null,
+                        $"edge-installer-secret:{executedAtUtc.Ticks:x}:{device.Id:N}"));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!allAuditsConfirmed)
+        {
+            throw new CloudWriteCommitUnknownException();
         }
     }
 
