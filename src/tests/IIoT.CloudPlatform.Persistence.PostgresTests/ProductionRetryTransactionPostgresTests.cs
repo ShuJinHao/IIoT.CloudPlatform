@@ -219,6 +219,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
             deduplicationKey,
             integrationEvent,
             budget.Token);
+        interceptor.Arm();
         var duplicate = await registry.RegisterAndEnqueueAsync(
             deviceId,
             "hourly-capacity",
@@ -231,7 +232,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
             },
             budget.Token);
 
-        Assert.Equal(1, interceptor.ExceptionsThrown);
+        Assert.Equal(2, interceptor.ExceptionsThrown);
         Assert.False(registered.IsDuplicate);
         Assert.True(duplicate.IsDuplicate);
         Assert.Equal(registered.OutboxMessageId, duplicate.OutboxMessageId);
@@ -252,6 +253,14 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 budget.Token);
         Assert.Equal(outbox.Id, registration.OutboxMessageId);
         Assert.Equal(2, registration.SeenCount);
+        Assert.Equal(
+            1,
+            await dbContext.UploadReceiveObservations
+                .AsNoTracking()
+                .CountAsync(
+                    observation =>
+                        observation.RegistrationId == registration.Id,
+                    budget.Token));
         Assert.Equal(0, outbox.OccurredAtUtc.UtcTicks % TimeSpan.TicksPerMicrosecond);
         Assert.Equal(
             1,

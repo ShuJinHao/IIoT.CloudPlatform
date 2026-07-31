@@ -49,6 +49,7 @@ public class IIoTDbContext
     public DbSet<EdgeReleaseApiKey> EdgeReleaseApiKeys => Set<EdgeReleaseApiKey>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<UploadReceiveRegistration> UploadReceiveRegistrations => Set<UploadReceiveRegistration>();
+    public DbSet<UploadReceiveObservation> UploadReceiveObservations => Set<UploadReceiveObservation>();
     public DbSet<AuditTrailRecord> AuditTrails => Set<AuditTrailRecord>();
     public DbSet<OpenIddictEntityFrameworkCoreApplication<Guid>> OpenIddictApplications => Set<OpenIddictEntityFrameworkCoreApplication<Guid>>();
     public DbSet<OpenIddictEntityFrameworkCoreAuthorization<Guid>> OpenIddictAuthorizations => Set<OpenIddictEntityFrameworkCoreAuthorization<Guid>>();

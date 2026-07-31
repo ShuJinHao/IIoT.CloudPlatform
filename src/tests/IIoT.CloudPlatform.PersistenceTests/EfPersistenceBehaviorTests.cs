@@ -27,6 +27,7 @@ using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Result;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -254,6 +255,28 @@ public sealed class EfPersistenceBehaviorTests
     }
 
     [Fact]
+    public void UploadReceiveObservationConfiguration_ShouldBindStableAttemptMarker()
+    {
+        using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
+        using var scope = provider.CreateScope();
+
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var entityType = dbContext.Model.FindEntityType(
+            typeof(UploadReceiveObservation));
+        var foreignKey = Assert.Single(entityType!.GetForeignKeys());
+
+        Assert.Equal("upload_receive_observations", entityType.GetTableName());
+        Assert.Equal(
+            ValueGenerated.Never,
+            entityType.FindProperty(nameof(UploadReceiveObservation.Id))!
+                .ValueGenerated);
+        Assert.Equal(
+            nameof(UploadReceiveObservation.RegistrationId),
+            Assert.Single(foreignKey.Properties).Name);
+        Assert.Equal(DeleteBehavior.Cascade, foreignKey.DeleteBehavior);
+    }
+
+    [Fact]
     public void UploadReceiveRegistration_ShouldCountOutOfOrderDuplicatesWithoutMovingLastSeenBackward()
     {
         var receivedAtUtc = DateTimeOffset.UtcNow;
@@ -321,6 +344,7 @@ public sealed class EfPersistenceBehaviorTests
         Assert.True(second.IsDuplicate);
         Assert.Equal(first.OutboxMessageId, second.OutboxMessageId);
         Assert.Single(dbContext.OutboxMessages);
+        Assert.Single(dbContext.UploadReceiveObservations);
         Assert.Equal("request-1", registration.RequestId);
         Assert.Equal(2, registration.SeenCount);
         Assert.True(registration.LastSeenAtUtc >= registration.ReceivedAtUtc);

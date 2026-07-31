@@ -103,6 +103,7 @@ public sealed class EfUploadReceiveRegistry(IIoTDbContext dbContext)
                 requestId,
                 targetOutboxMessage,
                 receivedAtUtc,
+                recordDuplicateObservation: true,
                 cancellationToken);
         }
 
@@ -141,6 +142,7 @@ public sealed class EfUploadReceiveRegistry(IIoTDbContext dbContext)
                     requestId,
                     targetOutboxMessage,
                     receivedAtUtc,
+                    recordDuplicateObservation: true,
                     cancellationToken);
         }
     }
@@ -167,6 +169,7 @@ public sealed class EfUploadReceiveRegistry(IIoTDbContext dbContext)
         string? targetRequestId,
         OutboxMessage targetOutboxMessage,
         DateTimeOffset seenAtUtc,
+        bool recordDuplicateObservation,
         CancellationToken cancellationToken)
     {
         if (registration.Id == targetRegistrationId)
@@ -199,9 +202,122 @@ public sealed class EfUploadReceiveRegistry(IIoTDbContext dbContext)
             return UploadReceiveRegistrationResult.Registered(targetOutboxMessage.Id);
         }
 
-        registration.MarkSeen(seenAtUtc);
+        return recordDuplicateObservation
+            ? await RecordDuplicateObservationAsync(
+                context,
+                registration,
+                targetRegistrationId,
+                seenAtUtc,
+                cancellationToken)
+            : await ObserveDuplicateOutcomeAsync(
+                context,
+                registration,
+                targetRegistrationId,
+                seenAtUtc,
+                cancellationToken);
+    }
+
+    private static async Task<UploadReceiveRegistrationResult>
+        RecordDuplicateObservationAsync(
+            IIoTDbContext context,
+            UploadReceiveRegistration registration,
+            Guid observationId,
+            DateTimeOffset seenAtUtc,
+            CancellationToken cancellationToken)
+    {
+        await using var transaction =
+            await context.Database.BeginTransactionAsync(cancellationToken);
+        var existingObservation = await context.UploadReceiveObservations
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                observation => observation.Id == observationId,
+                cancellationToken);
+        if (existingObservation is not null)
+        {
+            EnsureObservationTarget(
+                existingObservation,
+                registration.Id,
+                seenAtUtc);
+            await transaction.CommitAsync(cancellationToken);
+            return UploadReceiveRegistrationResult.Duplicate(
+                registration.OutboxMessageId);
+        }
+
+        context.UploadReceiveObservations.Add(
+            UploadReceiveObservation.Create(
+                observationId,
+                registration.Id,
+                seenAtUtc));
         await context.SaveChangesAsync(cancellationToken);
-        return UploadReceiveRegistrationResult.Duplicate(registration.OutboxMessageId);
+
+        if (context.Database.IsNpgsql())
+        {
+            var updated = await context.UploadReceiveRegistrations
+                .Where(candidate => candidate.Id == registration.Id)
+                .ExecuteUpdateAsync(
+                    updates => updates
+                        .SetProperty(
+                            candidate => candidate.SeenCount,
+                            candidate => candidate.SeenCount + 1)
+                        .SetProperty(
+                            candidate => candidate.LastSeenAtUtc,
+                            candidate =>
+                                candidate.LastSeenAtUtc < seenAtUtc
+                                    ? seenAtUtc
+                                    : candidate.LastSeenAtUtc),
+                    cancellationToken);
+            if (updated != 1)
+            {
+                throw new CloudWriteConflictException();
+            }
+        }
+        else
+        {
+            registration.MarkSeen(seenAtUtc);
+            await context.SaveChangesAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return UploadReceiveRegistrationResult.Duplicate(
+            registration.OutboxMessageId);
+    }
+
+    private static async Task<UploadReceiveRegistrationResult>
+        ObserveDuplicateOutcomeAsync(
+            IIoTDbContext context,
+            UploadReceiveRegistration registration,
+            Guid observationId,
+            DateTimeOffset seenAtUtc,
+            CancellationToken cancellationToken)
+    {
+        var observation = await context.UploadReceiveObservations
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                candidate => candidate.Id == observationId,
+                cancellationToken);
+        if (observation is null)
+        {
+            throw new CloudWriteCommitUnknownException();
+        }
+
+        EnsureObservationTarget(
+            observation,
+            registration.Id,
+            seenAtUtc);
+        return UploadReceiveRegistrationResult.Duplicate(
+            registration.OutboxMessageId);
+    }
+
+    private static void EnsureObservationTarget(
+        UploadReceiveObservation observation,
+        Guid registrationId,
+        DateTimeOffset seenAtUtc)
+    {
+        if (observation.RegistrationId != registrationId
+            || observation.SeenAtUtc != seenAtUtc)
+        {
+            throw new CloudWriteConflictException();
+        }
     }
 
     private async Task<UploadReceiveRegistrationResult> ObserveCommitOutcomeAsync(
@@ -235,6 +351,7 @@ public sealed class EfUploadReceiveRegistry(IIoTDbContext dbContext)
                 requestId,
                 targetOutboxMessage,
                 receivedAtUtc,
+                recordDuplicateObservation: false,
                 observationTimeout.Token);
         }
         catch (CloudWriteConflictException)
