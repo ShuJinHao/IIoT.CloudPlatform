@@ -308,10 +308,17 @@ public sealed class IdentityPasswordService(
         var passwordHash = verification == PasswordVerificationResult.SuccessRehashNeeded
             ? userManager.PasswordHasher.HashPassword(user, password)
             : user.PasswordHash;
+        var stateChanged =
+            !string.Equals(passwordHash, user.PasswordHash, StringComparison.Ordinal) ||
+            lockoutEnabled != user.LockoutEnabled ||
+            accessFailedCount != user.AccessFailedCount ||
+            !Nullable.Equals(lockoutEnd, user.LockoutEnd);
         return new PasswordTarget(
             passwordHash,
             user.SecurityStamp,
-            Guid.NewGuid().ToString("N"),
+            stateChanged
+                ? Guid.NewGuid().ToString("N")
+                : user.ConcurrencyStamp,
             lockoutEnabled,
             accessFailedCount,
             lockoutEnd,
