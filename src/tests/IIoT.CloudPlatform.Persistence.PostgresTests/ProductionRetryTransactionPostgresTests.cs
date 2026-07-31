@@ -657,6 +657,67 @@ public sealed class ProductionRetryTransactionPostgresTests(
     }
 
     [Fact]
+    public async Task PasswordReadOnlyFailures_ShouldRemainDeterministicWhenCommitConfirmationIsRepeatedlyLost()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(60));
+        var interceptor = new ThrowEveryCommitConfirmationInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var context = services.GetRequiredService<IIoTDbContext>();
+        var userManager = services.GetRequiredService<UserManager<ApplicationUser>>();
+        var user = new ApplicationUser
+        {
+            Id = Guid.NewGuid(),
+            UserName = $"identity-read-only-{Guid.NewGuid():N}"[..40],
+            IsEnabled = true
+        };
+        Assert.True((await userManager.CreateAsync(
+            user,
+            "OldPassword123!")).Succeeded);
+        context.ChangeTracker.Clear();
+
+        interceptor.Arm();
+        var passwords = CreatePasswordService(services);
+        var wrongCurrent = await passwords.ChangePasswordAsync(
+            user.Id,
+            "WrongPassword123!",
+            "ChangedPassword123!",
+            budget.Token);
+        var invalidNewPassword = await passwords.ResetPasswordAsync(
+            user.Id,
+            "short",
+            budget.Token);
+        var missingUser = await passwords.ResetPasswordAsync(
+            Guid.NewGuid(),
+            "ChangedPassword123!",
+            budget.Token);
+
+        Assert.False(wrongCurrent.IsSuccess);
+        Assert.Contains("当前密码不正确", wrongCurrent.Errors ?? []);
+        Assert.False(invalidNewPassword.IsSuccess);
+        Assert.NotEmpty(invalidNewPassword.Errors ?? []);
+        Assert.False(missingUser.IsSuccess);
+        Assert.Contains("用户不存在", missingUser.Errors ?? []);
+        Assert.True(interceptor.ExceptionsThrown > 3);
+
+        context.ChangeTracker.Clear();
+        var persisted = await context.Users
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == user.Id, budget.Token);
+        Assert.Equal(
+            PasswordVerificationResult.Success,
+            userManager.PasswordHasher.VerifyHashedPassword(
+                persisted,
+                persisted.PasswordHash!,
+                "OldPassword123!"));
+    }
+
+    [Fact]
     public async Task IdentityPolicyAndPasswordWrites_ShouldRecoverCommitConfirmationLossExactly()
     {
         using var budget = await PostgresTestBudget.CreateAsync(

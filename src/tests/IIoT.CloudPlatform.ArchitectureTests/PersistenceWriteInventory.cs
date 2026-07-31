@@ -580,9 +580,18 @@ internal static class PersistenceWriteInventory
     private static bool RoutesOperationThroughExecutionStrategy(
         IMethodSymbol implementation,
         IReadOnlyDictionary<SyntaxTree, SemanticModel> models)
+        => RoutesDelegateThroughExecutionStrategy(
+            implementation,
+            models,
+            "operation");
+
+    private static bool RoutesDelegateThroughExecutionStrategy(
+        IMethodSymbol implementation,
+        IReadOnlyDictionary<SyntaxTree, SemanticModel> models,
+        string parameterName)
     {
         var operationParameter = implementation.Parameters.SingleOrDefault(parameter =>
-            parameter.Name == "operation" && parameter.Type.TypeKind == TypeKind.Delegate);
+            parameter.Name == parameterName && parameter.Type.TypeKind == TypeKind.Delegate);
         if (operationParameter is null)
         {
             return false;
@@ -596,8 +605,75 @@ internal static class PersistenceWriteInventory
                 continue;
             }
 
+            var trackedDelegates = new HashSet<ISymbol>(SymbolEqualityComparer.Default)
+            {
+                operationParameter
+            };
+            var aliasSources = new HashSet<SyntaxNode>();
+            var aliasTargets = new HashSet<SyntaxNode>();
+            var changed = true;
+            while (changed)
+            {
+                changed = false;
+                foreach (var variable in declaration
+                             .DescendantNodes()
+                             .OfType<VariableDeclaratorSyntax>())
+                {
+                    if (variable.Initializer?.Value is not { } initializer ||
+                        model.GetDeclaredSymbol(variable) is not ILocalSymbol
+                        {
+                            Type.TypeKind: TypeKind.Delegate
+                        } local ||
+                        GetDirectDelegateSource(initializer, model) is not { } source ||
+                        !trackedDelegates.Contains(source))
+                    {
+                        continue;
+                    }
+
+                    if (trackedDelegates.Add(local))
+                    {
+                        changed = true;
+                    }
+
+                    aliasSources.Add(initializer);
+                }
+
+                foreach (var assignment in declaration
+                             .DescendantNodes()
+                             .OfType<AssignmentExpressionSyntax>()
+                             .Where(candidate => candidate.IsKind(
+                                 SyntaxKind.SimpleAssignmentExpression)))
+                {
+                    if (model.GetSymbolInfo(assignment.Left).Symbol is not ILocalSymbol
+                        {
+                            Type.TypeKind: TypeKind.Delegate
+                        } local ||
+                        GetDirectDelegateSource(assignment.Right, model) is not { } source ||
+                        !trackedDelegates.Contains(source))
+                    {
+                        continue;
+                    }
+
+                    if (trackedDelegates.Add(local))
+                    {
+                        changed = true;
+                    }
+
+                    aliasSources.Add(assignment.Right);
+                    aliasTargets.Add(assignment.Left);
+                }
+            }
+
+            if (HasUnsafeAliasMutation(
+                    declaration,
+                    model,
+                    trackedDelegates))
+            {
+                continue;
+            }
+
             var protectedScopes = new List<SyntaxNode>();
-            var directlyPassed = false;
+            var directStrategyArguments = new List<SyntaxNode>();
             foreach (var invocation in declaration
                          .DescendantNodes()
                          .OfType<InvocationExpressionSyntax>())
@@ -612,12 +688,10 @@ internal static class PersistenceWriteInventory
                              argument.Parameter is { } parameter &&
                              IsExecutionStrategyOperationParameter(parameter)))
                 {
-                    if (argument.Value is IParameterReferenceOperation parameterReference &&
-                        SymbolEqualityComparer.Default.Equals(
-                            parameterReference.Parameter,
-                            operationParameter))
+                    if (GetDirectDelegateSource(argument.Value.Syntax, model) is { } source &&
+                        trackedDelegates.Contains(source))
                     {
-                        directlyPassed = true;
+                        directStrategyArguments.Add(argument.Value.Syntax);
                     }
                     else
                     {
@@ -626,14 +700,34 @@ internal static class PersistenceWriteInventory
                 }
             }
 
-            var delegateInvocations = declaration
+            var protectedDelegateInvocations = declaration
                 .DescendantNodes()
                 .OfType<InvocationExpressionSyntax>()
-                .Where(invocation => InvokesParameter(invocation, model, operationParameter))
+                .Where(invocation =>
+                    InvokesTrackedDelegate(invocation, model, trackedDelegates) &&
+                    protectedScopes.Any(scope => scope.Span.Contains(invocation.Span)))
                 .ToArray();
-            if ((directlyPassed || delegateInvocations.Length > 0) &&
-                delegateInvocations.All(invocation => protectedScopes.Any(scope =>
-                    scope.Span.Contains(invocation.Span))))
+            var routed = directStrategyArguments.Count > 0 ||
+                         protectedDelegateInvocations.Length > 0;
+            if (!routed)
+            {
+                continue;
+            }
+
+            var references = declaration
+                .DescendantNodes()
+                .OfType<IdentifierNameSyntax>()
+                .Where(reference =>
+                    model.GetSymbolInfo(reference).Symbol is { } symbol &&
+                    trackedDelegates.Contains(symbol));
+            if (references.All(reference =>
+                    aliasSources.Any(source => source.Span.Contains(reference.Span)) ||
+                    aliasTargets.Any(target => target.Span.Contains(reference.Span)) ||
+                    directStrategyArguments.Any(argument =>
+                        argument.Span.Contains(reference.Span)) ||
+                    IsNullGuardReference(reference, model, operationParameter) ||
+                    protectedDelegateInvocations.Any(invocation =>
+                        invocation.Span.Contains(reference.Span))))
             {
                 return true;
             }
@@ -642,10 +736,77 @@ internal static class PersistenceWriteInventory
         return false;
     }
 
-    private static bool InvokesParameter(
+    private static ISymbol? GetDirectDelegateSource(
+        SyntaxNode syntax,
+        SemanticModel model)
+    {
+        var operation = model.GetOperation(syntax);
+        while (operation is IConversionOperation conversion)
+        {
+            operation = conversion.Operand;
+        }
+
+        while (operation is IDelegateCreationOperation delegateCreation)
+        {
+            operation = delegateCreation.Target;
+        }
+
+        return operation switch
+        {
+            IParameterReferenceOperation parameter => parameter.Parameter,
+            ILocalReferenceOperation local => local.Local,
+            _ => null
+        };
+    }
+
+    private static bool HasUnsafeAliasMutation(
+        SyntaxNode declaration,
+        SemanticModel model,
+        IReadOnlySet<ISymbol> trackedDelegates)
+    {
+        foreach (var variable in declaration
+                     .DescendantNodes()
+                     .OfType<VariableDeclaratorSyntax>())
+        {
+            if (model.GetDeclaredSymbol(variable) is not ILocalSymbol local ||
+                !trackedDelegates.Contains(local))
+            {
+                continue;
+            }
+
+            if (variable.Initializer?.Value is not { } initializer ||
+                GetDirectDelegateSource(initializer, model) is not { } source ||
+                !trackedDelegates.Contains(source))
+            {
+                return true;
+            }
+        }
+
+        foreach (var assignment in declaration
+                     .DescendantNodes()
+                     .OfType<AssignmentExpressionSyntax>())
+        {
+            if (model.GetSymbolInfo(assignment.Left).Symbol is not { } target ||
+                !trackedDelegates.Contains(target))
+            {
+                continue;
+            }
+
+            if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) ||
+                GetDirectDelegateSource(assignment.Right, model) is not { } source ||
+                !trackedDelegates.Contains(source))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool InvokesTrackedDelegate(
         InvocationExpressionSyntax invocation,
         SemanticModel model,
-        IParameterSymbol parameter)
+        IReadOnlySet<ISymbol> trackedDelegates)
     {
         ExpressionSyntax? receiver = invocation.Expression switch
         {
@@ -658,9 +819,27 @@ internal static class PersistenceWriteInventory
             _ => null
         };
         return receiver is not null &&
-               SymbolEqualityComparer.Default.Equals(
-                   model.GetSymbolInfo(receiver).Symbol,
-                   parameter);
+               model.GetSymbolInfo(receiver).Symbol is { } symbol &&
+               trackedDelegates.Contains(symbol);
+    }
+
+    private static bool IsNullGuardReference(
+        IdentifierNameSyntax reference,
+        SemanticModel model,
+        IParameterSymbol operationParameter)
+    {
+        if (!SymbolEqualityComparer.Default.Equals(
+                model.GetSymbolInfo(reference).Symbol,
+                operationParameter) ||
+            reference.Ancestors().OfType<ArgumentSyntax>().FirstOrDefault() is not
+                { Parent.Parent: InvocationExpressionSyntax invocation })
+        {
+            return false;
+        }
+
+        return GetMethodSymbols(model.GetSymbolInfo(invocation)).Any(method =>
+            method.Name == "ThrowIfNull" &&
+            method.ContainingType.ToDisplayString() == "System.ArgumentNullException");
     }
 
     private static bool IsExecutionStrategyOperationParameter(IParameterSymbol parameter)
@@ -1583,31 +1762,13 @@ internal static class PersistenceWriteInventory
                  method.ContainingType.ToDisplayString() is
                      "IIoT.EntityFrameworkCore.Identity.RolePolicyService" or
                      "IIoT.EntityFrameworkCore.Identity.IdentityPasswordService");
-            return isKnownHelper && DirectlyInvokesExecutionStrategy(method);
-        }
-
-        private bool DirectlyInvokesExecutionStrategy(IMethodSymbol method)
-        {
-            foreach (var syntaxReference in method.DeclaringSyntaxReferences)
-            {
-                var declaration = syntaxReference.GetSyntax();
-                if (!_models.TryGetValue(declaration.SyntaxTree, out var model))
-                {
-                    continue;
-                }
-
-                if (declaration
-                    .DescendantNodes()
-                    .OfType<InvocationExpressionSyntax>()
-                    .SelectMany(invocation =>
-                        GetMethodSymbols(model.GetSymbolInfo(invocation)))
-                    .Any(IsExecutionStrategyExecutor))
-                {
-                    return true;
-                }
-            }
-
-            return false;
+            var replayParameterName = method.Name == "ExecuteFreshStageAsync"
+                ? "stage"
+                : "attempt";
+            return isKnownHelper && RoutesDelegateThroughExecutionStrategy(
+                method,
+                _models,
+                replayParameterName);
         }
 
         private static bool IsExecutionStrategyExecutor(IMethodSymbol symbol)

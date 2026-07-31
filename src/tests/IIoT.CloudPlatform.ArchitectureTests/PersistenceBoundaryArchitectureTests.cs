@@ -200,6 +200,31 @@ public sealed class PersistenceBoundaryArchitectureTests
                     => Task.CompletedTask;
             }
             """;
+        const string escapedAliasImplementation =
+            """
+            using IIoT.Services.Contracts.Persistence;
+            using Microsoft.EntityFrameworkCore;
+            using Microsoft.EntityFrameworkCore.Storage;
+
+            public sealed class EscapedAliasUnitOfWork(IExecutionStrategy strategy) : IUnitOfWork
+            {
+                public async Task<TResult> ExecuteResilientAsync<TResult>(
+                    Func<CancellationToken, Task<TResult>> operation,
+                    CancellationToken cancellationToken = default)
+                {
+                    var escaped = operation;
+                    _ = await strategy.ExecuteAsync(operation, cancellationToken);
+                    return await escaped(cancellationToken);
+                }
+
+                public Task BeginTransactionAsync(CancellationToken cancellationToken = default)
+                    => Task.CompletedTask;
+                public Task CommitAsync(CancellationToken cancellationToken = default)
+                    => Task.CompletedTask;
+                public Task RollbackAsync(CancellationToken cancellationToken = default)
+                    => Task.CompletedTask;
+            }
+            """;
         const string caller =
             """
             using IIoT.Services.Contracts.Persistence;
@@ -220,6 +245,9 @@ public sealed class PersistenceBoundaryArchitectureTests
         Assert.False(
             PersistenceWriteInventory.VerifyUnitOfWorkReplayImplementationSnippet(
                 unsafeImplementation));
+        Assert.False(
+            PersistenceWriteInventory.VerifyUnitOfWorkReplayImplementationSnippet(
+                escapedAliasImplementation));
         var entry = Assert.Single(
             PersistenceWriteInventory.DiscoverSnippet(
                 caller,
@@ -248,6 +276,41 @@ public sealed class PersistenceBoundaryArchitectureTests
                     Func<CancellationToken, Task<int>> attempt,
                     CancellationToken cancellationToken)
                     => attempt(cancellationToken);
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(source).UnclassifiedEntries);
+
+        Assert.Contains("ef-save", entry.SinkKinds);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldRejectNamedHelperThatDoesNotRouteItsAttempt()
+    {
+        const string source =
+            """
+            using Microsoft.EntityFrameworkCore;
+
+            namespace IIoT.EntityFrameworkCore.Identity;
+
+            public sealed class IdentityPasswordService(DbContext context)
+            {
+                public Task<int> WriteAsync(CancellationToken cancellationToken)
+                    => ExecuteRecoverableAsync(
+                        callbackToken => context.SaveChangesAsync(callbackToken),
+                        cancellationToken);
+
+                private async Task<int> ExecuteRecoverableAsync(
+                    Func<CancellationToken, Task<int>> attempt,
+                    CancellationToken cancellationToken)
+                {
+                    var strategy = context.Database.CreateExecutionStrategy();
+                    _ = await strategy.ExecuteAsync(
+                        static _ => Task.FromResult(0),
+                        cancellationToken);
+                    return await attempt(cancellationToken);
+                }
             }
             """;
 

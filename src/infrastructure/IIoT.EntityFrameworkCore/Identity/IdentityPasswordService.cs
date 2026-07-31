@@ -202,10 +202,12 @@ public sealed class IdentityPasswordService(
     {
         PasswordSnapshot? baseline = null;
         PasswordTarget? target = null;
+        Result<bool>? settledReadOnlyResult = null;
 
         return await ExecuteRecoverableAsync(
             async callbackToken =>
             {
+                settledReadOnlyResult = null;
                 await using var context = _createContext();
                 await using var transaction =
                     await context.Database.BeginTransactionAsync(callbackToken);
@@ -214,7 +216,10 @@ public sealed class IdentityPasswordService(
                     callbackToken);
                 if (user is null)
                 {
-                    return Result.Failure("用户不存在");
+                    Result<bool> result = Result.Failure("用户不存在");
+                    settledReadOnlyResult = result;
+                    await transaction.CommitAsync(callbackToken);
+                    return result;
                 }
 
                 var current = PasswordSnapshot.From(user);
@@ -234,16 +239,22 @@ public sealed class IdentityPasswordService(
                     if (requireCurrentPassword &&
                         !VerifyPassword(user, currentPassword ?? string.Empty))
                     {
-                        return Result.Failure("当前密码不正确");
+                        Result<bool> result = Result.Failure("当前密码不正确");
+                        settledReadOnlyResult = result;
+                        await transaction.CommitAsync(callbackToken);
+                        return result;
                     }
 
                     var validation = await ValidatePasswordAsync(user, newPassword);
                     if (!validation.Succeeded)
                     {
-                        return Result.Failure(
+                        Result<bool> result = Result.Failure(
                             validation.Errors
                                 .Select(error => error.Description)
                                 .ToArray());
+                        settledReadOnlyResult = result;
+                        await transaction.CommitAsync(callbackToken);
+                        return result;
                     }
 
                     baseline = current;
@@ -278,7 +289,8 @@ public sealed class IdentityPasswordService(
                     target);
             },
             targetResult: () => Result.Success(true),
-            cancellationToken);
+            cancellationToken,
+            knownResult: () => settledReadOnlyResult);
     }
 
     private async Task<Result<bool>> ExecuteRecoverableAsync(
