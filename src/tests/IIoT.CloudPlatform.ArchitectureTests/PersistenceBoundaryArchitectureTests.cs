@@ -533,7 +533,7 @@ public sealed class PersistenceBoundaryArchitectureTests
         var processGateSource = File.ReadAllText(
             CloudRepositoryPath.Find(
                 "src", "infrastructure", "IIoT.EntityFrameworkCore",
-                "Identity", "HumanSessionTokenExchangeProcessGate.cs"));
+                "Identity", "HumanSessionIssuanceProcessGate.cs"));
         var dependencyInjectionSource = File.ReadAllText(
             CloudRepositoryPath.Find(
                 "src", "infrastructure", "IIoT.EntityFrameworkCore",
@@ -559,20 +559,37 @@ public sealed class PersistenceBoundaryArchitectureTests
             "AcquireOidcTokenExchangeAsync",
             issuanceLockSource,
             StringComparison.Ordinal);
-        var processGateIndex = issuanceLockSource.IndexOf(
-            "tokenExchangeProcessGate.EnterAsync",
+        var authorizationProcessGateIndex = issuanceLockSource.IndexOf(
+            "processGate.EnterAuthorizationAsync",
             StringComparison.Ordinal);
-        var databaseLeaseIndex = issuanceLockSource.IndexOf(
+        var authorizationDatabaseLeaseIndex = issuanceLockSource.IndexOf(
             "var databaseLease = await AcquireAsync",
             StringComparison.Ordinal);
-        Assert.True(processGateIndex >= 0);
-        Assert.True(databaseLeaseIndex > processGateIndex);
+        var tokenExchangeProcessGateIndex = issuanceLockSource.IndexOf(
+            "processGate.EnterTokenExchangeAsync",
+            StringComparison.Ordinal);
+        var tokenExchangeDatabaseLeaseIndex = issuanceLockSource.IndexOf(
+            "var databaseLease = await AcquireAsync",
+            authorizationDatabaseLeaseIndex + 1,
+            StringComparison.Ordinal);
+        Assert.True(authorizationProcessGateIndex >= 0);
+        Assert.True(
+            authorizationDatabaseLeaseIndex >
+            authorizationProcessGateIndex);
+        Assert.True(tokenExchangeProcessGateIndex >= 0);
+        Assert.True(
+            tokenExchangeDatabaseLeaseIndex >
+            tokenExchangeProcessGateIndex);
         Assert.Contains(
             "SemaphoreSlim(1, 1)",
             processGateSource,
             StringComparison.Ordinal);
         Assert.Contains(
-            "AddSingleton<HumanSessionTokenExchangeProcessGate>",
+            "ConcurrentDictionary<Guid, AuthorizationGateEntry>",
+            processGateSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AddSingleton<HumanSessionIssuanceProcessGate>",
             dependencyInjectionSource,
             StringComparison.Ordinal);
     }

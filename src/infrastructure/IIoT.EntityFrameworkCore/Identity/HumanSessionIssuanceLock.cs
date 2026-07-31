@@ -8,22 +8,41 @@ namespace IIoT.EntityFrameworkCore.Identity;
 
 public sealed class HumanSessionIssuanceLock(
     IIoTDbContext dbContext,
-    HumanSessionTokenExchangeProcessGate tokenExchangeProcessGate)
+    HumanSessionIssuanceProcessGate processGate)
     : IHumanSessionIssuanceLock
 {
     private readonly Func<IIoTDbContext> _createContext = dbContext.CreateFreshContext;
     private readonly bool _usesNpgsql = dbContext.Database.IsNpgsql();
 
-    public ValueTask<IAsyncDisposable> AcquireAuthorizationAsync(
+    public async ValueTask<IAsyncDisposable> AcquireAuthorizationAsync(
         Guid subjectId,
         CancellationToken cancellationToken = default)
-        => AcquireAsync(
-            (context, token) =>
-                RefreshTokenSubjectTransactionLock.AcquireAsync(
-                    context,
-                    subjectId,
-                    token),
+    {
+        if (!_usesNpgsql)
+        {
+            return NoopLease.Instance;
+        }
+
+        var processLease = await processGate.EnterAuthorizationAsync(
+            subjectId,
             cancellationToken);
+        try
+        {
+            var databaseLease = await AcquireAsync(
+                (context, token) =>
+                    RefreshTokenSubjectTransactionLock.AcquireAsync(
+                        context,
+                        subjectId,
+                        token),
+                cancellationToken);
+            return new CompositeLease(databaseLease, processLease);
+        }
+        catch
+        {
+            await processLease.DisposeAsync();
+            throw;
+        }
+    }
 
     public async ValueTask<IAsyncDisposable> AcquireTokenExchangeAsync(
         CancellationToken cancellationToken = default)
@@ -33,7 +52,7 @@ public sealed class HumanSessionIssuanceLock(
             return NoopLease.Instance;
         }
 
-        var processLease = await tokenExchangeProcessGate.EnterAsync(
+        var processLease = await processGate.EnterTokenExchangeAsync(
             cancellationToken);
         try
         {

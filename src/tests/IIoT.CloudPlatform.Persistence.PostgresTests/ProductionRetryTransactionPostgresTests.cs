@@ -925,7 +925,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
             $"tx-03b3-oidc-issuance-{Guid.NewGuid():N}");
         var issuanceLock = new HumanSessionIssuanceLock(
             issuanceContext,
-            new HumanSessionTokenExchangeProcessGate());
+            new HumanSessionIssuanceProcessGate());
         var revocationApplicationName =
             $"tx-03b3-oidc-revoke-{Guid.NewGuid():N}";
         await using var revocationContext = CreateRetryContext(
@@ -1009,7 +1009,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
         using var budget = await PostgresTestBudget.CreateAsync(
             fixture,
             TimeSpan.FromSeconds(45));
-        var processGate = new HumanSessionTokenExchangeProcessGate();
+        var processGate = new HumanSessionIssuanceProcessGate();
         var holderApplicationName =
             $"tx-03b3-token-holder-{Guid.NewGuid():N}";
         var waiterApplicationName =
@@ -1036,6 +1036,72 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 .AsTask();
             await WaitForProcessGateWaiterAsync(
                 processGate,
+                budget.Token);
+
+            Assert.Equal(
+                0,
+                await CountPostgresSessionsAsync(
+                    budget.ConnectionString,
+                    waiterApplicationName,
+                    budget.Token));
+
+            await holderLease.DisposeAsync();
+            holderLease = null;
+            await using var waiterLease = await waiterTask.WaitAsync(
+                budget.Token);
+            Assert.Equal(
+                1,
+                await CountPostgresSessionsAsync(
+                    budget.ConnectionString,
+                    waiterApplicationName,
+                    budget.Token));
+        }
+        finally
+        {
+            if (holderLease is not null)
+            {
+                await holderLease.DisposeAsync();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task AuthorizationProcessGate_ShouldQueueSameSubjectBeforeOpeningAnotherDatabaseConnection()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var subjectId = Guid.NewGuid();
+        var processGate = new HumanSessionIssuanceProcessGate();
+        var holderApplicationName =
+            $"tx-03b3-auth-holder-{Guid.NewGuid():N}";
+        var waiterApplicationName =
+            $"tx-03b3-auth-waiter-{Guid.NewGuid():N}";
+        await using var holderContext = CreateRetryContext(
+            budget.ConnectionString,
+            holderApplicationName);
+        await using var waiterContext = CreateRetryContext(
+            budget.ConnectionString,
+            waiterApplicationName);
+        var holder = new HumanSessionIssuanceLock(
+            holderContext,
+            processGate);
+        var waiter = new HumanSessionIssuanceLock(
+            waiterContext,
+            processGate);
+        IAsyncDisposable? holderLease =
+            await holder.AcquireAuthorizationAsync(
+                subjectId,
+                budget.Token);
+
+        try
+        {
+            var waiterTask = waiter
+                .AcquireAuthorizationAsync(subjectId, budget.Token)
+                .AsTask();
+            await WaitForAuthorizationProcessGateWaiterAsync(
+                processGate,
+                subjectId,
                 budget.Token);
 
             Assert.Equal(
@@ -4357,7 +4423,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
     }
 
     private static async Task WaitForProcessGateWaiterAsync(
-        HumanSessionTokenExchangeProcessGate processGate,
+        HumanSessionIssuanceProcessGate processGate,
         CancellationToken testToken)
     {
         using var readinessTimeout =
@@ -4365,7 +4431,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
         readinessTimeout.CancelAfter(TimeSpan.FromSeconds(10));
         try
         {
-            while (processGate.WaitingCount == 0)
+            while (processGate.TokenExchangeWaitingCount == 0)
             {
                 readinessTimeout.Token.ThrowIfCancellationRequested();
                 await Task.Yield();
@@ -4376,6 +4442,30 @@ public sealed class ProductionRetryTransactionPostgresTests(
         {
             throw new TimeoutException(
                 "Token-exchange operation did not enter the process gate within 10 seconds.");
+        }
+    }
+
+    private static async Task WaitForAuthorizationProcessGateWaiterAsync(
+        HumanSessionIssuanceProcessGate processGate,
+        Guid subjectId,
+        CancellationToken testToken)
+    {
+        using var readinessTimeout =
+            CancellationTokenSource.CreateLinkedTokenSource(testToken);
+        readinessTimeout.CancelAfter(TimeSpan.FromSeconds(10));
+        try
+        {
+            while (processGate.GetAuthorizationWaitingCount(subjectId) == 0)
+            {
+                readinessTimeout.Token.ThrowIfCancellationRequested();
+                await Task.Yield();
+            }
+        }
+        catch (OperationCanceledException)
+            when (!testToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                "Authorization operation did not enter the process gate within 10 seconds.");
         }
     }
 
