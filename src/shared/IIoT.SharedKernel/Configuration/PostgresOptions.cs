@@ -24,9 +24,27 @@ public sealed class PostgresOptions
             throw new InvalidOperationException("Infrastructure:Postgres:MaxRetryCount cannot be negative.");
         }
 
+        if (EnableRetry && MaxRetryCount <= 0)
+        {
+            throw new InvalidOperationException(
+                "Infrastructure:Postgres:MaxRetryCount must be greater than 0 when retry is enabled.");
+        }
+
         if (MaxRetryDelaySeconds <= 0)
         {
             throw new InvalidOperationException("Infrastructure:Postgres:MaxRetryDelaySeconds must be greater than 0.");
+        }
+    }
+
+    public void Validate(string environmentName)
+    {
+        Validate();
+
+        if (string.Equals(environmentName, "Production", StringComparison.OrdinalIgnoreCase) &&
+            !EnableRetry)
+        {
+            throw new InvalidOperationException(
+                "Infrastructure:Postgres:EnableRetry must be true in Production.");
         }
     }
 }

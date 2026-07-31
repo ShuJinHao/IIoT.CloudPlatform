@@ -167,6 +167,76 @@ public sealed class InfrastructureValueBehaviorTests
     }
 
     [Fact]
+    public void PostgresOptions_ShouldRejectDisabledRetryInProduction()
+    {
+        var options = new PostgresOptions
+        {
+            EnableRetry = false,
+            MaxRetryCount = 3
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => options.Validate(Environments.Production));
+
+        Assert.Contains(
+            "Infrastructure:Postgres:EnableRetry must be true in Production.",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PostgresOptions_ShouldTreatMissingRetryKeyAsDisabledInProduction()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{PostgresOptions.SectionName}:CommandTimeoutSeconds"] = "30",
+                [$"{PostgresOptions.SectionName}:MaxRetryCount"] = "3",
+                [$"{PostgresOptions.SectionName}:MaxRetryDelaySeconds"] = "10"
+            })
+            .Build();
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => configuration.GetRequiredValidatedOptions<PostgresOptions>(
+                PostgresOptions.SectionName,
+                options => options.Validate(Environments.Production)));
+
+        Assert.Contains(
+            "Infrastructure:Postgres:EnableRetry must be true in Production.",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PostgresOptions_ShouldRejectNonPositiveRetryCountWhenRetryIsEnabled()
+    {
+        var options = new PostgresOptions
+        {
+            EnableRetry = true,
+            MaxRetryCount = 0
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => options.Validate());
+
+        Assert.Contains(
+            "Infrastructure:Postgres:MaxRetryCount must be greater than 0 when retry is enabled.",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PostgresOptions_ShouldAllowTestingToExplicitlyDisableRetry()
+    {
+        var options = new PostgresOptions
+        {
+            EnableRetry = false,
+            MaxRetryCount = 0
+        };
+
+        options.Validate("Testing");
+    }
+
+    [Fact]
     public void JwtSettings_ShouldRejectConfiguredSecretShorterThanRuntimeMinimum()
     {
         var options = new JwtSettings

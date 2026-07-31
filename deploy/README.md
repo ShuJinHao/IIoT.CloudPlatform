@@ -62,6 +62,8 @@ iiot-migration -> one-shot migration/bootstrap job
 
 `docker-compose.prod.yml` 的默认资源和吞吐配置按 16GB 单机生产起步值设置，并在 `.env` 中保留覆盖项。默认给 Cloud 预留约 8-10GB 容器额度，保留 OS、Docker、备份任务和同机 AICopilot 的余量；真实上线前仍以现场压测为准调整 `POSTGRES_*`、`HTTPAPI_*`、`DATAWORKER_*`、`OUTBOX_*`、`*_CONSUMER_CONCURRENCY` 和 `RATE_LIMIT_*`。
 
+PostgreSQL execution-strategy retry 不再是生产运维开关。HttpApi、DataWorker 和 MigrationWorkApp 的受版本控制默认值均为 `Infrastructure:Postgres:EnableRetry=true`，生产 compose 也对三个宿主分别固定为 `"true"`；`POSTGRES_ENABLE_RETRY` 已退役。Production 中该键缺失或为 false 会在宿主构造时失败，启用 retry 时 `MaxRetryCount` 必须大于零；只有 Testing 环境允许测试显式关闭。
+
 外部暴露：
 
 - `${GATEWAY_HTTP_PORT:-80}`：产品入口。

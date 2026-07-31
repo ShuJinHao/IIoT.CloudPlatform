@@ -57,7 +57,11 @@ public sealed class RepositoryConfigurationBoundaryTests
         dataWorker.GetValue<int>("Infrastructure:EventBus:Consumers:DeviceLogConcurrentMessageLimit").Should().BeGreaterThan(0);
         dataWorker.GetValue<int>("Infrastructure:EventBus:Consumers:HourlyCapacityConcurrentMessageLimit").Should().BeGreaterThan(0);
         migration.GetValue<int>("Infrastructure:Postgres:CommandTimeoutSeconds").Should().BeGreaterThan(0);
-        migration.GetValue<int>("Infrastructure:Postgres:MaxRetryCount").Should().BeGreaterThanOrEqualTo(0);
+        foreach (var hostConfiguration in new[] { httpApi, dataWorker, migration })
+        {
+            hostConfiguration.GetValue<bool>("Infrastructure:Postgres:EnableRetry").Should().BeTrue();
+            hostConfiguration.GetValue<int>("Infrastructure:Postgres:MaxRetryCount").Should().BeGreaterThan(0);
+        }
         migration.GetValue<string>("OidcProvider:AicopilotClientId").Should().Be("aicopilot");
         AssertAicopilotRedirectUris(migration);
         migration.GetValue<int>("OidcProvider:AuthorizationCodeLifetimeMinutes").Should().Be(5);

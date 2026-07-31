@@ -285,6 +285,29 @@ public sealed class DeploymentSourceGuardTests
     }
 
     [Fact]
+    public void ProductionCompose_ShouldForcePostgresRetryForAllDatabaseHosts()
+    {
+        var composeSource = File.ReadAllText(
+            CloudRepositoryPath.Find("deploy", "docker-compose.prod.yml"));
+        var environmentExample = File.ReadAllText(
+            CloudRepositoryPath.Find("deploy", ".env.example"));
+        var deploymentGuide = File.ReadAllText(
+            CloudRepositoryPath.Find("deploy", "README.md"));
+
+        var migration = GetComposeServiceBlock(composeSource, "iiot-migration");
+        var httpApi = GetComposeServiceBlock(composeSource, "iiot-httpapi");
+        var dataWorker = GetComposeServiceBlock(composeSource, "iiot-dataworker");
+
+        AssertForcedProductionRetry(migration, "DOTNET_ENVIRONMENT");
+        AssertForcedProductionRetry(httpApi, "ASPNETCORE_ENVIRONMENT");
+        AssertForcedProductionRetry(dataWorker, "DOTNET_ENVIRONMENT");
+        composeSource.Should().NotContain("POSTGRES_ENABLE_RETRY");
+        environmentExample.Should().NotContain("POSTGRES_ENABLE_RETRY");
+        deploymentGuide.Should().Contain("`POSTGRES_ENABLE_RETRY` 已退役");
+        deploymentGuide.Should().Contain("Production 中该键缺失或为 false");
+    }
+
+    [Fact]
     public void DeploymentTemplates_ShouldExternalizeSecretsAndUseStandardDeployEntry()
     {
         var gitIgnoreSource = File.ReadAllText(CloudRepositoryPath.Find(".gitignore"));
@@ -348,6 +371,29 @@ public sealed class DeploymentSourceGuardTests
         edgeInstallerPublicBaseUrlSource.Should().Contain("http://cloud-host:81");
         edgeBindingDownloadPanelSource.Should().NotContain("10.98.90.154");
         edgeBindingDownloadPanelSource.Should().Contain("http://cloud-host:81");
+    }
+
+    private static void AssertForcedProductionRetry(
+        string serviceBlock,
+        string environmentVariable)
+    {
+        serviceBlock.Should().Contain($"{environmentVariable}: Production");
+        Regex.Matches(
+                serviceBlock,
+                "(?m)^\\s{6}Infrastructure__Postgres__EnableRetry: \\\"true\\\"\\s*$")
+            .Should().HaveCount(1);
+    }
+
+    private static string GetComposeServiceBlock(string composeSource, string serviceName)
+    {
+        var match = Regex.Match(
+            composeSource,
+            $"(?ms)^  {Regex.Escape(serviceName)}:\\r?\\n(?<body>.*?)(?=^  [a-z0-9][a-z0-9-]*:\\r?$|^networks:\\r?$)");
+
+        match.Success.Should().BeTrue($"compose service '{serviceName}' must exist exactly once");
+        Regex.Matches(composeSource, $"(?m)^  {Regex.Escape(serviceName)}:\\r?$")
+            .Should().HaveCount(1);
+        return match.Groups["body"].Value;
     }
 
     [Fact]

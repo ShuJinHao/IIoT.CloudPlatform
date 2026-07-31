@@ -77,9 +77,11 @@ services:
   iiot-migration:
     image: ${IIOT_MIGRATION_IMAGE}
     environment:
+      DOTNET_ENVIRONMENT: Production
       ConnectionStrings__iiot-db: Host=postgres;Port=5432;Username=postgres;Password=${PG_PASSWORD};Database=iiot-db
       ConnectionStrings__redis-cache: redis-cache:6379
       JwtSettings__Secret: ${JWTSETTINGS__SECRET}
+      Infrastructure__Postgres__EnableRetry: "true"
       SEED_ADMIN_NO: ${SEED_ADMIN_NO}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD}
       ALLOW_INTRANET_HTTP_OIDC: ${ALLOW_INTRANET_HTTP_OIDC:-false}
@@ -124,7 +126,7 @@ services:
       EdgeRelease__MaxVersionsPerComponent: ${EDGE_RELEASE_MAX_VERSIONS_PER_COMPONENT:-3}
       EdgeReleaseUpload__MaxUploadMbps: ${EDGE_RELEASE_UPLOAD_MAX_MBPS:-1000}
       EdgeReleaseUpload__MaxBundleBytes: ${EDGE_RELEASE_UPLOAD_MAX_BUNDLE_BYTES:-2147483648}
-      Infrastructure__Postgres__EnableRetry: ${POSTGRES_ENABLE_RETRY:-true}
+      Infrastructure__Postgres__EnableRetry: "true"
       Infrastructure__EventBus__ConcurrentMessageLimit: ${EVENTBUS_CONCURRENT_MESSAGE_LIMIT:-16}
       Infrastructure__EventBus__PrefetchMultiplier: ${EVENTBUS_PREFETCH_MULTIPLIER:-4}
       ALLOW_INTRANET_HTTP_OIDC: ${ALLOW_INTRANET_HTTP_OIDC:-false}
@@ -195,7 +197,7 @@ services:
       ConnectionStrings__redis-cache: redis-cache:6379
       ConnectionStrings__eventbus: amqp://${RABBITMQ_DEFAULT_USER}:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672
       JwtSettings__Secret: ${JWTSETTINGS__SECRET}
-      Infrastructure__Postgres__EnableRetry: ${POSTGRES_ENABLE_RETRY:-true}
+      Infrastructure__Postgres__EnableRetry: "true"
       Infrastructure__EventBus__ConcurrentMessageLimit: ${EVENTBUS_CONCURRENT_MESSAGE_LIMIT:-16}
       Infrastructure__EventBus__PrefetchMultiplier: ${EVENTBUS_PREFETCH_MULTIPLIER:-4}
       Infrastructure__EventBus__EndpointPrefix: ${Infrastructure__EventBus__EndpointPrefix}

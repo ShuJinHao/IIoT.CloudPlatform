@@ -119,7 +119,10 @@ public sealed class EfPersistenceBehaviorTests
     [Fact]
     public void EdgeHostPlcRuntimeState_ShouldUseDedicatedStore()
     {
-        var builder = Host.CreateApplicationBuilder();
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        {
+            EnvironmentName = "Testing"
+        });
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
             [$"ConnectionStrings:{ConnectionResourceNames.IiotDatabase}"] =
@@ -140,6 +143,58 @@ public sealed class EfPersistenceBehaviorTests
         Assert.Equal(
             typeof(IIoT.EntityFrameworkCore.EdgeHosts.EfEdgeHostPlcRuntimeStateStore),
             registration.ImplementationType);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AddEfCore_ShouldFailClosedWhenProductionRetryIsDisabledOrMissing(
+        bool includeEnableRetry)
+    {
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        {
+            EnvironmentName = Environments.Production
+        });
+        var settings = new Dictionary<string, string?>
+        {
+            [$"ConnectionStrings:{ConnectionResourceNames.IiotDatabase}"] =
+                "Host=127.0.0.1;Port=5432;Database=retry_guard;Username=test;Password=test",
+            [$"{PostgresOptions.SectionName}:CommandTimeoutSeconds"] = "30",
+            [$"{PostgresOptions.SectionName}:MaxRetryCount"] = "3",
+            [$"{PostgresOptions.SectionName}:MaxRetryDelaySeconds"] = "10"
+        };
+        if (includeEnableRetry)
+        {
+            settings[$"{PostgresOptions.SectionName}:EnableRetry"] = "false";
+        }
+        builder.Configuration.AddInMemoryCollection(settings);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => builder.AddEfCore());
+
+        Assert.Contains(
+            "Infrastructure:Postgres:EnableRetry must be true in Production.",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AddEfCore_ShouldAllowTestingToExplicitlyDisableRetry()
+    {
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        {
+            EnvironmentName = "Testing"
+        });
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [$"ConnectionStrings:{ConnectionResourceNames.IiotDatabase}"] =
+                "Host=127.0.0.1;Port=5432;Database=retry_guard;Username=test;Password=test",
+            [$"{PostgresOptions.SectionName}:EnableRetry"] = "false",
+            [$"{PostgresOptions.SectionName}:CommandTimeoutSeconds"] = "30",
+            [$"{PostgresOptions.SectionName}:MaxRetryCount"] = "0",
+            [$"{PostgresOptions.SectionName}:MaxRetryDelaySeconds"] = "10"
+        });
+
+        builder.AddEfCore();
     }
 
     [Fact]
