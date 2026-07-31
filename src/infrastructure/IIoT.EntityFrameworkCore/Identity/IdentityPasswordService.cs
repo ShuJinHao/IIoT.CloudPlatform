@@ -11,6 +11,7 @@ public sealed class IdentityPasswordService(
     IIoTDbContext dbContext) : IIdentityPasswordService
 {
     private static readonly TimeSpan ObservationTimeout = TimeSpan.FromSeconds(5);
+    private const int MaxPasswordConcurrencyAttempts = 3;
     private readonly Func<IIoTDbContext> _createContext = dbContext.CreateFreshContext;
 
     public async Task<Result<bool>> SetPasswordAsync(
@@ -57,52 +58,75 @@ public sealed class IdentityPasswordService(
         return await ExecuteRecoverableAsync(
             async callbackToken =>
             {
-                await using var context = _createContext();
-                await using var transaction =
-                    await context.Database.BeginTransactionAsync(callbackToken);
-                var user = await context.Users.SingleOrDefaultAsync(
-                    candidate => candidate.Id == userId,
-                    callbackToken);
-                if (user is null || !user.IsEnabled)
+                for (var concurrencyAttempt = 1;
+                     concurrencyAttempt <= MaxPasswordConcurrencyAttempts;
+                     concurrencyAttempt++)
                 {
+                    await using var context = _createContext();
+                    await using var transaction =
+                        await context.Database.BeginTransactionAsync(callbackToken);
+                    var user = await context.Users.SingleOrDefaultAsync(
+                        candidate => candidate.Id == userId,
+                        callbackToken);
+                    if (user is null || !user.IsEnabled)
+                    {
+                        await transaction.CommitAsync(callbackToken);
+                        return Result.Success(false);
+                    }
+
+                    var current = PasswordSnapshot.From(user);
+                    if (target is not null && target.Matches(current))
+                    {
+                        await transaction.CommitAsync(callbackToken);
+                        return Result.Success(target.PasswordAccepted);
+                    }
+
+                    if (baseline is not null && !baseline.Matches(current))
+                    {
+                        throw new CloudWriteConflictException();
+                    }
+
+                    if (user.LockoutEnabled &&
+                        user.LockoutEnd is { } lockoutEnd &&
+                        lockoutEnd > checkedAtUtc)
+                    {
+                        await transaction.CommitAsync(callbackToken);
+                        return Result.Success(false);
+                    }
+
+                    baseline ??= current;
+                    target ??= CreateCheckTarget(user, password, checkedAtUtc);
+                    if (target.Matches(current))
+                    {
+                        await transaction.CommitAsync(callbackToken);
+                        return Result.Success(target.PasswordAccepted);
+                    }
+
+                    var exactTarget = target ?? throw new InvalidOperationException(
+                        "Password write target was not established.");
+                    ApplyTarget(user, exactTarget);
+                    try
+                    {
+                        await context.SaveChangesAsync(callbackToken);
+                    }
+                    catch (DbUpdateConcurrencyException)
+                        when (concurrencyAttempt < MaxPasswordConcurrencyAttempts)
+                    {
+                        // A failed compare-and-swap did not commit. Re-read the
+                        // latest lockout facts so each concurrent password check
+                        // contributes exactly once without weakening unknown-commit
+                        // observation for all other failures.
+                        baseline = null;
+                        target = null;
+                        continue;
+                    }
+
                     await transaction.CommitAsync(callbackToken);
-                    return Result.Success(false);
+                    return Result.Success(exactTarget.PasswordAccepted);
                 }
 
-                var current = PasswordSnapshot.From(user);
-                if (target is not null && target.Matches(current))
-                {
-                    await transaction.CommitAsync(callbackToken);
-                    return Result.Success(target.PasswordAccepted);
-                }
-
-                if (baseline is not null && !baseline.Matches(current))
-                {
-                    throw new CloudWriteConflictException();
-                }
-
-                if (user.LockoutEnabled &&
-                    user.LockoutEnd is { } lockoutEnd &&
-                    lockoutEnd > checkedAtUtc)
-                {
-                    await transaction.CommitAsync(callbackToken);
-                    return Result.Success(false);
-                }
-
-                baseline ??= current;
-                target ??= CreateCheckTarget(user, password, checkedAtUtc);
-                if (target.Matches(current))
-                {
-                    await transaction.CommitAsync(callbackToken);
-                    return Result.Success(target.PasswordAccepted);
-                }
-
-                var exactTarget = target ?? throw new InvalidOperationException(
-                    "Password write target was not established.");
-                ApplyTarget(user, exactTarget);
-                await context.SaveChangesAsync(callbackToken);
-                await transaction.CommitAsync(callbackToken);
-                return Result.Success(exactTarget.PasswordAccepted);
+                throw new InvalidOperationException(
+                    "Password concurrency retry budget was exhausted.");
             },
             async token =>
             {

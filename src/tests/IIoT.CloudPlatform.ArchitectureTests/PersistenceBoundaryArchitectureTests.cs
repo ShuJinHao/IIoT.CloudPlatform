@@ -128,6 +128,35 @@ public sealed class PersistenceBoundaryArchitectureTests
     }
 
     [Fact]
+    public void PersistenceInventory_ShouldRejectNamedHelperWithoutExecutionStrategy()
+    {
+        const string source =
+            """
+            using Microsoft.EntityFrameworkCore;
+
+            namespace IIoT.EntityFrameworkCore.Identity;
+
+            public sealed class IdentityPasswordService(DbContext context)
+            {
+                public Task<int> WriteAsync(CancellationToken cancellationToken)
+                    => ExecuteRecoverableAsync(
+                        callbackToken => context.SaveChangesAsync(callbackToken),
+                        cancellationToken);
+
+                private static Task<int> ExecuteRecoverableAsync(
+                    Func<CancellationToken, Task<int>> attempt,
+                    CancellationToken cancellationToken)
+                    => attempt(cancellationToken);
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(source).UnclassifiedEntries);
+
+        Assert.Contains("ef-save", entry.SinkKinds);
+    }
+
+    [Fact]
     public void PersistenceInventory_ShouldRejectAliasedPersistenceMethodGroups()
     {
         const string source =

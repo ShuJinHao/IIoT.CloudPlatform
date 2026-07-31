@@ -1116,7 +1116,7 @@ internal static class PersistenceWriteInventory
             return false;
         }
 
-        private static bool IsProtectedDelegateArgument(SyntaxNode node, SemanticModel model)
+        private bool IsProtectedDelegateArgument(SyntaxNode node, SemanticModel model)
         {
             var argument = node.AncestorsAndSelf().OfType<ArgumentSyntax>().FirstOrDefault();
             if (argument?.Parent?.Parent is not InvocationExpressionSyntax invocation)
@@ -1128,10 +1128,9 @@ internal static class PersistenceWriteInventory
                 .Any(IsProtectedExecutor);
         }
 
-        private static bool IsProtectedExecutor(IMethodSymbol symbol)
+        private bool IsProtectedExecutor(IMethodSymbol symbol)
         {
             var method = symbol.ReducedFrom ?? symbol;
-            var namespaceName = method.ContainingNamespace.ToDisplayString();
             if (method.Name == "ExecuteResilientAsync" &&
                 (method.ContainingType.ToDisplayString() ==
                  "IIoT.Services.Contracts.Persistence.IUnitOfWork" ||
@@ -1142,26 +1141,59 @@ internal static class PersistenceWriteInventory
                 return true;
             }
 
-            if ((method.Name is "Execute" or "ExecuteAsync") &&
-                (symbol.ReceiverType?.ToDisplayString() ==
-                 "Microsoft.EntityFrameworkCore.Storage.IExecutionStrategy" ||
-                 method.ContainingType.ToDisplayString() is
-                     "Microsoft.EntityFrameworkCore.Storage.IExecutionStrategy" or
-                     "Microsoft.EntityFrameworkCore.ExecutionStrategyExtensions" ||
-                 namespaceName.StartsWith(
-                     "Microsoft.EntityFrameworkCore.Storage",
-                     StringComparison.Ordinal)))
+            if (IsExecutionStrategyExecutor(symbol))
             {
                 return true;
             }
 
-            return (method.Name == "ExecuteFreshStageAsync" &&
-                    method.ContainingType.ToDisplayString() ==
-                    "IIoT.MigrationWorkApp.DatabaseInitializationOrchestrator") ||
-                   (method.Name == "ExecuteRecoverableAsync" &&
+            var isKnownHelper =
+                (method.Name == "ExecuteFreshStageAsync" &&
+                 method.ContainingType.ToDisplayString() ==
+                 "IIoT.MigrationWorkApp.DatabaseInitializationOrchestrator") ||
+                (method.Name == "ExecuteRecoverableAsync" &&
+                 method.ContainingType.ToDisplayString() is
+                     "IIoT.EntityFrameworkCore.Identity.RolePolicyService" or
+                     "IIoT.EntityFrameworkCore.Identity.IdentityPasswordService");
+            return isKnownHelper && DirectlyInvokesExecutionStrategy(method);
+        }
+
+        private bool DirectlyInvokesExecutionStrategy(IMethodSymbol method)
+        {
+            foreach (var syntaxReference in method.DeclaringSyntaxReferences)
+            {
+                var declaration = syntaxReference.GetSyntax();
+                if (!_models.TryGetValue(declaration.SyntaxTree, out var model))
+                {
+                    continue;
+                }
+
+                if (declaration
+                    .DescendantNodes()
+                    .OfType<InvocationExpressionSyntax>()
+                    .SelectMany(invocation =>
+                        GetMethodSymbols(model.GetSymbolInfo(invocation)))
+                    .Any(IsExecutionStrategyExecutor))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsExecutionStrategyExecutor(IMethodSymbol symbol)
+        {
+            var method = symbol.ReducedFrom ?? symbol;
+            var namespaceName = method.ContainingNamespace.ToDisplayString();
+            return (method.Name is "Execute" or "ExecuteAsync") &&
+                   (symbol.ReceiverType?.ToDisplayString() ==
+                    "Microsoft.EntityFrameworkCore.Storage.IExecutionStrategy" ||
                     method.ContainingType.ToDisplayString() is
-                        "IIoT.EntityFrameworkCore.Identity.RolePolicyService" or
-                        "IIoT.EntityFrameworkCore.Identity.IdentityPasswordService");
+                        "Microsoft.EntityFrameworkCore.Storage.IExecutionStrategy" or
+                        "Microsoft.EntityFrameworkCore.ExecutionStrategyExtensions" ||
+                    namespaceName.StartsWith(
+                        "Microsoft.EntityFrameworkCore.Storage",
+                        StringComparison.Ordinal));
         }
     }
 

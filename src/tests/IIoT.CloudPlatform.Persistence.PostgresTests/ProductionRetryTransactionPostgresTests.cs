@@ -457,6 +457,57 @@ public sealed class ProductionRetryTransactionPostgresTests(
     }
 
     [Fact]
+    public async Task ConcurrentFailedPasswordChecks_ShouldEachAdvanceLockoutState()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var barrier = new PasswordSaveConcurrencyBarrierInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            new ThrowOnceBeforeCommitInterceptor(),
+            barrier);
+        Guid userId;
+        await using (var seedScope = provider.CreateAsyncScope())
+        {
+            var userManager = seedScope.ServiceProvider
+                .GetRequiredService<UserManager<ApplicationUser>>();
+            var user = new ApplicationUser
+            {
+                Id = Guid.NewGuid(),
+                UserName = $"identity-concurrent-{Guid.NewGuid():N}"[..40],
+                IsEnabled = true
+            };
+            Assert.True((await userManager.CreateAsync(
+                user,
+                "OldPassword123!")).Succeeded);
+            userId = user.Id;
+        }
+
+        barrier.Arm();
+        await using var firstScope = provider.CreateAsyncScope();
+        await using var secondScope = provider.CreateAsyncScope();
+        var first = CreatePasswordService(firstScope.ServiceProvider)
+            .CheckPasswordAsync(userId, "WrongPassword123!", budget.Token);
+        var second = CreatePasswordService(secondScope.ServiceProvider)
+            .CheckPasswordAsync(userId, "WrongPassword123!", budget.Token);
+        var results = await Task.WhenAll(first, second);
+
+        Assert.All(results, result =>
+        {
+            Assert.True(result.IsSuccess);
+            Assert.False(result.Value);
+        });
+        await using var verificationScope = provider.CreateAsyncScope();
+        var persisted = await verificationScope.ServiceProvider
+            .GetRequiredService<IIoTDbContext>()
+            .Users
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == userId, budget.Token);
+        Assert.Equal(2, persisted.AccessFailedCount);
+    }
+
+    [Fact]
     public async Task IdentityPolicyAndPasswordWrites_ShouldRecoverCommitConfirmationLossExactly()
     {
         using var budget = await PostgresTestBudget.CreateAsync(
@@ -5619,6 +5670,12 @@ public sealed class ProductionRetryTransactionPostgresTests(
         return services.BuildServiceProvider();
     }
 
+    private static IdentityPasswordService CreatePasswordService(
+        IServiceProvider services)
+        => new(
+            services.GetRequiredService<UserManager<ApplicationUser>>(),
+            services.GetRequiredService<IIoTDbContext>());
+
     private static IIoTDbContext CreateRetryContext(
         string connectionString,
         string applicationName,
@@ -6024,6 +6081,38 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 command.Transaction,
                 command.CommandText);
             return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class PasswordSaveConcurrencyBarrierInterceptor
+        : SaveChangesInterceptor
+    {
+        private readonly TaskCompletionSource bothSavesReached = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private int armed;
+        private int arrivals;
+
+        public void Arm() => Volatile.Write(ref armed, 1);
+
+        public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (Volatile.Read(ref armed) == 0)
+            {
+                return result;
+            }
+
+            var arrival = Interlocked.Increment(ref arrivals);
+            if (arrival == 2)
+            {
+                Volatile.Write(ref armed, 0);
+                bothSavesReached.TrySetResult();
+            }
+
+            await bothSavesReached.Task.WaitAsync(cancellationToken);
+            return result;
         }
     }
 
