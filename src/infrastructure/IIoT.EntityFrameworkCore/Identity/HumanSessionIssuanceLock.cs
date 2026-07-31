@@ -83,13 +83,25 @@ public sealed class HumanSessionIssuanceLock(
         Func<IIoTDbContext, CancellationToken, Task> acquire,
         CancellationToken cancellationToken)
     {
-        var context = _createContext();
-        if (!context.Database.IsNpgsql())
+        await using var strategyContext = _createContext();
+        if (!strategyContext.Database.IsNpgsql())
         {
-            await context.DisposeAsync();
             return NoopLease.Instance;
         }
 
+        var strategy = strategyContext.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(
+            callbackToken => AcquireAttemptAsync(
+                acquire,
+                callbackToken),
+            cancellationToken);
+    }
+
+    private async Task<IAsyncDisposable> AcquireAttemptAsync(
+        Func<IIoTDbContext, CancellationToken, Task> acquire,
+        CancellationToken cancellationToken)
+    {
+        var context = _createContext();
         IDbContextTransaction? transaction = null;
         try
         {

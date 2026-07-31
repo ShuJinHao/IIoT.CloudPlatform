@@ -559,6 +559,23 @@ public sealed class PersistenceBoundaryArchitectureTests
             "AcquireOidcTokenExchangeAsync",
             issuanceLockSource,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "CreateExecutionStrategy",
+            issuanceLockSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "callbackToken => AcquireAttemptAsync",
+            issuanceLockSource,
+            StringComparison.Ordinal);
+        var acquireAttemptIndex = issuanceLockSource.IndexOf(
+            "private async Task<IAsyncDisposable> AcquireAttemptAsync",
+            StringComparison.Ordinal);
+        var beginTransactionIndex = issuanceLockSource.IndexOf(
+            "BeginTransactionAsync",
+            acquireAttemptIndex,
+            StringComparison.Ordinal);
+        Assert.True(acquireAttemptIndex >= 0);
+        Assert.True(beginTransactionIndex > acquireAttemptIndex);
         var authorizationProcessGateIndex = issuanceLockSource.IndexOf(
             "processGate.TryEnterAuthorizationAsync",
             StringComparison.Ordinal);

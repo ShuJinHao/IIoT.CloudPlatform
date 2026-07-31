@@ -1243,6 +1243,38 @@ public sealed class ProductionRetryTransactionPostgresTests(
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OidcIssuanceLock_ShouldRetryTransientAdvisoryLockAcquisition(
+        bool tokenExchange)
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var interceptor =
+            new ThrowOnceOnOidcIssuanceLockInterceptor();
+        await using var context = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-lock-retry-{Guid.NewGuid():N}",
+            interceptor);
+        var issuanceLock = new HumanSessionIssuanceLock(
+            context,
+            new HumanSessionIssuanceProcessGate());
+
+        await using var lease = (tokenExchange
+            ? await issuanceLock.TryAcquireTokenExchangeAsync(budget.Token)
+            : await issuanceLock.TryAcquireAuthorizationAsync(
+                Guid.NewGuid(),
+                budget.Token))
+            ?? throw new InvalidOperationException(
+                "OIDC issuance admission was unexpectedly full.");
+
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+        Assert.Equal(2, interceptor.CommandAttempts);
+        Assert.Equal(2, interceptor.AttemptContextIds.Count);
+    }
+
     [Fact]
     public async Task ApiKeyCreateCancellationAfterCommit_ShouldPropagateAndKeepOneRecoverableTarget()
     {
@@ -4516,22 +4548,27 @@ public sealed class ProductionRetryTransactionPostgresTests(
 
     private static IIoTDbContext CreateRetryContext(
         string connectionString,
-        string applicationName)
+        string applicationName,
+        params IInterceptor[] interceptors)
     {
         var namedConnectionString = new NpgsqlConnectionStringBuilder(
             connectionString)
         {
             ApplicationName = applicationName
         }.ConnectionString;
-        var options = new DbContextOptionsBuilder<IIoTDbContext>()
-            .UseNpgsql(
-                namedConnectionString,
-                npgsql => npgsql.EnableRetryOnFailure(
-                    3,
-                    TimeSpan.FromMilliseconds(50),
-                    null))
-            .Options;
-        return new IIoTDbContext(options);
+        var options = new DbContextOptionsBuilder<IIoTDbContext>();
+        options.UseNpgsql(
+            namedConnectionString,
+            npgsql => npgsql.EnableRetryOnFailure(
+                3,
+                TimeSpan.FromMilliseconds(50),
+                null));
+        if (interceptors.Length > 0)
+        {
+            options.AddInterceptors(interceptors);
+        }
+
+        return new IIoTDbContext(options.Options);
     }
 
     private static async Task WaitForProcessGateWaiterAsync(
@@ -4938,6 +4975,65 @@ public sealed class ProductionRetryTransactionPostgresTests(
             {
                 throw new InvalidOperationException(
                     "simulated observation read failure");
+            }
+
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class ThrowOnceOnOidcIssuanceLockInterceptor
+        : DbCommandInterceptor
+    {
+        private readonly object sync = new();
+        private readonly HashSet<string> attemptContextIds = [];
+        private int armed = 1;
+        private int commandAttempts;
+        private int exceptionsThrown;
+
+        public int CommandAttempts =>
+            Volatile.Read(ref commandAttempts);
+
+        public int ExceptionsThrown =>
+            Volatile.Read(ref exceptionsThrown);
+
+        public IReadOnlyCollection<string> AttemptContextIds
+        {
+            get
+            {
+                lock (sync)
+                {
+                    return attemptContextIds.ToArray();
+                }
+            }
+        }
+
+        public override ValueTask<InterceptionResult<int>>
+            NonQueryExecutingAsync(
+                DbCommand command,
+                CommandEventData eventData,
+                InterceptionResult<int> result,
+                CancellationToken cancellationToken = default)
+        {
+            if (!command.CommandText.Contains(
+                    "pg_advisory_xact_lock",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return ValueTask.FromResult(result);
+            }
+
+            Interlocked.Increment(ref commandAttempts);
+            lock (sync)
+            {
+                attemptContextIds.Add(
+                    eventData.Context?.ContextId.ToString()
+                    ?? "<missing-context>");
+            }
+
+            if (Interlocked.CompareExchange(ref armed, 0, 1) == 1)
+            {
+                Interlocked.Increment(ref exceptionsThrown);
+                throw RetryablePostgresException(
+                    "simulated transient while acquiring OIDC issuance lock");
             }
 
             return ValueTask.FromResult(result);
