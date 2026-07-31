@@ -2918,6 +2918,126 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
+    public async Task DeleteClientReleasePackageHandler_MetadataRollbackAfterFilesRemoved_ShouldReplayPlannedReceipt()
+    {
+        var edgeRoot = CreateTempDirectory(
+            "iiot-delete-release-metadata-rollback");
+        try
+        {
+            var manifestPath = Path.Combine(
+                edgeRoot,
+                "installers",
+                "stable",
+                "1.2.7",
+                "installer-artifact.json");
+            WriteFile(manifestPath, "{}");
+            var component = CreateHostComponent(
+                "stable",
+                "1.2.7",
+                "1.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/installers/stable/1.2.7/installer-artifact.json",
+                ClientReleaseFileFacts.ComputeSha256(manifestPath),
+                new FileInfo(manifestPath).Length,
+                "metadata rollback recovery",
+                ClientReleaseStatus.Published);
+            var version = SingleVersion(component);
+            var repository =
+                new InMemoryRepository<ClientReleaseComponent>();
+            repository.Items.Add(component);
+            var transition = 0;
+            var firstHandler = new DeleteClientReleasePackageHandler(
+                Options.Create(new EdgeInstallerArtifactOptions
+                {
+                    RootPath = Path.Combine(edgeRoot, "installers")
+                }),
+                repository,
+                new InMemoryDeviceClientStateStore(),
+                new TestCurrentUser(),
+                new RecordingAuditTrailService(),
+                NullLogger<DeleteClientReleasePackageHandler>.Instance,
+                new RecordingUnitOfWork
+                {
+                    AfterOperationAsync = _ =>
+                    {
+                        transition++;
+                        if (transition == 2)
+                        {
+                            var plannedReceipt =
+                                version.DeletionReceiptJson;
+                            component.MarkVersionDeleteRequested(
+                                version.Id,
+                                DateTime.UtcNow,
+                                plannedReceipt);
+                            throw new InvalidOperationException(
+                                "simulated final metadata rollback");
+                        }
+
+                        return Task.CompletedTask;
+                    }
+                },
+                new InMemoryClientReleaseWriteObservationReader(
+                    repository));
+            var command = new DeleteClientReleasePackageCommand(
+                version.Id,
+                "metadata rollback recovery");
+
+            await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
+                () => firstHandler.Handle(
+                    command,
+                    CancellationToken.None));
+
+            Assert.False(File.Exists(manifestPath));
+            Assert.Equal(
+                ClientReleaseStatus.DeleteRequested,
+                version.Status);
+            Assert.NotNull(version.DeletionReceiptJson);
+
+            var recoveredAudit = new RecordingAuditTrailService();
+            var retryHandler = new DeleteClientReleasePackageHandler(
+                Options.Create(new EdgeInstallerArtifactOptions
+                {
+                    RootPath = Path.Combine(edgeRoot, "installers")
+                }),
+                repository,
+                new InMemoryDeviceClientStateStore(),
+                new TestCurrentUser(),
+                recoveredAudit,
+                NullLogger<DeleteClientReleasePackageHandler>.Instance,
+                new RecordingUnitOfWork(),
+                new InMemoryClientReleaseWriteObservationReader(
+                    repository));
+
+            var retry = await retryHandler.Handle(
+                command,
+                CancellationToken.None);
+
+            Assert.True(retry.IsSuccess);
+            Assert.True(retry.Value!.FilesDeleted);
+            Assert.Contains(
+                "installers/stable/1.2.7/installer-artifact.json",
+                retry.Value.DeletedPaths);
+            Assert.Equal(ClientReleaseStatus.Deleted, version.Status);
+            var audit = Assert.Single(recoveredAudit.Entries);
+            using var summary = JsonDocument.Parse(audit.Summary);
+            Assert.Contains(
+                summary.RootElement
+                    .GetProperty("deletedPaths")
+                    .EnumerateArray()
+                    .Select(item => item.GetString()),
+                path => string.Equals(
+                    path,
+                    "installers/stable/1.2.7/installer-artifact.json",
+                    StringComparison.Ordinal));
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
     public async Task DeleteClientReleasePackageHandler_NoFileRetryWithReason_ShouldRepairStableAudit()
     {
         var edgeRoot = CreateTempDirectory(

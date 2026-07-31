@@ -290,20 +290,22 @@ public sealed class ClientReleaseComponent : BaseEntity<Guid>, IAggregateRoot<Gu
 
     public void MarkVersionDeleteRequested(
         Guid versionId,
-        DateTime? changedAtUtc = null)
+        DateTime? changedAtUtc = null,
+        string? deletionReceiptJson = null)
     {
         var version = FindRequiredVersion(versionId);
-        version.MarkDeleteRequested();
+        version.MarkDeleteRequested(deletionReceiptJson);
         Touch(changedAtUtc);
     }
 
     public void MarkVersionDeleteFailed(
         Guid versionId,
         string failure,
-        DateTime? changedAtUtc = null)
+        DateTime? changedAtUtc = null,
+        string? deletionReceiptJson = null)
     {
         var version = FindRequiredVersion(versionId);
-        version.MarkDeleteFailed(failure);
+        version.MarkDeleteFailed(failure, deletionReceiptJson);
         Touch(changedAtUtc);
     }
 
@@ -622,22 +624,26 @@ public sealed class ClientReleaseVersion : BaseEntity<Guid>
             ClientReleaseComponent.NormalizeOptional(deletionReceiptJson);
     }
 
-    public void MarkDeleteRequested()
+    public void MarkDeleteRequested(string? deletionReceiptJson = null)
     {
         Status = ClientReleaseStatus.DeleteRequested;
         DeletedAtUtc = null;
         DeletionReason = null;
         DeletionFailure = null;
-        DeletionReceiptJson = null;
+        DeletionReceiptJson =
+            ClientReleaseComponent.NormalizeOptional(deletionReceiptJson);
     }
 
-    public void MarkDeleteFailed(string failure)
+    public void MarkDeleteFailed(
+        string failure,
+        string? deletionReceiptJson = null)
     {
         Status = ClientReleaseStatus.DeleteFailed;
         DeletedAtUtc = null;
         DeletionReason = null;
         DeletionFailure = ClientReleaseComponent.NormalizeRequired(failure, nameof(failure));
-        DeletionReceiptJson = null;
+        DeletionReceiptJson =
+            ClientReleaseComponent.NormalizeOptional(deletionReceiptJson);
     }
 
     public void ReplaceArtifacts(IEnumerable<ClientReleaseArtifact>? artifacts)
