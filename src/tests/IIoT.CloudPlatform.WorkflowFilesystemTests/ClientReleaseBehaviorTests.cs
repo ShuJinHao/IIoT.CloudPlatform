@@ -3360,6 +3360,95 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
+    public async Task DeleteClientReleasePackageHandler_EscapedComponentIdentity_ShouldKeepAuditBounded()
+    {
+        var edgeRoot = CreateTempDirectory(
+            "iiot-delete-release-escaped-component");
+        try
+        {
+            var moduleId = new string('汉', 128);
+            var packageDirectory = Path.Combine(
+                edgeRoot,
+                "plugins",
+                "stable",
+                "bounded",
+                "1.0.0");
+            WriteFile(
+                Path.Combine(packageDirectory, "bounded.zip"),
+                "bounded");
+            var component = CreatePluginComponent(
+                moduleId,
+                "bounded audit",
+                "stable",
+                "1.0.0",
+                "1.0.0",
+                "1.0.0",
+                "2.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/plugins/stable/bounded/1.0.0/bounded.zip",
+                new string('a', 64),
+                7,
+                "escaped component identity",
+                ClientReleaseStatus.Published);
+            var version = SingleVersion(component);
+            version.ReplaceArtifacts(
+            [
+                new ClientReleaseArtifact(
+                    ClientReleaseArtifactKind.PluginPackageDirectory,
+                    "plugins/stable/bounded/1.0.0")
+            ]);
+            var repository =
+                new InMemoryRepository<ClientReleaseComponent>();
+            repository.Items.Add(component);
+            var auditTrail = new RecordingAuditTrailService();
+            var handler = new DeleteClientReleasePackageHandler(
+                Options.Create(new EdgeInstallerArtifactOptions
+                {
+                    RootPath = Path.Combine(edgeRoot, "installers")
+                }),
+                repository,
+                new InMemoryDeviceClientStateStore(),
+                new TestCurrentUser(),
+                auditTrail,
+                NullLogger<DeleteClientReleasePackageHandler>.Instance,
+                new RecordingUnitOfWork(),
+                new InMemoryClientReleaseWriteObservationReader(
+                    repository));
+
+            var result = await handler.Handle(
+                new DeleteClientReleasePackageCommand(
+                    version.Id,
+                    "escaped component identity"),
+                CancellationToken.None);
+
+            Assert.True(result.IsSuccess);
+            var audit = Assert.Single(auditTrail.Entries);
+            Assert.True(
+                audit.Summary.Length <= 512,
+                $"summary length {audit.Summary.Length} exceeds 512");
+            using var summary = JsonDocument.Parse(audit.Summary);
+            Assert.Equal(
+                64,
+                summary.RootElement
+                    .GetProperty("componentIdentitySha256")
+                    .GetString()!
+                    .Length);
+            Assert.Equal(
+                64,
+                summary.RootElement
+                    .GetProperty("inventorySha256")
+                    .GetString()!
+                    .Length);
+            Assert.DoesNotContain(moduleId, audit.Summary, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
     public async Task DeleteClientReleasePackageHandler_NoFileCancellationBeforeMetadataCommit_ShouldNotMutate()
     {
         var edgeRoot = CreateTempDirectory(

@@ -51,6 +51,7 @@ public sealed class DeleteClientReleasePackageHandler(
     : ICommandHandler<DeleteClientReleasePackageCommand, Result<ClientReleaseFileDeletionResultDto>>
 {
     private const string AuditAction = "ClientRelease.DeletePackage";
+    private const int AuditSummaryMaxLength = 512;
     private const string NoFilesDeletionReason =
         "发布文件未找到或不在受控发布目录下，已移出可分发 catalog，历史更新内容保留。";
     private static readonly TimeSpan PostCommitFinalizationTimeout =
@@ -612,19 +613,13 @@ public sealed class DeleteClientReleasePackageHandler(
         DateTime executedAtUtc,
         CancellationToken cancellationToken)
     {
-        var summary = JsonSerializer.Serialize(new
-        {
-            action = AuditAction,
+        var summary = BuildAuditSummary(
             componentKind,
             componentName,
             channel,
             version,
-            deletedCount = deletedPaths.Count,
-            skippedCount = skippedPaths.Count,
-            inventorySha256 = ComputeInventorySha256(
-                deletedPaths,
-                skippedPaths)
-        });
+            deletedPaths,
+            skippedPaths);
 
         var entry = new AuditTrailEntry(
                 ClientReleaseAuditActor.ParseId(currentUser.Id),
@@ -659,6 +654,69 @@ public sealed class DeleteClientReleasePackageHandler(
             auditTrailService,
             entry);
         cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    private static string BuildAuditSummary(
+        string componentKind,
+        string componentName,
+        string channel,
+        string version,
+        IReadOnlyCollection<string> deletedPaths,
+        IReadOnlyCollection<string> skippedPaths)
+    {
+        var inventorySha256 = ComputeInventorySha256(
+            deletedPaths,
+            skippedPaths);
+        var summary = JsonSerializer.Serialize(new
+        {
+            action = AuditAction,
+            componentKind,
+            componentName,
+            channel,
+            version,
+            deletedCount = deletedPaths.Count,
+            skippedCount = skippedPaths.Count,
+            inventorySha256
+        });
+        if (summary.Length <= AuditSummaryMaxLength)
+        {
+            return summary;
+        }
+
+        summary = JsonSerializer.Serialize(new
+        {
+            action = AuditAction,
+            componentKind,
+            componentIdentitySha256 = ComputeComponentIdentitySha256(
+                componentName,
+                channel,
+                version),
+            deletedCount = deletedPaths.Count,
+            skippedCount = skippedPaths.Count,
+            inventorySha256
+        });
+        if (summary.Length > AuditSummaryMaxLength)
+        {
+            throw new InvalidOperationException(
+                "Client release package deletion audit summary exceeds the persistence limit.");
+        }
+
+        return summary;
+    }
+
+    private static string ComputeComponentIdentitySha256(
+        string componentName,
+        string channel,
+        string version)
+    {
+        var canonical = JsonSerializer.Serialize(new
+        {
+            componentName,
+            channel,
+            version
+        });
+        return Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
     }
 
     private static string ComputeInventorySha256(
