@@ -14,7 +14,7 @@ public sealed class HumanSessionIssuanceLock(
     private readonly Func<IIoTDbContext> _createContext = dbContext.CreateFreshContext;
     private readonly bool _usesNpgsql = dbContext.Database.IsNpgsql();
 
-    public async ValueTask<IAsyncDisposable> AcquireAuthorizationAsync(
+    public async ValueTask<IAsyncDisposable?> TryAcquireAuthorizationAsync(
         Guid subjectId,
         CancellationToken cancellationToken = default)
     {
@@ -23,9 +23,14 @@ public sealed class HumanSessionIssuanceLock(
             return NoopLease.Instance;
         }
 
-        var processLease = await processGate.EnterAuthorizationAsync(
+        var processLease = await processGate.TryEnterAuthorizationAsync(
             subjectId,
             cancellationToken);
+        if (processLease is null)
+        {
+            return null;
+        }
+
         try
         {
             var databaseLease = await AcquireAsync(

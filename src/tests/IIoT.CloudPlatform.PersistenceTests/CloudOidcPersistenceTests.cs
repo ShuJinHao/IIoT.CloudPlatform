@@ -94,7 +94,7 @@ public sealed class CloudOidcPersistenceTests
             TimeSpan.FromSeconds(10));
         var processGate = new HumanSessionIssuanceProcessGate();
         var holders = new List<IAsyncDisposable>();
-        Task<IAsyncDisposable>? waiterTask = null;
+        Task<IAsyncDisposable?>? waiterTask = null;
 
         try
         {
@@ -105,13 +105,15 @@ public sealed class CloudOidcPersistenceTests
                  index++)
             {
                 holders.Add(
-                    await processGate.EnterAuthorizationAsync(
+                    await processGate.TryEnterAuthorizationAsync(
                         Guid.NewGuid(),
-                        timeout.Token));
+                        timeout.Token)
+                    ?? throw new InvalidOperationException(
+                        "Authorization admission was unexpectedly full."));
             }
 
             waiterTask = processGate
-                .EnterAuthorizationAsync(
+                .TryEnterAuthorizationAsync(
                     Guid.NewGuid(),
                     timeout.Token)
                 .AsTask();
@@ -126,7 +128,7 @@ public sealed class CloudOidcPersistenceTests
             canceled.Cancel();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(
                 () => processGate
-                    .EnterAuthorizationAsync(
+                    .TryEnterAuthorizationAsync(
                         Guid.NewGuid(),
                         canceled.Token)
                     .AsTask());
@@ -134,7 +136,9 @@ public sealed class CloudOidcPersistenceTests
             await holders[0].DisposeAsync();
             holders.RemoveAt(0);
             await using var waiter =
-                await waiterTask.WaitAsync(timeout.Token);
+                await waiterTask.WaitAsync(timeout.Token)
+                ?? throw new InvalidOperationException(
+                    "Admitted authorization waiter was rejected.");
             waiterTask = null;
         }
         finally
@@ -155,6 +159,98 @@ public sealed class CloudOidcPersistenceTests
                 {
                     // Cleanup observes cancellation without masking assertions.
                 }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task HumanSessionIssuanceProcessGate_ShouldBoundSameSubjectAuthorizationAdmissionAndRecoverCapacity()
+    {
+        using var timeout = new CancellationTokenSource(
+            TimeSpan.FromSeconds(10));
+        var processGate = new HumanSessionIssuanceProcessGate();
+        var subjectId = Guid.NewGuid();
+        IAsyncDisposable? holder =
+            await processGate.TryEnterAuthorizationAsync(
+                subjectId,
+                timeout.Token)
+            ?? throw new InvalidOperationException(
+                "Initial authorization admission was rejected.");
+        var waiterTasks = Enumerable
+            .Range(
+                0,
+                HumanSessionIssuanceProcessGate.AuthorizationRequestLimit - 1)
+            .Select(async _ =>
+            {
+                await using var waiterLease =
+                    await processGate.TryEnterAuthorizationAsync(
+                        subjectId,
+                        timeout.Token)
+                    ?? throw new InvalidOperationException(
+                        "Admitted authorization waiter was rejected.");
+            })
+            .ToArray();
+
+        try
+        {
+            while (processGate.GetAuthorizationWaitingCount(subjectId) !=
+                   HumanSessionIssuanceProcessGate.AuthorizationRequestLimit -
+                   1)
+            {
+                timeout.Token.ThrowIfCancellationRequested();
+                await Task.Yield();
+            }
+
+            Assert.Null(
+                await processGate.TryEnterAuthorizationAsync(
+                    subjectId,
+                    timeout.Token));
+            Assert.Equal(
+                HumanSessionIssuanceProcessGate.AuthorizationRequestLimit - 1,
+                processGate.GetAuthorizationWaitingCount(subjectId));
+            var rejectedSubjectId = Guid.NewGuid();
+            Assert.Null(
+                await processGate.TryEnterAuthorizationAsync(
+                    rejectedSubjectId,
+                    timeout.Token));
+            Assert.Equal(
+                0,
+                processGate.GetAuthorizationWaitingCount(rejectedSubjectId));
+            using var canceled = new CancellationTokenSource();
+            canceled.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => processGate
+                    .TryEnterAuthorizationAsync(
+                        subjectId,
+                        canceled.Token)
+                    .AsTask());
+
+            await holder.DisposeAsync();
+            holder = null;
+            await Task.WhenAll(waiterTasks).WaitAsync(timeout.Token);
+
+            var recovered =
+                await processGate.TryEnterAuthorizationAsync(
+                    subjectId,
+                    timeout.Token);
+            Assert.NotNull(recovered);
+            await recovered.DisposeAsync();
+        }
+        finally
+        {
+            if (holder is not null)
+            {
+                await holder.DisposeAsync();
+            }
+
+            timeout.Cancel();
+            try
+            {
+                await Task.WhenAll(waiterTasks);
+            }
+            catch (OperationCanceledException)
+            {
+                // Cleanup observes canceled waiters without masking assertions.
             }
         }
     }

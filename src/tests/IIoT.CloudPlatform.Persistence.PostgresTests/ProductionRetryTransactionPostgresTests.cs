@@ -937,13 +937,13 @@ public sealed class ProductionRetryTransactionPostgresTests(
         var tokenId = Guid.NewGuid();
         Task revokeTask;
 
-        var issuanceLease = tokenExchange
+        var issuanceLease = (tokenExchange
             ? await issuanceLock.TryAcquireTokenExchangeAsync(budget.Token)
-                ?? throw new InvalidOperationException(
-                    "Token-exchange admission was unexpectedly full.")
-            : await issuanceLock.AcquireAuthorizationAsync(
+            : await issuanceLock.TryAcquireAuthorizationAsync(
                 subjectId,
-                budget.Token);
+                budget.Token))
+            ?? throw new InvalidOperationException(
+                "OIDC issuance admission was unexpectedly full.");
         await using (issuanceLease)
         {
             revokeTask = revocation.RevokeAllAsync(
@@ -1096,14 +1096,16 @@ public sealed class ProductionRetryTransactionPostgresTests(
             waiterContext,
             processGate);
         IAsyncDisposable? holderLease =
-            await holder.AcquireAuthorizationAsync(
+            await holder.TryAcquireAuthorizationAsync(
                 subjectId,
-                budget.Token);
+                budget.Token)
+            ?? throw new InvalidOperationException(
+                "Authorization admission was unexpectedly full.");
 
         try
         {
             var waiterTask = waiter
-                .AcquireAuthorizationAsync(subjectId, budget.Token)
+                .TryAcquireAuthorizationAsync(subjectId, budget.Token)
                 .AsTask();
             await WaitForAuthorizationProcessGateWaiterAsync(
                 processGate,
@@ -1119,8 +1121,10 @@ public sealed class ProductionRetryTransactionPostgresTests(
 
             await holderLease.DisposeAsync();
             holderLease = null;
-            await using var waiterLease = await waiterTask.WaitAsync(
-                budget.Token);
+            await using var waiterLease =
+                await waiterTask.WaitAsync(budget.Token)
+                ?? throw new InvalidOperationException(
+                    "Admitted authorization waiter was rejected.");
             Assert.Equal(
                 1,
                 await CountPostgresSessionsAsync(
@@ -1161,7 +1165,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
             waiterContext,
             processGate);
         var holderLeases = new List<IAsyncDisposable>();
-        Task<IAsyncDisposable>? waiterTask = null;
+        Task<IAsyncDisposable?>? waiterTask = null;
 
         try
         {
@@ -1172,9 +1176,11 @@ public sealed class ProductionRetryTransactionPostgresTests(
                  index++)
             {
                 holderLeases.Add(
-                    await holder.AcquireAuthorizationAsync(
+                    await holder.TryAcquireAuthorizationAsync(
                         Guid.NewGuid(),
-                        budget.Token));
+                        budget.Token)
+                    ?? throw new InvalidOperationException(
+                        "Authorization admission was unexpectedly full."));
             }
 
             Assert.Equal(
@@ -1186,7 +1192,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
                     budget.Token));
 
             waiterTask = waiter
-                .AcquireAuthorizationAsync(
+                .TryAcquireAuthorizationAsync(
                     Guid.NewGuid(),
                     budget.Token)
                 .AsTask();
@@ -1204,7 +1210,9 @@ public sealed class ProductionRetryTransactionPostgresTests(
             await holderLeases[0].DisposeAsync();
             holderLeases.RemoveAt(0);
             await using var waiterLease =
-                await waiterTask.WaitAsync(budget.Token);
+                await waiterTask.WaitAsync(budget.Token)
+                ?? throw new InvalidOperationException(
+                    "Admitted authorization waiter was rejected.");
             waiterTask = null;
             Assert.Equal(
                 1,

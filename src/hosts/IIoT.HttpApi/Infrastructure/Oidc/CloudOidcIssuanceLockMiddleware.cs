@@ -50,14 +50,29 @@ public sealed class CloudOidcIssuanceLockMiddleware(RequestDelegate next)
         }
 
         await using var authorizationLease =
-            await issuanceLock.AcquireAuthorizationAsync(
+            await issuanceLock.TryAcquireAuthorizationAsync(
                 subjectId,
                 context.RequestAborted);
+        if (authorizationLease is null)
+        {
+            await WriteCapacityRejectedAsync(
+                context,
+                "OIDC authorization 请求繁忙，请稍后重试。");
+            return;
+        }
+
         await next(context);
     }
 
     private static async Task WriteTokenExchangeCapacityRejectedAsync(
         HttpContext context)
+        => await WriteCapacityRejectedAsync(
+            context,
+            "OIDC token 交换繁忙，请稍后重试。");
+
+    private static async Task WriteCapacityRejectedAsync(
+        HttpContext context,
+        string detail)
     {
         context.Response.StatusCode =
             StatusCodes.Status429TooManyRequests;
@@ -69,7 +84,7 @@ public sealed class CloudOidcIssuanceLockMiddleware(RequestDelegate next)
                 Title = "请求过于频繁",
                 Type =
                     "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/429",
-                Detail = "OIDC token 交换繁忙，请稍后重试。"
+                Detail = detail
             },
             options: null,
             contentType: "application/problem+json",

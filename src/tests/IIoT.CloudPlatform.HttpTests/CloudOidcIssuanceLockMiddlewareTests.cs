@@ -93,6 +93,50 @@ public sealed class CloudOidcIssuanceLockMiddlewareTests
         Assert.False(issuanceLock.IsHeld);
     }
 
+    [Fact]
+    public async Task AuthorizationCapacityExceeded_ShouldReturn429WithoutReachingEndpoint()
+    {
+        var subjectId = Guid.NewGuid();
+        var authentication = new StaticAuthenticationService(
+            new ClaimsPrincipal(
+                new ClaimsIdentity(
+                    [new Claim(ClaimTypes.NameIdentifier, subjectId.ToString())],
+                    CloudOidcDefaults.SessionScheme)));
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddSingleton<IAuthenticationService>(authentication)
+                .BuildServiceProvider()
+        };
+        context.Request.Path = "/connect/authorize";
+        context.Response.Body = new MemoryStream();
+        var issuanceLock = new RecordingIssuanceLock
+        {
+            RejectAuthorization = true
+        };
+        var reachedEndpoint = false;
+        var middleware = new CloudOidcIssuanceLockMiddleware(_ =>
+        {
+            reachedEndpoint = true;
+            return Task.CompletedTask;
+        });
+
+        await middleware.InvokeAsync(context, issuanceLock);
+
+        Assert.False(reachedEndpoint);
+        Assert.Equal(
+            StatusCodes.Status429TooManyRequests,
+            context.Response.StatusCode);
+        Assert.Equal(
+            "application/problem+json",
+            context.Response.ContentType);
+        Assert.Equal("1", context.Response.Headers.RetryAfter);
+        Assert.True(context.Response.Body.Length > 0);
+        Assert.Equal(1, issuanceLock.AuthorizationAcquisitions);
+        Assert.Equal(subjectId, issuanceLock.AuthorizationSubjectId);
+        Assert.False(issuanceLock.IsHeld);
+    }
+
     private sealed class RecordingIssuanceLock : IHumanSessionIssuanceLock
     {
         public int AuthorizationAcquisitions { get; private set; }
@@ -103,16 +147,19 @@ public sealed class CloudOidcIssuanceLockMiddlewareTests
 
         public bool IsHeld { get; private set; }
 
+        public bool RejectAuthorization { get; init; }
+
         public bool RejectTokenExchange { get; init; }
 
-        public ValueTask<IAsyncDisposable> AcquireAuthorizationAsync(
+        public ValueTask<IAsyncDisposable?> TryAcquireAuthorizationAsync(
             Guid subjectId,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             AuthorizationAcquisitions++;
             AuthorizationSubjectId = subjectId;
-            return ValueTask.FromResult<IAsyncDisposable>(Acquire());
+            return ValueTask.FromResult<IAsyncDisposable?>(
+                RejectAuthorization ? null : Acquire());
         }
 
         public ValueTask<IAsyncDisposable?> TryAcquireTokenExchangeAsync(

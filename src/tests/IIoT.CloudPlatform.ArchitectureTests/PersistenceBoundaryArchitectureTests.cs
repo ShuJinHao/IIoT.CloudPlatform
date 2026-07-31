@@ -540,7 +540,7 @@ public sealed class PersistenceBoundaryArchitectureTests
                 "DependencyInjection.cs"));
 
         Assert.Contains(
-            "AcquireAuthorizationAsync",
+            "TryAcquireAuthorizationAsync",
             middlewareSource,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -560,7 +560,7 @@ public sealed class PersistenceBoundaryArchitectureTests
             issuanceLockSource,
             StringComparison.Ordinal);
         var authorizationProcessGateIndex = issuanceLockSource.IndexOf(
-            "processGate.EnterAuthorizationAsync",
+            "processGate.TryEnterAuthorizationAsync",
             StringComparison.Ordinal);
         var authorizationDatabaseLeaseIndex = issuanceLockSource.IndexOf(
             "var databaseLease = await AcquireAsync",
@@ -592,6 +592,23 @@ public sealed class PersistenceBoundaryArchitectureTests
             "new SemaphoreSlim(\n            TokenExchangeQueueLimit + 1,\n            TokenExchangeQueueLimit + 1)",
             processGateSource,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "internal const int AuthorizationRequestLimit = 16;",
+            processGateSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "new SemaphoreSlim(\n            AuthorizationRequestLimit,\n            AuthorizationRequestLimit)",
+            processGateSource,
+            StringComparison.Ordinal);
+        var authorizationAdmissionIndex = processGateSource.IndexOf(
+            "_authorizationAdmissionSlots.Wait(0)",
+            StringComparison.Ordinal);
+        var authorizationKeyedGateIndex = processGateSource.IndexOf(
+            "_authorizationGates.GetOrAdd",
+            StringComparison.Ordinal);
+        Assert.True(authorizationAdmissionIndex >= 0);
+        Assert.True(
+            authorizationKeyedGateIndex > authorizationAdmissionIndex);
         Assert.Contains(
             "internal const int AuthorizationDatabaseLeaseLimit = 8;",
             processGateSource,

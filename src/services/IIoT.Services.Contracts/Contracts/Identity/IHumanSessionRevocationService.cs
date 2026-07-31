@@ -18,7 +18,7 @@ public interface IIndependentHumanSessionRevocationService
 
 public interface IHumanSessionIssuanceLock
 {
-    ValueTask<IAsyncDisposable> AcquireAuthorizationAsync(
+    ValueTask<IAsyncDisposable?> TryAcquireAuthorizationAsync(
         Guid subjectId,
         CancellationToken cancellationToken = default);
 
