@@ -9,11 +9,13 @@ namespace IIoT.EntityFrameworkCore.Identity;
 
 public sealed class IdentityPasswordService(
     UserManager<ApplicationUser> userManager,
-    IIoTDbContext dbContext) : IIdentityPasswordService
+    IIoTDbContext dbContext,
+    TimeProvider? timeProvider = null) : IIdentityPasswordService
 {
     private static readonly TimeSpan ObservationTimeout = TimeSpan.FromSeconds(5);
     private const long PasswordCheckLockNamespace = 0x5057444300000000;
     private readonly Func<IIoTDbContext> _createContext = dbContext.CreateFreshContext;
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
     public async Task<Result<bool>> SetPasswordAsync(
         Guid userId,
@@ -52,7 +54,7 @@ public sealed class IdentityPasswordService(
         string password,
         CancellationToken cancellationToken = default)
     {
-        var checkedAtUtc = DateTimeOffset.UtcNow;
+        DateTimeOffset? checkedAtUtc = null;
         PasswordSnapshot? baseline = null;
         PasswordTarget? target = null;
         Result<bool>? settledReadOnlyResult = null;
@@ -68,6 +70,8 @@ public sealed class IdentityPasswordService(
                     context,
                     userId,
                     callbackToken);
+                checkedAtUtc ??= _timeProvider.GetUtcNow();
+                var serializedAtUtc = checkedAtUtc.Value;
                 var user = await context.Users.SingleOrDefaultAsync(
                     candidate => candidate.Id == userId,
                     callbackToken);
@@ -95,7 +99,7 @@ public sealed class IdentityPasswordService(
 
                 if (user.LockoutEnabled &&
                     user.LockoutEnd is { } lockoutEnd &&
-                    lockoutEnd > checkedAtUtc)
+                    lockoutEnd > serializedAtUtc)
                 {
                     var result = Result.Success(false);
                     settledReadOnlyResult = result;
@@ -104,7 +108,7 @@ public sealed class IdentityPasswordService(
                 }
 
                 baseline ??= current;
-                target ??= CreateCheckTarget(user, password, checkedAtUtc);
+                target ??= CreateCheckTarget(user, password, serializedAtUtc);
                 if (target.Matches(current))
                 {
                     var result = Result.Success(target.PasswordAccepted);
@@ -148,12 +152,17 @@ public sealed class IdentityPasswordService(
             return;
         }
 
-        var userIdBytes = userId.ToByteArray();
-        var lockKey = BinaryPrimitives.ReadInt64BigEndian(
-            userIdBytes.AsSpan(0, sizeof(long))) ^ PasswordCheckLockNamespace;
+        var lockKey = GetPasswordCheckLockKey(userId);
         await context.Database.ExecuteSqlInterpolatedAsync(
             $"SELECT pg_advisory_xact_lock({lockKey});",
             cancellationToken);
+    }
+
+    internal static long GetPasswordCheckLockKey(Guid userId)
+    {
+        var userIdBytes = userId.ToByteArray();
+        return BinaryPrimitives.ReadInt64BigEndian(
+            userIdBytes.AsSpan(0, sizeof(long))) ^ PasswordCheckLockNamespace;
     }
 
     public async Task<Result> ChangePasswordAsync(

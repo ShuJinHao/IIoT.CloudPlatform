@@ -12,21 +12,6 @@ internal static class PersistenceWriteInventory
     private static readonly CSharpParseOptions ParseOptions = CSharpParseOptions.Default
         .WithLanguageVersion(LanguageVersion.Preview);
 
-    private static readonly SymbolDisplayFormat MethodDisplayFormat =
-        new(
-            typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
-            genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters,
-            memberOptions:
-                SymbolDisplayMemberOptions.IncludeContainingType |
-                SymbolDisplayMemberOptions.IncludeParameters |
-                SymbolDisplayMemberOptions.IncludeExplicitInterface,
-            parameterOptions:
-                SymbolDisplayParameterOptions.IncludeType |
-                SymbolDisplayParameterOptions.IncludeName,
-            miscellaneousOptions:
-                SymbolDisplayMiscellaneousOptions.UseSpecialTypes |
-                SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier);
-
     private static readonly ImmutableHashSet<string> FailClosedCandidateNames =
         ImmutableHashSet.Create(
             StringComparer.Ordinal,
@@ -86,6 +71,291 @@ internal static class PersistenceWriteInventory
     private static readonly PersistenceEvidence ArchitectureEvidence = new(
         "src/tests/IIoT.CloudPlatform.ArchitectureTests/PersistenceBoundaryArchitectureTests.cs",
         "ProductionPersistenceWriteEntrypoints_ShouldBeDynamicallyClassified");
+
+    private static readonly IReadOnlyDictionary<string, PersistenceEvidence>
+        ConcreteEvidenceBindings = new Dictionary<string, PersistenceEvidence>(
+            StringComparer.Ordinal)
+    {
+        ["src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs::DatabaseInitializationOrchestrator.RunEfMigrationsAttemptAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs",
+            "LegacyDeviceAndIdentitySchemas_ShouldUpgradeAgainstRealPostgres"),
+        ["src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs::DatabaseInitializationOrchestrator.EnsureDeviceCodeSchemaCompatibilityAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs",
+            "LegacyDeviceAndIdentitySchemas_ShouldUpgradeAgainstRealPostgres"),
+        ["src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs::DatabaseInitializationOrchestrator.EnsureIdentitySchemaCompatibilityAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs",
+            "LegacyDeviceAndIdentitySchemas_ShouldUpgradeAgainstRealPostgres"),
+        ["src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs::DatabaseInitializationOrchestrator.EnsureRecordSchemaCompatibilityAttemptAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs",
+            "LegacyDeviceAndIdentitySchemas_ShouldUpgradeAgainstRealPostgres"),
+        ["src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs::DatabaseInitializationOrchestrator.InitializeTimescaleDbAttemptAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs",
+            "LegacyDeviceAndIdentitySchemas_ShouldUpgradeAgainstRealPostgres"),
+        ["src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs::DatabaseInitializationOrchestrator.SeedOidcClientsAttemptAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs",
+            "LegacyDeviceAndIdentitySchemas_ShouldUpgradeAgainstRealPostgres"),
+        ["src/hosts/IIoT.MigrationWorkApp/SeedData/SystemInitData.cs::SystemInitData.SeedAttemptAsync(IIoTDbContext,UserManager<ApplicationUser>,RoleManager<IdentityRole<Guid>>,IConfiguration,SeedRetryTarget,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/SingleAdminInvariantPostgresTests.cs",
+            "PasswordRepairCommitConfirmationLoss_ShouldConfirmTargetWithoutSecondAdmin"),
+        ["src/hosts/IIoT.MigrationWorkApp/SeedData/SystemInitData.cs::SystemInitData.AcquireSingleAdminSeedLockAsync(IIoTDbContext,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/SingleAdminInvariantPostgresTests.cs",
+            "PasswordRepairCommitConfirmationLoss_ShouldConfirmTargetWithoutSecondAdmin"),
+        ["src/hosts/IIoT.MigrationWorkApp/SeedData/SystemInitData.cs::SystemInitData.EnsureRolePermissionTemplatesAsync(RoleManager<IdentityRole<Guid>>,IReadOnlyDictionary<string, Guid>,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/SingleAdminInvariantPostgresTests.cs",
+            "PasswordRepairCommitConfirmationLoss_ShouldConfirmTargetWithoutSecondAdmin"),
+        ["src/hosts/IIoT.MigrationWorkApp/SeedData/SystemInitData.cs::SystemInitData.EnsureRoleAsync(RoleManager<IdentityRole<Guid>>,string,Guid,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/SingleAdminInvariantPostgresTests.cs",
+            "PasswordRepairCommitConfirmationLoss_ShouldConfirmTargetWithoutSecondAdmin"),
+        ["src/hosts/IIoT.MigrationWorkApp/SeedData/SystemInitData.cs::SystemInitData.CreateFirstAdminAsync(IIoTDbContext,UserManager<ApplicationUser>,SeedAdminOptions,string,Guid,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/SingleAdminInvariantPostgresTests.cs",
+            "PasswordRepairCommitConfirmationLoss_ShouldConfirmTargetWithoutSecondAdmin"),
+        ["src/hosts/IIoT.MigrationWorkApp/SeedData/SystemInitData.cs::SystemInitData.RepairExistingAdminAsync(IIoTDbContext,UserManager<ApplicationUser>,ExistingAdminState,string,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/SingleAdminInvariantPostgresTests.cs",
+            "PasswordRepairCommitConfirmationLoss_ShouldConfirmTargetWithoutSecondAdmin"),
+        ["src/hosts/IIoT.MigrationWorkApp/SeedData/SystemInitData.cs::SystemInitData.ResetPasswordAsync(UserManager<ApplicationUser>,ApplicationUser,string,string,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/SingleAdminInvariantPostgresTests.cs",
+            "PasswordRepairCommitConfirmationLoss_ShouldConfirmTargetWithoutSecondAdmin"),
+        ["src/infrastructure/IIoT.Dapper/Initializers/RecordSchemaInitializer.cs::RecordSchemaInitializer.InitializeAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/RecordSchemaInitializerPostgresTests.cs",
+            "RecordSchemas_FirstAndWarmRun_ShouldConvergeToRequiredTables"),
+        ["src/infrastructure/IIoT.Dapper/Production/Repositories/Capacities/HourlyCapacityRecordRepository.cs::HourlyCapacityRecordRepository.UpsertAsync(HourlyCapacityWriteModel,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/CapacityPersistencePostgresTests.cs",
+            "UpsertAsync_LateSmallerSnapshotCannotReplaceCompletedClipCount"),
+        ["src/infrastructure/IIoT.Dapper/Production/Repositories/DeviceLogs/DeviceLogRecordRepository.cs::DeviceLogRecordRepository.InsertBatchAsync(IReadOnlyCollection<DeviceLogWriteModel>,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/CapacityPersistencePostgresTests.cs",
+            "PassStationAndDeviceLogWrites_ShouldRemainIdempotent"),
+        ["src/infrastructure/IIoT.Dapper/Production/Repositories/PassStations/PassStationRecordRepository.cs::PassStationRecordRepository.InsertBatchAsync(IReadOnlyCollection<PassStationRecordWriteModel>,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/CapacityPersistencePostgresTests.cs",
+            "PassStationAndDeviceLogWrites_ShouldRemainIdempotent"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Auditing/EfAuditTrailService.cs::EfAuditTrailService.WriteAttemptAsync(Guid,AuditTrailEntry,string?,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseComponentDeletionPostgresTests.cs",
+            "EfAuditTrailService_ShouldPersistOneExactRecordPerIdempotencyKey"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Auditing/EfOidcIssuanceAuditTrailService.cs::EfOidcIssuanceAuditTrailService.StageSuccessAsync(AuditTrailEntry,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "OidcIssuanceSuccessAudit_ShouldCommitAtomicallyWithGrant"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/ClientReleases/EfClientReleaseComponentDeletionStore.cs::EfClientReleaseComponentDeletionStore.SaveChangesAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
+            "ClientReleaseWrites_ShouldReplayTransientAndRecoverCommitConfirmationLoss"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/ClientReleases/EfDeviceClientStateStore.cs::EfDeviceClientStateStore.SaveChangesAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
+            "ClientReleaseWrites_ShouldReplayTransientAndRecoverCommitConfirmationLoss"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/EdgeHosts/EfEdgeHostPlcRuntimeStateStore.cs::EfEdgeHostPlcRuntimeStateStore.SaveChangesAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "EdgeReports_ShouldRecoverCommitConfirmationLoss"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/IIoTDbContext.cs::IIoTDbContext.SaveChangesAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "ProductionRetryStrategy_ShouldReplayAllEmployeeWritesAccessAndDeviceDelete"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/EdgeReleaseApiKeyService.cs::EdgeReleaseApiKeyService.CreateAttemptAsync(CreateTarget,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "EdgeReleaseApiKeyLifecycle_ShouldRecoverCommitLossWithoutPersistingPlaintext"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/EdgeReleaseApiKeyService.cs::EdgeReleaseApiKeyService.RevokeAttemptAsync(RevokeTarget,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "EdgeReleaseApiKeyLifecycle_ShouldRecoverCommitLossWithoutPersistingPlaintext"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/EdgeReleaseApiKeyService.cs::EdgeReleaseApiKeyService.ValidateAttemptAsync(string,DateTimeOffset,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "EdgeReleaseApiKeyLifecycle_ShouldRecoverCommitLossWithoutPersistingPlaintext"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/EdgeReleaseApiKeyService.cs::EdgeReleaseApiKeyService.EnsureRevokeAuditByIdempotencyKeyAsync(Guid,AuditTrailEntry,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "EdgeReleaseApiKeyLifecycle_ShouldRecoverCommitLossWithoutPersistingPlaintext"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/EdgeReleaseApiKeyService.cs::EdgeReleaseApiKeyService.EnsureAuditTargetAsync(IIoTDbContext,Guid,AuditTrailEntry,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "EdgeReleaseApiKeyLifecycle_ShouldRecoverCommitLossWithoutPersistingPlaintext"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/EfRefreshTokenService.cs::EfRefreshTokenService.IssueAttemptAsync(RefreshTokenSession,bool,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "HumanRefreshRotation_ShouldRecoverCommitLossAndRejectSourceReplay"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/EfRefreshTokenService.cs::EfRefreshTokenService.RotateAttemptAsync(RotationTarget,Result<RefreshTokenRotationResult>,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "HumanRefreshRotation_ShouldRecoverCommitLossAndRejectSourceReplay"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/EfRefreshTokenService.cs::EfRefreshTokenService.RevokeSubjectAttemptAsync(SubjectRevocationTarget,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "HumanRefreshRotation_ShouldRecoverCommitLossAndRejectSourceReplay"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/EmployeeMutationObservationReader.cs::EmployeeMutationObservationReader.ObserveAsync(Guid,CancellationToken)::ObserveSnapshotAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "EmployeeMutationObservation_ShouldUseOneSnapshotAcrossConcurrentMutation"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/EmployeeMutationVersionStore.cs::EmployeeMutationVersionStore.TryAdvanceAsync(Guid,uint,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "ProductionRetryStrategy_ShouldReplayAllEmployeeWritesAccessAndDeviceDelete"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/HumanSessionIssuanceLock.cs::HumanSessionIssuanceLock.ExecuteTransactionAsync(Func<Task>,Func<IIoTDbContext, CancellationToken, Task>,bool,CancellationToken)::<lambda#1>"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "OidcIssuanceSuccessAudit_ShouldCommitAtomicallyWithGrant"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/HumanSessionRevocationService.cs::HumanSessionRevocationService.RevokeAllAsync(Guid,string,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "IndependentHumanSessionRevocation_ShouldRecoverCommitLossExactly"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/IdentityAccountStore.cs::IdentityAccountStore.CreateAsync(IdentityAccount,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "ProductionRetryStrategy_ShouldReplayAllEmployeeWritesAccessAndDeviceDelete"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/IdentityAccountStore.cs::IdentityAccountStore.CompareExchangeStateAsync(Guid,IdentityAccountStateSnapshot,bool,string,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "ProductionRetryStrategy_ShouldReplayAllEmployeeWritesAccessAndDeviceDelete"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/IdentityAccountStore.cs::IdentityAccountStore.DeleteAsync(Guid,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "ProductionRetryStrategy_ShouldReplayAllEmployeeWritesAccessAndDeviceDelete"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/IdentityAccountStore.cs::IdentityAccountStore.AssignRoleAsync(Guid,string,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "ProductionRetryStrategy_ShouldReplayAllEmployeeWritesAccessAndDeviceDelete"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/IdentityAccountStore.cs::IdentityAccountStore.ReplaceAssignableRoleAsync(Guid,string?,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "ProductionRetryStrategy_ShouldReplayAllEmployeeWritesAccessAndDeviceDelete"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/IdentityPasswordService.cs::IdentityPasswordService.SetPasswordAsync(Guid,string,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "IdentityPolicyAndPasswordWrites_ShouldRecoverCommitConfirmationLossExactly"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/IdentityPasswordService.cs::IdentityPasswordService.CheckPasswordAsync(Guid,string,CancellationToken)::<lambda#1>"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "IdentityPolicyAndPasswordWrites_ShouldRecoverCommitConfirmationLossExactly"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/IdentityPasswordService.cs::IdentityPasswordService.AcquirePasswordCheckLockAsync(IIoTDbContext,Guid,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "IdentityPolicyAndPasswordWrites_ShouldRecoverCommitConfirmationLossExactly"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/IdentityPasswordService.cs::IdentityPasswordService.SetStandalonePasswordAsync(Guid,string?,string,bool,CancellationToken)::<lambda#1>"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "IdentityPolicyAndPasswordWrites_ShouldRecoverCommitConfirmationLossExactly"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/IndependentHumanSessionRevocationService.cs::IndependentHumanSessionRevocationService.ReadBaselineAttemptAsync(Guid,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "IndependentHumanSessionRevocation_ShouldRecoverCommitLossExactly"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/IndependentHumanSessionRevocationService.cs::IndependentHumanSessionRevocationService.RevokeAttemptAsync(RevocationTarget,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "IndependentHumanSessionRevocation_ShouldRecoverCommitLossExactly"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/IndependentHumanSessionRevocationService.cs::IndependentHumanSessionRevocationService.ObserveOutcomeAttemptAsync(RevocationTarget,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "IndependentHumanSessionRevocation_ShouldRecoverCommitLossExactly"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/OpenIddictClientSeeder.cs::OpenIddictClientSeeder.EnsureAicopilotClientAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/OpenIddictClientSeederPostgresTests.cs",
+            "OidcClientSeed_FirstWarmAndCommitLoss_ShouldConvergeToOneClientId"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/RolePolicyService.cs::RolePolicyService.DefineRoleAsync(string,List<string>,CancellationToken)::<lambda#1>"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "IdentityPolicyAndPasswordWrites_ShouldRecoverCommitConfirmationLossExactly"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/RolePolicyService.cs::RolePolicyService.UpdateRolePermissionsAsync(string,List<string>,CancellationToken)::<lambda#1>"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "IdentityPolicyAndPasswordWrites_ShouldRecoverCommitConfirmationLossExactly"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/RolePolicyService.cs::RolePolicyService.UpdateUserPersonalPermissionsAsync(Guid,List<string>,CancellationToken)::<lambda#1>"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "IdentityPolicyAndPasswordWrites_ShouldRecoverCommitConfirmationLossExactly"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Outbox/OutboxMessageDispatcher.cs::OutboxMessageDispatcher.DispatchPendingCoreAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/OutboxDispatchPersistenceTests.cs",
+            "OutboxCommitTransient_ShouldRepublishStableIdentityAndReceiverInboxApplyBusinessEffectOnce"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Persistence/CloudWriteObservationReader.cs::CloudWriteObservationReader.ObserveConsistentAsync(Func<IIoTDbContext, CancellationToken, Task<T>>,CancellationToken)::<lambda#1>"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "EmployeeMutationObservation_ShouldUseOneSnapshotAcrossConcurrentMutation"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Persistence/DeviceDeletionTransactionLock.cs::DeviceDeletionTransactionLock.AcquireAsync(IIoTDbContext,Guid,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "IndependentHumanSessionRevocation_ShouldSeeSessionCommittedWhileWaitingForSubjectLock"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Persistence/EfUnitOfWork.cs::EfUnitOfWork.ExecuteResilientAsync(Func<CancellationToken, Task<TResult>>,CancellationToken)::<lambda#1>"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "ProductionRetryStrategy_ShouldReplayAllEmployeeWritesAccessAndDeviceDelete"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Persistence/EfUnitOfWork.cs::EfUnitOfWork.BeginTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "ProductionRetryStrategy_ShouldReplayAllEmployeeWritesAccessAndDeviceDelete"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Persistence/EfUnitOfWork.cs::EfUnitOfWork.CommitAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "ProductionRetryStrategy_ShouldReplayAllEmployeeWritesAccessAndDeviceDelete"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Persistence/EfUnitOfWork.cs::EfUnitOfWork.RollbackAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "ProductionRetryStrategy_ShouldReplayAllEmployeeWritesAccessAndDeviceDelete"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Persistence/RefreshTokenSubjectTransactionLock.cs::RefreshTokenSubjectTransactionLock.AcquireOidcTokenExchangeAsync(IIoTDbContext,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "IndependentHumanSessionRevocation_ShouldSeeSessionCommittedWhileWaitingForSubjectLock"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Persistence/RefreshTokenSubjectTransactionLock.cs::RefreshTokenSubjectTransactionLock.AcquireSubjectCoreAsync(IIoTDbContext,Guid,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "IndependentHumanSessionRevocation_ShouldSeeSessionCommittedWhileWaitingForSubjectLock"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/QueryServices/EfDeviceDeletionDependencyService.cs::EfDeviceDeletionDependencyService.DeleteCascadeAsync(Guid,CancellationToken,uint?)::ExecuteTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "CommitConfirmationLoss_ShouldNotDuplicateAllEmployeeWritesOrDeviceDelete"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/QueryServices/EfDeviceDeletionDependencyService.cs::EfDeviceDeletionDependencyService.DeleteAssociatedRowsAsync(Guid,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "CommitConfirmationLoss_ShouldNotDuplicateAllEmployeeWritesOrDeviceDelete"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Repository/EfRepository.cs::EfRepository<T>.SaveChangesAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "ProductionRetryStrategy_ShouldReplayAllEmployeeWritesAccessAndDeviceDelete"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Uploads/EfUploadReceiveObservationRetentionPruner.cs::EfUploadReceiveObservationRetentionPruner.PruneBatchAttemptAsync(DateTimeOffset,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "UploadRegistrationAndOutbox_ShouldRecoverCommitLossAsOneLogicalMessage"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Uploads/EfUploadReceiveRegistry.cs::EfUploadReceiveRegistry.RegisterAttemptAsync(Guid,Guid,string,string?,string,OutboxMessage,DateTimeOffset,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "UploadRegistrationAndOutbox_ShouldRecoverCommitLossAsOneLogicalMessage"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Uploads/EfUploadReceiveRegistry.cs::EfUploadReceiveRegistry.RecordDuplicateObservationAsync(IIoTDbContext,UploadReceiveRegistration,Guid,DateTimeOffset,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "UploadRegistrationAndOutbox_ShouldRecoverCommitLossAsOneLogicalMessage"),
+        ["src/services/IIoT.EmployeeService/Commands/Human/Employees/ActivateEmployee.cs::ActivateEmployeeHandler.Handle(ActivateEmployeeCommand,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "CommitConfirmationLoss_ShouldNotDuplicateAllEmployeeWritesOrDeviceDelete"),
+        ["src/services/IIoT.EmployeeService/Commands/Human/Employees/DeactivateEmployee.cs::DeactivateEmployeeHandler.Handle(DeactivateEmployeeCommand,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "CommitConfirmationLoss_ShouldNotDuplicateAllEmployeeWritesOrDeviceDelete"),
+        ["src/services/IIoT.EmployeeService/Commands/Human/Employees/OnboardEmployee.cs::OnboardEmployeeHandler.Handle(OnboardEmployeeCommand,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "CommitConfirmationLoss_ShouldNotDuplicateAllEmployeeWritesOrDeviceDelete"),
+        ["src/services/IIoT.EmployeeService/Commands/Human/Employees/TerminateEmployee.cs::TerminateEmployeeHandler.Handle(TerminateEmployeeCommand,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "CommitConfirmationLoss_ShouldNotDuplicateAllEmployeeWritesOrDeviceDelete"),
+        ["src/services/IIoT.EmployeeService/Commands/Human/Employees/UpdateEmployeeAccess.cs::UpdateEmployeeAccessHandler.Handle(UpdateEmployeeAccessCommand,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "CommitConfirmationLoss_ShouldNotDuplicateAllEmployeeWritesOrDeviceDelete"),
+        ["src/services/IIoT.EmployeeService/Commands/Human/Employees/UpdateEmployeeProfile.cs::UpdateEmployeeProfileHandler.Handle(UpdateEmployeeProfileCommand,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "CommitConfirmationLoss_ShouldNotDuplicateAllEmployeeWritesOrDeviceDelete"),
+        ["src/services/IIoT.MasterDataService/Commands/Human/Processes/CreateProcess.cs::CreateProcessHandler.Handle(CreateProcessCommand,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "BusinessAggregateWrites_ShouldRecoverCommitConfirmationLoss"),
+        ["src/services/IIoT.MasterDataService/Commands/Human/Processes/DeleteProcess.cs::DeleteProcessHandler.Handle(DeleteProcessCommand,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "BusinessAggregateWrites_ShouldRecoverCommitConfirmationLoss"),
+        ["src/services/IIoT.MasterDataService/Commands/Human/Processes/UpdateProcess.cs::UpdateProcessHandler.Handle(UpdateProcessCommand,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "BusinessAggregateWrites_ShouldRecoverCommitConfirmationLoss"),
+        ["src/services/IIoT.ProductionService/ClientReleases/ClientReleaseComponentDeletionProcessor.cs::ClientReleaseComponentDeletionProcessor.PersistDeletionTargetAsync(ClientReleaseDeletionWriteState,ClientReleaseDeletionWriteState,Action<ClientReleaseComponentDeletion>,CancellationToken)::ExecuteAttemptAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
+            "ClientReleaseWrites_ShouldReplayTransientAndRecoverCommitConfirmationLoss"),
+        ["src/services/IIoT.ProductionService/ClientReleases/ClientReleaseComponentDeletionProcessor.cs::ClientReleaseComponentDeletionProcessor.RemoveDeletionAsync(ClientReleaseComponentDeletion,CancellationToken)::ExecuteAttemptAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
+            "ClientReleaseWrites_ShouldReplayTransientAndRecoverCommitConfirmationLoss"),
+        ["src/services/IIoT.ProductionService/ClientReleases/ClientReleaseRetentionService.cs::ClientReleaseRetentionService.ApplyPolicyAsync(ClientReleaseComponentKind,string,string,string,CancellationToken)::ExecuteAttemptAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
+            "ClientReleaseWrites_ShouldReplayTransientAndRecoverCommitConfirmationLoss"),
+        ["src/services/IIoT.ProductionService/Commands/Edge/ClientVersions/ReportDeviceClientVersion.cs::ReportDeviceClientVersionHandler.Handle(ReportDeviceClientVersionCommand,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "EdgeReports_ShouldRecoverCommitConfirmationLoss"),
+        ["src/services/IIoT.ProductionService/Commands/Edge/ClientVersions/ReportDeviceRuntimeHeartbeat.cs::ReportDeviceRuntimeHeartbeatHandler.Handle(ReportDeviceRuntimeHeartbeatCommand,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "EdgeReports_ShouldRecoverCommitConfirmationLoss"),
+        ["src/services/IIoT.ProductionService/Commands/Edge/EdgeHosts/ReportEdgeHostPlcRuntimeStates.cs::ReportEdgeHostPlcRuntimeStatesHandler.Handle(ReportEdgeHostPlcRuntimeStatesCommand,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "EdgeReports_ShouldRecoverCommitConfirmationLoss"),
+        ["src/services/IIoT.ProductionService/Commands/Human/ClientReleases/ChangeClientReleaseLifecycle.cs::ArchiveClientReleaseHandler.Handle(ArchiveClientReleaseCommand,CancellationToken)::ExecuteAttemptAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
+            "ClientReleaseWrites_ShouldReplayTransientAndRecoverCommitConfirmationLoss"),
+        ["src/services/IIoT.ProductionService/Commands/Human/ClientReleases/DeleteClientReleasePackage.cs::DeleteClientReleasePackageHandler.PersistVersionTargetAsync(ClientReleaseVersionWriteState,ClientReleaseStatus,DateTime?,string?,string?,string?,Action<ClientReleaseComponent, ClientReleaseVersion>,CancellationToken)::ExecuteAttemptAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
+            "ClientReleaseWrites_ShouldReplayTransientAndRecoverCommitConfirmationLoss"),
+        ["src/services/IIoT.ProductionService/Commands/Human/ClientReleases/GenerateEdgeInstallerPackage.cs::GenerateEdgeInstallerPackageHandler.PersistDeviceSecretsAsync(IReadOnlyCollection<DeviceBootstrapWriteState>,IReadOnlyCollection<DeviceBootstrapSecretTarget>,CancellationToken)::ExecuteAttemptAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
+            "ClientReleaseWrites_ShouldReplayTransientAndRecoverCommitConfirmationLoss"),
+        ["src/services/IIoT.ProductionService/Commands/Human/ClientReleases/HardDeleteClientReleaseComponent.cs::HardDeleteClientReleaseComponentHandler.Handle(HardDeleteClientReleaseComponentCommand,CancellationToken)::ExecuteAttemptAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
+            "ClientReleaseWrites_ShouldReplayTransientAndRecoverCommitConfirmationLoss"),
+        ["src/services/IIoT.ProductionService/Commands/Human/ClientReleases/PublishEdgePluginPackage.cs::PublishEdgePluginPackageHandler.Handle(PublishEdgePluginPackageCommand,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
+            "ClientReleaseWrites_ShouldReplayTransientAndRecoverCommitConfirmationLoss"),
+        ["src/services/IIoT.ProductionService/Commands/Human/ClientReleases/PublishEdgeReleaseBundle.cs::PublishEdgeReleaseBundleHandler.Handle(PublishEdgeReleaseBundleCommand,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
+            "ClientReleaseWrites_ShouldReplayTransientAndRecoverCommitConfirmationLoss"),
+        ["src/services/IIoT.ProductionService/Commands/Human/ClientReleases/UpdateClientReleaseRetentionPolicy.cs::UpdateClientReleaseRetentionPolicyHandler.Handle(UpdateClientReleaseRetentionPolicyCommand,CancellationToken)::ExecuteAttemptAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
+            "ClientReleaseWrites_ShouldReplayTransientAndRecoverCommitConfirmationLoss"),
+        ["src/services/IIoT.ProductionService/Commands/Human/Devices/RegisterDevice.cs::RegisterDeviceHandler.Handle(RegisterDeviceCommand,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "BusinessAggregateWrites_ShouldRecoverCommitConfirmationLoss"),
+        ["src/services/IIoT.ProductionService/Commands/Human/Devices/UpdateDeviceProfile.cs::UpdateDeviceProfileHandler.Handle(UpdateDeviceProfileCommand,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "BusinessAggregateWrites_ShouldRecoverCommitConfirmationLoss"),
+        ["src/services/IIoT.ProductionService/Commands/Human/Recipes/CreateRecipe.cs::CreateRecipeHandler.Handle(CreateRecipeCommand,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "BusinessAggregateWrites_ShouldRecoverCommitConfirmationLoss"),
+        ["src/services/IIoT.ProductionService/Commands/Human/Recipes/DeleteRecipe.cs::DeleteRecipeHandler.Handle(DeleteRecipeCommand,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "BusinessAggregateWrites_ShouldRecoverCommitConfirmationLoss"),
+        ["src/services/IIoT.ProductionService/Commands/Human/Recipes/UpgradeRecipeVersion.cs::UpgradeRecipeVersionHandler.Handle(UpgradeRecipeVersionCommand,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "BusinessAggregateWrites_ShouldRecoverCommitConfirmationLoss"),
+    };
 
     public static PersistenceInventoryResult DiscoverProduction()
     {
@@ -270,7 +540,7 @@ internal static class PersistenceWriteInventory
                 return new PersistenceWriteEntry(
                     first.RelativePath,
                     first.Line,
-                    first.Callable.ToDisplayString(MethodDisplayFormat),
+                    GetCallableIdentity(first.Callable),
                     sites.Select(site => site.Kind)
                         .Distinct()
                         .Order(StringComparer.Ordinal)
@@ -282,6 +552,59 @@ internal static class PersistenceWriteInventory
             .ThenBy(entry => entry.Line)
             .ThenBy(entry => entry.Method, StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private static string GetCallableIdentity(IMethodSymbol callable)
+    {
+        if (callable.MethodKind is not MethodKind.LocalFunction and not MethodKind.AnonymousFunction)
+        {
+            var containingType = callable.ContainingType?.ToDisplayString(
+                SymbolDisplayFormat.MinimallyQualifiedFormat) ?? "<unknown-type>";
+            return $"{containingType}.{FormatCallableSegment(callable)}";
+        }
+
+        var containingCallable = callable.ContainingSymbol as IMethodSymbol;
+        var containingIdentity = containingCallable is null
+            ? callable.ContainingType?.ToDisplayString() ?? "<unknown-type>"
+            : GetCallableIdentity(containingCallable);
+        if (callable.MethodKind == MethodKind.LocalFunction)
+        {
+            return $"{containingIdentity}::{FormatCallableSegment(callable)}";
+        }
+
+        return $"{containingIdentity}::<lambda#{GetAnonymousFunctionOrdinal(callable)}>";
+    }
+
+    private static string FormatCallableSegment(IMethodSymbol callable)
+        => $"{callable.Name}({string.Join(
+            ",",
+            callable.Parameters.Select(parameter =>
+                parameter.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)))})";
+
+    private static int GetAnonymousFunctionOrdinal(IMethodSymbol callable)
+    {
+        var anonymous = callable.DeclaringSyntaxReferences
+            .Select(reference => reference.GetSyntax())
+            .OfType<AnonymousFunctionExpressionSyntax>()
+            .SingleOrDefault();
+        if (anonymous is null)
+        {
+            return 0;
+        }
+
+        var owner = anonymous.Ancestors().FirstOrDefault(node =>
+            node is BaseMethodDeclarationSyntax or
+                LocalFunctionStatementSyntax or
+                AccessorDeclarationSyntax);
+        if (owner is null)
+        {
+            return 0;
+        }
+
+        return owner.DescendantNodes()
+                   .OfType<AnonymousFunctionExpressionSyntax>()
+                   .TakeWhile(candidate => candidate != anonymous)
+                   .Count() + 1;
     }
 
     private static void DiscoverTreeWriteSites(
@@ -451,195 +774,13 @@ internal static class PersistenceWriteInventory
         IMethodSymbol callable,
         PersistenceWriteClassification? classification)
     {
-        const string retryTests =
-            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs";
-        var normalized = NormalizePath(relativePath);
-        var typeName = callable.ContainingType?.ToDisplayString() ?? string.Empty;
-
-        if (normalized.Contains("/services/IIoT.EmployeeService/", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                retryTests,
-                "CommitConfirmationLoss_ShouldNotDuplicateAllEmployeeWritesOrDeviceDelete");
-        }
-
-        if (normalized.Contains("/services/IIoT.MasterDataService/", StringComparison.Ordinal) ||
-            normalized.Contains("/services/IIoT.ProductionService/Commands/Human/Devices/", StringComparison.Ordinal) ||
-            normalized.Contains("/services/IIoT.ProductionService/Commands/Human/Recipes/", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                retryTests,
-                "BusinessAggregateWrites_ShouldRecoverCommitConfirmationLoss");
-        }
-
-        if (normalized.Contains("/services/IIoT.ProductionService/Commands/Edge/", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                retryTests,
-                "EdgeReports_ShouldRecoverCommitConfirmationLoss");
-        }
-
-        if (normalized.Contains("/services/IIoT.ProductionService/", StringComparison.Ordinal) &&
-            normalized.Contains("ClientRelease", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
-                "ClientReleaseWrites_ShouldReplayTransientAndRecoverCommitConfirmationLoss");
-        }
-
-        if (normalized.Contains("/infrastructure/IIoT.Dapper/Initializers/", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/RecordSchemaInitializerPostgresTests.cs",
-                "RecordSchemas_FirstAndWarmRun_ShouldConvergeToRequiredTables");
-        }
-
-        if (normalized.Contains("/infrastructure/IIoT.Dapper/Production/Repositories/Capacities/", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/CapacityPersistencePostgresTests.cs",
-                "UpsertAsync_LateSmallerSnapshotCannotReplaceCompletedClipCount");
-        }
-
-        if (normalized.Contains("/infrastructure/IIoT.Dapper/Production/Repositories/", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/CapacityPersistencePostgresTests.cs",
-                "PassStationAndDeviceLogWrites_ShouldRemainIdempotent");
-        }
-
-        if (normalized.Contains("/hosts/IIoT.MigrationWorkApp/SeedData/", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/SingleAdminInvariantPostgresTests.cs",
-                "PasswordRepairCommitConfirmationLoss_ShouldConfirmTargetWithoutSecondAdmin");
-        }
-
-        if (normalized.Contains("/hosts/IIoT.MigrationWorkApp/", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs",
-                "LegacyDeviceAndIdentitySchemas_ShouldUpgradeAgainstRealPostgres");
-        }
-
-        if (typeName is
-            "IIoT.EntityFrameworkCore.Identity.RolePolicyService" or
-            "IIoT.EntityFrameworkCore.Identity.IdentityPasswordService")
-        {
-            return new PersistenceEvidence(
-                retryTests,
-                "IdentityPolicyAndPasswordWrites_ShouldRecoverCommitConfirmationLossExactly");
-        }
-
-        if (normalized.Contains("/Auditing/EfOidcIssuanceAuditTrailService.cs", StringComparison.Ordinal) ||
-            normalized.Contains("/Identity/HumanSessionIssuanceLock.cs", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                retryTests,
-                "OidcIssuanceSuccessAudit_ShouldCommitAtomicallyWithGrant");
-        }
-
-        if (normalized.Contains("/Auditing/EfAuditTrailService.cs", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseComponentDeletionPostgresTests.cs",
-                "EfAuditTrailService_ShouldPersistOneExactRecordPerIdempotencyKey");
-        }
-
-        if (normalized.Contains("/Identity/EdgeReleaseApiKeyService.cs", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                retryTests,
-                "EdgeReleaseApiKeyLifecycle_ShouldRecoverCommitLossWithoutPersistingPlaintext");
-        }
-
-        if (normalized.Contains("/Identity/EfRefreshTokenService.cs", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                retryTests,
-                "HumanRefreshRotation_ShouldRecoverCommitLossAndRejectSourceReplay");
-        }
-
-        if (normalized.Contains("/Identity/IndependentHumanSessionRevocationService.cs", StringComparison.Ordinal) ||
-            normalized.Contains("/Identity/HumanSessionRevocationService.cs", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                retryTests,
-                "IndependentHumanSessionRevocation_ShouldRecoverCommitLossExactly");
-        }
-
-        if (normalized.Contains("/Identity/OpenIddictClientSeeder.cs", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/OpenIddictClientSeederPostgresTests.cs",
-                "OidcClientSeed_FirstWarmAndCommitLoss_ShouldConvergeToOneClientId");
-        }
-
-        if (normalized.Contains("/Uploads/", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                retryTests,
-                "UploadRegistrationAndOutbox_ShouldRecoverCommitLossAsOneLogicalMessage");
-        }
-
-        if (normalized.Contains("/Outbox/", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/OutboxDispatchPersistenceTests.cs",
-                "OutboxCommitTransient_ShouldRepublishStableIdentityAndReceiverInboxApplyBusinessEffectOnce");
-        }
-
-        if (normalized.Contains("/QueryServices/EfDeviceDeletionDependencyService.cs", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                retryTests,
-                "CommitConfirmationLoss_ShouldNotDuplicateAllEmployeeWritesOrDeviceDelete");
-        }
-
-        if (normalized.Contains("/Identity/EmployeeMutationObservationReader.cs", StringComparison.Ordinal) ||
-            normalized.Contains("/Persistence/CloudWriteObservationReader.cs", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                retryTests,
-                "EmployeeMutationObservation_ShouldUseOneSnapshotAcrossConcurrentMutation");
-        }
-
-        if (normalized.Contains("/ClientReleases/", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
-                "ClientReleaseWrites_ShouldReplayTransientAndRecoverCommitConfirmationLoss");
-        }
-
-        if (normalized.Contains("/EdgeHosts/", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                retryTests,
-                "EdgeReports_ShouldRecoverCommitConfirmationLoss");
-        }
-
-        if (normalized.Contains("/Identity/IdentityAccountStore.cs", StringComparison.Ordinal) ||
-            normalized.Contains("/Identity/EmployeeMutationVersionStore.cs", StringComparison.Ordinal) ||
-            normalized.Contains("/Repository/EfRepository.cs", StringComparison.Ordinal) ||
-            normalized.Contains("/Persistence/EfUnitOfWork.cs", StringComparison.Ordinal) ||
-            normalized.EndsWith("/IIoTDbContext.cs", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                retryTests,
-                "ProductionRetryStrategy_ShouldReplayAllEmployeeWritesAccessAndDeviceDelete");
-        }
-
-        if (normalized.Contains("/Persistence/DeviceDeletionTransactionLock.cs", StringComparison.Ordinal) ||
-            normalized.Contains("/Persistence/RefreshTokenSubjectTransactionLock.cs", StringComparison.Ordinal))
-        {
-            return new PersistenceEvidence(
-                retryTests,
-                "IndependentHumanSessionRevocation_ShouldSeeSessionCommittedWhileWaitingForSubjectLock");
-        }
-
         _ = classification;
-        return ArchitectureEvidence;
+        var bindingKey = $"{NormalizePath(relativePath)}::{GetCallableIdentity(callable)}";
+        return ConcreteEvidenceBindings.TryGetValue(bindingKey, out var evidence)
+            ? evidence
+            : ArchitectureEvidence;
     }
+
 
     private static bool TryClassifySink(IMethodSymbol symbol, out string kind)
     {

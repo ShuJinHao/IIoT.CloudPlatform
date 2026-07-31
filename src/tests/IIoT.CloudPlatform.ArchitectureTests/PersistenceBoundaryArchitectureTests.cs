@@ -157,6 +157,39 @@ public sealed class PersistenceBoundaryArchitectureTests
     }
 
     [Fact]
+    public void PersistenceInventory_ShouldRequireExactCallableEvidenceBinding()
+    {
+        const string source =
+            """
+            using IIoT.Services.Contracts.Persistence;
+            using Microsoft.EntityFrameworkCore;
+
+            namespace IIoT.EmployeeService.Commands.Employees;
+
+            public sealed class NewlyAddedWriter(
+                IUnitOfWork unitOfWork,
+                DbContext context)
+            {
+                public Task<int> WriteAsync(CancellationToken cancellationToken)
+                    => unitOfWork.ExecuteResilientAsync(
+                        callbackToken => context.SaveChangesAsync(callbackToken),
+                        cancellationToken);
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(
+                source,
+                "src/services/IIoT.EmployeeService/Commands/Human/Employees/NewlyAddedWriter.cs")
+                .Entries);
+
+        Assert.Equal(
+            PersistenceWriteClassification.ExecutionStrategyReplayRoot,
+            entry.Classification);
+        Assert.Contains("ArchitectureTests", entry.Evidence.RelativePath, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void PersistenceInventory_ShouldRejectWritesEvaluatedAsReplayState()
     {
         const string source =

@@ -527,6 +527,99 @@ public sealed class ProductionRetryTransactionPostgresTests(
     }
 
     [Fact]
+    public async Task PasswordLockoutDuration_ShouldStartAfterSerializedAccountLockIsAcquired()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var applicationName = $"password-lockout-{Guid.NewGuid():N}";
+        var connectionString = new NpgsqlConnectionStringBuilder(
+            budget.ConnectionString)
+        {
+            ApplicationName = applicationName,
+            Pooling = false
+        }.ConnectionString;
+        await using var provider = CreateRetryProvider(
+            connectionString,
+            new ThrowOnceBeforeCommitInterceptor());
+        var timeProvider = new MutableTimeProvider(
+            new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
+        Guid userId;
+        TimeSpan lockoutDuration;
+        await using (var seedScope = provider.CreateAsyncScope())
+        {
+            var services = seedScope.ServiceProvider;
+            var userManager = services.GetRequiredService<UserManager<ApplicationUser>>();
+            var context = services.GetRequiredService<IIoTDbContext>();
+            var user = new ApplicationUser
+            {
+                Id = Guid.NewGuid(),
+                UserName = $"identity-lock-wait-{Guid.NewGuid():N}"[..40],
+                IsEnabled = true,
+                LockoutEnabled = true,
+                AccessFailedCount = userManager.Options.Lockout.MaxFailedAccessAttempts - 1
+            };
+            Assert.True((await userManager.CreateAsync(
+                user,
+                "OldPassword123!")).Succeeded);
+            await context.SaveChangesAsync(budget.Token);
+            userId = user.Id;
+            lockoutDuration = userManager.Options.Lockout.DefaultLockoutTimeSpan;
+        }
+
+        var blockerConnectionString = new NpgsqlConnectionStringBuilder(
+            budget.ConnectionString)
+        {
+            Pooling = false
+        }.ConnectionString;
+        await using var blocker = new NpgsqlConnection(blockerConnectionString);
+        await blocker.OpenAsync(budget.Token);
+        await using var blockerTransaction = await blocker.BeginTransactionAsync(
+            budget.Token);
+        await using (var lockCommand = new NpgsqlCommand(
+                         "SELECT pg_advisory_xact_lock(@lock_key)",
+                         blocker,
+                         blockerTransaction))
+        {
+            lockCommand.Parameters.AddWithValue(
+                "lock_key",
+                IdentityPasswordService.GetPasswordCheckLockKey(userId));
+            _ = await lockCommand.ExecuteScalarAsync(budget.Token);
+        }
+
+        await using var checkScope = provider.CreateAsyncScope();
+        var check = CreatePasswordService(
+                checkScope.ServiceProvider,
+                timeProvider)
+            .CheckPasswordAsync(
+                userId,
+                "WrongPassword123!",
+                budget.Token);
+        await WaitForLockWaitAsync(
+            connectionString,
+            applicationName,
+            budget.Token);
+        timeProvider.Advance(TimeSpan.FromMinutes(10));
+        await blockerTransaction.CommitAsync(budget.Token);
+
+        var result = await check;
+        Assert.True(result.IsSuccess);
+        Assert.False(result.Value);
+
+        await using var verificationScope = provider.CreateAsyncScope();
+        var persisted = await verificationScope.ServiceProvider
+            .GetRequiredService<IIoTDbContext>()
+            .Users
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == userId, budget.Token);
+        Assert.Equal(
+            timeProvider.GetUtcNow().Add(lockoutDuration),
+            persisted.LockoutEnd);
+        Assert.Equal(0, persisted.AccessFailedCount);
+    }
+
+    [Fact]
     public async Task LockedPasswordCheck_ShouldKeepKnownRejectionWhenReadOnlyCommitAckIsLost()
     {
         using var budget = await PostgresTestBudget.CreateAsync(
@@ -5727,10 +5820,12 @@ public sealed class ProductionRetryTransactionPostgresTests(
     }
 
     private static IdentityPasswordService CreatePasswordService(
-        IServiceProvider services)
+        IServiceProvider services,
+        TimeProvider? timeProvider = null)
         => new(
             services.GetRequiredService<UserManager<ApplicationUser>>(),
-            services.GetRequiredService<IIoTDbContext>());
+            services.GetRequiredService<IIoTDbContext>(),
+            timeProvider);
 
     private static IIoTDbContext CreateRetryContext(
         string connectionString,
@@ -5933,6 +6028,15 @@ public sealed class ProductionRetryTransactionPostgresTests(
         public Guid? DeviceId => null;
 
         public bool IsAuthenticated => true;
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset currentUtc = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => currentUtc;
+
+        public void Advance(TimeSpan duration) => currentUtc = currentUtc.Add(duration);
     }
 
     private sealed class RecordingAuditTrailService : IAuditTrailService
