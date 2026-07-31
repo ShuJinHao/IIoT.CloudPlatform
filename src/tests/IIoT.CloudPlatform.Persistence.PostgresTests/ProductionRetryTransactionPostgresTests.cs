@@ -462,7 +462,9 @@ public sealed class ProductionRetryTransactionPostgresTests(
         using var budget = await PostgresTestBudget.CreateAsync(
             fixture,
             TimeSpan.FromSeconds(45));
-        var barrier = new PasswordSaveConcurrencyBarrierInterceptor();
+        const int concurrentChecks = 5;
+        var barrier = new PasswordLockConcurrencyBarrierInterceptor(
+            concurrentChecks);
         await using var provider = CreateRetryProvider(
             budget.ConnectionString,
             new ThrowOnceBeforeCommitInterceptor(),
@@ -485,13 +487,28 @@ public sealed class ProductionRetryTransactionPostgresTests(
         }
 
         barrier.Arm();
-        await using var firstScope = provider.CreateAsyncScope();
-        await using var secondScope = provider.CreateAsyncScope();
-        var first = CreatePasswordService(firstScope.ServiceProvider)
-            .CheckPasswordAsync(userId, "WrongPassword123!", budget.Token);
-        var second = CreatePasswordService(secondScope.ServiceProvider)
-            .CheckPasswordAsync(userId, "WrongPassword123!", budget.Token);
-        var results = await Task.WhenAll(first, second);
+        var scopes = Enumerable.Range(0, concurrentChecks)
+            .Select(_ => provider.CreateAsyncScope())
+            .ToArray();
+        Result<bool>[] results;
+        try
+        {
+            var checks = scopes
+                .Select(scope => CreatePasswordService(scope.ServiceProvider)
+                    .CheckPasswordAsync(
+                        userId,
+                        "WrongPassword123!",
+                        budget.Token))
+                .ToArray();
+            results = await Task.WhenAll(checks);
+        }
+        finally
+        {
+            foreach (var scope in scopes)
+            {
+                await scope.DisposeAsync();
+            }
+        }
 
         Assert.All(results, result =>
         {
@@ -504,7 +521,9 @@ public sealed class ProductionRetryTransactionPostgresTests(
             .Users
             .AsNoTracking()
             .SingleAsync(candidate => candidate.Id == userId, budget.Token);
-        Assert.Equal(2, persisted.AccessFailedCount);
+        Assert.True(persisted.LockoutEnabled);
+        Assert.True(persisted.LockoutEnd > DateTimeOffset.UtcNow);
+        Assert.Equal(0, persisted.AccessFailedCount);
     }
 
     [Fact]
@@ -6084,34 +6103,39 @@ public sealed class ProductionRetryTransactionPostgresTests(
         }
     }
 
-    private sealed class PasswordSaveConcurrencyBarrierInterceptor
-        : SaveChangesInterceptor
+    private sealed class PasswordLockConcurrencyBarrierInterceptor(
+        int expectedArrivals)
+        : DbCommandInterceptor
     {
-        private readonly TaskCompletionSource bothSavesReached = new(
+        private readonly TaskCompletionSource allChecksReached = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
         private int armed;
         private int arrivals;
 
         public void Arm() => Volatile.Write(ref armed, 1);
 
-        public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
-            DbContextEventData eventData,
+        public override async ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
             InterceptionResult<int> result,
             CancellationToken cancellationToken = default)
         {
-            if (Volatile.Read(ref armed) == 0)
+            if (Volatile.Read(ref armed) == 0 ||
+                !command.CommandText.Contains(
+                    "pg_advisory_xact_lock",
+                    StringComparison.Ordinal))
             {
                 return result;
             }
 
             var arrival = Interlocked.Increment(ref arrivals);
-            if (arrival == 2)
+            if (arrival == expectedArrivals)
             {
                 Volatile.Write(ref armed, 0);
-                bothSavesReached.TrySetResult();
+                allChecksReached.TrySetResult();
             }
 
-            await bothSavesReached.Task.WaitAsync(cancellationToken);
+            await allChecksReached.Task.WaitAsync(cancellationToken);
             return result;
         }
     }

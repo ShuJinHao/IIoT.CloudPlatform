@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Result;
@@ -11,7 +12,7 @@ public sealed class IdentityPasswordService(
     IIoTDbContext dbContext) : IIdentityPasswordService
 {
     private static readonly TimeSpan ObservationTimeout = TimeSpan.FromSeconds(5);
-    private const int MaxPasswordConcurrencyAttempts = 3;
+    private const long PasswordCheckLockNamespace = 0x5057444300000000;
     private readonly Func<IIoTDbContext> _createContext = dbContext.CreateFreshContext;
 
     public async Task<Result<bool>> SetPasswordAsync(
@@ -58,75 +59,56 @@ public sealed class IdentityPasswordService(
         return await ExecuteRecoverableAsync(
             async callbackToken =>
             {
-                for (var concurrencyAttempt = 1;
-                     concurrencyAttempt <= MaxPasswordConcurrencyAttempts;
-                     concurrencyAttempt++)
+                await using var context = _createContext();
+                await using var transaction =
+                    await context.Database.BeginTransactionAsync(callbackToken);
+                await AcquirePasswordCheckLockAsync(
+                    context,
+                    userId,
+                    callbackToken);
+                var user = await context.Users.SingleOrDefaultAsync(
+                    candidate => candidate.Id == userId,
+                    callbackToken);
+                if (user is null || !user.IsEnabled)
                 {
-                    await using var context = _createContext();
-                    await using var transaction =
-                        await context.Database.BeginTransactionAsync(callbackToken);
-                    var user = await context.Users.SingleOrDefaultAsync(
-                        candidate => candidate.Id == userId,
-                        callbackToken);
-                    if (user is null || !user.IsEnabled)
-                    {
-                        await transaction.CommitAsync(callbackToken);
-                        return Result.Success(false);
-                    }
-
-                    var current = PasswordSnapshot.From(user);
-                    if (target is not null && target.Matches(current))
-                    {
-                        await transaction.CommitAsync(callbackToken);
-                        return Result.Success(target.PasswordAccepted);
-                    }
-
-                    if (baseline is not null && !baseline.Matches(current))
-                    {
-                        throw new CloudWriteConflictException();
-                    }
-
-                    if (user.LockoutEnabled &&
-                        user.LockoutEnd is { } lockoutEnd &&
-                        lockoutEnd > checkedAtUtc)
-                    {
-                        await transaction.CommitAsync(callbackToken);
-                        return Result.Success(false);
-                    }
-
-                    baseline ??= current;
-                    target ??= CreateCheckTarget(user, password, checkedAtUtc);
-                    if (target.Matches(current))
-                    {
-                        await transaction.CommitAsync(callbackToken);
-                        return Result.Success(target.PasswordAccepted);
-                    }
-
-                    var exactTarget = target ?? throw new InvalidOperationException(
-                        "Password write target was not established.");
-                    ApplyTarget(user, exactTarget);
-                    try
-                    {
-                        await context.SaveChangesAsync(callbackToken);
-                    }
-                    catch (DbUpdateConcurrencyException)
-                        when (concurrencyAttempt < MaxPasswordConcurrencyAttempts)
-                    {
-                        // A failed compare-and-swap did not commit. Re-read the
-                        // latest lockout facts so each concurrent password check
-                        // contributes exactly once without weakening unknown-commit
-                        // observation for all other failures.
-                        baseline = null;
-                        target = null;
-                        continue;
-                    }
-
                     await transaction.CommitAsync(callbackToken);
-                    return Result.Success(exactTarget.PasswordAccepted);
+                    return Result.Success(false);
                 }
 
-                throw new InvalidOperationException(
-                    "Password concurrency retry budget was exhausted.");
+                var current = PasswordSnapshot.From(user);
+                if (target is not null && target.Matches(current))
+                {
+                    await transaction.CommitAsync(callbackToken);
+                    return Result.Success(target.PasswordAccepted);
+                }
+
+                if (baseline is not null && !baseline.Matches(current))
+                {
+                    throw new CloudWriteConflictException();
+                }
+
+                if (user.LockoutEnabled &&
+                    user.LockoutEnd is { } lockoutEnd &&
+                    lockoutEnd > checkedAtUtc)
+                {
+                    await transaction.CommitAsync(callbackToken);
+                    return Result.Success(false);
+                }
+
+                baseline ??= current;
+                target ??= CreateCheckTarget(user, password, checkedAtUtc);
+                if (target.Matches(current))
+                {
+                    await transaction.CommitAsync(callbackToken);
+                    return Result.Success(target.PasswordAccepted);
+                }
+
+                var exactTarget = target ?? throw new InvalidOperationException(
+                    "Password write target was not established.");
+                ApplyTarget(user, exactTarget);
+                await context.SaveChangesAsync(callbackToken);
+                await transaction.CommitAsync(callbackToken);
+                return Result.Success(exactTarget.PasswordAccepted);
             },
             async token =>
             {
@@ -142,6 +124,24 @@ public sealed class IdentityPasswordService(
                     target);
             },
             targetResult: () => Result.Success(target?.PasswordAccepted ?? false),
+            cancellationToken);
+    }
+
+    private static async Task AcquirePasswordCheckLockAsync(
+        IIoTDbContext context,
+        Guid userId,
+        CancellationToken cancellationToken)
+    {
+        if (!context.Database.IsNpgsql())
+        {
+            return;
+        }
+
+        var userIdBytes = userId.ToByteArray();
+        var lockKey = BinaryPrimitives.ReadInt64BigEndian(
+            userIdBytes.AsSpan(0, sizeof(long))) ^ PasswordCheckLockNamespace;
+        await context.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock({lockKey});",
             cancellationToken);
     }
 
