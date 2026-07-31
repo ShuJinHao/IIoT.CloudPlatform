@@ -321,6 +321,69 @@ public sealed class PersistenceBoundaryArchitectureTests
     }
 
     [Fact]
+    public void PersistenceInventory_ShouldDiscoverResolvedIdentityMutationsFromManagerAndStoreContracts()
+    {
+        const string source =
+            """
+            using IIoT.EntityFrameworkCore.Identity;
+            using Microsoft.AspNetCore.Identity;
+
+            public sealed class UnsafeIdentityWriter(
+                UserManager<ApplicationUser> userManager,
+                IUserLockoutStore<ApplicationUser> lockoutStore)
+            {
+                public Task<IdentityResult> SetLockoutAsync(ApplicationUser user)
+                    => userManager.SetLockoutEndDateAsync(
+                        user,
+                        DateTimeOffset.UtcNow.AddMinutes(5));
+
+                public Task<IdentityResult> RefreshStampAsync(ApplicationUser user)
+                    => userManager.UpdateSecurityStampAsync(user);
+
+                public Task SetStoreLockoutAsync(
+                    ApplicationUser user,
+                    CancellationToken cancellationToken)
+                    => lockoutStore.SetLockoutEndDateAsync(
+                        user,
+                        DateTimeOffset.UtcNow.AddMinutes(5),
+                        cancellationToken);
+            }
+            """;
+
+        var entries = PersistenceWriteInventory.DiscoverSnippet(source)
+            .UnclassifiedEntries;
+
+        Assert.Equal(3, entries.Count);
+        Assert.All(entries, entry => Assert.Contains("identity-write", entry.SinkKinds));
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldFailClosedForUnknownIdentityManagerMethods()
+    {
+        const string source =
+            """
+            using IIoT.EntityFrameworkCore.Identity;
+            using Microsoft.AspNetCore.Identity;
+
+            public sealed class FutureIdentityWriter(
+                UserManager<ApplicationUser> userManager)
+            {
+                public Task<IdentityResult> WriteAsync(ApplicationUser user)
+                    => userManager.FutureMutationAsync(user);
+            }
+            """;
+
+        var inventory = PersistenceWriteInventory.DiscoverSnippet(source);
+
+        Assert.Empty(inventory.Entries);
+        Assert.Contains(
+            inventory.UnresolvedCandidates,
+            candidate => candidate.Contains(
+                "FutureMutationAsync",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void PersistenceInventory_ShouldRequireExactCallableEvidenceBinding()
     {
         const string source =

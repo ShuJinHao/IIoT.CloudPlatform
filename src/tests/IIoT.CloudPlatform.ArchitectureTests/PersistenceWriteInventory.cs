@@ -46,27 +46,101 @@ internal static class PersistenceWriteInventory
             "Execute",
             "ExecuteAsync");
 
-    private static readonly ImmutableHashSet<string> IdentityCandidateNames =
+    // These are read-only allowlists: an unknown future Identity API is
+    // deliberately treated as a write until its semantics are reviewed.
+    private static readonly ImmutableHashSet<string> IdentityStoreReadOnlyMethodNames =
         ImmutableHashSet.Create(
             StringComparer.Ordinal,
-            "CreateAsync",
-            "UpdateAsync",
-            "DeleteAsync",
-            "AddToRoleAsync",
-            "RemoveFromRoleAsync",
-            "ResetPasswordAsync",
-            "RemoveFromRolesAsync",
-            "AddClaimAsync",
-            "AddClaimsAsync",
-            "RemoveClaimAsync",
-            "RemoveClaimsAsync",
-            "AddPasswordAsync",
-            "RemovePasswordAsync",
-            "ChangePasswordAsync",
-            "SetPasswordHashAsync",
-            "AccessFailedAsync",
-            "ResetAccessFailedCountAsync",
-            "SetLockoutEnabledAsync");
+            "CountCodesAsync",
+            "FindByEmailAsync",
+            "FindByIdAsync",
+            "FindByLoginAsync",
+            "FindByNameAsync",
+            "FindByPasskeyIdAsync",
+            "FindPasskeyAsync",
+            "GetAccessFailedCountAsync",
+            "GetAuthenticatorKeyAsync",
+            "GetClaimsAsync",
+            "GetEmailAsync",
+            "GetEmailConfirmedAsync",
+            "GetLockoutEnabledAsync",
+            "GetLockoutEndDateAsync",
+            "GetLoginsAsync",
+            "GetNormalizedEmailAsync",
+            "GetNormalizedRoleNameAsync",
+            "GetNormalizedUserNameAsync",
+            "GetPasskeysAsync",
+            "GetPasswordHashAsync",
+            "GetPhoneNumberAsync",
+            "GetPhoneNumberConfirmedAsync",
+            "GetRoleIdAsync",
+            "GetRoleNameAsync",
+            "GetRolesAsync",
+            "GetSecurityStampAsync",
+            "GetTokenAsync",
+            "GetTwoFactorEnabledAsync",
+            "GetUserIdAsync",
+            "GetUserNameAsync",
+            "GetUsersForClaimAsync",
+            "GetUsersInRoleAsync",
+            "HasPasswordAsync",
+            "IsInRoleAsync");
+
+    private static readonly ImmutableHashSet<string> IdentityManagerReadOnlyMethodNames =
+        ImmutableHashSet.Create(
+            StringComparer.Ordinal,
+            "CheckPasswordAsync",
+            "CountRecoveryCodesAsync",
+            "CreateSecurityTokenAsync",
+            "FindByEmailAsync",
+            "FindByIdAsync",
+            "FindByLoginAsync",
+            "FindByNameAsync",
+            "FindByPasskeyIdAsync",
+            "GenerateChangeEmailTokenAsync",
+            "GenerateChangePhoneNumberTokenAsync",
+            "GenerateConcurrencyStampAsync",
+            "GenerateEmailConfirmationTokenAsync",
+            "GenerateNewAuthenticatorKey",
+            "GeneratePasswordResetTokenAsync",
+            "GenerateTwoFactorTokenAsync",
+            "GenerateUserTokenAsync",
+            "GetAccessFailedCountAsync",
+            "GetAuthenticationTokenAsync",
+            "GetAuthenticatorKeyAsync",
+            "GetClaimsAsync",
+            "GetEmailAsync",
+            "GetLockoutEnabledAsync",
+            "GetLockoutEndDateAsync",
+            "GetLoginsAsync",
+            "GetPasskeyAsync",
+            "GetPasskeysAsync",
+            "GetPhoneNumberAsync",
+            "GetRoleIdAsync",
+            "GetRoleNameAsync",
+            "GetRolesAsync",
+            "GetSecurityStampAsync",
+            "GetTwoFactorEnabledAsync",
+            "GetUserAsync",
+            "GetUserId",
+            "GetUserIdAsync",
+            "GetUserName",
+            "GetUserNameAsync",
+            "GetUsersForClaimAsync",
+            "GetUsersInRoleAsync",
+            "GetValidTwoFactorProvidersAsync",
+            "HasPasswordAsync",
+            "IsEmailConfirmedAsync",
+            "IsInRoleAsync",
+            "IsLockedOutAsync",
+            "IsPhoneNumberConfirmedAsync",
+            "NormalizeEmail",
+            "NormalizeKey",
+            "NormalizeName",
+            "RoleExistsAsync",
+            "VerifyChangePhoneNumberTokenAsync",
+            "VerifyTwoFactorTokenAsync",
+            "VerifyUserTokenAsync");
 
     private static readonly PersistenceEvidence ArchitectureEvidence = new(
         "src/tests/IIoT.CloudPlatform.ArchitectureTests/PersistenceBoundaryArchitectureTests.cs",
@@ -1295,22 +1369,159 @@ internal static class PersistenceWriteInventory
             return true;
         }
 
-        if (namespaceName.StartsWith("Microsoft.AspNetCore.Identity", StringComparison.Ordinal) &&
-            (method.Name is "CreateAsync" or "UpdateAsync" or "DeleteAsync" or
-             "AddToRoleAsync" or "RemoveFromRoleAsync" or "ResetPasswordAsync" or
-             "RemoveFromRolesAsync" or "AddClaimAsync" or "AddClaimsAsync" or
-             "RemoveClaimAsync" or "RemoveClaimsAsync" or "AddPasswordAsync" or
-             "RemovePasswordAsync" or "ChangePasswordAsync" or
-             "SetPasswordHashAsync" or "AccessFailedAsync" or
-             "ResetAccessFailedCountAsync" or "SetLockoutEnabledAsync"))
+        if (IsIdentityManagerMutation(method) ||
+            IsIdentityStoreMutation(method))
         {
-            kind = "identity-seed";
+            kind = "identity-write";
             return true;
         }
 
         kind = string.Empty;
         return false;
     }
+
+    private static bool IsIdentityManagerMutation(IMethodSymbol method)
+    {
+        if (!IsIdentityManagerType(method.ContainingType))
+        {
+            return false;
+        }
+
+        if (IsIdentityStoreMutationName(
+                method.ContainingAssembly,
+                method.Name) ||
+            IsIdentityResultTask(method.ReturnType) ||
+            method.Name == "GenerateNewTwoFactorRecoveryCodesAsync" ||
+            method.Name.StartsWith("UpdateNormalized", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (method.Name is "Dispose" or "RegisterTokenProvider" or
+            "CreateSecurityTokenAsync")
+        {
+            return false;
+        }
+
+        return !IdentityManagerReadOnlyMethodNames.Contains(method.Name);
+    }
+
+    private static bool IsIdentityStoreMutation(IMethodSymbol method)
+    {
+        var type = method.ContainingType;
+        if (type is null)
+        {
+            return false;
+        }
+
+        foreach (var contract in GetIdentityStoreContracts(type))
+        {
+            foreach (var contractMethod in contract.GetMembers(method.Name)
+                         .OfType<IMethodSymbol>()
+                         .Where(IsIdentityStoreMutationContractMethod))
+            {
+                var implementation = type.TypeKind == TypeKind.Interface &&
+                                     SymbolEqualityComparer.Default.Equals(type, contract)
+                    ? contractMethod
+                    : type.FindImplementationForInterfaceMember(contractMethod) as IMethodSymbol;
+                if (implementation is not null &&
+                    SymbolEqualityComparer.Default.Equals(
+                        implementation.OriginalDefinition,
+                        method.OriginalDefinition))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsIdentityStoreMutationName(
+        IAssemblySymbol assembly,
+        string methodName)
+    {
+        var identityNamespace = GetNamespace(
+            assembly.GlobalNamespace,
+            "Microsoft",
+            "AspNetCore",
+            "Identity");
+        return identityNamespace is not null &&
+               identityNamespace.GetTypeMembers()
+                   .Where(IsIdentityStoreContract)
+                   .SelectMany(type => type.GetMembers(methodName))
+                   .OfType<IMethodSymbol>()
+                   .Any(IsIdentityStoreMutationContractMethod);
+    }
+
+    private static INamespaceSymbol? GetNamespace(
+        INamespaceSymbol root,
+        params string[] segments)
+    {
+        var current = root;
+        foreach (var segment in segments)
+        {
+            current = current.GetNamespaceMembers().SingleOrDefault(candidate =>
+                string.Equals(candidate.Name, segment, StringComparison.Ordinal));
+            if (current is null)
+            {
+                return null;
+            }
+        }
+
+        return current;
+    }
+
+    private static IEnumerable<INamedTypeSymbol> GetIdentityStoreContracts(
+        INamedTypeSymbol type)
+    {
+        if (IsIdentityStoreContract(type))
+        {
+            yield return type;
+        }
+
+        foreach (var contract in type.AllInterfaces.Where(IsIdentityStoreContract))
+        {
+            yield return contract;
+        }
+    }
+
+    private static bool IsIdentityStoreContract(INamedTypeSymbol type)
+        => type.TypeKind == TypeKind.Interface &&
+           type.Name.EndsWith("Store", StringComparison.Ordinal) &&
+           type.ContainingNamespace.ToDisplayString() ==
+           "Microsoft.AspNetCore.Identity";
+
+    private static bool IsIdentityStoreMutationContractMethod(IMethodSymbol method)
+        => !IdentityStoreReadOnlyMethodNames.Contains(method.Name);
+
+    private static bool IsIdentityResultTask(ITypeSymbol returnType)
+        => returnType is INamedTypeSymbol
+           {
+               Name: "Task",
+               TypeArguments.Length: 1
+           } task &&
+           task.ContainingNamespace.ToDisplayString() == "System.Threading.Tasks" &&
+           task.TypeArguments[0].ToDisplayString() ==
+           "Microsoft.AspNetCore.Identity.IdentityResult";
+
+    private static bool IsIdentityManagerType(INamedTypeSymbol? type)
+    {
+        for (var current = type; current is not null; current = current.BaseType)
+        {
+            if (current.ContainingNamespace.ToDisplayString() ==
+                    "Microsoft.AspNetCore.Identity" &&
+                current.MetadataName is "UserManager`1" or "RoleManager`1")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsIdentityStoreType(INamedTypeSymbol? type)
+        => type is not null && GetIdentityStoreContracts(type).Any();
 
     private static bool IsIiotRepositoryOrStore(INamedTypeSymbol? type)
     {
@@ -1515,6 +1726,13 @@ internal static class PersistenceWriteInventory
         SimpleNameSyntax reference,
         SemanticModel semanticModel)
     {
+        var symbolInfo = semanticModel.GetSymbolInfo(reference);
+        if (symbolInfo.Symbol is not null &&
+            symbolInfo.Symbol is not IMethodSymbol)
+        {
+            return false;
+        }
+
         var name = reference.Identifier.ValueText;
         if (FailClosedCandidateNames.Contains(name))
         {
@@ -1531,11 +1749,10 @@ internal static class PersistenceWriteInventory
             ?? string.Empty;
         return (DapperCandidateNames.Contains(name) &&
                 IsDatabaseConnectionType(receiverType)) ||
-               (IdentityCandidateNames.Contains(name) &&
-                (namespaceName.StartsWith(
-                     "Microsoft.AspNetCore.Identity",
-                     StringComparison.Ordinal) ||
-                 namespaceName.StartsWith("OpenIddict", StringComparison.Ordinal)));
+               IsIdentityManagerType(receiverType as INamedTypeSymbol) ||
+               IsIdentityStoreType(receiverType as INamedTypeSymbol) ||
+               (namespaceName.StartsWith("OpenIddict", StringComparison.Ordinal) &&
+                name is "CreateAsync" or "UpdateAsync" or "DeleteAsync");
     }
 
     private static ITypeSymbol? GetReceiverType(
