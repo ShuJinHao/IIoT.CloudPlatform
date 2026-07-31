@@ -93,7 +93,6 @@ internal static class PersistenceWriteInventory
     private static readonly ImmutableHashSet<string> IdentityManagerReadOnlyMethodNames =
         ImmutableHashSet.Create(
             StringComparer.Ordinal,
-            "CheckPasswordAsync",
             "CountRecoveryCodesAsync",
             "CreateSecurityTokenAsync",
             "FindByEmailAsync",
@@ -1446,7 +1445,11 @@ internal static class PersistenceWriteInventory
              "ExecuteReader" or "ExecuteReaderAsync" or
              "ExecuteScalar" or "ExecuteScalarAsync") &&
             (InheritsFrom(type, "System.Data.Common.DbCommand") ||
-             typeName is "System.Data.IDbCommand" or "System.Data.Common.DbCommand"))
+             InheritsFrom(type, "System.Data.Common.DbBatch") ||
+             typeName is
+                 "System.Data.IDbCommand" or
+                 "System.Data.Common.DbCommand" or
+                 "System.Data.Common.DbBatch"))
         {
             kind = "db-command-write";
             return true;

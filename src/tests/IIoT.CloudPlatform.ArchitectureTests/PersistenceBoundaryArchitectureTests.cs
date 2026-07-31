@@ -415,6 +415,28 @@ public sealed class PersistenceBoundaryArchitectureTests
     }
 
     [Fact]
+    public void PersistenceInventory_ShouldTreatPasswordRehashCheckAsIdentityWrite()
+    {
+        const string source =
+            """
+            using IIoT.EntityFrameworkCore.Identity;
+            using Microsoft.AspNetCore.Identity;
+
+            public sealed class UnsafePasswordCheck(
+                UserManager<ApplicationUser> userManager)
+            {
+                public Task<bool> CheckAsync(ApplicationUser user, string password)
+                    => userManager.CheckPasswordAsync(user, password);
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(source).UnclassifiedEntries);
+
+        Assert.Contains("identity-write", entry.SinkKinds);
+    }
+
+    [Fact]
     public void PersistenceInventory_ShouldFailClosedForUnknownIdentityManagerMethods()
     {
         const string source =
@@ -625,6 +647,31 @@ public sealed class PersistenceBoundaryArchitectureTests
                 {
                     _ = await command.ExecuteScalarAsync(cancellationToken);
                     await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+                }
+            }
+            """;
+
+        var inventory = PersistenceWriteInventory.DiscoverSnippet(source);
+        var entry = Assert.Single(inventory.UnclassifiedEntries);
+
+        Assert.Equal(["db-command-write"], entry.SinkKinds);
+        Assert.Empty(inventory.UnresolvedCandidates);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldTreatDbBatchExecutionsAsPotentialWrites()
+    {
+        const string source =
+            """
+            using System.Data.Common;
+
+            public sealed class BatchWriter(DbBatch batch)
+            {
+                public async Task WriteAsync(CancellationToken cancellationToken)
+                {
+                    _ = await batch.ExecuteNonQueryAsync(cancellationToken);
+                    _ = await batch.ExecuteScalarAsync(cancellationToken);
+                    await using var reader = await batch.ExecuteReaderAsync(cancellationToken);
                 }
             }
             """;
