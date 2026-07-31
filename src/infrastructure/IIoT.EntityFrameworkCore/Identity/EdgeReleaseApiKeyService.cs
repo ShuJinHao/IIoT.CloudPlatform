@@ -355,18 +355,20 @@ public sealed class EdgeReleaseApiKeyService(IIoTDbContext dbContext) : IEdgeRel
             return InvalidKeyResult();
         }
 
-        if (!entity!.LastUsedAtUtc.HasValue || entity.LastUsedAtUtc.Value < usedAtUtc)
+        for (var compareExchangeAttempt = 0;
+             !entity!.LastUsedAtUtc.HasValue || entity.LastUsedAtUtc.Value < usedAtUtc;
+             compareExchangeAttempt++)
         {
             var entityId = entity.Id;
-            var baselineRowVersion = entity.RowVersion;
             var baselineLastUsedAtUtc = entity.LastUsedAtUtc;
-            await context.EdgeReleaseApiKeys
+            var baselineExpiresAtUtc = entity.ExpiresAtUtc;
+            var updated = await context.EdgeReleaseApiKeys
                 .Where(key =>
                     key.Id == entityId
                     && key.KeyHash == keyHash
                     && key.Status == EdgeReleaseApiKeyStatuses.Active
                     && !key.RevokedAtUtc.HasValue
-                    && key.RowVersion == baselineRowVersion
+                    && key.ExpiresAtUtc == baselineExpiresAtUtc
                     && key.LastUsedAtUtc == baselineLastUsedAtUtc)
                 .ExecuteUpdateAsync(
                     updates => updates.SetProperty(
@@ -384,8 +386,9 @@ public sealed class EdgeReleaseApiKeyService(IIoTDbContext dbContext) : IEdgeRel
                 return InvalidKeyResult();
             }
 
-            if (!entity!.LastUsedAtUtc.HasValue
-                || entity.LastUsedAtUtc.Value < usedAtUtc)
+            if ((!entity!.LastUsedAtUtc.HasValue
+                 || entity.LastUsedAtUtc.Value < usedAtUtc)
+                && (updated > 0 || compareExchangeAttempt >= 2))
             {
                 throw new CloudWriteCommitUnknownException();
             }
