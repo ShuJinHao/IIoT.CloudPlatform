@@ -177,11 +177,30 @@ public sealed class PersistenceBoundaryArchitectureTests
             "DeviceDeletionTransactionLock.AcquireAsync",
             refreshTokenSource,
             StringComparison.Ordinal);
+        var refreshTokenRoot = CSharpSyntaxTree
+            .ParseText(refreshTokenSource)
+            .GetRoot();
+        var protectedRefreshTokenMethods = refreshTokenRoot
+            .DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Where(invocation =>
+                invocation.Expression.ToString()
+                    == "DeviceDeletionTransactionLock.AcquireAsync")
+            .Select(invocation => invocation
+                .Ancestors()
+                .OfType<MethodDeclarationSyntax>()
+                .First()
+                .Identifier
+                .ValueText)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
         Assert.Equal(
-            2,
-            refreshTokenSource.Split(
-                "DeviceDeletionTransactionLock.AcquireAsync",
-                StringSplitOptions.None).Length - 1);
+            [
+                "IssueAttemptAsync",
+                "RevokeSubjectAttemptAsync",
+                "RotateAttemptAsync"
+            ],
+            protectedRefreshTokenMethods);
         Assert.True(
             implementationSource.IndexOf(
                 "CreateExecutionStrategy()",
