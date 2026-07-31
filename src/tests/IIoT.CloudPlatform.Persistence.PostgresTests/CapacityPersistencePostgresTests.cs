@@ -1,9 +1,13 @@
 using Dapper;
+using IIoT.Core.Production.Contracts.PassStation;
 using IIoT.Core.Production.Contracts.RecordRepositories;
 using IIoT.Dapper;
 using IIoT.Dapper.Production.QueryServices.Capacity;
 using IIoT.Dapper.Production.Repositories.Capacities;
+using IIoT.Dapper.Production.Repositories.DeviceLogs;
+using IIoT.Dapper.Production.Repositories.PassStations;
 using IIoT.Dapper.TypeHandlers;
+using IIoT.SharedKernel.Paging;
 using Npgsql;
 
 namespace IIoT.CloudPlatform.Persistence.PostgresTests;
@@ -106,6 +110,31 @@ public sealed class CapacityPersistencePostgresTests(
                 cancellationToken: budget.Token);
             Assert.Equal(["CP07", "CP09"], hourlyRange.Select(item => item.PlcName));
 
+            var hourlyAggregate = Assert.Single(
+                await queryService.GetHourlyAggregateAsync(
+                    date,
+                    deviceIds: [device.DeviceId],
+                    cancellationToken: budget.Token));
+            Assert.Equal(10, hourlyAggregate.TotalCount);
+            Assert.Equal("10:00-10:30", hourlyAggregate.TimeLabel);
+
+            var daily = await queryService.GetSummaryByDeviceIdAsync(
+                device.DeviceId,
+                date,
+                cancellationToken: budget.Token);
+            Assert.NotNull(daily);
+            Assert.Equal(10, daily.TotalCount);
+
+            var paged = await queryService.GetDailyPagedAsync(
+                new Pagination { PageNumber = 1, PageSize = 10 },
+                date,
+                deviceIds: [device.DeviceId],
+                cancellationToken: budget.Token);
+            var pagedItem = Assert.Single(paged.Items);
+            Assert.Equal(1, paged.TotalCount);
+            Assert.Equal(10, pagedItem.TotalCount);
+            Assert.Equal(90m, pagedItem.OkRate);
+
             var aggregate = Assert.Single(
                 await queryService.GetSummaryRangeAsync(
                     device.DeviceId,
@@ -123,6 +152,76 @@ public sealed class CapacityPersistencePostgresTests(
             Assert.Equal(10, aggregate.TotalCount);
             Assert.Equal(["CP07", "CP09"], byPlc.Select(item => item.PlcName));
             Assert.Equal(aggregate.TotalCount, byPlc.Sum(item => item.TotalCount));
+        }
+        finally
+        {
+            await CleanupAsync(
+                budget.ConnectionString,
+                device.DeviceId,
+                device.ProcessId);
+        }
+    }
+
+    [Fact]
+    public async Task PassStationAndDeviceLogWrites_ShouldRemainIdempotent()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        var device = await InsertDeviceAsync(budget.ConnectionString, budget.Token);
+        var connectionFactory = new NpgsqlConnectionFactory(budget.ConnectionString);
+        var passStations = new PassStationRecordRepository(connectionFactory);
+        var deviceLogs = new DeviceLogRecordRepository(connectionFactory);
+        var observedAtUtc = DateTime.UtcNow;
+        var deduplicationKey = Guid.NewGuid().ToString("N");
+        var passStation = new PassStationRecordWriteModel(
+            Guid.NewGuid(),
+            device.DeviceId,
+            "ap-station",
+            "BC-RETRY",
+            "OK",
+            observedAtUtc,
+            observedAtUtc,
+            deduplicationKey,
+            "{\"result\":\"OK\"}");
+        var deviceLog = new DeviceLogWriteModel(
+            Guid.NewGuid(),
+            device.DeviceId,
+            "Information",
+            "retry-safe-log",
+            observedAtUtc,
+            observedAtUtc,
+            deduplicationKey);
+
+        try
+        {
+            await passStations.InsertBatchAsync([passStation], budget.Token);
+            await passStations.InsertBatchAsync(
+                [passStation with { Id = Guid.NewGuid() }],
+                budget.Token);
+            await deviceLogs.InsertBatchAsync([deviceLog], budget.Token);
+            await deviceLogs.InsertBatchAsync(
+                [deviceLog with { Id = Guid.NewGuid() }],
+                budget.Token);
+
+            await using var connection = new NpgsqlConnection(
+                budget.ConnectionString);
+            Assert.Equal(
+                1,
+                await connection.ExecuteScalarAsync<int>(
+                    """
+                    select count(*)
+                    from pass_station_records
+                    where device_id = @deviceId and deduplication_key = @key;
+                    """,
+                    new { deviceId = device.DeviceId, key = deduplicationKey }));
+            Assert.Equal(
+                1,
+                await connection.ExecuteScalarAsync<int>(
+                    """
+                    select count(*)
+                    from device_logs
+                    where device_id = @deviceId and idempotency_key = @key;
+                    """,
+                    new { deviceId = device.DeviceId, key = deduplicationKey }));
         }
         finally
         {
@@ -192,6 +291,8 @@ public sealed class CapacityPersistencePostgresTests(
         await connection.OpenAsync(cleanup.Token);
         await using var command = connection.CreateCommand();
         command.CommandText = """
+            DELETE FROM pass_station_records WHERE device_id = @device_id;
+            DELETE FROM device_logs WHERE device_id = @device_id;
             DELETE FROM hourly_capacity WHERE device_id = @device_id;
             DELETE FROM devices WHERE id = @device_id;
             DELETE FROM mfg_processes WHERE id = @process_id;

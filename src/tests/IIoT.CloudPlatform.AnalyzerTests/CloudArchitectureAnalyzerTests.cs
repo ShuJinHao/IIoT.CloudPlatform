@@ -708,6 +708,105 @@ public sealed class CloudArchitectureAnalyzerTests
     }
 
     [Fact]
+    public async Task ReadOnlyPortWithUnresolvedDapperSql_FailsClosed()
+    {
+        var dapper = CreateReference(
+            "Dapper",
+            "namespace Dapper { public enum CommandFlags { Buffered = 1 } public readonly struct CommandDefinition { public CommandDefinition(string sql, object? parameters = null, System.Data.IDbTransaction? transaction = null, int? timeout = null, System.Data.CommandType? commandType = null, CommandFlags flags = CommandFlags.Buffered, System.Threading.CancellationToken cancellationToken = default) { } } public static class SqlMapper { public static int Query(object db, CommandDefinition command) => 1; } }");
+        var source = AiReadPrelude + AuthorizedQuery + """
+            public interface IUnsafeQueryPort
+                : IIoT.SharedKernel.Architecture.IReadOnlyQueryPort
+            {
+                System.Threading.Tasks.Task<int> ReadAsync(string sql);
+            }
+
+            public sealed class UnsafeQueryPort(object db) : IUnsafeQueryPort
+            {
+                public System.Threading.Tasks.Task<int> ReadAsync(string sql)
+                    => System.Threading.Tasks.Task.FromResult(
+                        Dapper.SqlMapper.Query(
+                            db,
+                            new Dapper.CommandDefinition(sql)));
+            }
+
+            public sealed class Handler(IUnsafeQueryPort port)
+                : IIoT.SharedKernel.Messaging.IQueryHandler<Query, int>
+            {
+                public System.Threading.Tasks.Task<int> Handle(
+                    Query request,
+                    System.Threading.CancellationToken token)
+                    => port.ReadAsync(request.ToString()!);
+            }
+            """;
+
+        var diagnostics = await AnalyzeAsync(
+            "IIoT.Dapper.Fixture.UnresolvedReadOnlyPort",
+            [source],
+            dapper);
+
+        Assert.Contains(
+            diagnostics,
+            diagnostic => diagnostic.Id == "CLOUDARCH004");
+    }
+
+    [Fact]
+    public async Task SameNamedReadOnlyCommandFromDifferentAssembly_FailsClosed()
+    {
+        var dapper = CreateReference(
+            "Dapper",
+            "namespace Dapper { public enum CommandFlags { Buffered = 1 } public readonly struct CommandDefinition { public CommandDefinition(string sql, object? parameters = null, System.Data.IDbTransaction? transaction = null, int? timeout = null, System.Data.CommandType? commandType = null, CommandFlags flags = CommandFlags.Buffered, System.Threading.CancellationToken cancellationToken = default) { } } public static class SqlMapper { public static int Query(object db, CommandDefinition command) => 1; } }");
+        var source = AiReadPrelude + AuthorizedQuery + """
+            namespace IIoT.Dapper
+            {
+                internal readonly struct ReadOnlyCommandDefinition
+                {
+                    private readonly global::Dapper.CommandDefinition command;
+                    public ReadOnlyCommandDefinition(
+                        string sql,
+                        object? parameters = null,
+                        System.Data.IDbTransaction? transaction = null,
+                        int? timeout = null,
+                        System.Data.CommandType? commandType = null,
+                        global::Dapper.CommandFlags flags =
+                            global::Dapper.CommandFlags.Buffered,
+                        System.Threading.CancellationToken cancellationToken = default)
+                        => command = new global::Dapper.CommandDefinition(
+                            sql,
+                            parameters,
+                            transaction,
+                            timeout,
+                            commandType,
+                            flags,
+                            cancellationToken);
+                    public static implicit operator global::Dapper.CommandDefinition(
+                        ReadOnlyCommandDefinition value) => value.command;
+                }
+            }
+
+            public sealed class Handler(object db)
+                : IIoT.SharedKernel.Messaging.IQueryHandler<Query, int>
+            {
+                public System.Threading.Tasks.Task<int> Handle(
+                    Query request,
+                    System.Threading.CancellationToken token)
+                {
+                    var command = new IIoT.Dapper.ReadOnlyCommandDefinition(
+                        request.ToString()!);
+                    return System.Threading.Tasks.Task.FromResult(
+                        Dapper.SqlMapper.Query(db, command));
+                }
+            }
+            """;
+
+        var diagnostics = await AnalyzeAsync(
+            "IIoT.ProductionService.Fixture.ReadOnlyCommandImpostor",
+            [source],
+            dapper);
+
+        AssertSingleById(diagnostics, "CLOUDARCH004");
+    }
+
+    [Fact]
     public async Task AiReadCompilerImplicitCallsAndHandlerLifecycle_ReportWritePaths()
     {
         var source = AiReadPrelude + AuthorizedQuery + """
@@ -1246,7 +1345,8 @@ public sealed class CloudArchitectureAnalyzerTests
                     _ = Dapper.SqlMapper.Query(db, "SELECT mutate_business_state()");
                     _ = Dapper.SqlMapper.Query(db, "SELECT \"mutate_business_state\"()");
                     _ = Dapper.SqlMapper.Query(db, "SELECT \"custom_schema\".\"mutate_business_state\"()");
-                    _ = Dapper.SqlMapper.Query(db, "SELECT COUNT(*), LOWER('SAFE') FROM devices");
+                    _ = Dapper.SqlMapper.Query(db, "SELECT lower(1)");
+                    _ = Dapper.SqlMapper.Query(db, "SELECT pg_catalog.count(*) FROM devices");
                     _ = Dapper.SqlMapper.Query(db, "SELECT \"column\" FROM devices");
                     return System.Threading.Tasks.Task.FromResult(1);
                 }
@@ -1258,7 +1358,7 @@ public sealed class CloudArchitectureAnalyzerTests
             [source],
             dapper);
 
-        Assert.Equal(6, diagnostics.Length);
+        Assert.Equal(7, diagnostics.Length);
         Assert.All(diagnostics, diagnostic => Assert.Equal("CLOUDARCH004", diagnostic.Id));
     }
 

@@ -21,11 +21,6 @@ public interface IIdentityAccountStore
         Guid id,
         CancellationToken cancellationToken = default);
 
-    Task<Result<bool>> SetEnabledAsync(
-        Guid id,
-        bool isEnabled,
-        CancellationToken cancellationToken = default);
-
     Task<Result<IdentityAccountCompareExchangeOutcome>> CompareExchangeStateAsync(
         Guid id,
         IdentityAccountStateSnapshot expected,

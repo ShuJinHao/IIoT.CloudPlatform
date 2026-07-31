@@ -22,6 +22,7 @@ using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.Contracts.Events.Capacities;
+using IIoT.SharedKernel.Architecture;
 using IIoT.SharedKernel.Configuration;
 using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Result;
@@ -45,100 +46,33 @@ namespace IIoT.CloudPlatform.ArchitectureTests;
 public sealed class PersistenceBoundaryArchitectureTests
 {
     [Fact]
-    public void SharedAndMigrationWriteEntrypoints_ShouldHaveExplicitRecoveryClassification()
+    public void ProductionPersistenceWriteEntrypoints_ShouldBeDynamicallyClassified()
     {
-        var entries = new[]
-        {
-            new WriteBoundaryEntry(
-                "src/infrastructure/IIoT.EntityFrameworkCore/Uploads/EfUploadReceiveRegistry.cs",
-                "exact-recovery",
-                ["CreateExecutionStrategy()", "ObserveCommitOutcomeAsync", "callbackToken"]),
-            new WriteBoundaryEntry(
-                "src/infrastructure/IIoT.EntityFrameworkCore/Uploads/EfUploadReceiveObservationRetentionPruner.cs",
-                "stable-idempotent",
-                ["CreateExecutionStrategy()", "callbackToken", "CleanupBatchSize"]),
-            new WriteBoundaryEntry(
-                "src/infrastructure/IIoT.EntityFrameworkCore/Auditing/EfAuditTrailService.cs",
-                "exact-recovery",
-                ["CreateExecutionStrategy()", "ObserveCommitOutcomeAsync", "recordId"]),
-            new WriteBoundaryEntry(
-                "src/infrastructure/IIoT.EntityFrameworkCore/Identity/EdgeReleaseApiKeyService.cs",
-                "exact-recovery",
-                ["CreateExecutionStrategy()", "ObserveCreateOutcomeAsync", "ObserveRevokeOutcomeAsync"]),
-            new WriteBoundaryEntry(
-                "src/infrastructure/IIoT.EntityFrameworkCore/Identity/EfRefreshTokenService.cs",
-                "exact-recovery",
-                ["CreateExecutionStrategy()", "ObserveRotationOutcomeAsync", "ReplacementSession", "RefreshTokenSubjectTransactionLock"]),
-            new WriteBoundaryEntry(
-                "src/infrastructure/IIoT.EntityFrameworkCore/Identity/IndependentHumanSessionRevocationService.cs",
-                "exact-recovery",
-                ["CreateExecutionStrategy()", "ObserveOutcomeAsync", "callbackToken", "AcquireForOidcRevocationAsync"]),
-            new WriteBoundaryEntry(
-                "src/infrastructure/IIoT.EntityFrameworkCore/Outbox/OutboxMessageDispatcher.cs",
-                "stable-idempotent",
-                ["callbackToken", "message.Id", "PublishAsync"]),
-            new WriteBoundaryEntry(
-                "src/infrastructure/IIoT.Dapper/Initializers/RecordSchemaInitializer.cs",
-                "stable-idempotent",
-                ["BeginTransactionAsync", "transaction: transaction", "cancellationToken"]),
-            new WriteBoundaryEntry(
-                "src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs",
-                "exact-recovery",
-                ["ExecuteFreshStageAsync", "CreateAsyncScope", "callbackToken"]),
-            new WriteBoundaryEntry(
-                "src/hosts/IIoT.MigrationWorkApp/SeedData/SystemInitData.cs",
-                "exact-recovery",
-                ["SeedRetryTarget", "CheckPasswordAsync", "SingleAdminSeedAdvisoryLockKey"]),
-            new WriteBoundaryEntry(
-                "src/infrastructure/IIoT.EntityFrameworkCore/Identity/OpenIddictClientSeeder.cs",
-                "stable-idempotent",
-                ["FindByClientIdAsync", "CreateAsync", "UpdateAsync"]),
-            new WriteBoundaryEntry(
-                "src/infrastructure/IIoT.EntityFrameworkCore/Identity/HumanSessionRevocationService.cs",
-                "transaction-participant",
-                ["SaveChangesAsync", "AcquireForOidcRevocationAsync"]),
-            new WriteBoundaryEntry(
-                "src/infrastructure/IIoT.EntityFrameworkCore/Repository/EfRepository.cs",
-                "transaction-participant",
-                ["SaveChangesAsync"])
-        };
+        var inventory = PersistenceWriteInventory.DiscoverProduction();
 
-        Assert.Equal(13, entries.Length);
-        Assert.Equal(7, entries.Count(entry => entry.Classification == "exact-recovery"));
-        Assert.Equal(4, entries.Count(entry => entry.Classification == "stable-idempotent"));
-        Assert.Equal(2, entries.Count(entry => entry.Classification == "transaction-participant"));
-
-        foreach (var entry in entries)
-        {
-            var path = CloudRepositoryPath.Find(
-                entry.RelativePath.Split('/', StringSplitOptions.RemoveEmptyEntries));
-            var source = File.ReadAllText(path);
-            foreach (var marker in entry.RequiredMarkers)
-            {
-                Assert.Contains(marker, source, StringComparison.Ordinal);
-            }
-
-            if (entry.Classification == "transaction-participant")
-            {
-                Assert.DoesNotContain("CreateExecutionStrategy()", source, StringComparison.Ordinal);
-            }
-        }
-
-        var employeeMutationFiles = new[]
-        {
-            "UpdateEmployeeRole.cs",
-            "DeactivateEmployee.cs",
-            "TerminateEmployee.cs",
-            "ActivateEmployee.cs"
-        };
-        foreach (var fileName in employeeMutationFiles)
-        {
-            var source = File.ReadAllText(CloudRepositoryPath.Find(
-                "src", "services", "IIoT.EmployeeService", "Commands", "Human",
-                "Employees", fileName));
-            Assert.Contains("ExecuteResilientAsync", source, StringComparison.Ordinal);
-            Assert.Contains("sessionRevocationService.RevokeAllAsync", source, StringComparison.Ordinal);
-        }
+        Assert.NotEmpty(inventory.Entries);
+        Assert.True(
+            inventory.UnresolvedCandidates.Count == 0,
+            "Persistence calls that could not be resolved fail closed:\n" +
+            string.Join("\n", inventory.UnresolvedCandidates));
+        Assert.True(
+            inventory.UnclassifiedEntries.Count == 0,
+            "Unclassified production persistence write entrypoints:\n" +
+            string.Join("\n", inventory.UnclassifiedEntries.Select(entry => entry.Diagnostic)));
+        var entriesWithoutConcreteEvidence = inventory.Entries
+            .Where(entry => entry.Evidence.RelativePath.Contains(
+                "ArchitectureTests",
+                StringComparison.Ordinal))
+            .ToArray();
+        Assert.True(
+            entriesWithoutConcreteEvidence.Length == 0,
+            "Production persistence entries must bind concrete behavior evidence:\n" +
+            string.Join(
+                "\n",
+                entriesWithoutConcreteEvidence.Select(entry => entry.Diagnostic)));
+        Assert.All(
+            inventory.Entries,
+            entry => PersistenceWriteInventory.AssertEvidenceExists(entry.Evidence));
 
         Assert.False(File.Exists(CloudRepositoryPath.Find(
             "src", "services", "IIoT.Services.Contracts", "Contracts", "Messaging",
@@ -146,6 +80,972 @@ public sealed class PersistenceBoundaryArchitectureTests
         Assert.False(File.Exists(CloudRepositoryPath.Find(
             "src", "infrastructure", "IIoT.EntityFrameworkCore", "Outbox",
             "EfIntegrationEventOutbox.cs")));
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldRejectUnprotectedEfWrites()
+    {
+        const string source =
+            """
+            using Microsoft.EntityFrameworkCore;
+
+            public sealed class UnsafeWriter(DbContext context)
+            {
+                public Task<int> WriteAsync(CancellationToken cancellationToken)
+                    => context.SaveChangesAsync(cancellationToken);
+            }
+            """;
+
+        var inventory = PersistenceWriteInventory.DiscoverSnippet(source);
+
+        var entry = Assert.Single(inventory.UnclassifiedEntries);
+        Assert.Contains("ef-save", entry.SinkKinds);
+        Assert.Empty(inventory.UnresolvedCandidates);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldDiscoverUnitOfWorkTransactionReceiverItself()
+    {
+        const string source =
+            """
+            using IIoT.Services.Contracts.Persistence;
+
+            public sealed class UnsafeHostWriter(IUnitOfWork unitOfWork)
+            {
+                public Task WriteAsync(CancellationToken cancellationToken)
+                    => unitOfWork.BeginTransactionAsync(cancellationToken);
+            }
+            """;
+
+        var inventory = PersistenceWriteInventory.DiscoverSnippet(
+            source,
+            "src/hosts/IIoT.HttpApi/UnsafeHostWriter.cs");
+
+        var entry = Assert.Single(inventory.UnclassifiedEntries);
+        Assert.Contains("manual-transaction", entry.SinkKinds);
+        Assert.Empty(inventory.UnresolvedCandidates);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldClassifyWritesInsideResolvedReplayCallback()
+    {
+        const string source =
+            """
+            using IIoT.Services.Contracts.Persistence;
+            using Microsoft.EntityFrameworkCore;
+
+            public sealed class SafeWriter(IUnitOfWork unitOfWork, DbContext context)
+            {
+                public Task<int> WriteAsync(CancellationToken cancellationToken)
+                    => unitOfWork.ExecuteResilientAsync(
+                        callbackToken => context.SaveChangesAsync(callbackToken),
+                        cancellationToken);
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(source).Entries);
+
+        Assert.Equal(
+            PersistenceWriteClassification.ExecutionStrategyReplayRoot,
+            entry.Classification);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldTrackWriterCallersAcrossProjectGraph()
+    {
+        const string writerSource =
+            """
+            using Microsoft.EntityFrameworkCore;
+
+            public sealed class ExternallyCallableWriter(DbContext context)
+            {
+                public Task<int> PersistAsync(CancellationToken cancellationToken)
+                    => context.SaveChangesAsync(cancellationToken);
+            }
+            """;
+        const string protectedCallerSource =
+            """
+            using IIoT.Services.Contracts.Persistence;
+
+            public sealed class LocalProtectedCaller(
+                IUnitOfWork unitOfWork,
+                ExternallyCallableWriter writer)
+            {
+                public Task<int> WriteAsync(CancellationToken cancellationToken)
+                    => unitOfWork.ExecuteResilientAsync(
+                        writer.PersistAsync,
+                        cancellationToken);
+            }
+            """;
+        const string unprotectedCallerSource =
+            """
+            public sealed class ExternalUnprotectedCaller(ExternallyCallableWriter writer)
+            {
+                public Task<int> WriteAsync(CancellationToken cancellationToken)
+                    => writer.PersistAsync(cancellationToken);
+            }
+            """;
+
+        var protectedOnly = PersistenceWriteInventory.DiscoverProjectGraphSnippets(
+            writerSource,
+            protectedCallerSource);
+        var protectedEntry = Assert.Single(protectedOnly.Entries);
+        Assert.Equal(
+            PersistenceWriteClassification.ExecutionStrategyReplayRoot,
+            protectedEntry.Classification);
+        Assert.Empty(protectedOnly.UnresolvedCandidates);
+
+        var mixedCallers = PersistenceWriteInventory.DiscoverProjectGraphSnippets(
+            writerSource,
+            protectedCallerSource,
+            unprotectedCallerSource);
+        var entry = Assert.Single(
+            mixedCallers.UnclassifiedEntries);
+
+        Assert.Contains("ef-save", entry.SinkKinds);
+        Assert.Contains("ExternallyCallableWriter.PersistAsync", entry.Method);
+        Assert.Empty(mixedCallers.UnresolvedCandidates);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldVerifyUnitOfWorkReplayImplementationBody()
+    {
+        const string safeImplementation =
+            """
+            using IIoT.Services.Contracts.Persistence;
+            using Microsoft.EntityFrameworkCore;
+            using Microsoft.EntityFrameworkCore.Storage;
+
+            public sealed class SafeUnitOfWork(IExecutionStrategy strategy) : IUnitOfWork
+            {
+                public Task<TResult> ExecuteResilientAsync<TResult>(
+                    Func<CancellationToken, Task<TResult>> operation,
+                    CancellationToken cancellationToken = default)
+                    => strategy.ExecuteAsync(operation, cancellationToken);
+
+                public Task BeginTransactionAsync(CancellationToken cancellationToken = default)
+                    => Task.CompletedTask;
+                public Task CommitAsync(CancellationToken cancellationToken = default)
+                    => Task.CompletedTask;
+                public Task RollbackAsync(CancellationToken cancellationToken = default)
+                    => Task.CompletedTask;
+            }
+            """;
+        const string unsafeImplementation =
+            """
+            using IIoT.Services.Contracts.Persistence;
+            using Microsoft.EntityFrameworkCore;
+            using Microsoft.EntityFrameworkCore.Storage;
+
+            public sealed class UnsafeUnitOfWork(IExecutionStrategy strategy) : IUnitOfWork
+            {
+                public async Task<TResult> ExecuteResilientAsync<TResult>(
+                    Func<CancellationToken, Task<TResult>> operation,
+                    CancellationToken cancellationToken = default)
+                {
+                    await strategy.ExecuteAsync(
+                        static _ => Task.CompletedTask,
+                        cancellationToken);
+                    return await operation(cancellationToken);
+                }
+
+                public Task BeginTransactionAsync(CancellationToken cancellationToken = default)
+                    => Task.CompletedTask;
+                public Task CommitAsync(CancellationToken cancellationToken = default)
+                    => Task.CompletedTask;
+                public Task RollbackAsync(CancellationToken cancellationToken = default)
+                    => Task.CompletedTask;
+            }
+            """;
+        const string escapedAliasImplementation =
+            """
+            using IIoT.Services.Contracts.Persistence;
+            using Microsoft.EntityFrameworkCore;
+            using Microsoft.EntityFrameworkCore.Storage;
+
+            public sealed class EscapedAliasUnitOfWork(IExecutionStrategy strategy) : IUnitOfWork
+            {
+                public async Task<TResult> ExecuteResilientAsync<TResult>(
+                    Func<CancellationToken, Task<TResult>> operation,
+                    CancellationToken cancellationToken = default)
+                {
+                    var escaped = operation;
+                    _ = await strategy.ExecuteAsync(operation, cancellationToken);
+                    return await escaped(cancellationToken);
+                }
+
+                public Task BeginTransactionAsync(CancellationToken cancellationToken = default)
+                    => Task.CompletedTask;
+                public Task CommitAsync(CancellationToken cancellationToken = default)
+                    => Task.CompletedTask;
+                public Task RollbackAsync(CancellationToken cancellationToken = default)
+                    => Task.CompletedTask;
+            }
+            """;
+        const string caller =
+            """
+            using IIoT.Services.Contracts.Persistence;
+            using Microsoft.EntityFrameworkCore;
+
+            public sealed class Writer(IUnitOfWork unitOfWork, DbContext context)
+            {
+                public Task<int> WriteAsync(CancellationToken cancellationToken)
+                    => unitOfWork.ExecuteResilientAsync(
+                        callbackToken => context.SaveChangesAsync(callbackToken),
+                        cancellationToken);
+            }
+            """;
+
+        Assert.True(
+            PersistenceWriteInventory.VerifyUnitOfWorkReplayImplementationSnippet(
+                safeImplementation));
+        Assert.False(
+            PersistenceWriteInventory.VerifyUnitOfWorkReplayImplementationSnippet(
+                unsafeImplementation));
+        Assert.False(
+            PersistenceWriteInventory.VerifyUnitOfWorkReplayImplementationSnippet(
+                escapedAliasImplementation));
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(
+                caller,
+                unitOfWorkReplayContractVerified: false)
+                .UnclassifiedEntries);
+        Assert.Contains("ef-save", entry.SinkKinds);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldRejectNamedHelperWithoutExecutionStrategy()
+    {
+        const string source =
+            """
+            using Microsoft.EntityFrameworkCore;
+
+            namespace IIoT.EntityFrameworkCore.Identity;
+
+            public sealed class IdentityPasswordService(DbContext context)
+            {
+                public Task<int> WriteAsync(CancellationToken cancellationToken)
+                    => ExecuteRecoverableAsync(
+                        callbackToken => context.SaveChangesAsync(callbackToken),
+                        cancellationToken);
+
+                private static Task<int> ExecuteRecoverableAsync(
+                    Func<CancellationToken, Task<int>> attempt,
+                    CancellationToken cancellationToken)
+                    => attempt(cancellationToken);
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(source).UnclassifiedEntries);
+
+        Assert.Contains("ef-save", entry.SinkKinds);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldRejectNamedHelperThatDoesNotRouteItsAttempt()
+    {
+        const string source =
+            """
+            using Microsoft.EntityFrameworkCore;
+
+            namespace IIoT.EntityFrameworkCore.Identity;
+
+            public sealed class IdentityPasswordService(DbContext context)
+            {
+                public Task<int> WriteAsync(CancellationToken cancellationToken)
+                    => ExecuteRecoverableAsync(
+                        callbackToken => context.SaveChangesAsync(callbackToken),
+                        cancellationToken);
+
+                private async Task<int> ExecuteRecoverableAsync(
+                    Func<CancellationToken, Task<int>> attempt,
+                    CancellationToken cancellationToken)
+                {
+                    var strategy = context.Database.CreateExecutionStrategy();
+                    _ = await strategy.ExecuteAsync(
+                        static _ => Task.FromResult(0),
+                        cancellationToken);
+                    return await attempt(cancellationToken);
+                }
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(source).UnclassifiedEntries);
+
+        Assert.Contains("ef-save", entry.SinkKinds);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldDiscoverResolvedIdentityMutationsFromManagerAndStoreContracts()
+    {
+        const string source =
+            """
+            using IIoT.EntityFrameworkCore.Identity;
+            using Microsoft.AspNetCore.Identity;
+
+            public sealed class UnsafeIdentityWriter(
+                UserManager<ApplicationUser> userManager,
+                IUserLockoutStore<ApplicationUser> lockoutStore)
+            {
+                public Task<IdentityResult> SetLockoutAsync(ApplicationUser user)
+                    => userManager.SetLockoutEndDateAsync(
+                        user,
+                        DateTimeOffset.UtcNow.AddMinutes(5));
+
+                public Task<IdentityResult> RefreshStampAsync(ApplicationUser user)
+                    => userManager.UpdateSecurityStampAsync(user);
+
+                public Task SetStoreLockoutAsync(
+                    ApplicationUser user,
+                    CancellationToken cancellationToken)
+                    => lockoutStore.SetLockoutEndDateAsync(
+                        user,
+                        DateTimeOffset.UtcNow.AddMinutes(5),
+                        cancellationToken);
+            }
+            """;
+
+        var entries = PersistenceWriteInventory.DiscoverSnippet(source)
+            .UnclassifiedEntries;
+
+        Assert.Equal(3, entries.Count);
+        Assert.All(entries, entry => Assert.Contains("identity-write", entry.SinkKinds));
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldTreatPasswordRehashCheckAsIdentityWrite()
+    {
+        const string source =
+            """
+            using IIoT.EntityFrameworkCore.Identity;
+            using Microsoft.AspNetCore.Identity;
+
+            public sealed class UnsafePasswordCheck(
+                UserManager<ApplicationUser> userManager)
+            {
+                public Task<bool> CheckAsync(ApplicationUser user, string password)
+                    => userManager.CheckPasswordAsync(user, password);
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(source).UnclassifiedEntries);
+
+        Assert.Contains("identity-write", entry.SinkKinds);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldFailClosedForUnknownIdentityManagerMethods()
+    {
+        const string source =
+            """
+            using IIoT.EntityFrameworkCore.Identity;
+            using Microsoft.AspNetCore.Identity;
+
+            public sealed class FutureIdentityWriter(
+                UserManager<ApplicationUser> userManager)
+            {
+                public Task<IdentityResult> WriteAsync(ApplicationUser user)
+                    => userManager.FutureMutationAsync(user);
+            }
+            """;
+
+        var inventory = PersistenceWriteInventory.DiscoverSnippet(source);
+
+        Assert.Empty(inventory.Entries);
+        Assert.Contains(
+            inventory.UnresolvedCandidates,
+            candidate => candidate.Contains(
+                "FutureMutationAsync",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldRequireExactCallableEvidenceBinding()
+    {
+        const string source =
+            """
+            using IIoT.Services.Contracts.Persistence;
+            using Microsoft.EntityFrameworkCore;
+
+            namespace IIoT.EmployeeService.Commands.Employees;
+
+            public sealed class NewlyAddedWriter(
+                IUnitOfWork unitOfWork,
+                DbContext context)
+            {
+                public Task<int> WriteAsync(CancellationToken cancellationToken)
+                    => unitOfWork.ExecuteResilientAsync(
+                        callbackToken => context.SaveChangesAsync(callbackToken),
+                        cancellationToken);
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(
+                source,
+                "src/services/IIoT.EmployeeService/Commands/Human/Employees/NewlyAddedWriter.cs")
+                .Entries);
+
+        Assert.Equal(
+            PersistenceWriteClassification.ExecutionStrategyReplayRoot,
+            entry.Classification);
+        Assert.Contains("ArchitectureTests", entry.Evidence.RelativePath, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldRejectWritesEvaluatedAsReplayState()
+    {
+        const string source =
+            """
+            using Microsoft.EntityFrameworkCore;
+            using Microsoft.EntityFrameworkCore.Storage;
+
+            public sealed class StateWriter(
+                IExecutionStrategy strategy,
+                DbContext context)
+            {
+                public Task<int> WriteAsync(CancellationToken cancellationToken)
+                    => strategy.ExecuteAsync(
+                        context.SaveChangesAsync(cancellationToken),
+                        static (pendingSave, _) => pendingSave,
+                        cancellationToken);
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(source).UnclassifiedEntries);
+
+        Assert.Contains("ef-save", entry.SinkKinds);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldRejectAliasedPersistenceMethodGroups()
+    {
+        const string source =
+            """
+            using Microsoft.EntityFrameworkCore;
+
+            public sealed class AliasedWriter(DbContext context)
+            {
+                public Task<int> WriteAsync(CancellationToken cancellationToken)
+                {
+                    Func<CancellationToken, Task<int>> save = context.SaveChangesAsync;
+                    return save(cancellationToken);
+                }
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(source).UnclassifiedEntries);
+
+        Assert.Contains("ef-save-method-group", entry.SinkKinds);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldRejectMethodGroupsEscapingReplayCallbacks()
+    {
+        const string source =
+            """
+            using IIoT.Services.Contracts.Persistence;
+            using Microsoft.EntityFrameworkCore;
+
+            public sealed class DeferredWriter(DbContext context)
+            {
+                public Task<int> PersistAsync(CancellationToken cancellationToken)
+                    => context.SaveChangesAsync(cancellationToken);
+            }
+
+            public sealed class ReplayFactory(
+                IUnitOfWork unitOfWork,
+                DeferredWriter writer)
+            {
+                public Task<Func<CancellationToken, Task<int>>> CreateAsync(
+                    CancellationToken cancellationToken)
+                    => unitOfWork.ExecuteResilientAsync(
+                        _ => Task.FromResult<Func<CancellationToken, Task<int>>>(
+                            writer.PersistAsync),
+                        cancellationToken);
+            }
+
+            public sealed class OutsideCaller(ReplayFactory factory)
+            {
+                public async Task<int> WriteAsync(
+                    CancellationToken cancellationToken)
+                {
+                    var write = await factory.CreateAsync(cancellationToken);
+                    return await write(cancellationToken);
+                }
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(source).UnclassifiedEntries);
+
+        Assert.Contains("ef-save", entry.SinkKinds);
+        Assert.Contains("DeferredWriter.PersistAsync", entry.Method);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldUseSymbolsInsteadOfCommentsOrSafeLanguageConstructs()
+    {
+        const string source =
+            """
+            using IIoT.SharedKernel.Result;
+
+            public sealed class SafeValue
+            {
+                // SaveChangesAsync ExecuteSqlRawAsync BeginTransactionAsync
+                public SafeValue() { }
+
+                public string Name { get; } = "SaveChangesAsync";
+
+                public Result Read() => Result.Success();
+            }
+            """;
+
+        var inventory = PersistenceWriteInventory.DiscoverSnippet(source);
+
+        Assert.Empty(inventory.Entries);
+        Assert.Empty(inventory.UnresolvedCandidates);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldFailClosedWhenPersistenceSymbolCannotResolve()
+    {
+        const string source =
+            """
+            public sealed class UnknownWriter
+            {
+                public async Task WriteAsync(dynamic context)
+                {
+                    await context.SaveChangesAsync();
+                }
+            }
+            """;
+
+        var inventory = PersistenceWriteInventory.DiscoverSnippet(source);
+
+        Assert.Empty(inventory.Entries);
+        Assert.Single(inventory.UnresolvedCandidates);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldFailClosedWhenDapperExtensionCannotResolve()
+    {
+        const string source =
+            """
+            using System.Data;
+
+            public sealed class UnknownDapperWriter(IDbConnection connection)
+            {
+                public Task WriteAsync()
+                    => connection.ExecuteAsync("insert into sample(id) values (1)");
+            }
+            """;
+
+        var inventory = PersistenceWriteInventory.DiscoverSnippet(source);
+
+        Assert.Empty(inventory.Entries);
+        Assert.Single(inventory.UnresolvedCandidates);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldDiscoverDapperResultReturningWrites()
+    {
+        const string source =
+            """
+            using System.Data;
+            using Dapper;
+
+            public sealed class ReturningDapperWriter(IDbConnection connection)
+            {
+                public async Task WriteAsync(CancellationToken cancellationToken)
+                {
+                    _ = await connection.QuerySingleAsync<int>(
+                        "delete from sample returning id");
+                    _ = await connection.ExecuteScalarAsync<int>(
+                        "update sample set value = 1 returning value");
+                    using var reader = await connection.ExecuteReaderAsync(
+                        "insert into sample(value) values (1) returning value");
+                }
+            }
+            """;
+
+        var inventory = PersistenceWriteInventory.DiscoverSnippet(source);
+        var entry = Assert.Single(inventory.UnclassifiedEntries);
+
+        Assert.Equal(["dapper-write"], entry.SinkKinds);
+        Assert.Empty(inventory.UnresolvedCandidates);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldNotTrustReadOnlyPortForConstantDapperDml()
+    {
+        const string source =
+            """
+            using System.Data;
+            using Dapper;
+            using IIoT.SharedKernel.Architecture;
+
+            public interface IUnsafeQueryPort : IReadOnlyQueryPort
+            {
+                Task<int> ReadAsync(CancellationToken cancellationToken);
+            }
+
+            public sealed class UnsafeQueryPort(IDbConnection connection) : IUnsafeQueryPort
+            {
+                public async Task<int> ReadAsync(CancellationToken cancellationToken)
+                {
+                    var command = new CommandDefinition(
+                        "delete from sample returning id",
+                        cancellationToken: cancellationToken);
+                    return await connection.QuerySingleAsync<int>(command);
+                }
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(source).UnclassifiedEntries);
+
+        Assert.Contains("dapper-write", entry.SinkKinds);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldNotTrustReadOnlyPortForUnresolvedDapperSql()
+    {
+        const string source =
+            """
+            using System.Data;
+            using Dapper;
+            using IIoT.SharedKernel.Architecture;
+
+            public interface IUnsafeQueryPort : IReadOnlyQueryPort
+            {
+                Task<int> ReadAsync(string sql, CancellationToken cancellationToken);
+            }
+
+            public sealed class UnsafeQueryPort(IDbConnection connection) : IUnsafeQueryPort
+            {
+                public async Task<int> ReadAsync(
+                    string sql,
+                    CancellationToken cancellationToken)
+                {
+                    var command = new CommandDefinition(
+                        sql,
+                        cancellationToken: cancellationToken);
+                    return await connection.QuerySingleAsync<int>(command);
+                }
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(source).UnclassifiedEntries);
+
+        Assert.Contains("dapper-write", entry.SinkKinds);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldRejectSameNamedReadOnlyCommandImpostors()
+    {
+        const string source =
+            """
+            using System.Data;
+            using Dapper;
+
+            namespace IIoT.Dapper
+            {
+                internal readonly struct ReadOnlyCommandDefinition
+                {
+                    private readonly global::Dapper.CommandDefinition command;
+
+                    public ReadOnlyCommandDefinition(
+                        string commandText,
+                        object? parameters = null,
+                        IDbTransaction? transaction = null,
+                        int? commandTimeout = null,
+                        CommandType? commandType = null,
+                        global::Dapper.CommandFlags flags =
+                            global::Dapper.CommandFlags.Buffered,
+                        CancellationToken cancellationToken = default)
+                        => command = new global::Dapper.CommandDefinition(
+                            commandText,
+                            parameters,
+                            transaction,
+                            commandTimeout,
+                            commandType,
+                            flags,
+                            cancellationToken);
+
+                    public static implicit operator global::Dapper.CommandDefinition(
+                        ReadOnlyCommandDefinition value) => value.command;
+                }
+            }
+
+            public sealed class UnsafeQuery(IDbConnection connection)
+            {
+                public Task<int> ReadAsync(
+                    string sql,
+                    CancellationToken cancellationToken)
+                {
+                    var command = new IIoT.Dapper.ReadOnlyCommandDefinition(
+                        sql,
+                        cancellationToken: cancellationToken);
+                    return connection.QuerySingleAsync<int>(command);
+                }
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(source).UnclassifiedEntries);
+
+        Assert.Contains("dapper-write", entry.SinkKinds);
+    }
+
+    [Theory]
+    [InlineData("delete from sample returning id")]
+    [InlineData("select dangerous_side_effect()")]
+    [InlineData("select lower(value::text) from sample")]
+    [InlineData("select public.lower(value::text) from sample")]
+    [InlineData("select pg_catalog.upper(value::integer) from sample")]
+    [InlineData("select pg_catalog.sum(value::bigint) from sample")]
+    [InlineData("select 1; delete from sample")]
+    public void ReadOnlyCommandDefinition_ShouldRejectUnprovenSql(string sql)
+    {
+        var constructor = GetReadOnlyCommandConstructor();
+
+        var exception = Assert.Throws<System.Reflection.TargetInvocationException>(
+            () => constructor.Invoke(
+            [
+                sql,
+                null,
+                null,
+                null,
+                null,
+                global::Dapper.CommandFlags.Buffered,
+                CancellationToken.None
+            ]));
+
+        Assert.IsType<InvalidOperationException>(exception.InnerException);
+    }
+
+    [Fact]
+    public void ReadOnlyCommandDefinition_ShouldRejectStoredProcedures()
+    {
+        var exception = Assert.Throws<System.Reflection.TargetInvocationException>(
+            () => GetReadOnlyCommandConstructor().Invoke(
+            [
+                "select_apply",
+                null,
+                null,
+                null,
+                System.Data.CommandType.StoredProcedure,
+                global::Dapper.CommandFlags.Buffered,
+                CancellationToken.None
+            ]));
+
+        Assert.IsType<ArgumentOutOfRangeException>(exception.InnerException);
+    }
+
+    [Fact]
+    public void ReadOnlyCommandDefinition_ShouldAcceptProvenSql()
+    {
+        var command = GetReadOnlyCommandConstructor().Invoke(
+        [
+            "select 1",
+            null,
+            null,
+            null,
+            null,
+            global::Dapper.CommandFlags.Buffered,
+            CancellationToken.None
+        ]);
+
+        Assert.NotNull(command);
+    }
+
+    [Theory]
+    [InlineData("select 1")]
+    [InlineData("with sample as (select 1) select * from sample")]
+    [InlineData("select * from sample where id = any(@Ids)")]
+    [InlineData("select pg_catalog.count(*) from sample")]
+    [InlineData("select pg_catalog.upper(name::text) from sample")]
+    [InlineData("select pg_catalog.min(name::text) from sample")]
+    [InlineData("select pg_catalog.sum(value::integer) from sample")]
+    [InlineData("select pg_catalog.max(seen_at::timestamptz) from sample")]
+    [InlineData("select pg_catalog.make_interval(hours => hour::integer, mins => minute::integer) from sample")]
+    public void ReadOnlySqlGuard_ShouldAcceptProvenReadOnlySql(string sql)
+    {
+        Assert.Equal(sql, ReadOnlySqlGuard.Require(sql));
+    }
+
+    private static System.Reflection.ConstructorInfo GetReadOnlyCommandConstructor()
+    {
+        var wrapperType = typeof(IIoT.Dapper.DependencyInjection).Assembly.GetType(
+            "IIoT.Dapper.ReadOnlyCommandDefinition");
+        Assert.NotNull(wrapperType);
+        return Assert.Single(wrapperType.GetConstructors());
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldDiscoverOpenIddictManagerMutations()
+    {
+        const string source =
+            """
+            using OpenIddict.Abstractions;
+
+            public sealed class UnsafeOpenIddictWriter(
+                IOpenIddictAuthorizationManager authorizationManager)
+            {
+                public ValueTask<long> PruneAsync(CancellationToken cancellationToken)
+                    => authorizationManager.PruneAsync(
+                        DateTimeOffset.UtcNow,
+                        cancellationToken);
+
+                public ValueTask<bool> RevokeAsync(
+                    object authorization,
+                    CancellationToken cancellationToken)
+                    => authorizationManager.TryRevokeAsync(
+                        authorization,
+                        cancellationToken);
+
+                public IAsyncEnumerable<object> ReadAsync(
+                    CancellationToken cancellationToken)
+                    => authorizationManager.FindBySubjectAsync(
+                        "subject",
+                        cancellationToken);
+            }
+            """;
+
+        var inventory = PersistenceWriteInventory.DiscoverSnippet(source);
+
+        Assert.Equal(2, inventory.UnclassifiedEntries.Count);
+        Assert.All(
+            inventory.UnclassifiedEntries,
+            entry => Assert.Contains("oidc-write", entry.SinkKinds));
+        Assert.Empty(inventory.UnresolvedCandidates);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldFailClosedForUnknownOpenIddictManagerMethods()
+    {
+        const string source =
+            """
+            using OpenIddict.Abstractions;
+
+            public sealed class FutureOpenIddictWriter(
+                IOpenIddictAuthorizationManager authorizationManager)
+            {
+                public Task WriteAsync(CancellationToken cancellationToken)
+                    => authorizationManager.FutureMutationAsync(cancellationToken);
+            }
+            """;
+
+        var inventory = PersistenceWriteInventory.DiscoverSnippet(source);
+
+        Assert.Empty(inventory.Entries);
+        Assert.Contains(
+            inventory.UnresolvedCandidates,
+            candidate => candidate.Contains(
+                "FutureMutationAsync",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldDiscoverDapperAndDbCommandWritesBySymbol()
+    {
+        const string source =
+            """
+            using System.Data.Common;
+            using Dapper;
+
+            public sealed class SqlWriter(DbConnection connection, DbCommand command)
+            {
+                public async Task WriteAsync(CancellationToken cancellationToken)
+                {
+                    await connection.ExecuteAsync("insert into sample(id) values (1)");
+                    await command.ExecuteNonQueryAsync(cancellationToken);
+                }
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(source).UnclassifiedEntries);
+
+        Assert.Equal(
+            ["dapper-write", "db-command-write"],
+            entry.SinkKinds);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldTreatDbCommandScalarAndReaderAsPotentialWrites()
+    {
+        const string source =
+            """
+            using System.Data.Common;
+
+            public sealed class ReturningSqlWriter(DbCommand command)
+            {
+                public async Task WriteAsync(CancellationToken cancellationToken)
+                {
+                    _ = await command.ExecuteScalarAsync(cancellationToken);
+                    await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+                }
+            }
+            """;
+
+        var inventory = PersistenceWriteInventory.DiscoverSnippet(source);
+        var entry = Assert.Single(inventory.UnclassifiedEntries);
+
+        Assert.Equal(["db-command-write"], entry.SinkKinds);
+        Assert.Empty(inventory.UnresolvedCandidates);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldTreatDbBatchExecutionsAsPotentialWrites()
+    {
+        const string source =
+            """
+            using System.Data.Common;
+
+            public sealed class BatchWriter(DbBatch batch)
+            {
+                public async Task WriteAsync(CancellationToken cancellationToken)
+                {
+                    _ = await batch.ExecuteNonQueryAsync(cancellationToken);
+                    _ = await batch.ExecuteScalarAsync(cancellationToken);
+                    await using var reader = await batch.ExecuteReaderAsync(cancellationToken);
+                }
+            }
+            """;
+
+        var inventory = PersistenceWriteInventory.DiscoverSnippet(source);
+        var entry = Assert.Single(inventory.UnclassifiedEntries);
+
+        Assert.Equal(["db-command-write"], entry.SinkKinds);
+        Assert.Empty(inventory.UnresolvedCandidates);
+    }
+
+    [Theory]
+    [InlineData("src/tests/FakeWrite.cs")]
+    [InlineData("src/testing/FakeWrite.cs")]
+    [InlineData("src/analyzers/FakeWrite.cs")]
+    [InlineData("src/services/Fake/obj/Release/Fake.g.cs")]
+    [InlineData("src/infrastructure/Fake/Migrations/20260731_Fake.cs")]
+    [InlineData("src/infrastructure/Fake/Fake.Designer.cs")]
+    public void PersistenceInventory_ShouldExcludeTestsAndGeneratedSources(string path)
+    {
+        Assert.False(PersistenceWriteInventory.IsIncludedProductionSource(path));
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldIncludeOrdinaryProductionSources()
+    {
+        Assert.True(PersistenceWriteInventory.IsIncludedProductionSource(
+            "src/services/IIoT.ProductionService/Commands/Write.cs"));
     }
 
     [Fact]
@@ -755,11 +1655,6 @@ public sealed class PersistenceBoundaryArchitectureTests
             registrySource,
             StringComparison.Ordinal);
     }
-
-    private sealed record WriteBoundaryEntry(
-        string RelativePath,
-        string Classification,
-        IReadOnlyList<string> RequiredMarkers);
 
     private static bool IsInsideResilientCallback(
         InvocationExpressionSyntax transactionInvocation,

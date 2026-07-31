@@ -439,6 +439,808 @@ public sealed class ProductionRetryTransactionPostgresTests(
     }
 
     [Fact]
+    public async Task IdentityPolicyAndPasswordWrites_ShouldReplayTransientBeforeCommitExactly()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(60));
+        var interceptor = new ThrowOnceBeforeCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+
+        await VerifyIdentityPolicyAndPasswordRecoveryAsync(
+            provider,
+            interceptor.Arm,
+            () => interceptor.ExceptionsThrown,
+            budget.Token);
+    }
+
+    [Fact]
+    public async Task ConcurrentFailedPasswordChecks_ShouldEachAdvanceLockoutState()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        const int concurrentChecks = 5;
+        var barrier = new PasswordLockConcurrencyBarrierInterceptor(
+            concurrentChecks);
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            new ThrowOnceBeforeCommitInterceptor(),
+            barrier);
+        Guid userId;
+        await using (var seedScope = provider.CreateAsyncScope())
+        {
+            var userManager = seedScope.ServiceProvider
+                .GetRequiredService<UserManager<ApplicationUser>>();
+            var user = new ApplicationUser
+            {
+                Id = Guid.NewGuid(),
+                UserName = $"identity-concurrent-{Guid.NewGuid():N}"[..40],
+                IsEnabled = true
+            };
+            Assert.True((await userManager.CreateAsync(
+                user,
+                "OldPassword123!")).Succeeded);
+            userId = user.Id;
+        }
+
+        barrier.Arm();
+        var scopes = Enumerable.Range(0, concurrentChecks)
+            .Select(_ => provider.CreateAsyncScope())
+            .ToArray();
+        Result<bool>[] results;
+        try
+        {
+            var checks = scopes
+                .Select(scope => CreatePasswordService(scope.ServiceProvider)
+                    .CheckPasswordAsync(
+                        userId,
+                        "WrongPassword123!",
+                        budget.Token))
+                .ToArray();
+            results = await Task.WhenAll(checks);
+        }
+        finally
+        {
+            foreach (var scope in scopes)
+            {
+                await scope.DisposeAsync();
+            }
+        }
+
+        Assert.All(results, result =>
+        {
+            Assert.True(result.IsSuccess);
+            Assert.False(result.Value);
+        });
+        await using var verificationScope = provider.CreateAsyncScope();
+        var persisted = await verificationScope.ServiceProvider
+            .GetRequiredService<IIoTDbContext>()
+            .Users
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == userId, budget.Token);
+        Assert.True(persisted.LockoutEnabled);
+        Assert.True(persisted.LockoutEnd > DateTimeOffset.UtcNow);
+        Assert.Equal(0, persisted.AccessFailedCount);
+    }
+
+    [Fact]
+    public async Task PasswordLockoutDuration_ShouldStartAfterSerializedAccountLockIsAcquired()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var applicationName = $"password-lockout-{Guid.NewGuid():N}";
+        var connectionString = new NpgsqlConnectionStringBuilder(
+            budget.ConnectionString)
+        {
+            ApplicationName = applicationName,
+            Pooling = false
+        }.ConnectionString;
+        await using var provider = CreateRetryProvider(
+            connectionString,
+            new ThrowOnceBeforeCommitInterceptor());
+        var timeProvider = new MutableTimeProvider(
+            new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
+        Guid userId;
+        TimeSpan lockoutDuration;
+        await using (var seedScope = provider.CreateAsyncScope())
+        {
+            var services = seedScope.ServiceProvider;
+            var userManager = services.GetRequiredService<UserManager<ApplicationUser>>();
+            var context = services.GetRequiredService<IIoTDbContext>();
+            var user = new ApplicationUser
+            {
+                Id = Guid.NewGuid(),
+                UserName = $"identity-lock-wait-{Guid.NewGuid():N}"[..40],
+                IsEnabled = true,
+                LockoutEnabled = true,
+                AccessFailedCount = userManager.Options.Lockout.MaxFailedAccessAttempts - 1
+            };
+            Assert.True((await userManager.CreateAsync(
+                user,
+                "OldPassword123!")).Succeeded);
+            await context.SaveChangesAsync(budget.Token);
+            userId = user.Id;
+            lockoutDuration = userManager.Options.Lockout.DefaultLockoutTimeSpan;
+        }
+
+        var blockerConnectionString = new NpgsqlConnectionStringBuilder(
+            budget.ConnectionString)
+        {
+            Pooling = false
+        }.ConnectionString;
+        await using var blocker = new NpgsqlConnection(blockerConnectionString);
+        await blocker.OpenAsync(budget.Token);
+        await using var blockerTransaction = await blocker.BeginTransactionAsync(
+            budget.Token);
+        await using (var lockCommand = new NpgsqlCommand(
+                         "SELECT pg_advisory_xact_lock(@lock_key)",
+                         blocker,
+                         blockerTransaction))
+        {
+            lockCommand.Parameters.AddWithValue(
+                "lock_key",
+                IdentityPasswordService.GetPasswordCheckLockKey(userId));
+            _ = await lockCommand.ExecuteScalarAsync(budget.Token);
+        }
+
+        await using var checkScope = provider.CreateAsyncScope();
+        var check = CreatePasswordService(
+                checkScope.ServiceProvider,
+                timeProvider)
+            .CheckPasswordAsync(
+                userId,
+                "WrongPassword123!",
+                budget.Token);
+        await WaitForLockWaitAsync(
+            connectionString,
+            applicationName,
+            budget.Token);
+        timeProvider.Advance(TimeSpan.FromMinutes(10));
+        await blockerTransaction.CommitAsync(budget.Token);
+
+        var result = await check;
+        Assert.True(result.IsSuccess);
+        Assert.False(result.Value);
+
+        await using var verificationScope = provider.CreateAsyncScope();
+        var persisted = await verificationScope.ServiceProvider
+            .GetRequiredService<IIoTDbContext>()
+            .Users
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == userId, budget.Token);
+        Assert.Equal(
+            timeProvider.GetUtcNow().Add(lockoutDuration),
+            persisted.LockoutEnd);
+        Assert.Equal(0, persisted.AccessFailedCount);
+    }
+
+    [Fact]
+    public async Task LockedPasswordCheck_ShouldKeepKnownRejectionWhenReadOnlyCommitAckIsLost()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var interceptor = new ThrowEveryCommitConfirmationInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var userManager = services.GetRequiredService<UserManager<ApplicationUser>>();
+        var user = new ApplicationUser
+        {
+            Id = Guid.NewGuid(),
+            UserName = $"identity-locked-{Guid.NewGuid():N}"[..40],
+            IsEnabled = true,
+            LockoutEnabled = true,
+            LockoutEnd = DateTimeOffset.UtcNow.AddMinutes(5)
+        };
+        Assert.True((await userManager.CreateAsync(
+            user,
+            "OldPassword123!")).Succeeded);
+        services.GetRequiredService<IIoTDbContext>().ChangeTracker.Clear();
+
+        interceptor.Arm();
+        var result = await CreatePasswordService(services).CheckPasswordAsync(
+            user.Id,
+            "WrongPassword123!",
+            budget.Token);
+
+        Assert.True(result.IsSuccess);
+        Assert.False(result.Value);
+        Assert.True(interceptor.ExceptionsThrown > 1);
+    }
+
+    [Fact]
+    public async Task PasswordReadOnlyFailures_ShouldRemainDeterministicWhenCommitConfirmationIsRepeatedlyLost()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(60));
+        var interceptor = new ThrowEveryCommitConfirmationInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var context = services.GetRequiredService<IIoTDbContext>();
+        var userManager = services.GetRequiredService<UserManager<ApplicationUser>>();
+        var user = new ApplicationUser
+        {
+            Id = Guid.NewGuid(),
+            UserName = $"identity-read-only-{Guid.NewGuid():N}"[..40],
+            IsEnabled = true
+        };
+        Assert.True((await userManager.CreateAsync(
+            user,
+            "OldPassword123!")).Succeeded);
+        context.ChangeTracker.Clear();
+
+        interceptor.Arm();
+        var passwords = CreatePasswordService(services);
+        var wrongCurrent = await passwords.ChangePasswordAsync(
+            user.Id,
+            "WrongPassword123!",
+            "ChangedPassword123!",
+            budget.Token);
+        var invalidNewPassword = await passwords.ResetPasswordAsync(
+            user.Id,
+            "short",
+            budget.Token);
+        var missingUser = await passwords.ResetPasswordAsync(
+            Guid.NewGuid(),
+            "ChangedPassword123!",
+            budget.Token);
+
+        Assert.False(wrongCurrent.IsSuccess);
+        Assert.Contains("当前密码不正确", wrongCurrent.Errors ?? []);
+        Assert.False(invalidNewPassword.IsSuccess);
+        Assert.NotEmpty(invalidNewPassword.Errors ?? []);
+        Assert.False(missingUser.IsSuccess);
+        Assert.Contains("用户不存在", missingUser.Errors ?? []);
+        Assert.True(interceptor.ExceptionsThrown > 3);
+
+        context.ChangeTracker.Clear();
+        var persisted = await context.Users
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == user.Id, budget.Token);
+        Assert.Equal(
+            PasswordVerificationResult.Success,
+            userManager.PasswordHasher.VerifyHashedPassword(
+                persisted,
+                persisted.PasswordHash!,
+                "OldPassword123!"));
+    }
+
+    [Fact]
+    public async Task RolePolicyMissingEntities_ShouldRemainDeterministicWhenCommitConfirmationIsRepeatedlyLost()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(60));
+        var interceptor = new ThrowEveryCommitConfirmationInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var context = services.GetRequiredService<IIoTDbContext>();
+        var missingRole = $"MissingRole{Guid.NewGuid():N}"[..30];
+        var missingUserId = Guid.NewGuid();
+
+        interceptor.Arm();
+        var roles = CreateRolePolicyService(services);
+        var roleResult = await roles.UpdateRolePermissionsAsync(
+            missingRole,
+            [CloudPermissionCatalog.Device.Read],
+            budget.Token);
+        var userResult = await roles.UpdateUserPersonalPermissionsAsync(
+            missingUserId,
+            [CloudPermissionCatalog.Device.Read],
+            budget.Token);
+
+        Assert.False(roleResult.IsSuccess);
+        Assert.Contains("角色不存在", roleResult.Errors ?? []);
+        Assert.False(userResult.IsSuccess);
+        Assert.Contains("用户不存在", userResult.Errors ?? []);
+        Assert.True(interceptor.ExceptionsThrown > 3);
+        Assert.False(await context.Roles.AsNoTracking().AnyAsync(
+            role => role.NormalizedName == missingRole.ToUpperInvariant(),
+            budget.Token));
+        Assert.False(await context.Users.AsNoTracking().AnyAsync(
+            user => user.Id == missingUserId,
+            budget.Token));
+        Assert.False(await context.UserClaims.AsNoTracking().AnyAsync(
+            claim => claim.UserId == missingUserId,
+            budget.Token));
+    }
+
+    [Fact]
+    public async Task IdentityPolicyAndPasswordWrites_ShouldRecoverCommitConfirmationLossExactly()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(60));
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+
+        await VerifyIdentityPolicyAndPasswordRecoveryAsync(
+            provider,
+            () => interceptor.Arm(),
+            () => interceptor.ExceptionsThrown,
+            budget.Token);
+    }
+
+    [Fact]
+    public async Task IdentityPolicyAndPasswordWrites_ShouldPropagateCallerCancellationAfterCommit()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(75));
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var context = services.GetRequiredService<IIoTDbContext>();
+        var userManager = services.GetRequiredService<UserManager<ApplicationUser>>();
+        var roleManager = services.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
+        var roles = new RolePolicyService(userManager, roleManager, context);
+        var passwords = new IdentityPasswordService(userManager, context);
+        var unique = Guid.NewGuid().ToString("N");
+        var roleName = $"CancelRole{unique}"[..30];
+        var user = new ApplicationUser
+        {
+            Id = Guid.NewGuid(),
+            UserName = $"identity-cancel-{unique}"[..40],
+            IsEnabled = true
+        };
+        Assert.True((await userManager.CreateAsync(
+            user,
+            "OldPassword123!")).Succeeded);
+        context.ChangeTracker.Clear();
+
+        await AssertCallerCancellationAfterCommitAsync(
+            interceptor,
+            async token =>
+            {
+                _ = await roles.DefineRoleAsync(
+                    roleName,
+                    [CloudPermissionCatalog.Device.Read],
+                    token);
+            },
+            budget.Token);
+        Assert.Equal(
+            [CloudPermissionCatalog.Device.Read],
+            await roles.GetRolePermissionsAsync(roleName));
+
+        await AssertCallerCancellationAfterCommitAsync(
+            interceptor,
+            async token =>
+            {
+                _ = await roles.UpdateRolePermissionsAsync(
+                    roleName,
+                    [CloudPermissionCatalog.Recipe.Read],
+                    token);
+            },
+            budget.Token);
+        Assert.Equal(
+            [CloudPermissionCatalog.Recipe.Read],
+            await roles.GetRolePermissionsAsync(roleName));
+
+        await AssertCallerCancellationAfterCommitAsync(
+            interceptor,
+            async token =>
+            {
+                _ = await roles.UpdateUserPersonalPermissionsAsync(
+                    user.Id,
+                    [CloudPermissionCatalog.Device.Read],
+                    token);
+            },
+            budget.Token);
+        Assert.Equal(
+            [CloudPermissionCatalog.Device.Read],
+            await roles.GetUserPersonalPermissionsAsync(user.Id));
+
+        await AssertCallerCancellationAfterCommitAsync(
+            interceptor,
+            async token =>
+            {
+                _ = await passwords.CheckPasswordAsync(
+                    user.Id,
+                    "WrongPassword123!",
+                    token);
+            },
+            budget.Token);
+        context.ChangeTracker.Clear();
+        Assert.Equal(
+            1,
+            (await context.Users.AsNoTracking().SingleAsync(
+                candidate => candidate.Id == user.Id,
+                budget.Token)).AccessFailedCount);
+
+        await AssertCallerCancellationAfterCommitAsync(
+            interceptor,
+            async token =>
+            {
+                _ = await passwords.CheckPasswordAsync(
+                    user.Id,
+                    "OldPassword123!",
+                    token);
+            },
+            budget.Token);
+        context.ChangeTracker.Clear();
+        Assert.Equal(
+            0,
+            (await context.Users.AsNoTracking().SingleAsync(
+                candidate => candidate.Id == user.Id,
+                budget.Token)).AccessFailedCount);
+
+        await AssertCallerCancellationAfterCommitAsync(
+            interceptor,
+            async token =>
+            {
+                _ = await passwords.ChangePasswordAsync(
+                    user.Id,
+                    "OldPassword123!",
+                    "ChangedPassword123!",
+                    token);
+            },
+            budget.Token);
+
+        await AssertCallerCancellationAfterCommitAsync(
+            interceptor,
+            async token =>
+            {
+                _ = await passwords.ResetPasswordAsync(
+                    user.Id,
+                    "ResetPassword123!",
+                    token);
+            },
+            budget.Token);
+
+        Assert.Equal(7, interceptor.ExceptionsThrown);
+        context.ChangeTracker.Clear();
+        var persistedUser = await context.Users
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == user.Id, budget.Token);
+        Assert.Equal(
+            PasswordVerificationResult.Success,
+            userManager.PasswordHasher.VerifyHashedPassword(
+                persistedUser,
+                persistedUser.PasswordHash!,
+                "ResetPassword123!"));
+    }
+
+    [Fact]
+    public async Task IdentityPolicyAndPasswordWrites_WithPostCommitDrift_ShouldConflictWithoutOverwrite()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(75));
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var context = services.GetRequiredService<IIoTDbContext>();
+        var userManager = services.GetRequiredService<UserManager<ApplicationUser>>();
+        var roleManager = services.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
+        var roles = new RolePolicyService(userManager, roleManager, context);
+        var passwords = new IdentityPasswordService(userManager, context);
+        var unique = Guid.NewGuid().ToString("N");
+        var roleName = $"DriftRole{unique}"[..30];
+
+        interceptor.Arm(async callbackToken =>
+        {
+            await using var concurrentScope = provider.CreateAsyncScope();
+            var concurrent = concurrentScope.ServiceProvider
+                .GetRequiredService<IIoTDbContext>();
+            var role = await concurrent.Roles.SingleAsync(
+                candidate => candidate.NormalizedName == roleName.ToUpperInvariant(),
+                callbackToken);
+            role.ConcurrencyStamp = Guid.NewGuid().ToString("N");
+            var claims = await concurrent.RoleClaims
+                .Where(claim => claim.RoleId == role.Id)
+                .ToListAsync(callbackToken);
+            concurrent.RoleClaims.RemoveRange(claims);
+            concurrent.RoleClaims.Add(new IdentityRoleClaim<Guid>
+            {
+                RoleId = role.Id,
+                ClaimType = IIoTClaimTypes.Permission,
+                ClaimValue = CloudPermissionCatalog.Employee.Read
+            });
+            await concurrent.SaveChangesAsync(callbackToken);
+        });
+        await Assert.ThrowsAsync<CloudWriteConflictException>(
+            () => roles.DefineRoleAsync(
+                roleName,
+                [CloudPermissionCatalog.Device.Read],
+                budget.Token));
+        Assert.Equal(
+            [CloudPermissionCatalog.Employee.Read],
+            await roles.GetRolePermissionsAsync(roleName));
+
+        var user = new ApplicationUser
+        {
+            Id = Guid.NewGuid(),
+            UserName = $"identity-drift-{unique}"[..40],
+            IsEnabled = true
+        };
+        Assert.True((await userManager.CreateAsync(
+            user,
+            "OldPassword123!")).Succeeded);
+        context.ChangeTracker.Clear();
+
+        interceptor.Arm(async callbackToken =>
+        {
+            await using var concurrentScope = provider.CreateAsyncScope();
+            var concurrent = concurrentScope.ServiceProvider
+                .GetRequiredService<IIoTDbContext>();
+            var current = await concurrent.Users.SingleAsync(
+                candidate => candidate.Id == user.Id,
+                callbackToken);
+            current.ConcurrencyStamp = Guid.NewGuid().ToString("N");
+            var claims = await concurrent.UserClaims
+                .Where(claim => claim.UserId == user.Id)
+                .ToListAsync(callbackToken);
+            concurrent.UserClaims.RemoveRange(claims);
+            concurrent.UserClaims.Add(new IdentityUserClaim<Guid>
+            {
+                UserId = user.Id,
+                ClaimType = IIoTClaimTypes.Permission,
+                ClaimValue = CloudPermissionCatalog.Recipe.Read
+            });
+            await concurrent.SaveChangesAsync(callbackToken);
+        });
+        await Assert.ThrowsAsync<CloudWriteConflictException>(
+            () => roles.UpdateUserPersonalPermissionsAsync(
+                user.Id,
+                [CloudPermissionCatalog.Device.Read],
+                budget.Token));
+        Assert.Equal(
+            [CloudPermissionCatalog.Recipe.Read],
+            await roles.GetUserPersonalPermissionsAsync(user.Id));
+
+        interceptor.Arm(async callbackToken =>
+        {
+            await using var concurrentScope = provider.CreateAsyncScope();
+            var concurrentServices = concurrentScope.ServiceProvider;
+            var concurrent = concurrentServices.GetRequiredService<IIoTDbContext>();
+            var current = await concurrent.Users.SingleAsync(
+                candidate => candidate.Id == user.Id,
+                callbackToken);
+            current.PasswordHash = userManager.PasswordHasher.HashPassword(
+                current,
+                "ConcurrentPassword123!");
+            current.SecurityStamp = Guid.NewGuid().ToString("N");
+            current.ConcurrencyStamp = Guid.NewGuid().ToString("N");
+            await concurrent.SaveChangesAsync(callbackToken);
+        });
+        await Assert.ThrowsAsync<CloudWriteConflictException>(
+            () => passwords.ResetPasswordAsync(
+                user.Id,
+                "ResetPassword123!",
+                budget.Token));
+
+        context.ChangeTracker.Clear();
+        var persistedUser = await context.Users
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == user.Id, budget.Token);
+        Assert.Equal(
+            PasswordVerificationResult.Success,
+            userManager.PasswordHasher.VerifyHashedPassword(
+                persistedUser,
+                persistedUser.PasswordHash!,
+                "ConcurrentPassword123!"));
+        Assert.Equal(3, interceptor.ExceptionsThrown);
+    }
+
+    [Fact]
+    public async Task IdentityPolicyAndPasswordWrites_WhenObservationFails_ShouldRemainCommitUnknown()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(75));
+
+        var roleCommitLoss = new ThrowOnceAfterCommitInterceptor();
+        var roleObservationFailure = new FailReadsInterceptor("AspNetRoles");
+        await using (var roleProvider = CreateRetryProvider(
+                         budget.ConnectionString,
+                         roleCommitLoss,
+                         roleObservationFailure))
+        {
+            await using var roleScope = roleProvider.CreateAsyncScope();
+            var services = roleScope.ServiceProvider;
+            var roles = new RolePolicyService(
+                services.GetRequiredService<UserManager<ApplicationUser>>(),
+                services.GetRequiredService<RoleManager<IdentityRole<Guid>>>(),
+                services.GetRequiredService<IIoTDbContext>());
+            var roleName = $"UnknownRole{Guid.NewGuid():N}"[..30];
+            roleCommitLoss.Arm(_ =>
+            {
+                roleObservationFailure.Enable();
+                return Task.CompletedTask;
+            });
+
+            await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
+                () => roles.DefineRoleAsync(
+                    roleName,
+                    [CloudPermissionCatalog.Device.Read],
+                    budget.Token));
+
+            await using var verification = CreateRetryContext(
+                budget.ConnectionString,
+                $"tx-03c-role-observation-verify-{Guid.NewGuid():N}");
+            var role = await verification.Roles
+                .AsNoTracking()
+                .SingleAsync(
+                    candidate => candidate.NormalizedName == roleName.ToUpperInvariant(),
+                    budget.Token);
+            Assert.Equal(
+                1,
+                await verification.RoleClaims.AsNoTracking().CountAsync(
+                    claim =>
+                        claim.RoleId == role.Id &&
+                        claim.ClaimType == IIoTClaimTypes.Permission &&
+                        claim.ClaimValue == CloudPermissionCatalog.Device.Read,
+                    budget.Token));
+        }
+
+        var passwordCommitLoss = new ThrowOnceAfterCommitInterceptor();
+        var passwordObservationFailure = new FailReadsInterceptor("AspNetUsers");
+        await using var passwordProvider = CreateRetryProvider(
+            budget.ConnectionString,
+            passwordCommitLoss,
+            passwordObservationFailure);
+        await using var passwordScope = passwordProvider.CreateAsyncScope();
+        var passwordServices = passwordScope.ServiceProvider;
+        var passwordContext = passwordServices.GetRequiredService<IIoTDbContext>();
+        var passwordUserManager = passwordServices
+            .GetRequiredService<UserManager<ApplicationUser>>();
+        var passwordUser = new ApplicationUser
+        {
+            Id = Guid.NewGuid(),
+            UserName = $"identity-unknown-{Guid.NewGuid():N}"[..40],
+            IsEnabled = true
+        };
+        Assert.True((await passwordUserManager.CreateAsync(
+            passwordUser,
+            "OldPassword123!")).Succeeded);
+        passwordContext.ChangeTracker.Clear();
+        var passwords = new IdentityPasswordService(
+            passwordUserManager,
+            passwordContext);
+        passwordCommitLoss.Arm(_ =>
+        {
+            passwordObservationFailure.Enable();
+            return Task.CompletedTask;
+        });
+
+        await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
+            () => passwords.ResetPasswordAsync(
+                passwordUser.Id,
+                "ResetPassword123!",
+                budget.Token));
+
+        await using var passwordVerification = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03c-password-observation-verify-{Guid.NewGuid():N}");
+        var persistedUser = await passwordVerification.Users
+            .AsNoTracking()
+            .SingleAsync(
+                candidate => candidate.Id == passwordUser.Id,
+                budget.Token);
+        Assert.Equal(
+            PasswordVerificationResult.Success,
+            passwordUserManager.PasswordHasher.VerifyHashedPassword(
+                persistedUser,
+                persistedUser.PasswordHash!,
+                "ResetPassword123!"));
+    }
+
+    [Fact]
+    public async Task IdentityPolicyAndPasswordWrites_WhenBaselineCannotBeEstablished_ShouldRemainCommitUnknown()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(60));
+
+        var roleTransaction = new ThrowOnceBeforeCommitInterceptor();
+        var roleReadFailure = new FailNextReadInterceptor("AspNetRoles");
+        await using (var roleProvider = CreateRetryProvider(
+                         budget.ConnectionString,
+                         roleTransaction,
+                         roleReadFailure))
+        {
+            await using var roleScope = roleProvider.CreateAsyncScope();
+            var services = roleScope.ServiceProvider;
+            var context = services.GetRequiredService<IIoTDbContext>();
+            var userManager = services.GetRequiredService<UserManager<ApplicationUser>>();
+            var roleManager = services.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
+            var roleName = $"BaselineRole{Guid.NewGuid():N}"[..30];
+            var role = new IdentityRole<Guid>(roleName)
+            {
+                Id = Guid.NewGuid()
+            };
+            Assert.True((await roleManager.CreateAsync(role)).Succeeded);
+            Assert.True((await roleManager.AddClaimAsync(
+                role,
+                new System.Security.Claims.Claim(
+                    IIoTClaimTypes.Permission,
+                    CloudPermissionCatalog.Device.Read))).Succeeded);
+            context.ChangeTracker.Clear();
+            var roles = new RolePolicyService(
+                userManager,
+                roleManager,
+                context);
+            roleReadFailure.Arm();
+
+            await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
+                () => roles.UpdateRolePermissionsAsync(
+                    roleName,
+                    [CloudPermissionCatalog.Recipe.Read],
+                    budget.Token));
+
+            Assert.Equal(
+                [CloudPermissionCatalog.Device.Read],
+                await roles.GetRolePermissionsAsync(roleName));
+        }
+
+        var passwordTransaction = new ThrowOnceBeforeCommitInterceptor();
+        var passwordReadFailure = new FailNextReadInterceptor("AspNetUsers");
+        await using var passwordProvider = CreateRetryProvider(
+            budget.ConnectionString,
+            passwordTransaction,
+            passwordReadFailure);
+        await using var passwordScope = passwordProvider.CreateAsyncScope();
+        var passwordServices = passwordScope.ServiceProvider;
+        var passwordContext = passwordServices.GetRequiredService<IIoTDbContext>();
+        var userManagerForPassword = passwordServices
+            .GetRequiredService<UserManager<ApplicationUser>>();
+        var user = new ApplicationUser
+        {
+            Id = Guid.NewGuid(),
+            UserName = $"identity-baseline-{Guid.NewGuid():N}"[..40],
+            IsEnabled = true
+        };
+        Assert.True((await userManagerForPassword.CreateAsync(
+            user,
+            "OldPassword123!")).Succeeded);
+        passwordContext.ChangeTracker.Clear();
+        var passwords = new IdentityPasswordService(
+            userManagerForPassword,
+            passwordContext);
+        passwordReadFailure.Arm();
+
+        await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
+            () => passwords.ResetPasswordAsync(
+                user.Id,
+                "ResetPassword123!",
+                budget.Token));
+
+        passwordContext.ChangeTracker.Clear();
+        var persistedUser = await passwordContext.Users
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == user.Id, budget.Token);
+        Assert.Equal(
+            PasswordVerificationResult.Success,
+            userManagerForPassword.PasswordHasher.VerifyHashedPassword(
+                persistedUser,
+                persistedUser.PasswordHash!,
+                "OldPassword123!"));
+    }
+
+    [Fact]
     public async Task EdgeReleaseApiKeyLifecycle_ShouldRecoverCommitLossWithoutPersistingPlaintext()
     {
         using var budget = await PostgresTestBudget.CreateAsync(
@@ -4691,13 +5493,137 @@ public sealed class ProductionRetryTransactionPostgresTests(
         return new OnboardEmployeeHandler(
             CreateIdentityStore(services),
             new IdentityPasswordService(
-                services.GetRequiredService<UserManager<ApplicationUser>>()),
+                services.GetRequiredService<UserManager<ApplicationUser>>(),
+                dbContext),
             CreateRolePolicyService(services),
             new EfRepository<Employee>(dbContext),
             CreateUnitOfWork(dbContext),
             HumanAdmin(),
             new RecordingPermissionProvider(),
             CreateEmployeeMutationObserver(services));
+    }
+
+    private static async Task VerifyIdentityPolicyAndPasswordRecoveryAsync(
+        ServiceProvider provider,
+        Action arm,
+        Func<int> exceptionsThrown,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var context = services.GetRequiredService<IIoTDbContext>();
+        var userManager = services.GetRequiredService<UserManager<ApplicationUser>>();
+        var roleManager = services.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
+        var roles = new RolePolicyService(userManager, roleManager, context);
+        var passwords = new IdentityPasswordService(userManager, context);
+        var unique = Guid.NewGuid().ToString("N");
+        var roleName = $"RetryRole{unique}"[..30];
+        var user = new ApplicationUser
+        {
+            Id = Guid.NewGuid(),
+            UserName = $"identity-retry-{unique}"[..40],
+            IsEnabled = true
+        };
+        Assert.True((await userManager.CreateAsync(
+            user,
+            "OldPassword123!")).Succeeded);
+        context.ChangeTracker.Clear();
+
+        arm();
+        var defined = await roles.DefineRoleAsync(
+            roleName,
+            [CloudPermissionCatalog.Device.Read],
+            cancellationToken);
+        Assert.True(defined.IsSuccess && defined.Value);
+
+        arm();
+        var roleUpdated = await roles.UpdateRolePermissionsAsync(
+            roleName,
+            [CloudPermissionCatalog.Recipe.Read],
+            cancellationToken);
+        Assert.True(roleUpdated.IsSuccess && roleUpdated.Value);
+
+        arm();
+        var userUpdated = await roles.UpdateUserPersonalPermissionsAsync(
+            user.Id,
+            [CloudPermissionCatalog.Device.Read],
+            cancellationToken);
+        Assert.True(userUpdated.IsSuccess && userUpdated.Value);
+
+        arm();
+        var rejectedPassword = await passwords.CheckPasswordAsync(
+            user.Id,
+            "WrongPassword123!",
+            cancellationToken);
+        Assert.True(rejectedPassword.IsSuccess);
+        Assert.False(rejectedPassword.Value);
+
+        arm();
+        var acceptedPassword = await passwords.CheckPasswordAsync(
+            user.Id,
+            "OldPassword123!",
+            cancellationToken);
+        Assert.True(acceptedPassword.IsSuccess && acceptedPassword.Value);
+
+        arm();
+        var changed = await passwords.ChangePasswordAsync(
+            user.Id,
+            "OldPassword123!",
+            "ChangedPassword123!",
+            cancellationToken);
+        Assert.True(changed.IsSuccess);
+
+        arm();
+        var reset = await passwords.ResetPasswordAsync(
+            user.Id,
+            "ResetPassword123!",
+            cancellationToken);
+        Assert.True(reset.IsSuccess && reset.Value);
+
+        Assert.Equal(7, exceptionsThrown());
+        context.ChangeTracker.Clear();
+        Assert.Equal(
+            1,
+            await context.Roles
+                .AsNoTracking()
+                .CountAsync(
+                    role => role.NormalizedName == roleName.ToUpperInvariant(),
+                    cancellationToken));
+        Assert.Equal(
+            [CloudPermissionCatalog.Recipe.Read],
+            await roles.GetRolePermissionsAsync(roleName));
+        Assert.Equal(
+            [CloudPermissionCatalog.Device.Read],
+            await roles.GetUserPersonalPermissionsAsync(user.Id));
+        var persistedUser = await context.Users
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == user.Id, cancellationToken);
+        Assert.Equal(0, persistedUser.AccessFailedCount);
+        Assert.Equal(
+            PasswordVerificationResult.Success,
+            userManager.PasswordHasher.VerifyHashedPassword(
+                persistedUser,
+                persistedUser.PasswordHash!,
+                "ResetPassword123!"));
+    }
+
+    private static async Task AssertCallerCancellationAfterCommitAsync(
+        ThrowOnceAfterCommitInterceptor interceptor,
+        Func<CancellationToken, Task> write,
+        CancellationToken testToken)
+    {
+        using var callerCancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(testToken);
+        interceptor.Arm(_ =>
+        {
+            callerCancellation.Cancel();
+            return Task.CompletedTask;
+        });
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => write(callerCancellation.Token));
+
+        Assert.Equal(callerCancellation.Token, exception.CancellationToken);
     }
 
     private static IdentityAccountStore CreateIdentityStore(
@@ -4710,7 +5636,8 @@ public sealed class ProductionRetryTransactionPostgresTests(
         IServiceProvider services)
         => new(
             services.GetRequiredService<UserManager<ApplicationUser>>(),
-            services.GetRequiredService<RoleManager<IdentityRole<Guid>>>());
+            services.GetRequiredService<RoleManager<IdentityRole<Guid>>>(),
+            services.GetRequiredService<IIoTDbContext>());
 
     private static EfUnitOfWork CreateUnitOfWork(IIoTDbContext dbContext)
         => new(dbContext, NullLogger<EfUnitOfWork>.Instance);
@@ -4996,6 +5923,14 @@ public sealed class ProductionRetryTransactionPostgresTests(
         return services.BuildServiceProvider();
     }
 
+    private static IdentityPasswordService CreatePasswordService(
+        IServiceProvider services,
+        TimeProvider? timeProvider = null)
+        => new(
+            services.GetRequiredService<UserManager<ApplicationUser>>(),
+            services.GetRequiredService<IIoTDbContext>(),
+            timeProvider);
+
     private static IIoTDbContext CreateRetryContext(
         string connectionString,
         string applicationName,
@@ -5197,6 +6132,15 @@ public sealed class ProductionRetryTransactionPostgresTests(
         public Guid? DeviceId => null;
 
         public bool IsAuthenticated => true;
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset currentUtc = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => currentUtc;
+
+        public void Advance(TimeSpan duration) => currentUtc = currentUtc.Add(duration);
     }
 
     private sealed class RecordingAuditTrailService : IAuditTrailService
@@ -5404,6 +6348,43 @@ public sealed class ProductionRetryTransactionPostgresTests(
         }
     }
 
+    private sealed class PasswordLockConcurrencyBarrierInterceptor(
+        int expectedArrivals)
+        : DbCommandInterceptor
+    {
+        private readonly TaskCompletionSource allChecksReached = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private int armed;
+        private int arrivals;
+
+        public void Arm() => Volatile.Write(ref armed, 1);
+
+        public override async ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (Volatile.Read(ref armed) == 0 ||
+                !command.CommandText.Contains(
+                    "pg_advisory_xact_lock",
+                    StringComparison.Ordinal))
+            {
+                return result;
+            }
+
+            var arrival = Interlocked.Increment(ref arrivals);
+            if (arrival == expectedArrivals)
+            {
+                Volatile.Write(ref armed, 0);
+                allChecksReached.TrySetResult();
+            }
+
+            await allChecksReached.Task.WaitAsync(cancellationToken);
+            return result;
+        }
+    }
+
     private sealed class FailReadsInterceptor(string tableFragment)
         : DbCommandInterceptor
     {
@@ -5425,6 +6406,33 @@ public sealed class ProductionRetryTransactionPostgresTests(
             {
                 throw new InvalidOperationException(
                     "simulated observation read failure");
+            }
+
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class FailNextReadInterceptor(string tableFragment)
+        : DbCommandInterceptor
+    {
+        private int armed;
+
+        public void Arm() => Volatile.Write(ref armed, 1);
+
+        public override ValueTask<InterceptionResult<DbDataReader>>
+            ReaderExecutingAsync(
+                DbCommand command,
+                CommandEventData eventData,
+                InterceptionResult<DbDataReader> result,
+                CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains(
+                    tableFragment,
+                    StringComparison.OrdinalIgnoreCase) &&
+                Interlocked.CompareExchange(ref armed, 0, 1) == 1)
+            {
+                throw new InvalidOperationException(
+                    "simulated baseline read failure");
             }
 
             return ValueTask.FromResult(result);
@@ -5516,6 +6524,32 @@ public sealed class ProductionRetryTransactionPostgresTests(
             }
 
             return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class ThrowEveryCommitConfirmationInterceptor
+        : DbTransactionInterceptor
+    {
+        private int armed;
+        private int exceptionsThrown;
+
+        public int ExceptionsThrown => Volatile.Read(ref exceptionsThrown);
+
+        public void Arm() => Volatile.Write(ref armed, 1);
+
+        public override Task TransactionCommittedAsync(
+            DbTransaction transaction,
+            TransactionEndEventData eventData,
+            CancellationToken cancellationToken = default)
+        {
+            if (Volatile.Read(ref armed) == 1)
+            {
+                Interlocked.Increment(ref exceptionsThrown);
+                throw RetryablePostgresException(
+                    "simulated repeated read-only commit confirmation loss");
+            }
+
+            return Task.CompletedTask;
         }
     }
 

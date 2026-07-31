@@ -1,3 +1,4 @@
+using IIoT.EntityFrameworkCore;
 using IIoT.EntityFrameworkCore.Identity;
 using IIoT.Infrastructure.Authentication;
 using Microsoft.AspNetCore.Identity;
@@ -65,6 +66,26 @@ public sealed class IdentityPasswordPersistenceTests
         Assert.True(await runtime.UserManager.IsLockedOutAsync(resetUser));
     }
 
+    [Fact]
+    public async Task IdentityPasswordService_SuccessfulNoOpCheck_ShouldKeepConcurrencyState()
+    {
+        using var runtime = await IdentityPasswordRuntime.CreateAsync();
+        Assert.True((await runtime.PasswordService.CheckPasswordAsync(
+            runtime.User.Id,
+            "Password123")).Value);
+        var baseline = await runtime.ReloadUserAsync();
+
+        Assert.True((await runtime.PasswordService.CheckPasswordAsync(
+            runtime.User.Id,
+            "Password123")).Value);
+        var observed = await runtime.ReloadUserAsync();
+
+        Assert.Equal(baseline.PasswordHash, observed.PasswordHash);
+        Assert.Equal(baseline.SecurityStamp, observed.SecurityStamp);
+        Assert.Equal(baseline.ConcurrencyStamp, observed.ConcurrencyStamp);
+        Assert.Equal(0, observed.AccessFailedCount);
+    }
+
     private static async Task AssertPasswordFailuresAsync(
         IdentityPasswordService passwordService,
         Guid userId,
@@ -108,7 +129,9 @@ public sealed class IdentityPasswordPersistenceTests
             _scope = scope;
             UserManager = userManager;
             User = user;
-            PasswordService = new IdentityPasswordService(userManager);
+            PasswordService = new IdentityPasswordService(
+                userManager,
+                scope.ServiceProvider.GetRequiredService<IIoTDbContext>());
         }
 
         public UserManager<ApplicationUser> UserManager { get; }
@@ -117,9 +140,14 @@ public sealed class IdentityPasswordPersistenceTests
 
         public IdentityPasswordService PasswordService { get; }
 
-        public async Task<ApplicationUser> ReloadUserAsync() =>
-            await UserManager.FindByIdAsync(User.Id.ToString())
-            ?? throw new InvalidOperationException("User was not created.");
+        public async Task<ApplicationUser> ReloadUserAsync()
+        {
+            _scope.ServiceProvider
+                .GetRequiredService<IIoTDbContext>()
+                .ChangeTracker.Clear();
+            return await UserManager.FindByIdAsync(User.Id.ToString())
+                   ?? throw new InvalidOperationException("User was not created.");
+        }
 
         public static async Task<IdentityPasswordRuntime> CreateAsync()
         {

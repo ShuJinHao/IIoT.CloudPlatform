@@ -70,7 +70,8 @@ public class UpdateUserPermissionsHandler(
         var normalizedPermissions = validation.Permissions.ToList();
         var result = await rolePolicyService.UpdateUserPersonalPermissionsAsync(
             request.UserId,
-            normalizedPermissions);
+            normalizedPermissions,
+            cancellationToken);
         var afterPermissions = await rolePolicyService.GetUserPersonalPermissionsAsync(request.UserId);
 
         if (result.IsSuccess && result.Value)

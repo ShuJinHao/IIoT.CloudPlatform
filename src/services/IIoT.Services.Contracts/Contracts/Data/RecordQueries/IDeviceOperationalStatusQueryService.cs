@@ -1,6 +1,8 @@
+using IIoT.SharedKernel.Architecture;
+
 namespace IIoT.Services.Contracts.RecordQueries;
 
-public interface IDeviceOperationalStatusQueryService
+public interface IDeviceOperationalStatusQueryService : IReadOnlyQueryPort
 {
     Task<DeviceStatusSummaryDto> GetStatusSummaryAsync(
         DateTimeOffset offlineCutoff,

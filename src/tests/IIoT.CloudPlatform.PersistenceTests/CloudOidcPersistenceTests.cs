@@ -591,21 +591,20 @@ public sealed class CloudOidcPersistenceTests
         await dbContext.SaveChangesAsync();
 
         var profileService = new CloudOidcUserProfileService(dbContext);
-        var identityStore = new IdentityAccountStore(
-            scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>(),
-            scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>());
-
         var before = await profileService.GetByUserIdAsync(employee.Id);
-        var disabledResult = await identityStore.SetEnabledAsync(employee.Id, false);
+        var account = await dbContext.Users.SingleAsync(user => user.Id == employee.Id);
+        account.IsEnabled = false;
+        account.SecurityStamp = Guid.NewGuid().ToString("N");
+        await dbContext.SaveChangesAsync();
         var disabled = await profileService.GetByUserIdAsync(employee.Id);
-        var enabledResult = await identityStore.SetEnabledAsync(employee.Id, true);
+        account.IsEnabled = true;
+        account.SecurityStamp = Guid.NewGuid().ToString("N");
+        await dbContext.SaveChangesAsync();
         var reactivated = await profileService.GetByUserIdAsync(employee.Id);
-        var repeatedEnableResult = await identityStore.SetEnabledAsync(employee.Id, true);
+        account.SecurityStamp = Guid.NewGuid().ToString("N");
+        await dbContext.SaveChangesAsync();
         var repeatedActivation = await profileService.GetByUserIdAsync(employee.Id);
 
-        Assert.True(disabledResult.IsSuccess);
-        Assert.True(enabledResult.IsSuccess);
-        Assert.True(repeatedEnableResult.IsSuccess);
         Assert.NotNull(before);
         Assert.NotNull(disabled);
         Assert.NotNull(reactivated);

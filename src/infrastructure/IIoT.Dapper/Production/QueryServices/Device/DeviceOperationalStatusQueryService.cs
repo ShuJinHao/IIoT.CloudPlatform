@@ -39,7 +39,9 @@ internal sealed class DeviceOperationalStatusQueryService(IDbConnectionFactory c
                 {deviceConditions}
             ),
             last_activity AS (
-                SELECT r.device_id, MAX(r.last_seen_at_utc) AS last_seen_at_utc
+                SELECT
+                    r.device_id,
+                    pg_catalog.max(r.last_seen_at_utc::timestamptz) AS last_seen_at_utc
                 FROM upload_receive_registrations r
                 INNER JOIN scoped_devices sd ON sd.id = r.device_id
                 GROUP BY r.device_id
@@ -47,8 +49,12 @@ internal sealed class DeviceOperationalStatusQueryService(IDbConnectionFactory c
             recent_levels AS (
                 SELECT
                     l.device_id,
-                    MAX(CASE WHEN upper(l.level) IN ('ERROR', 'ERR') THEN 1 ELSE 0 END) AS has_error,
-                    MAX(CASE WHEN upper(l.level) IN ('WARN', 'WARNING') THEN 1 ELSE 0 END) AS has_warning
+                    CASE WHEN pg_catalog.count(*) FILTER (
+                        WHERE pg_catalog.upper(l.level::text) IN ('ERROR', 'ERR')) > 0
+                        THEN 1 ELSE 0 END AS has_error,
+                    CASE WHEN pg_catalog.count(*) FILTER (
+                        WHERE pg_catalog.upper(l.level::text) IN ('WARN', 'WARNING')) > 0
+                        THEN 1 ELSE 0 END AS has_warning
                 FROM device_logs l
                 INNER JOIN scoped_devices sd ON sd.id = l.device_id
                 WHERE l.log_time >= @StatusWindowStart
@@ -67,15 +73,18 @@ internal sealed class DeviceOperationalStatusQueryService(IDbConnectionFactory c
                 LEFT JOIN recent_levels rl ON rl.device_id = sd.id
             )
             SELECT
-                COUNT(*)::int AS Total,
-                COUNT(*) FILTER (WHERE status = 'Online')::int AS Online,
-                COUNT(*) FILTER (WHERE status = 'Warning')::int AS Warning,
-                COUNT(*) FILTER (WHERE status = 'Error')::int AS Error,
-                COUNT(*) FILTER (WHERE status = 'Offline')::int AS Offline,
+                pg_catalog.count(*)::int AS Total,
+                pg_catalog.count(*) FILTER (WHERE status = 'Online')::int AS Online,
+                pg_catalog.count(*) FILTER (WHERE status = 'Warning')::int AS Warning,
+                pg_catalog.count(*) FILTER (WHERE status = 'Error')::int AS Error,
+                pg_catalog.count(*) FILTER (WHERE status = 'Offline')::int AS Offline,
                 @GeneratedAt AS GeneratedAt
             FROM status_rows";
 
-        var command = new CommandDefinition(sql, parameters, cancellationToken: cancellationToken);
+        var command = new ReadOnlyCommandDefinition(
+            sql,
+            parameters,
+            cancellationToken: cancellationToken);
         var row = await connection.QuerySingleAsync<DeviceStatusSummaryRow>(command);
 
         return new DeviceStatusSummaryDto(

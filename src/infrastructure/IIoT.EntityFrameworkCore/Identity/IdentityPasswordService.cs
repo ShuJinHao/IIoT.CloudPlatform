@@ -1,26 +1,52 @@
+using System.Buffers.Binary;
 using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Result;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 
 namespace IIoT.EntityFrameworkCore.Identity;
 
-public sealed class IdentityPasswordService(UserManager<ApplicationUser> userManager) : IIdentityPasswordService
+public sealed class IdentityPasswordService(
+    UserManager<ApplicationUser> userManager,
+    IIoTDbContext dbContext,
+    TimeProvider? timeProvider = null) : IIdentityPasswordService
 {
+    private static readonly TimeSpan ObservationTimeout = TimeSpan.FromSeconds(5);
+    private const long PasswordCheckLockNamespace = 0x5057444300000000;
+    private readonly Func<IIoTDbContext> _createContext = dbContext.CreateFreshContext;
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+
     public async Task<Result<bool>> SetPasswordAsync(
         Guid userId,
         string password,
         CancellationToken cancellationToken = default)
     {
-        var user = await userManager.FindByIdAsync(userId.ToString());
+        var user = await dbContext.Users.SingleOrDefaultAsync(
+            candidate => candidate.Id == userId,
+            cancellationToken);
         if (user is null)
         {
             return Result.Failure("用户不存在");
         }
 
-        var result = await userManager.AddPasswordAsync(user, password);
-        return result.Succeeded
-            ? Result.Success(true)
-            : Result.Failure(result.Errors.Select(e => e.Description).ToArray());
+        if (!string.IsNullOrWhiteSpace(user.PasswordHash))
+        {
+            return Result.Failure("用户已设置密码");
+        }
+
+        var validation = await ValidatePasswordAsync(user, password);
+        if (!validation.Succeeded)
+        {
+            return Result.Failure(
+                validation.Errors.Select(error => error.Description).ToArray());
+        }
+
+        user.PasswordHash = userManager.PasswordHasher.HashPassword(user, password);
+        user.SecurityStamp = Guid.NewGuid().ToString("N");
+        user.ConcurrencyStamp = Guid.NewGuid().ToString("N");
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return Result.Success(true);
     }
 
     public async Task<Result<bool>> CheckPasswordAsync(
@@ -28,39 +54,115 @@ public sealed class IdentityPasswordService(UserManager<ApplicationUser> userMan
         string password,
         CancellationToken cancellationToken = default)
     {
-        var user = await userManager.FindByIdAsync(userId.ToString());
-        if (user is null || !user.IsEnabled)
-        {
-            return Result.Success(false);
-        }
+        DateTimeOffset? checkedAtUtc = null;
+        PasswordSnapshot? baseline = null;
+        PasswordTarget? target = null;
+        Result<bool>? settledReadOnlyResult = null;
 
-        if (!await userManager.GetLockoutEnabledAsync(user))
-        {
-            var lockoutEnableResult = await userManager.SetLockoutEnabledAsync(user, true);
-            if (!lockoutEnableResult.Succeeded)
+        return await ExecuteRecoverableAsync(
+            async callbackToken =>
             {
-                return Result.Failure(lockoutEnableResult.Errors.Select(e => e.Description).ToArray());
-            }
-        }
+                settledReadOnlyResult = null;
+                await using var context = _createContext();
+                await using var transaction =
+                    await context.Database.BeginTransactionAsync(callbackToken);
+                await AcquirePasswordCheckLockAsync(
+                    context,
+                    userId,
+                    callbackToken);
+                checkedAtUtc ??= _timeProvider.GetUtcNow();
+                var serializedAtUtc = checkedAtUtc.Value;
+                var user = await context.Users.SingleOrDefaultAsync(
+                    candidate => candidate.Id == userId,
+                    callbackToken);
+                if (user is null || !user.IsEnabled)
+                {
+                    var result = Result.Success(false);
+                    settledReadOnlyResult = result;
+                    await transaction.CommitAsync(callbackToken);
+                    return result;
+                }
 
-        if (await userManager.IsLockedOutAsync(user))
+                var current = PasswordSnapshot.From(user);
+                if (target is not null && target.Matches(current))
+                {
+                    var result = Result.Success(target.PasswordAccepted);
+                    settledReadOnlyResult = result;
+                    await transaction.CommitAsync(callbackToken);
+                    return result;
+                }
+
+                if (baseline is not null && !baseline.Matches(current))
+                {
+                    throw new CloudWriteConflictException();
+                }
+
+                if (user.LockoutEnabled &&
+                    user.LockoutEnd is { } lockoutEnd &&
+                    lockoutEnd > serializedAtUtc)
+                {
+                    var result = Result.Success(false);
+                    settledReadOnlyResult = result;
+                    await transaction.CommitAsync(callbackToken);
+                    return result;
+                }
+
+                baseline ??= current;
+                target ??= CreateCheckTarget(user, password, serializedAtUtc);
+                if (target.Matches(current))
+                {
+                    var result = Result.Success(target.PasswordAccepted);
+                    settledReadOnlyResult = result;
+                    await transaction.CommitAsync(callbackToken);
+                    return result;
+                }
+
+                var exactTarget = target ?? throw new InvalidOperationException(
+                    "Password write target was not established.");
+                ApplyTarget(user, exactTarget);
+                await context.SaveChangesAsync(callbackToken);
+                await transaction.CommitAsync(callbackToken);
+                return Result.Success(exactTarget.PasswordAccepted);
+            },
+            async token =>
+            {
+                await using var context = _createContext();
+                var current = await context.Users
+                    .AsNoTracking()
+                    .SingleOrDefaultAsync(
+                        candidate => candidate.Id == userId,
+                        token);
+                return Observe(
+                    current is null ? null : PasswordSnapshot.From(current),
+                    baseline,
+                    target);
+            },
+            targetResult: () => Result.Success(target?.PasswordAccepted ?? false),
+            cancellationToken,
+            knownResult: () => settledReadOnlyResult);
+    }
+
+    private static async Task AcquirePasswordCheckLockAsync(
+        IIoTDbContext context,
+        Guid userId,
+        CancellationToken cancellationToken)
+    {
+        if (!context.Database.IsNpgsql())
         {
-            return Result.Success(false);
+            return;
         }
 
-        var isValid = await userManager.CheckPasswordAsync(user, password);
-        if (!isValid)
-        {
-            var failedResult = await userManager.AccessFailedAsync(user);
-            return failedResult.Succeeded
-                ? Result.Success(false)
-                : Result.Failure(failedResult.Errors.Select(e => e.Description).ToArray());
-        }
+        var lockKey = GetPasswordCheckLockKey(userId);
+        await context.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock({lockKey});",
+            cancellationToken);
+    }
 
-        var resetResult = await userManager.ResetAccessFailedCountAsync(user);
-        return resetResult.Succeeded
-            ? Result.Success(true)
-            : Result.Failure(resetResult.Errors.Select(e => e.Description).ToArray());
+    internal static long GetPasswordCheckLockKey(Guid userId)
+    {
+        var userIdBytes = userId.ToByteArray();
+        return BinaryPrimitives.ReadInt64BigEndian(
+            userIdBytes.AsSpan(0, sizeof(long))) ^ PasswordCheckLockNamespace;
     }
 
     public async Task<Result> ChangePasswordAsync(
@@ -69,39 +171,350 @@ public sealed class IdentityPasswordService(UserManager<ApplicationUser> userMan
         string newPassword,
         CancellationToken cancellationToken = default)
     {
-        var user = await userManager.FindByIdAsync(userId.ToString());
-        if (user is null)
-        {
-            return Result.Failure("用户不存在");
-        }
-
-        var result = await userManager.ChangePasswordAsync(user, currentPassword, newPassword);
-        return result.ToResult();
+        var result = await SetStandalonePasswordAsync(
+            userId,
+            currentPassword,
+            newPassword,
+            requireCurrentPassword: true,
+            cancellationToken);
+        return result.IsSuccess
+            ? Result.Success()
+            : Result.Failure(result.Errors?.ToArray() ?? ["密码修改失败"]);
     }
 
-    public async Task<Result<bool>> ResetPasswordAsync(
+    public Task<Result<bool>> ResetPasswordAsync(
         Guid userId,
         string newPassword,
         CancellationToken cancellationToken = default)
+        => SetStandalonePasswordAsync(
+            userId,
+            currentPassword: null,
+            newPassword,
+            requireCurrentPassword: false,
+            cancellationToken);
+
+    private async Task<Result<bool>> SetStandalonePasswordAsync(
+        Guid userId,
+        string? currentPassword,
+        string newPassword,
+        bool requireCurrentPassword,
+        CancellationToken cancellationToken)
     {
-        var user = await userManager.FindByIdAsync(userId.ToString());
-        if (user is null)
+        PasswordSnapshot? baseline = null;
+        PasswordTarget? target = null;
+        Result<bool>? settledReadOnlyResult = null;
+
+        return await ExecuteRecoverableAsync(
+            async callbackToken =>
+            {
+                settledReadOnlyResult = null;
+                await using var context = _createContext();
+                await using var transaction =
+                    await context.Database.BeginTransactionAsync(callbackToken);
+                var user = await context.Users.SingleOrDefaultAsync(
+                    candidate => candidate.Id == userId,
+                    callbackToken);
+                if (user is null)
+                {
+                    Result<bool> result = Result.Failure("用户不存在");
+                    settledReadOnlyResult = result;
+                    await transaction.CommitAsync(callbackToken);
+                    return result;
+                }
+
+                var current = PasswordSnapshot.From(user);
+                if (target is not null && target.Matches(current))
+                {
+                    await transaction.CommitAsync(callbackToken);
+                    return Result.Success(true);
+                }
+
+                if (baseline is not null && !baseline.Matches(current))
+                {
+                    throw new CloudWriteConflictException();
+                }
+
+                if (baseline is null)
+                {
+                    if (requireCurrentPassword &&
+                        !VerifyPassword(user, currentPassword ?? string.Empty))
+                    {
+                        Result<bool> result = Result.Failure("当前密码不正确");
+                        settledReadOnlyResult = result;
+                        await transaction.CommitAsync(callbackToken);
+                        return result;
+                    }
+
+                    var validation = await ValidatePasswordAsync(user, newPassword);
+                    if (!validation.Succeeded)
+                    {
+                        Result<bool> result = Result.Failure(
+                            validation.Errors
+                                .Select(error => error.Description)
+                                .ToArray());
+                        settledReadOnlyResult = result;
+                        await transaction.CommitAsync(callbackToken);
+                        return result;
+                    }
+
+                    baseline = current;
+                    target = new PasswordTarget(
+                        userManager.PasswordHasher.HashPassword(user, newPassword),
+                        Guid.NewGuid().ToString("N"),
+                        Guid.NewGuid().ToString("N"),
+                        current.LockoutEnabled,
+                        current.AccessFailedCount,
+                        current.LockoutEnd,
+                        PasswordAccepted: true);
+                }
+
+                var exactTarget = target ?? throw new InvalidOperationException(
+                    "Password write target was not established.");
+                ApplyTarget(user, exactTarget);
+                await context.SaveChangesAsync(callbackToken);
+                await transaction.CommitAsync(callbackToken);
+                return Result.Success(true);
+            },
+            async token =>
+            {
+                await using var context = _createContext();
+                var current = await context.Users
+                    .AsNoTracking()
+                    .SingleOrDefaultAsync(
+                        candidate => candidate.Id == userId,
+                        token);
+                return Observe(
+                    current is null ? null : PasswordSnapshot.From(current),
+                    baseline,
+                    target);
+            },
+            targetResult: () => Result.Success(true),
+            cancellationToken,
+            knownResult: () => settledReadOnlyResult);
+    }
+
+    private async Task<Result<bool>> ExecuteRecoverableAsync(
+        Func<CancellationToken, Task<Result<bool>>> attempt,
+        Func<CancellationToken, Task<WriteObservation>> observe,
+        Func<Result<bool>> targetResult,
+        CancellationToken cancellationToken,
+        Func<Result<bool>?>? knownResult = null)
+    {
+        try
         {
-            return Result.Failure("用户不存在");
+            await using var strategyContext = _createContext();
+            var strategy = strategyContext.Database.CreateExecutionStrategy();
+            var result = await strategy.ExecuteAsync(attempt, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return result;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (CloudWriteConflictException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
+        }
+        catch
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (knownResult?.Invoke() is { } settledResult)
+            {
+                return settledResult;
+            }
+
+            using var timeout = new CancellationTokenSource(ObservationTimeout);
+            WriteObservation observation;
+            try
+            {
+                observation = await observe(timeout.Token);
+            }
+            catch
+            {
+                observation = WriteObservation.Unknown;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            return observation switch
+            {
+                WriteObservation.Target => targetResult(),
+                WriteObservation.Conflict => throw new CloudWriteConflictException(),
+                _ => throw new CloudWriteCommitUnknownException()
+            };
+        }
+    }
+
+    private PasswordTarget CreateCheckTarget(
+        ApplicationUser user,
+        string password,
+        DateTimeOffset checkedAtUtc)
+    {
+        var verification = VerifyPasswordResult(user, password);
+        var accepted = verification is
+            PasswordVerificationResult.Success or
+            PasswordVerificationResult.SuccessRehashNeeded;
+        var lockoutEnabled = true;
+        var accessFailedCount = accepted
+            ? 0
+            : checked(user.AccessFailedCount + 1);
+        var lockoutEnd = user.LockoutEnd;
+        if (!accepted &&
+            accessFailedCount >= userManager.Options.Lockout.MaxFailedAccessAttempts)
+        {
+            lockoutEnd = checkedAtUtc.Add(
+                userManager.Options.Lockout.DefaultLockoutTimeSpan);
+            accessFailedCount = 0;
         }
 
-        if (!string.IsNullOrWhiteSpace(user.PasswordHash))
+        var passwordHash = verification == PasswordVerificationResult.SuccessRehashNeeded
+            ? userManager.PasswordHasher.HashPassword(user, password)
+            : user.PasswordHash;
+        var stateChanged =
+            !string.Equals(passwordHash, user.PasswordHash, StringComparison.Ordinal) ||
+            lockoutEnabled != user.LockoutEnabled ||
+            accessFailedCount != user.AccessFailedCount ||
+            !Nullable.Equals(lockoutEnd, user.LockoutEnd);
+        return new PasswordTarget(
+            passwordHash,
+            user.SecurityStamp,
+            stateChanged
+                ? Guid.NewGuid().ToString("N")
+                : user.ConcurrencyStamp,
+            lockoutEnabled,
+            accessFailedCount,
+            lockoutEnd,
+            accepted);
+    }
+
+    private Task<IdentityResult> ValidatePasswordAsync(
+        ApplicationUser user,
+        string password)
+        => ValidatePasswordCoreAsync(user, password);
+
+    private async Task<IdentityResult> ValidatePasswordCoreAsync(
+        ApplicationUser user,
+        string password)
+    {
+        var errors = new List<IdentityError>();
+        foreach (var validator in userManager.PasswordValidators)
         {
-            var removeResult = await userManager.RemovePasswordAsync(user);
-            if (!removeResult.Succeeded)
+            var result = await validator.ValidateAsync(userManager, user, password);
+            if (!result.Succeeded)
             {
-                return Result.Failure(removeResult.Errors.Select(e => e.Description).ToArray());
+                errors.AddRange(result.Errors);
             }
         }
 
-        var addResult = await userManager.AddPasswordAsync(user, newPassword);
-        return addResult.Succeeded
-            ? Result.Success(true)
-            : Result.Failure(addResult.Errors.Select(e => e.Description).ToArray());
+        return errors.Count == 0
+            ? IdentityResult.Success
+            : IdentityResult.Failed(errors.ToArray());
+    }
+
+    private bool VerifyPassword(ApplicationUser user, string password)
+        => VerifyPasswordResult(user, password) is
+            PasswordVerificationResult.Success or
+            PasswordVerificationResult.SuccessRehashNeeded;
+
+    private PasswordVerificationResult VerifyPasswordResult(
+        ApplicationUser user,
+        string password)
+    {
+        return string.IsNullOrWhiteSpace(user.PasswordHash)
+            ? PasswordVerificationResult.Failed
+            : userManager.PasswordHasher.VerifyHashedPassword(
+                user,
+                user.PasswordHash,
+                password);
+    }
+
+    private static void ApplyTarget(
+        ApplicationUser user,
+        PasswordTarget target)
+    {
+        user.PasswordHash = target.PasswordHash;
+        user.SecurityStamp = target.SecurityStamp;
+        user.ConcurrencyStamp = target.ConcurrencyStamp;
+        user.LockoutEnabled = target.LockoutEnabled;
+        user.AccessFailedCount = target.AccessFailedCount;
+        user.LockoutEnd = target.LockoutEnd;
+    }
+
+    private static WriteObservation Observe(
+        PasswordSnapshot? current,
+        PasswordSnapshot? baseline,
+        PasswordTarget? target)
+    {
+        if (target is not null && target.Matches(current))
+        {
+            return WriteObservation.Target;
+        }
+
+        if (baseline is null || target is null)
+        {
+            return WriteObservation.Unknown;
+        }
+
+        if (baseline.Matches(current))
+        {
+            return WriteObservation.Baseline;
+        }
+
+        return WriteObservation.Conflict;
+    }
+
+    private sealed record PasswordSnapshot(
+        string? PasswordHash,
+        string? SecurityStamp,
+        string? ConcurrencyStamp,
+        bool LockoutEnabled,
+        int AccessFailedCount,
+        DateTimeOffset? LockoutEnd)
+    {
+        public static PasswordSnapshot From(ApplicationUser user)
+            => new(
+                user.PasswordHash,
+                user.SecurityStamp,
+                user.ConcurrencyStamp,
+                user.LockoutEnabled,
+                user.AccessFailedCount,
+                user.LockoutEnd);
+
+        public bool Matches(PasswordSnapshot? other)
+            => other is not null &&
+               string.Equals(PasswordHash, other.PasswordHash, StringComparison.Ordinal) &&
+               string.Equals(SecurityStamp, other.SecurityStamp, StringComparison.Ordinal) &&
+               string.Equals(ConcurrencyStamp, other.ConcurrencyStamp, StringComparison.Ordinal) &&
+               LockoutEnabled == other.LockoutEnabled &&
+               AccessFailedCount == other.AccessFailedCount &&
+               Nullable.Equals(LockoutEnd, other.LockoutEnd);
+    }
+
+    private sealed record PasswordTarget(
+        string? PasswordHash,
+        string? SecurityStamp,
+        string? ConcurrencyStamp,
+        bool LockoutEnabled,
+        int AccessFailedCount,
+        DateTimeOffset? LockoutEnd,
+        bool PasswordAccepted)
+    {
+        public bool Matches(PasswordSnapshot? snapshot)
+            => snapshot is not null &&
+               string.Equals(PasswordHash, snapshot.PasswordHash, StringComparison.Ordinal) &&
+               string.Equals(SecurityStamp, snapshot.SecurityStamp, StringComparison.Ordinal) &&
+               string.Equals(ConcurrencyStamp, snapshot.ConcurrencyStamp, StringComparison.Ordinal) &&
+               LockoutEnabled == snapshot.LockoutEnabled &&
+               AccessFailedCount == snapshot.AccessFailedCount &&
+               Nullable.Equals(LockoutEnd, snapshot.LockoutEnd);
+    }
+
+    private enum WriteObservation
+    {
+        Baseline,
+        Target,
+        Conflict,
+        Unknown
     }
 }

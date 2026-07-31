@@ -6,9 +6,19 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
     <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <DefineConstants>$(DefineConstants);CLOUD_ANALYZER</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.6.0" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="IIoT.CloudPlatform.ArchitectureTests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\shared\IIoT.SharedKernel\Architecture\ReadOnlySqlGuard.cs"
+             Link="Architecture\ReadOnlySqlGuard.cs" />
   </ItemGroup>
 </Project>

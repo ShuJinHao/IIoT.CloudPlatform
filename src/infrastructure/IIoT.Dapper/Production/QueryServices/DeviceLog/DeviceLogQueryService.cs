@@ -25,7 +25,8 @@ internal class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : I
 
         if (normalizedLevels is { Count: > 0 })
         {
-            conditions += " AND upper(l.level) = ANY(@Levels)";
+            conditions +=
+                " AND pg_catalog.upper(l.level::text) = ANY(@Levels)";
             parameters.Add("Levels", normalizedLevels.ToArray());
         }
         else if (!string.IsNullOrWhiteSpace(level))
@@ -68,7 +69,7 @@ internal class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : I
             OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY";
 
         var countSql = $@"
-            SELECT COUNT(*)
+            SELECT pg_catalog.count(*)
             FROM device_logs l
             {conditions}";
 
@@ -76,8 +77,14 @@ internal class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : I
         parameters.Add("Offset", offset);
         parameters.Add("PageSize", pagination.PageSize);
 
-        var command = new CommandDefinition(dataSql, parameters, cancellationToken: cancellationToken);
-        var countCommand = new CommandDefinition(countSql, parameters, cancellationToken: cancellationToken);
+        var command = new ReadOnlyCommandDefinition(
+            dataSql,
+            parameters,
+            cancellationToken: cancellationToken);
+        var countCommand = new ReadOnlyCommandDefinition(
+            countSql,
+            parameters,
+            cancellationToken: cancellationToken);
 
         var items = (await connection.QueryAsync<DeviceLogListItemDto>(command)).ToList();
         var totalCount = await connection.ExecuteScalarAsync<int>(countCommand);
@@ -99,7 +106,8 @@ internal class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : I
 
         using var connection = connectionFactory.CreateConnection();
 
-        var conditions = "WHERE upper(l.level) = ANY(@Levels)";
+        var conditions =
+            "WHERE pg_catalog.upper(l.level::text) = ANY(@Levels)";
         var parameters = new DynamicParameters();
         parameters.Add("Levels", normalizedLevels.ToArray());
         parameters.Add("Limit", limit);
@@ -130,7 +138,10 @@ internal class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : I
             ORDER BY l.log_time DESC
             LIMIT @Limit";
 
-        var command = new CommandDefinition(sql, parameters, cancellationToken: cancellationToken);
+        var command = new ReadOnlyCommandDefinition(
+            sql,
+            parameters,
+            cancellationToken: cancellationToken);
         var items = await connection.QueryAsync<DeviceLogListItemDto>(command);
         return items.ToList();
     }
@@ -149,7 +160,9 @@ internal class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : I
 
         using var connection = connectionFactory.CreateConnection();
 
-        var conditions = "WHERE l.log_time >= @WindowStart AND upper(l.level) = ANY(@Levels)";
+        var conditions =
+            "WHERE l.log_time >= @WindowStart " +
+            "AND pg_catalog.upper(l.level::text) = ANY(@Levels)";
         var parameters = new DynamicParameters();
         parameters.Add("WindowStart", windowStart);
         parameters.Add("Levels", normalizedLevels.ToArray());
@@ -167,12 +180,15 @@ internal class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : I
         }
 
         var sql = $@"
-            SELECT COUNT(*)::int
+            SELECT pg_catalog.count(*)::int
             FROM device_logs l
             INNER JOIN devices d ON l.device_id = d.id
             {conditions}";
 
-        var command = new CommandDefinition(sql, parameters, cancellationToken: cancellationToken);
+        var command = new ReadOnlyCommandDefinition(
+            sql,
+            parameters,
+            cancellationToken: cancellationToken);
         return await connection.ExecuteScalarAsync<int>(command);
     }
 }

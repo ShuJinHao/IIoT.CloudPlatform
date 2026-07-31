@@ -43,16 +43,22 @@ internal sealed class AiProductionRecordQueryService(IDbConnectionFactory connec
             OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY
             """;
         var countSql = $"""
-            SELECT COUNT(*)
+            SELECT pg_catalog.count(*)
             FROM pass_station_records r
             INNER JOIN devices d ON r.device_id = d.id
             {conditions}
             """;
 
         var rows = (await connection.QueryAsync<AiProductionRecordRow>(
-            new CommandDefinition(dataSql, parameters, cancellationToken: cancellationToken))).ToList();
+            new ReadOnlyCommandDefinition(
+                dataSql,
+                parameters,
+                cancellationToken: cancellationToken))).ToList();
         var totalCount = await connection.ExecuteScalarAsync<int>(
-            new CommandDefinition(countSql, parameters, cancellationToken: cancellationToken));
+            new ReadOnlyCommandDefinition(
+                countSql,
+                parameters,
+                cancellationToken: cancellationToken));
 
         return (rows.Select(ToItem).ToList(), totalCount);
     }

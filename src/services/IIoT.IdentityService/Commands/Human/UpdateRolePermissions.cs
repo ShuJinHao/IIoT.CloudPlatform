@@ -54,7 +54,8 @@ public class UpdateRolePermissionsHandler(
         var normalizedPermissions = validation.Permissions.ToList();
         var result = await rolePolicyService.UpdateRolePermissionsAsync(
             roleName,
-            normalizedPermissions);
+            normalizedPermissions,
+            cancellationToken);
         var afterPermissions = await rolePolicyService.GetRolePermissionsAsync(roleName)
             ?? (result.IsSuccess && result.Value ? normalizedPermissions : beforePermissions);
 

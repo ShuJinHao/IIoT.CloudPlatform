@@ -17,6 +17,7 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\analyzers\IIoT.CloudPlatform.Analyzers\IIoT.CloudPlatform.Analyzers.csproj" />
     <ProjectReference Include="..\..\hosts\IIoT.HttpApi\IIoT.HttpApi.csproj" />
     <ProjectReference Include="..\..\hosts\IIoT.MigrationWorkApp\IIoT.MigrationWorkApp.csproj" />
     <ProjectReference Include="..\..\infrastructure\IIoT.EntityFrameworkCore\IIoT.EntityFrameworkCore.csproj" />
