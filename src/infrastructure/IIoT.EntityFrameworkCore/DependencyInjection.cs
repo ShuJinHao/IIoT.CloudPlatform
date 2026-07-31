@@ -78,15 +78,23 @@ public static class DependencyInjection
         builder.Services.AddScoped<IRefreshTokenService, EfRefreshTokenService>();
         builder.Services.AddScoped<IHumanSessionRevocationService, HumanSessionRevocationService>();
         builder.Services.AddScoped<IIndependentHumanSessionRevocationService, IndependentHumanSessionRevocationService>();
+        builder.Services.AddSingleton<HumanSessionIssuanceProcessGate>();
+        builder.Services.AddScoped<IHumanSessionIssuanceLock, HumanSessionIssuanceLock>();
         builder.Services.AddScoped<IEdgeReleaseApiKeyService, EdgeReleaseApiKeyService>();
         builder.Services.AddScoped<DomainEventDispatchContext>();
         builder.Services.AddScoped<IDomainEventDispatchContext>(provider =>
             provider.GetRequiredService<DomainEventDispatchContext>());
         builder.Services.AddScoped<IUploadReceiveRegistry, EfUploadReceiveRegistry>();
+        builder.Services.AddScoped<
+            IUploadReceiveObservationRetentionPruner,
+            EfUploadReceiveObservationRetentionPruner>();
         builder.Services.AddScoped<IClientReleaseVersionObservationReader, EfClientReleaseVersionObservationReader>();
         builder.Services.AddScoped<IRolePolicyService, RolePolicyService>();
         builder.Services.AddScoped<IUserQueryService, UserQueryService>();
         builder.Services.AddScoped<IAuditTrailService, Auditing.EfAuditTrailService>();
+        builder.Services.AddScoped<
+            IOidcIssuanceAuditTrailService,
+            Auditing.EfOidcIssuanceAuditTrailService>();
         builder.Services.AddScoped<IUnitOfWork, EfUnitOfWork>();
         builder.Services.AddScoped<CloudWriteObservationReader>();
         builder.Services.AddScoped<IProcessWriteObservationReader>(provider =>

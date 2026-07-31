@@ -11,6 +11,13 @@ public interface IUploadReceiveRegistry
         CancellationToken cancellationToken = default);
 }
 
+public interface IUploadReceiveObservationRetentionPruner
+{
+    Task<int> PruneExpiredAsync(
+        DateTimeOffset observedAtUtc,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed record UploadReceiveRegistrationResult(
     bool IsDuplicate,
     Guid? OutboxMessageId)

@@ -1,3 +1,4 @@
+using System.Data;
 using System.Data.Common;
 using System.Text.Json;
 using IIoT.Core.Employees.Aggregates.Employees;
@@ -269,6 +270,82 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 .CountAsync(
                     candidate => candidate.Id == registered.OutboxMessageId,
                     budget.Token));
+    }
+
+    [Fact]
+    public async Task UploadReceiveObservationRetentionPruner_ShouldDeleteAllExpiredBatchesWithoutFutureDuplicate()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        await using var dbContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-upload-retention-{Guid.NewGuid():N}");
+        var registry = new EfUploadReceiveRegistry(dbContext);
+        var deviceId = Guid.NewGuid();
+        var requestId = $"retention-{Guid.NewGuid():N}";
+        await registry.RegisterAndEnqueueAsync(
+            deviceId,
+            "hourly-capacity",
+            requestId,
+            $"request:{requestId}",
+            new HourlyCapacityReceivedEvent
+            {
+                DeviceId = deviceId,
+                Date = DateOnly.FromDateTime(DateTime.UtcNow),
+                ShiftCode = "D",
+                Hour = 11,
+                Minute = 0,
+                TimeLabel = "11:00",
+                TotalCount = 4,
+                OkCount = 4,
+                NgCount = 0,
+                ReceivedAtUtc = DateTime.UtcNow
+            },
+            budget.Token);
+        var registration = await dbContext.UploadReceiveRegistrations
+            .AsNoTracking()
+            .SingleAsync(
+                candidate =>
+                    candidate.DeviceId == deviceId
+                    && candidate.MessageType == "hourly-capacity",
+                budget.Token);
+        var observedAtUtc = DateTimeOffset.UtcNow;
+        var freshObservationId = Guid.NewGuid();
+        var expired = Enumerable
+            .Range(
+                0,
+                EfUploadReceiveObservationRetentionPruner.CleanupBatchSize + 1)
+            .Select(index => UploadReceiveObservation.Create(
+                Guid.NewGuid(),
+                registration.Id,
+                observedAtUtc
+                - EfUploadReceiveObservationRetentionPruner.Retention
+                - TimeSpan.FromMinutes(index + 1)))
+            .ToArray();
+        dbContext.UploadReceiveObservations.AddRange(expired);
+        dbContext.UploadReceiveObservations.Add(
+            UploadReceiveObservation.Create(
+                freshObservationId,
+                registration.Id,
+                observedAtUtc - TimeSpan.FromMinutes(1)));
+        await dbContext.SaveChangesAsync(budget.Token);
+        dbContext.ChangeTracker.Clear();
+
+        var deleted =
+            await new EfUploadReceiveObservationRetentionPruner(dbContext)
+                .PruneExpiredAsync(observedAtUtc, budget.Token);
+        dbContext.ChangeTracker.Clear();
+
+        Assert.Equal(expired.Length, deleted);
+        var remaining = await dbContext.UploadReceiveObservations
+            .AsNoTracking()
+            .Where(
+                observation =>
+                    observation.RegistrationId == registration.Id)
+            .ToListAsync(budget.Token);
+        Assert.Single(remaining);
+        Assert.Equal(freshObservationId, remaining[0].Id);
     }
 
     [Fact]
@@ -832,6 +909,820 @@ public sealed class ProductionRetryTransactionPostgresTests(
             .ToListAsync(budget.Token);
         Assert.Equal(2, sessions.Count);
         Assert.All(sessions, session => Assert.Null(session.RevokedAtUtc));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task IndependentHumanSessionRevocation_ShouldNotMissOidcGrantCommittedUnderIssuanceLock(
+        bool tokenExchange)
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var subjectId = Guid.NewGuid();
+        await using var issuanceContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-issuance-{Guid.NewGuid():N}");
+        var issuanceLock = new HumanSessionIssuanceLock(
+            issuanceContext,
+            new HumanSessionIssuanceProcessGate());
+        var revocationApplicationName =
+            $"tx-03b3-oidc-revoke-{Guid.NewGuid():N}";
+        await using var revocationContext = CreateRetryContext(
+            budget.ConnectionString,
+            revocationApplicationName);
+        var revocation = new IndependentHumanSessionRevocationService(
+            revocationContext);
+        var authorizationId = Guid.NewGuid();
+        var tokenId = Guid.NewGuid();
+        Task? revokeTask = null;
+
+        async Task PersistGrantAsync()
+        {
+            Assert.NotNull(
+                issuanceContext.Database.CurrentTransaction);
+            revokeTask = revocation.RevokeAllAsync(
+                subjectId,
+                "manual-revoke",
+                budget.Token);
+            await WaitForLockWaitAsync(
+                budget.ConnectionString,
+                revocationApplicationName,
+                budget.Token);
+
+            var authorization =
+                new OpenIddictEntityFrameworkCoreAuthorization<Guid>
+                {
+                    Id = authorizationId,
+                    Subject = subjectId.ToString(),
+                    Status = OpenIddictConstants.Statuses.Valid,
+                    Type = "permanent",
+                    ConcurrencyToken = Guid.NewGuid().ToString("N")
+                };
+            issuanceContext.OpenIddictAuthorizations.Add(authorization);
+            if (tokenExchange)
+            {
+                issuanceContext.OpenIddictTokens.Add(
+                    new OpenIddictEntityFrameworkCoreToken<Guid>
+                    {
+                        Id = tokenId,
+                        Authorization = authorization,
+                        Subject = subjectId.ToString(),
+                        Status = OpenIddictConstants.Statuses.Valid,
+                        Type = "access_token",
+                        ConcurrencyToken = Guid.NewGuid().ToString("N")
+                    });
+            }
+
+            await issuanceContext.SaveChangesAsync(budget.Token);
+        }
+
+        var executed = tokenExchange
+            ? await issuanceLock.TryExecuteTokenExchangeAsync(
+                PersistGrantAsync,
+                budget.Token)
+            : await issuanceLock.TryExecuteAuthorizationAsync(
+                subjectId,
+                PersistGrantAsync,
+                budget.Token);
+        Assert.True(executed);
+        Assert.NotNull(revokeTask);
+        await Assert.ThrowsAsync<CloudWriteConflictException>(
+            () => revokeTask!);
+
+        await using var verificationContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-verify-{Guid.NewGuid():N}");
+        Assert.Equal(
+            OpenIddictConstants.Statuses.Valid,
+            (await verificationContext.OpenIddictAuthorizations
+                .AsNoTracking()
+                .SingleAsync(
+                    authorization => authorization.Id == authorizationId,
+                    budget.Token)).Status);
+        Assert.Equal(
+            tokenExchange ? 1 : 0,
+            await verificationContext.OpenIddictTokens
+                .AsNoTracking()
+                .CountAsync(token => token.Id == tokenId, budget.Token));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OidcIssuanceSuccessAudit_ShouldCommitAtomicallyWithGrant(
+        bool commit)
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var authorizationId = Guid.NewGuid();
+        var subjectId = Guid.NewGuid();
+        var auditKey = $"oidc-issuance-{Guid.NewGuid():N}";
+        await using var context = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-audit-{Guid.NewGuid():N}");
+        var auditTrail = new EfOidcIssuanceAuditTrailService(context);
+        var strategy = context.Database.CreateExecutionStrategy();
+
+        await strategy.ExecuteAsync(
+            async callbackToken =>
+            {
+                await using var transaction =
+                    await context.Database.BeginTransactionAsync(
+                        IsolationLevel.ReadCommitted,
+                        callbackToken);
+                await auditTrail.StageSuccessAsync(
+                    new AuditTrailEntry(
+                        subjectId,
+                        "E-OIDC-AUDIT",
+                        "CloudOidcAuthorize",
+                        "CloudOidc",
+                        "aicopilot",
+                        DateTime.UtcNow,
+                        true,
+                        "OIDC authorize 成功。",
+                        IdempotencyKey: auditKey),
+                    callbackToken);
+                context.OpenIddictAuthorizations.Add(
+                    new OpenIddictEntityFrameworkCoreAuthorization<Guid>
+                    {
+                        Id = authorizationId,
+                        Subject = subjectId.ToString(),
+                        Status = OpenIddictConstants.Statuses.Valid,
+                        Type = "permanent",
+                        ConcurrencyToken = Guid.NewGuid().ToString("N")
+                    });
+                await context.SaveChangesAsync(callbackToken);
+                if (commit)
+                {
+                    await transaction.CommitAsync(callbackToken);
+                }
+                else
+                {
+                    await transaction.RollbackAsync(callbackToken);
+                }
+            },
+            budget.Token);
+
+        await using var verificationContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-audit-verify-{Guid.NewGuid():N}");
+        Assert.Equal(
+            commit ? 1 : 0,
+            await verificationContext.AuditTrails
+                .AsNoTracking()
+                .CountAsync(
+                    audit => audit.IdempotencyKey == auditKey,
+                    budget.Token));
+        Assert.Equal(
+            commit ? 1 : 0,
+            await verificationContext.OpenIddictAuthorizations
+                .AsNoTracking()
+                .CountAsync(
+                    authorization =>
+                        authorization.Id == authorizationId,
+                    budget.Token));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OidcIssuanceLock_ShouldRecoverCommittedResponseAfterAcknowledgementLoss(
+        bool tokenExchange)
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var context = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-commit-recovery-{Guid.NewGuid():N}",
+            new WriteTrackingCommandInterceptor(interceptor),
+            interceptor);
+        var auditTrail =
+            new EfOidcIssuanceAuditTrailService(
+                context,
+                () => CreateRetryContext(
+                    budget.ConnectionString,
+                    $"tx-03b3-oidc-commit-observe-{Guid.NewGuid():N}"));
+        var issuanceLock = new HumanSessionIssuanceLock(
+            context,
+            new HumanSessionIssuanceProcessGate(),
+            auditTrail);
+        var authorizationId = Guid.NewGuid();
+        var tokenId = Guid.NewGuid();
+        var auditKey = $"oidc-commit-recovery-{Guid.NewGuid():N}";
+        var operationAttempts = 0;
+        interceptor.Arm();
+
+        async Task PersistGrantAsync()
+        {
+            Interlocked.Increment(ref operationAttempts);
+            await auditTrail.StageSuccessAsync(
+                new AuditTrailEntry(
+                    Guid.NewGuid(),
+                    "E-OIDC-COMMIT",
+                    tokenExchange
+                        ? "CloudOidcToken"
+                        : "CloudOidcAuthorize",
+                    "CloudOidc",
+                    "aicopilot",
+                    DateTime.UtcNow,
+                    true,
+                    "OIDC issuance 成功。",
+                    IdempotencyKey: auditKey),
+                budget.Token);
+            var authorization =
+                new OpenIddictEntityFrameworkCoreAuthorization<Guid>
+                {
+                    Id = authorizationId,
+                    Subject = Guid.NewGuid().ToString(),
+                    Status = OpenIddictConstants.Statuses.Valid,
+                    Type = "permanent",
+                    ConcurrencyToken = Guid.NewGuid().ToString("N")
+                };
+            context.OpenIddictAuthorizations.Add(authorization);
+            if (tokenExchange)
+            {
+                context.OpenIddictTokens.Add(
+                    new OpenIddictEntityFrameworkCoreToken<Guid>
+                    {
+                        Id = tokenId,
+                        Authorization = authorization,
+                        Subject = authorization.Subject,
+                        Status = OpenIddictConstants.Statuses.Valid,
+                        Type = "access_token",
+                        ConcurrencyToken = Guid.NewGuid().ToString("N")
+                    });
+            }
+
+            await context.SaveChangesAsync(budget.Token);
+        }
+
+        var executed = tokenExchange
+            ? await issuanceLock.TryExecuteTokenExchangeAsync(
+                PersistGrantAsync,
+                budget.Token)
+            : await issuanceLock.TryExecuteAuthorizationAsync(
+                Guid.NewGuid(),
+                PersistGrantAsync,
+                budget.Token);
+
+        Assert.True(executed);
+        Assert.Equal(1, operationAttempts);
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+        await using var verificationContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-commit-recovery-verify-{Guid.NewGuid():N}");
+        Assert.Equal(
+            1,
+            await verificationContext.AuditTrails
+                .AsNoTracking()
+                .CountAsync(
+                    audit => audit.IdempotencyKey == auditKey,
+                    budget.Token));
+        Assert.Equal(
+            1,
+            await verificationContext.OpenIddictAuthorizations
+                .AsNoTracking()
+                .CountAsync(
+                    authorization =>
+                        authorization.Id == authorizationId,
+                    budget.Token));
+        Assert.Equal(
+            tokenExchange ? 1 : 0,
+            await verificationContext.OpenIddictTokens
+                .AsNoTracking()
+                .CountAsync(
+                    token => token.Id == tokenId,
+                    budget.Token));
+    }
+
+    [Fact]
+    public async Task OidcIssuanceLock_ShouldFailClosedWhenCommitObservationFails()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var interceptor = new ThrowOnceAfterCommitInterceptor();
+        await using var context = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-observation-failure-{Guid.NewGuid():N}",
+            new WriteTrackingCommandInterceptor(interceptor),
+            interceptor);
+        var realAuditTrail =
+            new EfOidcIssuanceAuditTrailService(context);
+        var auditTrail =
+            new ThrowingObservationOidcIssuanceAuditTrailService(
+                realAuditTrail);
+        var issuanceLock = new HumanSessionIssuanceLock(
+            context,
+            new HumanSessionIssuanceProcessGate(),
+            auditTrail);
+        var authorizationId = Guid.NewGuid();
+        var auditKey = $"oidc-observation-failure-{Guid.NewGuid():N}";
+        interceptor.Arm();
+
+        async Task PersistGrantAsync()
+        {
+            await auditTrail.StageSuccessAsync(
+                new AuditTrailEntry(
+                    Guid.NewGuid(),
+                    "E-OIDC-UNKNOWN",
+                    "CloudOidcToken",
+                    "CloudOidc",
+                    "aicopilot",
+                    DateTime.UtcNow,
+                    true,
+                    "OIDC token exchange 成功。",
+                    IdempotencyKey: auditKey),
+                budget.Token);
+            context.OpenIddictAuthorizations.Add(
+                new OpenIddictEntityFrameworkCoreAuthorization<Guid>
+                {
+                    Id = authorizationId,
+                    Subject = Guid.NewGuid().ToString(),
+                    Status = OpenIddictConstants.Statuses.Valid,
+                    Type = "permanent",
+                    ConcurrencyToken = Guid.NewGuid().ToString("N")
+                });
+            await context.SaveChangesAsync(budget.Token);
+        }
+
+        await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
+            () => issuanceLock.TryExecuteTokenExchangeAsync(
+                PersistGrantAsync,
+                budget.Token));
+
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+        await using var verificationContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-observation-failure-verify-{Guid.NewGuid():N}");
+        Assert.Equal(
+            1,
+            await verificationContext.AuditTrails
+                .AsNoTracking()
+                .CountAsync(
+                    audit => audit.IdempotencyKey == auditKey,
+                    budget.Token));
+        Assert.Equal(
+            1,
+            await verificationContext.OpenIddictAuthorizations
+                .AsNoTracking()
+                .CountAsync(
+                    authorization =>
+                        authorization.Id == authorizationId,
+                    budget.Token));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OidcIssuanceLock_ShouldPropagateCallerCancellationAfterCommit(
+        bool tokenExchange)
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        using var callerCancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(
+                budget.Token);
+        var interceptor =
+            new CancelOnceAfterWriteCommitInterceptor(
+                callerCancellation);
+        await using var context = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-commit-cancel-{Guid.NewGuid():N}",
+            new WriteTrackingCommandInterceptor(interceptor),
+            interceptor);
+        var auditTrail =
+            new EfOidcIssuanceAuditTrailService(context);
+        var issuanceLock = new HumanSessionIssuanceLock(
+            context,
+            new HumanSessionIssuanceProcessGate(),
+            auditTrail);
+        var authorizationId = Guid.NewGuid();
+        var auditKey = $"oidc-commit-cancel-{Guid.NewGuid():N}";
+        interceptor.Arm();
+
+        async Task PersistGrantAsync()
+        {
+            await auditTrail.StageSuccessAsync(
+                new AuditTrailEntry(
+                    Guid.NewGuid(),
+                    "E-OIDC-CANCEL",
+                    tokenExchange
+                        ? "CloudOidcToken"
+                        : "CloudOidcAuthorize",
+                    "CloudOidc",
+                    "aicopilot",
+                    DateTime.UtcNow,
+                    true,
+                    "OIDC issuance 成功。",
+                    IdempotencyKey: auditKey),
+                callerCancellation.Token);
+            context.OpenIddictAuthorizations.Add(
+                new OpenIddictEntityFrameworkCoreAuthorization<Guid>
+                {
+                    Id = authorizationId,
+                    Subject = Guid.NewGuid().ToString(),
+                    Status = OpenIddictConstants.Statuses.Valid,
+                    Type = "permanent",
+                    ConcurrencyToken = Guid.NewGuid().ToString("N")
+                });
+            await context.SaveChangesAsync(
+                callerCancellation.Token);
+        }
+
+        var exception = await Assert.ThrowsAsync<OperationCanceledException>(
+            () => tokenExchange
+                ? issuanceLock.TryExecuteTokenExchangeAsync(
+                    PersistGrantAsync,
+                    callerCancellation.Token)
+                : issuanceLock.TryExecuteAuthorizationAsync(
+                    Guid.NewGuid(),
+                    PersistGrantAsync,
+                    callerCancellation.Token));
+
+        Assert.Equal(
+            callerCancellation.Token,
+            exception.CancellationToken);
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+        await using var verificationContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-commit-cancel-verify-{Guid.NewGuid():N}");
+        Assert.Equal(
+            1,
+            await verificationContext.AuditTrails
+                .AsNoTracking()
+                .CountAsync(
+                    audit => audit.IdempotencyKey == auditKey,
+                    budget.Token));
+        Assert.Equal(
+            1,
+            await verificationContext.OpenIddictAuthorizations
+                .AsNoTracking()
+                .CountAsync(
+                    authorization =>
+                        authorization.Id == authorizationId,
+                    budget.Token));
+    }
+
+    [Fact]
+    public async Task TokenExchangeProcessGate_ShouldQueueBeforeOpeningAnotherDatabaseConnection()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var processGate = new HumanSessionIssuanceProcessGate();
+        var holderApplicationName =
+            $"tx-03b3-token-holder-{Guid.NewGuid():N}";
+        var waiterApplicationName =
+            $"tx-03b3-token-waiter-{Guid.NewGuid():N}";
+        await using var holderContext = CreateRetryContext(
+            budget.ConnectionString,
+            holderApplicationName);
+        await using var waiterContext = CreateRetryContext(
+            budget.ConnectionString,
+            waiterApplicationName);
+        var holder = new HumanSessionIssuanceLock(
+            holderContext,
+            processGate);
+        var waiter = new HumanSessionIssuanceLock(
+            waiterContext,
+            processGate);
+        var holderEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseHolder = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var holderTask = holder.TryExecuteTokenExchangeAsync(
+            async () =>
+            {
+                holderEntered.SetResult();
+                await releaseHolder.Task.WaitAsync(budget.Token);
+            },
+            budget.Token);
+        await holderEntered.Task.WaitAsync(budget.Token);
+
+        try
+        {
+            var waiterTask = waiter
+                .TryExecuteTokenExchangeAsync(
+                    () => Task.CompletedTask,
+                    budget.Token);
+            await WaitForProcessGateWaiterAsync(
+                processGate,
+                budget.Token);
+
+            Assert.Equal(
+                0,
+                await CountPostgresSessionsAsync(
+                    budget.ConnectionString,
+                    waiterApplicationName,
+                    budget.Token));
+
+            releaseHolder.SetResult();
+            Assert.True(await holderTask.WaitAsync(budget.Token));
+            Assert.True(await waiterTask.WaitAsync(budget.Token));
+            Assert.Equal(
+                1,
+                await CountPostgresSessionsAsync(
+                    budget.ConnectionString,
+                    waiterApplicationName,
+                    budget.Token));
+        }
+        finally
+        {
+            releaseHolder.TrySetResult();
+            await holderTask.WaitAsync(budget.Token);
+        }
+    }
+
+    [Fact]
+    public async Task AuthorizationProcessGate_ShouldQueueSameSubjectBeforeOpeningAnotherDatabaseConnection()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var subjectId = Guid.NewGuid();
+        var processGate = new HumanSessionIssuanceProcessGate();
+        var holderApplicationName =
+            $"tx-03b3-auth-holder-{Guid.NewGuid():N}";
+        var waiterApplicationName =
+            $"tx-03b3-auth-waiter-{Guid.NewGuid():N}";
+        await using var holderContext = CreateRetryContext(
+            budget.ConnectionString,
+            holderApplicationName);
+        await using var waiterContext = CreateRetryContext(
+            budget.ConnectionString,
+            waiterApplicationName);
+        var holder = new HumanSessionIssuanceLock(
+            holderContext,
+            processGate);
+        var waiter = new HumanSessionIssuanceLock(
+            waiterContext,
+            processGate);
+        var holderEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseHolder = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var holderTask = holder.TryExecuteAuthorizationAsync(
+            subjectId,
+            async () =>
+            {
+                holderEntered.SetResult();
+                await releaseHolder.Task.WaitAsync(budget.Token);
+            },
+            budget.Token);
+        await holderEntered.Task.WaitAsync(budget.Token);
+
+        try
+        {
+            var waiterTask = waiter
+                .TryExecuteAuthorizationAsync(
+                    subjectId,
+                    () => Task.CompletedTask,
+                    budget.Token);
+            await WaitForAuthorizationProcessGateWaiterAsync(
+                processGate,
+                subjectId,
+                budget.Token);
+
+            Assert.Equal(
+                0,
+                await CountPostgresSessionsAsync(
+                    budget.ConnectionString,
+                    waiterApplicationName,
+                    budget.Token));
+
+            releaseHolder.SetResult();
+            Assert.True(await holderTask.WaitAsync(budget.Token));
+            Assert.True(await waiterTask.WaitAsync(budget.Token));
+            Assert.Equal(
+                1,
+                await CountPostgresSessionsAsync(
+                    budget.ConnectionString,
+                    waiterApplicationName,
+                    budget.Token));
+        }
+        finally
+        {
+            releaseHolder.TrySetResult();
+            await holderTask.WaitAsync(budget.Token);
+        }
+    }
+
+    [Fact]
+    public async Task AuthorizationProcessGate_ShouldCapDistinctSubjectsBeforeOpeningMoreDatabaseConnections()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var processGate = new HumanSessionIssuanceProcessGate();
+        var holderApplicationName =
+            $"tx-03b3-auth-cap-holders-{Guid.NewGuid():N}";
+        var waiterApplicationName =
+            $"tx-03b3-auth-cap-waiter-{Guid.NewGuid():N}";
+        await using var waiterContext = CreateRetryContext(
+            budget.ConnectionString,
+            waiterApplicationName);
+        var waiter = new HumanSessionIssuanceLock(
+            waiterContext,
+            processGate);
+        var holderContexts = new List<IIoTDbContext>();
+        var holderReleases = new List<TaskCompletionSource>();
+        var holderTasks = new List<Task<bool>>();
+        var waiterEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseWaiter = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool>? waiterTask = null;
+
+        try
+        {
+            for (var index = 0;
+                 index <
+                 HumanSessionIssuanceProcessGate
+                     .AuthorizationDatabaseLeaseLimit;
+                 index++)
+            {
+                var holderContext = CreateRetryContext(
+                    budget.ConnectionString,
+                    holderApplicationName);
+                holderContexts.Add(holderContext);
+                var holder = new HumanSessionIssuanceLock(
+                    holderContext,
+                    processGate);
+                var holderEntered = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                var releaseHolder = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                holderReleases.Add(releaseHolder);
+                holderTasks.Add(
+                    holder.TryExecuteAuthorizationAsync(
+                        Guid.NewGuid(),
+                        async () =>
+                        {
+                            holderEntered.SetResult();
+                            await releaseHolder.Task.WaitAsync(
+                                budget.Token);
+                        },
+                        budget.Token));
+                await holderEntered.Task.WaitAsync(budget.Token);
+            }
+
+            Assert.Equal(
+                HumanSessionIssuanceProcessGate
+                    .AuthorizationDatabaseLeaseLimit,
+                await CountPostgresSessionsAsync(
+                    budget.ConnectionString,
+                    holderApplicationName,
+                    budget.Token));
+
+            waiterTask = waiter
+                .TryExecuteAuthorizationAsync(
+                    Guid.NewGuid(),
+                    async () =>
+                    {
+                        waiterEntered.SetResult();
+                        await releaseWaiter.Task.WaitAsync(budget.Token);
+                    },
+                    budget.Token);
+            await WaitForAuthorizationDatabaseLeaseWaiterAsync(
+                processGate,
+                budget.Token);
+
+            Assert.Equal(
+                0,
+                await CountPostgresSessionsAsync(
+                    budget.ConnectionString,
+                    waiterApplicationName,
+                    budget.Token));
+
+            holderReleases[0].SetResult();
+            Assert.True(
+                await holderTasks[0].WaitAsync(budget.Token));
+            await waiterEntered.Task.WaitAsync(budget.Token);
+            Assert.Equal(
+                1,
+                await CountPostgresSessionsAsync(
+                    budget.ConnectionString,
+                    waiterApplicationName,
+                    budget.Token));
+            releaseWaiter.SetResult();
+            Assert.True(await waiterTask.WaitAsync(budget.Token));
+            waiterTask = null;
+        }
+        finally
+        {
+            foreach (var releaseHolder in holderReleases)
+            {
+                releaseHolder.TrySetResult();
+            }
+
+            releaseWaiter.TrySetResult();
+            foreach (var holderTask in holderTasks)
+            {
+                try
+                {
+                    await holderTask.WaitAsync(budget.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Cleanup observes the test budget cancellation.
+                }
+            }
+
+            if (waiterTask is not null)
+            {
+                try
+                {
+                    await waiterTask.WaitAsync(budget.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Cleanup observes the test budget cancellation.
+                }
+            }
+
+            foreach (var holderContext in holderContexts)
+            {
+                await holderContext.DisposeAsync();
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OidcIssuanceLock_ShouldRetryTransientAdvisoryLockAcquisition(
+        bool tokenExchange)
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var interceptor =
+            new ThrowOnceOnOidcIssuanceLockInterceptor();
+        await using var context = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-lock-retry-{Guid.NewGuid():N}",
+            interceptor);
+        var issuanceLock = new HumanSessionIssuanceLock(
+            context,
+            new HumanSessionIssuanceProcessGate());
+
+        var executed = tokenExchange
+            ? await issuanceLock.TryExecuteTokenExchangeAsync(
+                () => Task.CompletedTask,
+                budget.Token)
+            : await issuanceLock.TryExecuteAuthorizationAsync(
+                Guid.NewGuid(),
+                () => Task.CompletedTask,
+                budget.Token);
+
+        Assert.True(executed);
+        Assert.Equal(1, interceptor.ExceptionsThrown);
+        Assert.Equal(2, interceptor.CommandAttempts);
+        Assert.Single(interceptor.AttemptContextIds);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OidcIssuanceLock_ShouldNotReplayProtectedOperationAfterItStarts(
+        bool tokenExchange)
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        await using var context = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-operation-{Guid.NewGuid():N}");
+        var issuanceLock = new HumanSessionIssuanceLock(
+            context,
+            new HumanSessionIssuanceProcessGate());
+        var operationAttempts = 0;
+
+        Task FailAfterStartAsync()
+        {
+            Interlocked.Increment(ref operationAttempts);
+            throw RetryablePostgresException(
+                "simulated transient after OIDC issuance started");
+        }
+
+        await Assert.ThrowsAsync<PostgresException>(
+            () => tokenExchange
+                ? issuanceLock.TryExecuteTokenExchangeAsync(
+                    FailAfterStartAsync,
+                    budget.Token)
+                : issuanceLock.TryExecuteAuthorizationAsync(
+                    Guid.NewGuid(),
+                    FailAfterStartAsync,
+                    budget.Token));
+
+        Assert.Equal(1, operationAttempts);
     }
 
     [Fact]
@@ -4107,22 +4998,124 @@ public sealed class ProductionRetryTransactionPostgresTests(
 
     private static IIoTDbContext CreateRetryContext(
         string connectionString,
-        string applicationName)
+        string applicationName,
+        params IInterceptor[] interceptors)
     {
         var namedConnectionString = new NpgsqlConnectionStringBuilder(
             connectionString)
         {
             ApplicationName = applicationName
         }.ConnectionString;
-        var options = new DbContextOptionsBuilder<IIoTDbContext>()
-            .UseNpgsql(
-                namedConnectionString,
-                npgsql => npgsql.EnableRetryOnFailure(
-                    3,
-                    TimeSpan.FromMilliseconds(50),
-                    null))
-            .Options;
-        return new IIoTDbContext(options);
+        var options = new DbContextOptionsBuilder<IIoTDbContext>();
+        options.UseNpgsql(
+            namedConnectionString,
+            npgsql => npgsql.EnableRetryOnFailure(
+                3,
+                TimeSpan.FromMilliseconds(50),
+                null));
+        if (interceptors.Length > 0)
+        {
+            options.AddInterceptors(interceptors);
+        }
+
+        return new IIoTDbContext(options.Options);
+    }
+
+    private static async Task WaitForProcessGateWaiterAsync(
+        HumanSessionIssuanceProcessGate processGate,
+        CancellationToken testToken)
+    {
+        using var readinessTimeout =
+            CancellationTokenSource.CreateLinkedTokenSource(testToken);
+        readinessTimeout.CancelAfter(TimeSpan.FromSeconds(10));
+        try
+        {
+            while (processGate.TokenExchangeWaitingCount == 0)
+            {
+                readinessTimeout.Token.ThrowIfCancellationRequested();
+                await Task.Yield();
+            }
+        }
+        catch (OperationCanceledException)
+            when (!testToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                "Token-exchange operation did not enter the process gate within 10 seconds.");
+        }
+    }
+
+    private static async Task WaitForAuthorizationProcessGateWaiterAsync(
+        HumanSessionIssuanceProcessGate processGate,
+        Guid subjectId,
+        CancellationToken testToken)
+    {
+        using var readinessTimeout =
+            CancellationTokenSource.CreateLinkedTokenSource(testToken);
+        readinessTimeout.CancelAfter(TimeSpan.FromSeconds(10));
+        try
+        {
+            while (processGate.GetAuthorizationWaitingCount(subjectId) == 0)
+            {
+                readinessTimeout.Token.ThrowIfCancellationRequested();
+                await Task.Yield();
+            }
+        }
+        catch (OperationCanceledException)
+            when (!testToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                "Authorization operation did not enter the process gate within 10 seconds.");
+        }
+    }
+
+    private static async Task WaitForAuthorizationDatabaseLeaseWaiterAsync(
+        HumanSessionIssuanceProcessGate processGate,
+        CancellationToken testToken)
+    {
+        using var readinessTimeout =
+            CancellationTokenSource.CreateLinkedTokenSource(testToken);
+        readinessTimeout.CancelAfter(TimeSpan.FromSeconds(10));
+        try
+        {
+            while (processGate.AuthorizationDatabaseLeaseWaitingCount == 0)
+            {
+                readinessTimeout.Token.ThrowIfCancellationRequested();
+                await Task.Yield();
+            }
+        }
+        catch (OperationCanceledException)
+            when (!testToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                "Authorization operation did not enter the database-lease gate within 10 seconds.");
+        }
+    }
+
+    private static async Task<int> CountPostgresSessionsAsync(
+        string connectionString,
+        string applicationName,
+        CancellationToken cancellationToken)
+    {
+        var observerConnectionString = new NpgsqlConnectionStringBuilder(
+            connectionString)
+        {
+            ApplicationName =
+                $"token-process-gate-observer-{Guid.NewGuid():N}"
+        }.ConnectionString;
+        await using var observer = new NpgsqlConnection(
+            observerConnectionString);
+        await observer.OpenAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            """
+            select count(*)::integer
+            from pg_stat_activity
+            where application_name = @application_name
+            """,
+            observer);
+        command.Parameters.AddWithValue(
+            "application_name",
+            applicationName);
+        return (int)(await command.ExecuteScalarAsync(cancellationToken))!;
     }
 
     private static async Task WaitForLockWaitAsync(
@@ -4438,6 +5431,65 @@ public sealed class ProductionRetryTransactionPostgresTests(
         }
     }
 
+    private sealed class ThrowOnceOnOidcIssuanceLockInterceptor
+        : DbCommandInterceptor
+    {
+        private readonly object sync = new();
+        private readonly HashSet<string> attemptContextIds = [];
+        private int armed = 1;
+        private int commandAttempts;
+        private int exceptionsThrown;
+
+        public int CommandAttempts =>
+            Volatile.Read(ref commandAttempts);
+
+        public int ExceptionsThrown =>
+            Volatile.Read(ref exceptionsThrown);
+
+        public IReadOnlyCollection<string> AttemptContextIds
+        {
+            get
+            {
+                lock (sync)
+                {
+                    return attemptContextIds.ToArray();
+                }
+            }
+        }
+
+        public override ValueTask<InterceptionResult<int>>
+            NonQueryExecutingAsync(
+                DbCommand command,
+                CommandEventData eventData,
+                InterceptionResult<int> result,
+                CancellationToken cancellationToken = default)
+        {
+            if (!command.CommandText.Contains(
+                    "pg_advisory_xact_lock",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return ValueTask.FromResult(result);
+            }
+
+            Interlocked.Increment(ref commandAttempts);
+            lock (sync)
+            {
+                attemptContextIds.Add(
+                    eventData.Context?.ContextId.ToString()
+                    ?? "<missing-context>");
+            }
+
+            if (Interlocked.CompareExchange(ref armed, 0, 1) == 1)
+            {
+                Interlocked.Increment(ref exceptionsThrown);
+                throw RetryablePostgresException(
+                    "simulated transient while acquiring OIDC issuance lock");
+            }
+
+            return ValueTask.FromResult(result);
+        }
+    }
+
     private sealed class ThrowOnceBeforeCommitInterceptor
         : WriteAwareTransactionInterceptor
     {
@@ -4520,6 +5572,21 @@ public sealed class ProductionRetryTransactionPostgresTests(
                     "simulated commit confirmation loss");
             }
         }
+    }
+
+    private sealed class ThrowingObservationOidcIssuanceAuditTrailService(
+        IOidcIssuanceAuditTrailService inner)
+        : IOidcIssuanceAuditTrailService
+    {
+        public Task StageSuccessAsync(
+            AuditTrailEntry entry,
+            CancellationToken cancellationToken = default)
+            => inner.StageSuccessAsync(entry, cancellationToken);
+
+        public Task<bool> IsStagedSuccessCommittedAsync(
+            CancellationToken cancellationToken = default)
+            => throw new TimeoutException(
+                "simulated OIDC commit observation failure");
     }
 
     private sealed class CancelOnceAfterWriteCommitInterceptor(

@@ -54,6 +54,10 @@ public sealed class PersistenceBoundaryArchitectureTests
                 "exact-recovery",
                 ["CreateExecutionStrategy()", "ObserveCommitOutcomeAsync", "callbackToken"]),
             new WriteBoundaryEntry(
+                "src/infrastructure/IIoT.EntityFrameworkCore/Uploads/EfUploadReceiveObservationRetentionPruner.cs",
+                "stable-idempotent",
+                ["CreateExecutionStrategy()", "callbackToken", "CleanupBatchSize"]),
+            new WriteBoundaryEntry(
                 "src/infrastructure/IIoT.EntityFrameworkCore/Auditing/EfAuditTrailService.cs",
                 "exact-recovery",
                 ["CreateExecutionStrategy()", "ObserveCommitOutcomeAsync", "recordId"]),
@@ -68,7 +72,7 @@ public sealed class PersistenceBoundaryArchitectureTests
             new WriteBoundaryEntry(
                 "src/infrastructure/IIoT.EntityFrameworkCore/Identity/IndependentHumanSessionRevocationService.cs",
                 "exact-recovery",
-                ["CreateExecutionStrategy()", "ObserveOutcomeAsync", "callbackToken", "RefreshTokenSubjectTransactionLock"]),
+                ["CreateExecutionStrategy()", "ObserveOutcomeAsync", "callbackToken", "AcquireForOidcRevocationAsync"]),
             new WriteBoundaryEntry(
                 "src/infrastructure/IIoT.EntityFrameworkCore/Outbox/OutboxMessageDispatcher.cs",
                 "stable-idempotent",
@@ -92,16 +96,16 @@ public sealed class PersistenceBoundaryArchitectureTests
             new WriteBoundaryEntry(
                 "src/infrastructure/IIoT.EntityFrameworkCore/Identity/HumanSessionRevocationService.cs",
                 "transaction-participant",
-                ["SaveChangesAsync"]),
+                ["SaveChangesAsync", "AcquireForOidcRevocationAsync"]),
             new WriteBoundaryEntry(
                 "src/infrastructure/IIoT.EntityFrameworkCore/Repository/EfRepository.cs",
                 "transaction-participant",
                 ["SaveChangesAsync"])
         };
 
-        Assert.Equal(12, entries.Length);
+        Assert.Equal(13, entries.Length);
         Assert.Equal(7, entries.Count(entry => entry.Classification == "exact-recovery"));
-        Assert.Equal(3, entries.Count(entry => entry.Classification == "stable-idempotent"));
+        Assert.Equal(4, entries.Count(entry => entry.Classification == "stable-idempotent"));
         Assert.Equal(2, entries.Count(entry => entry.Classification == "transaction-participant"));
 
         foreach (var entry in entries)
@@ -510,6 +514,246 @@ public sealed class PersistenceBoundaryArchitectureTests
                 .Line + 1;
             yield return $"{relativePath}:{line}";
         }
+    }
+
+    [Fact]
+    public void OidcIssuanceAndRevocation_ShouldShareTransactionLocks()
+    {
+        var middlewareSource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "src", "hosts", "IIoT.HttpApi", "Infrastructure", "Oidc",
+                "CloudOidcIssuanceLockMiddleware.cs"));
+        var programSource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "src", "hosts", "IIoT.HttpApi", "Program.cs"));
+        var issuanceLockSource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "src", "infrastructure", "IIoT.EntityFrameworkCore",
+                "Identity", "HumanSessionIssuanceLock.cs"));
+        var processGateSource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "src", "infrastructure", "IIoT.EntityFrameworkCore",
+                "Identity", "HumanSessionIssuanceProcessGate.cs"));
+        var dependencyInjectionSource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "src", "infrastructure", "IIoT.EntityFrameworkCore",
+                "DependencyInjection.cs"));
+        var oidcControllerSource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "src", "hosts", "IIoT.HttpApi", "Controllers", "Oidc",
+                "CloudOidcController.cs"));
+        var issuanceAuditSource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "src", "infrastructure", "IIoT.EntityFrameworkCore",
+                "Auditing", "EfOidcIssuanceAuditTrailService.cs"));
+
+        Assert.Contains(
+            "TryExecuteAuthorizationAsync",
+            middlewareSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "TryExecuteTokenExchangeAsync",
+            middlewareSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ExecuteBufferedAsync",
+            middlewareSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "BufferedResponseBodyFeature",
+            middlewareSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "IHttpResponseBodyFeature",
+            middlewareSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "context.Response.HasStarted",
+            middlewareSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "CloudOidcIssuanceLockMiddleware",
+            programSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "RefreshTokenSubjectTransactionLock.AcquireAsync",
+            issuanceLockSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AcquireOidcTokenExchangeAsync",
+            issuanceLockSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "CreateExecutionStrategy",
+            issuanceLockSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ReferenceEquals(storeContext, dbContext)",
+            issuanceLockSource,
+            StringComparison.Ordinal);
+        var executionCallbackIndex = issuanceLockSource.IndexOf(
+            "async callbackToken =>",
+            StringComparison.Ordinal);
+        var beginTransactionIndex = issuanceLockSource.IndexOf(
+            "BeginTransactionAsync",
+            executionCallbackIndex,
+            StringComparison.Ordinal);
+        var protectedOperationIndex = issuanceLockSource.IndexOf(
+            "await operation();",
+            beginTransactionIndex,
+            StringComparison.Ordinal);
+        var commitIndex = issuanceLockSource.IndexOf(
+            "CommitAsync",
+            protectedOperationIndex,
+            StringComparison.Ordinal);
+        Assert.True(executionCallbackIndex >= 0);
+        Assert.True(beginTransactionIndex > executionCallbackIndex);
+        Assert.True(protectedOperationIndex > beginTransactionIndex);
+        Assert.True(commitIndex > protectedOperationIndex);
+        var processGateIndex = issuanceLockSource.IndexOf(
+            "var processLease = await enterProcessGate",
+            StringComparison.Ordinal);
+        var strategyIndex = issuanceLockSource.IndexOf(
+            "var strategy = dbContext.Database.CreateExecutionStrategy()",
+            StringComparison.Ordinal);
+        Assert.True(processGateIndex >= 0);
+        Assert.True(
+            strategyIndex > processGateIndex);
+        Assert.Contains(
+            "SemaphoreSlim(1, 1)",
+            processGateSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "internal const int TokenExchangeQueueLimit = 8;",
+            processGateSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "new SemaphoreSlim(\n            TokenExchangeQueueLimit + 1,\n            TokenExchangeQueueLimit + 1)",
+            processGateSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "internal const int AuthorizationRequestLimit = 16;",
+            processGateSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "internal const int AuthorizationPerSubjectRequestLimit = 2;",
+            processGateSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "new SemaphoreSlim(\n            AuthorizationRequestLimit,\n            AuthorizationRequestLimit)",
+            processGateSource,
+            StringComparison.Ordinal);
+        var authorizationPerSubjectAdmissionIndex =
+            processGateSource.IndexOf(
+                "entry.TryAcquireAdmission()",
+                StringComparison.Ordinal);
+        var authorizationGlobalAdmissionIndex = processGateSource.IndexOf(
+            "_authorizationAdmissionSlots.Wait(0)",
+            StringComparison.Ordinal);
+        var authorizationKeyedGateIndex = processGateSource.IndexOf(
+            "await entry.EnterAsync",
+            StringComparison.Ordinal);
+        Assert.True(authorizationPerSubjectAdmissionIndex >= 0);
+        Assert.True(
+            authorizationGlobalAdmissionIndex >
+            authorizationPerSubjectAdmissionIndex);
+        Assert.True(
+            authorizationKeyedGateIndex >
+            authorizationGlobalAdmissionIndex);
+        Assert.Contains(
+            "internal const int AuthorizationDatabaseLeaseLimit = 8;",
+            processGateSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "new SemaphoreSlim(\n            AuthorizationDatabaseLeaseLimit,\n            AuthorizationDatabaseLeaseLimit)",
+            processGateSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Status429TooManyRequests",
+            middlewareSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ConcurrentDictionary<Guid, AuthorizationGateEntry>",
+            processGateSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AddSingleton<HumanSessionIssuanceProcessGate>",
+            dependencyInjectionSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "IOidcIssuanceAuditTrailService",
+            dependencyInjectionSource,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            3,
+            oidcControllerSource.Split(
+                "WriteIssuanceSuccessAuditAsync",
+                StringSplitOptions.None).Length - 1);
+        Assert.Contains(
+            "StageSuccessAsync",
+            oidcControllerSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Database.CurrentTransaction",
+            issuanceAuditSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "dbContext.SaveChangesAsync",
+            issuanceAuditSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "IsStagedSuccessCommittedAsync",
+            issuanceLockSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "new CancellationTokenSource(TimeSpan.FromSeconds(5))",
+            issuanceLockSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "throw new CloudWriteCommitUnknownException()",
+            issuanceLockSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "useExplicitIsolation: false",
+            issuanceLockSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            ".BeginTransactionAsync(",
+            issuanceLockSource,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UploadObservationRetention_ShouldRunIndependentlyFromDuplicateRequests()
+    {
+        var programSource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "src", "hosts", "IIoT.HttpApi", "Program.cs"));
+        var serviceSource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "src", "hosts", "IIoT.HttpApi", "Infrastructure",
+                "UploadReceiveObservationRetentionService.cs"));
+        var registrySource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "src", "infrastructure", "IIoT.EntityFrameworkCore",
+                "Uploads", "EfUploadReceiveRegistry.cs"));
+
+        Assert.Contains(
+            "UploadReceiveObservationRetentionService.Register",
+            programSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "RunCleanupCycleAsync",
+            serviceSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Task.Delay",
+            serviceSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "PruneExpired",
+            registrySource,
+            StringComparison.Ordinal);
     }
 
     private sealed record WriteBoundaryEntry(

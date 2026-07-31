@@ -1,8 +1,10 @@
 using System.Security.Cryptography;
 using System.Text;
 using IIoT.EntityFrameworkCore;
+using IIoT.EntityFrameworkCore.Auditing;
 using IIoT.EntityFrameworkCore.Identity;
 using IIoT.IdentityService.Queries;
+using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
 using Microsoft.AspNetCore.Identity;
@@ -10,6 +12,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using OpenIddict.Abstractions;
+using OpenIddict.EntityFrameworkCore;
 using OpenIddict.EntityFrameworkCore.Models;
 using Xunit;
 
@@ -17,6 +20,460 @@ namespace IIoT.CloudPlatform.PersistenceTests;
 
 public sealed class CloudOidcPersistenceTests
 {
+    [Fact]
+    public async Task HumanSessionIssuanceProcessGate_ShouldBoundTokenExchangeQueueAndRecoverCapacity()
+    {
+        using var timeout = new CancellationTokenSource(
+            TimeSpan.FromSeconds(10));
+        var processGate = new HumanSessionIssuanceProcessGate();
+        IAsyncDisposable? holder =
+            await processGate.TryEnterTokenExchangeAsync(timeout.Token)
+            ?? throw new InvalidOperationException(
+                "Initial token-exchange admission was rejected.");
+        var waiterTasks = Enumerable
+            .Range(
+                0,
+                HumanSessionIssuanceProcessGate.TokenExchangeQueueLimit)
+            .Select(async _ =>
+            {
+                await using var waiterLease =
+                    await processGate.TryEnterTokenExchangeAsync(
+                        timeout.Token)
+                    ?? throw new InvalidOperationException(
+                        "Admitted token-exchange waiter was rejected.");
+            })
+            .ToArray();
+
+        try
+        {
+            while (processGate.TokenExchangeWaitingCount !=
+                   HumanSessionIssuanceProcessGate.TokenExchangeQueueLimit)
+            {
+                timeout.Token.ThrowIfCancellationRequested();
+                await Task.Yield();
+            }
+
+            Assert.Null(
+                await processGate.TryEnterTokenExchangeAsync(timeout.Token));
+            using var canceled = new CancellationTokenSource();
+            canceled.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => processGate
+                    .TryEnterTokenExchangeAsync(canceled.Token)
+                    .AsTask());
+
+            await holder.DisposeAsync();
+            holder = null;
+            await Task.WhenAll(waiterTasks).WaitAsync(timeout.Token);
+
+            var recovered =
+                await processGate.TryEnterTokenExchangeAsync(timeout.Token);
+            Assert.NotNull(recovered);
+            await recovered.DisposeAsync();
+        }
+        finally
+        {
+            if (holder is not null)
+            {
+                await holder.DisposeAsync();
+            }
+
+            timeout.Cancel();
+            try
+            {
+                await Task.WhenAll(waiterTasks);
+            }
+            catch (OperationCanceledException)
+            {
+                // Cleanup observes canceled waiters without masking the assertion.
+            }
+        }
+    }
+
+    [Fact]
+    public async Task HumanSessionIssuanceProcessGate_ShouldCapAuthorizationDatabaseLeasesAcrossDistinctSubjects()
+    {
+        using var timeout = new CancellationTokenSource(
+            TimeSpan.FromSeconds(10));
+        var processGate = new HumanSessionIssuanceProcessGate();
+        var holders = new List<IAsyncDisposable>();
+        Task<IAsyncDisposable?>? waiterTask = null;
+
+        try
+        {
+            for (var index = 0;
+                 index <
+                 HumanSessionIssuanceProcessGate
+                     .AuthorizationDatabaseLeaseLimit;
+                 index++)
+            {
+                holders.Add(
+                    await processGate.TryEnterAuthorizationAsync(
+                        Guid.NewGuid(),
+                        timeout.Token)
+                    ?? throw new InvalidOperationException(
+                        "Authorization admission was unexpectedly full."));
+            }
+
+            waiterTask = processGate
+                .TryEnterAuthorizationAsync(
+                    Guid.NewGuid(),
+                    timeout.Token)
+                .AsTask();
+            while (processGate.AuthorizationDatabaseLeaseWaitingCount != 1)
+            {
+                timeout.Token.ThrowIfCancellationRequested();
+                await Task.Yield();
+            }
+
+            Assert.False(waiterTask.IsCompleted);
+            using var canceled = new CancellationTokenSource();
+            canceled.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => processGate
+                    .TryEnterAuthorizationAsync(
+                        Guid.NewGuid(),
+                        canceled.Token)
+                    .AsTask());
+
+            await holders[0].DisposeAsync();
+            holders.RemoveAt(0);
+            await using var waiter =
+                await waiterTask.WaitAsync(timeout.Token)
+                ?? throw new InvalidOperationException(
+                    "Admitted authorization waiter was rejected.");
+            waiterTask = null;
+        }
+        finally
+        {
+            timeout.Cancel();
+            foreach (var holder in holders)
+            {
+                await holder.DisposeAsync();
+            }
+
+            if (waiterTask is not null)
+            {
+                try
+                {
+                    await using var waiter = await waiterTask;
+                }
+                catch (OperationCanceledException)
+                {
+                    // Cleanup observes cancellation without masking assertions.
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task HumanSessionIssuanceProcessGate_ShouldBoundOneSubjectWithoutBlockingAnotherSubject()
+    {
+        using var timeout = new CancellationTokenSource(
+            TimeSpan.FromSeconds(10));
+        var processGate = new HumanSessionIssuanceProcessGate();
+        var subjectId = Guid.NewGuid();
+        IAsyncDisposable? holder =
+            await processGate.TryEnterAuthorizationAsync(
+                subjectId,
+                timeout.Token)
+            ?? throw new InvalidOperationException(
+                "Initial authorization admission was rejected.");
+        var waiterTasks = Enumerable
+            .Range(
+                0,
+                HumanSessionIssuanceProcessGate
+                    .AuthorizationPerSubjectRequestLimit - 1)
+            .Select(async _ =>
+            {
+                await using var waiterLease =
+                    await processGate.TryEnterAuthorizationAsync(
+                        subjectId,
+                        timeout.Token)
+                    ?? throw new InvalidOperationException(
+                        "Admitted authorization waiter was rejected.");
+            })
+            .ToArray();
+
+        try
+        {
+            while (processGate.GetAuthorizationWaitingCount(subjectId) !=
+                   HumanSessionIssuanceProcessGate
+                       .AuthorizationPerSubjectRequestLimit - 1)
+            {
+                timeout.Token.ThrowIfCancellationRequested();
+                await Task.Yield();
+            }
+
+            Assert.Null(
+                await processGate.TryEnterAuthorizationAsync(
+                    subjectId,
+                    timeout.Token));
+            Assert.Equal(
+                HumanSessionIssuanceProcessGate
+                    .AuthorizationPerSubjectRequestLimit - 1,
+                processGate.GetAuthorizationWaitingCount(subjectId));
+            var independentSubjectId = Guid.NewGuid();
+            var independent =
+                await processGate.TryEnterAuthorizationAsync(
+                    independentSubjectId,
+                    timeout.Token);
+            Assert.NotNull(independent);
+            await independent.DisposeAsync();
+            Assert.Equal(
+                0,
+                processGate.GetAuthorizationWaitingCount(
+                    independentSubjectId));
+            using var canceled = new CancellationTokenSource();
+            canceled.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => processGate
+                    .TryEnterAuthorizationAsync(
+                        subjectId,
+                        canceled.Token)
+                    .AsTask());
+
+            await holder.DisposeAsync();
+            holder = null;
+            await Task.WhenAll(waiterTasks).WaitAsync(timeout.Token);
+
+            var recovered =
+                await processGate.TryEnterAuthorizationAsync(
+                    subjectId,
+                    timeout.Token);
+            Assert.NotNull(recovered);
+            await recovered.DisposeAsync();
+        }
+        finally
+        {
+            if (holder is not null)
+            {
+                await holder.DisposeAsync();
+            }
+
+            timeout.Cancel();
+            try
+            {
+                await Task.WhenAll(waiterTasks);
+            }
+            catch (OperationCanceledException)
+            {
+                // Cleanup observes canceled waiters without masking assertions.
+            }
+        }
+    }
+
+    [Fact]
+    public async Task HumanSessionIssuanceProcessGate_ShouldBoundGlobalAuthorizationAdmissionAcrossDistinctSubjects()
+    {
+        using var timeout = new CancellationTokenSource(
+            TimeSpan.FromSeconds(10));
+        var processGate = new HumanSessionIssuanceProcessGate();
+        var holders = new List<IAsyncDisposable>();
+        var waiterCount =
+            HumanSessionIssuanceProcessGate.AuthorizationRequestLimit
+            - HumanSessionIssuanceProcessGate
+                .AuthorizationDatabaseLeaseLimit;
+        var waiterTasks = Array.Empty<Task>();
+
+        try
+        {
+            for (var index = 0;
+                 index <
+                 HumanSessionIssuanceProcessGate
+                     .AuthorizationDatabaseLeaseLimit;
+                 index++)
+            {
+                holders.Add(
+                    await processGate.TryEnterAuthorizationAsync(
+                        Guid.NewGuid(),
+                        timeout.Token)
+                    ?? throw new InvalidOperationException(
+                        "Authorization admission was unexpectedly full."));
+            }
+
+            waiterTasks = Enumerable
+                .Range(0, waiterCount)
+                .Select(async _ =>
+                {
+                    await using var waiter =
+                        await processGate.TryEnterAuthorizationAsync(
+                            Guid.NewGuid(),
+                            timeout.Token)
+                        ?? throw new InvalidOperationException(
+                            "Admitted authorization waiter was rejected.");
+                })
+                .ToArray();
+            while (processGate.AuthorizationDatabaseLeaseWaitingCount !=
+                   waiterCount)
+            {
+                timeout.Token.ThrowIfCancellationRequested();
+                await Task.Yield();
+            }
+
+            Assert.Null(
+                await processGate.TryEnterAuthorizationAsync(
+                    Guid.NewGuid(),
+                    timeout.Token));
+
+            foreach (var holder in holders)
+            {
+                await holder.DisposeAsync();
+            }
+
+            holders.Clear();
+            await Task.WhenAll(waiterTasks).WaitAsync(timeout.Token);
+        }
+        finally
+        {
+            foreach (var holder in holders)
+            {
+                await holder.DisposeAsync();
+            }
+
+            timeout.Cancel();
+            try
+            {
+                await Task.WhenAll(waiterTasks);
+            }
+            catch (OperationCanceledException)
+            {
+                // Cleanup observes canceled waiters without masking the assertion.
+            }
+        }
+    }
+
+    [Fact]
+    public async Task HumanSessionIssuanceLock_ShouldFailClosedWhenOpenIddictUsesAnotherContext()
+    {
+        using var provider = TestServiceProviders.CreateEfServiceProvider(
+            new NoopMediator());
+        using var lockScope = provider.CreateScope();
+        using var storeScope = provider.CreateScope();
+        var lockContext =
+            lockScope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var storeContext =
+            storeScope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var issuanceLock = new HumanSessionIssuanceLock(
+            lockContext,
+            new OpenIddictEntityFrameworkCoreContext<IIoTDbContext>(
+                storeContext),
+            new HumanSessionIssuanceProcessGate());
+        var operationCalled = false;
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => issuanceLock.TryExecuteTokenExchangeAsync(
+                () =>
+                {
+                    operationCalled = true;
+                    return Task.CompletedTask;
+                }));
+
+        Assert.Contains(
+            "same DbContext",
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.False(operationCalled);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NonPostgresOidcIssuance_ShouldCommitOrRollbackGrantAndSuccessAuditTogether(
+        bool commit)
+    {
+        using var timeout = new CancellationTokenSource(
+            TimeSpan.FromSeconds(10));
+        using var provider = TestServiceProviders.CreateEfServiceProvider(
+            new NoopMediator());
+        using var scope = provider.CreateScope();
+        var context =
+            scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var auditTrail =
+            new EfOidcIssuanceAuditTrailService(context);
+        var issuanceLock = new HumanSessionIssuanceLock(
+            context,
+            new HumanSessionIssuanceProcessGate(),
+            auditTrail);
+        var authorizationId = Guid.NewGuid();
+        var auditKey = $"sqlite-oidc-{Guid.NewGuid():N}";
+
+        async Task PersistGrantAsync()
+        {
+            Assert.NotNull(context.Database.CurrentTransaction);
+            await auditTrail.StageSuccessAsync(
+                new AuditTrailEntry(
+                    Guid.NewGuid(),
+                    "E-SQLITE-OIDC",
+                    "CloudOidcAuthorize",
+                    "CloudOidc",
+                    "aicopilot",
+                    DateTime.UtcNow,
+                    true,
+                    "OIDC authorize 成功。",
+                    IdempotencyKey: auditKey),
+                timeout.Token);
+            context.OpenIddictAuthorizations.Add(
+                new OpenIddictEntityFrameworkCoreAuthorization<Guid>
+                {
+                    Id = authorizationId,
+                    Subject = Guid.NewGuid().ToString(),
+                    Status = OpenIddictConstants.Statuses.Valid,
+                    Type = "permanent",
+                    ConcurrencyToken = Guid.NewGuid().ToString("N")
+                });
+            await context.SaveChangesAsync(timeout.Token);
+            if (!commit)
+            {
+                throw new InvalidOperationException(
+                    "simulated OIDC issuance failure");
+            }
+        }
+
+        if (commit)
+        {
+            Assert.True(
+                await issuanceLock.TryExecuteAuthorizationAsync(
+                    Guid.NewGuid(),
+                    PersistGrantAsync,
+                    timeout.Token));
+        }
+        else
+        {
+            var exception =
+                await Assert.ThrowsAsync<InvalidOperationException>(
+                    () => issuanceLock.TryExecuteAuthorizationAsync(
+                        Guid.NewGuid(),
+                        PersistGrantAsync,
+                        timeout.Token));
+            Assert.Contains(
+                "simulated OIDC issuance failure",
+                exception.Message,
+                StringComparison.Ordinal);
+        }
+
+        Assert.Null(context.Database.CurrentTransaction);
+        using var verificationScope = provider.CreateScope();
+        var verificationContext =
+            verificationScope.ServiceProvider
+                .GetRequiredService<IIoTDbContext>();
+        Assert.Equal(
+            commit ? 1 : 0,
+            await verificationContext.AuditTrails
+                .AsNoTracking()
+                .CountAsync(
+                    audit => audit.IdempotencyKey == auditKey,
+                    timeout.Token));
+        Assert.Equal(
+            commit ? 1 : 0,
+            await verificationContext.OpenIddictAuthorizations
+                .AsNoTracking()
+                .CountAsync(
+                    authorization =>
+                        authorization.Id == authorizationId,
+                    timeout.Token));
+    }
+
     [Fact]
     public async Task CloudOidcUserProfileService_ShouldReturnAccountAndEmployeeState()
     {
@@ -215,9 +672,14 @@ public sealed class CloudOidcPersistenceTests
         dbContext.RefreshTokenSessions.AddRange(refreshSession, machineSession);
         await dbContext.SaveChangesAsync();
 
-        await new HumanSessionRevocationService(dbContext).RevokeAllAsync(
-            subjectId,
-            "employee-deactivated");
+        await using (var transaction =
+                     await dbContext.Database.BeginTransactionAsync())
+        {
+            await new HumanSessionRevocationService(dbContext).RevokeAllAsync(
+                subjectId,
+                "employee-deactivated");
+            await transaction.CommitAsync();
+        }
         dbContext.ChangeTracker.Clear();
 
         var persistedAuthorization = await dbContext.OpenIddictAuthorizations

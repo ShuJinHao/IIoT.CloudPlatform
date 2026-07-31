@@ -39,14 +39,6 @@ public sealed class IndependentHumanSessionRevocationService(IIoTDbContext dbCon
             throw new CloudWriteCommitUnknownException();
         }
 
-        if (target.RefreshSessions.Count == 0
-            && target.Tokens.Count == 0
-            && target.Authorizations.Count == 0)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return;
-        }
-
         try
         {
             await using var strategyContext = _createContext();
@@ -156,7 +148,7 @@ public sealed class IndependentHumanSessionRevocationService(IIoTDbContext dbCon
         await using var transaction = await context.Database.BeginTransactionAsync(
             IsolationLevel.ReadCommitted,
             cancellationToken);
-        await RefreshTokenSubjectTransactionLock.AcquireAsync(
+        await RefreshTokenSubjectTransactionLock.AcquireForOidcRevocationAsync(
             context,
             target.SubjectId,
             cancellationToken);
