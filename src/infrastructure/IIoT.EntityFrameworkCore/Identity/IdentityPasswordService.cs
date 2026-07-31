@@ -55,10 +55,12 @@ public sealed class IdentityPasswordService(
         var checkedAtUtc = DateTimeOffset.UtcNow;
         PasswordSnapshot? baseline = null;
         PasswordTarget? target = null;
+        Result<bool>? settledReadOnlyResult = null;
 
         return await ExecuteRecoverableAsync(
             async callbackToken =>
             {
+                settledReadOnlyResult = null;
                 await using var context = _createContext();
                 await using var transaction =
                     await context.Database.BeginTransactionAsync(callbackToken);
@@ -71,15 +73,19 @@ public sealed class IdentityPasswordService(
                     callbackToken);
                 if (user is null || !user.IsEnabled)
                 {
+                    var result = Result.Success(false);
+                    settledReadOnlyResult = result;
                     await transaction.CommitAsync(callbackToken);
-                    return Result.Success(false);
+                    return result;
                 }
 
                 var current = PasswordSnapshot.From(user);
                 if (target is not null && target.Matches(current))
                 {
+                    var result = Result.Success(target.PasswordAccepted);
+                    settledReadOnlyResult = result;
                     await transaction.CommitAsync(callbackToken);
-                    return Result.Success(target.PasswordAccepted);
+                    return result;
                 }
 
                 if (baseline is not null && !baseline.Matches(current))
@@ -91,16 +97,20 @@ public sealed class IdentityPasswordService(
                     user.LockoutEnd is { } lockoutEnd &&
                     lockoutEnd > checkedAtUtc)
                 {
+                    var result = Result.Success(false);
+                    settledReadOnlyResult = result;
                     await transaction.CommitAsync(callbackToken);
-                    return Result.Success(false);
+                    return result;
                 }
 
                 baseline ??= current;
                 target ??= CreateCheckTarget(user, password, checkedAtUtc);
                 if (target.Matches(current))
                 {
+                    var result = Result.Success(target.PasswordAccepted);
+                    settledReadOnlyResult = result;
                     await transaction.CommitAsync(callbackToken);
-                    return Result.Success(target.PasswordAccepted);
+                    return result;
                 }
 
                 var exactTarget = target ?? throw new InvalidOperationException(
@@ -124,7 +134,8 @@ public sealed class IdentityPasswordService(
                     target);
             },
             targetResult: () => Result.Success(target?.PasswordAccepted ?? false),
-            cancellationToken);
+            cancellationToken,
+            knownResult: () => settledReadOnlyResult);
     }
 
     private static async Task AcquirePasswordCheckLockAsync(
@@ -265,7 +276,8 @@ public sealed class IdentityPasswordService(
         Func<CancellationToken, Task<Result<bool>>> attempt,
         Func<CancellationToken, Task<WriteObservation>> observe,
         Func<Result<bool>> targetResult,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<Result<bool>?>? knownResult = null)
     {
         try
         {
@@ -286,6 +298,12 @@ public sealed class IdentityPasswordService(
         }
         catch
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (knownResult?.Invoke() is { } settledResult)
+            {
+                return settledResult;
+            }
+
             using var timeout = new CancellationTokenSource(ObservationTimeout);
             WriteObservation observation;
             try

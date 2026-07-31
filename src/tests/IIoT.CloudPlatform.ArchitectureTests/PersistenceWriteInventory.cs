@@ -3,6 +3,7 @@ using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace IIoT.CloudPlatform.ArchitectureTests;
 
@@ -1124,9 +1125,20 @@ internal static class PersistenceWriteInventory
                 return false;
             }
 
-            return GetMethodSymbols(model.GetSymbolInfo(invocation))
-                .Any(IsProtectedExecutor);
+            if (model.GetOperation(invocation) is not IInvocationOperation invocationOperation ||
+                model.GetOperation(argument) is not IArgumentOperation argumentOperation ||
+                argumentOperation.Parameter is not { } parameter)
+            {
+                return false;
+            }
+
+            return IsProtectedExecutor(invocationOperation.TargetMethod) &&
+                   IsReplayOperationParameter(parameter);
         }
+
+        private static bool IsReplayOperationParameter(IParameterSymbol parameter)
+            => parameter.Type.TypeKind == TypeKind.Delegate &&
+               parameter.Name is "operation" or "attempt" or "stage";
 
         private bool IsProtectedExecutor(IMethodSymbol symbol)
         {

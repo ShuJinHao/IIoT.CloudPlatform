@@ -157,6 +157,32 @@ public sealed class PersistenceBoundaryArchitectureTests
     }
 
     [Fact]
+    public void PersistenceInventory_ShouldRejectWritesEvaluatedAsReplayState()
+    {
+        const string source =
+            """
+            using Microsoft.EntityFrameworkCore;
+            using Microsoft.EntityFrameworkCore.Storage;
+
+            public sealed class StateWriter(
+                IExecutionStrategy strategy,
+                DbContext context)
+            {
+                public Task<int> WriteAsync(CancellationToken cancellationToken)
+                    => strategy.ExecuteAsync(
+                        context.SaveChangesAsync(cancellationToken),
+                        static (pendingSave, _) => pendingSave,
+                        cancellationToken);
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(source).UnclassifiedEntries);
+
+        Assert.Contains("ef-save", entry.SinkKinds);
+    }
+
+    [Fact]
     public void PersistenceInventory_ShouldRejectAliasedPersistenceMethodGroups()
     {
         const string source =

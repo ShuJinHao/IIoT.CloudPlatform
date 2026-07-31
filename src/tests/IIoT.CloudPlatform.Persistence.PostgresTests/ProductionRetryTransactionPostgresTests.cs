@@ -527,6 +527,43 @@ public sealed class ProductionRetryTransactionPostgresTests(
     }
 
     [Fact]
+    public async Task LockedPasswordCheck_ShouldKeepKnownRejectionWhenReadOnlyCommitAckIsLost()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var interceptor = new ThrowEveryCommitConfirmationInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            interceptor);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var userManager = services.GetRequiredService<UserManager<ApplicationUser>>();
+        var user = new ApplicationUser
+        {
+            Id = Guid.NewGuid(),
+            UserName = $"identity-locked-{Guid.NewGuid():N}"[..40],
+            IsEnabled = true,
+            LockoutEnabled = true,
+            LockoutEnd = DateTimeOffset.UtcNow.AddMinutes(5)
+        };
+        Assert.True((await userManager.CreateAsync(
+            user,
+            "OldPassword123!")).Succeeded);
+        services.GetRequiredService<IIoTDbContext>().ChangeTracker.Clear();
+
+        interceptor.Arm();
+        var result = await CreatePasswordService(services).CheckPasswordAsync(
+            user.Id,
+            "WrongPassword123!",
+            budget.Token);
+
+        Assert.True(result.IsSuccess);
+        Assert.False(result.Value);
+        Assert.True(interceptor.ExceptionsThrown > 1);
+    }
+
+    [Fact]
     public async Task IdentityPolicyAndPasswordWrites_ShouldRecoverCommitConfirmationLossExactly()
     {
         using var budget = await PostgresTestBudget.CreateAsync(
@@ -6279,6 +6316,32 @@ public sealed class ProductionRetryTransactionPostgresTests(
             }
 
             return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class ThrowEveryCommitConfirmationInterceptor
+        : DbTransactionInterceptor
+    {
+        private int armed;
+        private int exceptionsThrown;
+
+        public int ExceptionsThrown => Volatile.Read(ref exceptionsThrown);
+
+        public void Arm() => Volatile.Write(ref armed, 1);
+
+        public override Task TransactionCommittedAsync(
+            DbTransaction transaction,
+            TransactionEndEventData eventData,
+            CancellationToken cancellationToken = default)
+        {
+            if (Volatile.Read(ref armed) == 1)
+            {
+                Interlocked.Increment(ref exceptionsThrown);
+                throw RetryablePostgresException(
+                    "simulated repeated read-only commit confirmation loss");
+            }
+
+            return Task.CompletedTask;
         }
     }
 
