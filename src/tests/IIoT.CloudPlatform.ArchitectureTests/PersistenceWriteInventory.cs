@@ -292,6 +292,9 @@ internal static class PersistenceWriteInventory
         ["src/services/IIoT.EmployeeService/Commands/Human/Employees/UpdateEmployeeProfile.cs::UpdateEmployeeProfileHandler.Handle(UpdateEmployeeProfileCommand,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
             "CommitConfirmationLoss_ShouldNotDuplicateAllEmployeeWritesOrDeviceDelete"),
+        ["src/services/IIoT.EmployeeService/Commands/Human/Employees/UpdateEmployeeRole.cs::UpdateEmployeeRoleHandler.Handle(UpdateEmployeeRoleCommand,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
+            "CommitConfirmationLoss_ShouldNotDuplicateAllEmployeeWritesOrDeviceDelete"),
         ["src/services/IIoT.MasterDataService/Commands/Human/Processes/CreateProcess.cs::CreateProcessHandler.Handle(CreateProcessCommand,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
             "BusinessAggregateWrites_ShouldRecoverCommitConfirmationLoss"),
@@ -893,6 +896,10 @@ internal static class PersistenceWriteInventory
         return namespaceName.StartsWith("Microsoft.EntityFrameworkCore", StringComparison.Ordinal) ||
                namespaceName.StartsWith("System.Data", StringComparison.Ordinal) ||
                namespaceName.StartsWith("Npgsql", StringComparison.Ordinal) ||
+               type.ToDisplayString() is
+                   "IIoT.Services.Contracts.Persistence.IUnitOfWork" or
+                   "Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction" or
+                   "System.Data.IDbTransaction" ||
                type.AllInterfaces.Any(candidate =>
                    candidate.ToDisplayString() is
                        "IIoT.Services.Contracts.Persistence.IUnitOfWork" or

@@ -103,6 +103,29 @@ public sealed class PersistenceBoundaryArchitectureTests
     }
 
     [Fact]
+    public void PersistenceInventory_ShouldDiscoverUnitOfWorkTransactionReceiverItself()
+    {
+        const string source =
+            """
+            using IIoT.Services.Contracts.Persistence;
+
+            public sealed class UnsafeHostWriter(IUnitOfWork unitOfWork)
+            {
+                public Task WriteAsync(CancellationToken cancellationToken)
+                    => unitOfWork.BeginTransactionAsync(cancellationToken);
+            }
+            """;
+
+        var inventory = PersistenceWriteInventory.DiscoverSnippet(
+            source,
+            "src/hosts/IIoT.HttpApi/UnsafeHostWriter.cs");
+
+        var entry = Assert.Single(inventory.UnclassifiedEntries);
+        Assert.Contains("manual-transaction", entry.SinkKinds);
+        Assert.Empty(inventory.UnresolvedCandidates);
+    }
+
+    [Fact]
     public void PersistenceInventory_ShouldClassifyWritesInsideResolvedReplayCallback()
     {
         const string source =
