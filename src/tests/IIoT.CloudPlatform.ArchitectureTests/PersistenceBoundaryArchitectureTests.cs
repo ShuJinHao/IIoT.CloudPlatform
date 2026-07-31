@@ -593,6 +593,14 @@ public sealed class PersistenceBoundaryArchitectureTests
             processGateSource,
             StringComparison.Ordinal);
         Assert.Contains(
+            "internal const int AuthorizationDatabaseLeaseLimit = 8;",
+            processGateSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "new SemaphoreSlim(\n            AuthorizationDatabaseLeaseLimit,\n            AuthorizationDatabaseLeaseLimit)",
+            processGateSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "Status429TooManyRequests",
             middlewareSource,
             StringComparison.Ordinal);

@@ -5,6 +5,7 @@ namespace IIoT.EntityFrameworkCore.Identity;
 public sealed class HumanSessionIssuanceProcessGate
 {
     internal const int TokenExchangeQueueLimit = 8;
+    internal const int AuthorizationDatabaseLeaseLimit = 8;
 
     private readonly SemaphoreSlim _tokenExchangeGate =
         new SemaphoreSlim(1, 1);
@@ -12,12 +13,20 @@ public sealed class HumanSessionIssuanceProcessGate
         new SemaphoreSlim(
             TokenExchangeQueueLimit + 1,
             TokenExchangeQueueLimit + 1);
+    private readonly SemaphoreSlim _authorizationDatabaseLeaseSlots =
+        new SemaphoreSlim(
+            AuthorizationDatabaseLeaseLimit,
+            AuthorizationDatabaseLeaseLimit);
     private readonly ConcurrentDictionary<Guid, AuthorizationGateEntry>
         _authorizationGates = new();
     private int _tokenExchangeWaitingCount;
+    private int _authorizationDatabaseLeaseWaitingCount;
 
     internal int TokenExchangeWaitingCount =>
         Volatile.Read(ref _tokenExchangeWaitingCount);
+
+    internal int AuthorizationDatabaseLeaseWaitingCount =>
+        Volatile.Read(ref _authorizationDatabaseLeaseWaitingCount);
 
     internal int GetAuthorizationWaitingCount(Guid subjectId)
         => _authorizationGates.TryGetValue(subjectId, out var entry)
@@ -72,13 +81,33 @@ public sealed class HumanSessionIssuanceProcessGate
             RemoveAuthorizationEntry(subjectId, entry);
         }
 
+        var subjectGateHeld = false;
         try
         {
             await entry.EnterAsync(cancellationToken);
+            subjectGateHeld = true;
+            Interlocked.Increment(
+                ref _authorizationDatabaseLeaseWaitingCount);
+            try
+            {
+                await _authorizationDatabaseLeaseSlots.WaitAsync(
+                    cancellationToken);
+            }
+            finally
+            {
+                Interlocked.Decrement(
+                    ref _authorizationDatabaseLeaseWaitingCount);
+            }
+
             return new AuthorizationLease(this, subjectId, entry);
         }
         catch
         {
+            if (subjectGateHeld)
+            {
+                entry.Release();
+            }
+
             ReleaseAuthorizationReference(subjectId, entry);
             throw;
         }
@@ -89,6 +118,7 @@ public sealed class HumanSessionIssuanceProcessGate
         AuthorizationGateEntry entry)
     {
         entry.Release();
+        _authorizationDatabaseLeaseSlots.Release();
         ReleaseAuthorizationReference(subjectId, entry);
     }
 

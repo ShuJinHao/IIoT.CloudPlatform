@@ -1138,6 +1138,104 @@ public sealed class ProductionRetryTransactionPostgresTests(
     }
 
     [Fact]
+    public async Task AuthorizationProcessGate_ShouldCapDistinctSubjectsBeforeOpeningMoreDatabaseConnections()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var processGate = new HumanSessionIssuanceProcessGate();
+        var holderApplicationName =
+            $"tx-03b3-auth-cap-holders-{Guid.NewGuid():N}";
+        var waiterApplicationName =
+            $"tx-03b3-auth-cap-waiter-{Guid.NewGuid():N}";
+        await using var holderContext = CreateRetryContext(
+            budget.ConnectionString,
+            holderApplicationName);
+        await using var waiterContext = CreateRetryContext(
+            budget.ConnectionString,
+            waiterApplicationName);
+        var holder = new HumanSessionIssuanceLock(
+            holderContext,
+            processGate);
+        var waiter = new HumanSessionIssuanceLock(
+            waiterContext,
+            processGate);
+        var holderLeases = new List<IAsyncDisposable>();
+        Task<IAsyncDisposable>? waiterTask = null;
+
+        try
+        {
+            for (var index = 0;
+                 index <
+                 HumanSessionIssuanceProcessGate
+                     .AuthorizationDatabaseLeaseLimit;
+                 index++)
+            {
+                holderLeases.Add(
+                    await holder.AcquireAuthorizationAsync(
+                        Guid.NewGuid(),
+                        budget.Token));
+            }
+
+            Assert.Equal(
+                HumanSessionIssuanceProcessGate
+                    .AuthorizationDatabaseLeaseLimit,
+                await CountPostgresSessionsAsync(
+                    budget.ConnectionString,
+                    holderApplicationName,
+                    budget.Token));
+
+            waiterTask = waiter
+                .AcquireAuthorizationAsync(
+                    Guid.NewGuid(),
+                    budget.Token)
+                .AsTask();
+            await WaitForAuthorizationDatabaseLeaseWaiterAsync(
+                processGate,
+                budget.Token);
+
+            Assert.Equal(
+                0,
+                await CountPostgresSessionsAsync(
+                    budget.ConnectionString,
+                    waiterApplicationName,
+                    budget.Token));
+
+            await holderLeases[0].DisposeAsync();
+            holderLeases.RemoveAt(0);
+            await using var waiterLease =
+                await waiterTask.WaitAsync(budget.Token);
+            waiterTask = null;
+            Assert.Equal(
+                1,
+                await CountPostgresSessionsAsync(
+                    budget.ConnectionString,
+                    waiterApplicationName,
+                    budget.Token));
+        }
+        finally
+        {
+            foreach (var holderLease in holderLeases)
+            {
+                await holderLease.DisposeAsync();
+            }
+
+            if (waiterTask is not null)
+            {
+                try
+                {
+                    await using var waiterLease =
+                        await waiterTask.WaitAsync(budget.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Cleanup observes the test budget cancellation.
+                }
+            }
+        }
+    }
+
+    [Fact]
     public async Task ApiKeyCreateCancellationAfterCommit_ShouldPropagateAndKeepOneRecoverableTarget()
     {
         using var budget = await PostgresTestBudget.CreateAsync(
@@ -4472,6 +4570,29 @@ public sealed class ProductionRetryTransactionPostgresTests(
         {
             throw new TimeoutException(
                 "Authorization operation did not enter the process gate within 10 seconds.");
+        }
+    }
+
+    private static async Task WaitForAuthorizationDatabaseLeaseWaiterAsync(
+        HumanSessionIssuanceProcessGate processGate,
+        CancellationToken testToken)
+    {
+        using var readinessTimeout =
+            CancellationTokenSource.CreateLinkedTokenSource(testToken);
+        readinessTimeout.CancelAfter(TimeSpan.FromSeconds(10));
+        try
+        {
+            while (processGate.AuthorizationDatabaseLeaseWaitingCount == 0)
+            {
+                readinessTimeout.Token.ThrowIfCancellationRequested();
+                await Task.Yield();
+            }
+        }
+        catch (OperationCanceledException)
+            when (!testToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                "Authorization operation did not enter the database-lease gate within 10 seconds.");
         }
     }
 

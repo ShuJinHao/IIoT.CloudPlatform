@@ -88,6 +88,78 @@ public sealed class CloudOidcPersistenceTests
     }
 
     [Fact]
+    public async Task HumanSessionIssuanceProcessGate_ShouldCapAuthorizationDatabaseLeasesAcrossDistinctSubjects()
+    {
+        using var timeout = new CancellationTokenSource(
+            TimeSpan.FromSeconds(10));
+        var processGate = new HumanSessionIssuanceProcessGate();
+        var holders = new List<IAsyncDisposable>();
+        Task<IAsyncDisposable>? waiterTask = null;
+
+        try
+        {
+            for (var index = 0;
+                 index <
+                 HumanSessionIssuanceProcessGate
+                     .AuthorizationDatabaseLeaseLimit;
+                 index++)
+            {
+                holders.Add(
+                    await processGate.EnterAuthorizationAsync(
+                        Guid.NewGuid(),
+                        timeout.Token));
+            }
+
+            waiterTask = processGate
+                .EnterAuthorizationAsync(
+                    Guid.NewGuid(),
+                    timeout.Token)
+                .AsTask();
+            while (processGate.AuthorizationDatabaseLeaseWaitingCount != 1)
+            {
+                timeout.Token.ThrowIfCancellationRequested();
+                await Task.Yield();
+            }
+
+            Assert.False(waiterTask.IsCompleted);
+            using var canceled = new CancellationTokenSource();
+            canceled.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => processGate
+                    .EnterAuthorizationAsync(
+                        Guid.NewGuid(),
+                        canceled.Token)
+                    .AsTask());
+
+            await holders[0].DisposeAsync();
+            holders.RemoveAt(0);
+            await using var waiter =
+                await waiterTask.WaitAsync(timeout.Token);
+            waiterTask = null;
+        }
+        finally
+        {
+            timeout.Cancel();
+            foreach (var holder in holders)
+            {
+                await holder.DisposeAsync();
+            }
+
+            if (waiterTask is not null)
+            {
+                try
+                {
+                    await using var waiter = await waiterTask;
+                }
+                catch (OperationCanceledException)
+                {
+                    // Cleanup observes cancellation without masking assertions.
+                }
+            }
+        }
+    }
+
+    [Fact]
     public async Task CloudOidcUserProfileService_ShouldReturnAccountAndEmployeeState()
     {
         using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
