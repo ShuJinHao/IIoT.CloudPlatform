@@ -695,7 +695,7 @@ internal sealed class CloudArchitectureEffectCollector
                 }
 
                 AddEdge(caller, invocation.TargetMethod);
-                if (IsDirectWriteInvocation(invocation, caller))
+                if (IsDirectWriteInvocation(invocation))
                     MarkDirectWrite(caller);
 
                 foreach (var argument in invocation.Arguments)
@@ -900,34 +900,11 @@ internal sealed class CloudArchitectureEffectCollector
                    !CloudArchitectureCallSemantics.IsUnresolvedSourceBoundary(target));
     }
 
-    private bool IsDirectWriteInvocation(IInvocationOperation invocation, IMethodSymbol caller)
+    private bool IsDirectWriteInvocation(IInvocationOperation invocation)
     {
         return CloudArchitectureAnalyzer.IsDirectEffectSink(
             invocation,
-            caller,
-            IsDirectReadOnlyQueryPortImplementation,
             _command);
-    }
-
-    private bool IsDirectReadOnlyQueryPortImplementation(IMethodSymbol method)
-    {
-        var marker = _compilation.GetTypeByMetadataName("IIoT.SharedKernel.Architecture.IReadOnlyQueryPort");
-        if (marker is null)
-            return false;
-        foreach (var @interface in method.ContainingType.AllInterfaces)
-        {
-            if (!@interface.Interfaces.Any(candidate => SymbolEqualityComparer.Default.Equals(candidate, marker)))
-                continue;
-            foreach (var member in EnumerateCallableMethods(@interface))
-            {
-                if (method.ContainingType.FindImplementationForInterfaceMember(member) is IMethodSymbol implementation &&
-                    SymbolEqualityComparer.Default.Equals(NormalizeMethod(implementation), method))
-                {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     private bool IsReadOnlyQueryPortType(INamedTypeSymbol? type)

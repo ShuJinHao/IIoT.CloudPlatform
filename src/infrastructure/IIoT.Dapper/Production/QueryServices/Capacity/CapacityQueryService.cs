@@ -39,7 +39,7 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
               AND (@PlcName IS NULL OR h.plc_name = @PlcName)
             ORDER BY h.hour, h.minute, h.plc_name";
 
-        var cmd = new CommandDefinition(
+        var cmd = new ReadOnlyCommandDefinition(
             sql,
             new { DeviceId = deviceId, Date = date, PlcName = plcName },
             cancellationToken: cancellationToken);
@@ -92,7 +92,7 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
             ORDER BY q.bucket_time ASC, q.plc_name ASC
             """;
 
-        var cmd = new CommandDefinition(
+        var cmd = new ReadOnlyCommandDefinition(
             sql,
             new
             {
@@ -152,7 +152,10 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
             GROUP BY h.hour, h.minute
             ORDER BY h.hour, h.minute";
 
-        var cmd = new CommandDefinition(sql, parameters, cancellationToken: cancellationToken);
+        var cmd = new ReadOnlyCommandDefinition(
+            sql,
+            parameters,
+            cancellationToken: cancellationToken);
         var rows = await connection.QueryAsync<HourlyCapacityAggregateDto>(cmd);
         return rows.ToList();
     }
@@ -179,7 +182,7 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
               AND (@PlcName IS NULL OR h.plc_name = @PlcName)
             GROUP BY h.shift_code";
 
-        var cmd = new CommandDefinition(
+        var cmd = new ReadOnlyCommandDefinition(
             sql,
             new { DeviceId = deviceId, Date = date, PlcName = plcName },
             cancellationToken: cancellationToken);
@@ -237,7 +240,7 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
             GROUP BY h.date, h.shift_code{plcGroup}
             ORDER BY h.date ASC{plcOrder}, h.shift_code ASC";
 
-        var cmd = new CommandDefinition(
+        var cmd = new ReadOnlyCommandDefinition(
             sql,
             new { DeviceId = deviceId, StartDate = startDate, EndDate = endDate, PlcName = plcName },
             cancellationToken: cancellationToken);
@@ -349,8 +352,14 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
         parameters.Add("Offset", offset);
         parameters.Add("PageSize", pagination.PageSize);
 
-        var dataCmd = new CommandDefinition(dataSql, parameters, cancellationToken: cancellationToken);
-        var countCmd = new CommandDefinition(countSql, parameters, cancellationToken: cancellationToken);
+        var dataCmd = new ReadOnlyCommandDefinition(
+            dataSql,
+            parameters,
+            cancellationToken: cancellationToken);
+        var countCmd = new ReadOnlyCommandDefinition(
+            countSql,
+            parameters,
+            cancellationToken: cancellationToken);
 
         var items = (await connection.QueryAsync<DailyCapacityPagedItemDto>(dataCmd)).ToList();
         var totalCount = await connection.ExecuteScalarAsync<int>(countCmd);

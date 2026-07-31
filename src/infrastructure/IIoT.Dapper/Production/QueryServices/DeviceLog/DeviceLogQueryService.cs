@@ -76,8 +76,14 @@ internal class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : I
         parameters.Add("Offset", offset);
         parameters.Add("PageSize", pagination.PageSize);
 
-        var command = new CommandDefinition(dataSql, parameters, cancellationToken: cancellationToken);
-        var countCommand = new CommandDefinition(countSql, parameters, cancellationToken: cancellationToken);
+        var command = new ReadOnlyCommandDefinition(
+            dataSql,
+            parameters,
+            cancellationToken: cancellationToken);
+        var countCommand = new ReadOnlyCommandDefinition(
+            countSql,
+            parameters,
+            cancellationToken: cancellationToken);
 
         var items = (await connection.QueryAsync<DeviceLogListItemDto>(command)).ToList();
         var totalCount = await connection.ExecuteScalarAsync<int>(countCommand);
@@ -130,7 +136,10 @@ internal class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : I
             ORDER BY l.log_time DESC
             LIMIT @Limit";
 
-        var command = new CommandDefinition(sql, parameters, cancellationToken: cancellationToken);
+        var command = new ReadOnlyCommandDefinition(
+            sql,
+            parameters,
+            cancellationToken: cancellationToken);
         var items = await connection.QueryAsync<DeviceLogListItemDto>(command);
         return items.ToList();
     }
@@ -172,7 +181,10 @@ internal class DeviceLogQueryService(IDbConnectionFactory connectionFactory) : I
             INNER JOIN devices d ON l.device_id = d.id
             {conditions}";
 
-        var command = new CommandDefinition(sql, parameters, cancellationToken: cancellationToken);
+        var command = new ReadOnlyCommandDefinition(
+            sql,
+            parameters,
+            cancellationToken: cancellationToken);
         return await connection.ExecuteScalarAsync<int>(command);
     }
 }

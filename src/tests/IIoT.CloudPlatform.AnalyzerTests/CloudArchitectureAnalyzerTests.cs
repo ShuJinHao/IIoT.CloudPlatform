@@ -708,6 +708,48 @@ public sealed class CloudArchitectureAnalyzerTests
     }
 
     [Fact]
+    public async Task ReadOnlyPortWithUnresolvedDapperSql_FailsClosed()
+    {
+        var dapper = CreateReference(
+            "Dapper",
+            "namespace Dapper { public readonly struct CommandDefinition { public CommandDefinition(string sql) { } } public static class SqlMapper { public static int Query(object db, CommandDefinition command) => 1; } }");
+        var source = AiReadPrelude + AuthorizedQuery + """
+            public interface IUnsafeQueryPort
+                : IIoT.SharedKernel.Architecture.IReadOnlyQueryPort
+            {
+                System.Threading.Tasks.Task<int> ReadAsync(string sql);
+            }
+
+            public sealed class UnsafeQueryPort(object db) : IUnsafeQueryPort
+            {
+                public System.Threading.Tasks.Task<int> ReadAsync(string sql)
+                    => System.Threading.Tasks.Task.FromResult(
+                        Dapper.SqlMapper.Query(
+                            db,
+                            new Dapper.CommandDefinition(sql)));
+            }
+
+            public sealed class Handler(IUnsafeQueryPort port)
+                : IIoT.SharedKernel.Messaging.IQueryHandler<Query, int>
+            {
+                public System.Threading.Tasks.Task<int> Handle(
+                    Query request,
+                    System.Threading.CancellationToken token)
+                    => port.ReadAsync(request.ToString()!);
+            }
+            """;
+
+        var diagnostics = await AnalyzeAsync(
+            "IIoT.Dapper.Fixture.UnresolvedReadOnlyPort",
+            [source],
+            dapper);
+
+        Assert.Contains(
+            diagnostics,
+            diagnostic => diagnostic.Id == "CLOUDARCH004");
+    }
+
+    [Fact]
     public async Task AiReadCompilerImplicitCallsAndHandlerLifecycle_ReportWritePaths()
     {
         var source = AiReadPrelude + AuthorizedQuery + """

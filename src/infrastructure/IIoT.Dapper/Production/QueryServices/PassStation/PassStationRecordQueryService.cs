@@ -45,10 +45,16 @@ internal sealed class PassStationRecordQueryService(IDbConnectionFactory connect
         var countSql = $"SELECT COUNT(*) FROM pass_station_records {conditions}";
 
         var rows = (await connection.QueryAsync<PassStationRecordRow>(
-            new CommandDefinition(dataSql, parameters, cancellationToken: cancellationToken))).ToList();
+            new ReadOnlyCommandDefinition(
+                dataSql,
+                parameters,
+                cancellationToken: cancellationToken))).ToList();
 
         var totalCount = await connection.ExecuteScalarAsync<int>(
-            new CommandDefinition(countSql, parameters, cancellationToken: cancellationToken));
+            new ReadOnlyCommandDefinition(
+                countSql,
+                parameters,
+                cancellationToken: cancellationToken));
 
         return (rows.Select(ToListItem).ToList(), totalCount);
     }
@@ -67,7 +73,7 @@ internal sealed class PassStationRecordQueryService(IDbConnectionFactory connect
             """;
 
         var row = await connection.QuerySingleOrDefaultAsync<PassStationRecordRow>(
-            new CommandDefinition(
+            new ReadOnlyCommandDefinition(
                 detailSql,
                 new { TypeKey = typeKey, Id = id },
                 cancellationToken: cancellationToken));

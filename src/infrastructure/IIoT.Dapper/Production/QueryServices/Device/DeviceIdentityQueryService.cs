@@ -28,7 +28,7 @@ internal class DeviceIdentityQueryService(
 
         using var connection = connectionFactory.CreateConnection();
 
-        var cmd = new CommandDefinition(
+        var cmd = new ReadOnlyCommandDefinition(
             sql,
             new { DeviceId = deviceId },
             cancellationToken: cancellationToken);

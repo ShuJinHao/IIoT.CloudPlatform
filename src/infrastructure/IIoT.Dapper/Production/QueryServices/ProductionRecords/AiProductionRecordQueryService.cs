@@ -50,9 +50,15 @@ internal sealed class AiProductionRecordQueryService(IDbConnectionFactory connec
             """;
 
         var rows = (await connection.QueryAsync<AiProductionRecordRow>(
-            new CommandDefinition(dataSql, parameters, cancellationToken: cancellationToken))).ToList();
+            new ReadOnlyCommandDefinition(
+                dataSql,
+                parameters,
+                cancellationToken: cancellationToken))).ToList();
         var totalCount = await connection.ExecuteScalarAsync<int>(
-            new CommandDefinition(countSql, parameters, cancellationToken: cancellationToken));
+            new ReadOnlyCommandDefinition(
+                countSql,
+                parameters,
+                cancellationToken: cancellationToken));
 
         return (rows.Select(ToItem).ToList(), totalCount);
     }

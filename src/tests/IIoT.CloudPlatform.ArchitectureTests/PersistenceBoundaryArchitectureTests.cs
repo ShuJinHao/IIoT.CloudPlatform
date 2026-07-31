@@ -22,6 +22,7 @@ using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.Contracts.Events.Capacities;
+using IIoT.SharedKernel.Architecture;
 using IIoT.SharedKernel.Configuration;
 using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Result;
@@ -545,6 +546,50 @@ public sealed class PersistenceBoundaryArchitectureTests
     }
 
     [Fact]
+    public void PersistenceInventory_ShouldRejectMethodGroupsEscapingReplayCallbacks()
+    {
+        const string source =
+            """
+            using IIoT.Services.Contracts.Persistence;
+            using Microsoft.EntityFrameworkCore;
+
+            public sealed class DeferredWriter(DbContext context)
+            {
+                public Task<int> PersistAsync(CancellationToken cancellationToken)
+                    => context.SaveChangesAsync(cancellationToken);
+            }
+
+            public sealed class ReplayFactory(
+                IUnitOfWork unitOfWork,
+                DeferredWriter writer)
+            {
+                public Task<Func<CancellationToken, Task<int>>> CreateAsync(
+                    CancellationToken cancellationToken)
+                    => unitOfWork.ExecuteResilientAsync(
+                        _ => Task.FromResult<Func<CancellationToken, Task<int>>>(
+                            writer.PersistAsync),
+                        cancellationToken);
+            }
+
+            public sealed class OutsideCaller(ReplayFactory factory)
+            {
+                public async Task<int> WriteAsync(
+                    CancellationToken cancellationToken)
+                {
+                    var write = await factory.CreateAsync(cancellationToken);
+                    return await write(cancellationToken);
+                }
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(source).UnclassifiedEntries);
+
+        Assert.Contains("ef-save", entry.SinkKinds);
+        Assert.Contains("DeferredWriter.PersistAsync", entry.Method);
+    }
+
+    [Fact]
     public void PersistenceInventory_ShouldUseSymbolsInsteadOfCommentsOrSafeLanguageConstructs()
     {
         const string source =
@@ -667,6 +712,97 @@ public sealed class PersistenceBoundaryArchitectureTests
             PersistenceWriteInventory.DiscoverSnippet(source).UnclassifiedEntries);
 
         Assert.Contains("dapper-write", entry.SinkKinds);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldNotTrustReadOnlyPortForUnresolvedDapperSql()
+    {
+        const string source =
+            """
+            using System.Data;
+            using Dapper;
+            using IIoT.SharedKernel.Architecture;
+
+            public interface IUnsafeQueryPort : IReadOnlyQueryPort
+            {
+                Task<int> ReadAsync(string sql, CancellationToken cancellationToken);
+            }
+
+            public sealed class UnsafeQueryPort(IDbConnection connection) : IUnsafeQueryPort
+            {
+                public async Task<int> ReadAsync(
+                    string sql,
+                    CancellationToken cancellationToken)
+                {
+                    var command = new CommandDefinition(
+                        sql,
+                        cancellationToken: cancellationToken);
+                    return await connection.QuerySingleAsync<int>(command);
+                }
+            }
+            """;
+
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(source).UnclassifiedEntries);
+
+        Assert.Contains("dapper-write", entry.SinkKinds);
+    }
+
+    [Theory]
+    [InlineData("delete from sample returning id")]
+    [InlineData("select dangerous_side_effect()")]
+    [InlineData("select 1; delete from sample")]
+    public void ReadOnlyCommandDefinition_ShouldRejectUnprovenSql(string sql)
+    {
+        var constructor = GetReadOnlyCommandConstructor();
+
+        var exception = Assert.Throws<System.Reflection.TargetInvocationException>(
+            () => constructor.Invoke(
+            [
+                sql,
+                null,
+                null,
+                null,
+                null,
+                global::Dapper.CommandFlags.Buffered,
+                CancellationToken.None
+            ]));
+
+        Assert.IsType<InvalidOperationException>(exception.InnerException);
+    }
+
+    [Fact]
+    public void ReadOnlyCommandDefinition_ShouldAcceptProvenSql()
+    {
+        var command = GetReadOnlyCommandConstructor().Invoke(
+        [
+            "select 1",
+            null,
+            null,
+            null,
+            null,
+            global::Dapper.CommandFlags.Buffered,
+            CancellationToken.None
+        ]);
+
+        Assert.NotNull(command);
+    }
+
+    [Theory]
+    [InlineData("select 1")]
+    [InlineData("with sample as (select 1) select * from sample")]
+    [InlineData("select * from sample where id = any(@Ids)")]
+    public void ReadOnlySqlGuard_ShouldAcceptProvenReadOnlySql(string sql)
+    {
+        Assert.Equal(sql, ReadOnlySqlGuard.Require(sql));
+    }
+
+    private static System.Reflection.ConstructorInfo GetReadOnlyCommandConstructor()
+    {
+        var wrapperType = typeof(IIoT.Dapper.DependencyInjection).Assembly.GetType(
+            "IIoT.Dapper.ReadOnlyCommandDefinition");
+        Assert.NotNull(wrapperType);
+        return Assert.Single(wrapperType.GetConstructors());
     }
 
     [Fact]

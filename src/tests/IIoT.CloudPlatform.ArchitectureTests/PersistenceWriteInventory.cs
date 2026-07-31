@@ -1257,7 +1257,7 @@ internal static class PersistenceWriteInventory
             }
 
             if (kind == "dapper-write" &&
-                IsProvenReadOnlyDapperInvocation(invocation, semanticModel, callable))
+                IsProvenReadOnlyDapperInvocation(invocation, semanticModel))
             {
                 continue;
             }
@@ -1513,8 +1513,7 @@ internal static class PersistenceWriteInventory
 
     private static bool IsProvenReadOnlyDapperInvocation(
         InvocationExpressionSyntax invocation,
-        SemanticModel semanticModel,
-        IMethodSymbol callable)
+        SemanticModel semanticModel)
     {
         if (semanticModel.GetOperation(invocation) is not IInvocationOperation operation)
         {
@@ -1531,16 +1530,12 @@ internal static class PersistenceWriteInventory
             return false;
         }
 
-        if (TryGetDapperCommandDefinitionSql(
-                operation,
-                semanticModel,
-                new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default),
-                out var sql))
-        {
-            return CloudArchitectureAnalyzer.IsReadOnlySql(sql);
-        }
-
-        return IsDirectReadOnlyQueryPortImplementation(callable);
+        return TryGetDapperCommandDefinitionSql(
+                   operation,
+                   semanticModel,
+                   new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default),
+                   out var sql) &&
+               CloudArchitectureAnalyzer.IsReadOnlySql(sql);
     }
 
     private static bool TryGetDapperCommandDefinitionSql(
@@ -1629,47 +1624,6 @@ internal static class PersistenceWriteInventory
 
         return operation;
     }
-
-    private static bool IsDirectReadOnlyQueryPortImplementation(IMethodSymbol callable)
-    {
-        var containingType = callable.ContainingType;
-        if (containingType is null)
-        {
-            return false;
-        }
-
-        foreach (var contract in containingType.AllInterfaces.Where(IsReadOnlyQueryPortType))
-        {
-            if (CloudArchitectureAnalyzer.HasWritableCapabilitySurface(contract))
-            {
-                continue;
-            }
-
-            foreach (var contractMethod in contract.GetMembers()
-                         .OfType<IMethodSymbol>())
-            {
-                if (containingType.FindImplementationForInterfaceMember(contractMethod)
-                        is IMethodSymbol implementation &&
-                    SymbolEqualityComparer.Default.Equals(
-                        implementation.OriginalDefinition,
-                        callable.OriginalDefinition))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
-    private static bool IsReadOnlyQueryPortType(INamedTypeSymbol type)
-        => IsReadOnlyQueryPortMarker(type) ||
-           type.AllInterfaces.Any(IsReadOnlyQueryPortMarker);
-
-    private static bool IsReadOnlyQueryPortMarker(INamedTypeSymbol type)
-        => type.Name == "IReadOnlyQueryPort" &&
-           type.ContainingNamespace.ToDisplayString() ==
-           "IIoT.SharedKernel.Architecture";
 
     private static bool IsOpenIddictMutation(IMethodSymbol method)
     {
@@ -2218,7 +2172,9 @@ internal static class PersistenceWriteInventory
         public bool IsInsideReplayRoot(SyntaxNode writeSyntax, IMethodSymbol callable)
         {
             var model = _models[writeSyntax.SyntaxTree];
-            if (IsInsideProtectedDelegate(writeSyntax, model))
+            if (IsProtectedDelegateArgument(writeSyntax, model) ||
+                (writeSyntax is InvocationExpressionSyntax &&
+                 IsInsideProtectedDelegate(writeSyntax, model)))
             {
                 return true;
             }
@@ -2251,7 +2207,8 @@ internal static class PersistenceWriteInventory
                 {
                     var model = _models[reference.SyntaxTree];
                     if (IsProtectedDelegateArgument(reference, model) ||
-                        IsInsideProtectedDelegate(reference, model))
+                        (reference is InvocationExpressionSyntax &&
+                         IsInsideProtectedDelegate(reference, model)))
                     {
                         return true;
                     }

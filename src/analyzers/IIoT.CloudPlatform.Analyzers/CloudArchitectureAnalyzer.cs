@@ -1,7 +1,5 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
-using System.Text;
-using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -68,67 +66,6 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
 
     private static readonly ImmutableHashSet<string> ConnectionResourceLiterals =
         ImmutableHashSet.Create(StringComparer.Ordinal, "iiot-db", "eventbus");
-
-    private static readonly Regex ReadOnlySqlStart = new(
-        @"^(SELECT|WITH)\b",
-        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-    private static readonly Regex SqlSelectKeyword = new(
-        @"\bSELECT\b",
-        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-    private static readonly Regex SqlWriteOrDdlKeyword = new(
-        @"\b(INSERT|UPDATE|DELETE|MERGE|UPSERT|REPLACE|INTO|CREATE|ALTER|DROP|TRUNCATE|GRANT|REVOKE|CALL|EXEC|EXECUTE|COPY|VACUUM|ANALYZE|LOCK|COMMENT|REINDEX|CLUSTER|REFRESH)\b",
-        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-    private static readonly Regex SqlFunctionCall = new(
-        "(?<![\\w$\\\"])(?<name>(?:[A-Za-z_][A-Za-z0-9_$]*|\\\"[^\\\"]*\\\")(?:\\s*\\.\\s*(?:[A-Za-z_][A-Za-z0-9_$]*|\\\"[^\\\"]*\\\"))?)\\s*\\(",
-        RegexOptions.CultureInvariant);
-
-    private static readonly ImmutableHashSet<string> ProvenReadOnlySqlFunctions =
-        ImmutableHashSet.Create(
-            StringComparer.OrdinalIgnoreCase,
-            "abs",
-            "avg",
-            "ceil",
-            "ceiling",
-            "char_length",
-            "coalesce",
-            "concat",
-            "count",
-            "date_part",
-            "date_trunc",
-            "extract",
-            "floor",
-            "greatest",
-            "json_array_length",
-            "jsonb_array_length",
-            "least",
-            "length",
-            "lower",
-            "make_interval",
-            "max",
-            "min",
-            "nullif",
-            "round",
-            "row_number",
-            "sum",
-            "trim",
-            "upper");
-
-    private static readonly ImmutableHashSet<string> SqlStructuralParentheses =
-        ImmutableHashSet.Create(
-            StringComparer.OrdinalIgnoreCase,
-            "and",
-            "as",
-            "exists",
-            "filter",
-            "from",
-            "in",
-            "join",
-            "or",
-            "over",
-            "values");
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
         ImmutableArray.Create(
@@ -203,8 +140,6 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
 
     internal static bool IsDirectEffectSink(
         IInvocationOperation invocation,
-        IMethodSymbol caller,
-        Func<IMethodSymbol, bool> isDirectReadOnlyQueryPortImplementation,
         INamedTypeSymbol? commandType)
     {
         var method = invocation.TargetMethod.ReducedFrom?.OriginalDefinition ?? invocation.TargetMethod.OriginalDefinition;
@@ -220,9 +155,7 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
 
         if (RawDatabaseAccessMethods.Contains(method.Name) && CompilationState.IsDatabaseApiType(method.ContainingType))
         {
-            return !(CompilationState.IsDapperCommandDefinitionInvocation(invocation) &&
-                     isDirectReadOnlyQueryPortImplementation(caller)) &&
-                   !CompilationState.HasCompileTimeReadOnlySql(invocation);
+            return !CompilationState.HasCompileTimeReadOnlySql(invocation);
         }
 
         if ((method.Name == "SaveChanges" || method.Name == "SaveChangesAsync") &&
@@ -251,7 +184,7 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
         => CompilationState.IsDapperCommandDefinitionInvocation(invocation);
 
     internal static bool IsReadOnlySql(string sql)
-        => CompilationState.IsReadOnlySql(sql);
+        => ReadOnlySqlGuard.IsReadOnly(sql);
 
     private static bool IsRepositoryApiType(INamedTypeSymbol? type)
     {
@@ -636,7 +569,7 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
                     var edge = new InvocationEdge(
                         target,
                         invocation.Syntax.GetLocation(),
-                        IsDirectWriteSink(invocation, caller, target),
+                        IsDirectWriteSink(invocation),
                         target.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat));
                     _callGraph.GetOrAdd(caller, static _ => new ConcurrentBag<InvocationEdge>()).Add(edge);
                 }
@@ -1821,40 +1754,11 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
             return false;
         }
 
-        private bool IsDirectWriteSink(
-            IInvocationOperation invocation,
-            IMethodSymbol caller,
-            IMethodSymbol method)
+        private bool IsDirectWriteSink(IInvocationOperation invocation)
         {
             return CloudArchitectureAnalyzer.IsDirectEffectSink(
                 invocation,
-                caller,
-                IsDirectReadOnlyQueryPortImplementation,
                 _command);
-        }
-
-        private bool IsDirectReadOnlyQueryPortImplementation(IMethodSymbol method)
-        {
-            var containingType = method.ContainingType;
-            if (containingType is null)
-                return false;
-
-            foreach (var @interface in containingType.AllInterfaces)
-            {
-                if (!IsReadOnlyQueryPortType(@interface))
-                    continue;
-
-                foreach (var interfaceMethod in @interface.GetMembers().OfType<IMethodSymbol>())
-                {
-                    if (containingType.FindImplementationForInterfaceMember(interfaceMethod) is IMethodSymbol implementation &&
-                        SymbolEqualityComparer.Default.Equals(NormalizeMethod(implementation), NormalizeMethod(method)))
-                    {
-                        return true;
-                    }
-                }
-            }
-
-            return false;
         }
 
         internal static bool IsDapperParameterBagMutation(IMethodSymbol method)
@@ -1879,6 +1783,12 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
 
         internal static bool HasCompileTimeReadOnlySql(IInvocationOperation invocation)
         {
+            if (invocation.Arguments.Any(static argument =>
+                    IsValidatedReadOnlyCommand(argument.Value)))
+            {
+                return true;
+            }
+
             var sqlArgument = invocation.Arguments.FirstOrDefault(static argument =>
                 string.Equals(argument.Parameter?.Name, "sql", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(argument.Parameter?.Name, "commandText", StringComparison.OrdinalIgnoreCase) ||
@@ -1896,52 +1806,16 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
         }
 
         internal static bool IsReadOnlySql(string sql)
+            => ReadOnlySqlGuard.IsReadOnly(sql);
+
+        private static bool IsValidatedReadOnlyCommand(IOperation operation)
         {
-            if (!TryGetSqlCode(sql, out var code))
-            {
-                return false;
-            }
-
-            code = code.Trim();
-            if (code.Length == 0)
-                return false;
-
-            var semicolon = code.IndexOf(';');
-            if (semicolon >= 0)
-            {
-                if (semicolon != code.Length - 1 || code.IndexOf(';', semicolon + 1) >= 0)
-                    return false;
-                code = code.Substring(0, semicolon).TrimEnd();
-            }
-
-            if (!ReadOnlySqlStart.IsMatch(code) ||
-                SqlWriteOrDdlKeyword.IsMatch(code) ||
-                ContainsUnprovenSqlFunction(code))
-                return false;
-
-            return !code.StartsWith("WITH", StringComparison.OrdinalIgnoreCase) ||
-                   SqlSelectKeyword.IsMatch(code);
-        }
-
-        private static bool ContainsUnprovenSqlFunction(string code)
-        {
-            foreach (Match match in SqlFunctionCall.Matches(code))
-            {
-                var name = Regex.Replace(match.Groups["name"].Value, @"\s+", string.Empty);
-                if (SqlStructuralParentheses.Contains(name))
-                    continue;
-
-                // Schema-qualified functions and every unrecognised function fail closed:
-                // PostgreSQL permits user-defined functions to mutate state even in SELECT.
-                if (name.IndexOf('.') >= 0 ||
-                    name.IndexOf('"') >= 0 ||
-                    !ProvenReadOnlySqlFunctions.Contains(name))
-                {
-                    return true;
-                }
-            }
-
-            return false;
+            operation = UnwrapConversion(operation);
+            return string.Equals(
+                operation.Type?.ToDisplayString(
+                    SymbolDisplayFormat.CSharpErrorMessageFormat),
+                "IIoT.Dapper.ReadOnlyCommandDefinition",
+                StringComparison.Ordinal);
         }
 
         private static IOperation UnwrapConversion(IOperation operation)
@@ -1962,123 +1836,6 @@ public sealed class CloudArchitectureAnalyzer : DiagnosticAnalyzer
 
             value = string.Empty;
             return false;
-        }
-
-        private static bool TryGetSqlCode(string sql, out string code)
-        {
-            var builder = new StringBuilder(sql.Length);
-            var state = SqlLexicalState.Code;
-            for (var index = 0; index < sql.Length; index++)
-            {
-                var current = sql[index];
-                var next = index + 1 < sql.Length ? sql[index + 1] : '\0';
-                switch (state)
-                {
-                    case SqlLexicalState.Code:
-                        if (current == '-' && next == '-')
-                        {
-                            builder.Append("  ");
-                            index++;
-                            state = SqlLexicalState.LineComment;
-                        }
-                        else if (current == '/' && next == '*')
-                        {
-                            builder.Append("  ");
-                            index++;
-                            state = SqlLexicalState.BlockComment;
-                        }
-                        else if (current == '\'')
-                        {
-                            builder.Append(' ');
-                            state = SqlLexicalState.StringLiteral;
-                        }
-                        else if (current == '"')
-                        {
-                            builder.Append('"');
-                            state = SqlLexicalState.QuotedIdentifier;
-                        }
-                        else if (current == '[')
-                        {
-                            builder.Append(' ');
-                            state = SqlLexicalState.BracketIdentifier;
-                        }
-                        else
-                        {
-                            builder.Append(current);
-                        }
-                        break;
-                    case SqlLexicalState.LineComment:
-                        builder.Append(current is '\r' or '\n' ? current : ' ');
-                        if (current is '\r' or '\n')
-                            state = SqlLexicalState.Code;
-                        break;
-                    case SqlLexicalState.BlockComment:
-                        if (current == '*' && next == '/')
-                        {
-                            builder.Append("  ");
-                            index++;
-                            state = SqlLexicalState.Code;
-                        }
-                        else
-                        {
-                            builder.Append(current is '\r' or '\n' ? current : ' ');
-                        }
-                        break;
-                    case SqlLexicalState.StringLiteral:
-                        builder.Append(' ');
-                        if (current == '\'' && next == '\'')
-                        {
-                            builder.Append(' ');
-                            index++;
-                        }
-                        else if (current == '\'')
-                        {
-                            state = SqlLexicalState.Code;
-                        }
-                        break;
-                    case SqlLexicalState.QuotedIdentifier:
-                        if (current == '"' && next == '"')
-                        {
-                            builder.Append("qq");
-                            index++;
-                        }
-                        else if (current == '"')
-                        {
-                            builder.Append('"');
-                            state = SqlLexicalState.Code;
-                        }
-                        else
-                        {
-                            builder.Append(current is '\r' or '\n' ? current : 'q');
-                        }
-                        break;
-                    case SqlLexicalState.BracketIdentifier:
-                        builder.Append(' ');
-                        if (current == ']' && next == ']')
-                        {
-                            builder.Append(' ');
-                            index++;
-                        }
-                        else if (current == ']')
-                        {
-                            state = SqlLexicalState.Code;
-                        }
-                        break;
-                }
-            }
-
-            code = builder.ToString();
-            return state is SqlLexicalState.Code or SqlLexicalState.LineComment;
-        }
-
-        private enum SqlLexicalState
-        {
-            Code,
-            LineComment,
-            BlockComment,
-            StringLiteral,
-            QuotedIdentifier,
-            BracketIdentifier
         }
 
         private bool IsRepositoryType(INamedTypeSymbol? type)

@@ -75,7 +75,10 @@ internal sealed class DeviceOperationalStatusQueryService(IDbConnectionFactory c
                 @GeneratedAt AS GeneratedAt
             FROM status_rows";
 
-        var command = new CommandDefinition(sql, parameters, cancellationToken: cancellationToken);
+        var command = new ReadOnlyCommandDefinition(
+            sql,
+            parameters,
+            cancellationToken: cancellationToken);
         var row = await connection.QuerySingleAsync<DeviceStatusSummaryRow>(command);
 
         return new DeviceStatusSummaryDto(
