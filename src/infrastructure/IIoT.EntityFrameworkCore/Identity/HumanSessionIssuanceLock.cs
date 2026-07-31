@@ -44,7 +44,7 @@ public sealed class HumanSessionIssuanceLock(
         }
     }
 
-    public async ValueTask<IAsyncDisposable> AcquireTokenExchangeAsync(
+    public async ValueTask<IAsyncDisposable?> TryAcquireTokenExchangeAsync(
         CancellationToken cancellationToken = default)
     {
         if (!_usesNpgsql)
@@ -52,8 +52,13 @@ public sealed class HumanSessionIssuanceLock(
             return NoopLease.Instance;
         }
 
-        var processLease = await processGate.EnterTokenExchangeAsync(
+        var processLease = await processGate.TryEnterTokenExchangeAsync(
             cancellationToken);
+        if (processLease is null)
+        {
+            return null;
+        }
+
         try
         {
             var databaseLease = await AcquireAsync(

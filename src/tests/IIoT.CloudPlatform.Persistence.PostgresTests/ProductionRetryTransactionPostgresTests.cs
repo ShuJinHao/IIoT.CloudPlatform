@@ -937,12 +937,14 @@ public sealed class ProductionRetryTransactionPostgresTests(
         var tokenId = Guid.NewGuid();
         Task revokeTask;
 
-        await using (var lease = tokenExchange
-                         ? await issuanceLock.AcquireTokenExchangeAsync(
-                             budget.Token)
-                         : await issuanceLock.AcquireAuthorizationAsync(
-                             subjectId,
-                             budget.Token))
+        var issuanceLease = tokenExchange
+            ? await issuanceLock.TryAcquireTokenExchangeAsync(budget.Token)
+                ?? throw new InvalidOperationException(
+                    "Token-exchange admission was unexpectedly full.")
+            : await issuanceLock.AcquireAuthorizationAsync(
+                subjectId,
+                budget.Token);
+        await using (issuanceLease)
         {
             revokeTask = revocation.RevokeAllAsync(
                 subjectId,
@@ -1027,12 +1029,14 @@ public sealed class ProductionRetryTransactionPostgresTests(
             waiterContext,
             processGate);
         IAsyncDisposable? holderLease =
-            await holder.AcquireTokenExchangeAsync(budget.Token);
+            await holder.TryAcquireTokenExchangeAsync(budget.Token)
+            ?? throw new InvalidOperationException(
+                "Token-exchange admission was unexpectedly full.");
 
         try
         {
             var waiterTask = waiter
-                .AcquireTokenExchangeAsync(budget.Token)
+                .TryAcquireTokenExchangeAsync(budget.Token)
                 .AsTask();
             await WaitForProcessGateWaiterAsync(
                 processGate,
@@ -1047,8 +1051,10 @@ public sealed class ProductionRetryTransactionPostgresTests(
 
             await holderLease.DisposeAsync();
             holderLease = null;
-            await using var waiterLease = await waiterTask.WaitAsync(
-                budget.Token);
+            await using var waiterLease =
+                await waiterTask.WaitAsync(budget.Token)
+                ?? throw new InvalidOperationException(
+                    "Token-exchange waiter was unexpectedly rejected.");
             Assert.Equal(
                 1,
                 await CountPostgresSessionsAsync(

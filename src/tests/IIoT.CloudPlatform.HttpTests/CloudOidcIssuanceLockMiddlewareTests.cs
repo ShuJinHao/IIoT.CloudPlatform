@@ -31,6 +31,38 @@ public sealed class CloudOidcIssuanceLockMiddlewareTests
     }
 
     [Fact]
+    public async Task TokenExchangeCapacityExceeded_ShouldReturn429WithoutReachingEndpoint()
+    {
+        var issuanceLock = new RecordingIssuanceLock
+        {
+            RejectTokenExchange = true
+        };
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/connect/token";
+        context.Response.Body = new MemoryStream();
+        var reachedEndpoint = false;
+        var middleware = new CloudOidcIssuanceLockMiddleware(_ =>
+        {
+            reachedEndpoint = true;
+            return Task.CompletedTask;
+        });
+
+        await middleware.InvokeAsync(context, issuanceLock);
+
+        Assert.False(reachedEndpoint);
+        Assert.Equal(
+            StatusCodes.Status429TooManyRequests,
+            context.Response.StatusCode);
+        Assert.Equal(
+            "application/problem+json",
+            context.Response.ContentType);
+        Assert.Equal("1", context.Response.Headers.RetryAfter);
+        Assert.True(context.Response.Body.Length > 0);
+        Assert.Equal(1, issuanceLock.TokenExchangeAcquisitions);
+        Assert.False(issuanceLock.IsHeld);
+    }
+
+    [Fact]
     public async Task Authorization_ShouldHoldSubjectLockThroughEndpoint()
     {
         var subjectId = Guid.NewGuid();
@@ -71,6 +103,8 @@ public sealed class CloudOidcIssuanceLockMiddlewareTests
 
         public bool IsHeld { get; private set; }
 
+        public bool RejectTokenExchange { get; init; }
+
         public ValueTask<IAsyncDisposable> AcquireAuthorizationAsync(
             Guid subjectId,
             CancellationToken cancellationToken = default)
@@ -81,12 +115,13 @@ public sealed class CloudOidcIssuanceLockMiddlewareTests
             return ValueTask.FromResult<IAsyncDisposable>(Acquire());
         }
 
-        public ValueTask<IAsyncDisposable> AcquireTokenExchangeAsync(
+        public ValueTask<IAsyncDisposable?> TryAcquireTokenExchangeAsync(
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             TokenExchangeAcquisitions++;
-            return ValueTask.FromResult<IAsyncDisposable>(Acquire());
+            return ValueTask.FromResult<IAsyncDisposable?>(
+                RejectTokenExchange ? null : Acquire());
         }
 
         private IAsyncDisposable Acquire()

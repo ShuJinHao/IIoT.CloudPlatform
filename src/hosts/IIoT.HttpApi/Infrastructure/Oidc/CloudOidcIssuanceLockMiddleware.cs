@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using IIoT.Services.Contracts.Identity;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Mvc;
 
 namespace IIoT.HttpApi.Infrastructure.Oidc;
 
@@ -16,8 +17,14 @@ public sealed class CloudOidcIssuanceLockMiddleware(RequestDelegate next)
                 StringComparison.OrdinalIgnoreCase))
         {
             await using var lease =
-                await issuanceLock.AcquireTokenExchangeAsync(
+                await issuanceLock.TryAcquireTokenExchangeAsync(
                     context.RequestAborted);
+            if (lease is null)
+            {
+                await WriteTokenExchangeCapacityRejectedAsync(context);
+                return;
+            }
+
             await next(context);
             return;
         }
@@ -47,5 +54,25 @@ public sealed class CloudOidcIssuanceLockMiddleware(RequestDelegate next)
                 subjectId,
                 context.RequestAborted);
         await next(context);
+    }
+
+    private static async Task WriteTokenExchangeCapacityRejectedAsync(
+        HttpContext context)
+    {
+        context.Response.StatusCode =
+            StatusCodes.Status429TooManyRequests;
+        context.Response.Headers.RetryAfter = "1";
+        await context.Response.WriteAsJsonAsync(
+            new ProblemDetails
+            {
+                Status = StatusCodes.Status429TooManyRequests,
+                Title = "请求过于频繁",
+                Type =
+                    "https://developer.mozilla.org/zh-CN/docs/Web/HTTP/Status/429",
+                Detail = "OIDC token 交换繁忙，请稍后重试。"
+            },
+            options: null,
+            contentType: "application/problem+json",
+            cancellationToken: context.RequestAborted);
     }
 }

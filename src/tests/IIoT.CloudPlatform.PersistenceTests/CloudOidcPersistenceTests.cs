@@ -18,6 +18,76 @@ namespace IIoT.CloudPlatform.PersistenceTests;
 public sealed class CloudOidcPersistenceTests
 {
     [Fact]
+    public async Task HumanSessionIssuanceProcessGate_ShouldBoundTokenExchangeQueueAndRecoverCapacity()
+    {
+        using var timeout = new CancellationTokenSource(
+            TimeSpan.FromSeconds(10));
+        var processGate = new HumanSessionIssuanceProcessGate();
+        IAsyncDisposable? holder =
+            await processGate.TryEnterTokenExchangeAsync(timeout.Token)
+            ?? throw new InvalidOperationException(
+                "Initial token-exchange admission was rejected.");
+        var waiterTasks = Enumerable
+            .Range(
+                0,
+                HumanSessionIssuanceProcessGate.TokenExchangeQueueLimit)
+            .Select(async _ =>
+            {
+                await using var waiterLease =
+                    await processGate.TryEnterTokenExchangeAsync(
+                        timeout.Token)
+                    ?? throw new InvalidOperationException(
+                        "Admitted token-exchange waiter was rejected.");
+            })
+            .ToArray();
+
+        try
+        {
+            while (processGate.TokenExchangeWaitingCount !=
+                   HumanSessionIssuanceProcessGate.TokenExchangeQueueLimit)
+            {
+                timeout.Token.ThrowIfCancellationRequested();
+                await Task.Yield();
+            }
+
+            Assert.Null(
+                await processGate.TryEnterTokenExchangeAsync(timeout.Token));
+            using var canceled = new CancellationTokenSource();
+            canceled.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => processGate
+                    .TryEnterTokenExchangeAsync(canceled.Token)
+                    .AsTask());
+
+            await holder.DisposeAsync();
+            holder = null;
+            await Task.WhenAll(waiterTasks).WaitAsync(timeout.Token);
+
+            var recovered =
+                await processGate.TryEnterTokenExchangeAsync(timeout.Token);
+            Assert.NotNull(recovered);
+            await recovered.DisposeAsync();
+        }
+        finally
+        {
+            if (holder is not null)
+            {
+                await holder.DisposeAsync();
+            }
+
+            timeout.Cancel();
+            try
+            {
+                await Task.WhenAll(waiterTasks);
+            }
+            catch (OperationCanceledException)
+            {
+                // Cleanup observes canceled waiters without masking the assertion.
+            }
+        }
+    }
+
+    [Fact]
     public async Task CloudOidcUserProfileService_ShouldReturnAccountAndEmployeeState()
     {
         using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());

@@ -22,6 +22,6 @@ public interface IHumanSessionIssuanceLock
         Guid subjectId,
         CancellationToken cancellationToken = default);
 
-    ValueTask<IAsyncDisposable> AcquireTokenExchangeAsync(
+    ValueTask<IAsyncDisposable?> TryAcquireTokenExchangeAsync(
         CancellationToken cancellationToken = default);
 }

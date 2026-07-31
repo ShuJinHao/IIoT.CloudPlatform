@@ -544,7 +544,7 @@ public sealed class PersistenceBoundaryArchitectureTests
             middlewareSource,
             StringComparison.Ordinal);
         Assert.Contains(
-            "AcquireTokenExchangeAsync",
+            "TryAcquireTokenExchangeAsync",
             middlewareSource,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -566,7 +566,7 @@ public sealed class PersistenceBoundaryArchitectureTests
             "var databaseLease = await AcquireAsync",
             StringComparison.Ordinal);
         var tokenExchangeProcessGateIndex = issuanceLockSource.IndexOf(
-            "processGate.EnterTokenExchangeAsync",
+            "processGate.TryEnterTokenExchangeAsync",
             StringComparison.Ordinal);
         var tokenExchangeDatabaseLeaseIndex = issuanceLockSource.IndexOf(
             "var databaseLease = await AcquireAsync",
@@ -583,6 +583,18 @@ public sealed class PersistenceBoundaryArchitectureTests
         Assert.Contains(
             "SemaphoreSlim(1, 1)",
             processGateSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "internal const int TokenExchangeQueueLimit = 8;",
+            processGateSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "new SemaphoreSlim(\n            TokenExchangeQueueLimit + 1,\n            TokenExchangeQueueLimit + 1)",
+            processGateSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Status429TooManyRequests",
+            middlewareSource,
             StringComparison.Ordinal);
         Assert.Contains(
             "ConcurrentDictionary<Guid, AuthorizationGateEntry>",

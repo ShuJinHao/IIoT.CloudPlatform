@@ -4,8 +4,14 @@ namespace IIoT.EntityFrameworkCore.Identity;
 
 public sealed class HumanSessionIssuanceProcessGate
 {
+    internal const int TokenExchangeQueueLimit = 8;
+
     private readonly SemaphoreSlim _tokenExchangeGate =
         new SemaphoreSlim(1, 1);
+    private readonly SemaphoreSlim _tokenExchangeAdmissionSlots =
+        new SemaphoreSlim(
+            TokenExchangeQueueLimit + 1,
+            TokenExchangeQueueLimit + 1);
     private readonly ConcurrentDictionary<Guid, AuthorizationGateEntry>
         _authorizationGates = new();
     private int _tokenExchangeWaitingCount;
@@ -18,20 +24,34 @@ public sealed class HumanSessionIssuanceProcessGate
             ? entry.WaitingCount
             : 0;
 
-    internal async ValueTask<IAsyncDisposable> EnterTokenExchangeAsync(
+    internal async ValueTask<IAsyncDisposable?> TryEnterTokenExchangeAsync(
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_tokenExchangeAdmissionSlots.Wait(0))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return null;
+        }
+
         Interlocked.Increment(ref _tokenExchangeWaitingCount);
         try
         {
             await _tokenExchangeGate.WaitAsync(cancellationToken);
+        }
+        catch
+        {
+            _tokenExchangeAdmissionSlots.Release();
+            throw;
         }
         finally
         {
             Interlocked.Decrement(ref _tokenExchangeWaitingCount);
         }
 
-        return new SemaphoreLease(_tokenExchangeGate);
+        return new TokenExchangeLease(
+            _tokenExchangeGate,
+            _tokenExchangeAdmissionSlots);
     }
 
     internal async ValueTask<IAsyncDisposable> EnterAuthorizationAsync(
@@ -85,11 +105,10 @@ public sealed class HumanSessionIssuanceProcessGate
     private void RemoveAuthorizationEntry(
         Guid subjectId,
         AuthorizationGateEntry entry)
-        => ((ICollection<KeyValuePair<Guid, AuthorizationGateEntry>>)
-            _authorizationGates).Remove(
-                new KeyValuePair<Guid, AuthorizationGateEntry>(
-                    subjectId,
-                    entry));
+        => _authorizationGates.TryRemove(
+            new KeyValuePair<Guid, AuthorizationGateEntry>(
+                subjectId,
+                entry));
 
     private sealed class AuthorizationGateEntry
     {
@@ -164,7 +183,9 @@ public sealed class HumanSessionIssuanceProcessGate
         }
     }
 
-    private sealed class SemaphoreLease(SemaphoreSlim gate) : IAsyncDisposable
+    private sealed class TokenExchangeLease(
+        SemaphoreSlim gate,
+        SemaphoreSlim admissionSlots) : IAsyncDisposable
     {
         private int _released;
 
@@ -173,6 +194,7 @@ public sealed class HumanSessionIssuanceProcessGate
             if (Interlocked.Exchange(ref _released, 1) == 0)
             {
                 gate.Release();
+                admissionSlots.Release();
             }
 
             return ValueTask.CompletedTask;
