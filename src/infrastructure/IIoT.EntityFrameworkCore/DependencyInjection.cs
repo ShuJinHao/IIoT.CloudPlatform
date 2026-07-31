@@ -78,6 +78,7 @@ public static class DependencyInjection
         builder.Services.AddScoped<IRefreshTokenService, EfRefreshTokenService>();
         builder.Services.AddScoped<IHumanSessionRevocationService, HumanSessionRevocationService>();
         builder.Services.AddScoped<IIndependentHumanSessionRevocationService, IndependentHumanSessionRevocationService>();
+        builder.Services.AddScoped<IHumanSessionIssuanceLock, HumanSessionIssuanceLock>();
         builder.Services.AddScoped<IEdgeReleaseApiKeyService, EdgeReleaseApiKeyService>();
         builder.Services.AddScoped<DomainEventDispatchContext>();
         builder.Services.AddScoped<IDomainEventDispatchContext>(provider =>

@@ -12,6 +12,7 @@ using IIoT.EntityFrameworkCore.Auditing;
 using IIoT.EntityFrameworkCore.ClientReleases;
 using IIoT.EntityFrameworkCore.EdgeHosts;
 using IIoT.EntityFrameworkCore.Identity;
+using IIoT.EntityFrameworkCore.Outbox;
 using IIoT.EntityFrameworkCore.Persistence;
 using IIoT.EntityFrameworkCore.QueryServices;
 using IIoT.EntityFrameworkCore.Repository;
@@ -219,6 +220,31 @@ public sealed class ProductionRetryTransactionPostgresTests(
             deduplicationKey,
             integrationEvent,
             budget.Token);
+        dbContext.ChangeTracker.Clear();
+        var seededRegistration = await dbContext.UploadReceiveRegistrations
+            .AsNoTracking()
+            .SingleAsync(
+                candidate =>
+                    candidate.DeviceId == deviceId
+                    && candidate.MessageType == "hourly-capacity"
+                    && candidate.DeduplicationKey == deduplicationKey,
+                budget.Token);
+        var expiredObservationId = Guid.NewGuid();
+        var freshObservationId = Guid.NewGuid();
+        var now = OutboxMessage.NormalizePostgresTimestamp(
+            DateTimeOffset.UtcNow);
+        dbContext.UploadReceiveObservations.AddRange(
+            UploadReceiveObservation.Create(
+                expiredObservationId,
+                seededRegistration.Id,
+                now - EfUploadReceiveRegistry.DuplicateObservationRetention
+                    - TimeSpan.FromMinutes(1)),
+            UploadReceiveObservation.Create(
+                freshObservationId,
+                seededRegistration.Id,
+                now - TimeSpan.FromMinutes(1)));
+        await dbContext.SaveChangesAsync(budget.Token);
+        dbContext.ChangeTracker.Clear();
         interceptor.Arm();
         var duplicate = await registry.RegisterAndEnqueueAsync(
             deviceId,
@@ -253,8 +279,18 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 budget.Token);
         Assert.Equal(outbox.Id, registration.OutboxMessageId);
         Assert.Equal(2, registration.SeenCount);
+        Assert.False(await dbContext.UploadReceiveObservations
+            .AsNoTracking()
+            .AnyAsync(
+                observation => observation.Id == expiredObservationId,
+                budget.Token));
+        Assert.True(await dbContext.UploadReceiveObservations
+            .AsNoTracking()
+            .AnyAsync(
+                observation => observation.Id == freshObservationId,
+                budget.Token));
         Assert.Equal(
-            1,
+            2,
             await dbContext.UploadReceiveObservations
                 .AsNoTracking()
                 .CountAsync(
@@ -832,6 +868,97 @@ public sealed class ProductionRetryTransactionPostgresTests(
             .ToListAsync(budget.Token);
         Assert.Equal(2, sessions.Count);
         Assert.All(sessions, session => Assert.Null(session.RevokedAtUtc));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task IndependentHumanSessionRevocation_ShouldNotMissOidcGrantCommittedUnderIssuanceLock(
+        bool tokenExchange)
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var subjectId = Guid.NewGuid();
+        await using var issuanceContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-issuance-{Guid.NewGuid():N}");
+        var issuanceLock = new HumanSessionIssuanceLock(issuanceContext);
+        var revocationApplicationName =
+            $"tx-03b3-oidc-revoke-{Guid.NewGuid():N}";
+        await using var revocationContext = CreateRetryContext(
+            budget.ConnectionString,
+            revocationApplicationName);
+        var revocation = new IndependentHumanSessionRevocationService(
+            revocationContext);
+        var authorizationId = Guid.NewGuid();
+        var tokenId = Guid.NewGuid();
+        Task revokeTask;
+
+        await using (var lease = tokenExchange
+                         ? await issuanceLock.AcquireTokenExchangeAsync(
+                             budget.Token)
+                         : await issuanceLock.AcquireAuthorizationAsync(
+                             subjectId,
+                             budget.Token))
+        {
+            revokeTask = revocation.RevokeAllAsync(
+                subjectId,
+                "manual-revoke",
+                budget.Token);
+            await WaitForLockWaitAsync(
+                budget.ConnectionString,
+                revocationApplicationName,
+                budget.Token);
+
+            await using var grantContext = CreateRetryContext(
+                budget.ConnectionString,
+                $"tx-03b3-oidc-grant-{Guid.NewGuid():N}");
+            var authorization =
+                new OpenIddictEntityFrameworkCoreAuthorization<Guid>
+                {
+                    Id = authorizationId,
+                    Subject = subjectId.ToString(),
+                    Status = OpenIddictConstants.Statuses.Valid,
+                    Type = "permanent",
+                    ConcurrencyToken = Guid.NewGuid().ToString("N")
+                };
+            grantContext.OpenIddictAuthorizations.Add(authorization);
+            if (tokenExchange)
+            {
+                grantContext.OpenIddictTokens.Add(
+                    new OpenIddictEntityFrameworkCoreToken<Guid>
+                    {
+                        Id = tokenId,
+                        Authorization = authorization,
+                        Subject = subjectId.ToString(),
+                        Status = OpenIddictConstants.Statuses.Valid,
+                        Type = "access_token",
+                        ConcurrencyToken = Guid.NewGuid().ToString("N")
+                    });
+            }
+
+            await grantContext.SaveChangesAsync(budget.Token);
+        }
+
+        await Assert.ThrowsAsync<CloudWriteConflictException>(
+            () => revokeTask);
+
+        await using var verificationContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-verify-{Guid.NewGuid():N}");
+        Assert.Equal(
+            OpenIddictConstants.Statuses.Valid,
+            (await verificationContext.OpenIddictAuthorizations
+                .AsNoTracking()
+                .SingleAsync(
+                    authorization => authorization.Id == authorizationId,
+                    budget.Token)).Status);
+        Assert.Equal(
+            tokenExchange ? 1 : 0,
+            await verificationContext.OpenIddictTokens
+                .AsNoTracking()
+                .CountAsync(token => token.Id == tokenId, budget.Token));
     }
 
     [Fact]

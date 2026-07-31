@@ -68,7 +68,7 @@ public sealed class PersistenceBoundaryArchitectureTests
             new WriteBoundaryEntry(
                 "src/infrastructure/IIoT.EntityFrameworkCore/Identity/IndependentHumanSessionRevocationService.cs",
                 "exact-recovery",
-                ["CreateExecutionStrategy()", "ObserveOutcomeAsync", "callbackToken", "RefreshTokenSubjectTransactionLock"]),
+                ["CreateExecutionStrategy()", "ObserveOutcomeAsync", "callbackToken", "AcquireForOidcRevocationAsync"]),
             new WriteBoundaryEntry(
                 "src/infrastructure/IIoT.EntityFrameworkCore/Outbox/OutboxMessageDispatcher.cs",
                 "stable-idempotent",
@@ -92,7 +92,7 @@ public sealed class PersistenceBoundaryArchitectureTests
             new WriteBoundaryEntry(
                 "src/infrastructure/IIoT.EntityFrameworkCore/Identity/HumanSessionRevocationService.cs",
                 "transaction-participant",
-                ["SaveChangesAsync"]),
+                ["SaveChangesAsync", "AcquireForOidcRevocationAsync"]),
             new WriteBoundaryEntry(
                 "src/infrastructure/IIoT.EntityFrameworkCore/Repository/EfRepository.cs",
                 "transaction-participant",
@@ -510,6 +510,43 @@ public sealed class PersistenceBoundaryArchitectureTests
                 .Line + 1;
             yield return $"{relativePath}:{line}";
         }
+    }
+
+    [Fact]
+    public void OidcIssuanceAndRevocation_ShouldShareTransactionLocks()
+    {
+        var middlewareSource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "src", "hosts", "IIoT.HttpApi", "Infrastructure", "Oidc",
+                "CloudOidcIssuanceLockMiddleware.cs"));
+        var programSource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "src", "hosts", "IIoT.HttpApi", "Program.cs"));
+        var issuanceLockSource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "src", "infrastructure", "IIoT.EntityFrameworkCore",
+                "Identity", "HumanSessionIssuanceLock.cs"));
+
+        Assert.Contains(
+            "AcquireAuthorizationAsync",
+            middlewareSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AcquireTokenExchangeAsync",
+            middlewareSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "CloudOidcIssuanceLockMiddleware",
+            programSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "RefreshTokenSubjectTransactionLock.AcquireAsync",
+            issuanceLockSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AcquireOidcTokenExchangeAsync",
+            issuanceLockSource,
+            StringComparison.Ordinal);
     }
 
     private sealed record WriteBoundaryEntry(

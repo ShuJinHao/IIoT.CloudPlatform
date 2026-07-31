@@ -69,6 +69,7 @@ app.UseIIoTSerilogRequestLogging();
 app.UseCors(HttpApiCorsOptions.PolicyName);
 app.UseAuthentication();
 app.UseRateLimiter();
+app.UseMiddleware<IIoT.HttpApi.Infrastructure.Oidc.CloudOidcIssuanceLockMiddleware>();
 app.UseAuthorization();
 app.MapControllers();
 app.MapHealthChecks("/internal/healthz", new HealthCheckOptions

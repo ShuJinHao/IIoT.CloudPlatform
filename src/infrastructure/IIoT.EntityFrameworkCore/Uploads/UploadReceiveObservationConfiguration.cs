@@ -29,6 +29,10 @@ internal sealed class UploadReceiveObservationConfiguration
             .HasDatabaseName(
                 "ix_upload_receive_observations_registration_id");
 
+        builder.HasIndex(observation => observation.SeenAtUtc)
+            .HasDatabaseName(
+                "ix_upload_receive_observations_seen_at_utc");
+
         builder.HasOne<UploadReceiveRegistration>()
             .WithMany()
             .HasForeignKey(observation => observation.RegistrationId)

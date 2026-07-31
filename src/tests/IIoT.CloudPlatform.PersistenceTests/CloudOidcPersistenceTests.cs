@@ -215,9 +215,14 @@ public sealed class CloudOidcPersistenceTests
         dbContext.RefreshTokenSessions.AddRange(refreshSession, machineSession);
         await dbContext.SaveChangesAsync();
 
-        await new HumanSessionRevocationService(dbContext).RevokeAllAsync(
-            subjectId,
-            "employee-deactivated");
+        await using (var transaction =
+                     await dbContext.Database.BeginTransactionAsync())
+        {
+            await new HumanSessionRevocationService(dbContext).RevokeAllAsync(
+                subjectId,
+                "employee-deactivated");
+            await transaction.CommitAsync();
+        }
         dbContext.ChangeTracker.Clear();
 
         var persistedAuthorization = await dbContext.OpenIddictAuthorizations

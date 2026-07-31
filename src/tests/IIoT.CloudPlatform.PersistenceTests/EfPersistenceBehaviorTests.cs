@@ -274,6 +274,12 @@ public sealed class EfPersistenceBehaviorTests
             nameof(UploadReceiveObservation.RegistrationId),
             Assert.Single(foreignKey.Properties).Name);
         Assert.Equal(DeleteBehavior.Cascade, foreignKey.DeleteBehavior);
+        Assert.Contains(
+            entityType.GetIndexes(),
+            index => string.Equals(
+                index.GetDatabaseName(),
+                "ix_upload_receive_observations_seen_at_utc",
+                StringComparison.Ordinal));
     }
 
     [Fact]
@@ -332,6 +338,23 @@ public sealed class EfPersistenceBehaviorTests
             " request-1 ",
             "request:request-1",
             firstEvent);
+        var seededRegistration = await dbContext.UploadReceiveRegistrations
+            .AsNoTracking()
+            .SingleAsync();
+        var expiredObservationId = Guid.NewGuid();
+        var freshObservationId = Guid.NewGuid();
+        var now = DateTimeOffset.UtcNow;
+        dbContext.UploadReceiveObservations.AddRange(
+            UploadReceiveObservation.Create(
+                expiredObservationId,
+                seededRegistration.Id,
+                now - EfUploadReceiveRegistry.DuplicateObservationRetention
+                    - TimeSpan.FromMinutes(1)),
+            UploadReceiveObservation.Create(
+                freshObservationId,
+                seededRegistration.Id,
+                now - TimeSpan.FromMinutes(1)));
+        await dbContext.SaveChangesAsync();
         var second = await registry.RegisterAndEnqueueAsync(
             deviceId,
             "hourly-capacity",
@@ -344,7 +367,11 @@ public sealed class EfPersistenceBehaviorTests
         Assert.True(second.IsDuplicate);
         Assert.Equal(first.OutboxMessageId, second.OutboxMessageId);
         Assert.Single(dbContext.OutboxMessages);
-        Assert.Single(dbContext.UploadReceiveObservations);
+        Assert.False(await dbContext.UploadReceiveObservations
+            .AnyAsync(observation => observation.Id == expiredObservationId));
+        Assert.True(await dbContext.UploadReceiveObservations
+            .AnyAsync(observation => observation.Id == freshObservationId));
+        Assert.Equal(2, await dbContext.UploadReceiveObservations.CountAsync());
         Assert.Equal("request-1", registration.RequestId);
         Assert.Equal(2, registration.SeenCount);
         Assert.True(registration.LastSeenAtUtc >= registration.ReceivedAtUtc);

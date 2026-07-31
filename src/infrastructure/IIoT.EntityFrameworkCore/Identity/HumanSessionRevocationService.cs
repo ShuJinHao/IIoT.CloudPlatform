@@ -1,4 +1,5 @@
 using IIoT.Services.Contracts.Identity;
+using IIoT.EntityFrameworkCore.Persistence;
 using Microsoft.EntityFrameworkCore;
 using OpenIddict.Abstractions;
 
@@ -14,6 +15,10 @@ public sealed class HumanSessionRevocationService(IIoTDbContext dbContext)
     {
         var now = DateTimeOffset.UtcNow;
         var subject = subjectId.ToString();
+        await RefreshTokenSubjectTransactionLock.AcquireForOidcRevocationAsync(
+            dbContext,
+            subjectId,
+            cancellationToken);
 
         var refreshSessions = await dbContext.RefreshTokenSessions
             .Where(session =>

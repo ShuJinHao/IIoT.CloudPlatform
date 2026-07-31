@@ -15,3 +15,13 @@ public interface IIndependentHumanSessionRevocationService
         string reason,
         CancellationToken cancellationToken = default);
 }
+
+public interface IHumanSessionIssuanceLock
+{
+    ValueTask<IAsyncDisposable> AcquireAuthorizationAsync(
+        Guid subjectId,
+        CancellationToken cancellationToken = default);
+
+    ValueTask<IAsyncDisposable> AcquireTokenExchangeAsync(
+        CancellationToken cancellationToken = default);
+}
