@@ -2900,8 +2900,22 @@ public sealed class ClientReleaseBehaviorTests
                 expectedDeletedPath,
                 retry.Value!.DeletedPaths);
             using var auditSummary = JsonDocument.Parse(audit.Summary);
-            Assert.Contains(
+            Assert.Equal(
+                1,
                 auditSummary.RootElement
+                    .GetProperty("deletedCount")
+                    .GetInt32());
+            Assert.Equal(
+                64,
+                auditSummary.RootElement
+                    .GetProperty("inventorySha256")
+                    .GetString()!
+                    .Length);
+            Assert.True(audit.Summary.Length <= 512);
+            using var receipt = JsonDocument.Parse(
+                version.DeletionReceiptJson!);
+            Assert.Contains(
+                receipt.RootElement
                     .GetProperty("deletedPaths")
                     .EnumerateArray()
                     .Select(item => item.GetString()),
@@ -3021,15 +3035,19 @@ public sealed class ClientReleaseBehaviorTests
             Assert.Equal(ClientReleaseStatus.Deleted, version.Status);
             var audit = Assert.Single(recoveredAudit.Entries);
             using var summary = JsonDocument.Parse(audit.Summary);
-            Assert.Contains(
+            Assert.Equal(
+                1,
                 summary.RootElement
-                    .GetProperty("deletedPaths")
-                    .EnumerateArray()
-                    .Select(item => item.GetString()),
-                path => string.Equals(
-                    path,
-                    "installers/stable/1.2.7/installer-artifact.json",
-                    StringComparison.Ordinal));
+                    .GetProperty("deletedCount")
+                    .GetInt32());
+            Assert.True(audit.Summary.Length <= 512);
+            using var receipt = JsonDocument.Parse(
+                version.DeletionReceiptJson!);
+            Assert.Equal(
+                "installers/stable/1.2.7/installer-artifact.json",
+                receipt.RootElement
+                    .GetProperty("deletedPaths")[0]
+                    .GetString());
         }
         finally
         {
@@ -3121,10 +3139,219 @@ public sealed class ClientReleaseBehaviorTests
             var audit = Assert.Single(repairedAudit.Entries);
             Assert.True(audit.Succeeded);
             using var summary = JsonDocument.Parse(audit.Summary);
-            Assert.Empty(
+            Assert.Equal(
+                0,
                 summary.RootElement
+                    .GetProperty("deletedCount")
+                    .GetInt32());
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteClientReleasePackageHandler_EmptyDirectoryRetry_ShouldRemainPhysicalDeletion()
+    {
+        var edgeRoot = CreateTempDirectory(
+            "iiot-delete-release-empty-directory");
+        try
+        {
+            var emptyDirectory = Path.Combine(
+                edgeRoot,
+                "installers",
+                "stable",
+                "1.2.8");
+            Directory.CreateDirectory(emptyDirectory);
+            var component = CreateHostComponent(
+                "stable",
+                "1.2.8",
+                "1.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/installers/stable/1.2.8/installer-artifact.json",
+                new string('a', 64),
+                0,
+                "empty directory recovery",
+                ClientReleaseStatus.Published);
+            var version = SingleVersion(component);
+            version.ReplaceArtifacts(
+            [
+                new ClientReleaseArtifact(
+                    ClientReleaseArtifactKind.InstallerDirectory,
+                    "installers/stable/1.2.8")
+            ]);
+            var repository =
+                new InMemoryRepository<ClientReleaseComponent>();
+            repository.Items.Add(component);
+            var rejectedAudit = new ConfirmedAuditBarrier(
+                confirmed: false);
+            var command = new DeleteClientReleasePackageCommand(
+                version.Id,
+                "empty directory recovery");
+            var firstHandler = new DeleteClientReleasePackageHandler(
+                Options.Create(new EdgeInstallerArtifactOptions
+                {
+                    RootPath = Path.Combine(edgeRoot, "installers")
+                }),
+                repository,
+                new InMemoryDeviceClientStateStore(),
+                new TestCurrentUser(),
+                rejectedAudit,
+                NullLogger<DeleteClientReleasePackageHandler>.Instance,
+                new RecordingUnitOfWork(),
+                new InMemoryClientReleaseWriteObservationReader(
+                    repository));
+
+            var firstHandling = firstHandler.Handle(
+                command,
+                CancellationToken.None);
+            await rejectedAudit.AuditEntered.WaitAsync(
+                TimeSpan.FromSeconds(5));
+            Assert.Equal(ClientReleaseStatus.Deleted, version.Status);
+            Assert.False(Directory.Exists(emptyDirectory));
+            rejectedAudit.Release();
+            await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
+                () => firstHandling);
+
+            var recoveredAudit = new RecordingAuditTrailService();
+            var retryHandler = new DeleteClientReleasePackageHandler(
+                Options.Create(new EdgeInstallerArtifactOptions
+                {
+                    RootPath = Path.Combine(edgeRoot, "installers")
+                }),
+                repository,
+                new InMemoryDeviceClientStateStore(),
+                new TestCurrentUser(),
+                recoveredAudit,
+                NullLogger<DeleteClientReleasePackageHandler>.Instance,
+                new RecordingUnitOfWork(),
+                new InMemoryClientReleaseWriteObservationReader(
+                    repository));
+
+            var retry = await retryHandler.Handle(
+                command,
+                CancellationToken.None);
+
+            Assert.True(retry.IsSuccess);
+            Assert.True(retry.Value!.FilesDeleted);
+            Assert.Empty(retry.Value.DeletedPaths);
+            Assert.Equal("empty directory recovery", version.DeletionReason);
+            using var receipt = JsonDocument.Parse(
+                version.DeletionReceiptJson!);
+            Assert.True(
+                receipt.RootElement
+                    .GetProperty("physicalDeletion")
+                    .GetBoolean());
+            var audit = Assert.Single(recoveredAudit.Entries);
+            using var summary = JsonDocument.Parse(audit.Summary);
+            Assert.Equal(
+                0,
+                summary.RootElement
+                    .GetProperty("deletedCount")
+                    .GetInt32());
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteClientReleasePackageHandler_LargeInventory_ShouldKeepAuditBoundedAndReceiptExact()
+    {
+        var edgeRoot = CreateTempDirectory(
+            "iiot-delete-release-large-inventory");
+        try
+        {
+            var packageDirectory = Path.Combine(
+                edgeRoot,
+                "installers",
+                "stable",
+                "1.2.9");
+            for (var index = 0; index < 40; index++)
+            {
+                WriteFile(
+                    Path.Combine(
+                        packageDirectory,
+                        $"payload-with-a-long-relative-name-{index:D3}.bin"),
+                    $"payload-{index}");
+            }
+
+            var component = CreateHostComponent(
+                "stable",
+                "1.2.9",
+                "1.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/installers/stable/1.2.9/installer-artifact.json",
+                new string('a', 64),
+                0,
+                "large inventory",
+                ClientReleaseStatus.Published);
+            var version = SingleVersion(component);
+            version.ReplaceArtifacts(
+            [
+                new ClientReleaseArtifact(
+                    ClientReleaseArtifactKind.InstallerDirectory,
+                    "installers/stable/1.2.9")
+            ]);
+            var repository =
+                new InMemoryRepository<ClientReleaseComponent>();
+            repository.Items.Add(component);
+            var auditTrail = new RecordingAuditTrailService();
+            var handler = new DeleteClientReleasePackageHandler(
+                Options.Create(new EdgeInstallerArtifactOptions
+                {
+                    RootPath = Path.Combine(edgeRoot, "installers")
+                }),
+                repository,
+                new InMemoryDeviceClientStateStore(),
+                new TestCurrentUser(),
+                auditTrail,
+                NullLogger<DeleteClientReleasePackageHandler>.Instance,
+                new RecordingUnitOfWork(),
+                new InMemoryClientReleaseWriteObservationReader(
+                    repository));
+
+            var result = await handler.Handle(
+                new DeleteClientReleasePackageCommand(
+                    version.Id,
+                    "large inventory"),
+                CancellationToken.None);
+
+            Assert.True(result.IsSuccess);
+            Assert.Equal(40, result.Value!.DeletedPaths.Count);
+            var audit = Assert.Single(auditTrail.Entries);
+            Assert.True(audit.Summary.Length <= 512);
+            Assert.DoesNotContain(
+                "payload-with-a-long-relative-name-039.bin",
+                audit.Summary,
+                StringComparison.Ordinal);
+            using var summary = JsonDocument.Parse(audit.Summary);
+            Assert.Equal(
+                40,
+                summary.RootElement
+                    .GetProperty("deletedCount")
+                    .GetInt32());
+            Assert.Equal(
+                64,
+                summary.RootElement
+                    .GetProperty("inventorySha256")
+                    .GetString()!
+                    .Length);
+            using var receipt = JsonDocument.Parse(
+                version.DeletionReceiptJson!);
+            Assert.Equal(
+                40,
+                receipt.RootElement
                     .GetProperty("deletedPaths")
-                    .EnumerateArray());
+                    .GetArrayLength());
+            Assert.Contains(
+                "payload-with-a-long-relative-name-039.bin",
+                version.DeletionReceiptJson,
+                StringComparison.Ordinal);
         }
         finally
         {

@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Contracts.ClientReleases;
@@ -114,9 +116,9 @@ public sealed class DeleteClientReleasePackageHandler(
                 ClientReleasePackageDeletionReceipt.Parse(
                 baseline.DeletionReceiptJson)
                 ?? throw new CloudWriteCommitUnknownException();
-            var expectedReason = committedReceipt.DeletedPaths.Count == 0
-                ? NoFilesDeletionReason
-                : requestedPhysicalDeletionReason;
+            var expectedReason = committedReceipt.PhysicalDeletion
+                ? requestedPhysicalDeletionReason
+                : NoFilesDeletionReason;
             if (baseline.DeletedAtUtc is null
                 || baseline.DeletionFailure is not null
                 || !string.Equals(
@@ -144,7 +146,7 @@ public sealed class DeleteClientReleasePackageHandler(
                 baseline.DeletedAtUtc.Value,
                 cancellationToken);
             return BuildSuccess(
-                committedReceipt.DeletedPaths.Count > 0,
+                committedReceipt.PhysicalDeletion,
                 committedReceipt.DeletedPaths,
                 committedReceipt.SkippedPaths,
                 committedReceipt.Warning);
@@ -204,7 +206,7 @@ public sealed class DeleteClientReleasePackageHandler(
                 ClientReleaseStatus.DeleteFailed)
         {
             if (receipt is null
-                || receipt.DeletedPaths.Count == 0
+                || !receipt.PhysicalDeletion
                 || !string.Equals(
                     receipt.DeletionReason,
                     requestedPhysicalDeletionReason,
@@ -225,22 +227,22 @@ public sealed class DeleteClientReleasePackageHandler(
         }
         else
         {
-            var deletionReason = currentDeletedPaths.Length == 0
-                ? NoFilesDeletionReason
-                : requestedPhysicalDeletionReason;
+            var physicalDeletion = plan.Targets.Count > 0;
+            var deletionReason = physicalDeletion
+                ? requestedPhysicalDeletionReason
+                : NoFilesDeletionReason;
             receipt = ClientReleasePackageDeletionReceipt.Create(
                 deletionReason,
+                physicalDeletion,
                 currentDeletedPaths,
                 plan.SkippedPaths,
-                currentDeletedPaths.Length == 0
-                    ? NoFilesDeletionReason
-                    : currentWarning);
+                physicalDeletion ? currentWarning : NoFilesDeletionReason);
         }
 
         var stableReceipt = receipt
             ?? throw new CloudWriteCommitUnknownException();
         var stableDeletionReason = stableReceipt.DeletionReason;
-        if (stableReceipt.DeletedPaths.Count == 0)
+        if (!stableReceipt.PhysicalDeletion)
         {
             await PersistVersionTargetAsync(
                 baseline,
@@ -337,7 +339,7 @@ public sealed class DeleteClientReleasePackageHandler(
                         cancellationToken);
 
                     return BuildSuccess(
-                        stableReceipt.DeletedPaths.Count > 0,
+                        stableReceipt.PhysicalDeletion,
                         stableReceipt.DeletedPaths,
                         stableReceipt.SkippedPaths,
                         stableReceipt.Warning);
@@ -610,27 +612,19 @@ public sealed class DeleteClientReleasePackageHandler(
         DateTime executedAtUtc,
         CancellationToken cancellationToken)
     {
-        var summary = succeeded
-            ? JsonSerializer.Serialize(new
-            {
-                action = AuditAction,
-                componentKind,
-                componentName,
-                channel,
-                version,
+        var summary = JsonSerializer.Serialize(new
+        {
+            action = AuditAction,
+            componentKind,
+            componentName,
+            channel,
+            version,
+            deletedCount = deletedPaths.Count,
+            skippedCount = skippedPaths.Count,
+            inventorySha256 = ComputeInventorySha256(
                 deletedPaths,
-                skippedPaths
-            })
-            : JsonSerializer.Serialize(new
-            {
-                action = AuditAction,
-                componentKind,
-                componentName,
-                channel,
-                version,
-                deletedPaths,
-                skippedPaths
-            });
+                skippedPaths)
+        });
 
         var entry = new AuditTrailEntry(
                 ClientReleaseAuditActor.ParseId(currentUser.Id),
@@ -666,6 +660,27 @@ public sealed class DeleteClientReleasePackageHandler(
             entry);
         cancellationToken.ThrowIfCancellationRequested();
     }
+
+    private static string ComputeInventorySha256(
+        IEnumerable<string> deletedPaths,
+        IEnumerable<string> skippedPaths)
+    {
+        var canonical = JsonSerializer.Serialize(new
+        {
+            deletedPaths = deletedPaths
+                .Select(path => path.Replace('\\', '/'))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray(),
+            skippedPaths = skippedPaths
+                .Select(path => path.Replace('\\', '/'))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray()
+        });
+        return Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
+    }
 }
 
 internal sealed class ClientReleasePackageDeletionReceipt
@@ -675,6 +690,7 @@ internal sealed class ClientReleasePackageDeletionReceipt
 
     private ClientReleasePackageDeletionReceipt(
         string deletionReason,
+        bool physicalDeletion,
         IReadOnlyList<string> deletedPaths,
         IReadOnlyList<string> skippedPaths,
         string? warning)
@@ -684,6 +700,7 @@ internal sealed class ClientReleasePackageDeletionReceipt
                 "Deletion receipt reason cannot be empty.",
                 nameof(deletionReason))
             : deletionReason.Trim();
+        PhysicalDeletion = physicalDeletion;
         DeletedPaths = NormalizePaths(deletedPaths);
         SkippedPaths = NormalizePaths(skippedPaths);
         Warning = string.IsNullOrWhiteSpace(warning)
@@ -692,6 +709,7 @@ internal sealed class ClientReleasePackageDeletionReceipt
         Json = JsonSerializer.Serialize(
             new ReceiptPayload(
                 DeletionReason,
+                PhysicalDeletion,
                 DeletedPaths,
                 SkippedPaths,
                 Warning),
@@ -699,6 +717,8 @@ internal sealed class ClientReleasePackageDeletionReceipt
     }
 
     public string DeletionReason { get; }
+
+    public bool PhysicalDeletion { get; }
 
     public IReadOnlyList<string> DeletedPaths { get; }
 
@@ -710,10 +730,16 @@ internal sealed class ClientReleasePackageDeletionReceipt
 
     public static ClientReleasePackageDeletionReceipt Create(
         string deletionReason,
+        bool physicalDeletion,
         IReadOnlyList<string> deletedPaths,
         IReadOnlyList<string> skippedPaths,
         string? warning)
-        => new(deletionReason, deletedPaths, skippedPaths, warning);
+        => new(
+            deletionReason,
+            physicalDeletion,
+            deletedPaths,
+            skippedPaths,
+            warning);
 
     public static ClientReleasePackageDeletionReceipt? Parse(string? json)
     {
@@ -733,6 +759,7 @@ internal sealed class ClientReleasePackageDeletionReceipt
                 ? null
                 : new ClientReleasePackageDeletionReceipt(
                     payload.DeletionReason,
+                    payload.PhysicalDeletion,
                     payload.DeletedPaths,
                     payload.SkippedPaths,
                     payload.Warning);
@@ -754,6 +781,7 @@ internal sealed class ClientReleasePackageDeletionReceipt
 
     private sealed record ReceiptPayload(
         string DeletionReason,
+        bool PhysicalDeletion,
         IReadOnlyList<string> DeletedPaths,
         IReadOnlyList<string> SkippedPaths,
         string? Warning);
