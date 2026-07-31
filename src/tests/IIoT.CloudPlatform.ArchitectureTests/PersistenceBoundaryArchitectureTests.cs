@@ -54,6 +54,10 @@ public sealed class PersistenceBoundaryArchitectureTests
                 "exact-recovery",
                 ["CreateExecutionStrategy()", "ObserveCommitOutcomeAsync", "callbackToken"]),
             new WriteBoundaryEntry(
+                "src/infrastructure/IIoT.EntityFrameworkCore/Uploads/EfUploadReceiveObservationRetentionPruner.cs",
+                "stable-idempotent",
+                ["CreateExecutionStrategy()", "callbackToken", "CleanupBatchSize"]),
+            new WriteBoundaryEntry(
                 "src/infrastructure/IIoT.EntityFrameworkCore/Auditing/EfAuditTrailService.cs",
                 "exact-recovery",
                 ["CreateExecutionStrategy()", "ObserveCommitOutcomeAsync", "recordId"]),
@@ -99,9 +103,9 @@ public sealed class PersistenceBoundaryArchitectureTests
                 ["SaveChangesAsync"])
         };
 
-        Assert.Equal(12, entries.Length);
+        Assert.Equal(13, entries.Length);
         Assert.Equal(7, entries.Count(entry => entry.Classification == "exact-recovery"));
-        Assert.Equal(3, entries.Count(entry => entry.Classification == "stable-idempotent"));
+        Assert.Equal(4, entries.Count(entry => entry.Classification == "stable-idempotent"));
         Assert.Equal(2, entries.Count(entry => entry.Classification == "transaction-participant"));
 
         foreach (var entry in entries)
@@ -546,6 +550,39 @@ public sealed class PersistenceBoundaryArchitectureTests
         Assert.Contains(
             "AcquireOidcTokenExchangeAsync",
             issuanceLockSource,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UploadObservationRetention_ShouldRunIndependentlyFromDuplicateRequests()
+    {
+        var programSource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "src", "hosts", "IIoT.HttpApi", "Program.cs"));
+        var serviceSource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "src", "hosts", "IIoT.HttpApi", "Infrastructure",
+                "UploadReceiveObservationRetentionService.cs"));
+        var registrySource = File.ReadAllText(
+            CloudRepositoryPath.Find(
+                "src", "infrastructure", "IIoT.EntityFrameworkCore",
+                "Uploads", "EfUploadReceiveRegistry.cs"));
+
+        Assert.Contains(
+            "UploadReceiveObservationRetentionService.Register",
+            programSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "RunCleanupCycleAsync",
+            serviceSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Task.Delay",
+            serviceSource,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "PruneExpired",
+            registrySource,
             StringComparison.Ordinal);
     }
 

@@ -12,7 +12,6 @@ using IIoT.EntityFrameworkCore.Auditing;
 using IIoT.EntityFrameworkCore.ClientReleases;
 using IIoT.EntityFrameworkCore.EdgeHosts;
 using IIoT.EntityFrameworkCore.Identity;
-using IIoT.EntityFrameworkCore.Outbox;
 using IIoT.EntityFrameworkCore.Persistence;
 using IIoT.EntityFrameworkCore.QueryServices;
 using IIoT.EntityFrameworkCore.Repository;
@@ -220,31 +219,6 @@ public sealed class ProductionRetryTransactionPostgresTests(
             deduplicationKey,
             integrationEvent,
             budget.Token);
-        dbContext.ChangeTracker.Clear();
-        var seededRegistration = await dbContext.UploadReceiveRegistrations
-            .AsNoTracking()
-            .SingleAsync(
-                candidate =>
-                    candidate.DeviceId == deviceId
-                    && candidate.MessageType == "hourly-capacity"
-                    && candidate.DeduplicationKey == deduplicationKey,
-                budget.Token);
-        var expiredObservationId = Guid.NewGuid();
-        var freshObservationId = Guid.NewGuid();
-        var now = OutboxMessage.NormalizePostgresTimestamp(
-            DateTimeOffset.UtcNow);
-        dbContext.UploadReceiveObservations.AddRange(
-            UploadReceiveObservation.Create(
-                expiredObservationId,
-                seededRegistration.Id,
-                now - EfUploadReceiveRegistry.DuplicateObservationRetention
-                    - TimeSpan.FromMinutes(1)),
-            UploadReceiveObservation.Create(
-                freshObservationId,
-                seededRegistration.Id,
-                now - TimeSpan.FromMinutes(1)));
-        await dbContext.SaveChangesAsync(budget.Token);
-        dbContext.ChangeTracker.Clear();
         interceptor.Arm();
         var duplicate = await registry.RegisterAndEnqueueAsync(
             deviceId,
@@ -279,18 +253,8 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 budget.Token);
         Assert.Equal(outbox.Id, registration.OutboxMessageId);
         Assert.Equal(2, registration.SeenCount);
-        Assert.False(await dbContext.UploadReceiveObservations
-            .AsNoTracking()
-            .AnyAsync(
-                observation => observation.Id == expiredObservationId,
-                budget.Token));
-        Assert.True(await dbContext.UploadReceiveObservations
-            .AsNoTracking()
-            .AnyAsync(
-                observation => observation.Id == freshObservationId,
-                budget.Token));
         Assert.Equal(
-            2,
+            1,
             await dbContext.UploadReceiveObservations
                 .AsNoTracking()
                 .CountAsync(
@@ -305,6 +269,82 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 .CountAsync(
                     candidate => candidate.Id == registered.OutboxMessageId,
                     budget.Token));
+    }
+
+    [Fact]
+    public async Task UploadReceiveObservationRetentionPruner_ShouldDeleteAllExpiredBatchesWithoutFutureDuplicate()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        await using var dbContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-upload-retention-{Guid.NewGuid():N}");
+        var registry = new EfUploadReceiveRegistry(dbContext);
+        var deviceId = Guid.NewGuid();
+        var requestId = $"retention-{Guid.NewGuid():N}";
+        await registry.RegisterAndEnqueueAsync(
+            deviceId,
+            "hourly-capacity",
+            requestId,
+            $"request:{requestId}",
+            new HourlyCapacityReceivedEvent
+            {
+                DeviceId = deviceId,
+                Date = DateOnly.FromDateTime(DateTime.UtcNow),
+                ShiftCode = "D",
+                Hour = 11,
+                Minute = 0,
+                TimeLabel = "11:00",
+                TotalCount = 4,
+                OkCount = 4,
+                NgCount = 0,
+                ReceivedAtUtc = DateTime.UtcNow
+            },
+            budget.Token);
+        var registration = await dbContext.UploadReceiveRegistrations
+            .AsNoTracking()
+            .SingleAsync(
+                candidate =>
+                    candidate.DeviceId == deviceId
+                    && candidate.MessageType == "hourly-capacity",
+                budget.Token);
+        var observedAtUtc = DateTimeOffset.UtcNow;
+        var freshObservationId = Guid.NewGuid();
+        var expired = Enumerable
+            .Range(
+                0,
+                EfUploadReceiveObservationRetentionPruner.CleanupBatchSize + 1)
+            .Select(index => UploadReceiveObservation.Create(
+                Guid.NewGuid(),
+                registration.Id,
+                observedAtUtc
+                - EfUploadReceiveObservationRetentionPruner.Retention
+                - TimeSpan.FromMinutes(index + 1)))
+            .ToArray();
+        dbContext.UploadReceiveObservations.AddRange(expired);
+        dbContext.UploadReceiveObservations.Add(
+            UploadReceiveObservation.Create(
+                freshObservationId,
+                registration.Id,
+                observedAtUtc - TimeSpan.FromMinutes(1)));
+        await dbContext.SaveChangesAsync(budget.Token);
+        dbContext.ChangeTracker.Clear();
+
+        var deleted =
+            await new EfUploadReceiveObservationRetentionPruner(dbContext)
+                .PruneExpiredAsync(observedAtUtc, budget.Token);
+        dbContext.ChangeTracker.Clear();
+
+        Assert.Equal(expired.Length, deleted);
+        var remaining = await dbContext.UploadReceiveObservations
+            .AsNoTracking()
+            .Where(
+                observation =>
+                    observation.RegistrationId == registration.Id)
+            .ToListAsync(budget.Token);
+        Assert.Single(remaining);
+        Assert.Equal(freshObservationId, remaining[0].Id);
     }
 
     [Fact]

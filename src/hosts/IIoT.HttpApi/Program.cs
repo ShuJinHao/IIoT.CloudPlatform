@@ -26,6 +26,7 @@ ClientReleaseComponentDeletionRecoveryService.RegisterUnlessExplicitlyDisabledFo
     builder.Services,
     builder.Configuration,
     builder.Environment);
+UploadReceiveObservationRetentionService.Register(builder.Services);
 
 builder.Services.AddControllers()
     .AddMvcOptions(options =>

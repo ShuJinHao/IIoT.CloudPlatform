@@ -9,9 +9,6 @@ namespace IIoT.EntityFrameworkCore.Uploads;
 public sealed class EfUploadReceiveRegistry(IIoTDbContext dbContext)
     : IUploadReceiveRegistry
 {
-    internal static readonly TimeSpan DuplicateObservationRetention =
-        TimeSpan.FromHours(24);
-    private const int DuplicateObservationCleanupBatchSize = 512;
     private readonly Func<IIoTDbContext> _createContext = dbContext.CreateFreshContext;
 
     public async Task<UploadReceiveRegistrationResult> RegisterAndEnqueueAsync(
@@ -230,10 +227,6 @@ public sealed class EfUploadReceiveRegistry(IIoTDbContext dbContext)
     {
         await using var transaction =
             await context.Database.BeginTransactionAsync(cancellationToken);
-        await PruneExpiredObservationsAsync(
-            context,
-            seenAtUtc - DuplicateObservationRetention,
-            cancellationToken);
         var existingObservation = await context.UploadReceiveObservations
             .AsNoTracking()
             .SingleOrDefaultAsync(
@@ -287,44 +280,6 @@ public sealed class EfUploadReceiveRegistry(IIoTDbContext dbContext)
         await transaction.CommitAsync(cancellationToken);
         return UploadReceiveRegistrationResult.Duplicate(
             registration.OutboxMessageId);
-    }
-
-    private static async Task PruneExpiredObservationsAsync(
-        IIoTDbContext context,
-        DateTimeOffset cutoffUtc,
-        CancellationToken cancellationToken)
-    {
-        if (context.Database.IsNpgsql())
-        {
-            await context.Database.ExecuteSqlInterpolatedAsync($"""
-                with expired as
-                (
-                    select id
-                    from upload_receive_observations
-                    where seen_at_utc < {cutoffUtc}
-                    order by seen_at_utc, id
-                    limit {DuplicateObservationCleanupBatchSize}
-                )
-                delete from upload_receive_observations as observation
-                using expired
-                where observation.id = expired.id;
-                """, cancellationToken);
-            return;
-        }
-
-        var expired = (await context.UploadReceiveObservations
-                .AsNoTracking()
-                .ToListAsync(cancellationToken))
-            .Where(observation => observation.SeenAtUtc < cutoffUtc)
-            .OrderBy(observation => observation.SeenAtUtc)
-            .ThenBy(observation => observation.Id)
-            .Take(DuplicateObservationCleanupBatchSize)
-            .ToArray();
-        if (expired.Length > 0)
-        {
-            context.UploadReceiveObservations.RemoveRange(expired);
-            await context.SaveChangesAsync(cancellationToken);
-        }
     }
 
     private static async Task<UploadReceiveRegistrationResult>

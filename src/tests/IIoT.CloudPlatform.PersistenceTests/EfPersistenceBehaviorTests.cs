@@ -338,23 +338,6 @@ public sealed class EfPersistenceBehaviorTests
             " request-1 ",
             "request:request-1",
             firstEvent);
-        var seededRegistration = await dbContext.UploadReceiveRegistrations
-            .AsNoTracking()
-            .SingleAsync();
-        var expiredObservationId = Guid.NewGuid();
-        var freshObservationId = Guid.NewGuid();
-        var now = DateTimeOffset.UtcNow;
-        dbContext.UploadReceiveObservations.AddRange(
-            UploadReceiveObservation.Create(
-                expiredObservationId,
-                seededRegistration.Id,
-                now - EfUploadReceiveRegistry.DuplicateObservationRetention
-                    - TimeSpan.FromMinutes(1)),
-            UploadReceiveObservation.Create(
-                freshObservationId,
-                seededRegistration.Id,
-                now - TimeSpan.FromMinutes(1)));
-        await dbContext.SaveChangesAsync();
         var second = await registry.RegisterAndEnqueueAsync(
             deviceId,
             "hourly-capacity",
@@ -367,14 +350,76 @@ public sealed class EfPersistenceBehaviorTests
         Assert.True(second.IsDuplicate);
         Assert.Equal(first.OutboxMessageId, second.OutboxMessageId);
         Assert.Single(dbContext.OutboxMessages);
-        Assert.False(await dbContext.UploadReceiveObservations
-            .AnyAsync(observation => observation.Id == expiredObservationId));
-        Assert.True(await dbContext.UploadReceiveObservations
-            .AnyAsync(observation => observation.Id == freshObservationId));
-        Assert.Equal(2, await dbContext.UploadReceiveObservations.CountAsync());
+        Assert.Single(dbContext.UploadReceiveObservations);
         Assert.Equal("request-1", registration.RequestId);
         Assert.Equal(2, registration.SeenCount);
         Assert.True(registration.LastSeenAtUtc >= registration.ReceivedAtUtc);
+    }
+
+    [Fact]
+    public async Task UploadReceiveObservationRetentionPruner_ShouldDeleteAllExpiredBatchesWithoutFutureDuplicate()
+    {
+        using var provider = TestServiceProviders.CreateEfServiceProvider(
+            new NoopMediator());
+        using var scope = provider.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var registry = new EfUploadReceiveRegistry(dbContext);
+        var deviceId = Guid.NewGuid();
+        var receivedEvent = new HourlyCapacityReceivedEvent
+        {
+            DeviceId = deviceId,
+            Date = DateOnly.FromDateTime(DateTime.UtcNow),
+            ShiftCode = "D",
+            Hour = 10,
+            Minute = 0,
+            TimeLabel = "10:00",
+            TotalCount = 8,
+            OkCount = 8,
+            NgCount = 0,
+            ReceivedAtUtc = DateTime.UtcNow
+        };
+        await registry.RegisterAndEnqueueAsync(
+            deviceId,
+            "hourly-capacity",
+            "retention-request",
+            "request:retention-request",
+            receivedEvent);
+        var registration = await dbContext.UploadReceiveRegistrations
+            .AsNoTracking()
+            .SingleAsync();
+        var observedAtUtc = DateTimeOffset.UtcNow;
+        var freshObservationId = Guid.NewGuid();
+        var expired = Enumerable
+            .Range(
+                0,
+                EfUploadReceiveObservationRetentionPruner.CleanupBatchSize + 1)
+            .Select(index => UploadReceiveObservation.Create(
+                Guid.NewGuid(),
+                registration.Id,
+                observedAtUtc
+                - EfUploadReceiveObservationRetentionPruner.Retention
+                - TimeSpan.FromMinutes(index + 1)))
+            .ToArray();
+        dbContext.UploadReceiveObservations.AddRange(expired);
+        dbContext.UploadReceiveObservations.Add(
+            UploadReceiveObservation.Create(
+                freshObservationId,
+                registration.Id,
+                observedAtUtc - TimeSpan.FromMinutes(1)));
+        await dbContext.SaveChangesAsync();
+        dbContext.ChangeTracker.Clear();
+
+        var deleted =
+            await new EfUploadReceiveObservationRetentionPruner(dbContext)
+                .PruneExpiredAsync(observedAtUtc);
+        dbContext.ChangeTracker.Clear();
+
+        Assert.Equal(expired.Length, deleted);
+        var remaining = await dbContext.UploadReceiveObservations
+            .AsNoTracking()
+            .ToListAsync();
+        Assert.Single(remaining);
+        Assert.Equal(freshObservationId, remaining[0].Id);
     }
 
     private static ILogger<T> CreateLogger<T>()

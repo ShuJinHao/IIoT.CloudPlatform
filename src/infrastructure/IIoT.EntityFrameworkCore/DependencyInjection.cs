@@ -84,6 +84,9 @@ public static class DependencyInjection
         builder.Services.AddScoped<IDomainEventDispatchContext>(provider =>
             provider.GetRequiredService<DomainEventDispatchContext>());
         builder.Services.AddScoped<IUploadReceiveRegistry, EfUploadReceiveRegistry>();
+        builder.Services.AddScoped<
+            IUploadReceiveObservationRetentionPruner,
+            EfUploadReceiveObservationRetentionPruner>();
         builder.Services.AddScoped<IClientReleaseVersionObservationReader, EfClientReleaseVersionObservationReader>();
         builder.Services.AddScoped<IRolePolicyService, RolePolicyService>();
         builder.Services.AddScoped<IUserQueryService, UserQueryService>();
