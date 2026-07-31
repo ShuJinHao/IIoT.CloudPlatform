@@ -64,12 +64,11 @@ public sealed class UploadReceiveRegistration
 
     public void MarkSeen(DateTimeOffset seenAtUtc)
     {
-        if (seenAtUtc <= LastSeenAtUtc)
+        if (seenAtUtc > LastSeenAtUtc)
         {
-            return;
+            LastSeenAtUtc = seenAtUtc;
         }
 
-        LastSeenAtUtc = seenAtUtc;
         SeenCount++;
     }
 }

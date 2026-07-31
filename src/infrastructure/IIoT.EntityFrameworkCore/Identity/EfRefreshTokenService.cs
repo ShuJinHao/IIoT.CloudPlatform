@@ -209,6 +209,7 @@ public sealed class EfRefreshTokenService(
             subjectId,
             reason.Trim(),
             revokedAtUtc,
+            true,
             targets);
         try
         {
@@ -476,21 +477,24 @@ public sealed class EfRefreshTokenService(
         }
 
         var targetIds = target.Sessions.Select(session => session.Id).ToArray();
-        var currentSessions = await context.RefreshTokenSessions
-            .AsNoTracking()
-            .Where(session =>
-                session.ActorType == target.ActorType
-                && session.SubjectId == target.SubjectId
-                && !session.RevokedAtUtc.HasValue)
-            .OrderBy(session => session.Id)
-            .ToArrayAsync(cancellationToken);
-        var currentTargetIds = currentSessions
-            .Where(session => session.ExpiresAtUtc > target.RevokedAtUtc)
-            .Select(session => session.Id)
-            .ToArray();
-        if (currentTargetIds.Any(id => !targetIds.Contains(id)))
+        if (target.RequireCompleteSubject)
         {
-            throw new CloudWriteConflictException();
+            var currentSessions = await context.RefreshTokenSessions
+                .AsNoTracking()
+                .Where(session =>
+                    session.ActorType == target.ActorType
+                    && session.SubjectId == target.SubjectId
+                    && !session.RevokedAtUtc.HasValue)
+                .OrderBy(session => session.Id)
+                .ToArrayAsync(cancellationToken);
+            var currentTargetIds = currentSessions
+                .Where(session => session.ExpiresAtUtc > target.RevokedAtUtc)
+                .Select(session => session.Id)
+                .ToArray();
+            if (currentTargetIds.Any(id => !targetIds.Contains(id)))
+            {
+                throw new CloudWriteConflictException();
+            }
         }
 
         var sessions = await context.RefreshTokenSessions
@@ -543,6 +547,7 @@ public sealed class EfRefreshTokenService(
             baseline.SubjectId,
             reason,
             revokedAtUtc,
+            false,
             [new RevocationSessionTarget(baseline.Id, baseline.RowVersion)]);
         try
         {
@@ -857,6 +862,7 @@ public sealed class EfRefreshTokenService(
         Guid SubjectId,
         string Reason,
         DateTimeOffset RevokedAtUtc,
+        bool RequireCompleteSubject,
         IReadOnlyList<RevocationSessionTarget> Sessions);
 
     private sealed class InvalidRefreshTokenException : Exception

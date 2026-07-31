@@ -433,6 +433,84 @@ public sealed class ProductionRetryTransactionPostgresTests(
     }
 
     [Fact]
+    public async Task EdgeReleaseApiKeyRevoke_ShouldIgnoreConcurrentLastUsedTelemetryVersionDrift()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var pause = new PauseOnceAfterApiKeyPreflightReadInterceptor();
+        await using var provider = CreateRetryProvider(
+            budget.ConnectionString,
+            new ThrowOnceBeforeCommitInterceptor(),
+            pause);
+        await using var scope = provider.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var service = new EdgeReleaseApiKeyService(dbContext);
+        var actorId = Guid.NewGuid();
+        var auditContext = new EdgeReleaseApiKeyAuditContext(
+            "tx-03b3-admin",
+            DateTime.UtcNow);
+        var created = await service.CreateAsync(
+            $"tx-03b3-telemetry-{Guid.NewGuid():N}",
+            [ClientReleasePermissions.Read],
+            DateTimeOffset.UtcNow.AddDays(30),
+            actorId,
+            auditContext,
+            budget.Token);
+        Assert.True(created.IsSuccess);
+
+        pause.Arm();
+        var revokeTask = service.RevokeAsync(
+            created.Value!.Id,
+            actorId,
+            "security-revoke",
+            auditContext with { ExecutedAtUtc = DateTime.UtcNow },
+            budget.Token);
+        await pause.WaitUntilPausedAsync(budget.Token);
+        try
+        {
+            await using var telemetryContext = CreateRetryContext(
+                budget.ConnectionString,
+                $"tx-03b3-api-key-telemetry-{Guid.NewGuid():N}");
+            Assert.Equal(
+                1,
+                await telemetryContext.EdgeReleaseApiKeys
+                    .Where(key => key.Id == created.Value.Id)
+                    .ExecuteUpdateAsync(
+                        updates => updates.SetProperty(
+                            key => key.LastUsedAtUtc,
+                            DateTimeOffset.UtcNow),
+                        budget.Token));
+        }
+        finally
+        {
+            pause.Resume();
+        }
+
+        var revoked = await revokeTask;
+        Assert.True(revoked.IsSuccess);
+        await using var verificationContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-api-key-revoke-verify-{Guid.NewGuid():N}");
+        var key = await verificationContext.EdgeReleaseApiKeys
+            .AsNoTracking()
+            .SingleAsync(
+                candidate => candidate.Id == created.Value.Id,
+                budget.Token);
+        Assert.Equal(EdgeReleaseApiKeyStatuses.Revoked, key.Status);
+        Assert.NotNull(key.LastUsedAtUtc);
+        Assert.Equal(
+            1,
+            await verificationContext.AuditTrails
+                .AsNoTracking()
+                .CountAsync(
+                    audit =>
+                        audit.OperationType == "ClientRelease.ApiKey.Revoke"
+                        && audit.TargetIdOrKey == created.Value.Id.ToString(),
+                    budget.Token));
+    }
+
+    [Fact]
     public async Task HumanRefreshRotation_ShouldRecoverCommitLossAndRejectSourceReplay()
     {
         using var budget = await PostgresTestBudget.CreateAsync(
@@ -664,6 +742,87 @@ public sealed class ProductionRetryTransactionPostgresTests(
                     && candidate.SubjectId == subjectId,
                 budget.Token);
         Assert.Equal("concurrent-security-action", persisted.RevokedReason);
+    }
+
+    [Fact]
+    public async Task IndependentHumanSessionRevocation_ShouldSeeSessionCommittedWhileWaitingForSubjectLock()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var subjectId = Guid.NewGuid();
+        await using var seedContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-session-seed-{Guid.NewGuid():N}");
+        var initialSession = new RefreshTokenSession
+        {
+            Id = Guid.NewGuid(),
+            ActorType = IIoTClaimTypes.HumanActor,
+            SubjectId = subjectId,
+            TokenHash = $"tx-initial-{Guid.NewGuid():N}",
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            ExpiresAtUtc = DateTimeOffset.UtcNow.AddHours(1)
+        };
+        seedContext.RefreshTokenSessions.Add(initialSession);
+        await seedContext.SaveChangesAsync(budget.Token);
+
+        await using var lockContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-session-lock-holder-{Guid.NewGuid():N}");
+        await using var lockTransaction =
+            await lockContext.Database.BeginTransactionAsync(budget.Token);
+        await RefreshTokenSubjectTransactionLock.AcquireAsync(
+            lockContext,
+            subjectId,
+            budget.Token);
+
+        var revocationApplicationName =
+            $"tx-03b3-session-revoke-{Guid.NewGuid():N}";
+        await using var revocationContext = CreateRetryContext(
+            budget.ConnectionString,
+            revocationApplicationName);
+        var revocation = new IndependentHumanSessionRevocationService(
+            revocationContext);
+        var revokeTask = revocation.RevokeAllAsync(
+            subjectId,
+            "manual-revoke",
+            budget.Token);
+        await WaitForLockWaitAsync(
+            budget.ConnectionString,
+            revocationApplicationName,
+            budget.Token);
+
+        var lateSessionId = Guid.NewGuid();
+        var lateTokenHash = $"tx-late-{Guid.NewGuid():N}";
+        await lockContext.Database.ExecuteSqlInterpolatedAsync($"""
+            insert into refresh_token_sessions
+            (
+                "Id", "ActorType", "SubjectId", "TokenHash",
+                "CreatedAtUtc", "ExpiresAtUtc"
+            )
+            values
+            (
+                {lateSessionId}, {IIoTClaimTypes.HumanActor}, {subjectId},
+                {lateTokenHash}, now(), now() + interval '1 hour'
+            )
+            """, budget.Token);
+        await lockTransaction.CommitAsync(budget.Token);
+
+        await Assert.ThrowsAsync<CloudWriteConflictException>(
+            () => revokeTask);
+
+        await using var verificationContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-session-verify-{Guid.NewGuid():N}");
+        var sessions = await verificationContext.RefreshTokenSessions
+            .AsNoTracking()
+            .Where(session =>
+                session.ActorType == IIoTClaimTypes.HumanActor
+                && session.SubjectId == subjectId)
+            .OrderBy(session => session.Id)
+            .ToListAsync(budget.Token);
+        Assert.Equal(2, sessions.Count);
+        Assert.All(sessions, session => Assert.Null(session.RevokedAtUtc));
     }
 
     [Fact]
@@ -4505,6 +4664,47 @@ public sealed class ProductionRetryTransactionPostgresTests(
             if (Interlocked.CompareExchange(ref pauseClaimed, 1, 0) == 0)
             {
                 firstReadCompleted.TrySetResult(true);
+                await resume.Task.WaitAsync(cancellationToken);
+            }
+
+            return result;
+        }
+    }
+
+    private sealed class PauseOnceAfterApiKeyPreflightReadInterceptor
+        : DbCommandInterceptor
+    {
+        private readonly TaskCompletionSource paused = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource resume = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private int armed;
+        private int pauseClaimed;
+
+        public void Arm() => Volatile.Write(ref armed, 1);
+
+        public Task WaitUntilPausedAsync(CancellationToken cancellationToken)
+            => paused.Task.WaitAsync(cancellationToken);
+
+        public void Resume() => resume.TrySetResult();
+
+        public override async ValueTask<DbDataReader> ReaderExecutedAsync(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            DbDataReader result,
+            CancellationToken cancellationToken = default)
+        {
+            if (Volatile.Read(ref armed) == 1
+                && command.Transaction is null
+                && command.CommandText.Contains(
+                    "edge_release_api_keys",
+                    StringComparison.OrdinalIgnoreCase)
+                && Interlocked.CompareExchange(
+                    ref pauseClaimed,
+                    1,
+                    0) == 0)
+            {
+                paused.TrySetResult();
                 await resume.Task.WaitAsync(cancellationToken);
             }
 

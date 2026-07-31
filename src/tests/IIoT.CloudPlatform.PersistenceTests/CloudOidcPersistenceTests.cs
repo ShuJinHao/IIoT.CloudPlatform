@@ -284,7 +284,17 @@ public sealed class CloudOidcPersistenceTests
             CreatedAtUtc = DateTimeOffset.UtcNow,
             ExpiresAtUtc = DateTimeOffset.UtcNow.AddHours(1)
         };
-        dbContext.RefreshTokenSessions.Add(session);
+        var sibling = new RefreshTokenSession
+        {
+            Id = Guid.NewGuid(),
+            ActorType = IIoTClaimTypes.HumanActor,
+            SubjectId = session.SubjectId,
+            TokenHash = Convert.ToHexString(SHA256.HashData(
+                Encoding.UTF8.GetBytes("independent-active-session"))),
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            ExpiresAtUtc = DateTimeOffset.UtcNow.AddHours(1)
+        };
+        dbContext.RefreshTokenSessions.AddRange(session, sibling);
         await dbContext.SaveChangesAsync();
         var service = new EfRefreshTokenService(
             dbContext,
@@ -297,8 +307,12 @@ public sealed class CloudOidcPersistenceTests
         dbContext.ChangeTracker.Clear();
         session = await dbContext.RefreshTokenSessions.SingleAsync(
             candidate => candidate.Id == session.Id);
+        sibling = await dbContext.RefreshTokenSessions.SingleAsync(
+            candidate => candidate.Id == sibling.Id);
         Assert.False(result.IsSuccess);
         Assert.Equal("status-version-missing", session.RevokedReason);
         Assert.NotNull(session.RevokedAtUtc);
+        Assert.Null(sibling.RevokedAtUtc);
+        Assert.Null(sibling.RevokedReason);
     }
 }

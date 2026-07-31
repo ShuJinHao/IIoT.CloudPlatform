@@ -76,6 +76,66 @@ public sealed class EdgeReleaseApiKeyPersistenceTests
     }
 
     [Fact]
+    public async Task EdgeReleaseApiKeyService_ShouldRepairMissingRevokeAuditExactlyOnce()
+    {
+        using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());
+        using var scope = provider.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var service = new EdgeReleaseApiKeyService(dbContext);
+        var actorId = Guid.NewGuid();
+
+        var created = await service.CreateAsync(
+            "edge-audit-repair",
+            [ClientReleasePermissions.Read],
+            DateTimeOffset.UtcNow.AddDays(30),
+            actorId,
+            new EdgeReleaseApiKeyAuditContext("release-admin", DateTime.UtcNow));
+        Assert.True(created.IsSuccess);
+        var revoked = await service.RevokeAsync(
+            created.Value!.Id,
+            actorId,
+            "rotation",
+            new EdgeReleaseApiKeyAuditContext("release-admin", DateTime.UtcNow));
+        Assert.True(revoked.IsSuccess);
+
+        dbContext.ChangeTracker.Clear();
+        var revokeAudit = await dbContext.AuditTrails.SingleAsync(
+            audit =>
+                audit.OperationType == "ClientRelease.ApiKey.Revoke"
+                && audit.TargetIdOrKey == created.Value.Id.ToString());
+        dbContext.AuditTrails.Remove(revokeAudit);
+        await dbContext.SaveChangesAsync();
+
+        var repaired = await service.RevokeAsync(
+            created.Value.Id,
+            Guid.NewGuid(),
+            "different-request-reason",
+            new EdgeReleaseApiKeyAuditContext("another-admin", DateTime.UtcNow));
+        var repeated = await service.RevokeAsync(
+            created.Value.Id,
+            Guid.NewGuid(),
+            "another-request-reason",
+            new EdgeReleaseApiKeyAuditContext("third-admin", DateTime.UtcNow));
+
+        Assert.True(repaired.IsSuccess);
+        Assert.True(repeated.IsSuccess);
+        dbContext.ChangeTracker.Clear();
+        var repairedAudit = Assert.Single(
+            await dbContext.AuditTrails
+                .AsNoTracking()
+                .Where(audit =>
+                    audit.OperationType == "ClientRelease.ApiKey.Revoke"
+                    && audit.TargetIdOrKey == created.Value.Id.ToString())
+                .ToListAsync());
+        Assert.Equal(actorId, repairedAudit.ActorUserId);
+        Assert.Contains("Reason: rotation.", repairedAudit.Summary, StringComparison.Ordinal);
+        Assert.StartsWith(
+            $"edge-release-api-key-revoke:{created.Value.Id:N}:",
+            repairedAudit.IdempotencyKey,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task EdgeReleaseApiKeyHandlers_ShouldAuditCreateAndRevokeAfterCommit()
     {
         using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());

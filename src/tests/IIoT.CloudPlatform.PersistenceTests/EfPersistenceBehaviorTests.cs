@@ -254,6 +254,28 @@ public sealed class EfPersistenceBehaviorTests
     }
 
     [Fact]
+    public void UploadReceiveRegistration_ShouldCountOutOfOrderDuplicatesWithoutMovingLastSeenBackward()
+    {
+        var receivedAtUtc = DateTimeOffset.UtcNow;
+        var registration = UploadReceiveRegistration.Create(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            "hourly-capacity",
+            "request-1",
+            "request:request-1",
+            Guid.NewGuid(),
+            receivedAtUtc);
+        var latestSeenAtUtc = receivedAtUtc.AddMinutes(2);
+
+        registration.MarkSeen(latestSeenAtUtc);
+        registration.MarkSeen(receivedAtUtc.AddMinutes(1));
+        registration.MarkSeen(latestSeenAtUtc);
+
+        Assert.Equal(4, registration.SeenCount);
+        Assert.Equal(latestSeenAtUtc, registration.LastSeenAtUtc);
+    }
+
+    [Fact]
     public async Task UploadReceiveRegistry_ShouldRegisterOnceAndReturnDuplicateForSameDeduplicationKey()
     {
         using var provider = TestServiceProviders.CreateEfServiceProvider(new NoopMediator());

@@ -154,7 +154,7 @@ public sealed class IndependentHumanSessionRevocationService(IIoTDbContext dbCon
     {
         await using var context = _createContext();
         await using var transaction = await context.Database.BeginTransactionAsync(
-            IsolationLevel.RepeatableRead,
+            IsolationLevel.ReadCommitted,
             cancellationToken);
         await RefreshTokenSubjectTransactionLock.AcquireAsync(
             context,

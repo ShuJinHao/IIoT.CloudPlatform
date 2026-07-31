@@ -175,6 +175,11 @@ public sealed class EdgeReleaseApiKeyService(IIoTDbContext dbContext) : IEdgeRel
 
         if (baseline.Status == EdgeReleaseApiKeyStatuses.Revoked)
         {
+            await EnsurePreviouslyCommittedRevokeAuditAsync(
+                baseline,
+                revokedByUserId,
+                auditContext,
+                cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             return Result.Success();
         }
@@ -192,7 +197,12 @@ public sealed class EdgeReleaseApiKeyService(IIoTDbContext dbContext) : IEdgeRel
             revokedAtUtc);
         var target = new RevokeTarget(
             id,
-            baseline.RowVersion,
+            baseline.Name,
+            baseline.KeyHash,
+            baseline.PermissionsJson,
+            baseline.ExpiresAtUtc,
+            baseline.CreatedAtUtc,
+            baseline.CreatedByUserId,
             revokedAtUtc,
             revokedByUserId,
             normalizedReason,
@@ -306,36 +316,68 @@ public sealed class EdgeReleaseApiKeyService(IIoTDbContext dbContext) : IEdgeRel
         CancellationToken cancellationToken)
     {
         await using var context = _createContext();
+        await using var transaction =
+            await context.Database.BeginTransactionAsync(cancellationToken);
         var entity = await context.EdgeReleaseApiKeys
+            .AsNoTracking()
             .SingleOrDefaultAsync(key => key.Id == target.Id, cancellationToken)
             ?? throw new CloudWriteConflictException();
 
         if (MatchesRevokeTarget(entity, target))
         {
             await EnsureAuditTargetAsync(context, target.AuditRecordId, target.AuditEntry, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
             return;
         }
 
-        if (entity.Status != EdgeReleaseApiKeyStatuses.Active
-            || entity.RevokedAtUtc.HasValue
-            || entity.RowVersion != target.BaselineRowVersion)
+        if (!MatchesRevokeBaseline(entity, target))
         {
             throw new CloudWriteConflictException();
         }
 
-        entity.Status = EdgeReleaseApiKeyStatuses.Revoked;
-        entity.RevokedAtUtc = target.RevokedAtUtc;
-        entity.RevokedByUserId = target.RevokedByUserId;
-        entity.RevokedReason = target.RevokedReason;
+        var updated = await context.EdgeReleaseApiKeys
+            .Where(key =>
+                key.Id == target.Id
+                && key.Name == target.BaselineName
+                && key.KeyHash == target.BaselineKeyHash
+                && key.PermissionsJson == target.BaselinePermissionsJson
+                && key.ExpiresAtUtc == target.BaselineExpiresAtUtc
+                && key.CreatedAtUtc == target.BaselineCreatedAtUtc
+                && key.CreatedByUserId == target.BaselineCreatedByUserId
+                && key.Status == EdgeReleaseApiKeyStatuses.Active
+                && !key.RevokedAtUtc.HasValue)
+            .ExecuteUpdateAsync(
+                updates => updates
+                    .SetProperty(
+                        key => key.Status,
+                        EdgeReleaseApiKeyStatuses.Revoked)
+                    .SetProperty(
+                        key => key.RevokedAtUtc,
+                        target.RevokedAtUtc)
+                    .SetProperty(
+                        key => key.RevokedByUserId,
+                        target.RevokedByUserId)
+                    .SetProperty(
+                        key => key.RevokedReason,
+                        target.RevokedReason),
+                cancellationToken);
+        if (updated != 1)
+        {
+            entity = await context.EdgeReleaseApiKeys
+                .AsNoTracking()
+                .SingleOrDefaultAsync(
+                    key => key.Id == target.Id,
+                    cancellationToken)
+                ?? throw new CloudWriteConflictException();
+            if (!MatchesRevokeTarget(entity, target))
+            {
+                throw new CloudWriteConflictException();
+            }
+        }
+
         context.AuditTrails.Add(AuditTrailRecord.FromEntry(target.AuditRecordId, target.AuditEntry));
-        try
-        {
-            await context.SaveChangesAsync(cancellationToken);
-        }
-        catch (DbUpdateConcurrencyException)
-        {
-            throw new CloudWriteConflictException();
-        }
+        await context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     private async Task<Result<EdgeReleaseApiKeyValidationResult>> ValidateAttemptAsync(
@@ -462,8 +504,7 @@ public sealed class EdgeReleaseApiKeyService(IIoTDbContext dbContext) : IEdgeRel
 
             if (!MatchesRevokeTarget(entity, target))
             {
-                if (entity.Status == EdgeReleaseApiKeyStatuses.Active
-                    && entity.RowVersion == target.BaselineRowVersion)
+                if (MatchesRevokeBaseline(entity, target))
                 {
                     throw new CloudWriteCommitUnknownException();
                 }
@@ -482,6 +523,124 @@ public sealed class EdgeReleaseApiKeyService(IIoTDbContext dbContext) : IEdgeRel
             }
 
             if (!MatchesAuditTarget(audit, target.AuditEntry))
+            {
+                throw new CloudWriteConflictException();
+            }
+        }
+        catch (CloudWriteException)
+        {
+            throw;
+        }
+        catch
+        {
+            throw new CloudWriteCommitUnknownException();
+        }
+    }
+
+    private async Task EnsurePreviouslyCommittedRevokeAuditAsync(
+        EdgeReleaseApiKey revokedKey,
+        Guid? currentActorUserId,
+        EdgeReleaseApiKeyAuditContext auditContext,
+        CancellationToken cancellationToken)
+    {
+        if (!revokedKey.RevokedAtUtc.HasValue)
+        {
+            throw new CloudWriteConflictException();
+        }
+
+        var revokedAtUtc = NormalizeTimestamp(revokedKey.RevokedAtUtc.Value);
+        var revokedReason = string.IsNullOrWhiteSpace(revokedKey.RevokedReason)
+            ? "manual-revoke"
+            : revokedKey.RevokedReason.Trim();
+        var auditEntry = new AuditTrailEntry(
+            revokedKey.RevokedByUserId,
+            currentActorUserId == revokedKey.RevokedByUserId
+                ? auditContext.ActorEmployeeNo
+                : null,
+            "ClientRelease.ApiKey.Revoke",
+            "EdgeReleaseApiKey",
+            revokedKey.Id.ToString(),
+            revokedAtUtc.UtcDateTime,
+            true,
+            $"Revoked Edge release API key {revokedKey.Id}. Reason: {revokedReason}.",
+            IdempotencyKey:
+                $"edge-release-api-key-revoke:{revokedKey.Id:N}:{revokedAtUtc.UtcTicks}");
+        var auditRecordId = Guid.NewGuid();
+
+        try
+        {
+            await using var strategyContext = _createContext();
+            var strategy = strategyContext.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(
+                callbackToken => EnsureRevokeAuditByIdempotencyKeyAsync(
+                    auditRecordId,
+                    auditEntry,
+                    callbackToken),
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (CloudWriteConflictException)
+        {
+            throw;
+        }
+        catch
+        {
+            await ObserveRevokeAuditOutcomeAsync(auditEntry);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    private async Task EnsureRevokeAuditByIdempotencyKeyAsync(
+        Guid auditRecordId,
+        AuditTrailEntry auditEntry,
+        CancellationToken cancellationToken)
+    {
+        await using var context = _createContext();
+        var audit = await context.AuditTrails
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                record => record.IdempotencyKey == auditEntry.IdempotencyKey,
+                cancellationToken);
+        if (audit is not null)
+        {
+            if (!MatchesRevokeAuditTarget(audit, auditEntry))
+            {
+                throw new CloudWriteConflictException();
+            }
+
+            return;
+        }
+
+        context.AuditTrails.Add(
+            AuditTrailRecord.FromEntry(auditRecordId, auditEntry));
+        await context.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task ObserveRevokeAuditOutcomeAsync(
+        AuditTrailEntry auditEntry)
+    {
+        using var observationTimeout =
+            new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            await using var context = _createContext();
+            var audit = await context.AuditTrails
+                .AsNoTracking()
+                .SingleOrDefaultAsync(
+                    record =>
+                        record.IdempotencyKey == auditEntry.IdempotencyKey,
+                    observationTimeout.Token);
+            if (audit is null)
+            {
+                throw new CloudWriteCommitUnknownException();
+            }
+
+            if (!MatchesRevokeAuditTarget(audit, auditEntry))
             {
                 throw new CloudWriteConflictException();
             }
@@ -600,11 +759,42 @@ public sealed class EdgeReleaseApiKeyService(IIoTDbContext dbContext) : IEdgeRel
            && entity.RevokedReason is null;
 
     private static bool MatchesRevokeTarget(EdgeReleaseApiKey entity, RevokeTarget target)
-        => entity.Id == target.Id
+        => MatchesRevokeSecurityFields(entity, target)
            && string.Equals(entity.Status, EdgeReleaseApiKeyStatuses.Revoked, StringComparison.Ordinal)
            && entity.RevokedAtUtc == target.RevokedAtUtc
            && entity.RevokedByUserId == target.RevokedByUserId
            && string.Equals(entity.RevokedReason, target.RevokedReason, StringComparison.Ordinal);
+
+    private static bool MatchesRevokeBaseline(
+        EdgeReleaseApiKey entity,
+        RevokeTarget target)
+        => MatchesRevokeSecurityFields(entity, target)
+           && string.Equals(
+               entity.Status,
+               EdgeReleaseApiKeyStatuses.Active,
+               StringComparison.Ordinal)
+           && entity.RevokedAtUtc is null
+           && entity.RevokedByUserId is null
+           && entity.RevokedReason is null;
+
+    private static bool MatchesRevokeSecurityFields(
+        EdgeReleaseApiKey entity,
+        RevokeTarget target)
+        => entity.Id == target.Id
+           && string.Equals(
+               entity.Name,
+               target.BaselineName,
+               StringComparison.Ordinal)
+           && string.Equals(
+               entity.KeyHash,
+               target.BaselineKeyHash,
+               StringComparison.Ordinal)
+           && JsonPayloadEquals(
+               entity.PermissionsJson,
+               target.BaselinePermissionsJson)
+           && entity.ExpiresAtUtc == target.BaselineExpiresAtUtc
+           && entity.CreatedAtUtc == target.BaselineCreatedAtUtc
+           && entity.CreatedByUserId == target.BaselineCreatedByUserId;
 
     private static bool MatchesAuditTarget(AuditTrailRecord record, AuditTrailEntry entry)
         => record.ActorUserId == entry.ActorUserId
@@ -617,6 +807,36 @@ public sealed class EdgeReleaseApiKeyService(IIoTDbContext dbContext) : IEdgeRel
            && string.Equals(record.Summary, entry.Summary, StringComparison.Ordinal)
            && string.Equals(record.FailureReason, entry.FailureReason, StringComparison.Ordinal)
            && string.Equals(record.IdempotencyKey, entry.IdempotencyKey, StringComparison.Ordinal);
+
+    private static bool MatchesRevokeAuditTarget(
+        AuditTrailRecord record,
+        AuditTrailEntry entry)
+        => record.ActorUserId == entry.ActorUserId
+           && string.Equals(
+               record.OperationType,
+               entry.OperationType,
+               StringComparison.Ordinal)
+           && string.Equals(
+               record.TargetType,
+               entry.TargetType,
+               StringComparison.Ordinal)
+           && string.Equals(
+               record.TargetIdOrKey,
+               entry.TargetIdOrKey,
+               StringComparison.Ordinal)
+           && record.Succeeded == entry.Succeeded
+           && string.Equals(
+               record.Summary,
+               entry.Summary,
+               StringComparison.Ordinal)
+           && string.Equals(
+               record.FailureReason,
+               entry.FailureReason,
+               StringComparison.Ordinal)
+           && string.Equals(
+               record.IdempotencyKey,
+               entry.IdempotencyKey,
+               StringComparison.Ordinal);
 
     private static bool JsonPayloadEquals(string persisted, string target)
     {
@@ -726,7 +946,12 @@ public sealed class EdgeReleaseApiKeyService(IIoTDbContext dbContext) : IEdgeRel
 
     private sealed record RevokeTarget(
         Guid Id,
-        uint BaselineRowVersion,
+        string BaselineName,
+        string BaselineKeyHash,
+        string BaselinePermissionsJson,
+        DateTimeOffset BaselineExpiresAtUtc,
+        DateTimeOffset BaselineCreatedAtUtc,
+        Guid? BaselineCreatedByUserId,
         DateTimeOffset RevokedAtUtc,
         Guid? RevokedByUserId,
         string RevokedReason,
