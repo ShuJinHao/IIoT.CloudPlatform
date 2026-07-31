@@ -151,6 +151,84 @@ public sealed class PersistenceBoundaryArchitectureTests
     }
 
     [Fact]
+    public void PersistenceInventory_ShouldVerifyUnitOfWorkReplayImplementationBody()
+    {
+        const string safeImplementation =
+            """
+            using IIoT.Services.Contracts.Persistence;
+            using Microsoft.EntityFrameworkCore;
+            using Microsoft.EntityFrameworkCore.Storage;
+
+            public sealed class SafeUnitOfWork(IExecutionStrategy strategy) : IUnitOfWork
+            {
+                public Task<TResult> ExecuteResilientAsync<TResult>(
+                    Func<CancellationToken, Task<TResult>> operation,
+                    CancellationToken cancellationToken = default)
+                    => strategy.ExecuteAsync(operation, cancellationToken);
+
+                public Task BeginTransactionAsync(CancellationToken cancellationToken = default)
+                    => Task.CompletedTask;
+                public Task CommitAsync(CancellationToken cancellationToken = default)
+                    => Task.CompletedTask;
+                public Task RollbackAsync(CancellationToken cancellationToken = default)
+                    => Task.CompletedTask;
+            }
+            """;
+        const string unsafeImplementation =
+            """
+            using IIoT.Services.Contracts.Persistence;
+            using Microsoft.EntityFrameworkCore;
+            using Microsoft.EntityFrameworkCore.Storage;
+
+            public sealed class UnsafeUnitOfWork(IExecutionStrategy strategy) : IUnitOfWork
+            {
+                public async Task<TResult> ExecuteResilientAsync<TResult>(
+                    Func<CancellationToken, Task<TResult>> operation,
+                    CancellationToken cancellationToken = default)
+                {
+                    await strategy.ExecuteAsync(
+                        static _ => Task.CompletedTask,
+                        cancellationToken);
+                    return await operation(cancellationToken);
+                }
+
+                public Task BeginTransactionAsync(CancellationToken cancellationToken = default)
+                    => Task.CompletedTask;
+                public Task CommitAsync(CancellationToken cancellationToken = default)
+                    => Task.CompletedTask;
+                public Task RollbackAsync(CancellationToken cancellationToken = default)
+                    => Task.CompletedTask;
+            }
+            """;
+        const string caller =
+            """
+            using IIoT.Services.Contracts.Persistence;
+            using Microsoft.EntityFrameworkCore;
+
+            public sealed class Writer(IUnitOfWork unitOfWork, DbContext context)
+            {
+                public Task<int> WriteAsync(CancellationToken cancellationToken)
+                    => unitOfWork.ExecuteResilientAsync(
+                        callbackToken => context.SaveChangesAsync(callbackToken),
+                        cancellationToken);
+            }
+            """;
+
+        Assert.True(
+            PersistenceWriteInventory.VerifyUnitOfWorkReplayImplementationSnippet(
+                safeImplementation));
+        Assert.False(
+            PersistenceWriteInventory.VerifyUnitOfWorkReplayImplementationSnippet(
+                unsafeImplementation));
+        var entry = Assert.Single(
+            PersistenceWriteInventory.DiscoverSnippet(
+                caller,
+                unitOfWorkReplayContractVerified: false)
+                .UnclassifiedEntries);
+        Assert.Contains("ef-save", entry.SinkKinds);
+    }
+
+    [Fact]
     public void PersistenceInventory_ShouldRejectNamedHelperWithoutExecutionStrategy()
     {
         const string source =

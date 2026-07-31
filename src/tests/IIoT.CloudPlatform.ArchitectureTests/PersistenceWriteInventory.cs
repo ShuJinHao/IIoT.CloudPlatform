@@ -367,16 +367,27 @@ internal static class PersistenceWriteInventory
         var references = CreateMetadataReferences();
         var entries = new List<PersistenceWriteEntry>();
         var unresolved = new List<string>();
+        var projectPaths = Directory
+            .GetFiles(sourceRoot, "*.csproj", SearchOption.AllDirectories)
+            .Where(IsProductionProject)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var unitOfWorkReplayContract = VerifyProductionUnitOfWorkReplayContract(
+            repositoryRoot,
+            projectPaths,
+            references);
+        if (!unitOfWorkReplayContract.IsVerified)
+        {
+            unresolved.AddRange(unitOfWorkReplayContract.Diagnostics);
+        }
 
-        foreach (var projectPath in Directory
-                     .GetFiles(sourceRoot, "*.csproj", SearchOption.AllDirectories)
-                     .Where(IsProductionProject)
-                     .Order(StringComparer.Ordinal))
+        foreach (var projectPath in projectPaths)
         {
             DiscoverProject(
                 repositoryRoot,
                 projectPath,
                 references,
+                unitOfWorkReplayContract.IsVerified,
                 entries,
                 unresolved);
         }
@@ -399,7 +410,8 @@ internal static class PersistenceWriteInventory
 
     public static PersistenceInventoryResult DiscoverSnippet(
         string source,
-        string relativePath = "InventoryFixture.cs")
+        string relativePath = "InventoryFixture.cs",
+        bool unitOfWorkReplayContractVerified = true)
     {
         var absolutePath = Path.Combine(
             Environment.CurrentDirectory,
@@ -426,7 +438,10 @@ internal static class PersistenceWriteInventory
         {
             [tree] = model
         };
-        var graph = ProtectionGraph.Create([tree], models);
+        var graph = ProtectionGraph.Create(
+            [tree],
+            models,
+            unitOfWorkReplayContractVerified);
         var entries = CreateEntries(sites, graph);
         return new PersistenceInventoryResult(
             entries,
@@ -435,6 +450,236 @@ internal static class PersistenceWriteInventory
                 .Distinct(StringComparer.Ordinal)
                 .Order(StringComparer.Ordinal)
                 .ToArray());
+    }
+
+    public static bool VerifyUnitOfWorkReplayImplementationSnippet(string source)
+    {
+        var absolutePath = Path.Combine(
+            Environment.CurrentDirectory,
+            "UnitOfWorkReplayImplementationFixture.cs");
+        var tree = CSharpSyntaxTree.ParseText(source, ParseOptions, absolutePath);
+        var compilation = CSharpCompilation.Create(
+            "UnitOfWorkReplayImplementationFixture",
+            [CreateImplicitUsingsTree(absolutePath), tree],
+            CreateMetadataReferences().Values,
+            new CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary,
+                nullableContextOptions: NullableContextOptions.Enable));
+        var models = new Dictionary<SyntaxTree, SemanticModel>
+        {
+            [tree] = compilation.GetSemanticModel(tree, ignoreAccessibility: true)
+        };
+        var verification = VerifyUnitOfWorkReplayImplementations(
+            Environment.CurrentDirectory,
+            new ProjectCompilation([tree], models));
+        return verification.ImplementationCount > 0 && verification.Diagnostics.Count == 0;
+    }
+
+    private static UnitOfWorkReplayVerification VerifyProductionUnitOfWorkReplayContract(
+        string repositoryRoot,
+        IReadOnlyCollection<string> projectPaths,
+        IReadOnlyDictionary<string, MetadataReference> allReferences)
+    {
+        var implementationCount = 0;
+        var diagnostics = new List<string>();
+        foreach (var projectPath in projectPaths)
+        {
+            var project = CreateProjectCompilation(projectPath, allReferences);
+            if (project is null)
+            {
+                continue;
+            }
+
+            var projectVerification = VerifyUnitOfWorkReplayImplementations(
+                repositoryRoot,
+                project);
+            implementationCount += projectVerification.ImplementationCount;
+            diagnostics.AddRange(projectVerification.Diagnostics);
+        }
+
+        if (implementationCount == 0)
+        {
+            diagnostics.Add(
+                "IUnitOfWork replay contract invalid: no concrete production implementation was resolved.");
+        }
+
+        return new UnitOfWorkReplayVerification(
+            implementationCount > 0 && diagnostics.Count == 0,
+            implementationCount,
+            diagnostics
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .ToArray());
+    }
+
+    private static UnitOfWorkReplayVerification VerifyUnitOfWorkReplayImplementations(
+        string repositoryRoot,
+        ProjectCompilation project)
+    {
+        const string contractName =
+            "IIoT.Services.Contracts.Persistence.IUnitOfWork";
+        var implementations = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+        foreach (var tree in project.Trees)
+        {
+            var model = project.Models[tree];
+            foreach (var declaration in tree.GetRoot()
+                         .DescendantNodes()
+                         .OfType<TypeDeclarationSyntax>())
+            {
+                if (model.GetDeclaredSymbol(declaration) is not INamedTypeSymbol
+                    {
+                        TypeKind: TypeKind.Class,
+                        IsAbstract: false
+                    } type ||
+                    !type.AllInterfaces.Any(candidate =>
+                        candidate.ToDisplayString() == contractName))
+                {
+                    continue;
+                }
+
+                implementations.Add(type);
+            }
+        }
+
+        var diagnostics = new List<string>();
+        foreach (var implementationType in implementations)
+        {
+            var contract = implementationType.AllInterfaces.Single(candidate =>
+                candidate.ToDisplayString() == contractName);
+            var contractMethod = contract.GetMembers("ExecuteResilientAsync")
+                .OfType<IMethodSymbol>()
+                .SingleOrDefault();
+            var implementation = contractMethod is null
+                ? null
+                : implementationType.FindImplementationForInterfaceMember(contractMethod)
+                    as IMethodSymbol;
+            if (implementation is not null &&
+                RoutesOperationThroughExecutionStrategy(implementation, project.Models))
+            {
+                continue;
+            }
+
+            var declaration = implementationType.DeclaringSyntaxReferences
+                .FirstOrDefault()
+                ?.GetSyntax();
+            var path = declaration is null
+                ? implementationType.ToDisplayString()
+                : NormalizePath(Path.GetRelativePath(
+                    repositoryRoot,
+                    declaration.SyntaxTree.FilePath));
+            diagnostics.Add(
+                $"IUnitOfWork replay contract invalid: {path}::{implementationType.ToDisplayString()}.ExecuteResilientAsync does not route its operation delegate through IExecutionStrategy.");
+        }
+
+        return new UnitOfWorkReplayVerification(
+            implementations.Count > 0 && diagnostics.Count == 0,
+            implementations.Count,
+            diagnostics);
+    }
+
+    private static bool RoutesOperationThroughExecutionStrategy(
+        IMethodSymbol implementation,
+        IReadOnlyDictionary<SyntaxTree, SemanticModel> models)
+    {
+        var operationParameter = implementation.Parameters.SingleOrDefault(parameter =>
+            parameter.Name == "operation" && parameter.Type.TypeKind == TypeKind.Delegate);
+        if (operationParameter is null)
+        {
+            return false;
+        }
+
+        foreach (var syntaxReference in implementation.DeclaringSyntaxReferences)
+        {
+            var declaration = syntaxReference.GetSyntax();
+            if (!models.TryGetValue(declaration.SyntaxTree, out var model))
+            {
+                continue;
+            }
+
+            var protectedScopes = new List<SyntaxNode>();
+            var directlyPassed = false;
+            foreach (var invocation in declaration
+                         .DescendantNodes()
+                         .OfType<InvocationExpressionSyntax>())
+            {
+                if (model.GetOperation(invocation) is not IInvocationOperation operation ||
+                    !IsExecutionStrategyInvocation(operation.TargetMethod))
+                {
+                    continue;
+                }
+
+                foreach (var argument in operation.Arguments.Where(argument =>
+                             argument.Parameter is { } parameter &&
+                             IsExecutionStrategyOperationParameter(parameter)))
+                {
+                    if (argument.Value is IParameterReferenceOperation parameterReference &&
+                        SymbolEqualityComparer.Default.Equals(
+                            parameterReference.Parameter,
+                            operationParameter))
+                    {
+                        directlyPassed = true;
+                    }
+                    else
+                    {
+                        protectedScopes.Add(argument.Value.Syntax);
+                    }
+                }
+            }
+
+            var delegateInvocations = declaration
+                .DescendantNodes()
+                .OfType<InvocationExpressionSyntax>()
+                .Where(invocation => InvokesParameter(invocation, model, operationParameter))
+                .ToArray();
+            if ((directlyPassed || delegateInvocations.Length > 0) &&
+                delegateInvocations.All(invocation => protectedScopes.Any(scope =>
+                    scope.Span.Contains(invocation.Span))))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool InvokesParameter(
+        InvocationExpressionSyntax invocation,
+        SemanticModel model,
+        IParameterSymbol parameter)
+    {
+        ExpressionSyntax? receiver = invocation.Expression switch
+        {
+            IdentifierNameSyntax identifier => identifier,
+            MemberAccessExpressionSyntax
+            {
+                Name.Identifier.ValueText: "Invoke",
+                Expression: var expression
+            } => expression,
+            _ => null
+        };
+        return receiver is not null &&
+               SymbolEqualityComparer.Default.Equals(
+                   model.GetSymbolInfo(receiver).Symbol,
+                   parameter);
+    }
+
+    private static bool IsExecutionStrategyOperationParameter(IParameterSymbol parameter)
+        => parameter.Type.TypeKind == TypeKind.Delegate &&
+           parameter.Name is "operation" or "attempt" or "stage";
+
+    private static bool IsExecutionStrategyInvocation(IMethodSymbol symbol)
+    {
+        var method = symbol.ReducedFrom ?? symbol;
+        var namespaceName = method.ContainingNamespace.ToDisplayString();
+        return (method.Name is "Execute" or "ExecuteAsync") &&
+               (symbol.ReceiverType?.ToDisplayString() ==
+                "Microsoft.EntityFrameworkCore.Storage.IExecutionStrategy" ||
+                method.ContainingType.ToDisplayString() is
+                    "Microsoft.EntityFrameworkCore.Storage.IExecutionStrategy" or
+                    "Microsoft.EntityFrameworkCore.ExecutionStrategyExtensions" ||
+                namespaceName.StartsWith(
+                    "Microsoft.EntityFrameworkCore.Storage",
+                    StringComparison.Ordinal));
     }
 
     public static bool IsIncludedProductionSource(string path)
@@ -464,8 +709,40 @@ internal static class PersistenceWriteInventory
         string repositoryRoot,
         string projectPath,
         IReadOnlyDictionary<string, MetadataReference> allReferences,
+        bool unitOfWorkReplayContractVerified,
         ICollection<PersistenceWriteEntry> entries,
         ICollection<string> unresolved)
+    {
+        var project = CreateProjectCompilation(projectPath, allReferences);
+        if (project is null)
+        {
+            return;
+        }
+
+        var projectWriteSites = new List<WriteSite>();
+        foreach (var tree in project.Trees)
+        {
+            DiscoverTreeWriteSites(
+                repositoryRoot,
+                tree,
+                project.Models[tree],
+                projectWriteSites,
+                unresolved);
+        }
+
+        var protectionGraph = ProtectionGraph.Create(
+            project.Trees,
+            project.Models,
+            unitOfWorkReplayContractVerified);
+        foreach (var entry in CreateEntries(projectWriteSites, protectionGraph))
+        {
+            entries.Add(entry);
+        }
+    }
+
+    private static ProjectCompilation? CreateProjectCompilation(
+        string projectPath,
+        IReadOnlyDictionary<string, MetadataReference> allReferences)
     {
         var projectDirectory = Path.GetDirectoryName(projectPath)!;
         var sourcePaths = Directory
@@ -475,7 +752,7 @@ internal static class PersistenceWriteInventory
             .ToArray();
         if (sourcePaths.Length == 0)
         {
-            return;
+            return null;
         }
 
         var trees = sourcePaths
@@ -503,22 +780,7 @@ internal static class PersistenceWriteInventory
         var models = trees.ToDictionary(
             tree => tree,
             tree => compilation.GetSemanticModel(tree, ignoreAccessibility: true));
-        var projectWriteSites = new List<WriteSite>();
-        foreach (var tree in trees)
-        {
-            DiscoverTreeWriteSites(
-                repositoryRoot,
-                tree,
-                models[tree],
-                projectWriteSites,
-                unresolved);
-        }
-
-        var protectionGraph = ProtectionGraph.Create(trees, models);
-        foreach (var entry in CreateEntries(projectWriteSites, protectionGraph))
-        {
-            entries.Add(entry);
-        }
+        return new ProjectCompilation(trees, models);
     }
 
     private static IReadOnlyList<PersistenceWriteEntry> CreateEntries(
@@ -1141,6 +1403,7 @@ internal static class PersistenceWriteInventory
     {
         private readonly IReadOnlyDictionary<IMethodSymbol, IReadOnlyList<SyntaxNode>> _references;
         private readonly IReadOnlyDictionary<SyntaxTree, SemanticModel> _models;
+        private readonly bool _unitOfWorkReplayContractVerified;
         private readonly Dictionary<IMethodSymbol, bool> _memo =
             new(SymbolEqualityComparer.Default);
         private readonly HashSet<IMethodSymbol> _visiting =
@@ -1148,15 +1411,18 @@ internal static class PersistenceWriteInventory
 
         private ProtectionGraph(
             IReadOnlyDictionary<IMethodSymbol, IReadOnlyList<SyntaxNode>> references,
-            IReadOnlyDictionary<SyntaxTree, SemanticModel> models)
+            IReadOnlyDictionary<SyntaxTree, SemanticModel> models,
+            bool unitOfWorkReplayContractVerified)
         {
             _references = references;
             _models = models;
+            _unitOfWorkReplayContractVerified = unitOfWorkReplayContractVerified;
         }
 
         public static ProtectionGraph Create(
             IReadOnlyCollection<SyntaxTree> trees,
-            IReadOnlyDictionary<SyntaxTree, SemanticModel> models)
+            IReadOnlyDictionary<SyntaxTree, SemanticModel> models,
+            bool unitOfWorkReplayContractVerified = true)
         {
             var references = new Dictionary<IMethodSymbol, List<SyntaxNode>>(
                 SymbolEqualityComparer.Default);
@@ -1197,7 +1463,10 @@ internal static class PersistenceWriteInventory
                 readOnlyReferences.Add(method, methodReferences);
             }
 
-            return new ProtectionGraph(readOnlyReferences, models);
+            return new ProtectionGraph(
+                readOnlyReferences,
+                models,
+                unitOfWorkReplayContractVerified);
         }
 
         public bool IsInsideReplayRoot(SyntaxNode writeSyntax, IMethodSymbol callable)
@@ -1298,7 +1567,7 @@ internal static class PersistenceWriteInventory
                      candidate.ToDisplayString() ==
                      "IIoT.Services.Contracts.Persistence.IUnitOfWork")))
             {
-                return true;
+                return _unitOfWorkReplayContractVerified;
             }
 
             if (IsExecutionStrategyExecutor(symbol))
@@ -1356,6 +1625,15 @@ internal static class PersistenceWriteInventory
                         StringComparison.Ordinal));
         }
     }
+
+    private sealed record ProjectCompilation(
+        IReadOnlyList<SyntaxTree> Trees,
+        IReadOnlyDictionary<SyntaxTree, SemanticModel> Models);
+
+    private sealed record UnitOfWorkReplayVerification(
+        bool IsVerified,
+        int ImplementationCount,
+        IReadOnlyList<string> Diagnostics);
 
     private sealed record WriteSite(
         string RelativePath,
