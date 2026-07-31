@@ -102,8 +102,11 @@ public sealed class HumanSessionIssuanceLock(
 
         if (!_usesNpgsql)
         {
-            await operation();
-            return true;
+            return await ExecuteTransactionAsync(
+                operation,
+                static (_, _) => Task.CompletedTask,
+                useExplicitIsolation: false,
+                cancellationToken);
         }
 
         await using var processLease = await enterProcessGate(
@@ -113,6 +116,19 @@ public sealed class HumanSessionIssuanceLock(
             return false;
         }
 
+        return await ExecuteTransactionAsync(
+            operation,
+            acquire,
+            useExplicitIsolation: true,
+            cancellationToken);
+    }
+
+    private async Task<bool> ExecuteTransactionAsync(
+        Func<Task> operation,
+        Func<IIoTDbContext, CancellationToken, Task> acquire,
+        bool useExplicitIsolation,
+        CancellationToken cancellationToken)
+    {
         var strategy = dbContext.Database.CreateExecutionStrategy();
         try
         {
@@ -123,9 +139,14 @@ public sealed class HumanSessionIssuanceLock(
                     try
                     {
                         await using var transaction =
-                            await dbContext.Database.BeginTransactionAsync(
-                                IsolationLevel.ReadCommitted,
-                                callbackToken);
+                            useExplicitIsolation
+                                ? await dbContext.Database
+                                    .BeginTransactionAsync(
+                                        IsolationLevel.ReadCommitted,
+                                        callbackToken)
+                                : await dbContext.Database
+                                    .BeginTransactionAsync(
+                                        callbackToken);
                         await acquire(dbContext, callbackToken);
                         protectedOperationStarted = true;
                         await operation();

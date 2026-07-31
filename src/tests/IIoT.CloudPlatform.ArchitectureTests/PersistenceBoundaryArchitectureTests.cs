@@ -713,6 +713,14 @@ public sealed class PersistenceBoundaryArchitectureTests
             "throw new CloudWriteCommitUnknownException()",
             issuanceLockSource,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "useExplicitIsolation: false",
+            issuanceLockSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            ".BeginTransactionAsync(",
+            issuanceLockSource,
+            StringComparison.Ordinal);
     }
 
     [Fact]

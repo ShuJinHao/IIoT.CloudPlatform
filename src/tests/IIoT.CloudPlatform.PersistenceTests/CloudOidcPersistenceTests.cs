@@ -1,8 +1,10 @@
 using System.Security.Cryptography;
 using System.Text;
 using IIoT.EntityFrameworkCore;
+using IIoT.EntityFrameworkCore.Auditing;
 using IIoT.EntityFrameworkCore.Identity;
 using IIoT.IdentityService.Queries;
+using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
 using Microsoft.AspNetCore.Identity;
@@ -372,6 +374,104 @@ public sealed class CloudOidcPersistenceTests
             exception.Message,
             StringComparison.Ordinal);
         Assert.False(operationCalled);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NonPostgresOidcIssuance_ShouldCommitOrRollbackGrantAndSuccessAuditTogether(
+        bool commit)
+    {
+        using var timeout = new CancellationTokenSource(
+            TimeSpan.FromSeconds(10));
+        using var provider = TestServiceProviders.CreateEfServiceProvider(
+            new NoopMediator());
+        using var scope = provider.CreateScope();
+        var context =
+            scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var auditTrail =
+            new EfOidcIssuanceAuditTrailService(context);
+        var issuanceLock = new HumanSessionIssuanceLock(
+            context,
+            new HumanSessionIssuanceProcessGate(),
+            auditTrail);
+        var authorizationId = Guid.NewGuid();
+        var auditKey = $"sqlite-oidc-{Guid.NewGuid():N}";
+
+        async Task PersistGrantAsync()
+        {
+            Assert.NotNull(context.Database.CurrentTransaction);
+            await auditTrail.StageSuccessAsync(
+                new AuditTrailEntry(
+                    Guid.NewGuid(),
+                    "E-SQLITE-OIDC",
+                    "CloudOidcAuthorize",
+                    "CloudOidc",
+                    "aicopilot",
+                    DateTime.UtcNow,
+                    true,
+                    "OIDC authorize 成功。",
+                    IdempotencyKey: auditKey),
+                timeout.Token);
+            context.OpenIddictAuthorizations.Add(
+                new OpenIddictEntityFrameworkCoreAuthorization<Guid>
+                {
+                    Id = authorizationId,
+                    Subject = Guid.NewGuid().ToString(),
+                    Status = OpenIddictConstants.Statuses.Valid,
+                    Type = "permanent",
+                    ConcurrencyToken = Guid.NewGuid().ToString("N")
+                });
+            await context.SaveChangesAsync(timeout.Token);
+            if (!commit)
+            {
+                throw new InvalidOperationException(
+                    "simulated OIDC issuance failure");
+            }
+        }
+
+        if (commit)
+        {
+            Assert.True(
+                await issuanceLock.TryExecuteAuthorizationAsync(
+                    Guid.NewGuid(),
+                    PersistGrantAsync,
+                    timeout.Token));
+        }
+        else
+        {
+            var exception =
+                await Assert.ThrowsAsync<InvalidOperationException>(
+                    () => issuanceLock.TryExecuteAuthorizationAsync(
+                        Guid.NewGuid(),
+                        PersistGrantAsync,
+                        timeout.Token));
+            Assert.Contains(
+                "simulated OIDC issuance failure",
+                exception.Message,
+                StringComparison.Ordinal);
+        }
+
+        Assert.Null(context.Database.CurrentTransaction);
+        using var verificationScope = provider.CreateScope();
+        var verificationContext =
+            verificationScope.ServiceProvider
+                .GetRequiredService<IIoTDbContext>();
+        Assert.Equal(
+            commit ? 1 : 0,
+            await verificationContext.AuditTrails
+                .AsNoTracking()
+                .CountAsync(
+                    audit => audit.IdempotencyKey == auditKey,
+                    timeout.Token));
+        Assert.Equal(
+            commit ? 1 : 0,
+            await verificationContext.OpenIddictAuthorizations
+                .AsNoTracking()
+                .CountAsync(
+                    authorization =>
+                        authorization.Id == authorizationId,
+                    timeout.Token));
     }
 
     [Fact]
