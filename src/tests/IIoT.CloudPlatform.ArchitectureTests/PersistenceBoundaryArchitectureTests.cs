@@ -151,6 +151,63 @@ public sealed class PersistenceBoundaryArchitectureTests
     }
 
     [Fact]
+    public void PersistenceInventory_ShouldTrackWriterCallersAcrossProjectGraph()
+    {
+        const string writerSource =
+            """
+            using Microsoft.EntityFrameworkCore;
+
+            public sealed class ExternallyCallableWriter(DbContext context)
+            {
+                public Task<int> PersistAsync(CancellationToken cancellationToken)
+                    => context.SaveChangesAsync(cancellationToken);
+            }
+            """;
+        const string protectedCallerSource =
+            """
+            using IIoT.Services.Contracts.Persistence;
+
+            public sealed class LocalProtectedCaller(
+                IUnitOfWork unitOfWork,
+                ExternallyCallableWriter writer)
+            {
+                public Task<int> WriteAsync(CancellationToken cancellationToken)
+                    => unitOfWork.ExecuteResilientAsync(
+                        writer.PersistAsync,
+                        cancellationToken);
+            }
+            """;
+        const string unprotectedCallerSource =
+            """
+            public sealed class ExternalUnprotectedCaller(ExternallyCallableWriter writer)
+            {
+                public Task<int> WriteAsync(CancellationToken cancellationToken)
+                    => writer.PersistAsync(cancellationToken);
+            }
+            """;
+
+        var protectedOnly = PersistenceWriteInventory.DiscoverProjectGraphSnippets(
+            writerSource,
+            protectedCallerSource);
+        var protectedEntry = Assert.Single(protectedOnly.Entries);
+        Assert.Equal(
+            PersistenceWriteClassification.ExecutionStrategyReplayRoot,
+            protectedEntry.Classification);
+        Assert.Empty(protectedOnly.UnresolvedCandidates);
+
+        var mixedCallers = PersistenceWriteInventory.DiscoverProjectGraphSnippets(
+            writerSource,
+            protectedCallerSource,
+            unprotectedCallerSource);
+        var entry = Assert.Single(
+            mixedCallers.UnclassifiedEntries);
+
+        Assert.Contains("ef-save", entry.SinkKinds);
+        Assert.Contains("ExternallyCallableWriter.PersistAsync", entry.Method);
+        Assert.Empty(mixedCallers.UnresolvedCandidates);
+    }
+
+    [Fact]
     public void PersistenceInventory_ShouldVerifyUnitOfWorkReplayImplementationBody()
     {
         const string safeImplementation =
@@ -553,6 +610,30 @@ public sealed class PersistenceBoundaryArchitectureTests
         Assert.Equal(
             ["dapper-write", "db-command-write"],
             entry.SinkKinds);
+    }
+
+    [Fact]
+    public void PersistenceInventory_ShouldTreatDbCommandScalarAndReaderAsPotentialWrites()
+    {
+        const string source =
+            """
+            using System.Data.Common;
+
+            public sealed class ReturningSqlWriter(DbCommand command)
+            {
+                public async Task WriteAsync(CancellationToken cancellationToken)
+                {
+                    _ = await command.ExecuteScalarAsync(cancellationToken);
+                    await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+                }
+            }
+            """;
+
+        var inventory = PersistenceWriteInventory.DiscoverSnippet(source);
+        var entry = Assert.Single(inventory.UnclassifiedEntries);
+
+        Assert.Equal(["db-command-write"], entry.SinkKinds);
+        Assert.Empty(inventory.UnresolvedCandidates);
     }
 
     [Theory]

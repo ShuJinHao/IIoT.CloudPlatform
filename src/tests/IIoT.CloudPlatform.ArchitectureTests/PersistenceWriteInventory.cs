@@ -33,6 +33,10 @@ internal static class PersistenceWriteInventory
             "ExecuteDeleteAsync",
             "ExecuteNonQuery",
             "ExecuteNonQueryAsync",
+            "ExecuteReader",
+            "ExecuteReaderAsync",
+            "ExecuteScalar",
+            "ExecuteScalarAsync",
             "Migrate",
             "MigrateAsync",
             "EnsureCreated",
@@ -156,7 +160,22 @@ internal static class PersistenceWriteInventory
         ["src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs::DatabaseInitializationOrchestrator.EnsureDeviceCodeSchemaCompatibilityAsync(CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs",
             "LegacyDeviceAndIdentitySchemas_ShouldUpgradeAgainstRealPostgres"),
+        ["src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs::DatabaseInitializationOrchestrator.GetNormalizedClientCodeConflictsAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs",
+            "LegacyDeviceAndIdentitySchemas_ShouldUpgradeAgainstRealPostgres"),
         ["src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs::DatabaseInitializationOrchestrator.EnsureIdentitySchemaCompatibilityAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs",
+            "LegacyDeviceAndIdentitySchemas_ShouldUpgradeAgainstRealPostgres"),
+        ["src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs::DatabaseInitializationOrchestrator.IdentityAdminTablesExistAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs",
+            "LegacyDeviceAndIdentitySchemas_ShouldUpgradeAgainstRealPostgres"),
+        ["src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs::DatabaseInitializationOrchestrator.IdentityAuthorizationTablesExistAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs",
+            "LegacyDeviceAndIdentitySchemas_ShouldUpgradeAgainstRealPostgres"),
+        ["src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs::DatabaseInitializationOrchestrator.GetAdminLikeRoleConflictsAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs",
+            "LegacyDeviceAndIdentitySchemas_ShouldUpgradeAgainstRealPostgres"),
+        ["src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs::DatabaseInitializationOrchestrator.GetPermissionClaimConflictsAsync(CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs",
             "LegacyDeviceAndIdentitySchemas_ShouldUpgradeAgainstRealPostgres"),
         ["src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs::DatabaseInitializationOrchestrator.EnsureRecordSchemaCompatibilityAttemptAsync(CancellationToken)"] = new(
@@ -166,6 +185,9 @@ internal static class PersistenceWriteInventory
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs",
             "LegacyDeviceAndIdentitySchemas_ShouldUpgradeAgainstRealPostgres"),
         ["src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs::DatabaseInitializationOrchestrator.SeedOidcClientsAttemptAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs",
+            "LegacyDeviceAndIdentitySchemas_ShouldUpgradeAgainstRealPostgres"),
+        ["src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs::DatabaseInitializationOrchestrator.RecordTablesExistAsync(CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs",
             "LegacyDeviceAndIdentitySchemas_ShouldUpgradeAgainstRealPostgres"),
         ["src/hosts/IIoT.MigrationWorkApp/SeedData/SystemInitData.cs::SystemInitData.SeedAttemptAsync(IIoTDbContext,UserManager<ApplicationUser>,RoleManager<IdentityRole<Guid>>,IConfiguration,SeedRetryTarget,CancellationToken)"] = new(
@@ -455,13 +477,28 @@ internal static class PersistenceWriteInventory
             unresolved.AddRange(unitOfWorkReplayContract.Diagnostics);
         }
 
-        foreach (var projectPath in projectPaths)
+        var projects = projectPaths
+            .Select(projectPath => CreateProjectCompilation(projectPath, references))
+            .Where(project => project is not null)
+            .Cast<ProjectCompilation>()
+            .ToArray();
+        var models = projects
+            .SelectMany(project => project.Models)
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
+        var protectionGraph = ProtectionGraph.Create(
+            projects.SelectMany(project => project.Trees).ToArray(),
+            models,
+            unitOfWorkReplayContract.IsVerified,
+            projectPaths
+                .Select(GetAssemblyName)
+                .ToHashSet(StringComparer.Ordinal));
+
+        foreach (var project in projects)
         {
             DiscoverProject(
                 repositoryRoot,
-                projectPath,
-                references,
-                unitOfWorkReplayContract.IsVerified,
+                project,
+                protectionGraph,
                 entries,
                 unresolved);
         }
@@ -547,6 +584,77 @@ internal static class PersistenceWriteInventory
             Environment.CurrentDirectory,
             new ProjectCompilation([tree], models));
         return verification.ImplementationCount > 0 && verification.Diagnostics.Count == 0;
+    }
+
+    public static PersistenceInventoryResult DiscoverProjectGraphSnippets(
+        string writerSource,
+        params string[] callerSources)
+    {
+        var fixtureRoot = Path.Combine(
+            Environment.CurrentDirectory,
+            "PersistenceInventoryProjectGraphFixture");
+        var references = CreateMetadataReferences().Values.ToArray();
+        var writerPath = Path.Combine(fixtureRoot, "Writer.cs");
+        var writerTree = CSharpSyntaxTree.ParseText(writerSource, ParseOptions, writerPath);
+        var writerCompilation = CSharpCompilation.Create(
+            "PersistenceInventoryWriterFixture",
+            [CreateImplicitUsingsTree(writerPath), writerTree],
+            references,
+            new CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary,
+                nullableContextOptions: NullableContextOptions.Enable));
+
+        var compilations = new List<(SyntaxTree Tree, CSharpCompilation Compilation)>
+        {
+            (writerTree, writerCompilation)
+        };
+        for (var index = 0; index < callerSources.Length; index++)
+        {
+            var callerPath = Path.Combine(fixtureRoot, $"Caller{index + 1}.cs");
+            var callerTree = CSharpSyntaxTree.ParseText(
+                callerSources[index],
+                ParseOptions,
+                callerPath);
+            var callerCompilation = CSharpCompilation.Create(
+                $"PersistenceInventoryCallerFixture{index + 1}",
+                [CreateImplicitUsingsTree(callerPath), callerTree],
+                references.Append(writerCompilation.ToMetadataReference()),
+                new CSharpCompilationOptions(
+                    OutputKind.DynamicallyLinkedLibrary,
+                    nullableContextOptions: NullableContextOptions.Enable));
+            compilations.Add((callerTree, callerCompilation));
+        }
+
+        var models = compilations.ToDictionary(
+            pair => pair.Tree,
+            pair => pair.Compilation.GetSemanticModel(pair.Tree, ignoreAccessibility: true));
+        var sites = new List<WriteSite>();
+        var unresolved = new List<string>();
+        foreach (var (tree, _) in compilations)
+        {
+            DiscoverTreeWriteSites(
+                Environment.CurrentDirectory,
+                tree,
+                models[tree],
+                sites,
+                unresolved);
+        }
+
+        var graph = ProtectionGraph.Create(
+            compilations.Select(pair => pair.Tree).ToArray(),
+            models,
+            unitOfWorkReplayContractVerified: true,
+            compilations
+                .Select(pair => pair.Compilation.AssemblyName!)
+                .ToHashSet(StringComparer.Ordinal));
+        var entries = CreateEntries(sites, graph);
+        return new PersistenceInventoryResult(
+            entries,
+            entries.Where(entry => entry.Classification is null).ToArray(),
+            unresolved
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .ToArray());
     }
 
     private static UnitOfWorkReplayVerification VerifyProductionUnitOfWorkReplayContract(
@@ -960,18 +1068,11 @@ internal static class PersistenceWriteInventory
 
     private static void DiscoverProject(
         string repositoryRoot,
-        string projectPath,
-        IReadOnlyDictionary<string, MetadataReference> allReferences,
-        bool unitOfWorkReplayContractVerified,
+        ProjectCompilation project,
+        ProtectionGraph protectionGraph,
         ICollection<PersistenceWriteEntry> entries,
         ICollection<string> unresolved)
     {
-        var project = CreateProjectCompilation(projectPath, allReferences);
-        if (project is null)
-        {
-            return;
-        }
-
         var projectWriteSites = new List<WriteSite>();
         foreach (var tree in project.Trees)
         {
@@ -983,10 +1084,6 @@ internal static class PersistenceWriteInventory
                 unresolved);
         }
 
-        var protectionGraph = ProtectionGraph.Create(
-            project.Trees,
-            project.Models,
-            unitOfWorkReplayContractVerified);
         foreach (var entry in CreateEntries(projectWriteSites, protectionGraph))
         {
             entries.Add(entry);
@@ -1022,7 +1119,7 @@ internal static class PersistenceWriteInventory
                 StringComparison.OrdinalIgnoreCase))
             .Select(pair => pair.Value);
         var compilation = CSharpCompilation.Create(
-            assemblyName + ".PersistenceInventory",
+            assemblyName,
             trees.Prepend(CreateImplicitUsingsTree(projectPath)),
             references,
             new CSharpCompilationOptions(
@@ -1345,7 +1442,9 @@ internal static class PersistenceWriteInventory
             return true;
         }
 
-        if ((method.Name is "ExecuteNonQuery" or "ExecuteNonQueryAsync") &&
+        if ((method.Name is "ExecuteNonQuery" or "ExecuteNonQueryAsync" or
+             "ExecuteReader" or "ExecuteReaderAsync" or
+             "ExecuteScalar" or "ExecuteScalarAsync") &&
             (InheritsFrom(type, "System.Data.Common.DbCommand") ||
              typeName is "System.Data.IDbCommand" or "System.Data.Common.DbCommand"))
         {
@@ -1797,16 +1896,14 @@ internal static class PersistenceWriteInventory
 
     private sealed class ProtectionGraph
     {
-        private readonly IReadOnlyDictionary<IMethodSymbol, IReadOnlyList<SyntaxNode>> _references;
+        private readonly IReadOnlyDictionary<string, IReadOnlyList<SyntaxNode>> _references;
         private readonly IReadOnlyDictionary<SyntaxTree, SemanticModel> _models;
         private readonly bool _unitOfWorkReplayContractVerified;
-        private readonly Dictionary<IMethodSymbol, bool> _memo =
-            new(SymbolEqualityComparer.Default);
-        private readonly HashSet<IMethodSymbol> _visiting =
-            new(SymbolEqualityComparer.Default);
+        private readonly Dictionary<string, bool> _memo = new(StringComparer.Ordinal);
+        private readonly HashSet<string> _visiting = new(StringComparer.Ordinal);
 
         private ProtectionGraph(
-            IReadOnlyDictionary<IMethodSymbol, IReadOnlyList<SyntaxNode>> references,
+            IReadOnlyDictionary<string, IReadOnlyList<SyntaxNode>> references,
             IReadOnlyDictionary<SyntaxTree, SemanticModel> models,
             bool unitOfWorkReplayContractVerified)
         {
@@ -1818,10 +1915,16 @@ internal static class PersistenceWriteInventory
         public static ProtectionGraph Create(
             IReadOnlyCollection<SyntaxTree> trees,
             IReadOnlyDictionary<SyntaxTree, SemanticModel> models,
-            bool unitOfWorkReplayContractVerified = true)
+            bool unitOfWorkReplayContractVerified = true,
+            IReadOnlySet<string>? analyzedAssemblyNames = null)
         {
-            var references = new Dictionary<IMethodSymbol, List<SyntaxNode>>(
-                SymbolEqualityComparer.Default);
+            analyzedAssemblyNames ??= models.Values
+                .Select(model => model.Compilation.AssemblyName)
+                .Where(name => name is not null)
+                .Cast<string>()
+                .ToHashSet(StringComparer.Ordinal);
+            var references = new Dictionary<string, List<SyntaxNode>>(
+                StringComparer.Ordinal);
             foreach (var tree in trees)
             {
                 var model = models[tree];
@@ -1836,15 +1939,18 @@ internal static class PersistenceWriteInventory
                         _ => null
                     };
                     if (symbol is not IMethodSymbol method ||
-                        !method.Locations.Any(location => location.IsInSource))
+                        (!method.Locations.Any(location => location.IsInSource) &&
+                         !analyzedAssemblyNames.Contains(
+                             method.ContainingAssembly.Identity.Name)))
                     {
                         continue;
                     }
 
-                    if (!references.TryGetValue(method, out var methodReferences))
+                    var methodKey = GetCallableGraphKey(method);
+                    if (!references.TryGetValue(methodKey, out var methodReferences))
                     {
                         methodReferences = [];
-                        references.Add(method, methodReferences);
+                        references.Add(methodKey, methodReferences);
                     }
 
                     methodReferences.Add(node);
@@ -1852,11 +1958,10 @@ internal static class PersistenceWriteInventory
             }
 
             var readOnlyReferences =
-                new Dictionary<IMethodSymbol, IReadOnlyList<SyntaxNode>>(
-                    SymbolEqualityComparer.Default);
-            foreach (var (method, methodReferences) in references)
+                new Dictionary<string, IReadOnlyList<SyntaxNode>>(StringComparer.Ordinal);
+            foreach (var (methodKey, methodReferences) in references)
             {
-                readOnlyReferences.Add(method, methodReferences);
+                readOnlyReferences.Add(methodKey, methodReferences);
             }
 
             return new ProtectionGraph(
@@ -1878,21 +1983,23 @@ internal static class PersistenceWriteInventory
 
         private bool IsProtectedCallable(IMethodSymbol callable)
         {
-            if (_memo.TryGetValue(callable, out var cached))
+            var callableKey = GetCallableGraphKey(callable);
+            if (_memo.TryGetValue(callableKey, out var cached))
             {
                 return cached;
             }
 
-            if (!_visiting.Add(callable))
+            if (!_visiting.Add(callableKey))
             {
                 return false;
             }
 
             try
             {
-                if (!_references.TryGetValue(callable, out var references) || references.Count == 0)
+                if (!_references.TryGetValue(callableKey, out var references) ||
+                    references.Count == 0)
                 {
-                    return _memo[callable] = false;
+                    return _memo[callableKey] = false;
                 }
 
                 var protectedEverywhere = references.All(reference =>
@@ -1906,15 +2013,38 @@ internal static class PersistenceWriteInventory
 
                     var caller = model.GetEnclosingSymbol(reference.SpanStart) as IMethodSymbol;
                     return caller is not null &&
-                           !SymbolEqualityComparer.Default.Equals(caller, callable) &&
+                           !string.Equals(
+                               GetCallableGraphKey(caller),
+                               callableKey,
+                               StringComparison.Ordinal) &&
                            IsProtectedCallable(caller);
                 });
-                return _memo[callable] = protectedEverywhere;
+                return _memo[callableKey] = protectedEverywhere;
             }
             finally
             {
-                _visiting.Remove(callable);
+                _visiting.Remove(callableKey);
             }
+        }
+
+        private static string GetCallableGraphKey(IMethodSymbol symbol)
+        {
+            var method = (symbol.ReducedFrom ?? symbol).OriginalDefinition;
+            var assemblyName = method.ContainingAssembly?.Identity.Name ?? "<unknown-assembly>";
+            if (DocumentationCommentId.CreateDeclarationId(method) is { } declarationId)
+            {
+                return $"{assemblyName}|{declarationId}";
+            }
+
+            if (method.DeclaringSyntaxReferences.FirstOrDefault() is { } syntaxReference)
+            {
+                var syntax = syntaxReference.GetSyntax();
+                return $"{assemblyName}|{NormalizePath(syntax.SyntaxTree.FilePath)}|" +
+                       $"{syntax.SpanStart}|{method.MethodKind}|{method.Name}";
+            }
+
+            return $"{assemblyName}|" +
+                   method.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
         }
 
         private bool IsInsideProtectedDelegate(SyntaxNode node, SemanticModel model)
