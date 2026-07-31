@@ -314,11 +314,11 @@ public sealed class AuthorizationAndIdentityBehaviorTests
     }
 
     [Fact]
-    public async Task DefineRolePolicyHandler_ShouldDeleteRoleWhenPermissionAssignmentFails()
+    public async Task DefineRolePolicyHandler_ShouldLeaveNoPartialRoleWhenAtomicDefinitionFails()
     {
         var rolePolicyService = new StubRolePolicyService
         {
-            UpdateRolePermissionsResult = Result.Failure("permission update failed")
+            DefineRoleResult = Result.Failure("permission update failed")
         };
         var auditTrail = new RecordingAuditTrailService();
         var handler = new DefineRolePolicyHandler(
@@ -338,7 +338,8 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             CancellationToken.None);
 
         Assert.False(result.IsSuccess);
-        Assert.Equal("Auditor", rolePolicyService.DeletedRoleName);
+        Assert.False(rolePolicyService.RoleExists);
+        Assert.Empty(rolePolicyService.RolePermissions);
         Assert.Contains(auditTrail.Entries, x =>
             x.OperationType == "Role.Define"
             && x.TargetIdOrKey == "Auditor"
@@ -371,7 +372,6 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             CancellationToken.None);
 
         Assert.False(result.IsSuccess);
-        Assert.Null(rolePolicyService.DeletedRoleName);
         Assert.Null(rolePolicyService.CreatedRoleName);
         Assert.Equal(0, rolePolicyService.UpdateRolePermissionsCalls);
         Assert.Equal([DevicePermissions.Read], rolePolicyService.RolePermissions);

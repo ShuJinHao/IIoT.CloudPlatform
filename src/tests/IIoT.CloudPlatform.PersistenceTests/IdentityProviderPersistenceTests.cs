@@ -100,7 +100,10 @@ public sealed class IdentityProviderPersistenceTests
 
         var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
         var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
-        var service = new RolePolicyService(userManager, roleManager);
+        var service = new RolePolicyService(
+            userManager,
+            roleManager,
+            scope.ServiceProvider.GetRequiredService<IIoTDbContext>());
         const string roleName = "Supervisor";
         Assert.True((await roleManager.CreateAsync(new IdentityRole<Guid>(roleName))).Succeeded);
         var role = await roleManager.FindByNameAsync(roleName)
@@ -137,7 +140,10 @@ public sealed class IdentityProviderPersistenceTests
 
         var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
         var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
-        var service = new RolePolicyService(userManager, roleManager);
+        var service = new RolePolicyService(
+            userManager,
+            roleManager,
+            scope.ServiceProvider.GetRequiredService<IIoTDbContext>());
         Assert.True((await roleManager.CreateAsync(
             new IdentityRole<Guid>(SystemRoles.RoleAdmin))).Succeeded);
         var role = await roleManager.FindByNameAsync(SystemRoles.RoleAdmin)
@@ -183,7 +189,10 @@ public sealed class IdentityProviderPersistenceTests
 
         var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
         var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
-        var service = new RolePolicyService(userManager, roleManager);
+        var service = new RolePolicyService(
+            userManager,
+            roleManager,
+            scope.ServiceProvider.GetRequiredService<IIoTDbContext>());
         Assert.True((await roleManager.CreateAsync(
             new IdentityRole<Guid>(SystemRoles.HrAdmin))).Succeeded);
         var role = await roleManager.FindByNameAsync(SystemRoles.HrAdmin)
@@ -226,7 +235,10 @@ public sealed class IdentityProviderPersistenceTests
 
         var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
         var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
-        var service = new RolePolicyService(userManager, roleManager);
+        var service = new RolePolicyService(
+            userManager,
+            roleManager,
+            scope.ServiceProvider.GetRequiredService<IIoTDbContext>());
         const string roleName = "Supervisor";
         Assert.True((await roleManager.CreateAsync(new IdentityRole<Guid>(roleName))).Succeeded);
         var role = await roleManager.FindByNameAsync(roleName)
@@ -286,7 +298,10 @@ public sealed class IdentityProviderPersistenceTests
 
         var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
         var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
-        var service = new RolePolicyService(userManager, roleManager);
+        var service = new RolePolicyService(
+            userManager,
+            roleManager,
+            scope.ServiceProvider.GetRequiredService<IIoTDbContext>());
         var user = new ApplicationUser
         {
             Id = Guid.NewGuid(),
@@ -323,7 +338,10 @@ public sealed class IdentityProviderPersistenceTests
 
         var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
         var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
-        var service = new RolePolicyService(userManager, roleManager);
+        var service = new RolePolicyService(
+            userManager,
+            roleManager,
+            scope.ServiceProvider.GetRequiredService<IIoTDbContext>());
         Assert.True((await roleManager.CreateAsync(
             new IdentityRole<Guid>(SystemRoles.Admin))).Succeeded);
         var adminRole = await roleManager.FindByNameAsync(SystemRoles.Admin)
@@ -332,7 +350,7 @@ public sealed class IdentityProviderPersistenceTests
             adminRole,
             new Claim(IIoTClaimTypes.Permission, DevicePermissions.Read))).Succeeded);
 
-        var createResult = await service.CreateRoleAsync(" admin ");
+        var createResult = await service.DefineRoleAsync(" admin ", []);
         var updateResult = await service.UpdateRolePermissionsAsync(
             " ADMIN ",
             [CloudPermissionCatalog.Recipe.Read]);

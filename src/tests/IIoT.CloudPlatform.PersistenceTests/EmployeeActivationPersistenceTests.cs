@@ -150,10 +150,7 @@ public sealed class EmployeeActivationPersistenceTests
                 scope.ServiceProvider,
                 dbContext,
                 new StubHumanSessionRevocationService(),
-                new RecordingIdentityAccountStore
-                {
-                    SetEnabledResult = Result.Success(false)
-                });
+                new RecordingIdentityAccountStore());
 
             var result = await handler.Handle(
                 new ActivateEmployeeCommand(employeeId),

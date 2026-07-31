@@ -909,12 +909,6 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
 
     public List<(Guid UserId, string RoleName)> AssignedRoles { get; } = [];
 
-    public Guid? LastSetEnabledId { get; private set; }
-
-    public bool LastSetEnabledValue { get; private set; }
-
-    public Result<bool> SetEnabledResult { get; set; } = Result.Success(true);
-
     public Result<IdentityAccountCompareExchangeOutcome> CompareExchangeStateResult { get; set; } =
         Result.Success(IdentityAccountCompareExchangeOutcome.Applied);
 
@@ -980,30 +974,6 @@ internal sealed class RecordingIdentityAccountStore : IIdentityAccountStore
             new IdentityAccountStateSnapshot(
                 AccountById.IsEnabled,
                 securityStamp));
-    }
-
-    public Task<Result<bool>> SetEnabledAsync(
-        Guid id,
-        bool isEnabled,
-        CancellationToken cancellationToken = default)
-    {
-        LastSetEnabledId = id;
-        LastSetEnabledValue = isEnabled;
-        if (SetEnabledResult.IsSuccess
-            && SetEnabledResult.Value
-            && AccountById?.Id == id)
-        {
-            if (isEnabled)
-            {
-                AccountById.Enable();
-            }
-            else
-            {
-                AccountById.Disable();
-            }
-        }
-
-        return Task.FromResult(SetEnabledResult);
     }
 
     public Task<Result<IdentityAccountCompareExchangeOutcome>> CompareExchangeStateAsync(
@@ -1734,9 +1704,7 @@ internal sealed class StubRolePolicyService : IRolePolicyService
 
     public bool RoleExists { get; set; }
 
-    public Result CreateRoleResult { get; set; } = Result.Success();
-
-    public Result DeleteRoleResult { get; set; } = Result.Success();
+    public Result<bool> DefineRoleResult { get; set; } = Result.Success(true);
 
     public Result<bool> UpdateRolePermissionsResult { get; set; } = Result.Success(true);
 
@@ -1745,8 +1713,6 @@ internal sealed class StubRolePolicyService : IRolePolicyService
     public List<string> RolePermissions { get; set; } = [];
 
     public List<string> UserPersonalPermissions { get; set; } = [];
-
-    public string? DeletedRoleName { get; private set; }
 
     public string? CreatedRoleName { get; private set; }
 
@@ -1779,21 +1745,21 @@ internal sealed class StubRolePolicyService : IRolePolicyService
         return Task.FromResult(RoleExists);
     }
 
-    public Task<Result> CreateRoleAsync(string roleName)
+    public Task<Result<bool>> DefineRoleAsync(
+        string roleName,
+        List<string> permissions,
+        CancellationToken cancellationToken = default)
     {
         CreatedRoleName = roleName;
-        return Task.FromResult(CreateRoleResult);
-    }
+        LastUpdatedRoleName = roleName;
+        LastUpdatedRolePermissions = [.. permissions];
+        if (DefineRoleResult.IsSuccess && DefineRoleResult.Value)
+        {
+            RoleExists = true;
+            RolePermissions = [.. permissions];
+        }
 
-    public Task<Result> DeleteRoleAsync(string roleName)
-    {
-        DeletedRoleName = roleName;
-        return Task.FromResult(DeleteRoleResult);
-    }
-
-    public Task<Result> RemoveRoleFromUserAsync(string employeeNo, string roleName)
-    {
-        return Task.FromResult(Result.Success());
+        return Task.FromResult(DefineRoleResult);
     }
 
     public Task<List<string>?> GetRolePermissionsAsync(string roleName)
@@ -1802,7 +1768,10 @@ internal sealed class StubRolePolicyService : IRolePolicyService
         return Task.FromResult<List<string>?>([.. RolePermissions]);
     }
 
-    public Task<Result<bool>> UpdateRolePermissionsAsync(string roleName, List<string> permissions)
+    public Task<Result<bool>> UpdateRolePermissionsAsync(
+        string roleName,
+        List<string> permissions,
+        CancellationToken cancellationToken = default)
     {
         UpdateRolePermissionsCalls++;
         LastUpdatedRoleName = roleName;
@@ -1815,7 +1784,10 @@ internal sealed class StubRolePolicyService : IRolePolicyService
         return Task.FromResult(UpdateRolePermissionsResult);
     }
 
-    public Task<Result<bool>> UpdateUserPersonalPermissionsAsync(Guid userId, List<string> permissions)
+    public Task<Result<bool>> UpdateUserPersonalPermissionsAsync(
+        Guid userId,
+        List<string> permissions,
+        CancellationToken cancellationToken = default)
     {
         UpdateUserPersonalPermissionsCalls++;
         LastUpdatedUserId = userId;

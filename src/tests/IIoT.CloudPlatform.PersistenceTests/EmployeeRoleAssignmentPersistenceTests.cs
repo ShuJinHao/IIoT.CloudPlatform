@@ -382,7 +382,8 @@ public sealed class EmployeeRoleAssignmentPersistenceTests
             store,
             new RolePolicyService(
                 serviceProvider.GetRequiredService<UserManager<ApplicationUser>>(),
-                serviceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>()),
+                serviceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>(),
+                dbContext),
             new EfUnitOfWork(dbContext, NullLogger<EfUnitOfWork>.Instance),
             sessionRevocationService ?? new HumanSessionRevocationService(dbContext),
             new AdminTargetGuard(store),
@@ -501,12 +502,6 @@ public sealed class EmployeeRoleAssignmentPersistenceTests
             Guid id,
             CancellationToken cancellationToken = default)
             => inner.GetStateSnapshotAsync(id, cancellationToken);
-
-        public Task<Result<bool>> SetEnabledAsync(
-            Guid id,
-            bool isEnabled,
-            CancellationToken cancellationToken = default)
-            => inner.SetEnabledAsync(id, isEnabled, cancellationToken);
 
         public async Task<Result<IdentityAccountCompareExchangeOutcome>>
             CompareExchangeStateAsync(

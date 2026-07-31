@@ -58,25 +58,6 @@ public sealed class IdentityAccountStore(
             .SingleOrDefaultAsync(cancellationToken);
     }
 
-    public async Task<Result<bool>> SetEnabledAsync(
-        Guid id,
-        bool isEnabled,
-        CancellationToken cancellationToken = default)
-    {
-        var user = await userManager.FindByIdAsync(id.ToString());
-        if (user is null)
-        {
-            return Result.Success(false);
-        }
-
-        user.IsEnabled = isEnabled;
-        user.SecurityStamp = Guid.NewGuid().ToString("N");
-        var result = await userManager.UpdateAsync(user);
-        return result.Succeeded
-            ? Result.Success(true)
-            : Result.Failure(result.Errors.Select(e => e.Description).ToArray());
-    }
-
     public async Task<Result<IdentityAccountCompareExchangeOutcome>> CompareExchangeStateAsync(
         Guid id,
         IdentityAccountStateSnapshot expected,

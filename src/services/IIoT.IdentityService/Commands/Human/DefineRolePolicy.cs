@@ -67,72 +67,38 @@ public class DefineRolePolicyHandler(
         }
 
         var normalizedPermissions = validation.Permissions.ToList();
-        var createResult = await rolePolicyService.CreateRoleAsync(roleName);
-
-        if (!createResult.IsSuccess)
+        var defineResult = await rolePolicyService.DefineRoleAsync(
+            roleName,
+            normalizedPermissions,
+            cancellationToken);
+        if (!defineResult.IsSuccess || !defineResult.Value)
         {
-            return await FailAsync(
-                roleName,
-                beforePermissions,
-                beforePermissions,
-                normalizedPermissions,
-                createResult.Errors?.ToArray() ?? ["Role creation failed."],
-                "RoleCreationFailed",
-                0,
-                cancellationToken);
-        }
-
-        try
-        {
-            var updateResult = await rolePolicyService.UpdateRolePermissionsAsync(
-                roleName,
-                normalizedPermissions);
-
-            if (!updateResult.IsSuccess || !updateResult.Value)
-            {
-                await rolePolicyService.DeleteRoleAsync(roleName);
-
-                return await FailAsync(
-                    roleName,
-                    beforePermissions,
-                    [],
-                    normalizedPermissions,
-                    updateResult.Errors?.ToArray() ?? ["Role permission assignment failed."],
-                    "PermissionPersistenceFailed",
-                    0,
-                    cancellationToken);
-            }
-
-            var afterPermissions = await rolePolicyService.GetRolePermissionsAsync(roleName)
-                ?? normalizedPermissions;
-            await auditTrailService.TryWriteAsync(
-                CreateAuditEntry(
-                    roleName,
-                    succeeded: true,
-                    summary: PermissionAuditSummary.Serialize(
-                        "RoleDefine",
-                        beforePermissions,
-                        afterPermissions,
-                        normalizedPermissions,
-                        "Succeeded")),
-                cancellationToken);
-
-            return Result.Success(true);
-        }
-        catch (Exception)
-        {
-            await rolePolicyService.DeleteRoleAsync(roleName);
-
             return await FailAsync(
                 roleName,
                 beforePermissions,
                 [],
                 normalizedPermissions,
-                ["角色定义执行失败，已回滚本次新建角色。"],
-                "UnexpectedFailure",
+                defineResult.Errors?.ToArray() ?? ["Role definition failed."],
+                "PermissionPersistenceFailed",
                 0,
                 cancellationToken);
         }
+
+        var afterPermissions = await rolePolicyService.GetRolePermissionsAsync(roleName)
+            ?? normalizedPermissions;
+        await auditTrailService.TryWriteAsync(
+            CreateAuditEntry(
+                roleName,
+                succeeded: true,
+                summary: PermissionAuditSummary.Serialize(
+                    "RoleDefine",
+                    beforePermissions,
+                    afterPermissions,
+                    normalizedPermissions,
+                    "Succeeded")),
+            cancellationToken);
+
+        return Result.Success(true);
     }
 
     private async Task<Result<bool>> FailAsync(

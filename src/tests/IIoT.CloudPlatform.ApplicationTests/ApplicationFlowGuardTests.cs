@@ -1035,10 +1035,7 @@ public sealed class ApplicationFlowGuardTests
         var sessionRevocationService = new StubHumanSessionRevocationService();
         var handler = new ActivateEmployeeHandler(
             new InMemoryRepository<Employee> { SingleOrDefaultResult = employee },
-            new RecordingIdentityAccountStore
-            {
-                SetEnabledResult = Result.Success(false)
-            },
+            new RecordingIdentityAccountStore(),
             unitOfWork,
             sessionRevocationService,
             new StubAdminTargetGuard(),

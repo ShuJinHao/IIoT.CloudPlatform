@@ -1,3 +1,4 @@
+using IIoT.EntityFrameworkCore;
 using IIoT.EntityFrameworkCore.Identity;
 using IIoT.Infrastructure.Authentication;
 using Microsoft.AspNetCore.Identity;
@@ -108,7 +109,9 @@ public sealed class IdentityPasswordPersistenceTests
             _scope = scope;
             UserManager = userManager;
             User = user;
-            PasswordService = new IdentityPasswordService(userManager);
+            PasswordService = new IdentityPasswordService(
+                userManager,
+                scope.ServiceProvider.GetRequiredService<IIoTDbContext>());
         }
 
         public UserManager<ApplicationUser> UserManager { get; }
@@ -117,9 +120,14 @@ public sealed class IdentityPasswordPersistenceTests
 
         public IdentityPasswordService PasswordService { get; }
 
-        public async Task<ApplicationUser> ReloadUserAsync() =>
-            await UserManager.FindByIdAsync(User.Id.ToString())
-            ?? throw new InvalidOperationException("User was not created.");
+        public async Task<ApplicationUser> ReloadUserAsync()
+        {
+            _scope.ServiceProvider
+                .GetRequiredService<IIoTDbContext>()
+                .ChangeTracker.Clear();
+            return await UserManager.FindByIdAsync(User.Id.ToString())
+                   ?? throw new InvalidOperationException("User was not created.");
+        }
 
         public static async Task<IdentityPasswordRuntime> CreateAsync()
         {

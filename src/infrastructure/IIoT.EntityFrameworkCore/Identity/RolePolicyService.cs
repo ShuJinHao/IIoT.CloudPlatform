@@ -1,20 +1,24 @@
+using System.Security.Claims;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
 using IIoT.SharedKernel.Result;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
-using System.Security.Claims;
 
 namespace IIoT.EntityFrameworkCore.Identity;
 
 public sealed class RolePolicyService(
     UserManager<ApplicationUser> userManager,
-    RoleManager<IdentityRole<Guid>> roleManager) : IRolePolicyService
+    RoleManager<IdentityRole<Guid>> roleManager,
+    IIoTDbContext dbContext) : IRolePolicyService
 {
+    private static readonly TimeSpan ObservationTimeout = TimeSpan.FromSeconds(5);
+    private readonly Func<IIoTDbContext> _createContext = dbContext.CreateFreshContext;
+
     public async Task<IList<string>> GetAllRolesAsync()
     {
-        return await roleManager.Roles.Select(r => r.Name!).ToListAsync();
+        return await roleManager.Roles.Select(role => role.Name!).ToListAsync();
     }
 
     public Task<bool> RoleExistsAsync(string roleName)
@@ -22,57 +26,13 @@ public sealed class RolePolicyService(
         return roleManager.RoleExistsAsync((roleName ?? string.Empty).Trim());
     }
 
-    public async Task<Result> CreateRoleAsync(string roleName)
+    public async Task<Result<bool>> DefineRoleAsync(
+        string roleName,
+        List<string> permissions,
+        CancellationToken cancellationToken = default)
     {
         var normalizedRoleName = (roleName ?? string.Empty).Trim();
-        if (SystemRoles.IsAdminLike(roleName))
-        {
-            return Result.Failure("禁止定义、覆盖或修改 Admin 角色。");
-        }
-
-        if (await roleManager.RoleExistsAsync(normalizedRoleName))
-        {
-            return Result.Failure("角色已存在，DefineRolePolicy 只允许创建新角色。");
-        }
-
-        var result = await roleManager.CreateAsync(new IdentityRole<Guid>(normalizedRoleName));
-        return result.ToResult();
-    }
-
-    public async Task<Result> DeleteRoleAsync(string roleName)
-    {
-        var role = await roleManager.FindByNameAsync(roleName);
-        if (role == null) return Result.Success();
-
-        var result = await roleManager.DeleteAsync(role);
-        return result.ToResult();
-    }
-
-    public async Task<Result> RemoveRoleFromUserAsync(string employeeNo, string roleName)
-    {
-        var user = await userManager.FindByNameAsync(employeeNo);
-        if (user == null) return Result.Failure("\u7528\u6237\u4E0D\u5B58\u5728");
-
-        var result = await userManager.RemoveFromRoleAsync(user, roleName);
-        return result.ToResult();
-    }
-
-    public async Task<List<string>?> GetRolePermissionsAsync(string roleName)
-    {
-        var role = await roleManager.FindByNameAsync((roleName ?? string.Empty).Trim());
-        if (role == null) return null;
-
-        var claims = await roleManager.GetClaimsAsync(role);
-        return claims
-            .Where(c => c.Type == IIoTClaimTypes.Permission)
-            .Select(c => c.Value)
-            .ToList();
-    }
-
-    public async Task<Result<bool>> UpdateRolePermissionsAsync(string roleName, List<string> permissions)
-    {
-        var normalizedRoleName = (roleName ?? string.Empty).Trim();
-        if (SystemRoles.IsAdminLike(roleName))
+        if (SystemRoles.IsAdminLike(normalizedRoleName))
         {
             return Result.Failure("禁止定义、覆盖或修改 Admin 角色。");
         }
@@ -82,110 +42,575 @@ public sealed class RolePolicyService(
             permissions);
         if (!validation.IsValid)
         {
-            return Result.Failure("权限集合包含未知权限或 RoleAdmin 不可分配权限，未执行任何修改。");
+            return Result.Failure(
+                "权限集合包含未知权限或 RoleAdmin 不可分配权限，未执行任何修改。");
         }
 
-        var effectivePermissions = validation.Permissions.ToList();
+        var target = new RoleWriteTarget(
+            Guid.NewGuid(),
+            normalizedRoleName,
+            roleManager.NormalizeKey(normalizedRoleName)
+                ?? normalizedRoleName.ToUpperInvariant(),
+            Guid.NewGuid().ToString("N"),
+            NormalizePermissions(validation.Permissions));
+        var writeAttempted = false;
 
-        var role = await roleManager.FindByNameAsync(normalizedRoleName);
-        if (role == null) return Result.Failure("\u89D2\u8272\u4E0D\u5B58\u5728");
-
-        var claims = await roleManager.GetClaimsAsync(role);
-        var existingPermissions = claims
-            .Where(c => c.Type == IIoTClaimTypes.Permission)
-            .ToList();
-        var desiredPermissions = effectivePermissions.ToDictionary(
-            permission => permission,
-            permission => permission,
-            StringComparer.OrdinalIgnoreCase);
-        var retainedPermissions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var claim in existingPermissions)
-        {
-            var shouldRetain =
-                desiredPermissions.TryGetValue(claim.Value.Trim(), out var canonicalPermission)
-                && string.Equals(claim.Value, canonicalPermission, StringComparison.Ordinal)
-                && retainedPermissions.Add(canonicalPermission);
-            if (shouldRetain)
+        return await ExecuteRecoverableAsync(
+            async callbackToken =>
             {
-                continue;
-            }
+                await using var context = _createContext();
+                var current = await ReadRoleAsync(
+                    context,
+                    target.NormalizedName,
+                    callbackToken);
+                if (MatchesTarget(current, target))
+                {
+                    return Result.Success(true);
+                }
 
-            var removeResult = await roleManager.RemoveClaimAsync(role, claim);
-            if (!removeResult.Succeeded)
-                return Result.Failure(removeResult.Errors.Select(error => error.Description).ToArray());
-        }
+                if (current is not null)
+                {
+                    if (writeAttempted)
+                    {
+                        throw new CloudWriteConflictException();
+                    }
 
-        foreach (var permission in effectivePermissions.Where(permission => !retainedPermissions.Contains(permission)))
-        {
-            var addResult = await roleManager.AddClaimAsync(
-                role,
-                new Claim(IIoTClaimTypes.Permission, permission));
-            if (!addResult.Succeeded)
-                return Result.Failure(addResult.Errors.Select(error => error.Description).ToArray());
-        }
+                    return Result.Failure(
+                        "角色已存在，DefineRolePolicy 只允许创建新角色。");
+                }
 
-        return Result.Success(true);
+                await using var transaction =
+                    await context.Database.BeginTransactionAsync(callbackToken);
+                writeAttempted = true;
+                context.Roles.Add(new IdentityRole<Guid>
+                {
+                    Id = target.Id,
+                    Name = target.Name,
+                    NormalizedName = target.NormalizedName,
+                    ConcurrencyStamp = target.ConcurrencyStamp
+                });
+                context.RoleClaims.AddRange(target.Permissions.Select(permission =>
+                    new IdentityRoleClaim<Guid>
+                    {
+                        RoleId = target.Id,
+                        ClaimType = IIoTClaimTypes.Permission,
+                        ClaimValue = permission
+                    }));
+                await context.SaveChangesAsync(callbackToken);
+                await transaction.CommitAsync(callbackToken);
+                return Result.Success(true);
+            },
+            token => ObserveRoleTargetAsync(target, baseline: null, token),
+            cancellationToken);
     }
 
-    public async Task<Result<bool>> UpdateUserPersonalPermissionsAsync(Guid userId, List<string> permissions)
+    public async Task<List<string>?> GetRolePermissionsAsync(string roleName)
+    {
+        var role = await roleManager.FindByNameAsync(
+            (roleName ?? string.Empty).Trim());
+        if (role is null)
+        {
+            return null;
+        }
+
+        var claims = await roleManager.GetClaimsAsync(role);
+        return claims
+            .Where(claim => claim.Type == IIoTClaimTypes.Permission)
+            .Select(claim => claim.Value)
+            .ToList();
+    }
+
+    public async Task<Result<bool>> UpdateRolePermissionsAsync(
+        string roleName,
+        List<string> permissions,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedRoleName = (roleName ?? string.Empty).Trim();
+        if (SystemRoles.IsAdminLike(normalizedRoleName))
+        {
+            return Result.Failure("禁止定义、覆盖或修改 Admin 角色。");
+        }
+
+        var validation = CloudPermissionCatalog.NormalizeForTargetRole(
+            normalizedRoleName,
+            permissions);
+        if (!validation.IsValid)
+        {
+            return Result.Failure(
+                "权限集合包含未知权限或 RoleAdmin 不可分配权限，未执行任何修改。");
+        }
+
+        var normalizedName = roleManager.NormalizeKey(normalizedRoleName)
+            ?? normalizedRoleName.ToUpperInvariant();
+        var targetPermissions = NormalizePermissions(validation.Permissions);
+        RoleWriteSnapshot? baseline = null;
+        var targetConcurrencyStamp = Guid.NewGuid().ToString("N");
+
+        return await ExecuteRecoverableAsync(
+            async callbackToken =>
+            {
+                await using var context = _createContext();
+                await using var transaction =
+                    await context.Database.BeginTransactionAsync(callbackToken);
+                var current = await ReadRoleAsync(
+                    context,
+                    normalizedName,
+                    callbackToken);
+                if (current is null)
+                {
+                    return Result.Failure("角色不存在");
+                }
+
+                if (MatchesPermissionsTarget(
+                        current,
+                        targetConcurrencyStamp,
+                        targetPermissions))
+                {
+                    await transaction.CommitAsync(callbackToken);
+                    return Result.Success(true);
+                }
+
+                baseline ??= current;
+                if (!MatchesSnapshot(current, baseline))
+                {
+                    throw new CloudWriteConflictException();
+                }
+
+                var claimed = await context.Roles
+                    .Where(role =>
+                        role.Id == baseline.Id &&
+                        role.ConcurrencyStamp == baseline.ConcurrencyStamp)
+                    .ExecuteUpdateAsync(
+                        updates => updates.SetProperty(
+                            role => role.ConcurrencyStamp,
+                            targetConcurrencyStamp),
+                        callbackToken);
+                if (claimed != 1)
+                {
+                    throw new CloudWriteConflictException();
+                }
+
+                await context.RoleClaims
+                    .Where(claim =>
+                        claim.RoleId == baseline.Id &&
+                        claim.ClaimType == IIoTClaimTypes.Permission)
+                    .ExecuteDeleteAsync(callbackToken);
+                context.RoleClaims.AddRange(targetPermissions.Select(permission =>
+                    new IdentityRoleClaim<Guid>
+                    {
+                        RoleId = baseline.Id,
+                        ClaimType = IIoTClaimTypes.Permission,
+                        ClaimValue = permission
+                    }));
+                await context.SaveChangesAsync(callbackToken);
+                await transaction.CommitAsync(callbackToken);
+                return Result.Success(true);
+            },
+            token => ObserveRolePermissionsAsync(
+                normalizedName,
+                baseline,
+                targetConcurrencyStamp,
+                targetPermissions,
+                token),
+            cancellationToken);
+    }
+
+    public async Task<Result<bool>> UpdateUserPersonalPermissionsAsync(
+        Guid userId,
+        List<string> permissions,
+        CancellationToken cancellationToken = default)
     {
         var validation = CloudPermissionCatalog.Normalize(permissions);
         if (!validation.IsValid)
         {
-            return Result.Failure("权限集合包含未知或空白权限，未执行任何修改。");
+            return Result.Failure(
+                "权限集合包含未知或空白权限，未执行任何修改。");
         }
 
-        var user = await userManager.FindByIdAsync(userId.ToString());
-        if (user == null) return Result.Failure("\u7528\u6237\u4E0D\u5B58\u5728");
+        var targetPermissions = NormalizePermissions(validation.Permissions);
+        UserPermissionSnapshot? baseline = null;
+        var targetConcurrencyStamp = Guid.NewGuid().ToString("N");
 
-        var claims = await userManager.GetClaimsAsync(user);
-        var existingPermissions = claims
-            .Where(c => c.Type == IIoTClaimTypes.Permission)
-            .ToList();
-        var desiredPermissions = validation.Permissions.ToDictionary(
-            permission => permission,
-            permission => permission,
-            StringComparer.OrdinalIgnoreCase);
-        var retainedPermissions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var claim in existingPermissions)
-        {
-            var shouldRetain =
-                desiredPermissions.TryGetValue(claim.Value.Trim(), out var canonicalPermission)
-                && string.Equals(claim.Value, canonicalPermission, StringComparison.Ordinal)
-                && retainedPermissions.Add(canonicalPermission);
-            if (shouldRetain)
+        return await ExecuteRecoverableAsync(
+            async callbackToken =>
             {
-                continue;
-            }
+                await using var context = _createContext();
+                await using var transaction =
+                    await context.Database.BeginTransactionAsync(callbackToken);
+                var current = await ReadUserPermissionsAsync(
+                    context,
+                    userId,
+                    callbackToken);
+                if (current is null)
+                {
+                    return Result.Failure("用户不存在");
+                }
 
-            var removeResult = await userManager.RemoveClaimAsync(user, claim);
-            if (!removeResult.Succeeded)
-                return Result.Failure(removeResult.Errors.Select(error => error.Description).ToArray());
-        }
+                if (MatchesPermissionsTarget(
+                        current,
+                        targetConcurrencyStamp,
+                        targetPermissions))
+                {
+                    await transaction.CommitAsync(callbackToken);
+                    return Result.Success(true);
+                }
 
-        foreach (var permission in validation.Permissions.Where(permission => !retainedPermissions.Contains(permission)))
-        {
-            var addResult = await userManager.AddClaimAsync(
-                user,
-                new Claim(IIoTClaimTypes.Permission, permission));
-            if (!addResult.Succeeded)
-                return Result.Failure(addResult.Errors.Select(error => error.Description).ToArray());
-        }
+                baseline ??= current;
+                if (!MatchesSnapshot(current, baseline))
+                {
+                    throw new CloudWriteConflictException();
+                }
 
-        return Result.Success(true);
+                var claimed = await context.Users
+                    .Where(user =>
+                        user.Id == baseline.Id &&
+                        user.ConcurrencyStamp == baseline.ConcurrencyStamp)
+                    .ExecuteUpdateAsync(
+                        updates => updates.SetProperty(
+                            user => user.ConcurrencyStamp,
+                            targetConcurrencyStamp),
+                        callbackToken);
+                if (claimed != 1)
+                {
+                    throw new CloudWriteConflictException();
+                }
+
+                await context.UserClaims
+                    .Where(claim =>
+                        claim.UserId == baseline.Id &&
+                        claim.ClaimType == IIoTClaimTypes.Permission)
+                    .ExecuteDeleteAsync(callbackToken);
+                context.UserClaims.AddRange(targetPermissions.Select(permission =>
+                    new IdentityUserClaim<Guid>
+                    {
+                        UserId = baseline.Id,
+                        ClaimType = IIoTClaimTypes.Permission,
+                        ClaimValue = permission
+                    }));
+                await context.SaveChangesAsync(callbackToken);
+                await transaction.CommitAsync(callbackToken);
+                return Result.Success(true);
+            },
+            token => ObserveUserPermissionsAsync(
+                userId,
+                baseline,
+                targetConcurrencyStamp,
+                targetPermissions,
+                token),
+            cancellationToken);
     }
 
     public async Task<List<string>> GetUserPersonalPermissionsAsync(Guid userId)
     {
         var user = await userManager.FindByIdAsync(userId.ToString());
-        if (user == null) return [];
+        if (user is null)
+        {
+            return [];
+        }
 
         var claims = await userManager.GetClaimsAsync(user);
         return claims
-            .Where(c => c.Type == IIoTClaimTypes.Permission)
-            .Select(c => c.Value)
+            .Where(claim => claim.Type == IIoTClaimTypes.Permission)
+            .Select(claim => claim.Value)
             .ToList();
+    }
+
+    private async Task<Result<bool>> ExecuteRecoverableAsync(
+        Func<CancellationToken, Task<Result<bool>>> attempt,
+        Func<CancellationToken, Task<WriteObservation>> observe,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var strategyContext = _createContext();
+            var strategy = strategyContext.Database.CreateExecutionStrategy();
+            var result = await strategy.ExecuteAsync(attempt, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            return result;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (CloudWriteConflictException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw;
+        }
+        catch
+        {
+            using var timeout = new CancellationTokenSource(ObservationTimeout);
+            WriteObservation observation;
+            try
+            {
+                observation = await observe(timeout.Token);
+            }
+            catch
+            {
+                observation = WriteObservation.Unknown;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            return observation switch
+            {
+                WriteObservation.Target => Result.Success(true),
+                WriteObservation.Conflict => throw new CloudWriteConflictException(),
+                _ => throw new CloudWriteCommitUnknownException()
+            };
+        }
+    }
+
+    private async Task<WriteObservation> ObserveRoleTargetAsync(
+        RoleWriteTarget target,
+        RoleWriteSnapshot? baseline,
+        CancellationToken cancellationToken)
+    {
+        await using var context = _createContext();
+        var current = await ReadRoleAsync(
+            context,
+            target.NormalizedName,
+            cancellationToken);
+        if (MatchesTarget(current, target))
+        {
+            return WriteObservation.Target;
+        }
+
+        return baseline is not null && MatchesSnapshot(current, baseline)
+            ? WriteObservation.Baseline
+            : current is null
+                ? WriteObservation.Baseline
+                : WriteObservation.Conflict;
+    }
+
+    private async Task<WriteObservation> ObserveRolePermissionsAsync(
+        string normalizedName,
+        RoleWriteSnapshot? baseline,
+        string targetConcurrencyStamp,
+        IReadOnlyList<string> targetPermissions,
+        CancellationToken cancellationToken)
+    {
+        await using var context = _createContext();
+        var current = await ReadRoleAsync(
+            context,
+            normalizedName,
+            cancellationToken);
+        if (MatchesPermissionsTarget(
+                current,
+                targetConcurrencyStamp,
+                targetPermissions))
+        {
+            return WriteObservation.Target;
+        }
+
+        if (baseline is null)
+        {
+            return WriteObservation.Unknown;
+        }
+
+        return MatchesSnapshot(current, baseline)
+            ? WriteObservation.Baseline
+            : WriteObservation.Conflict;
+    }
+
+    private async Task<WriteObservation> ObserveUserPermissionsAsync(
+        Guid userId,
+        UserPermissionSnapshot? baseline,
+        string targetConcurrencyStamp,
+        IReadOnlyList<string> targetPermissions,
+        CancellationToken cancellationToken)
+    {
+        await using var context = _createContext();
+        var current = await ReadUserPermissionsAsync(
+            context,
+            userId,
+            cancellationToken);
+        if (MatchesPermissionsTarget(
+                current,
+                targetConcurrencyStamp,
+                targetPermissions))
+        {
+            return WriteObservation.Target;
+        }
+
+        if (baseline is null)
+        {
+            return WriteObservation.Unknown;
+        }
+
+        return MatchesSnapshot(current, baseline)
+            ? WriteObservation.Baseline
+            : WriteObservation.Conflict;
+    }
+
+    private static async Task<RoleWriteSnapshot?> ReadRoleAsync(
+        IIoTDbContext context,
+        string normalizedName,
+        CancellationToken cancellationToken)
+    {
+        var role = await context.Roles
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                candidate => candidate.NormalizedName == normalizedName,
+                cancellationToken);
+        if (role is null)
+        {
+            return null;
+        }
+
+        var permissions = await context.RoleClaims
+            .AsNoTracking()
+            .Where(claim =>
+                claim.RoleId == role.Id &&
+                claim.ClaimType == IIoTClaimTypes.Permission)
+            .Select(claim => claim.ClaimValue!)
+            .ToListAsync(cancellationToken);
+        return new RoleWriteSnapshot(
+            role.Id,
+            role.Name,
+            role.NormalizedName,
+            role.ConcurrencyStamp,
+            NormalizePermissions(permissions));
+    }
+
+    private static async Task<UserPermissionSnapshot?> ReadUserPermissionsAsync(
+        IIoTDbContext context,
+        Guid userId,
+        CancellationToken cancellationToken)
+    {
+        var user = await context.Users
+            .AsNoTracking()
+            .Where(candidate => candidate.Id == userId)
+            .Select(candidate => new
+            {
+                candidate.Id,
+                candidate.ConcurrencyStamp
+            })
+            .SingleOrDefaultAsync(cancellationToken);
+        if (user is null)
+        {
+            return null;
+        }
+
+        var permissions = await context.UserClaims
+            .AsNoTracking()
+            .Where(claim =>
+                claim.UserId == userId &&
+                claim.ClaimType == IIoTClaimTypes.Permission)
+            .Select(claim => claim.ClaimValue!)
+            .ToListAsync(cancellationToken);
+        return new UserPermissionSnapshot(
+            user.Id,
+            user.ConcurrencyStamp,
+            NormalizePermissions(permissions));
+    }
+
+    private static string[] NormalizePermissions(IEnumerable<string> permissions)
+        => permissions
+            .Select(permission => permission.Trim())
+            .Where(permission => permission.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private static bool MatchesTarget(
+        RoleWriteSnapshot? snapshot,
+        RoleWriteTarget target)
+        => snapshot is not null &&
+           snapshot.Id == target.Id &&
+           string.Equals(snapshot.Name, target.Name, StringComparison.Ordinal) &&
+           string.Equals(
+               snapshot.NormalizedName,
+               target.NormalizedName,
+               StringComparison.Ordinal) &&
+           string.Equals(
+               snapshot.ConcurrencyStamp,
+               target.ConcurrencyStamp,
+               StringComparison.Ordinal) &&
+           snapshot.Permissions.SequenceEqual(
+               target.Permissions,
+               StringComparer.OrdinalIgnoreCase);
+
+    private static bool MatchesPermissionsTarget(
+        RoleWriteSnapshot? snapshot,
+        string targetConcurrencyStamp,
+        IReadOnlyList<string> targetPermissions)
+        => snapshot is not null &&
+           string.Equals(
+               snapshot.ConcurrencyStamp,
+               targetConcurrencyStamp,
+               StringComparison.Ordinal) &&
+           snapshot.Permissions.SequenceEqual(
+               targetPermissions,
+               StringComparer.OrdinalIgnoreCase);
+
+    private static bool MatchesPermissionsTarget(
+        UserPermissionSnapshot? snapshot,
+        string targetConcurrencyStamp,
+        IReadOnlyList<string> targetPermissions)
+        => snapshot is not null &&
+           string.Equals(
+               snapshot.ConcurrencyStamp,
+               targetConcurrencyStamp,
+               StringComparison.Ordinal) &&
+           snapshot.Permissions.SequenceEqual(
+               targetPermissions,
+               StringComparer.OrdinalIgnoreCase);
+
+    private static bool MatchesSnapshot(
+        RoleWriteSnapshot? current,
+        RoleWriteSnapshot baseline)
+        => current is not null &&
+           current.Id == baseline.Id &&
+           string.Equals(current.Name, baseline.Name, StringComparison.Ordinal) &&
+           string.Equals(
+               current.NormalizedName,
+               baseline.NormalizedName,
+               StringComparison.Ordinal) &&
+           string.Equals(
+               current.ConcurrencyStamp,
+               baseline.ConcurrencyStamp,
+               StringComparison.Ordinal) &&
+           current.Permissions.SequenceEqual(
+               baseline.Permissions,
+               StringComparer.OrdinalIgnoreCase);
+
+    private static bool MatchesSnapshot(
+        UserPermissionSnapshot? current,
+        UserPermissionSnapshot baseline)
+        => current is not null &&
+           current.Id == baseline.Id &&
+           string.Equals(
+               current.ConcurrencyStamp,
+               baseline.ConcurrencyStamp,
+               StringComparison.Ordinal) &&
+           current.Permissions.SequenceEqual(
+               baseline.Permissions,
+               StringComparer.OrdinalIgnoreCase);
+
+    private sealed record RoleWriteTarget(
+        Guid Id,
+        string Name,
+        string NormalizedName,
+        string ConcurrencyStamp,
+        IReadOnlyList<string> Permissions);
+
+    private sealed record RoleWriteSnapshot(
+        Guid Id,
+        string? Name,
+        string? NormalizedName,
+        string? ConcurrencyStamp,
+        IReadOnlyList<string> Permissions);
+
+    private sealed record UserPermissionSnapshot(
+        Guid Id,
+        string? ConcurrencyStamp,
+        IReadOnlyList<string> Permissions);
+
+    private enum WriteObservation
+    {
+        Baseline,
+        Target,
+        Conflict,
+        Unknown
     }
 }
