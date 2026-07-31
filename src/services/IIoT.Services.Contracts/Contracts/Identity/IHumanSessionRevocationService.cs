@@ -18,10 +18,12 @@ public interface IIndependentHumanSessionRevocationService
 
 public interface IHumanSessionIssuanceLock
 {
-    ValueTask<IAsyncDisposable?> TryAcquireAuthorizationAsync(
+    Task<bool> TryExecuteAuthorizationAsync(
         Guid subjectId,
+        Func<Task> operation,
         CancellationToken cancellationToken = default);
 
-    ValueTask<IAsyncDisposable?> TryAcquireTokenExchangeAsync(
+    Task<bool> TryExecuteTokenExchangeAsync(
+        Func<Task> operation,
         CancellationToken cancellationToken = default);
 }

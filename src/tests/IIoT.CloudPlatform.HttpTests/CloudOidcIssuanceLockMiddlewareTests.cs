@@ -31,6 +31,28 @@ public sealed class CloudOidcIssuanceLockMiddlewareTests
     }
 
     [Fact]
+    public async Task TokenExchange_ShouldBufferResponseUntilProtectedOperationCommits()
+    {
+        var issuanceLock = new RecordingIssuanceLock();
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/connect/token";
+        var clientBody = new CommitCheckingStream(
+            () => issuanceLock.IsCommitted);
+        context.Response.Body = clientBody;
+        var middleware = new CloudOidcIssuanceLockMiddleware(
+            async endpointContext =>
+            {
+                await endpointContext.Response.WriteAsync("token-response");
+                Assert.Equal(0, clientBody.Length);
+            });
+
+        await middleware.InvokeAsync(context, issuanceLock);
+
+        Assert.True(issuanceLock.IsCommitted);
+        Assert.Equal("token-response", clientBody.GetBody());
+    }
+
+    [Fact]
     public async Task TokenExchangeCapacityExceeded_ShouldReturn429WithoutReachingEndpoint()
     {
         var issuanceLock = new RecordingIssuanceLock
@@ -147,45 +169,84 @@ public sealed class CloudOidcIssuanceLockMiddlewareTests
 
         public bool IsHeld { get; private set; }
 
+        public bool IsCommitted { get; private set; }
+
         public bool RejectAuthorization { get; init; }
 
         public bool RejectTokenExchange { get; init; }
 
-        public ValueTask<IAsyncDisposable?> TryAcquireAuthorizationAsync(
+        public Task<bool> TryExecuteAuthorizationAsync(
             Guid subjectId,
+            Func<Task> operation,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             AuthorizationAcquisitions++;
             AuthorizationSubjectId = subjectId;
-            return ValueTask.FromResult<IAsyncDisposable?>(
-                RejectAuthorization ? null : Acquire());
+            return ExecuteAsync(RejectAuthorization, operation);
         }
 
-        public ValueTask<IAsyncDisposable?> TryAcquireTokenExchangeAsync(
+        public Task<bool> TryExecuteTokenExchangeAsync(
+            Func<Task> operation,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             TokenExchangeAcquisitions++;
-            return ValueTask.FromResult<IAsyncDisposable?>(
-                RejectTokenExchange ? null : Acquire());
+            return ExecuteAsync(RejectTokenExchange, operation);
         }
 
-        private IAsyncDisposable Acquire()
+        private async Task<bool> ExecuteAsync(
+            bool reject,
+            Func<Task> operation)
         {
+            if (reject)
+            {
+                return false;
+            }
+
             Assert.False(IsHeld);
             IsHeld = true;
-            return new Lease(this);
+            IsCommitted = false;
+            try
+            {
+                await operation();
+                IsCommitted = true;
+                return true;
+            }
+            finally
+            {
+                IsHeld = false;
+            }
+        }
+    }
+
+    private sealed class CommitCheckingStream(Func<bool> isCommitted)
+        : MemoryStream
+    {
+        public override void Write(
+            byte[] buffer,
+            int offset,
+            int count)
+        {
+            Assert.True(isCommitted());
+            base.Write(buffer, offset, count);
         }
 
-        private sealed class Lease(RecordingIssuanceLock owner)
-            : IAsyncDisposable
+        public override async ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
         {
-            public ValueTask DisposeAsync()
-            {
-                owner.IsHeld = false;
-                return ValueTask.CompletedTask;
-            }
+            Assert.True(isCommitted());
+            await base.WriteAsync(buffer, cancellationToken);
+        }
+
+        public string GetBody()
+        {
+            Position = 0;
+            using var reader = new StreamReader(
+                this,
+                leaveOpen: true);
+            return reader.ReadToEnd();
         }
     }
 

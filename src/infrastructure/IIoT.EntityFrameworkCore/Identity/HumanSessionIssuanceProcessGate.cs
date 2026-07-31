@@ -6,6 +6,7 @@ public sealed class HumanSessionIssuanceProcessGate
 {
     internal const int TokenExchangeQueueLimit = 8;
     internal const int AuthorizationRequestLimit = 16;
+    internal const int AuthorizationPerSubjectRequestLimit = 2;
     internal const int AuthorizationDatabaseLeaseLimit = 8;
 
     private readonly SemaphoreSlim _tokenExchangeGate =
@@ -73,14 +74,10 @@ public sealed class HumanSessionIssuanceProcessGate
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!_authorizationAdmissionSlots.Wait(0))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return null;
-        }
-
         AuthorizationGateEntry? entry = null;
         var referenceHeld = false;
+        var subjectAdmissionHeld = false;
+        var globalAdmissionHeld = false;
         var subjectGateHeld = false;
         var databaseLeaseSlotHeld = false;
         try
@@ -99,6 +96,26 @@ public sealed class HumanSessionIssuanceProcessGate
                 RemoveAuthorizationEntry(subjectId, entry);
             }
 
+            if (!entry.TryAcquireAdmission())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                ReleaseAuthorizationReference(subjectId, entry);
+                referenceHeld = false;
+                return null;
+            }
+
+            subjectAdmissionHeld = true;
+            if (!_authorizationAdmissionSlots.Wait(0))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                entry.ReleaseAdmission();
+                subjectAdmissionHeld = false;
+                ReleaseAuthorizationReference(subjectId, entry);
+                referenceHeld = false;
+                return null;
+            }
+
+            globalAdmissionHeld = true;
             await entry.EnterAsync(cancellationToken);
             subjectGateHeld = true;
             Interlocked.Increment(
@@ -129,12 +146,21 @@ public sealed class HumanSessionIssuanceProcessGate
                 entry!.Release();
             }
 
+            if (globalAdmissionHeld)
+            {
+                _authorizationAdmissionSlots.Release();
+            }
+
+            if (subjectAdmissionHeld)
+            {
+                entry!.ReleaseAdmission();
+            }
+
             if (referenceHeld)
             {
                 ReleaseAuthorizationReference(subjectId, entry!);
             }
 
-            _authorizationAdmissionSlots.Release();
             throw;
         }
     }
@@ -146,6 +172,7 @@ public sealed class HumanSessionIssuanceProcessGate
         entry.Release();
         _authorizationDatabaseLeaseSlots.Release();
         _authorizationAdmissionSlots.Release();
+        entry.ReleaseAdmission();
         ReleaseAuthorizationReference(subjectId, entry);
     }
 
@@ -171,6 +198,9 @@ public sealed class HumanSessionIssuanceProcessGate
     {
         private readonly object _referenceLock = new();
         private readonly SemaphoreSlim _gate = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _admissionSlots = new SemaphoreSlim(
+            AuthorizationPerSubjectRequestLimit,
+            AuthorizationPerSubjectRequestLimit);
         private int _referenceCount;
         private int _waitingCount;
         private bool _retired;
@@ -218,6 +248,10 @@ public sealed class HumanSessionIssuanceProcessGate
                 Interlocked.Decrement(ref _waitingCount);
             }
         }
+
+        public bool TryAcquireAdmission() => _admissionSlots.Wait(0);
+
+        public void ReleaseAdmission() => _admissionSlots.Release();
 
         public void Release() => _gate.Release();
     }

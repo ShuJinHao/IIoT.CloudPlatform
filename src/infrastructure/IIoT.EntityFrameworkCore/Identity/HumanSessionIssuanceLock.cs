@@ -1,189 +1,127 @@
 using System.Data;
+using System.Runtime.ExceptionServices;
 using IIoT.EntityFrameworkCore.Persistence;
 using IIoT.Services.Contracts.Identity;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Storage;
+using OpenIddict.EntityFrameworkCore;
 
 namespace IIoT.EntityFrameworkCore.Identity;
 
 public sealed class HumanSessionIssuanceLock(
     IIoTDbContext dbContext,
+    IOpenIddictEntityFrameworkCoreContext openIddictContext,
     HumanSessionIssuanceProcessGate processGate)
     : IHumanSessionIssuanceLock
 {
-    private readonly Func<IIoTDbContext> _createContext = dbContext.CreateFreshContext;
     private readonly bool _usesNpgsql = dbContext.Database.IsNpgsql();
 
-    public async ValueTask<IAsyncDisposable?> TryAcquireAuthorizationAsync(
+    internal HumanSessionIssuanceLock(
+        IIoTDbContext dbContext,
+        HumanSessionIssuanceProcessGate processGate)
+        : this(
+            dbContext,
+            new OpenIddictEntityFrameworkCoreContext<IIoTDbContext>(
+                dbContext),
+            processGate)
+    {
+    }
+
+    public Task<bool> TryExecuteAuthorizationAsync(
         Guid subjectId,
+        Func<Task> operation,
         CancellationToken cancellationToken = default)
-    {
-        if (!_usesNpgsql)
-        {
-            return NoopLease.Instance;
-        }
-
-        var processLease = await processGate.TryEnterAuthorizationAsync(
-            subjectId,
+        => ExecuteAsync(
+            operation,
+            (context, token) =>
+                RefreshTokenSubjectTransactionLock.AcquireAsync(
+                    context,
+                    subjectId,
+                    token),
+            token => processGate.TryEnterAuthorizationAsync(
+                subjectId,
+                token),
             cancellationToken);
-        if (processLease is null)
-        {
-            return null;
-        }
 
-        try
-        {
-            var databaseLease = await AcquireAsync(
-                (context, token) =>
-                    RefreshTokenSubjectTransactionLock.AcquireAsync(
-                        context,
-                        subjectId,
-                        token),
-                cancellationToken);
-            return new CompositeLease(databaseLease, processLease);
-        }
-        catch
-        {
-            await processLease.DisposeAsync();
-            throw;
-        }
-    }
-
-    public async ValueTask<IAsyncDisposable?> TryAcquireTokenExchangeAsync(
+    public Task<bool> TryExecuteTokenExchangeAsync(
+        Func<Task> operation,
         CancellationToken cancellationToken = default)
-    {
-        if (!_usesNpgsql)
-        {
-            return NoopLease.Instance;
-        }
-
-        var processLease = await processGate.TryEnterTokenExchangeAsync(
-            cancellationToken);
-        if (processLease is null)
-        {
-            return null;
-        }
-
-        try
-        {
-            var databaseLease = await AcquireAsync(
+        => ExecuteAsync(
+            operation,
+            (context, token) =>
                 RefreshTokenSubjectTransactionLock
-                    .AcquireOidcTokenExchangeAsync,
-                cancellationToken);
-            return new CompositeLease(databaseLease, processLease);
-        }
-        catch
-        {
-            await processLease.DisposeAsync();
-            throw;
-        }
-    }
-
-    private async ValueTask<IAsyncDisposable> AcquireAsync(
-        Func<IIoTDbContext, CancellationToken, Task> acquire,
-        CancellationToken cancellationToken)
-    {
-        await using var strategyContext = _createContext();
-        if (!strategyContext.Database.IsNpgsql())
-        {
-            return NoopLease.Instance;
-        }
-
-        var strategy = strategyContext.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(
-            callbackToken => AcquireAttemptAsync(
-                acquire,
-                callbackToken),
+                    .AcquireOidcTokenExchangeAsync(context, token),
+            processGate.TryEnterTokenExchangeAsync,
             cancellationToken);
-    }
 
-    private async Task<IAsyncDisposable> AcquireAttemptAsync(
+    private async Task<bool> ExecuteAsync(
+        Func<Task> operation,
         Func<IIoTDbContext, CancellationToken, Task> acquire,
+        Func<CancellationToken, ValueTask<IAsyncDisposable?>>
+            enterProcessGate,
         CancellationToken cancellationToken)
     {
-        var context = _createContext();
-        IDbContextTransaction? transaction = null;
+        ArgumentNullException.ThrowIfNull(operation);
+        cancellationToken.ThrowIfCancellationRequested();
+        var storeContext = await openIddictContext.GetDbContextAsync(
+            cancellationToken);
+        if (!ReferenceEquals(storeContext, dbContext))
+        {
+            throw new InvalidOperationException(
+                "OIDC issuance lock and OpenIddict stores must use the same DbContext.");
+        }
+
+        if (!_usesNpgsql)
+        {
+            await operation();
+            return true;
+        }
+
+        await using var processLease = await enterProcessGate(
+            cancellationToken);
+        if (processLease is null)
+        {
+            return false;
+        }
+
+        var strategy = dbContext.Database.CreateExecutionStrategy();
         try
         {
-            transaction = await context.Database.BeginTransactionAsync(
-                IsolationLevel.ReadCommitted,
+            await strategy.ExecuteAsync(
+                async callbackToken =>
+                {
+                    var protectedOperationStarted = false;
+                    try
+                    {
+                        await using var transaction =
+                            await dbContext.Database.BeginTransactionAsync(
+                                IsolationLevel.ReadCommitted,
+                                callbackToken);
+                        await acquire(dbContext, callbackToken);
+                        protectedOperationStarted = true;
+                        await operation();
+                        callbackToken.ThrowIfCancellationRequested();
+                        await transaction.CommitAsync(callbackToken);
+                    }
+                    catch (Exception exception)
+                        when (protectedOperationStarted
+                              && exception is not
+                                  ProtectedOperationException)
+                    {
+                        throw new ProtectedOperationException(exception);
+                    }
+                },
                 cancellationToken);
-            await acquire(context, cancellationToken);
-            return new TransactionLease(context, transaction);
         }
-        catch
+        catch (ProtectedOperationException exception)
         {
-            if (transaction is not null)
-            {
-                await transaction.DisposeAsync();
-            }
-
-            await context.DisposeAsync();
-            throw;
+            ExceptionDispatchInfo.Capture(exception.InnerException!).Throw();
         }
+
+        return true;
     }
 
-    private sealed class TransactionLease(
-        IIoTDbContext context,
-        IDbContextTransaction transaction) : IAsyncDisposable
+    private sealed class ProtectedOperationException(Exception innerException)
+        : Exception("OIDC issuance failed after the protected operation started.", innerException)
     {
-        private IIoTDbContext? _context = context;
-        private IDbContextTransaction? _transaction = transaction;
-
-        public async ValueTask DisposeAsync()
-        {
-            var currentTransaction = Interlocked.Exchange(
-                ref _transaction,
-                null);
-            var currentContext = Interlocked.Exchange(ref _context, null);
-            if (currentTransaction is not null)
-            {
-                await currentTransaction.DisposeAsync();
-            }
-
-            if (currentContext is not null)
-            {
-                await currentContext.DisposeAsync();
-            }
-        }
-    }
-
-    private sealed class CompositeLease(
-        IAsyncDisposable databaseLease,
-        IAsyncDisposable processLease) : IAsyncDisposable
-    {
-        private IAsyncDisposable? _databaseLease = databaseLease;
-        private IAsyncDisposable? _processLease = processLease;
-
-        public async ValueTask DisposeAsync()
-        {
-            var currentDatabaseLease = Interlocked.Exchange(
-                ref _databaseLease,
-                null);
-            var currentProcessLease = Interlocked.Exchange(
-                ref _processLease,
-                null);
-            try
-            {
-                if (currentDatabaseLease is not null)
-                {
-                    await currentDatabaseLease.DisposeAsync();
-                }
-            }
-            finally
-            {
-                if (currentProcessLease is not null)
-                {
-                    await currentProcessLease.DisposeAsync();
-                }
-            }
-        }
-    }
-
-    private sealed class NoopLease : IAsyncDisposable
-    {
-        public static NoopLease Instance { get; } = new();
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

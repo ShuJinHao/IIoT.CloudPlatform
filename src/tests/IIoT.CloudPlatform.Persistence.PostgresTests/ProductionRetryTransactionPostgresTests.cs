@@ -935,17 +935,12 @@ public sealed class ProductionRetryTransactionPostgresTests(
             revocationContext);
         var authorizationId = Guid.NewGuid();
         var tokenId = Guid.NewGuid();
-        Task revokeTask;
+        Task? revokeTask = null;
 
-        var issuanceLease = (tokenExchange
-            ? await issuanceLock.TryAcquireTokenExchangeAsync(budget.Token)
-            : await issuanceLock.TryAcquireAuthorizationAsync(
-                subjectId,
-                budget.Token))
-            ?? throw new InvalidOperationException(
-                "OIDC issuance admission was unexpectedly full.");
-        await using (issuanceLease)
+        async Task PersistGrantAsync()
         {
+            Assert.NotNull(
+                issuanceContext.Database.CurrentTransaction);
             revokeTask = revocation.RevokeAllAsync(
                 subjectId,
                 "manual-revoke",
@@ -955,9 +950,6 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 revocationApplicationName,
                 budget.Token);
 
-            await using var grantContext = CreateRetryContext(
-                budget.ConnectionString,
-                $"tx-03b3-oidc-grant-{Guid.NewGuid():N}");
             var authorization =
                 new OpenIddictEntityFrameworkCoreAuthorization<Guid>
                 {
@@ -967,10 +959,10 @@ public sealed class ProductionRetryTransactionPostgresTests(
                     Type = "permanent",
                     ConcurrencyToken = Guid.NewGuid().ToString("N")
                 };
-            grantContext.OpenIddictAuthorizations.Add(authorization);
+            issuanceContext.OpenIddictAuthorizations.Add(authorization);
             if (tokenExchange)
             {
-                grantContext.OpenIddictTokens.Add(
+                issuanceContext.OpenIddictTokens.Add(
                     new OpenIddictEntityFrameworkCoreToken<Guid>
                     {
                         Id = tokenId,
@@ -982,11 +974,21 @@ public sealed class ProductionRetryTransactionPostgresTests(
                     });
             }
 
-            await grantContext.SaveChangesAsync(budget.Token);
+            await issuanceContext.SaveChangesAsync(budget.Token);
         }
 
+        var executed = tokenExchange
+            ? await issuanceLock.TryExecuteTokenExchangeAsync(
+                PersistGrantAsync,
+                budget.Token)
+            : await issuanceLock.TryExecuteAuthorizationAsync(
+                subjectId,
+                PersistGrantAsync,
+                budget.Token);
+        Assert.True(executed);
+        Assert.NotNull(revokeTask);
         await Assert.ThrowsAsync<CloudWriteConflictException>(
-            () => revokeTask);
+            () => revokeTask!);
 
         await using var verificationContext = CreateRetryContext(
             budget.ConnectionString,
@@ -1028,16 +1030,25 @@ public sealed class ProductionRetryTransactionPostgresTests(
         var waiter = new HumanSessionIssuanceLock(
             waiterContext,
             processGate);
-        IAsyncDisposable? holderLease =
-            await holder.TryAcquireTokenExchangeAsync(budget.Token)
-            ?? throw new InvalidOperationException(
-                "Token-exchange admission was unexpectedly full.");
+        var holderEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseHolder = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var holderTask = holder.TryExecuteTokenExchangeAsync(
+            async () =>
+            {
+                holderEntered.SetResult();
+                await releaseHolder.Task.WaitAsync(budget.Token);
+            },
+            budget.Token);
+        await holderEntered.Task.WaitAsync(budget.Token);
 
         try
         {
             var waiterTask = waiter
-                .TryAcquireTokenExchangeAsync(budget.Token)
-                .AsTask();
+                .TryExecuteTokenExchangeAsync(
+                    () => Task.CompletedTask,
+                    budget.Token);
             await WaitForProcessGateWaiterAsync(
                 processGate,
                 budget.Token);
@@ -1049,12 +1060,9 @@ public sealed class ProductionRetryTransactionPostgresTests(
                     waiterApplicationName,
                     budget.Token));
 
-            await holderLease.DisposeAsync();
-            holderLease = null;
-            await using var waiterLease =
-                await waiterTask.WaitAsync(budget.Token)
-                ?? throw new InvalidOperationException(
-                    "Token-exchange waiter was unexpectedly rejected.");
+            releaseHolder.SetResult();
+            Assert.True(await holderTask.WaitAsync(budget.Token));
+            Assert.True(await waiterTask.WaitAsync(budget.Token));
             Assert.Equal(
                 1,
                 await CountPostgresSessionsAsync(
@@ -1064,10 +1072,8 @@ public sealed class ProductionRetryTransactionPostgresTests(
         }
         finally
         {
-            if (holderLease is not null)
-            {
-                await holderLease.DisposeAsync();
-            }
+            releaseHolder.TrySetResult();
+            await holderTask.WaitAsync(budget.Token);
         }
     }
 
@@ -1095,18 +1101,27 @@ public sealed class ProductionRetryTransactionPostgresTests(
         var waiter = new HumanSessionIssuanceLock(
             waiterContext,
             processGate);
-        IAsyncDisposable? holderLease =
-            await holder.TryAcquireAuthorizationAsync(
-                subjectId,
-                budget.Token)
-            ?? throw new InvalidOperationException(
-                "Authorization admission was unexpectedly full.");
+        var holderEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseHolder = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var holderTask = holder.TryExecuteAuthorizationAsync(
+            subjectId,
+            async () =>
+            {
+                holderEntered.SetResult();
+                await releaseHolder.Task.WaitAsync(budget.Token);
+            },
+            budget.Token);
+        await holderEntered.Task.WaitAsync(budget.Token);
 
         try
         {
             var waiterTask = waiter
-                .TryAcquireAuthorizationAsync(subjectId, budget.Token)
-                .AsTask();
+                .TryExecuteAuthorizationAsync(
+                    subjectId,
+                    () => Task.CompletedTask,
+                    budget.Token);
             await WaitForAuthorizationProcessGateWaiterAsync(
                 processGate,
                 subjectId,
@@ -1119,12 +1134,9 @@ public sealed class ProductionRetryTransactionPostgresTests(
                     waiterApplicationName,
                     budget.Token));
 
-            await holderLease.DisposeAsync();
-            holderLease = null;
-            await using var waiterLease =
-                await waiterTask.WaitAsync(budget.Token)
-                ?? throw new InvalidOperationException(
-                    "Admitted authorization waiter was rejected.");
+            releaseHolder.SetResult();
+            Assert.True(await holderTask.WaitAsync(budget.Token));
+            Assert.True(await waiterTask.WaitAsync(budget.Token));
             Assert.Equal(
                 1,
                 await CountPostgresSessionsAsync(
@@ -1134,10 +1146,8 @@ public sealed class ProductionRetryTransactionPostgresTests(
         }
         finally
         {
-            if (holderLease is not null)
-            {
-                await holderLease.DisposeAsync();
-            }
+            releaseHolder.TrySetResult();
+            await holderTask.WaitAsync(budget.Token);
         }
     }
 
@@ -1152,20 +1162,20 @@ public sealed class ProductionRetryTransactionPostgresTests(
             $"tx-03b3-auth-cap-holders-{Guid.NewGuid():N}";
         var waiterApplicationName =
             $"tx-03b3-auth-cap-waiter-{Guid.NewGuid():N}";
-        await using var holderContext = CreateRetryContext(
-            budget.ConnectionString,
-            holderApplicationName);
         await using var waiterContext = CreateRetryContext(
             budget.ConnectionString,
             waiterApplicationName);
-        var holder = new HumanSessionIssuanceLock(
-            holderContext,
-            processGate);
         var waiter = new HumanSessionIssuanceLock(
             waiterContext,
             processGate);
-        var holderLeases = new List<IAsyncDisposable>();
-        Task<IAsyncDisposable?>? waiterTask = null;
+        var holderContexts = new List<IIoTDbContext>();
+        var holderReleases = new List<TaskCompletionSource>();
+        var holderTasks = new List<Task<bool>>();
+        var waiterEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseWaiter = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool>? waiterTask = null;
 
         try
         {
@@ -1175,12 +1185,29 @@ public sealed class ProductionRetryTransactionPostgresTests(
                      .AuthorizationDatabaseLeaseLimit;
                  index++)
             {
-                holderLeases.Add(
-                    await holder.TryAcquireAuthorizationAsync(
+                var holderContext = CreateRetryContext(
+                    budget.ConnectionString,
+                    holderApplicationName);
+                holderContexts.Add(holderContext);
+                var holder = new HumanSessionIssuanceLock(
+                    holderContext,
+                    processGate);
+                var holderEntered = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                var releaseHolder = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                holderReleases.Add(releaseHolder);
+                holderTasks.Add(
+                    holder.TryExecuteAuthorizationAsync(
                         Guid.NewGuid(),
-                        budget.Token)
-                    ?? throw new InvalidOperationException(
-                        "Authorization admission was unexpectedly full."));
+                        async () =>
+                        {
+                            holderEntered.SetResult();
+                            await releaseHolder.Task.WaitAsync(
+                                budget.Token);
+                        },
+                        budget.Token));
+                await holderEntered.Task.WaitAsync(budget.Token);
             }
 
             Assert.Equal(
@@ -1192,10 +1219,14 @@ public sealed class ProductionRetryTransactionPostgresTests(
                     budget.Token));
 
             waiterTask = waiter
-                .TryAcquireAuthorizationAsync(
+                .TryExecuteAuthorizationAsync(
                     Guid.NewGuid(),
-                    budget.Token)
-                .AsTask();
+                    async () =>
+                    {
+                        waiterEntered.SetResult();
+                        await releaseWaiter.Task.WaitAsync(budget.Token);
+                    },
+                    budget.Token);
             await WaitForAuthorizationDatabaseLeaseWaiterAsync(
                 processGate,
                 budget.Token);
@@ -1207,38 +1238,55 @@ public sealed class ProductionRetryTransactionPostgresTests(
                     waiterApplicationName,
                     budget.Token));
 
-            await holderLeases[0].DisposeAsync();
-            holderLeases.RemoveAt(0);
-            await using var waiterLease =
-                await waiterTask.WaitAsync(budget.Token)
-                ?? throw new InvalidOperationException(
-                    "Admitted authorization waiter was rejected.");
-            waiterTask = null;
+            holderReleases[0].SetResult();
+            Assert.True(
+                await holderTasks[0].WaitAsync(budget.Token));
+            await waiterEntered.Task.WaitAsync(budget.Token);
             Assert.Equal(
                 1,
                 await CountPostgresSessionsAsync(
                     budget.ConnectionString,
                     waiterApplicationName,
                     budget.Token));
+            releaseWaiter.SetResult();
+            Assert.True(await waiterTask.WaitAsync(budget.Token));
+            waiterTask = null;
         }
         finally
         {
-            foreach (var holderLease in holderLeases)
+            foreach (var releaseHolder in holderReleases)
             {
-                await holderLease.DisposeAsync();
+                releaseHolder.TrySetResult();
+            }
+
+            releaseWaiter.TrySetResult();
+            foreach (var holderTask in holderTasks)
+            {
+                try
+                {
+                    await holderTask.WaitAsync(budget.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Cleanup observes the test budget cancellation.
+                }
             }
 
             if (waiterTask is not null)
             {
                 try
                 {
-                    await using var waiterLease =
-                        await waiterTask.WaitAsync(budget.Token);
+                    await waiterTask.WaitAsync(budget.Token);
                 }
                 catch (OperationCanceledException)
                 {
                     // Cleanup observes the test budget cancellation.
                 }
+            }
+
+            foreach (var holderContext in holderContexts)
+            {
+                await holderContext.DisposeAsync();
             }
         }
     }
@@ -1262,17 +1310,56 @@ public sealed class ProductionRetryTransactionPostgresTests(
             context,
             new HumanSessionIssuanceProcessGate());
 
-        await using var lease = (tokenExchange
-            ? await issuanceLock.TryAcquireTokenExchangeAsync(budget.Token)
-            : await issuanceLock.TryAcquireAuthorizationAsync(
+        var executed = tokenExchange
+            ? await issuanceLock.TryExecuteTokenExchangeAsync(
+                () => Task.CompletedTask,
+                budget.Token)
+            : await issuanceLock.TryExecuteAuthorizationAsync(
                 Guid.NewGuid(),
-                budget.Token))
-            ?? throw new InvalidOperationException(
-                "OIDC issuance admission was unexpectedly full.");
+                () => Task.CompletedTask,
+                budget.Token);
 
+        Assert.True(executed);
         Assert.Equal(1, interceptor.ExceptionsThrown);
         Assert.Equal(2, interceptor.CommandAttempts);
-        Assert.Equal(2, interceptor.AttemptContextIds.Count);
+        Assert.Single(interceptor.AttemptContextIds);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OidcIssuanceLock_ShouldNotReplayProtectedOperationAfterItStarts(
+        bool tokenExchange)
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        await using var context = CreateRetryContext(
+            budget.ConnectionString,
+            $"tx-03b3-oidc-operation-{Guid.NewGuid():N}");
+        var issuanceLock = new HumanSessionIssuanceLock(
+            context,
+            new HumanSessionIssuanceProcessGate());
+        var operationAttempts = 0;
+
+        Task FailAfterStartAsync()
+        {
+            Interlocked.Increment(ref operationAttempts);
+            throw RetryablePostgresException(
+                "simulated transient after OIDC issuance started");
+        }
+
+        await Assert.ThrowsAsync<PostgresException>(
+            () => tokenExchange
+                ? issuanceLock.TryExecuteTokenExchangeAsync(
+                    FailAfterStartAsync,
+                    budget.Token)
+                : issuanceLock.TryExecuteAuthorizationAsync(
+                    Guid.NewGuid(),
+                    FailAfterStartAsync,
+                    budget.Token));
+
+        Assert.Equal(1, operationAttempts);
     }
 
     [Fact]

@@ -540,11 +540,27 @@ public sealed class PersistenceBoundaryArchitectureTests
                 "DependencyInjection.cs"));
 
         Assert.Contains(
-            "TryAcquireAuthorizationAsync",
+            "TryExecuteAuthorizationAsync",
             middlewareSource,
             StringComparison.Ordinal);
         Assert.Contains(
-            "TryAcquireTokenExchangeAsync",
+            "TryExecuteTokenExchangeAsync",
+            middlewareSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ExecuteBufferedAsync",
+            middlewareSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "BufferedResponseBodyFeature",
+            middlewareSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "IHttpResponseBodyFeature",
+            middlewareSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "context.Response.HasStarted",
             middlewareSource,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -564,39 +580,37 @@ public sealed class PersistenceBoundaryArchitectureTests
             issuanceLockSource,
             StringComparison.Ordinal);
         Assert.Contains(
-            "callbackToken => AcquireAttemptAsync",
+            "ReferenceEquals(storeContext, dbContext)",
             issuanceLockSource,
             StringComparison.Ordinal);
-        var acquireAttemptIndex = issuanceLockSource.IndexOf(
-            "private async Task<IAsyncDisposable> AcquireAttemptAsync",
+        var executionCallbackIndex = issuanceLockSource.IndexOf(
+            "async callbackToken =>",
             StringComparison.Ordinal);
         var beginTransactionIndex = issuanceLockSource.IndexOf(
             "BeginTransactionAsync",
-            acquireAttemptIndex,
+            executionCallbackIndex,
             StringComparison.Ordinal);
-        Assert.True(acquireAttemptIndex >= 0);
-        Assert.True(beginTransactionIndex > acquireAttemptIndex);
-        var authorizationProcessGateIndex = issuanceLockSource.IndexOf(
-            "processGate.TryEnterAuthorizationAsync",
+        var protectedOperationIndex = issuanceLockSource.IndexOf(
+            "await operation();",
+            beginTransactionIndex,
             StringComparison.Ordinal);
-        var authorizationDatabaseLeaseIndex = issuanceLockSource.IndexOf(
-            "var databaseLease = await AcquireAsync",
+        var commitIndex = issuanceLockSource.IndexOf(
+            "CommitAsync",
+            protectedOperationIndex,
             StringComparison.Ordinal);
-        var tokenExchangeProcessGateIndex = issuanceLockSource.IndexOf(
-            "processGate.TryEnterTokenExchangeAsync",
+        Assert.True(executionCallbackIndex >= 0);
+        Assert.True(beginTransactionIndex > executionCallbackIndex);
+        Assert.True(protectedOperationIndex > beginTransactionIndex);
+        Assert.True(commitIndex > protectedOperationIndex);
+        var processGateIndex = issuanceLockSource.IndexOf(
+            "var processLease = await enterProcessGate",
             StringComparison.Ordinal);
-        var tokenExchangeDatabaseLeaseIndex = issuanceLockSource.IndexOf(
-            "var databaseLease = await AcquireAsync",
-            authorizationDatabaseLeaseIndex + 1,
+        var strategyIndex = issuanceLockSource.IndexOf(
+            "var strategy = dbContext.Database.CreateExecutionStrategy()",
             StringComparison.Ordinal);
-        Assert.True(authorizationProcessGateIndex >= 0);
+        Assert.True(processGateIndex >= 0);
         Assert.True(
-            authorizationDatabaseLeaseIndex >
-            authorizationProcessGateIndex);
-        Assert.True(tokenExchangeProcessGateIndex >= 0);
-        Assert.True(
-            tokenExchangeDatabaseLeaseIndex >
-            tokenExchangeProcessGateIndex);
+            strategyIndex > processGateIndex);
         Assert.Contains(
             "SemaphoreSlim(1, 1)",
             processGateSource,
@@ -614,18 +628,30 @@ public sealed class PersistenceBoundaryArchitectureTests
             processGateSource,
             StringComparison.Ordinal);
         Assert.Contains(
+            "internal const int AuthorizationPerSubjectRequestLimit = 2;",
+            processGateSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "new SemaphoreSlim(\n            AuthorizationRequestLimit,\n            AuthorizationRequestLimit)",
             processGateSource,
             StringComparison.Ordinal);
-        var authorizationAdmissionIndex = processGateSource.IndexOf(
+        var authorizationPerSubjectAdmissionIndex =
+            processGateSource.IndexOf(
+                "entry.TryAcquireAdmission()",
+                StringComparison.Ordinal);
+        var authorizationGlobalAdmissionIndex = processGateSource.IndexOf(
             "_authorizationAdmissionSlots.Wait(0)",
             StringComparison.Ordinal);
         var authorizationKeyedGateIndex = processGateSource.IndexOf(
-            "_authorizationGates.GetOrAdd",
+            "await entry.EnterAsync",
             StringComparison.Ordinal);
-        Assert.True(authorizationAdmissionIndex >= 0);
+        Assert.True(authorizationPerSubjectAdmissionIndex >= 0);
         Assert.True(
-            authorizationKeyedGateIndex > authorizationAdmissionIndex);
+            authorizationGlobalAdmissionIndex >
+            authorizationPerSubjectAdmissionIndex);
+        Assert.True(
+            authorizationKeyedGateIndex >
+            authorizationGlobalAdmissionIndex);
         Assert.Contains(
             "internal const int AuthorizationDatabaseLeaseLimit = 8;",
             processGateSource,
