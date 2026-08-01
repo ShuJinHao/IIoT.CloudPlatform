@@ -166,8 +166,16 @@ public sealed class InfrastructureValueBehaviorTests
         Assert.Throws<InvalidOperationException>(() => options.Validate());
     }
 
-    [Fact]
-    public void PostgresOptions_ShouldRejectDisabledRetryInProduction()
+    [Theory]
+    [InlineData("Production")]
+    [InlineData("Development")]
+    [InlineData("Staging")]
+    [InlineData("")]
+    [InlineData("testing")]
+    [InlineData("Other")]
+    [InlineData(null)]
+    public void PostgresOptions_ShouldRejectDisabledRetryOutsideExactTesting(
+        string? environmentName)
     {
         var options = new PostgresOptions
         {
@@ -176,10 +184,10 @@ public sealed class InfrastructureValueBehaviorTests
         };
 
         var exception = Assert.Throws<InvalidOperationException>(
-            () => options.Validate(Environments.Production));
+            () => options.Validate(environmentName));
 
         Assert.Contains(
-            "Infrastructure:Postgres:EnableRetry must be true in Production.",
+            "Infrastructure:Postgres:EnableRetry may be false only when the environment is exactly Testing.",
             exception.Message,
             StringComparison.Ordinal);
     }
@@ -202,7 +210,7 @@ public sealed class InfrastructureValueBehaviorTests
                 options => options.Validate(Environments.Production)));
 
         Assert.Contains(
-            "Infrastructure:Postgres:EnableRetry must be true in Production.",
+            "Infrastructure:Postgres:EnableRetry may be false only when the environment is exactly Testing.",
             exception.Message,
             StringComparison.Ordinal);
     }

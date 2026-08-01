@@ -172,7 +172,38 @@ public sealed class EfPersistenceBehaviorTests
         var exception = Assert.Throws<InvalidOperationException>(() => builder.AddEfCore());
 
         Assert.Contains(
-            "Infrastructure:Postgres:EnableRetry must be true in Production.",
+            "Infrastructure:Postgres:EnableRetry may be false only when the environment is exactly Testing.",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Development")]
+    [InlineData("Staging")]
+    [InlineData("")]
+    [InlineData("testing")]
+    [InlineData("Other")]
+    public void AddEfCore_ShouldRejectDisabledRetryOutsideExactTesting(
+        string environmentName)
+    {
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        {
+            EnvironmentName = environmentName
+        });
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [$"ConnectionStrings:{ConnectionResourceNames.IiotDatabase}"] =
+                "Host=127.0.0.1;Port=5432;Database=retry_guard;Username=test;Password=test",
+            [$"{PostgresOptions.SectionName}:EnableRetry"] = "false",
+            [$"{PostgresOptions.SectionName}:CommandTimeoutSeconds"] = "30",
+            [$"{PostgresOptions.SectionName}:MaxRetryCount"] = "0",
+            [$"{PostgresOptions.SectionName}:MaxRetryDelaySeconds"] = "10"
+        });
+
+        var exception = Assert.Throws<InvalidOperationException>(() => builder.AddEfCore());
+
+        Assert.Contains(
+            "Infrastructure:Postgres:EnableRetry may be false only when the environment is exactly Testing.",
             exception.Message,
             StringComparison.Ordinal);
     }

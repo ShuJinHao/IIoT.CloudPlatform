@@ -36,15 +36,15 @@ public sealed class PostgresOptions
         }
     }
 
-    public void Validate(string environmentName)
+    public void Validate(string? environmentName)
     {
         Validate();
 
-        if (string.Equals(environmentName, "Production", StringComparison.OrdinalIgnoreCase) &&
-            !EnableRetry)
+        if (!EnableRetry &&
+            !string.Equals(environmentName, "Testing", StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "Infrastructure:Postgres:EnableRetry must be true in Production.");
+                "Infrastructure:Postgres:EnableRetry may be false only when the environment is exactly Testing.");
         }
     }
 }
