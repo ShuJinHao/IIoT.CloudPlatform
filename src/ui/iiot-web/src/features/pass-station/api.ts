@@ -74,12 +74,15 @@ export interface GetPassStationListParams {
 const basePath = '/human/pass-stations';
 
 export const getPassStationTypesApi = () =>
-  http.get<PassStationTypeDefinitionDto[]>(`${basePath}/types`);
+  http.get<PassStationTypeDefinitionDto[]>(`${basePath}/types`, {
+    inlineFeedback: true,
+  });
 
 export const getPassStationListApi = (params: GetPassStationListParams) =>
   http.get<PagedList<PassStationListItemDto>>(
     `${basePath}/${encodeURIComponent(params.typeKey)}`,
     {
+      inlineFeedback: true,
       params: {
         PageNumber: params.pagination?.PageNumber ?? 1,
         PageSize: params.pagination?.PageSize ?? 10,
@@ -94,7 +97,9 @@ export const getPassStationListApi = (params: GetPassStationListParams) =>
   );
 
 export const getPassStationDetailApi = (typeKey: string, id: string) =>
-  http.get<PassStationDetailDto>(`${basePath}/${encodeURIComponent(typeKey)}/${id}`);
+  http.get<PassStationDetailDto>(`${basePath}/${encodeURIComponent(typeKey)}/${id}`, {
+    inlineFeedback: true,
+  });
 
 const parseDownloadFileName = (contentDisposition?: string): string | null => {
   if (!contentDisposition) return null;
@@ -114,6 +119,7 @@ export const exportPassStationsApi = async (params: GetPassStationListParams) =>
   const response = await http.getRaw<Blob>(
     `${basePath}/${encodeURIComponent(params.typeKey)}/export`,
     {
+      inlineFeedback: true,
       responseType: 'blob',
       timeout: 30000,
       params: {

@@ -11,18 +11,22 @@ export interface CapacityLoadError {
 }
 
 export async function resolveCapacityLoadError(error: unknown): Promise<CapacityLoadError> {
-  if (error instanceof CapacityPayloadError) {
+  const source = error instanceof Error && 'cause' in error && error.cause !== undefined
+    ? error.cause
+    : error;
+
+  if (source instanceof CapacityPayloadError) {
     return {
       kind: 'payload',
       title: '产能数据解析失败',
-      message: `${error.message} 请重试；若持续出现，请检查接口或缓存数据。`,
+      message: `${source.message} 请重试；若持续出现，请检查接口或缓存数据。`,
     };
   }
 
-  if (axios.isAxiosError(error) && error.response) {
-    const contentType = error.response.headers?.['content-type'] as string | undefined;
-    const problem = await readProblemDetails(error.response.data, contentType);
-    const notification = resolveProblemNotification(error.response.status, problem);
+  if (axios.isAxiosError(source) && source.response) {
+    const contentType = source.response.headers?.['content-type'] as string | undefined;
+    const problem = await readProblemDetails(source.response.data, contentType);
+    const notification = resolveProblemNotification(source.response.status, problem);
     return {
       kind: 'api',
       title: '产能数据加载失败',
@@ -30,8 +34,8 @@ export async function resolveCapacityLoadError(error: unknown): Promise<Capacity
     };
   }
 
-  if (isApiResult(error)) {
-    const notification = resolveApiResultNotification(error);
+  if (isApiResult(source)) {
+    const notification = resolveApiResultNotification(source);
     return {
       kind: 'api',
       title: notification.title,
@@ -42,8 +46,6 @@ export async function resolveCapacityLoadError(error: unknown): Promise<Capacity
   return {
     kind: 'api',
     title: '产能数据加载失败',
-    message: error instanceof Error && error.message.trim()
-      ? error.message
-      : '网络请求失败，请检查服务状态后重试。',
+    message: '网络请求失败，请检查服务状态后重试。',
   };
 }

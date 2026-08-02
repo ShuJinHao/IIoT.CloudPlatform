@@ -56,6 +56,7 @@ export const getLogsByDeviceAndLevelApi = (params: {
   level?: string;
 }) =>
   http.get<PagedList<DeviceLogListItemDto>>(`${basePath}/by-level`, {
+    inlineFeedback: true,
     params: {
       PageNumber: params.pagination?.PageNumber ?? 1,
       PageSize: params.pagination?.PageSize ?? 10,
@@ -70,6 +71,7 @@ export const getLogsByDeviceAndKeywordApi = (params: {
   keyword: string;
 }) =>
   http.get<PagedList<DeviceLogListItemDto>>(`${basePath}/by-keyword`, {
+    inlineFeedback: true,
     params: {
       PageNumber: params.pagination?.PageNumber ?? 1,
       PageSize: params.pagination?.PageSize ?? 10,
@@ -84,6 +86,7 @@ export const getLogsByDeviceAndDateApi = (params: {
   date: string;
 }) =>
   http.get<PagedList<DeviceLogListItemDto>>(`${basePath}/by-date`, {
+    inlineFeedback: true,
     params: {
       PageNumber: params.pagination?.PageNumber ?? 1,
       PageSize: params.pagination?.PageSize ?? 10,
@@ -99,6 +102,7 @@ export const getLogsByDeviceAndTimeRangeApi = (params: {
   endTime: string;
 }) =>
   http.get<PagedList<DeviceLogListItemDto>>(`${basePath}/by-time-range`, {
+    inlineFeedback: true,
     params: {
       PageNumber: params.pagination?.PageNumber ?? 1,
       PageSize: params.pagination?.PageSize ?? 10,
@@ -115,6 +119,7 @@ export const getLogsByDeviceDateAndKeywordApi = (params: {
   keyword: string;
 }) =>
   http.get<PagedList<DeviceLogListItemDto>>(`${basePath}/by-date-keyword`, {
+    inlineFeedback: true,
     params: {
       PageNumber: params.pagination?.PageNumber ?? 1,
       PageSize: params.pagination?.PageSize ?? 10,

@@ -89,8 +89,10 @@ export const getAllActiveDevicesApi = () => {
   return http.get<DeviceSelectDto[]>(`${basePath}/all`);
 };
 
-export const getScopedDeviceSelectApi = () => {
-  return http.get<ScopedDeviceSelectDto[]>(`${basePath}/select`);
+export const getScopedDeviceSelectApi = (options?: { inlineFeedback?: boolean }) => {
+  return http.get<ScopedDeviceSelectDto[]>(`${basePath}/select`, {
+    inlineFeedback: options?.inlineFeedback,
+  });
 };
 
 export const getEmployeeAccessDeviceCandidatesApi = () => {

@@ -15,7 +15,28 @@
       </UiButton>
     </template>
 
-    <NiondToolbar class="capacity-detail-page__filter-card">
+    <ProductionContextToolbar
+      :process-id="selectedProcessId"
+      :device-id="selectedDeviceId"
+      :process-options="processOptions"
+      :device-options="deviceOptions"
+      :context="context"
+      :status="contextStatus"
+      :has-authorized-devices="hasAuthorizedDevices"
+      test-id-prefix="capacity-detail"
+      @update:process-id="selectProcess"
+      @update:device-id="selectDevice"
+    />
+
+    <ProductionContextState
+      v-if="contextState !== 'ready'"
+      :state="contextState"
+      :error="contextError"
+      test-id-prefix="capacity-detail"
+      @retry="initialize"
+    />
+
+    <NiondToolbar v-else class="capacity-detail-page__filter-card">
       <div class="capacity-detail-page__filter-row">
         <div class="filter-field">
           <span class="filter-field__label">查询粒度</span>
@@ -72,23 +93,23 @@
       </div>
     </NiondToolbar>
 
-    <NiondTableCard v-if="loading" class="capacity-detail-page__state-card">
+    <NiondTableCard v-if="contextState === 'ready' && loading" class="capacity-detail-page__state-card">
       <LoadingState variant="card" :rows="5" />
     </NiondTableCard>
-    <NiondTableCard v-else-if="loadError" class="capacity-detail-page__state-card">
+    <NiondTableCard v-else-if="contextState === 'ready' && loadError" class="capacity-detail-page__state-card">
       <EmptyState :title="loadError.title" :description="loadError.message">
         <template #action>
           <UiButton size="small" type="primary" @click="fetchData">重新加载</UiButton>
         </template>
       </EmptyState>
     </NiondTableCard>
-    <NiondTableCard v-else-if="rows.length === 0" class="capacity-detail-page__state-card">
+    <NiondTableCard v-else-if="contextState === 'ready' && rows.length === 0" class="capacity-detail-page__state-card">
       <EmptyState
         title="当前范围没有完工弹夹明细"
         description="当前日期与 PLC 筛选下没有可展示的数据。"
       />
     </NiondTableCard>
-    <template v-else>
+    <template v-else-if="contextState === 'ready'">
       <div class="capacity-detail-page__stats">
         <StatCard label="完工弹夹数" :value="formatInt(summary.total)" unit="个" accent="brand" />
         <StatCard label="合格弹夹数" :value="formatInt(summary.ok)" unit="个" accent="success" />
@@ -132,6 +153,7 @@ import UiDatePicker from '../../components/ui/UiDatePicker.vue';
 import UiRadioButton from '../../components/ui/UiRadioButton.vue';
 import UiRadioGroup from '../../components/ui/UiRadioGroup.vue';
 import UiSelect from '../../components/ui/UiSelect.vue';
+import { ProductionContextState, ProductionContextToolbar } from '../../shared/production-context';
 import CapacityTrendChart from './CapacityTrendChart.vue';
 import { useCapacityDetail } from './useCapacityDetail';
 import './capacity-page.css';
@@ -139,6 +161,15 @@ import './capacity-page.css';
 const router = useRouter();
 const {
   deviceName,
+  processOptions,
+  deviceOptions,
+  selectedProcessId,
+  selectedDeviceId,
+  context,
+  contextStatus,
+  contextError,
+  contextState,
+  hasAuthorizedDevices,
   queryMode,
   queryDate,
   queryMonth,
@@ -156,11 +187,14 @@ const {
   columns,
   rowKey,
   canExport,
+  initialize,
+  selectProcess,
+  selectDevice,
   fetchData,
   exportRows,
   formatInt,
   rateAccent,
 } = useCapacityDetail();
 
-onMounted(fetchData);
+onMounted(initialize);
 </script>

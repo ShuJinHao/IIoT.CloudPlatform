@@ -8,7 +8,11 @@
     <div v-else-if="!searched && !loading" class="hint-empty">
       <EmptyState title="请填写查询条件后执行查询" description="未查询前不显示数据，避免误展示无关记录。" />
     </div>
-    <UiDataTable v-else class="passstation-page__table" :columns="columns" :data="records" :loading="loading" :bordered="false" :single-line="false" :row-key="rowKey" :row-props="rowProps" size="small" />
+    <UiDataTable v-else class="passstation-page__table" :columns="columns" :data="records" :loading="loading" :bordered="false" :single-line="false" :row-key="rowKey" :row-props="rowProps" size="small">
+      <template #empty>
+        <EmptyState title="当前设备暂无过站数据" description="所选设备与查询条件下没有过站记录。" />
+      </template>
+    </UiDataTable>
     <div v-if="metaData.totalPages > 1" class="pagination-wrap">
       <UiPagination :page="currentPage" :page-count="metaData.totalPages" :item-count="metaData.totalCount" :page-size="pageSize" show-quick-jumper @update:page="$emit('pageChange', $event)" />
     </div>

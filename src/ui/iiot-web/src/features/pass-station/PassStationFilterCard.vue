@@ -8,37 +8,13 @@
         </UiRadioGroup>
       </div>
       <div class="filter-row">
-        <template v-if="currentMode === 'barcode-process'">
+        <template v-if="currentMode === 'device-barcode'">
           <div class="filter-field filter-field--wide">
             <span class="filter-field__label">弹夹号</span>
             <UiInput v-model:value="filters.barcode" placeholder="请输入弹夹号" size="small" style="width: 280px;" @keyup.enter="$emit('search')" />
           </div>
         </template>
-        <template v-if="currentMode === 'time-process'">
-          <div class="filter-field">
-            <span class="filter-field__label">开始时间</span>
-            <UiDatePicker v-model:formatted-value="filters.startTime" value-format="yyyy-MM-dd'T'HH:mm" type="datetime" size="small" style="width: 220px;" />
-          </div>
-          <div class="filter-field">
-            <span class="filter-field__label">结束时间</span>
-            <UiDatePicker v-model:formatted-value="filters.endTime" value-format="yyyy-MM-dd'T'HH:mm" type="datetime" size="small" style="width: 220px;" />
-          </div>
-        </template>
-        <template v-if="currentMode === 'device-barcode'">
-          <div class="filter-field">
-            <span class="filter-field__label">设备</span>
-            <UiSelect v-model:value="filters.deviceId" :options="deviceOptions" placeholder="请选择设备" clearable size="small" style="width: 220px;" />
-          </div>
-          <div class="filter-field filter-field--wide">
-            <span class="filter-field__label">弹夹号</span>
-            <UiInput v-model:value="filters.barcode" placeholder="请输入弹夹号" size="small" style="width: 240px;" @keyup.enter="$emit('search')" />
-          </div>
-        </template>
         <template v-if="currentMode === 'device-time'">
-          <div class="filter-field">
-            <span class="filter-field__label">设备</span>
-            <UiSelect v-model:value="filters.deviceId" :options="deviceOptions" placeholder="请选择设备" clearable size="small" style="width: 220px;" />
-          </div>
           <div class="filter-field">
             <span class="filter-field__label">开始时间</span>
             <UiDatePicker v-model:formatted-value="filters.startTime" value-format="yyyy-MM-dd'T'HH:mm" type="datetime" size="small" style="width: 220px;" />
@@ -49,10 +25,6 @@
           </div>
         </template>
         <template v-if="currentMode === 'device-latest'">
-          <div class="filter-field">
-            <span class="filter-field__label">设备</span>
-            <UiSelect v-model:value="filters.deviceId" :options="deviceOptions" placeholder="请选择设备" clearable size="small" style="width: 220px;" />
-          </div>
           <div class="latest-hint">读取所选设备最新 200 条过站记录</div>
         </template>
         <UiButton type="primary" size="small" @click="$emit('search')">
@@ -76,22 +48,18 @@ import UiDatePicker from '../../components/ui/UiDatePicker.vue';
 import UiInput from '../../components/ui/UiInput.vue';
 import UiRadioButton from '../../components/ui/UiRadioButton.vue';
 import UiRadioGroup from '../../components/ui/UiRadioGroup.vue';
-import UiSelect from '../../components/ui/UiSelect.vue';
-import type { UiSelectOption } from '../../components/ui/types';
-import type { PassStationQueryMode } from './api';
-import type { PassStationFilters } from './types';
+import type { DevicePassStationQueryMode, PassStationFilters } from './types';
 
 defineEmits<{
   search: [];
   export: [];
-  switchMode: [value: PassStationQueryMode];
+  switchMode: [value: DevicePassStationQueryMode];
 }>();
 
 defineProps<{
-  currentMode: PassStationQueryMode;
-  activeQueryModes: Array<{ key: PassStationQueryMode; label: string }>;
+  currentMode: DevicePassStationQueryMode;
+  activeQueryModes: Array<{ key: DevicePassStationQueryMode; label: string }>;
   filters: PassStationFilters;
-  deviceOptions: UiSelectOption[];
   exporting: boolean;
 }>();
 </script>

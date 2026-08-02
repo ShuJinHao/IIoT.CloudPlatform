@@ -1,16 +1,16 @@
 import { computed, reactive, ref, watch } from 'vue';
-import { getScopedDeviceSelectApi, type ScopedDeviceSelectDto } from '../devices/api';
 import type { PagedMetaData } from '../../core/types/pagination';
+import { resolveRequestErrorMessage } from '../../core/http/resolveRequestError';
+import { useProductionContext } from '../../shared/production-context';
 import { notifySuccess, notifyWarning } from '../../utils/feedback';
 import {
   exportPassStationsApi,
   getPassStationDetailApi,
   getPassStationListApi,
   getPassStationTypesApi,
+  type GetPassStationListParams,
   type PassStationDetailDto,
   type PassStationListItemDto,
-  type GetPassStationListParams,
-  type PassStationQueryMode,
 } from './api';
 import { createPassStationColumns } from './columns';
 import {
@@ -22,11 +22,12 @@ import {
 import {
   defaultEndTime,
   defaultStartTime,
+  deviceQueryModes,
   PAGE_SIZE,
   queryModeLabels,
   toUtcIso,
+  type DevicePassStationQueryMode,
   type PassStationFilters,
-  type PassStationProcessOption,
 } from './types';
 
 const emptyMetaData = (): PagedMetaData => ({
@@ -37,55 +38,63 @@ const emptyMetaData = (): PagedMetaData => ({
 });
 
 export function usePassStation() {
+  const productionContext = useProductionContext();
+  const {
+    processOptions,
+    deviceOptions,
+    selectedProcessId,
+    selectedDeviceId,
+    selectedProcess,
+    context,
+    status: contextStatus,
+    error: contextError,
+    state: contextState,
+    selectionRevision,
+    hasAuthorizedDevices,
+    loadContext,
+    selectProcess,
+    selectDevice,
+  } = productionContext;
   const loading = ref(false);
-  const selectLoading = ref(false);
-  const selectError = ref<string | null>(null);
+  const schemaLoading = ref(false);
+  const schemaError = ref('');
   const queryError = ref<string | null>(null);
   const exporting = ref(false);
   const searched = ref(false);
   const currentPage = ref(1);
-  const currentMode = ref<PassStationQueryMode>('barcode-process');
-  const currentProcessId = ref<string | null>(null);
+  const currentMode = ref<DevicePassStationQueryMode>('device-barcode');
   const records = ref<PassStationListItemDto[]>([]);
   const metaData = ref<PagedMetaData>(emptyMetaData());
-  const allProcesses = ref<PassStationProcessOption[]>([]);
-  const allDevices = ref<ScopedDeviceSelectDto[]>([]);
   const schemaMap = ref<Record<string, PassStationSchema>>({});
   const showDetail = ref(false);
   const detailLoading = ref(false);
+  const detailError = ref('');
   const detailData = ref<PassStationDetailDto | null>(null);
+  const detailId = ref<string | null>(null);
   const filters = reactive<PassStationFilters>({
-    deviceId: null,
     barcode: '',
     startTime: defaultStartTime(),
     endTime: defaultEndTime(),
   });
+  let schemaGeneration = 0;
+  let queryGeneration = 0;
+  let detailGeneration = 0;
+  let exportGeneration = 0;
 
-  const currentProcess = computed(() =>
-    allProcesses.value.find((process) => process.id === currentProcessId.value) ?? null);
   const currentTypeKey = computed(() =>
-    currentProcess.value ? normalizePassStationTypeKey(currentProcess.value.processCode) : '');
+    selectedProcess.value
+      ? normalizePassStationTypeKey(selectedProcess.value.processCode)
+      : '');
   const currentSchema = computed(() =>
     getPassStationSchema(schemaMap.value, currentTypeKey.value));
-  const supportedProcesses = computed(() =>
-    allProcesses.value.filter((process) =>
-      Boolean(schemaMap.value[normalizePassStationTypeKey(process.processCode)])));
-  const processOptions = computed(() => supportedProcesses.value.map((process) => ({
-    label: `${process.processCode} - ${process.processName}`,
-    value: process.id,
-  })));
-  const filteredDevices = computed(() => {
-    if (!currentProcessId.value) return [] as ScopedDeviceSelectDto[];
-    return allDevices.value.filter((device) => device.processId === currentProcessId.value);
-  });
-  const deviceOptions = computed(() => filteredDevices.value.map((device) => ({
-    label: device.deviceName,
-    value: device.id,
-  })));
   const activeQueryModes = computed(() => {
     if (!currentSchema.value) return [];
-    return currentSchema.value.supportedModes.map((mode) => ({ key: mode, label: queryModeLabels[mode] }));
+    return currentSchema.value.supportedModes
+      .filter((mode): mode is DevicePassStationQueryMode =>
+        deviceQueryModes.some((candidate) => candidate === mode))
+      .map((mode) => ({ key: mode, label: queryModeLabels[mode] }));
   });
+  const hasDeviceQueryMode = computed(() => activeQueryModes.value.length > 0);
   const columns = computed(() => createPassStationColumns(currentSchema.value));
   const rowKey = (row: PassStationListItemDto) => row.id;
   const rowProps = (row: PassStationListItemDto) => ({
@@ -93,91 +102,97 @@ export function usePassStation() {
     onClick: () => openDetail(row.id),
   });
 
+  function clearDetail() {
+    detailGeneration++;
+    showDetail.value = false;
+    detailLoading.value = false;
+    detailError.value = '';
+    detailData.value = null;
+    detailId.value = null;
+  }
+
   function resetResults() {
+    queryGeneration++;
+    exportGeneration++;
+    loading.value = false;
+    exporting.value = false;
+    queryError.value = null;
+    searched.value = false;
     currentPage.value = 1;
     records.value = [];
     metaData.value = emptyMetaData();
+    clearDetail();
   }
 
-  async function fetchSelectData() {
-    selectLoading.value = true;
-    selectError.value = null;
+  async function loadSchemas() {
+    const generation = ++schemaGeneration;
+    schemaLoading.value = true;
+    schemaError.value = '';
+    schemaMap.value = {};
     try {
-      const [devices, schemas] = await Promise.all([
-        getScopedDeviceSelectApi(),
-        getPassStationTypesApi(),
-      ]);
-      allDevices.value = devices;
-      const processById = new Map<string, PassStationProcessOption>();
-      devices.forEach((device) => {
-        processById.set(device.processId, {
-          id: device.processId,
-          processCode: device.processCode,
-          processName: device.processName,
-        });
-      });
-      allProcesses.value = [...processById.values()];
+      const schemas = await getPassStationTypesApi();
+      if (generation !== schemaGeneration) return;
       schemaMap.value = buildPassStationSchemaMap(schemas);
-
-      const firstSupported = supportedProcesses.value[0];
-      if (!currentProcessId.value && firstSupported) currentProcessId.value = firstSupported.id;
-    } catch {
-      allProcesses.value = [];
-      allDevices.value = [];
-      schemaMap.value = {};
-      currentProcessId.value = null;
-      selectError.value = '授权设备与过站契约加载失败，请重试。';
+    } catch (error) {
+      const message = await resolveRequestErrorMessage(
+        error,
+        '过站查询契约加载失败，请检查服务状态后重试。',
+      );
+      if (generation !== schemaGeneration) return;
+      schemaError.value = message;
     } finally {
-      selectLoading.value = false;
+      if (generation === schemaGeneration) schemaLoading.value = false;
     }
   }
 
+  async function initialize() {
+    await Promise.all([loadContext(), loadSchemas()]);
+  }
+
   function buildCurrentQueryParams(): GetPassStationListParams | null {
-    if (!currentSchema.value || !currentProcess.value) return null;
+    const activeContext = context.value;
+    const schema = currentSchema.value;
+    if (!activeContext || !schema || !hasDeviceQueryMode.value) return null;
     return {
-      typeKey: currentSchema.value.typeKey,
+      typeKey: schema.typeKey,
       mode: currentMode.value,
       pagination: { PageNumber: currentPage.value, PageSize: PAGE_SIZE },
-      processId: currentMode.value === 'barcode-process' || currentMode.value === 'time-process'
-        ? currentProcess.value.id
-        : undefined,
-      deviceId: currentMode.value === 'device-barcode' || currentMode.value === 'device-time' || currentMode.value === 'device-latest'
-        ? filters.deviceId || undefined
-        : undefined,
-      barcode: currentMode.value === 'barcode-process' || currentMode.value === 'device-barcode'
+      deviceId: activeContext.deviceId,
+      barcode: currentMode.value === 'device-barcode'
         ? filters.barcode.trim()
         : undefined,
-      startTime: currentMode.value === 'time-process' || currentMode.value === 'device-time'
+      startTime: currentMode.value === 'device-time'
         ? toUtcIso(filters.startTime)
         : undefined,
-      endTime: currentMode.value === 'time-process' || currentMode.value === 'device-time'
+      endTime: currentMode.value === 'device-time'
         ? toUtcIso(filters.endTime)
         : undefined,
     };
   }
 
   async function fetchData() {
-    if (!currentSchema.value || !currentProcess.value) {
-      notifyWarning('请先选择已支持追溯的工序。');
-      return;
-    }
-
+    const params = buildCurrentQueryParams();
+    if (!params) return;
+    const generation = ++queryGeneration;
     loading.value = true;
     searched.value = true;
     queryError.value = null;
+    records.value = [];
+    metaData.value = emptyMetaData();
     try {
-      const params = buildCurrentQueryParams();
-      if (!params) return;
       const response = await getPassStationListApi(params);
+      if (generation !== queryGeneration) return;
       metaData.value = response.metaData;
       records.value = response.items;
-    } catch {
-      records.value = [];
-      metaData.value = emptyMetaData();
-      currentPage.value = 1;
-      queryError.value = '过站记录加载失败，请重试。';
+    } catch (error) {
+      const message = await resolveRequestErrorMessage(
+        error,
+        '过站记录加载失败，请检查服务状态后重试。',
+      );
+      if (generation !== queryGeneration) return;
+      queryError.value = message;
     } finally {
-      loading.value = false;
+      if (generation === queryGeneration) loading.value = false;
     }
   }
 
@@ -200,9 +215,11 @@ export function usePassStation() {
     const params = buildCurrentQueryParams();
     if (!params) return;
 
+    const generation = ++exportGeneration;
     exporting.value = true;
     try {
       const download = await exportPassStationsApi(params);
+      if (generation !== exportGeneration) return;
       const url = URL.createObjectURL(download.blob);
       const anchor = document.createElement('a');
       anchor.href = url;
@@ -210,8 +227,14 @@ export function usePassStation() {
       anchor.click();
       URL.revokeObjectURL(url);
       notifySuccess('过站 CSV 已生成。');
+    } catch (error) {
+      const message = await resolveRequestErrorMessage(
+        error,
+        '过站 CSV 导出失败，请检查服务状态后重试。',
+      );
+      if (generation === exportGeneration) notifyWarning(message);
     } finally {
-      exporting.value = false;
+      if (generation === exportGeneration) exporting.value = false;
     }
   }
 
@@ -221,94 +244,116 @@ export function usePassStation() {
   }
 
   async function openDetail(id: string) {
-    if (!currentSchema.value) return;
+    const activeContext = context.value;
+    const schema = currentSchema.value;
+    if (!activeContext || !schema) return;
+    const generation = ++detailGeneration;
+    detailId.value = id;
     showDetail.value = true;
     detailLoading.value = true;
+    detailError.value = '';
     detailData.value = null;
     try {
-      detailData.value = await getPassStationDetailApi(currentSchema.value.typeKey, id);
-    } catch {
-      showDetail.value = false;
+      const detail = await getPassStationDetailApi(schema.typeKey, id);
+      if (generation !== detailGeneration) return;
+      if (detail.deviceId !== activeContext.deviceId) {
+        detailError.value = '该记录已不属于当前设备上下文，请重新查询。';
+        return;
+      }
+      detailData.value = detail;
+    } catch (error) {
+      const message = await resolveRequestErrorMessage(
+        error,
+        '过站详情加载失败，请检查服务状态后重试。',
+      );
+      if (generation === detailGeneration) detailError.value = message;
     } finally {
-      detailLoading.value = false;
+      if (generation === detailGeneration) detailLoading.value = false;
     }
   }
 
-  function switchMode(mode: PassStationQueryMode) {
+  function retryDetail() {
+    if (detailId.value) void openDetail(detailId.value);
+  }
+
+  function switchMode(mode: DevicePassStationQueryMode) {
+    if (!activeQueryModes.value.some((item) => item.key === mode)) return;
     currentMode.value = mode;
     resetResults();
-    searched.value = false;
-    if (mode === 'time-process' || mode === 'device-time') {
+    if (mode === 'device-time') {
       filters.startTime = defaultStartTime();
       filters.endTime = defaultEndTime();
     }
   }
 
   function validateCurrentQuery(): string | null {
-    if (!currentSchema.value || !currentProcess.value) return '请先选择已支持追溯的工序。';
-    if ((currentMode.value === 'barcode-process' || currentMode.value === 'device-barcode') && !filters.barcode.trim()) {
-      return '当前查询模式必须填写条码。';
+    if (!context.value) return '请先完整选择工序和设备。';
+    if (!currentSchema.value) return '当前工序尚未接入过站追溯能力。';
+    if (!hasDeviceQueryMode.value) return '当前工序不支持设备级过站查询。';
+    if (currentMode.value === 'device-barcode' && !filters.barcode.trim()) {
+      return '当前查询模式必须填写弹夹号。';
     }
-    if (
-      (currentMode.value === 'device-barcode' || currentMode.value === 'device-time' || currentMode.value === 'device-latest') &&
-      !filters.deviceId
-    ) {
-      return '请选择设备。';
-    }
-    if ((currentMode.value === 'time-process' || currentMode.value === 'device-time') && (!filters.startTime || !filters.endTime)) {
+    if (currentMode.value === 'device-time' && (!filters.startTime || !filters.endTime)) {
       return '请同时填写开始时间和结束时间。';
     }
     return null;
   }
 
-  watch(currentSchema, (schema) => {
-    if (!schema) {
-      resetResults();
-      searched.value = false;
-      filters.deviceId = null;
-      return;
-    }
-    if (!schema.supportedModes.includes(currentMode.value)) {
-      const next = schema.supportedModes[0];
-      if (next) currentMode.value = next;
-    }
-  });
-
-  watch(currentProcessId, () => {
+  watch(selectionRevision, resetResults, { flush: 'sync' });
+  watch(showDetail, (visible) => {
+    if (visible) return;
+    detailGeneration++;
+    detailLoading.value = false;
+    detailError.value = '';
+    detailData.value = null;
+    detailId.value = null;
+  }, { flush: 'sync' });
+  watch(activeQueryModes, (modes) => {
+    if (modes.some((mode) => mode.key === currentMode.value)) return;
+    currentMode.value = modes[0]?.key ?? 'device-barcode';
     resetResults();
-    searched.value = false;
-    filters.deviceId = null;
-  });
+  }, { flush: 'sync' });
 
   return {
     PAGE_SIZE,
     loading,
-    selectLoading,
-    selectError,
+    schemaLoading,
+    schemaError,
     queryError,
     exporting,
     searched,
     currentPage,
     currentMode,
-    currentProcessId,
     records,
     metaData,
     filters,
-    currentProcess,
     currentSchema,
     processOptions,
     deviceOptions,
     activeQueryModes,
+    hasDeviceQueryMode,
     columns,
     rowKey,
     rowProps,
     showDetail,
     detailLoading,
+    detailError,
     detailData,
-    fetchSelectData,
+    context,
+    contextStatus,
+    contextError,
+    contextState,
+    selectedProcessId,
+    selectedDeviceId,
+    hasAuthorizedDevices,
+    initialize,
+    loadSchemas,
+    selectProcess,
+    selectDevice,
     doSearch,
     doExport,
     onPageChange,
     switchMode,
+    retryDetail,
   };
 }

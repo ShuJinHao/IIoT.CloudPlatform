@@ -64,4 +64,24 @@ describe('useListPage', () => {
     expect(page.error.value?.message).toBe('network failed');
     expect(page.isEmpty.value).toBe(true);
   });
+
+  it('invalidates pending requests when rows are cleared', async () => {
+    let resolve!: (value: { items: string[]; total: number }) => void;
+    const pending = new Promise<{ items: string[]; total: number }>((done) => {
+      resolve = done;
+    });
+    const page = useListPage<string, Record<string, unknown>>({
+      fetcher: () => pending,
+      immediate: false,
+    });
+
+    const refresh = page.refresh();
+    page.clear();
+    resolve({ items: ['stale'], total: 1 });
+    await refresh;
+
+    expect(page.items.value).toEqual([]);
+    expect(page.total.value).toBe(0);
+    expect(page.loading.value).toBe(false);
+  });
 });

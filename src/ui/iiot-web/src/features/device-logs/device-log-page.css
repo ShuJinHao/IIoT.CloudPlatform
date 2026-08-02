@@ -3,34 +3,15 @@
   font-family: var(--font-sans);
 }
 
-.device-log-page__device-card,
 .device-log-page__filter-card {
   margin-bottom: var(--space-4);
 }
 
-.device-row,
 .filter-row {
   display: flex;
   align-items: flex-end;
   flex-wrap: wrap;
   gap: var(--space-4);
-}
-
-.device-row {
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.device-row__label {
-  color: var(--text-1);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semibold);
-}
-
-.device-row__error {
-  margin-top: var(--space-3);
-  color: var(--error);
-  font-size: var(--fs-sm);
 }
 
 .filter-stack {

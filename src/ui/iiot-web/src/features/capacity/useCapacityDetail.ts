@@ -1,6 +1,6 @@
-import { computed, ref } from 'vue';
-import { useRoute } from 'vue-router';
+import { computed, ref, watch } from 'vue';
 import { useTheme } from '../../composables/useTheme';
+import { useProductionContext } from '../../shared/production-context';
 import { getHourlyByDeviceApi, getSummaryRangeApi } from './api';
 import { createCapacityDetailColumns } from './columns';
 import { resolveCapacityLoadError, type CapacityLoadError } from './errors';
@@ -23,10 +23,23 @@ import {
 } from './types';
 
 export function useCapacityDetail() {
-  const route = useRoute();
   const { mode: themeMode } = useTheme();
-  const deviceId = ref((route.query.deviceId as string | undefined) ?? '');
-  const deviceName = ref((route.query.deviceName as string | undefined) ?? '设备详情');
+  const productionContext = useProductionContext();
+  const {
+    processOptions,
+    deviceOptions,
+    selectedProcessId,
+    selectedDeviceId,
+    context,
+    status: contextStatus,
+    error: contextError,
+    state: contextState,
+    selectionRevision,
+    hasAuthorizedDevices,
+    loadContext,
+    selectProcess,
+    selectDevice,
+  } = productionContext;
   const queryMode = ref<CapacityQueryMode>('day');
   const queryDate = ref(todayLocal());
   const queryMonth = ref(thisMonth());
@@ -36,6 +49,8 @@ export function useCapacityDetail() {
   const loadError = ref<CapacityLoadError | null>(null);
   const allRows = ref<CapacityDetailRow[]>([]);
   let requestGeneration = 0;
+
+  const deviceName = computed(() => context.value?.deviceName ?? '产能详情');
 
   const yearOptions = Array.from({ length: 5 }, (_, index) => {
     const year = new Date().getFullYear() - index;
@@ -130,46 +145,42 @@ export function useCapacityDetail() {
     `${row.bucketKey}-${row.plcKey}-${row.shift || 'all'}`;
   const canExport = computed(() => !loading.value && !loadError.value && rows.value.length > 0);
 
-  async function requestRows(): Promise<CapacityDetailRow[]> {
+  async function requestRows(deviceId: string): Promise<CapacityDetailRow[]> {
     if (queryMode.value === 'day') {
       return mapHourlyRows(queryDate.value, await getHourlyByDeviceApi({
-        deviceId: deviceId.value,
+        deviceId,
         date: queryDate.value,
       }));
     }
     if (queryMode.value === 'month') {
       const range = monthDateRange(queryMonth.value);
       return mapMonthRows(queryMonth.value, await getSummaryRangeApi({
-        deviceId: deviceId.value,
+        deviceId,
         ...range,
         breakdownByPlc: true,
       }));
     }
     const range = yearDateRange(queryYear.value);
     return mapYearRows(queryYear.value, await getSummaryRangeApi({
-      deviceId: deviceId.value,
+      deviceId,
       ...range,
       breakdownByPlc: true,
     }));
   }
 
   async function fetchData() {
+    const activeContext = context.value;
     const generation = ++requestGeneration;
     loading.value = true;
     loadError.value = null;
     allRows.value = [];
     plcCodeFilter.value = null;
-    if (!deviceId.value) {
-      loadError.value = {
-        kind: 'api',
-        title: '缺少设备信息',
-        message: '未指定要查询的设备，请返回产能看板后重新进入。',
-      };
+    if (!activeContext) {
       loading.value = false;
       return;
     }
     try {
-      const nextRows = await requestRows();
+      const nextRows = await requestRows(activeContext.deviceId);
       if (generation === requestGeneration) allRows.value = nextRows;
     } catch (error) {
       const resolved = await resolveCapacityLoadError(error);
@@ -187,8 +198,30 @@ export function useCapacityDetail() {
     );
   }
 
+  function clearData() {
+    requestGeneration++;
+    loading.value = false;
+    loadError.value = null;
+    allRows.value = [];
+    plcCodeFilter.value = null;
+  }
+
+  watch(selectionRevision, () => {
+    clearData();
+    if (context.value) void fetchData();
+  }, { flush: 'sync' });
+
   return {
     deviceName,
+    processOptions,
+    deviceOptions,
+    selectedProcessId,
+    selectedDeviceId,
+    context,
+    contextStatus,
+    contextError,
+    contextState,
+    hasAuthorizedDevices,
     queryMode,
     queryDate,
     queryMonth,
@@ -206,6 +239,9 @@ export function useCapacityDetail() {
     columns,
     rowKey,
     canExport,
+    initialize: loadContext,
+    selectProcess,
+    selectDevice,
     fetchData,
     exportRows,
     formatInt,

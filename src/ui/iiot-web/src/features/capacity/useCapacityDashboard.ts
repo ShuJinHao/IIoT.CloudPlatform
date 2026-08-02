@@ -1,33 +1,48 @@
 import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useListPage } from '../../core/list-page';
-import { getScopedDeviceSelectApi, type DeviceSelectDto } from '../devices/api';
+import { useProductionContext } from '../../shared/production-context';
 import { getDailyPagedApi, type DailyCapacityItem } from './api';
 import { resolveCapacityLoadError, type CapacityLoadError } from './errors';
 import { CAPACITY_PAGE_SIZE, todayLocal } from './types';
 
 interface CapacityDashboardFilter extends Record<string, unknown> {
-  deviceId: string | null;
   date: string;
 }
 
 export function useCapacityDashboard() {
   const router = useRouter();
-  const allDevices = ref<DeviceSelectDto[]>([]);
-  const deviceLoadError = ref('');
+  const productionContext = useProductionContext();
+  const {
+    processOptions,
+    deviceOptions,
+    selectedProcessId,
+    selectedDeviceId,
+    context,
+    status: contextStatus,
+    error: contextError,
+    state: contextState,
+    selectionRevision,
+    hasAuthorizedDevices,
+    loadContext,
+    selectProcess,
+    selectDevice,
+  } = productionContext;
   const listError = ref<CapacityLoadError | null>(null);
   let listErrorGeneration = 0;
 
   const listPage = useListPage<DailyCapacityItem, CapacityDashboardFilter>({
-    initialFilter: { deviceId: null, date: todayLocal() },
+    initialFilter: { date: todayLocal() },
     initialPageSize: CAPACITY_PAGE_SIZE,
     immediate: false,
     fetcher: async ({ page, pageSize, filter }) => {
+      const activeContext = context.value;
+      if (!activeContext) return { items: [], total: 0 };
       const response = await getDailyPagedApi({
         PageNumber: page,
         PageSize: pageSize,
         date: filter.date || undefined,
-        deviceId: filter.deviceId || undefined,
+        deviceId: activeContext.deviceId,
       });
       return {
         items: response.items,
@@ -36,12 +51,6 @@ export function useCapacityDashboard() {
     },
   });
 
-  const deviceFilter = computed({
-    get: () => listPage.filter.deviceId,
-    set: (value: string | null) => {
-      listPage.filter.deviceId = value;
-    },
-  });
   const dateFilter = computed({
     get: () => listPage.filter.date,
     set: (value: string) => {
@@ -54,12 +63,6 @@ export function useCapacityDashboard() {
     currentPage: listPage.page.value,
     totalPages: listPage.totalPages.value,
   }));
-  const deviceOptions = computed(() =>
-    allDevices.value.map((device) => ({
-      label: device.deviceName,
-      value: device.id,
-    })),
-  );
   const totalStats = computed(() => {
     const total = listPage.items.value.reduce((sum, row) => sum + row.totalCount, 0);
     const qualityKnown = listPage.items.value.every(
@@ -85,67 +88,87 @@ export function useCapacityDashboard() {
     if (generation === listErrorGeneration) listError.value = resolved;
   });
 
-  async function fetchDevices() {
-    try {
-      deviceLoadError.value = '';
-      allDevices.value = await getScopedDeviceSelectApi();
-    } catch (error) {
-      allDevices.value = [];
-      deviceLoadError.value = (await resolveCapacityLoadError(error)).message;
-    }
-  }
-
   async function fetchData() {
-    await listPage.refresh();
-    if (listPage.error.value) {
-      listPage.page.value = 1;
+    if (!context.value) {
+      listPage.clear();
+      return;
     }
+    listPage.clear();
+    await listPage.refresh();
   }
 
   async function initialize() {
-    await Promise.all([fetchDevices(), fetchData()]);
+    await loadContext();
   }
 
-  function onFilterChange() {
-    listPage.page.value = 1;
-    void fetchData();
+  function resetPageAndFetch() {
+    listPage.clear();
+    listError.value = null;
+    if (listPage.page.value !== 1) {
+      listPage.page.value = 1;
+      return;
+    }
+    if (context.value) void fetchData();
   }
 
   function clearFilters() {
-    listPage.filter.deviceId = null;
     listPage.filter.date = todayLocal();
-    listPage.page.value = 1;
-    void fetchData();
+    resetPageAndFetch();
   }
 
   function onPageChange(page: number) {
-    listPage.gotoPage(page);
+    const target = Math.max(1, Math.min(metaData.value.totalPages, page));
+    if (target === listPage.page.value) return;
+    listPage.clear();
+    listPage.page.value = target;
   }
 
-  function goDetail(deviceId: string, deviceName: string) {
-    if (!deviceId) return;
+  function goDetail(deviceId: string, _deviceName: string) {
+    const activeContext = context.value;
+    if (!activeContext || deviceId !== activeContext.deviceId) return;
     void router.push({
       name: 'CapacityDetail',
-      query: { deviceId, deviceName },
+      query: {
+        processId: activeContext.processId,
+        deviceId: activeContext.deviceId,
+      },
     });
   }
 
   const rowKey = (row: DailyCapacityItem) => `${row.deviceId}-${row.date}`;
+
+  watch(selectionRevision, () => {
+    listPage.clear();
+    listError.value = null;
+    if (listPage.page.value !== 1) {
+      listPage.page.value = 1;
+      return;
+    }
+    if (context.value) void fetchData();
+  }, { flush: 'sync' });
 
   return {
     records: listPage.items,
     loading: listPage.loading,
     currentPage: listPage.page,
     metaData,
-    deviceFilter,
     dateFilter,
+    processOptions,
     deviceOptions,
-    deviceLoadError,
+    selectedProcessId,
+    selectedDeviceId,
+    context,
+    contextStatus,
+    contextError,
+    contextState,
+    hasAuthorizedDevices,
     listError,
     totalStats,
     initialize,
     fetchData,
-    onFilterChange,
+    selectProcess,
+    selectDevice,
+    resetPageAndFetch,
     clearFilters,
     onPageChange,
     goDetail,

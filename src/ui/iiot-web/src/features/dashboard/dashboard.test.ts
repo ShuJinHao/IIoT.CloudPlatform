@@ -203,7 +203,7 @@ describe('dashboard feature', () => {
     await flushPromises();
 
     expect(getScopedDevices).toHaveBeenCalledTimes(1);
-    expect(wrapper.find('[data-testid="dashboard-selection-required"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="dashboard-select-process"]').exists()).toBe(true);
     expect(getStatus).not.toHaveBeenCalled();
     expect(getHourly).not.toHaveBeenCalled();
     expect(getAlertCount).not.toHaveBeenCalled();
@@ -214,7 +214,7 @@ describe('dashboard feature', () => {
     getScopedDevices.mockReturnValueOnce(new Promise<never>(() => {}));
     const { wrapper } = await mountDashboard();
 
-    expect(wrapper.find('[data-testid="dashboard-context-loading"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="dashboard-loading"]').exists()).toBe(true);
     expect(getStatus).not.toHaveBeenCalled();
 
     wrapper.unmount();
@@ -223,9 +223,9 @@ describe('dashboard feature', () => {
     await flushPromises();
 
     expect(
-      failedMount.wrapper.find('[data-testid="dashboard-context-error"]').exists(),
+      failedMount.wrapper.find('[data-testid="dashboard-error"]').exists(),
     ).toBe(true);
-    expect(failedMount.wrapper.text()).toContain('网络请求失败，请检查服务状态后重试');
+    expect(failedMount.wrapper.text()).toContain('授权设备加载失败，请检查服务状态后重试');
     expect(failedMount.wrapper.text()).not.toContain('connection string secret');
     expect(getStatus).not.toHaveBeenCalled();
   });
@@ -235,7 +235,7 @@ describe('dashboard feature', () => {
     const { wrapper } = await mountDashboard();
     await flushPromises();
 
-    expect(wrapper.find('[data-testid="dashboard-no-devices"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="dashboard-no-authorized-devices"]').exists()).toBe(true);
     expect(wrapper.text()).toContain('当前账号没有授权设备');
     expect(getStatus).not.toHaveBeenCalled();
   });
@@ -313,7 +313,7 @@ describe('dashboard feature', () => {
     expect(invalidMount.router.currentRoute.value.query.processId).toBeUndefined();
     expect(invalidMount.router.currentRoute.value.query.deviceId).toBeUndefined();
     expect(
-      invalidMount.wrapper.find('[data-testid="dashboard-selection-required"]').exists(),
+      invalidMount.wrapper.find('[data-testid="dashboard-select-process"]').exists(),
     ).toBe(true);
     expect(getStatus).not.toHaveBeenCalled();
   });
@@ -328,7 +328,7 @@ describe('dashboard feature', () => {
     await wrapper.get('[data-testid="dashboard-process-select"]').setValue(processBId);
     await flushPromises();
 
-    expect(wrapper.find('[data-testid="dashboard-selection-required"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="dashboard-select-device"]').exists()).toBe(true);
     expect(
       wrapper.get<HTMLSelectElement>('[data-testid="dashboard-device-select"]').element.value,
     ).toBe('');
