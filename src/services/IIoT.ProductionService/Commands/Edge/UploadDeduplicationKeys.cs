@@ -46,6 +46,28 @@ internal static class UploadDeduplicationKeys
 
     public static Result<string> ForHourlyCapacity(ReceiveHourlyCapacityCommand request)
     {
+        if (request.SchemaVersion == 2)
+        {
+            return Build(
+                request.RequestId,
+                new
+                {
+                    request.DeviceId,
+                    Date = request.Date.ToString("O", CultureInfo.InvariantCulture),
+                    request.ShiftCode,
+                    request.Hour,
+                    request.Minute,
+                    request.TimeLabel,
+                    request.TotalCount,
+                    request.OkCount,
+                    request.NgCount,
+                    request.SchemaVersion,
+                    ProcessType = request.ProcessType?.Trim().ToLowerInvariant(),
+                    PlcCode = request.PlcCode?.Trim(),
+                    PlcName = request.PlcName?.Trim()
+                });
+        }
+
         return Build(
             request.RequestId,
             new

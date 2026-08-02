@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using IIoT.Core.Production.Aggregates.ClientReleases;
@@ -33,7 +34,8 @@ public sealed record GenerateEdgeInstallerPackageCommand(
 public sealed record EdgeInstallerPackageDto(
     string FileName,
     string ContentType,
-    Stream Content);
+    Stream Content,
+    Guid GenerationId);
 
 public sealed class GenerateEdgeInstallerPackageHandler(
     ICurrentUser currentUser,
@@ -43,13 +45,14 @@ public sealed class GenerateEdgeInstallerPackageHandler(
     IAuditTrailService auditTrailService,
     IOptions<EdgeInstallerArtifactOptions> options,
     IUnitOfWork unitOfWork,
-    IClientReleaseWriteObservationReader observationReader)
+    IClientReleaseWriteObservationReader observationReader,
+    IEdgeInstallerGenerationStore installerGenerationStore)
     : ICommandHandler<GenerateEdgeInstallerPackageCommand, Result<EdgeInstallerPackageDto>>
 {
     private static readonly byte[] InstallerMagic = "IIOTEDG1"u8.ToArray();
     private const string BindingFileName = "iiot-binding.json";
     private const string HostPluginManifestFileName = "iiot-enabled-plugins.json";
-    private const string PluginBindingFileName = "iiot-plugin-binding.json";
+    private const string RemovedPluginBindingFileName = "iiot-plugin-binding.json";
     private const string UpdateConfigFileName = "launcher.update.json";
     private static readonly IComparer<string> VersionComparer = Comparer<string>.Create(ClientReleaseMapping.CompareVersions);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -189,6 +192,36 @@ public sealed class GenerateEdgeInstallerPackageHandler(
 
         try
         {
+            var fileName = BuildDownloadFileName(bindings, host.Version.Version);
+            var generationId = Guid.NewGuid();
+            var packageFact = ComputePackageFact(packageStream);
+            var generationRecord = new EdgeInstallerGenerationRecord(
+                generationId,
+                ClientReleaseAuditActor.ParseId(currentUser.Id),
+                currentUser.UserName,
+                bindingBundle.GeneratedAtUtc,
+                channel,
+                targetRuntime,
+                host.Version.Version,
+                host.Version.Sha256,
+                fileName,
+                packageFact.Sha256,
+                packageFact.Size,
+                selections.Select(selection =>
+                {
+                    var device = devices.DevicesById![selection.DeviceId];
+                    return new EdgeInstallerGenerationBindingFact(
+                        selection.ModuleId,
+                        device.Id,
+                        device.Code,
+                        device.DeviceName,
+                        device.ProcessId);
+                }),
+                selectedPlugins.Select(plugin => new EdgeInstallerGenerationPluginFact(
+                    plugin.ModuleId,
+                    plugin.Version,
+                    plugin.Sha256)));
+
             await PersistDeviceSecretsAsync(
                 baselineObservation,
                 secretTargets,
@@ -198,6 +231,18 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 devices.DevicesById!,
                 bindingBundle.GeneratedAtUtc,
                 cancellationToken);
+            if (!await installerGenerationStore.TryAddConfirmedAsync(
+                    generationRecord,
+                    cancellationToken))
+            {
+                throw new CloudWriteCommitUnknownException();
+            }
+
+            return Result.Success(new EdgeInstallerPackageDto(
+                fileName,
+                "application/vnd.microsoft.portable-executable",
+                packageStream,
+                generationId));
         }
         catch
         {
@@ -205,11 +250,6 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             throw;
         }
 
-        var fileName = BuildDownloadFileName(bindings, host.Version.Version);
-        return Result.Success(new EdgeInstallerPackageDto(
-            fileName,
-            "application/vnd.microsoft.portable-executable",
-            packageStream));
     }
 
     private async Task<HostReleaseSelection?> ResolveHostReleaseAsync(
@@ -449,6 +489,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 ? moduleId
                 : selection.Component.DisplayName,
             version.Version,
+            packageArtifact.Sha256!,
             moduleId,
             packagePath));
     }
@@ -953,7 +994,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
     {
         using (var target = new ZipArchive(packageStream, ZipArchiveMode.Create, leaveOpen: true))
         {
-            var reservedEntries = BuildGeneratedEntryNames(artifact, selectedPlugins, bindingBundle);
+            var reservedEntries = BuildGeneratedEntryNames(artifact);
             var writtenEntries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             AddDirectoryEntries(
@@ -1000,17 +1041,6 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 BuildHostPluginManifest(selectedPlugins, bindingBundle),
                 writtenEntries);
 
-            foreach (var binding in bindingBundle.Bindings)
-            {
-                var plugin = selectedPlugins.Single(item =>
-                    string.Equals(item.ModuleId, binding.ModuleId, StringComparison.OrdinalIgnoreCase));
-                WriteJsonEntry(
-                    target,
-                    CombineZipPath(artifact.PluginsRoot, plugin.PluginDirectory, PluginBindingFileName),
-                    BuildPluginBindingManifest(bindingBundle, binding),
-                    writtenEntries);
-            }
-
             WriteJsonEntry(
                 target,
                 CombineZipPath(artifact.LauncherDirectory, UpdateConfigFileName),
@@ -1020,9 +1050,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
     }
 
     private static HashSet<string> BuildGeneratedEntryNames(
-        EdgeInstallerArtifactManifest artifact,
-        IReadOnlyCollection<EdgeInstallerPluginPackage> selectedPlugins,
-        EdgeBindingBundleDto bindingBundle)
+        EdgeInstallerArtifactManifest artifact)
     {
         var entries = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -1030,16 +1058,6 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             CombineZipPath(artifact.LauncherDirectory, HostPluginManifestFileName),
             CombineZipPath(artifact.LauncherDirectory, UpdateConfigFileName)
         };
-
-        foreach (var binding in bindingBundle.Bindings)
-        {
-            var plugin = selectedPlugins.Single(item =>
-                string.Equals(item.ModuleId, binding.ModuleId, StringComparison.OrdinalIgnoreCase));
-            entries.Add(CombineZipPath(
-                artifact.PluginsRoot,
-                plugin.PluginDirectory,
-                PluginBindingFileName));
-        }
 
         return entries;
     }
@@ -1065,19 +1083,6 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             .ToList();
         return new EdgeInstallerHostPluginManifest(1, bindingBundle.GeneratedAtUtc, plugins);
     }
-
-    private static EdgeInstallerPluginBindingManifest BuildPluginBindingManifest(
-        EdgeBindingBundleDto bindingBundle,
-        EdgeBindingItemDto binding)
-        => new(
-            1,
-            bindingBundle.BaseUrl,
-            bindingBundle.GeneratedAtUtc,
-            binding.ModuleId,
-            binding.ClientCode,
-            binding.BootstrapSecret,
-            binding.DeviceName,
-            binding.ProcessId);
 
     private static EdgeInstallerUpdateConfig BuildUpdateConfig(
         EdgeBindingBundleDto bindingBundle,
@@ -1113,7 +1118,9 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 throw new InvalidDataException("Artifact contains unsafe path.");
             }
 
-            if (reservedEntries.Contains(entryName) || !writtenEntries.Add(entryName))
+            if (IsRemovedPluginBindingEntry(entryName)
+                || reservedEntries.Contains(entryName)
+                || !writtenEntries.Add(entryName))
             {
                 continue;
             }
@@ -1153,7 +1160,8 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 throw new InvalidDataException("Plugin package contains unsafe path.");
             }
 
-            if (reservedEntries.Contains(entryName))
+            if (IsRemovedPluginBindingEntry(entryName)
+                || reservedEntries.Contains(entryName))
             {
                 continue;
             }
@@ -1243,6 +1251,12 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         return !entryName.StartsWith("/", StringComparison.Ordinal)
             && !entryName.Split('/').Any(part => part is "." or "..");
     }
+
+    private static bool IsRemovedPluginBindingEntry(string entryName)
+        => string.Equals(
+            entryName.Replace('\\', '/').Split('/').LastOrDefault(),
+            RemovedPluginBindingFileName,
+            StringComparison.OrdinalIgnoreCase);
 
     private static string NormalizeZipDirectory(string directory)
         => directory.Replace('\\', '/').Trim('/');
@@ -1345,6 +1359,15 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         return $"IIoT.EdgeClient-{safeIdentity}-{version}.exe";
     }
 
+    private static InstallerPackageFact ComputePackageFact(Stream packageStream)
+    {
+        packageStream.Position = 0;
+        var sha256 = Convert.ToHexString(SHA256.HashData(packageStream)).ToLowerInvariant();
+        var size = packageStream.Length;
+        packageStream.Position = 0;
+        return new InstallerPackageFact(sha256, size);
+    }
+
     private static string NormalizeDefault(string? value, string defaultValue)
     {
         var normalized = value?.Trim();
@@ -1354,6 +1377,8 @@ public sealed class GenerateEdgeInstallerPackageHandler(
     private sealed record HostReleaseSelection(
         ClientReleaseComponent Component,
         ClientReleaseVersion Version);
+
+    private sealed record InstallerPackageFact(string Sha256, long Size);
 
     private sealed record DeviceBootstrapSecretTarget(
         Guid DeviceId,
@@ -1380,6 +1405,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         string ModuleId,
         string DisplayName,
         string Version,
+        string Sha256,
         string PluginDirectory,
         string PackagePath);
 
@@ -1507,16 +1533,6 @@ internal sealed record EdgeInstallerHostPluginItem(
     string Version,
     string PluginDirectory,
     string ClientCode,
-    string DeviceName,
-    Guid ProcessId);
-
-internal sealed record EdgeInstallerPluginBindingManifest(
-    int SchemaVersion,
-    string? BaseUrl,
-    DateTime GeneratedAtUtc,
-    string ModuleId,
-    string ClientCode,
-    string BootstrapSecret,
     string DeviceName,
     Guid ProcessId);
 

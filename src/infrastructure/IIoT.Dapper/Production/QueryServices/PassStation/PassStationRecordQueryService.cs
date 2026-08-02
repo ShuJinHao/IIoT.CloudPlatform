@@ -38,7 +38,7 @@ internal sealed class PassStationRecordQueryService(IDbConnectionFactory connect
             SELECT {SelectColumns}
             FROM pass_station_records
             {conditions}
-            ORDER BY completed_time DESC
+            ORDER BY completed_time DESC, id DESC
             OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY
             """;
 
@@ -63,23 +63,70 @@ internal sealed class PassStationRecordQueryService(IDbConnectionFactory connect
     public async Task<PassStationDetailDto?> GetDetailAsync(
         string typeKey,
         Guid id,
+        IReadOnlyCollection<Guid>? allowedDeviceIds,
         CancellationToken cancellationToken = default)
     {
+        if (allowedDeviceIds is { Count: 0 })
+            return null;
+
         using var connection = connectionFactory.CreateConnection();
+
+        var scopeCondition = allowedDeviceIds is { Count: > 0 }
+            ? " AND device_id = ANY(@AllowedDeviceIds)"
+            : string.Empty;
 
         var detailSql = $"""
             SELECT {SelectColumns}
             FROM pass_station_records
-            WHERE type_key = @TypeKey AND id = @Id
+            WHERE type_key = @TypeKey AND id = @Id{scopeCondition}
             """;
+
+        var parameters = new DynamicParameters();
+        parameters.Add("TypeKey", typeKey);
+        parameters.Add("Id", id);
+        if (allowedDeviceIds is { Count: > 0 })
+            parameters.Add("AllowedDeviceIds", allowedDeviceIds.ToArray());
 
         var row = await connection.QuerySingleOrDefaultAsync<PassStationRecordRow>(
             new ReadOnlyCommandDefinition(
                 detailSql,
-                new { TypeKey = typeKey, Id = id },
+                parameters,
                 cancellationToken: cancellationToken));
 
         return row is null ? null : ToDetail(row);
+    }
+
+    public async Task<List<PassStationListItemDto>> GetForExportAsync(
+        PassStationQueryRequest request,
+        IReadOnlyCollection<Guid>? allowedDeviceIds,
+        int take,
+        CancellationToken cancellationToken = default)
+    {
+        if (take <= 0 || allowedDeviceIds is { Count: 0 })
+            return [];
+
+        using var connection = connectionFactory.CreateConnection();
+        var (conditions, parameters) = BuildWhereClause(
+            request.TypeKey,
+            allowedDeviceIds,
+            request.DeviceId,
+            request.Barcode,
+            request.StartTime,
+            request.EndTime);
+        parameters.Add("Take", take);
+        var sql = $"""
+            SELECT {SelectColumns}
+            FROM pass_station_records
+            {conditions}
+            ORDER BY completed_time DESC, id DESC
+            LIMIT @Take
+            """;
+        var rows = await connection.QueryAsync<PassStationRecordRow>(
+            new ReadOnlyCommandDefinition(
+                sql,
+                parameters,
+                cancellationToken: cancellationToken));
+        return rows.Select(ToListItem).ToList();
     }
 
     private static (string Conditions, DynamicParameters Parameters) BuildWhereClause(

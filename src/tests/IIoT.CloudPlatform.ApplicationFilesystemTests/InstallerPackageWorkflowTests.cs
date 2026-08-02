@@ -232,6 +232,7 @@ public sealed class InstallerPackageWorkflowTests
         var deviceRepository = new InMemoryRepository<Device>();
         deviceRepository.Add(device);
         var auditTrail = new RecordingAuditTrailService();
+        var generationStore = new InMemoryEdgeInstallerGenerationStore();
         var edgeRoot = CreateInstallerArtifactFixture("stable", "1.2.0", targetRuntime);
         var componentRepository = CreatePublishedReleaseComponentRepository(edgeRoot, targetRuntime);
 
@@ -241,7 +242,8 @@ public sealed class InstallerPackageWorkflowTests
                 deviceRepository,
                 componentRepository,
                 GetInstallerRoot(edgeRoot),
-                auditTrail);
+                auditTrail,
+                installerGenerationStore: generationStore);
 
             var result = await handler.Handle(
                 new GenerateEdgeInstallerPackageCommand(
@@ -255,6 +257,7 @@ public sealed class InstallerPackageWorkflowTests
             var package = result.Value!;
             Assert.EndsWith(".exe", package.FileName, StringComparison.OrdinalIgnoreCase);
             Assert.Equal("application/vnd.microsoft.portable-executable", package.ContentType);
+            Assert.NotEqual(Guid.Empty, package.GenerationId);
             await using var packageContent = package.Content;
             using var packageBuffer = new MemoryStream();
             await packageContent.CopyToAsync(packageBuffer);
@@ -271,7 +274,7 @@ public sealed class InstallerPackageWorkflowTests
             Assert.NotNull(archive.GetEntry(VelopackSetupFixtureFile));
             Assert.NotNull(archive.GetEntry("plugins/CP/plugin.json"));
             Assert.NotNull(archive.GetEntry("plugins/CP/IIoT.Edge.Module.CP.dll"));
-            Assert.NotNull(archive.GetEntry("plugins/CP/iiot-plugin-binding.json"));
+            Assert.Null(archive.GetEntry("plugins/CP/iiot-plugin-binding.json"));
             Assert.Null(archive.GetEntry("plugins/AP/plugin.json"));
             Assert.Null(archive.GetEntry("plugins/AP/iiot-plugin-binding.json"));
 
@@ -301,15 +304,61 @@ public sealed class InstallerPackageWorkflowTests
             Assert.Equal(PrimaryModuleId, hostPlugin.GetProperty("pluginDirectory").GetString());
             Assert.Equal(device.Code, hostPlugin.GetProperty("clientCode").GetString());
 
-            var pluginBindingJson = ReadZipEntryText(archive, "plugins/CP/iiot-plugin-binding.json");
-            using var pluginBinding = JsonDocument.Parse(pluginBindingJson);
-            Assert.Equal(PrimaryModuleId, pluginBinding.RootElement.GetProperty("moduleId").GetString());
-            Assert.Equal(device.Code, pluginBinding.RootElement.GetProperty("clientCode").GetString());
-            Assert.Equal(bootstrapSecret, pluginBinding.RootElement.GetProperty("bootstrapSecret").GetString());
+            var generationRecord = Assert.Single(generationStore.Records).Value;
+            Assert.Equal(package.GenerationId, generationRecord.Id);
+            Assert.Equal(packageBytes.Length, generationRecord.PackageSize);
+            Assert.Equal(
+                Convert.ToHexString(SHA256.HashData(packageBytes)).ToLowerInvariant(),
+                generationRecord.PackageSha256);
+            Assert.Contains(PrimaryModuleId, generationRecord.BindingsJson, StringComparison.Ordinal);
+            Assert.Contains("2.3.4", generationRecord.PluginsJson, StringComparison.Ordinal);
+            Assert.DoesNotContain(bootstrapSecret!, generationRecord.BindingsJson, StringComparison.Ordinal);
+            Assert.DoesNotContain(bootstrapSecret!, generationRecord.PluginsJson, StringComparison.Ordinal);
 
             Assert.DoesNotContain(auditTrail.Entries, entry =>
                 entry.Summary.Contains(bootstrapSecret!, StringComparison.Ordinal)
                 || (entry.FailureReason?.Contains(bootstrapSecret!, StringComparison.Ordinal) ?? false));
+        }
+        finally
+        {
+            if (Directory.Exists(edgeRoot))
+            {
+                Directory.Delete(edgeRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GenerateEdgeInstallerPackageHandler_WhenGenerationRecordIsUnconfirmed_ShouldNotReturnPackageOrCreateSuccessRecord()
+    {
+        var device = new Device("正极模切客户端", "DEV-GEN-UNKNOWN", Guid.NewGuid());
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.Add(device);
+        var generationStore = new InMemoryEdgeInstallerGenerationStore
+        {
+            ConfirmResult = false
+        };
+        var edgeRoot = CreateInstallerArtifactFixture("stable", "1.2.0");
+        var componentRepository = CreatePublishedReleaseComponentRepository(edgeRoot);
+
+        try
+        {
+            var handler = CreateInstallerPackageHandler(
+                deviceRepository,
+                componentRepository,
+                GetInstallerRoot(edgeRoot),
+                new RecordingAuditTrailService(),
+                installerGenerationStore: generationStore);
+
+            await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(() =>
+                handler.Handle(
+                    new GenerateEdgeInstallerPackageCommand(
+                        [new EdgeBindingSelection(PrimaryModuleId, device.Id)],
+                        HostVersion: "1.2.0",
+                        BaseUrl: "http://cloud.local"),
+                    CancellationToken.None));
+
+            Assert.Empty(generationStore.Records);
         }
         finally
         {
@@ -1089,7 +1138,8 @@ public sealed class InstallerPackageWorkflowTests
         string artifactRoot,
         IAuditTrailService auditTrail,
         IUnitOfWork? unitOfWork = null,
-        IClientReleaseWriteObservationReader? observationReader = null)
+        IClientReleaseWriteObservationReader? observationReader = null,
+        IEdgeInstallerGenerationStore? installerGenerationStore = null)
     {
         return new GenerateEdgeInstallerPackageHandler(
             new TestCurrentUser
@@ -1110,7 +1160,9 @@ public sealed class InstallerPackageWorkflowTests
             unitOfWork ?? new RecordingUnitOfWork(),
             observationReader
             ?? new InstallerClientReleaseWriteObservationReader(
-                deviceRepository));
+                deviceRepository),
+            installerGenerationStore
+            ?? new InMemoryEdgeInstallerGenerationStore());
     }
 
     private sealed class ConfirmedAuditBarrier : IAuditTrailService

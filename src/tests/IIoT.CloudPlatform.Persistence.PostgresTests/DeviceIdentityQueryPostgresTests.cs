@@ -98,13 +98,18 @@ public sealed class DeviceIdentityQueryPostgresTests(
     {
         var builder = new NpgsqlConnectionStringBuilder(connectionString)
         {
-            ApplicationName = applicationName
+            ApplicationName = applicationName,
+            Pooling = false
         };
         return new DeviceIdentityQueryService(new NpgsqlConnectionFactory(builder.ConnectionString));
     }
 
     private async Task<DeviceIdentityRuntime> CreateRuntimeAsync(string applicationName)
     {
+        // The persistence collection uses unique application names for PostgreSQL
+        // observation. Drain its idle in-process pools before opening this runtime
+        // so a full affected-suite run cannot exhaust PostgreSQL max_connections.
+        NpgsqlConnection.ClearAllPools();
         var budget = await PostgresTestBudget.CreateAsync(fixture);
         return new DeviceIdentityRuntime(
             budget,
@@ -187,7 +192,8 @@ public sealed class DeviceIdentityQueryPostgresTests(
         var readinessToken = readinessTimeout.Token;
         var observerBuilder = new NpgsqlConnectionStringBuilder(connectionString)
         {
-            ApplicationName = $"device-identity-lock-observer-{Guid.NewGuid():N}"
+            ApplicationName = $"device-identity-lock-observer-{Guid.NewGuid():N}",
+            Pooling = false
         };
 
         try

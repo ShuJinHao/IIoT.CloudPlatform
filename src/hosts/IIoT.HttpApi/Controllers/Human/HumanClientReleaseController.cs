@@ -134,6 +134,8 @@ public sealed class HumanClientReleaseController : ApiControllerBase
         }
 
         Response.Headers.CacheControl = "no-store";
+        Response.Headers[InstallerPackageHeaderNames.GenerationId] =
+            result.Value!.GenerationId.ToString("D");
         return File(result.Value!.Content, result.Value.ContentType, result.Value.FileName);
     }
 

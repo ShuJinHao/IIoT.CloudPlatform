@@ -3,7 +3,7 @@
     <div class="filter-stack">
       <div class="filter-field">
         <span class="filter-field__label">查询模式</span>
-        <UiRadioGroup :value="currentMode" size="small" @update:value="$emit('switchMode', $event)">
+        <UiRadioGroup class="passstation-query-modes" :value="currentMode" size="small" @update:value="$emit('switchMode', $event)">
           <UiRadioButton v-for="mode in activeQueryModes" :key="mode.key" :value="mode.key">{{ mode.label }}</UiRadioButton>
         </UiRadioGroup>
       </div>
@@ -59,13 +59,17 @@
           <template #icon><Search :size="14" /></template>
           查询
         </UiButton>
+        <UiButton secondary size="small" :loading="exporting" @click="$emit('export')">
+          <template #icon><Download :size="14" /></template>
+          导出 CSV
+        </UiButton>
       </div>
     </div>
   </CardSurface>
 </template>
 
 <script setup lang="ts">
-import { Search } from 'lucide-vue-next';
+import { Download, Search } from 'lucide-vue-next';
 import CardSurface from '../../components/layout/CardSurface.vue';
 import UiButton from '../../components/ui/UiButton.vue';
 import UiDatePicker from '../../components/ui/UiDatePicker.vue';
@@ -79,6 +83,7 @@ import type { PassStationFilters } from './types';
 
 defineEmits<{
   search: [];
+  export: [];
   switchMode: [value: PassStationQueryMode];
 }>();
 
@@ -87,5 +92,6 @@ defineProps<{
   activeQueryModes: Array<{ key: PassStationQueryMode; label: string }>;
   filters: PassStationFilters;
   deviceOptions: UiSelectOption[];
+  exporting: boolean;
 }>();
 </script>

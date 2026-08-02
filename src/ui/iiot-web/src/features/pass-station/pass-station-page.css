@@ -50,6 +50,16 @@
   gap: var(--space-4);
 }
 
+.passstation-query-modes {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.passstation-query-modes > button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .filter-field {
   display: flex;
   flex-direction: column;

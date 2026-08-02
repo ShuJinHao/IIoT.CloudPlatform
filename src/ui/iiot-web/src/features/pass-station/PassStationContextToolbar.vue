@@ -15,12 +15,12 @@
 <script setup lang="ts">
 import NiondToolbar from '../../components/layout/NiondToolbar.vue';
 import UiSelect from '../../components/ui/UiSelect.vue';
-import type { ProcessSelectDto } from '../processes/api';
 import type { UiSelectOption } from '../../components/ui/types';
+import type { PassStationProcessOption } from './types';
 
 const currentProcessId = defineModel<string | null>('currentProcessId', { required: true });
 defineProps<{
   processOptions: UiSelectOption[];
-  currentProcess: ProcessSelectDto | null;
+  currentProcess: PassStationProcessOption | null;
 }>();
 </script>

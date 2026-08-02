@@ -1,4 +1,6 @@
 using System.Linq.Expressions;
+using IIoT.Core.Production.Aggregates.ClientReleases;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Core.Production.Contracts.RecordRepositories;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Core.Identity.Aggregates.IdentityAccounts;
@@ -15,6 +17,37 @@ using IIoT.SharedKernel.Result;
 using IIoT.SharedKernel.Specification;
 
 namespace IIoT.CloudPlatform.TestKit;
+
+internal sealed class InMemoryEdgeInstallerGenerationStore : IEdgeInstallerGenerationStore
+{
+    public Dictionary<Guid, EdgeInstallerGenerationRecord> Records { get; } = [];
+
+    public bool ConfirmResult { get; set; } = true;
+
+    public Task<bool> TryAddConfirmedAsync(
+        EdgeInstallerGenerationRecord record,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!ConfirmResult) return Task.FromResult(false);
+        if (Records.TryGetValue(record.Id, out var existing))
+        {
+            return Task.FromResult(ReferenceEquals(existing, record));
+        }
+
+        Records.Add(record.Id, record);
+        return Task.FromResult(true);
+    }
+
+    public Task<EdgeInstallerGenerationRecord?> GetByIdAsync(
+        Guid generationId,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Records.TryGetValue(generationId, out var record);
+        return Task.FromResult(record);
+    }
+}
 
 internal sealed class InMemoryRepository<T> : IRepository<T>
     where T : class, IEntity, IAggregateRoot
@@ -457,6 +490,10 @@ internal sealed class StubCapacityQueryService : ICapacityQueryService
 
     public Guid? LastHourlyDeviceId { get; private set; }
 
+    public DateOnly? LastHourlyDate { get; private set; }
+
+    public string? LastHourlyPlcCode { get; private set; }
+
     public DateTime? LastHourlyRangeStart { get; private set; }
 
     public DateTime? LastHourlyRangeEnd { get; private set; }
@@ -492,11 +529,13 @@ internal sealed class StubCapacityQueryService : ICapacityQueryService
     public Task<List<HourlyCapacityDto>> GetHourlyByDeviceIdAsync(
         Guid deviceId,
         DateOnly date,
-        string? plcName = null,
+        string? plcCode = null,
         CancellationToken cancellationToken = default)
     {
         HourlyCalls++;
         LastHourlyDeviceId = deviceId;
+        LastHourlyDate = date;
+        LastHourlyPlcCode = plcCode;
         return Task.FromResult(HourlyResult);
     }
 
@@ -711,6 +750,10 @@ internal sealed class StubPassStationRecordQueryService : IPassStationRecordQuer
 
     public int GetDetailCalls { get; private set; }
 
+    public int GetForExportCalls { get; private set; }
+
+    public int LastExportTake { get; private set; }
+
     public PassStationQueryRequest? LastRequest { get; private set; }
 
     public IReadOnlyCollection<Guid>? LastAllowedDeviceIds { get; private set; }
@@ -727,41 +770,106 @@ internal sealed class StubPassStationRecordQueryService : IPassStationRecordQuer
         GetByConditionCalls++;
         LastRequest = request;
         LastAllowedDeviceIds = allowedDeviceIds;
-        return Task.FromResult((Items, TotalCount));
+        var scopedItems = allowedDeviceIds is null
+            ? Items
+            : Items.Where(item => allowedDeviceIds.Contains(item.DeviceId)).ToList();
+        return Task.FromResult((
+            scopedItems,
+            allowedDeviceIds is null ? TotalCount : scopedItems.Count));
     }
 
     public Task<PassStationDetailDto?> GetDetailAsync(
         string typeKey,
         Guid id,
+        IReadOnlyCollection<Guid>? allowedDeviceIds,
         CancellationToken cancellationToken = default)
     {
         GetDetailCalls++;
         LastDetailTypeKey = typeKey;
         LastDetailId = id;
-        return Task.FromResult(Detail);
+        LastAllowedDeviceIds = allowedDeviceIds;
+        var detail = Detail is not null
+                     && Detail.Id == id
+                     && (allowedDeviceIds is null || allowedDeviceIds.Contains(Detail.DeviceId))
+            ? Detail
+            : null;
+        return Task.FromResult(detail);
+    }
+
+    public Task<List<PassStationListItemDto>> GetForExportAsync(
+        PassStationQueryRequest request,
+        IReadOnlyCollection<Guid>? allowedDeviceIds,
+        int take,
+        CancellationToken cancellationToken = default)
+    {
+        GetForExportCalls++;
+        LastRequest = request;
+        LastAllowedDeviceIds = allowedDeviceIds;
+        LastExportTake = take;
+        var scopedItems = allowedDeviceIds is null
+            ? Items
+            : Items.Where(item => allowedDeviceIds.Contains(item.DeviceId)).ToList();
+        return Task.FromResult(scopedItems.Take(take).ToList());
     }
 }
 
 internal sealed class StubDeviceOperationalStatusQueryService : IDeviceOperationalStatusQueryService
 {
-    public DeviceStatusSummaryDto Summary { get; set; } = new(0, 0, 0, 0, 0, DateTimeOffset.UtcNow);
+    public IReadOnlyList<DeviceOperationalStatusTarget> Targets { get; set; } = [];
 
     public IReadOnlyCollection<Guid>? LastDeviceIds { get; private set; }
 
-    public DateTimeOffset? LastOfflineCutoff { get; private set; }
-
-    public DateTimeOffset? LastStatusWindowStart { get; private set; }
-
-    public Task<DeviceStatusSummaryDto> GetStatusSummaryAsync(
-        DateTimeOffset offlineCutoff,
-        DateTimeOffset statusWindowStart,
+    public Task<IReadOnlyList<DeviceOperationalStatusTarget>> GetScopedDevicesAsync(
         IReadOnlyCollection<Guid>? deviceIds = null,
         CancellationToken cancellationToken = default)
     {
-        LastOfflineCutoff = offlineCutoff;
-        LastStatusWindowStart = statusWindowStart;
         LastDeviceIds = deviceIds;
-        return Task.FromResult(Summary);
+        return Task.FromResult(Targets);
+    }
+}
+
+internal sealed class StubDeviceClientStateQueryService : IDeviceClientStateQueryService
+{
+    public List<DeviceClientState> States { get; } = [];
+
+    public List<DeviceClientVersionSnapshot> Snapshots { get; } = [];
+
+    public IReadOnlyCollection<Guid>? LastRequestedDeviceIds { get; private set; }
+
+    public Task<DeviceClientVersionSnapshot?> GetVersionSnapshotByDeviceAsync(
+        Guid deviceId,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(Snapshots.SingleOrDefault(snapshot => snapshot.DeviceId == deviceId));
+
+    public Task<IReadOnlyList<DeviceClientVersionSnapshot>> GetVersionSnapshotsByDevicesAsync(
+        IReadOnlyCollection<Guid>? deviceIds = null,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<DeviceClientVersionSnapshot>>(Snapshots
+            .Where(snapshot => deviceIds is null || deviceIds.Contains(snapshot.DeviceId))
+            .ToArray());
+
+    public Task<EdgeDeviceRuntimeHeartbeat?> GetRuntimeHeartbeatByIdentityAsync(
+        Guid deviceId,
+        string clientCode,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<EdgeDeviceRuntimeHeartbeat?>(null);
+
+    public Task<DeviceClientState?> GetStateByIdentityAsync(
+        Guid deviceId,
+        string clientCode,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(States.SingleOrDefault(state =>
+            state.DeviceId == deviceId
+            && string.Equals(state.ClientCode, clientCode, StringComparison.OrdinalIgnoreCase)));
+
+    public Task<IReadOnlyList<DeviceClientState>> GetStatesByDevicesAsync(
+        IReadOnlyCollection<Guid>? deviceIds = null,
+        CancellationToken cancellationToken = default)
+    {
+        LastRequestedDeviceIds = deviceIds;
+        return Task.FromResult<IReadOnlyList<DeviceClientState>>(States
+            .Where(state => deviceIds is null || deviceIds.Contains(state.DeviceId))
+            .ToArray());
     }
 }
 
@@ -1842,6 +1950,8 @@ internal sealed class RecordingUploadReceiveRegistry(
 
     public string? LastDeduplicationKey { get; private set; }
 
+    public string? LastContentFingerprint { get; private set; }
+
     public List<IIntegrationEvent> RegisteredEvents { get; } = [];
 
     public UploadReceiveRegistrationResult NextResult { get; set; } =
@@ -1853,7 +1963,8 @@ internal sealed class RecordingUploadReceiveRegistry(
         string? requestId,
         string deduplicationKey,
         IIntegrationEvent integrationEvent,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? contentFingerprint = null)
     {
         callOrder?.Add("register");
         if (registerException is not null)
@@ -1864,6 +1975,7 @@ internal sealed class RecordingUploadReceiveRegistry(
         LastMessageType = messageType;
         LastRequestId = requestId;
         LastDeduplicationKey = deduplicationKey;
+        LastContentFingerprint = contentFingerprint;
         LastRegisteredEvent = integrationEvent;
         RegisteredEvents.Add(integrationEvent);
         return Task.FromResult(NextResult);

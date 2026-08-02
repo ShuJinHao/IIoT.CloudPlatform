@@ -15,7 +15,8 @@ namespace IIoT.ProductionService.Queries.Capacities;
 public record GetSummaryByDeviceIdQuery(
     Guid DeviceId,
     DateOnly Date,
-    string? PlcName = null
+    string? PlcName = null,
+    string? PlcCode = null
 ) : IHumanQuery<Result<DailySummaryDto?>>;
 
 public class GetSummaryByDeviceIdHandler(
@@ -38,6 +39,6 @@ public class GetSummaryByDeviceIdHandler(
 
         return Result.Success<DailySummaryDto?>(await CapacityQueryCache.GetSummaryAsync(
             queryService, cacheService, request.DeviceId, request.Date,
-            request.PlcName, cancellationToken));
+            request.PlcCode ?? request.PlcName, cancellationToken));
     }
 }

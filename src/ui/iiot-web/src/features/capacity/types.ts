@@ -1,5 +1,4 @@
 export const CAPACITY_PAGE_SIZE = 10;
-export const UNASSIGNED_PLC_KEY = '__unassigned_plc__';
 
 export type RateAccent = 'success' | 'warn' | 'error';
 export type CapacityQueryMode = 'day' | 'month' | 'year';
@@ -9,19 +8,21 @@ export interface CapacityDetailRow {
   period: string;
   label: string;
   plcKey: string;
-  plcName: string;
+  plcCode: string;
+  plcName: string | null;
+  plcDisplay: string;
   shift: string;
   total: number;
-  ok: number;
-  ng: number;
-  rate: number;
+  ok: number | null;
+  ng: number | null;
+  rate: number | null;
 }
 
 export interface CapacitySummary {
   total: number;
-  ok: number;
-  ng: number;
-  ratePercent: number;
+  ok: number | null;
+  ng: number | null;
+  ratePercent: number | null;
 }
 
 export class CapacityPayloadError extends Error {
@@ -45,7 +46,8 @@ export const thisMonth = () => {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 };
 
-export const formatInt = (value: number) => value.toLocaleString('zh-CN');
+export const formatInt = (value: number | null | undefined) =>
+  value === null || value === undefined ? '—' : value.toLocaleString('zh-CN');
 
 export const rateAccent = (rate: number): RateAccent => {
   if (rate >= 95) return 'success';
@@ -84,30 +86,51 @@ function requireString(item: Record<string, unknown>, key: string, context: stri
 }
 
 function readPlc(item: Record<string, unknown>, context: string) {
+  const plcCode = requireString(item, 'plcCode', context);
   const value = item.plcName;
   if (value !== null && value !== undefined && typeof value !== 'string') {
     throw new CapacityPayloadError(`${context}.plcName格式无效。`);
   }
-  const plcName = typeof value === 'string' ? value.trim() : '';
+  const plcName = typeof value === 'string' && value.trim() ? value.trim() : null;
   return {
-    plcKey: plcName || UNASSIGNED_PLC_KEY,
-    plcName: plcName || '—',
+    plcKey: plcCode,
+    plcCode,
+    plcName,
+    plcDisplay: plcName ? `${plcCode} · ${plcName}` : plcCode,
+  };
+}
+
+function readQualityPair(
+  item: Record<string, unknown>,
+  okKey: string,
+  ngKey: string,
+  total: number,
+  context: string,
+) {
+  const okValue = item[okKey];
+  const ngValue = item[ngKey];
+  const okMissing = okValue === null || okValue === undefined;
+  const ngMissing = ngValue === null || ngValue === undefined;
+  if (okMissing !== ngMissing) {
+    throw new CapacityPayloadError(`${context}.${okKey}与${ngKey}必须同时有值或同时为空。`);
+  }
+  if (okMissing) return { ok: null, ng: null, rate: null };
+
+  const ok = requireCount(item, okKey, context);
+  const ng = requireCount(item, ngKey, context);
+  if (ok + ng > total) {
+    throw new CapacityPayloadError(`${context}的质量计数不能超过完工弹夹数。`);
+  }
+  return {
+    ok,
+    ng,
+    rate: total > 0 ? (ok / total) * 100 : 0,
   };
 }
 
 function readCounts(item: Record<string, unknown>, context: string) {
   const total = requireCount(item, 'totalCount', context);
-  const ok = requireCount(item, 'okCount', context);
-  const ng = requireCount(item, 'ngCount', context);
-  if (total !== ok + ng) {
-    throw new CapacityPayloadError(`${context}的完工、合格和不合格弹夹数无法对账。`);
-  }
-  return {
-    total,
-    ok,
-    ng,
-    rate: total > 0 ? (ok / total) * 100 : 0,
-  };
+  return { total, ...readQualityPair(item, 'okCount', 'ngCount', total, context) };
 }
 
 interface ParsedHourlyItem {
@@ -116,21 +139,25 @@ interface ParsedHourlyItem {
   shiftCode: string;
   timeLabel: string;
   plcKey: string;
-  plcName: string;
+  plcCode: string;
+  plcName: string | null;
+  plcDisplay: string;
   total: number;
-  ok: number;
-  ng: number;
-  rate: number;
+  ok: number | null;
+  ng: number | null;
+  rate: number | null;
 }
 
 interface ParsedRangeItem {
   date: string;
   plcKey: string;
-  plcName: string;
+  plcCode: string;
+  plcName: string | null;
+  plcDisplay: string;
   total: number;
-  ok: number;
-  ng: number;
-  rate: number;
+  ok: number | null;
+  ng: number | null;
+  rate: number | null;
 }
 
 function parseHourlyItem(value: unknown, index: number): ParsedHourlyItem {
@@ -141,17 +168,13 @@ function parseHourlyItem(value: unknown, index: number): ParsedHourlyItem {
   if (hour > 23 || minute > 59) {
     throw new CapacityPayloadError(`${context}的时间桶超出有效范围。`);
   }
-  const shiftCode = requireString(item, 'shiftCode', context);
-  const timeLabel = requireString(item, 'timeLabel', context);
-  const counts = readCounts(item, context);
-  const plc = readPlc(item, context);
   return {
     hour,
     minute,
-    shiftCode,
-    timeLabel,
-    ...counts,
-    ...plc,
+    shiftCode: requireString(item, 'shiftCode', context),
+    timeLabel: requireString(item, 'timeLabel', context),
+    ...readCounts(item, context),
+    ...readPlc(item, context),
   };
 }
 
@@ -163,24 +186,22 @@ function parseRangeItem(value: unknown, index: number): ParsedRangeItem {
     throw new CapacityPayloadError(`${context}.date格式无效。`);
   }
   const counts = readCounts(item, context);
-  const plc = readPlc(item, context);
   const dayTotal = requireCount(item, 'dayShiftTotal', context);
-  const dayOk = requireCount(item, 'dayShiftOk', context);
-  const dayNg = requireCount(item, 'dayShiftNg', context);
   const nightTotal = requireCount(item, 'nightShiftTotal', context);
-  const nightOk = requireCount(item, 'nightShiftOk', context);
-  const nightNg = requireCount(item, 'nightShiftNg', context);
-  if (dayTotal !== dayOk + dayNg || nightTotal !== nightOk + nightNg) {
-    throw new CapacityPayloadError(`${context}的班次合格与不合格弹夹数无法对账。`);
-  }
+  const dayQuality = readQualityPair(item, 'dayShiftOk', 'dayShiftNg', dayTotal, context);
+  const nightQuality = readQualityPair(item, 'nightShiftOk', 'nightShiftNg', nightTotal, context);
   if (counts.total !== dayTotal + nightTotal) {
     throw new CapacityPayloadError(`${context}的班次完工弹夹数与日汇总无法对账。`);
   }
-  return {
-    date,
-    ...counts,
-    ...plc,
-  };
+  if (dayQuality.ok !== null && nightQuality.ok !== null) {
+    if (counts.ok !== dayQuality.ok + nightQuality.ok
+      || counts.ng !== dayQuality.ng! + nightQuality.ng!) {
+      throw new CapacityPayloadError(`${context}的班次质量计数与日汇总无法对账。`);
+    }
+  } else if (counts.ok !== null || counts.ng !== null) {
+    throw new CapacityPayloadError(`${context}包含未知班次质量时，日质量汇总也必须为空。`);
+  }
+  return { date, ...counts, ...readPlc(item, context) };
 }
 
 export function mapHourlyRows(date: string, payload: unknown): CapacityDetailRow[] {
@@ -191,7 +212,9 @@ export function mapHourlyRows(date: string, payload: unknown): CapacityDetailRow
       period: `${date} ${item.timeLabel}`,
       label: item.timeLabel,
       plcKey: item.plcKey,
+      plcCode: item.plcCode,
       plcName: item.plcName,
+      plcDisplay: item.plcDisplay,
       shift: item.shiftCode,
       total: item.total,
       ok: item.ok,
@@ -212,7 +235,9 @@ export function mapMonthRows(month: string, payload: unknown): CapacityDetailRow
       period: item.date,
       label: item.date.slice(5),
       plcKey: item.plcKey,
+      plcCode: item.plcCode,
       plcName: item.plcName,
+      plcDisplay: item.plcDisplay,
       shift: '',
       total: item.total,
       ok: item.ok,
@@ -231,27 +256,34 @@ export function mapYearRows(year: number, payload: unknown): CapacityDetailRow[]
     }
     const month = item.date.slice(0, 7);
     const key = `${month}|${item.plcKey}`;
-    const current = groups.get(key) ?? {
-      bucketKey: month,
-      period: month,
-      label: `${Number(month.slice(5))} 月`,
-      plcKey: item.plcKey,
-      plcName: item.plcName,
-      shift: '',
-      total: 0,
-      ok: 0,
-      ng: 0,
-      rate: 0,
-    };
+    const current = groups.get(key);
+    if (!current) {
+      groups.set(key, {
+        bucketKey: month,
+        period: month,
+        label: `${Number(month.slice(5))} 月`,
+        plcKey: item.plcKey,
+        plcCode: item.plcCode,
+        plcName: item.plcName,
+        plcDisplay: item.plcDisplay,
+        shift: '',
+        total: item.total,
+        ok: item.ok,
+        ng: item.ng,
+        rate: item.rate,
+      });
+      return;
+    }
     current.total += item.total;
-    current.ok += item.ok;
-    current.ng += item.ng;
-    current.rate = current.total > 0 ? (current.ok / current.total) * 100 : 0;
-    groups.set(key, current);
+    current.ok = current.ok !== null && item.ok !== null ? current.ok + item.ok : null;
+    current.ng = current.ng !== null && item.ng !== null ? current.ng + item.ng : null;
+    current.rate = current.ok !== null && current.total > 0
+      ? (current.ok / current.total) * 100
+      : current.ok === 0 ? 0 : null;
   });
   return [...groups.values()].sort((left, right) =>
     left.bucketKey.localeCompare(right.bucketKey)
-    || left.plcName.localeCompare(right.plcName, 'zh-CN'));
+    || left.plcDisplay.localeCompare(right.plcDisplay, 'zh-CN'));
 }
 
 export function filterRowsByPlc(
@@ -264,20 +296,21 @@ export function filterRowsByPlc(
 
 export function summarizeRows(rows: CapacityDetailRow[]): CapacitySummary {
   const total = rows.reduce((sum, row) => sum + row.total, 0);
-  const ok = rows.reduce((sum, row) => sum + row.ok, 0);
-  const ng = rows.reduce((sum, row) => sum + row.ng, 0);
+  const qualityKnown = rows.every((row) => row.ok !== null && row.ng !== null);
+  const ok = qualityKnown ? rows.reduce((sum, row) => sum + row.ok!, 0) : null;
+  const ng = qualityKnown ? rows.reduce((sum, row) => sum + row.ng!, 0) : null;
   return {
     total,
     ok,
     ng,
-    ratePercent: total > 0 ? (ok * 100) / total : 0,
+    ratePercent: ok === null ? null : total > 0 ? (ok * 100) / total : 0,
   };
 }
 
 export function createPlcOptions(rows: CapacityDetailRow[]) {
   return [...new Map(rows.map((row) => [
     row.plcKey,
-    { label: row.plcName, value: row.plcKey },
+    { label: row.plcDisplay, value: row.plcKey },
   ])).values()].sort((left, right) =>
     left.label.localeCompare(right.label, 'zh-CN'));
 }

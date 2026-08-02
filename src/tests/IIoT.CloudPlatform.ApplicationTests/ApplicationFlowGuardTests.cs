@@ -21,6 +21,7 @@ using IIoT.ProductionService.Commands.PassStations;
 using IIoT.ProductionService.Commands.Recipes;
 using IIoT.ProductionService.Caching;
 using IIoT.ProductionService.ClientReleases;
+using IIoT.ProductionService.BusinessTime;
 using IIoT.ProductionService.PassStations;
 using IIoT.ProductionService.Profiles;
 using IIoT.ProductionService.Commands.ClientReleases;
@@ -1812,6 +1813,38 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
+    public void UploadCommandValidators_ShouldAcceptV2CapacityWithUnknownQualityAndRejectUntrustedIdentity()
+    {
+        var validator = new ReceiveHourlyCapacityCommandValidator();
+        var valid = new ReceiveHourlyCapacityCommand(
+            Guid.NewGuid(),
+            new DateOnly(2026, 8, 2),
+            "D",
+            9,
+            30,
+            "09:30",
+            TotalCount: 10,
+            OkCount: null,
+            NgCount: null,
+            PlcName: "正极模切一号 PLC",
+            SchemaVersion: 2,
+            ProcessType: "cp",
+            PlcCode: "P2-CP01");
+
+        Assert.True(validator.Validate(valid).IsValid);
+        var missingName = validator.Validate(valid with { PlcName = null });
+        Assert.False(missingName.IsValid);
+        Assert.Contains(
+            missingName.Errors,
+            error => error.PropertyName == nameof(ReceiveHourlyCapacityCommand.PlcName));
+        var partialQuality = validator.Validate(valid with { OkCount = 9, NgCount = null });
+        Assert.False(partialQuality.IsValid);
+        Assert.Contains(
+            partialQuality.Errors,
+            error => error.ErrorMessage.Contains("同时为空或同时提供", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void UploadCommandValidators_ShouldRejectInvalidPassStationItem()
     {
         var validator = new ReceivePassStationBatchCommandValidator(CreatePassStationSchemaProvider());
@@ -1930,7 +1963,7 @@ public sealed class ApplicationFlowGuardTests
                     }
                     """))
             ],
-            SchemaVersion: 2);
+            SchemaVersion: 3);
 
         var result = validator.Validate(command);
 
@@ -1963,7 +1996,11 @@ public sealed class ApplicationFlowGuardTests
                     TotalCount = 16,
                     OkCount = 15,
                     NgCount = 1,
+                    SchemaVersion = 2,
+                    ProcessType = "cp",
+                    PlcCode = "P2-CP01",
                     PlcName = "PLC-01",
+                    PlcNameIsTrusted = true,
                     ReceivedAtUtc = reportedAt
                 }),
             CancellationToken.None);
@@ -1973,13 +2010,13 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal(deviceId, repository.LastUpsert!.DeviceId);
         Assert.Equal(reportedAt, repository.LastUpsert.ReportedAt);
         Assert.Contains(
-            CacheKeys.CapacityHourly(repository.LastUpsert.DeviceId, repository.LastUpsert.Date, repository.LastUpsert.PlcName),
+            CacheKeys.CapacityHourly(repository.LastUpsert.DeviceId, repository.LastUpsert.Date, repository.LastUpsert.PlcCode),
             cache.RemovedKeys);
         Assert.Contains(
-            CacheKeys.CapacitySummary(repository.LastUpsert.DeviceId, repository.LastUpsert.Date, repository.LastUpsert.PlcName),
+            CacheKeys.CapacitySummary(repository.LastUpsert.DeviceId, repository.LastUpsert.Date, repository.LastUpsert.PlcCode),
             cache.RemovedKeys);
         Assert.Contains(
-            CacheKeys.CapacityRange(repository.LastUpsert.DeviceId, repository.LastUpsert.Date, repository.LastUpsert.Date, repository.LastUpsert.PlcName),
+            CacheKeys.CapacityRange(repository.LastUpsert.DeviceId, repository.LastUpsert.Date, repository.LastUpsert.Date, repository.LastUpsert.PlcCode),
             cache.RemovedKeys);
         Assert.Contains(CacheKeys.CapacityHourlyPattern(deviceId), cache.RemovedPatterns);
         Assert.Contains(CacheKeys.CapacitySummaryPattern(deviceId), cache.RemovedPatterns);
@@ -1999,7 +2036,11 @@ public sealed class ApplicationFlowGuardTests
         mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
         var mapper = mapperServices.BuildServiceProvider().GetRequiredService<IMapper>();
         var handler = new ReceiveHourlyCapacityHandler(
-            new StubDeviceIdentityQueryService { Exists = true },
+            new StubDeviceIdentityQueryService
+            {
+                Exists = true,
+                Snapshot = new DeviceIdentitySnapshot(deviceId, "EDGE-01", ProcessCode: "cp")
+            },
             mapper,
             registry,
             cache);
@@ -2038,6 +2079,97 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
+    public async Task ReceiveHourlyCapacityHandler_ShouldMapTrustedV2IdentityAndNullableQuality()
+    {
+        var deviceId = Guid.NewGuid();
+        var registry = new RecordingUploadReceiveRegistry();
+        var cache = new RecordingCacheService();
+        var mapperServices = new ServiceCollection();
+        mapperServices.AddLogging();
+        mapperServices.AddAutoMapper(cfg => cfg.AddProfile<ProductionProfile>());
+        var handler = new ReceiveHourlyCapacityHandler(
+            new StubDeviceIdentityQueryService
+            {
+                Exists = true,
+                Snapshot = new DeviceIdentitySnapshot(deviceId, "EDGE-01", ProcessCode: "cp")
+            },
+            mapperServices.BuildServiceProvider().GetRequiredService<IMapper>(),
+            registry,
+            cache);
+        var request = new ReceiveHourlyCapacityCommand(
+            deviceId,
+            new DateOnly(2026, 8, 2),
+            "D",
+            9,
+            30,
+            "09:30",
+            TotalCount: 10,
+            OkCount: null,
+            NgCount: null,
+            PlcName: " 正极模切一号 PLC ",
+            RequestId: "capacity-v2-1",
+            SchemaVersion: 2,
+            ProcessType: " CP ",
+            PlcCode: " P2-CP01 ");
+
+        var result = await handler.Handle(request, CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var enqueued = Assert.IsType<HourlyCapacityReceivedEvent>(registry.LastRegisteredEvent);
+        Assert.Equal(2, enqueued.SchemaVersion);
+        Assert.Equal("cp", enqueued.ProcessType);
+        Assert.Equal("P2-CP01", enqueued.PlcCode);
+        Assert.Equal("正极模切一号 PLC", enqueued.PlcName);
+        Assert.True(enqueued.PlcNameIsTrusted);
+        Assert.Null(enqueued.OkCount);
+        Assert.Null(enqueued.NgCount);
+        Assert.Contains(
+            CacheKeys.CapacityHourly(deviceId, request.Date, "P2-CP01"),
+            cache.RemovedKeys);
+    }
+
+    [Fact]
+    public async Task ReceiveHourlyCapacityHandler_ShouldRejectV2ProcessMismatchBeforeOutbox()
+    {
+        var deviceId = Guid.NewGuid();
+        var registry = new RecordingUploadReceiveRegistry();
+        var cache = new RecordingCacheService();
+        var mapperServices = new ServiceCollection();
+        mapperServices.AddLogging();
+        mapperServices.AddAutoMapper(cfg => cfg.AddProfile<ProductionProfile>());
+        var handler = new ReceiveHourlyCapacityHandler(
+            new StubDeviceIdentityQueryService
+            {
+                Snapshot = new DeviceIdentitySnapshot(deviceId, "EDGE-01", ProcessCode: "ap")
+            },
+            mapperServices.BuildServiceProvider().GetRequiredService<IMapper>(),
+            registry,
+            cache);
+
+        var result = await handler.Handle(
+            new ReceiveHourlyCapacityCommand(
+                deviceId,
+                new DateOnly(2026, 8, 2),
+                "D",
+                9,
+                30,
+                "09:30",
+                10,
+                null,
+                null,
+                "正极模切一号 PLC",
+                SchemaVersion: 2,
+                ProcessType: "cp",
+                PlcCode: "P2-CP01"),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ResultStatus.Forbidden, result.Status);
+        Assert.Null(registry.LastRegisteredEvent);
+        Assert.Empty(cache.RemovedKeys);
+    }
+
+    [Fact]
     public async Task ReceiveHourlyCapacityHandler_ShouldVaryDeduplicationKeyWhenCountsChange()
     {
         var deviceId = Guid.NewGuid();
@@ -2049,12 +2181,18 @@ public sealed class ApplicationFlowGuardTests
         var firstRegistry = new RecordingUploadReceiveRegistry();
         var secondRegistry = new RecordingUploadReceiveRegistry();
         var firstHandler = new ReceiveHourlyCapacityHandler(
-            new StubDeviceIdentityQueryService { Exists = true },
+            new StubDeviceIdentityQueryService
+            {
+                Snapshot = new DeviceIdentitySnapshot(deviceId, "EDGE-01", ProcessCode: "cp")
+            },
             mapper,
             firstRegistry,
             new RecordingCacheService());
         var secondHandler = new ReceiveHourlyCapacityHandler(
-            new StubDeviceIdentityQueryService { Exists = true },
+            new StubDeviceIdentityQueryService
+            {
+                Snapshot = new DeviceIdentitySnapshot(deviceId, "EDGE-01", ProcessCode: "cp")
+            },
             mapper,
             secondRegistry,
             new RecordingCacheService());
@@ -2105,7 +2243,10 @@ public sealed class ApplicationFlowGuardTests
         mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
         var mapper = mapperServices.BuildServiceProvider().GetRequiredService<IMapper>();
         var handler = new ReceiveHourlyCapacityHandler(
-            new StubDeviceIdentityQueryService { Exists = true },
+            new StubDeviceIdentityQueryService
+            {
+                Snapshot = new DeviceIdentitySnapshot(deviceId, "EDGE-01", ProcessCode: "cp")
+            },
             mapper,
             registry,
             cache);
@@ -2146,7 +2287,10 @@ public sealed class ApplicationFlowGuardTests
         mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
         var mapper = mapperServices.BuildServiceProvider().GetRequiredService<IMapper>();
         var handler = new ReceiveHourlyCapacityHandler(
-            new StubDeviceIdentityQueryService { Exists = true },
+            new StubDeviceIdentityQueryService
+            {
+                Snapshot = new DeviceIdentitySnapshot(deviceId, "EDGE-01", ProcessCode: "cp")
+            },
             mapper,
             registry,
             cache);
@@ -2184,7 +2328,11 @@ public sealed class ApplicationFlowGuardTests
         mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
         var mapper = mapperServices.BuildServiceProvider().GetRequiredService<IMapper>();
         var handler = new ReceiveDeviceLogHandler(
-            new StubDeviceIdentityQueryService { Exists = true },
+            new StubDeviceIdentityQueryService
+            {
+                Exists = true,
+                Snapshot = new DeviceIdentitySnapshot(deviceId, "EDGE-01", ProcessCode: "cp")
+            },
             mapper,
             registry);
 
@@ -2226,7 +2374,11 @@ public sealed class ApplicationFlowGuardTests
         mapperServices.AddAutoMapper(cfg => { cfg.AddProfile<ProductionProfile>(); });
         var mapper = mapperServices.BuildServiceProvider().GetRequiredService<IMapper>();
         var handler = new ReceiveDeviceLogHandler(
-            new StubDeviceIdentityQueryService { Exists = true },
+            new StubDeviceIdentityQueryService
+            {
+                Exists = true,
+                Snapshot = new DeviceIdentitySnapshot(deviceId, "EDGE-01", ProcessCode: "cp")
+            },
             mapper,
             registry);
 
@@ -2331,7 +2483,10 @@ public sealed class ApplicationFlowGuardTests
         var deviceId = Guid.NewGuid();
         var registry = new RecordingUploadReceiveRegistry();
         var receiveService = new PassStationReceiveService(
-            new StubDeviceIdentityQueryService { Exists = true },
+            new StubDeviceIdentityQueryService
+            {
+                Snapshot = new DeviceIdentitySnapshot(deviceId, "EDGE-01", ProcessCode: "cp")
+            },
             registry);
         var handler = new ReceivePassStationBatchHandler(receiveService, CreatePassStationSchemaProvider());
 
@@ -2348,7 +2503,8 @@ public sealed class ApplicationFlowGuardTests
                         {
                           "plcCode": "P2-CP01",
                           "plcName": "正极模切01",
-                          "startTime": "2026-07-24T00:00:00Z",
+                          "clipSlot": "MG1",
+                          "startTime": "2026-04-29T09:00:00Z",
                           "punchingQuantity": 120,
                           "punchingSpeed": 1.25
                         }
@@ -2378,7 +2534,10 @@ public sealed class ApplicationFlowGuardTests
             NextResult = UploadReceiveRegistrationResult.Duplicate(Guid.NewGuid())
         };
         var receiveService = new PassStationReceiveService(
-            new StubDeviceIdentityQueryService { Exists = true },
+            new StubDeviceIdentityQueryService
+            {
+                Snapshot = new DeviceIdentitySnapshot(deviceId, "EDGE-01", ProcessCode: "cp")
+            },
             registry);
         var handler = new ReceivePassStationBatchHandler(receiveService, CreatePassStationSchemaProvider());
 
@@ -2395,7 +2554,8 @@ public sealed class ApplicationFlowGuardTests
                         {
                           "plcCode": "P2-CP01",
                           "plcName": "正极模切01",
-                          "startTime": "2026-07-24T00:00:00Z",
+                          "clipSlot": "MG1",
+                          "startTime": "2026-04-29T09:00:00Z",
                           "punchingQuantity": 120,
                           "punchingSpeed": 1.25
                         }
@@ -2407,6 +2567,110 @@ public sealed class ApplicationFlowGuardTests
         Assert.True(result.IsSuccess);
         Assert.Equal("duplicate_accepted", result.Value!.Code);
         Assert.True(result.Value.DuplicateAccepted);
+    }
+
+    [Fact]
+    public async Task ReceivePassStationBatchHandler_ShouldRejectRegisteredProcessMismatchBeforeOutbox()
+    {
+        var deviceId = Guid.NewGuid();
+        var registry = new RecordingUploadReceiveRegistry();
+        var receiveService = new PassStationReceiveService(
+            new StubDeviceIdentityQueryService
+            {
+                Snapshot = new DeviceIdentitySnapshot(deviceId, "EDGE-01", ProcessCode: "ap")
+            },
+            registry);
+        var handler = new ReceivePassStationBatchHandler(
+            receiveService,
+            CreatePassStationSchemaProvider());
+
+        var result = await handler.Handle(
+            new ReceivePassStationBatchCommand(
+                "cp",
+                deviceId,
+                [CreateStrictPassStationItem("BC-WRONG-PROCESS")],
+                "wrong-process",
+                SchemaVersion: 2,
+                ProcessType: "cp"),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ResultStatus.Forbidden, result.Status);
+        Assert.Null(registry.LastRegisteredEvent);
+    }
+
+    [Fact]
+    public async Task ReceivePassStationBatchHandler_ShouldCanonicalizeContentFingerprint()
+    {
+        var deviceId = Guid.NewGuid();
+        var firstRegistry = new RecordingUploadReceiveRegistry();
+        var secondRegistry = new RecordingUploadReceiveRegistry();
+        var identity = new StubDeviceIdentityQueryService
+        {
+            Snapshot = new DeviceIdentitySnapshot(deviceId, "EDGE-01", ProcessCode: "cp")
+        };
+        var firstHandler = new ReceivePassStationBatchHandler(
+            new PassStationReceiveService(identity, firstRegistry),
+            CreatePassStationSchemaProvider());
+        var secondHandler = new ReceivePassStationBatchHandler(
+            new PassStationReceiveService(identity, secondRegistry),
+            CreatePassStationSchemaProvider());
+        var completedTime = new DateTime(2026, 8, 2, 1, 30, 0, DateTimeKind.Utc);
+        var firstItem = CreateStrictPassStationItem("BC-FINGERPRINT", completedTime);
+        var secondItem = firstItem with
+        {
+            Payload = JsonPayload("""
+            {
+              "punchingSpeed": 1.25,
+              "clipSlot": "MG1",
+              "plcName": "正极模切一号 PLC",
+              "punchingQuantity": 120,
+              "startTime": "2026-08-02T01:25:00Z",
+              "plcCode": "P2-CP01"
+            }
+            """)
+        };
+
+        await firstHandler.Handle(
+            new ReceivePassStationBatchCommand(
+                "cp", deviceId, [firstItem], "same-request", 2, "cp"),
+            CancellationToken.None);
+        await secondHandler.Handle(
+            new ReceivePassStationBatchCommand(
+                "CP", deviceId, [secondItem], "same-request", 2, "CP"),
+            CancellationToken.None);
+
+        Assert.NotNull(firstRegistry.LastContentFingerprint);
+        Assert.Equal(64, firstRegistry.LastContentFingerprint!.Length);
+        Assert.Equal(firstRegistry.LastContentFingerprint, secondRegistry.LastContentFingerprint);
+        Assert.Equal("request:same-request", firstRegistry.LastDeduplicationKey);
+        Assert.Equal(firstRegistry.LastDeduplicationKey, secondRegistry.LastDeduplicationKey);
+    }
+
+    [Fact]
+    public void PassStationContentFingerprint_ShouldTreatLegacyMissingProcessTypeAsRouteType()
+    {
+        var item = CreateStrictPassStationItem("BC-LEGACY-FINGERPRINT");
+        var batchItem = new PassStationBatchItem
+        {
+            Barcode = item.Barcode,
+            CellResult = item.CellResult,
+            CompletedTime = item.CompletedTime,
+            PayloadJson = item.Payload.GetRawText(),
+            DeduplicationKey = "ignored-by-content-fingerprint"
+        };
+        var legacy = new PassStationBatchReceivedEvent
+        {
+            DeviceId = Guid.NewGuid(),
+            TypeKey = "cp",
+            ProcessType = string.Empty,
+            SchemaVersion = 1,
+            Items = [batchItem]
+        };
+
+        Assert.Equal(
+            PassStationContentFingerprint.Compute(legacy),
+            PassStationContentFingerprint.Compute(legacy with { ProcessType = "CP" }));
     }
 
     [Fact]
@@ -2423,7 +2687,10 @@ public sealed class ApplicationFlowGuardTests
         };
         var handler = new GetHourlyByDeviceIdHandler(
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
-            queryService);
+            queryService,
+            new BusinessTimeProvider(
+                TimeProvider.System,
+                Options.Create(new BusinessTimeOptions())));
 
         var first = await handler.Handle(new GetHourlyByDeviceIdQuery(deviceId, date, "PLC-01"), CancellationToken.None);
         var second = await handler.Handle(new GetHourlyByDeviceIdQuery(deviceId, date, "PLC-01"), CancellationToken.None);
@@ -2431,6 +2698,30 @@ public sealed class ApplicationFlowGuardTests
         Assert.True(first.IsSuccess);
         Assert.True(second.IsSuccess);
         Assert.Equal(2, queryService.HourlyCalls);
+    }
+
+    [Fact]
+    public async Task GetHourlyByDeviceIdHandler_WithoutDate_ShouldUseConfiguredCloudBusinessDay()
+    {
+        var deviceId = Guid.NewGuid();
+        var queryService = new StubCapacityQueryService();
+        var handler = new GetHourlyByDeviceIdHandler(
+            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            queryService,
+            new BusinessTimeProvider(
+                new FixedTimeProvider(new DateTimeOffset(2026, 8, 1, 16, 30, 0, TimeSpan.Zero)),
+                Options.Create(new BusinessTimeOptions { TimeZoneId = "Asia/Shanghai" })));
+
+        var result = await handler.Handle(
+            new GetHourlyByDeviceIdQuery(
+                deviceId,
+                Date: null,
+                PlcName: "LEGACY-PLC-IDENTITY"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(new DateOnly(2026, 8, 2), queryService.LastHourlyDate);
+        Assert.Equal("LEGACY-PLC-IDENTITY", queryService.LastHourlyPlcCode);
     }
 
     [Fact]
@@ -2447,7 +2738,10 @@ public sealed class ApplicationFlowGuardTests
         };
         var handler = new GetHourlyCapacityAggregateHandler(
             new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [allowedDeviceId] },
-            queryService);
+            queryService,
+            new BusinessTimeProvider(
+                TimeProvider.System,
+                Options.Create(new BusinessTimeOptions())));
 
         var result = await handler.Handle(
             new GetHourlyCapacityAggregateQuery(DateOnly.FromDateTime(DateTime.UtcNow), processId),
@@ -2462,20 +2756,25 @@ public sealed class ApplicationFlowGuardTests
     public async Task GetDeviceStatusSummaryHandler_ShouldUseCurrentUserDeviceScope()
     {
         var allowedDeviceId = Guid.NewGuid();
+        const string clientCode = "EDGE-01";
         var queryService = new StubDeviceOperationalStatusQueryService
         {
-            Summary = new DeviceStatusSummaryDto(1, 1, 0, 0, 0, DateTimeOffset.UtcNow)
+            Targets = [new DeviceOperationalStatusTarget(allowedDeviceId, clientCode)]
         };
+        var stateQueryService = new StubDeviceClientStateQueryService();
+        stateQueryService.States.Add(CreateClientState(allowedDeviceId, clientCode, "Running"));
         var handler = new GetDeviceStatusSummaryHandler(
             new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [allowedDeviceId] },
-            queryService);
+            queryService,
+            stateQueryService);
 
         var result = await handler.Handle(new GetDeviceStatusSummaryQuery(), CancellationToken.None);
 
         Assert.True(result.IsSuccess);
         Assert.Equal(new[] { allowedDeviceId }, queryService.LastDeviceIds);
-        Assert.NotNull(queryService.LastOfflineCutoff);
-        Assert.NotNull(queryService.LastStatusWindowStart);
+        Assert.Equal(new[] { allowedDeviceId }, stateQueryService.LastRequestedDeviceIds);
+        Assert.Equal(1, result.Value!.Online);
+        Assert.Equal("Running", result.Value.SoftwareStatus);
     }
 
     [Fact]
@@ -2488,9 +2787,14 @@ public sealed class ApplicationFlowGuardTests
         };
         var queryService = new StubDeviceOperationalStatusQueryService
         {
-            Summary = new DeviceStatusSummaryDto(1, 0, 1, 0, 0, DateTimeOffset.UtcNow)
+            Targets = [new DeviceOperationalStatusTarget(selectedDeviceId, "edge-02")]
         };
-        var handler = new GetDeviceStatusSummaryHandler(accessService, queryService);
+        var stateQueryService = new StubDeviceClientStateQueryService();
+        stateQueryService.States.Add(CreateClientState(selectedDeviceId, "EDGE-02", "Starting"));
+        var handler = new GetDeviceStatusSummaryHandler(
+            accessService,
+            queryService,
+            stateQueryService);
 
         var result = await handler.Handle(
             new GetDeviceStatusSummaryQuery(selectedDeviceId),
@@ -2500,6 +2804,7 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal(selectedDeviceId, accessService.LastCheckedDeviceId);
         Assert.Equal(0, accessService.GetAccessibleDeviceIdsCalls);
         Assert.Equal(new[] { selectedDeviceId }, queryService.LastDeviceIds);
+        Assert.Equal("Starting", result.Value!.SoftwareStatus);
     }
 
     [Fact]
@@ -2509,7 +2814,8 @@ public sealed class ApplicationFlowGuardTests
         var queryService = new StubDeviceOperationalStatusQueryService();
         var handler = new GetDeviceStatusSummaryHandler(
             new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [] },
-            queryService);
+            queryService,
+            new StubDeviceClientStateQueryService());
 
         var result = await handler.Handle(
             new GetDeviceStatusSummaryQuery(selectedDeviceId),
@@ -3049,7 +3355,9 @@ public sealed class ApplicationFlowGuardTests
             new Dictionary<string, object?>
             {
                 ["plcName"] = "正极模切01",
-                ["clipSlot"] = "MG1"
+                ["clipSlot"] = "MG1",
+                ["processType"] = "cp",
+                ["uploadTargets"] = 3
             });
         var queryService = new StubPassStationRecordQueryService
         {
@@ -3075,6 +3383,8 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal("CP-CLIP-001", returned.Barcode);
         Assert.Equal("MG1", returned.Fields["clipSlot"]);
         Assert.Equal("正极模切01", returned.Fields["plcName"]);
+        Assert.False(returned.Fields.ContainsKey("processType"));
+        Assert.False(returned.Fields.ContainsKey("uploadTargets"));
     }
 
     [Fact]
@@ -3127,8 +3437,127 @@ public sealed class ApplicationFlowGuardTests
             CancellationToken.None);
 
         Assert.False(result.IsSuccess);
-        Assert.Equal(ResultStatus.Forbidden, result.Status);
+        Assert.Equal(ResultStatus.NotFound, result.Status);
         Assert.Equal(1, queryService.GetDetailCalls);
+    }
+
+    [Fact]
+    public async Task GetPassStationDetailByTypeHandler_ShouldReturnOnlyPublicSchemaFields()
+    {
+        var deviceId = Guid.NewGuid();
+        var detail = new PassStationDetailDto(
+            Guid.NewGuid(),
+            deviceId,
+            "CP-CLIP-001",
+            "OK",
+            DateTime.UtcNow,
+            DateTime.UtcNow,
+            new Dictionary<string, object?>
+            {
+                ["plcCode"] = "P2-CP01",
+                ["clipSlot"] = "MG1",
+                ["processType"] = "cp",
+                ["uploadTargets"] = 3
+            });
+        var handler = new GetPassStationDetailByTypeHandler(
+            CreatePassStationSchemaProvider(),
+            new StubPassStationRecordQueryService { Detail = detail },
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [deviceId] });
+
+        var result = await handler.Handle(
+            new GetPassStationDetailByTypeQuery("cp", detail.Id),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("P2-CP01", result.Value!.Fields["plcCode"]);
+        Assert.Equal("MG1", result.Value.Fields["clipSlot"]);
+        Assert.False(result.Value.Fields.ContainsKey("processType"));
+        Assert.False(result.Value.Fields.ContainsKey("uploadTargets"));
+    }
+
+    [Fact]
+    public async Task ExportPassStationsByTypeHandler_ShouldUseScopeAndPublicFieldWhitelist()
+    {
+        var deviceId = Guid.NewGuid();
+        var item = new PassStationListItemDto(
+            Guid.NewGuid(),
+            deviceId,
+            "=CP-CLIP-001",
+            "OK",
+            new DateTime(2026, 8, 2, 1, 30, 0, DateTimeKind.Utc),
+            new DateTime(2026, 8, 2, 1, 31, 0, DateTimeKind.Utc),
+            new Dictionary<string, object?>
+            {
+                ["plcCode"] = "P2-CP01",
+                ["plcName"] = "正极模切一号 PLC",
+                ["clipSlot"] = "MG1",
+                ["startTime"] = "2026-08-02T01:25:00Z",
+                ["punchingQuantity"] = 120,
+                ["punchingSpeed"] = 1.25m,
+                ["processType"] = "cp",
+                ["uploadTargets"] = 3,
+                ["secretTransportField"] = "must-not-leak"
+            });
+        var queryService = new StubPassStationRecordQueryService { Items = [item] };
+        var handler = new ExportPassStationsByTypeHandler(
+            CreatePassStationSchemaProvider(),
+            queryService,
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [deviceId] },
+            new StubProcessReadQueryService());
+
+        var result = await handler.Handle(
+            new ExportPassStationsByTypeQuery(new PassStationQueryRequest(
+                "cp",
+                PassStationQueryModes.DeviceLatest,
+                Page(),
+                DeviceId: deviceId)),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(1, queryService.GetForExportCalls);
+        Assert.Equal(10_001, queryService.LastExportTake);
+        Assert.Equal(new[] { deviceId }, queryService.LastAllowedDeviceIds);
+        var csv = Encoding.UTF8.GetString(result.Value!.Content);
+        Assert.Contains("\"id\",\"deviceId\",\"barcode\",\"cellResult\",\"completedTime\",\"receivedAt\",\"plcCode\",\"plcName\",\"clipSlot\",\"startTime\",\"punchingQuantity\",\"punchingSpeed\"", csv, StringComparison.Ordinal);
+        Assert.Contains("'=CP-CLIP-001", csv, StringComparison.Ordinal);
+        Assert.DoesNotContain("processType", csv, StringComparison.Ordinal);
+        Assert.DoesNotContain("uploadTargets", csv, StringComparison.Ordinal);
+        Assert.DoesNotContain("must-not-leak", csv, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExportPassStationsByTypeHandler_ShouldRejectMoreThanTenThousandRows()
+    {
+        var deviceId = Guid.NewGuid();
+        var item = new PassStationListItemDto(
+            Guid.NewGuid(),
+            deviceId,
+            "CP-CLIP",
+            "OK",
+            DateTime.UtcNow,
+            DateTime.UtcNow,
+            []);
+        var queryService = new StubPassStationRecordQueryService
+        {
+            Items = Enumerable.Repeat(item, 10_001).ToList()
+        };
+        var handler = new ExportPassStationsByTypeHandler(
+            CreatePassStationSchemaProvider(),
+            queryService,
+            new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [deviceId] },
+            new StubProcessReadQueryService());
+
+        var result = await handler.Handle(
+            new ExportPassStationsByTypeQuery(new PassStationQueryRequest(
+                "cp",
+                PassStationQueryModes.DeviceLatest,
+                Page(),
+                DeviceId: deviceId)),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ResultStatus.Invalid, result.Status);
+        Assert.Contains(result.Errors!, error => error.Contains("10,000", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -3323,6 +3752,27 @@ public sealed class ApplicationFlowGuardTests
         return document.RootElement.Clone();
     }
 
+    private static DeviceClientState CreateClientState(
+        Guid deviceId,
+        string clientCode,
+        string runtimeStatus)
+    {
+        var now = DateTime.UtcNow;
+        var state = new DeviceClientState(deviceId, clientCode, createdAtUtc: now);
+        state.ApplyRuntimeHeartbeat(new EdgeDeviceRuntimeHeartbeat(
+            deviceId,
+            clientCode,
+            "runtime-1",
+            "test-machine",
+            "1.0.0",
+            "1.0",
+            runtimeStatus,
+            now.AddHours(-1),
+            now,
+            receivedAtUtc: now));
+        return state;
+    }
+
     private static Pagination Page(int pageNumber = 1, int pageSize = 10)
     {
         return new Pagination
@@ -3330,6 +3780,28 @@ public sealed class ApplicationFlowGuardTests
             PageNumber = pageNumber,
             PageSize = pageSize
         };
+    }
+
+    private static PassStationItemInput CreateStrictPassStationItem(
+        string barcode,
+        DateTime? completedTime = null)
+    {
+        var completed = completedTime
+            ?? new DateTime(2026, 8, 2, 1, 30, 0, DateTimeKind.Utc);
+        return new PassStationItemInput(
+            barcode,
+            "OK",
+            completed,
+            JsonPayload("""
+            {
+              "plcCode": "P2-CP01",
+              "plcName": "正极模切一号 PLC",
+              "clipSlot": "MG1",
+              "startTime": "2026-08-02T01:25:00Z",
+              "punchingQuantity": 120,
+              "punchingSpeed": 1.25
+            }
+            """));
     }
 
     private static (
@@ -3362,7 +3834,7 @@ public sealed class ApplicationFlowGuardTests
                     [
                         new PassStationFieldDefinitionDto { Key = "plcCode", Label = "PLC 编码", Type = PassStationFieldTypes.String, Required = true, MaxLength = 64 },
                         new PassStationFieldDefinitionDto { Key = "plcName", Label = "PLC 名称", Type = PassStationFieldTypes.String, Required = true, MaxLength = 128 },
-                        new PassStationFieldDefinitionDto { Key = "clipSlot", Label = "弹夹位", Type = PassStationFieldTypes.Enum, Required = false, Options = ["MG1", "MG2"] },
+                        new PassStationFieldDefinitionDto { Key = "clipSlot", Label = "弹夹位", Type = PassStationFieldTypes.Enum, Required = true, Options = ["MG1", "MG2"] },
                         new PassStationFieldDefinitionDto { Key = "startTime", Label = "开始时间", Type = PassStationFieldTypes.DateTime, Required = true },
                         new PassStationFieldDefinitionDto { Key = "punchingQuantity", Label = "冲切数量", Type = PassStationFieldTypes.Integer, Required = true, Min = 0 },
                         new PassStationFieldDefinitionDto { Key = "punchingSpeed", Label = "冲切速度", Type = PassStationFieldTypes.Number, Required = true, Min = 0, Precision = 5 }
@@ -3387,7 +3859,7 @@ public sealed class ApplicationFlowGuardTests
                     [
                         new PassStationFieldDefinitionDto { Key = "plcCode", Label = "PLC 编码", Type = PassStationFieldTypes.String, Required = true, MaxLength = 64 },
                         new PassStationFieldDefinitionDto { Key = "plcName", Label = "PLC 名称", Type = PassStationFieldTypes.String, Required = true, MaxLength = 128 },
-                        new PassStationFieldDefinitionDto { Key = "clipSlot", Label = "弹夹位", Type = PassStationFieldTypes.Enum, Required = false, Options = ["MG1", "MG2"] },
+                        new PassStationFieldDefinitionDto { Key = "clipSlot", Label = "弹夹位", Type = PassStationFieldTypes.Enum, Required = true, Options = ["MG1", "MG2"] },
                         new PassStationFieldDefinitionDto { Key = "startTime", Label = "开始时间", Type = PassStationFieldTypes.DateTime, Required = true },
                         new PassStationFieldDefinitionDto { Key = "punchingQuantity", Label = "冲切数量", Type = PassStationFieldTypes.Integer, Required = true, Min = 0 },
                         new PassStationFieldDefinitionDto { Key = "punchingSpeed", Label = "冲切速度", Type = PassStationFieldTypes.Number, Required = true, Min = 0, Precision = 5 }
@@ -3406,5 +3878,10 @@ public sealed class ApplicationFlowGuardTests
         };
 
         return new PassStationSchemaProvider(Options.Create(options));
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }

@@ -17,16 +17,17 @@ public class HumanCapacityController : ApiControllerBase
     [HttpGet("hourly")]
     public async Task<IActionResult> GetHourly(
         [FromQuery] Guid deviceId,
-        [FromQuery] DateOnly date,
+        [FromQuery] DateOnly? date = null,
         [FromQuery] string? plcName = null,
+        [FromQuery] string? plcCode = null,
         CancellationToken cancellationToken = default)
     {
-        return ReturnResult(await Sender.Send(new GetHourlyByDeviceIdQuery(deviceId, date, plcName), cancellationToken));
+        return ReturnResult(await Sender.Send(new GetHourlyByDeviceIdQuery(deviceId, date, plcName, plcCode), cancellationToken));
     }
 
     [HttpGet("hourly/aggregate")]
     public async Task<IActionResult> GetHourlyAggregate(
-        [FromQuery] DateOnly date,
+        [FromQuery] DateOnly? date = null,
         [FromQuery] Guid? processId = null,
         CancellationToken cancellationToken = default)
     {
@@ -38,9 +39,10 @@ public class HumanCapacityController : ApiControllerBase
         [FromQuery] Guid deviceId,
         [FromQuery] DateOnly date,
         [FromQuery] string? plcName = null,
+        [FromQuery] string? plcCode = null,
         CancellationToken cancellationToken = default)
     {
-        return ReturnResult(await Sender.Send(new GetSummaryByDeviceIdQuery(deviceId, date, plcName), cancellationToken));
+        return ReturnResult(await Sender.Send(new GetSummaryByDeviceIdQuery(deviceId, date, plcName, plcCode), cancellationToken));
     }
 
     [HttpGet("summary/range")]
@@ -49,11 +51,12 @@ public class HumanCapacityController : ApiControllerBase
         [FromQuery] DateOnly startDate,
         [FromQuery] DateOnly endDate,
         [FromQuery] string? plcName = null,
+        [FromQuery] string? plcCode = null,
         [FromQuery] bool breakdownByPlc = false,
         CancellationToken cancellationToken = default)
     {
         return ReturnResult(await Sender.Send(
-            new GetSummaryRangeQuery(deviceId, startDate, endDate, plcName, breakdownByPlc),
+            new GetSummaryRangeQuery(deviceId, startDate, endDate, plcName, breakdownByPlc, plcCode),
             cancellationToken));
     }
 

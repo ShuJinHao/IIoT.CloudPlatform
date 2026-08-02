@@ -1,3 +1,4 @@
+using IIoT.ProductionService.BusinessTime;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
@@ -9,13 +10,14 @@ namespace IIoT.ProductionService.Queries.Capacities;
 
 [AuthorizeRequirement("Device.Read")]
 public record GetHourlyCapacityAggregateQuery(
-    DateOnly Date,
+    DateOnly? Date = null,
     Guid? ProcessId = null
 ) : IHumanQuery<Result<List<HourlyCapacityAggregateDto>>>;
 
 public class GetHourlyCapacityAggregateHandler(
     ICurrentUserDeviceAccessService currentUserDeviceAccessService,
-    ICapacityQueryService queryService)
+    ICapacityQueryService queryService,
+    IBusinessTimeProvider businessTimeProvider)
     : IQueryHandler<GetHourlyCapacityAggregateQuery, Result<List<HourlyCapacityAggregateDto>>>
 {
     public async Task<Result<List<HourlyCapacityAggregateDto>>> Handle(
@@ -34,7 +36,7 @@ public class GetHourlyCapacityAggregateHandler(
         }
 
         var data = await queryService.GetHourlyAggregateAsync(
-            request.Date,
+            request.Date ?? businessTimeProvider.Today(),
             request.ProcessId,
             scope.Value,
             cancellationToken);

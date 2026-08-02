@@ -20,10 +20,13 @@ internal class DeviceIdentityQueryService(
 
         const string sql = @"
             SELECT
-                id           AS DeviceId,
-                client_code  AS Code
-            FROM devices
-            WHERE id = @DeviceId
+                d.id            AS DeviceId,
+                d.client_code   AS Code,
+                d.process_id    AS ProcessId,
+                p.process_code  AS ProcessCode
+            FROM devices d
+            LEFT JOIN mfg_processes p ON p.id = d.process_id
+            WHERE d.id = @DeviceId
             LIMIT 1";
 
         using var connection = connectionFactory.CreateConnection();

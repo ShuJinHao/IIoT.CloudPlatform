@@ -31,7 +31,7 @@ export function useCapacityDetail() {
   const queryDate = ref(todayLocal());
   const queryMonth = ref(thisMonth());
   const queryYear = ref(new Date().getFullYear());
-  const plcNameFilter = ref<string | null>(null);
+  const plcCodeFilter = ref<string | null>(null);
   const loading = ref(false);
   const loadError = ref<CapacityLoadError | null>(null);
   const allRows = ref<CapacityDetailRow[]>([]);
@@ -42,10 +42,10 @@ export function useCapacityDetail() {
     return { label: `${year} 年`, value: year };
   });
   const plcOptions = computed(() => createPlcOptions(allRows.value));
-  const rows = computed(() => filterRowsByPlc(allRows.value, plcNameFilter.value));
+  const rows = computed(() => filterRowsByPlc(allRows.value, plcCodeFilter.value));
   const summary = computed(() => summarizeRows(rows.value));
   const selectedPlcName = computed(() =>
-    plcOptions.value.find((option) => option.value === plcNameFilter.value)?.label ?? '全部 PLC');
+    plcOptions.value.find((option) => option.value === plcCodeFilter.value)?.label ?? '全部 PLC');
   const scopeText = computed(() =>
     queryMode.value === 'day'
       ? queryDate.value
@@ -59,28 +59,26 @@ export function useCapacityDetail() {
     return `${grain}统计 · ${selectedPlcName.value} · ${rows.value.length} 个数据点`;
   });
   const chartOption = computed(() => {
-    const labels = rows.value.map((row) => `${row.plcName} · ${row.label}`);
+    const labels = rows.value.map((row) => `${row.plcDisplay} · ${row.label}`);
     const palette = themeMode.value === 'dark'
       ? {
           text: '#c4c4ca',
           grid: 'rgba(255, 255, 255, 0.09)',
           tooltipBackground: '#202024',
           tooltipBorder: 'rgba(255, 255, 255, 0.14)',
-          ok: '#5eead4',
-          ng: '#f87171',
+          total: '#5eead4',
         }
       : {
           text: '#596273',
           grid: 'rgba(17, 24, 39, 0.08)',
           tooltipBackground: '#ffffff',
           tooltipBorder: 'rgba(17, 24, 39, 0.12)',
-          ok: '#229aa3',
-          ng: '#ef4444',
+          total: '#229aa3',
         };
     return {
       grid: { left: 52, right: 16, top: 32, bottom: labels.length > 8 ? 72 : 48 },
       legend: {
-        data: ['合格弹夹', '不合格弹夹'],
+        data: ['完工弹夹'],
         top: 0,
         right: 8,
         itemWidth: 12,
@@ -118,19 +116,10 @@ export function useCapacityDetail() {
       },
       series: [
         {
-          name: '合格弹夹',
+          name: '完工弹夹',
           type: 'bar',
-          stack: 'total',
-          data: rows.value.map((row) => row.ok),
-          itemStyle: { color: palette.ok },
-          barMaxWidth: 36,
-        },
-        {
-          name: '不合格弹夹',
-          type: 'bar',
-          stack: 'total',
-          data: rows.value.map((row) => row.ng),
-          itemStyle: { color: palette.ng, borderRadius: [4, 4, 0, 0] },
+          data: rows.value.map((row) => row.total),
+          itemStyle: { color: palette.total, borderRadius: [4, 4, 0, 0] },
           barMaxWidth: 36,
         },
       ],
@@ -169,7 +158,7 @@ export function useCapacityDetail() {
     loading.value = true;
     loadError.value = null;
     allRows.value = [];
-    plcNameFilter.value = null;
+    plcCodeFilter.value = null;
     if (!deviceId.value) {
       loadError.value = {
         kind: 'api',
@@ -204,7 +193,7 @@ export function useCapacityDetail() {
     queryDate,
     queryMonth,
     queryYear,
-    plcNameFilter,
+    plcCodeFilter,
     yearOptions,
     plcOptions,
     loading,

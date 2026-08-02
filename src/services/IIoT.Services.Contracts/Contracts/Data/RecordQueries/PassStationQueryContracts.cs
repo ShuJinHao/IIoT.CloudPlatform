@@ -97,6 +97,25 @@ public sealed record PassStationQueryRequest(
     DateTime? StartTime = null,
     DateTime? EndTime = null);
 
+public static class PassStationPublicFieldProjection
+{
+    public static Dictionary<string, object?> Project(
+        PassStationTypeDefinitionDto definition,
+        IReadOnlyDictionary<string, object?> fields,
+        IEnumerable<string>? requestedKeys = null)
+    {
+        var allowedKeys = definition.Fields
+            .Select(field => field.Key)
+            .ToHashSet(StringComparer.Ordinal);
+        if (requestedKeys is not null)
+            allowedKeys.IntersectWith(requestedKeys);
+
+        return fields
+            .Where(field => allowedKeys.Contains(field.Key))
+            .ToDictionary(field => field.Key, field => field.Value, StringComparer.Ordinal);
+    }
+}
+
 public interface IPassStationSchemaProvider : IReadOnlyQueryPort
 {
     IReadOnlyList<PassStationTypeDefinitionDto> GetAll();
@@ -111,8 +130,15 @@ public interface IPassStationRecordQueryService : IReadOnlyQueryPort
         IReadOnlyCollection<Guid>? allowedDeviceIds,
         CancellationToken cancellationToken = default);
 
+    Task<List<PassStationListItemDto>> GetForExportAsync(
+        PassStationQueryRequest request,
+        IReadOnlyCollection<Guid>? allowedDeviceIds,
+        int take,
+        CancellationToken cancellationToken = default);
+
     Task<PassStationDetailDto?> GetDetailAsync(
         string typeKey,
         Guid id,
+        IReadOnlyCollection<Guid>? allowedDeviceIds,
         CancellationToken cancellationToken = default);
 }

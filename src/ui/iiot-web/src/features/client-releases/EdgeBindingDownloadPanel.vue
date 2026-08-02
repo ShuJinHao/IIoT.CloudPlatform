@@ -171,7 +171,9 @@ async function generate() {
       baseUrl: baseUrl.value.trim(),
     });
     downloadBlob(installer.fileName, installer.blob);
-    notifySuccess('首装包已生成，浏览器正在下载。', { title: '生成完成' });
+    notifySuccess(`首装包已生成，记录号 ${installer.generationId}，浏览器正在下载。`, {
+      title: '生成完成',
+    });
   } finally {
     generating.value = false;
   }

@@ -12,6 +12,7 @@ public interface IPassStationReceiveService
         string messageType,
         string? requestId,
         string deduplicationKey,
+        string contentFingerprint,
         IPassStationEvent @event,
         CancellationToken cancellationToken);
 }

@@ -86,6 +86,8 @@ const emptyStatus = {
   error: 0,
   offline: 1,
   generatedAt: '2026-07-11T00:00:00Z',
+  softwareStatus: 'MissingRuntimeHeartbeat',
+  issue: '尚未收到客户端运行心跳' as string | null,
 };
 
 const emptyAlertSummary = {
@@ -101,6 +103,7 @@ function hourlySlot(
   totalCount: number,
   okCount: number,
   timeLabel = '08:00',
+  plcCode = 'P1-AP01',
 ): HourlyCapacityItem {
   const [hour, minute] = timeLabel.split(':').map(Number);
   return {
@@ -111,6 +114,7 @@ function hourlySlot(
     totalCount,
     okCount,
     ngCount: totalCount - okCount,
+    plcCode,
     plcName: null,
   };
 }
@@ -241,6 +245,8 @@ describe('dashboard feature', () => {
       ...emptyStatus,
       online: 1,
       offline: 0,
+      softwareStatus: 'Running',
+      issue: null,
     });
     getHourly.mockResolvedValueOnce([hourlySlot(10, 9)]);
     const { wrapper, router } = await mountDashboard();
@@ -266,10 +272,7 @@ describe('dashboard feature', () => {
       deviceId: deviceAId,
     });
     expect(getStatus).toHaveBeenCalledWith({ deviceId: deviceAId });
-    expect(getHourly).toHaveBeenCalledWith({
-      deviceId: deviceAId,
-      date: todayIsoDate(),
-    });
+    expect(getHourly).toHaveBeenCalledWith({ deviceId: deviceAId });
     expect(getAlertCount).toHaveBeenCalledWith({ deviceId: deviceAId });
     expect(getRecentLogs).toHaveBeenCalledWith({
       limit: 20,
@@ -277,7 +280,7 @@ describe('dashboard feature', () => {
       deviceId: deviceAId,
     });
     expect(wrapper.get('[data-testid="dashboard-card-production-value"]').text()).toBe('10');
-    expect(wrapper.get('[data-testid="dashboard-card-active-clients-value"]').text()).toBe('正常');
+    expect(wrapper.get('[data-testid="dashboard-card-active-clients-value"]').text()).toBe('运行中');
     expect(wrapper.text()).toContain('装配 · 一号装配客户端');
   });
 
@@ -341,21 +344,21 @@ describe('dashboard feature', () => {
     expect(wrapper.find('[data-testid="dashboard-ready"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="dashboard-trend-empty"]').exists()).toBe(true);
     expect(wrapper.get('[data-testid="dashboard-card-production-value"]').text()).toBe('0');
-    expect(wrapper.get('[data-testid="dashboard-card-pass-rate-value"]').text()).toBe('0.0%');
+    expect(wrapper.get('[data-testid="dashboard-card-reporting-plcs-value"]').text()).toBe('0');
     expect(wrapper.get('[data-testid="dashboard-production-display"]').text()).toBe('0');
-    expect(wrapper.get('[data-testid="dashboard-card-active-clients-value"]').text()).toBe('离线');
-    expect(wrapper.text()).toContain('今日上报合格率');
-    expect(wrapper.text()).toContain('hourly_capacity：OK 数 ÷ 总数');
-    expect(wrapper.text()).not.toContain('完工弹夹');
-    expect(wrapper.text()).not.toContain('弹夹合格率');
+    expect(wrapper.get('[data-testid="dashboard-card-active-clients-value"]').text()).toBe('无运行心跳');
+    expect(wrapper.text()).toContain('今日完工弹夹数');
+    expect(wrapper.text()).toContain('今日有产能上报的 PLC 数');
+    expect(wrapper.text()).toContain('不等同于在线 PLC 数');
+    expect(wrapper.text()).not.toContain('合格率');
   });
 
   it('keeps successful sources visible when one selected-device source fails', async () => {
     getStatus.mockRejectedValueOnce({
       isAxiosError: true,
       response: {
-        status: 503,
-        data: { detail: 'Cloud 客户端状态服务暂不可用' },
+        status: 403,
+        data: { detail: '当前账号无权读取客户端运行状态' },
         headers: { 'content-type': 'application/problem+json' },
       },
     });
@@ -372,7 +375,7 @@ describe('dashboard feature', () => {
       wrapper.get('[data-testid="dashboard-card-active-clients"]')
         .attributes('data-source-status'),
     ).toBe('error');
-    expect(wrapper.text()).toContain('Cloud 客户端状态服务暂不可用');
+    expect(wrapper.text()).toContain('当前账号无权读取客户端运行状态');
     expect(wrapper.find('[data-testid="dashboard-status-error"]').exists()).toBe(true);
   });
 
@@ -419,10 +422,12 @@ describe('dashboard feature', () => {
       ...emptyStatus,
       warning: 1,
       offline: 0,
+      softwareStatus: 'Starting',
+      issue: null,
     });
     getHourly.mockResolvedValueOnce([
       hourlySlot(10, 9),
-      hourlySlot(5, 4),
+      hourlySlot(5, 4, '08:00', 'P1-AP02'),
     ]);
     getAlertCount.mockResolvedValueOnce({ ...emptyAlertSummary, count: 7 });
     getRecentLogs.mockResolvedValueOnce([{
@@ -439,8 +444,8 @@ describe('dashboard feature', () => {
     await selectContext(wrapper);
 
     expect(wrapper.get('[data-testid="dashboard-card-production-value"]').text()).toBe('15');
-    expect(wrapper.get('[data-testid="dashboard-card-pass-rate-value"]').text()).toBe('86.7%');
-    expect(wrapper.get('[data-testid="dashboard-card-active-clients-value"]').text()).toBe('预警');
+    expect(wrapper.get('[data-testid="dashboard-card-reporting-plcs-value"]').text()).toBe('2');
+    expect(wrapper.get('[data-testid="dashboard-card-active-clients-value"]').text()).toBe('启动中');
     expect(wrapper.get('[data-testid="dashboard-card-alert-records-value"]').text()).toBe('7');
     expect(wrapper.findAll('.dashboard-bars__bar')).toHaveLength(1);
     expect(wrapper.get('.dashboard-bars__bar').attributes('title')).toBe('08:00: 15');
@@ -460,23 +465,27 @@ describe('dashboard feature', () => {
       ...emptyStatus,
       warning: 1,
       offline: 0,
+      softwareStatus: 'Starting',
+      issue: null,
     });
     getHourly.mockResolvedValueOnce([hourlySlot(20, 20, '09:30')]);
     await wrapper.get('[data-testid="dashboard-device-select"]').setValue(deviceBId);
     await flushPromises();
 
     expect(wrapper.get('[data-testid="dashboard-card-production-value"]').text()).toBe('20');
-    expect(wrapper.get('[data-testid="dashboard-card-active-clients-value"]').text()).toBe('预警');
+    expect(wrapper.get('[data-testid="dashboard-card-active-clients-value"]').text()).toBe('启动中');
 
     staleStatus.resolve({
       ...emptyStatus,
       online: 1,
       offline: 0,
+      softwareStatus: 'Running',
+      issue: null,
     });
     staleHourly.resolve([hourlySlot(999, 999, '10:00')]);
     await flushPromises();
 
     expect(wrapper.get('[data-testid="dashboard-card-production-value"]').text()).toBe('20');
-    expect(wrapper.get('[data-testid="dashboard-card-active-clients-value"]').text()).toBe('预警');
+    expect(wrapper.get('[data-testid="dashboard-card-active-clients-value"]').text()).toBe('启动中');
   });
 });

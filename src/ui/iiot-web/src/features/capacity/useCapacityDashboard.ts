@@ -62,9 +62,16 @@ export function useCapacityDashboard() {
   );
   const totalStats = computed(() => {
     const total = listPage.items.value.reduce((sum, row) => sum + row.totalCount, 0);
-    const ok = listPage.items.value.reduce((sum, row) => sum + row.okCount, 0);
-    const ng = listPage.items.value.reduce((sum, row) => sum + row.ngCount, 0);
-    const ratePercent = total > 0 ? (ok * 100) / total : 0;
+    const qualityKnown = listPage.items.value.every(
+      (row) => row.okCount !== null && row.ngCount !== null,
+    );
+    const ok = qualityKnown
+      ? listPage.items.value.reduce((sum, row) => sum + row.okCount!, 0)
+      : null;
+    const ng = qualityKnown
+      ? listPage.items.value.reduce((sum, row) => sum + row.ngCount!, 0)
+      : null;
+    const ratePercent = ok === null ? null : total > 0 ? (ok * 100) / total : 0;
     return { total, ok, ng, ratePercent };
   });
 

@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.RecordQueries;
@@ -64,7 +66,16 @@ public sealed class GetPassStationListByTypeHandler(
             allowedDeviceIds.DeviceIds,
             cancellationToken);
 
-        return Result.Success(new PagedList<PassStationListItemDto>(items, totalCount, normalizedRequest.Pagination));
+        var projectedItems = items
+            .Select(item => item with
+            {
+                Fields = PassStationPublicFieldProjection.Project(
+                    definition,
+                    item.Fields)
+            })
+            .ToList();
+
+        return Result.Success(new PagedList<PassStationListItemDto>(projectedItems, totalCount, normalizedRequest.Pagination));
     }
 }
 
@@ -88,18 +99,159 @@ public sealed class GetPassStationDetailByTypeHandler(
         if (definition is null)
             return Result.NotFound($"过站类型 [{request.TypeKey}] 不存在。");
 
-        var detail = await queryService.GetDetailAsync(definition.TypeKey, request.Id, cancellationToken);
-        if (detail is null)
-            return Result.NotFound("未找到该过站记录。");
-
         var scope = await currentUserDeviceAccessService.GetAccessibleDeviceIdsAsync(cancellationToken);
         if (!scope.IsSuccess)
             return Result.Invalid(scope.Errors?.ToArray() ?? ["用户凭证异常。"]);
 
-        if (scope.Value is null || scope.Value.Contains(detail.DeviceId))
-            return Result.Success(detail);
+        var detail = await queryService.GetDetailAsync(
+            definition.TypeKey,
+            request.Id,
+            scope.Value,
+            cancellationToken);
+        if (detail is null)
+            return Result.NotFound("未找到该过站记录。");
 
-        return Result.Forbidden();
+        return Result.Success(detail with
+        {
+            Fields = PassStationPublicFieldProjection.Project(definition, detail.Fields)
+        });
+    }
+}
+
+public sealed record PassStationCsvExportDto(
+    string FileName,
+    string ContentType,
+    byte[] Content);
+
+[AuthorizeRequirement("Device.Read")]
+public sealed record ExportPassStationsByTypeQuery(
+    PassStationQueryRequest Request
+) : IHumanQuery<Result<PassStationCsvExportDto>>;
+
+public sealed class ExportPassStationsByTypeHandler(
+    IPassStationSchemaProvider schemaProvider,
+    IPassStationRecordQueryService queryService,
+    ICurrentUserDeviceAccessService currentUserDeviceAccessService,
+    IProcessReadQueryService processReadQueryService)
+    : IQueryHandler<ExportPassStationsByTypeQuery, Result<PassStationCsvExportDto>>
+{
+    private const int ExportLimit = 10_000;
+
+    public async Task<Result<PassStationCsvExportDto>> Handle(
+        ExportPassStationsByTypeQuery request,
+        CancellationToken cancellationToken)
+    {
+        var typeKey = PassStationQueryRuntime.NormalizeTypeKey(request.Request.TypeKey);
+        var definition = schemaProvider.Find(typeKey);
+        if (definition is null)
+            return Result.NotFound($"过站类型 [{request.Request.TypeKey}] 不存在。");
+
+        var normalizedRequest = request.Request with
+        {
+            TypeKey = definition.TypeKey,
+            Pagination = new Pagination { PageNumber = 1, PageSize = 1 }
+        };
+        var validation = PassStationQueryRuntime.ValidateListRequest(normalizedRequest, definition);
+        if (validation is not null)
+            return Result.Invalid(validation.Errors?.ToArray() ?? ["过站导出条件无效。"]);
+
+        var allowedDeviceIds = await PassStationQueryRuntime.ResolveAllowedDeviceIdsAsync(
+            normalizedRequest,
+            currentUserDeviceAccessService,
+            processReadQueryService,
+            cancellationToken);
+        if (!allowedDeviceIds.IsSuccess)
+            return Result.Invalid(allowedDeviceIds.ErrorMessage!);
+
+        if (allowedDeviceIds.ShouldReturnEmpty)
+        {
+            return Result.Success(PassStationCsvExport.Create(
+                definition,
+                [],
+                DateTimeOffset.UtcNow));
+        }
+
+        var items = await queryService.GetForExportAsync(
+            normalizedRequest,
+            allowedDeviceIds.DeviceIds,
+            ExportLimit + 1,
+            cancellationToken);
+        if (items.Count > ExportLimit)
+        {
+            return Result.Invalid(
+                $"过站导出结果超过 {ExportLimit.ToString("N0", CultureInfo.InvariantCulture)} 条上限，请缩小筛选范围。");
+        }
+
+        return Result.Success(PassStationCsvExport.Create(
+            definition,
+            items,
+            DateTimeOffset.UtcNow));
+    }
+}
+
+internal static class PassStationCsvExport
+{
+    private static readonly string[] CommonHeaders =
+        ["id", "deviceId", "barcode", "cellResult", "completedTime", "receivedAt"];
+
+    public static PassStationCsvExportDto Create(
+        PassStationTypeDefinitionDto definition,
+        IReadOnlyList<PassStationListItemDto> items,
+        DateTimeOffset generatedAtUtc)
+    {
+        var fieldKeys = definition.Fields.Select(field => field.Key).ToArray();
+        var builder = new StringBuilder();
+        WriteRow(builder, CommonHeaders.Concat(fieldKeys));
+        foreach (var item in items)
+        {
+            var publicFields = PassStationPublicFieldProjection.Project(definition, item.Fields);
+            WriteRow(
+                builder,
+                new object?[]
+                    {
+                        item.Id,
+                        item.DeviceId,
+                        item.Barcode,
+                        item.CellResult,
+                        FormatTimestamp(item.CompletedTime),
+                        FormatTimestamp(item.ReceivedAt)
+                    }
+                    .Concat(fieldKeys.Select(key => publicFields.GetValueOrDefault(key))));
+        }
+
+        var body = Encoding.UTF8.GetBytes(builder.ToString());
+        var preamble = Encoding.UTF8.GetPreamble();
+        var content = new byte[preamble.Length + body.Length];
+        preamble.CopyTo(content, 0);
+        body.CopyTo(content, preamble.Length);
+        return new PassStationCsvExportDto(
+            $"pass-stations-{definition.TypeKey}-{generatedAtUtc:yyyyMMddHHmmss}.csv",
+            "text/csv; charset=utf-8",
+            content);
+    }
+
+    private static string? FormatTimestamp(DateTime? value)
+        => value?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+
+    private static void WriteRow(StringBuilder builder, IEnumerable<object?> values)
+    {
+        builder.AppendLine(string.Join(',', values.Select(FormatCell)));
+    }
+
+    private static string FormatCell(object? value)
+    {
+        var text = value switch
+        {
+            null => string.Empty,
+            DateTime dateTime => dateTime.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+            DateTimeOffset dateTimeOffset => dateTimeOffset.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+            IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture) ?? string.Empty,
+            _ => value.ToString() ?? string.Empty
+        };
+
+        if (text.Length > 0 && text[0] is '=' or '+' or '-' or '@' or '\t' or '\r')
+            text = "'" + text;
+        return $"\"{text.Replace("\"", "\"\"")}\"";
     }
 }
 

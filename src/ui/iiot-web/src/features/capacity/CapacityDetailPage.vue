@@ -61,7 +61,7 @@
         <div class="filter-field">
           <span class="filter-field__label">PLC 范围</span>
           <UiSelect
-            v-model:value="plcNameFilter"
+            v-model:value="plcCodeFilter"
             :options="plcOptions"
             placeholder="全部 PLC"
             size="small"
@@ -93,7 +93,12 @@
         <StatCard label="完工弹夹数" :value="formatInt(summary.total)" unit="个" accent="brand" />
         <StatCard label="合格弹夹数" :value="formatInt(summary.ok)" unit="个" accent="success" />
         <StatCard label="不合格弹夹数" :value="formatInt(summary.ng)" unit="个" accent="error" />
-        <StatCard label="良率" :value="summary.ratePercent.toFixed(1)" unit="%" :accent="rateAccent(summary.ratePercent)" />
+        <StatCard
+          label="良率"
+          :value="summary.ratePercent === null ? '—' : summary.ratePercent.toFixed(1)"
+          :unit="summary.ratePercent === null ? '' : '%'"
+          :accent="summary.ratePercent === null ? 'info' : rateAccent(summary.ratePercent)"
+        />
       </div>
       <CapacityTrendChart
         :chart-option="chartOption"
@@ -138,7 +143,7 @@ const {
   queryDate,
   queryMonth,
   queryYear,
-  plcNameFilter,
+  plcCodeFilter,
   yearOptions,
   plcOptions,
   loading,

@@ -39,10 +39,14 @@ public sealed class ReceivePassStationBatchHandler(
         CancellationToken cancellationToken)
     {
         var typeKey = PassStationPayloadJson.NormalizeTypeKey(request.TypeKey);
-        if (request.SchemaVersion != 1)
+        if (request.SchemaVersion is not 1 and not 2)
             return Result.Invalid($"过站数据 schemaVersion [{request.SchemaVersion}] 不受支持。");
 
-        var processType = PassStationPayloadJson.NormalizeOptionalProcessType(request.ProcessType) ?? typeKey;
+        var normalizedProcessType = PassStationPayloadJson.NormalizeOptionalProcessType(request.ProcessType);
+        if (request.SchemaVersion == 2 && normalizedProcessType is null)
+            return Result.Invalid("过站 v2 数据必须提供 processType。");
+
+        var processType = normalizedProcessType ?? typeKey;
         if (!string.Equals(processType, typeKey, StringComparison.Ordinal))
             return Result.Invalid("过站数据 processType 必须与 typeKey 保持一致。");
 
@@ -83,6 +87,7 @@ public sealed class ReceivePassStationBatchHandler(
             SchemaVersion = request.SchemaVersion,
             Items = eventItems
         };
+        var contentFingerprint = PassStationContentFingerprint.Compute(@event);
 
         return await receiveService.ValidateAndRegisterAsync(
             request.DeviceId,
@@ -90,6 +95,7 @@ public sealed class ReceivePassStationBatchHandler(
             UploadMessageTypes.ForPassStation(definition.TypeKey),
             UploadDeduplicationKeys.NormalizeRequestId(request.RequestId),
             deduplicationKey.Value!,
+            contentFingerprint,
             @event,
             cancellationToken);
     }

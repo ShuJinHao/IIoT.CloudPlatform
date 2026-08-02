@@ -4,7 +4,9 @@ namespace IIoT.Services.Contracts.RecordQueries;
 
 public sealed record DeviceIdentitySnapshot(
     Guid DeviceId,
-    string Code);
+    string Code,
+    Guid? ProcessId = null,
+    string? ProcessCode = null);
 
 public interface IDeviceIdentityQueryService : IReadOnlyQueryPort
 {

@@ -18,10 +18,13 @@ public record ReceiveHourlyCapacityCommand(
     int Minute,
     string TimeLabel,
     int TotalCount,
-    int OkCount,
-    int NgCount,
+    int? OkCount = 0,
+    int? NgCount = 0,
     string? PlcName = null,
-    string? RequestId = null
+    string? RequestId = null,
+    int SchemaVersion = 1,
+    string? ProcessType = null,
+    string? PlcCode = null
 ) : IDeviceCommand<Result<EdgeUploadAcceptedResponse>>;
 
 public class ReceiveHourlyCapacityHandler(
@@ -38,9 +41,24 @@ public class ReceiveHourlyCapacityHandler(
         if (request.DeviceId == Guid.Empty)
             return Result.Failure("数据接收失败: DeviceId 不能为空");
 
-        var exists = await deviceIdentityQuery.ExistsAsync(request.DeviceId, cancellationToken);
-        if (!exists)
+        if (request.SchemaVersion is not 1 and not 2)
+            return Result.Invalid($"产能数据 schemaVersion [{request.SchemaVersion}] 不受支持。");
+
+        var device = await deviceIdentityQuery.GetByDeviceIdAsync(request.DeviceId, cancellationToken);
+        if (device is null)
             return Result.Failure("数据接收失败: 设备不存在");
+
+        var processType = Normalize(request.ProcessType);
+        if (request.SchemaVersion == 2)
+        {
+            var registeredProcess = Normalize(device.ProcessCode);
+            if (registeredProcess is null
+                || processType is null
+                || !string.Equals(registeredProcess, processType, StringComparison.Ordinal))
+            {
+                return Result.Forbidden("数据接收失败: 设备登记工序与产能上报工序不一致");
+            }
+        }
 
         var deduplicationKey = UploadDeduplicationKeys.ForHourlyCapacity(request);
         if (!deduplicationKey.IsSuccess)
@@ -48,6 +66,13 @@ public class ReceiveHourlyCapacityHandler(
 
         var @event = mapper.Map<HourlyCapacityReceivedEvent>(request) with
         {
+            SchemaVersion = request.SchemaVersion,
+            ProcessType = request.SchemaVersion == 2 ? processType : null,
+            PlcCode = request.SchemaVersion == 2
+                ? request.PlcCode!.Trim()
+                : request.PlcName?.Trim() ?? string.Empty,
+            PlcName = request.PlcName?.Trim(),
+            PlcNameIsTrusted = request.SchemaVersion == 2,
             ReceivedAtUtc = DateTime.UtcNow
         };
         var registration = await uploadReceiveRegistry.RegisterAndEnqueueAsync(
@@ -60,14 +85,15 @@ public class ReceiveHourlyCapacityHandler(
         if (registration.IsDuplicate)
             return Result.Success(EdgeUploadAcceptedResponse.Duplicate(registration.OutboxMessageId));
 
+        var plcCode = @event.PlcCode;
         await cacheService.RemoveAsync(
-            CacheKeys.CapacityHourly(request.DeviceId, request.Date, request.PlcName),
+            CacheKeys.CapacityHourly(request.DeviceId, request.Date, plcCode),
             cancellationToken);
         await cacheService.RemoveAsync(
-            CacheKeys.CapacitySummary(request.DeviceId, request.Date, request.PlcName),
+            CacheKeys.CapacitySummary(request.DeviceId, request.Date, plcCode),
             cancellationToken);
         await cacheService.RemoveAsync(
-            CacheKeys.CapacityRange(request.DeviceId, request.Date, request.Date, request.PlcName),
+            CacheKeys.CapacityRange(request.DeviceId, request.Date, request.Date, plcCode),
             cancellationToken);
         await cacheService.RemoveByPatternAsync(
             CacheKeys.CapacityHourlyPattern(request.DeviceId),
@@ -83,5 +109,11 @@ public class ReceiveHourlyCapacityHandler(
             cancellationToken);
 
         return Result.Success(EdgeUploadAcceptedResponse.Accepted(registration.OutboxMessageId));
+    }
+
+    private static string? Normalize(string? value)
+    {
+        value = value?.Trim();
+        return string.IsNullOrWhiteSpace(value) ? null : value.ToLowerInvariant();
     }
 }

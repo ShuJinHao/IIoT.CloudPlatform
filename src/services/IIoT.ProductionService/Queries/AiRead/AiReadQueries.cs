@@ -60,8 +60,8 @@ public sealed record AiReadDeviceClientStateDto(
 public sealed record AiReadCapacitySummaryDto(
     DateOnly Date,
     int TotalCount,
-    int OkCount,
-    int NgCount,
+    int? OkCount,
+    int? NgCount,
     int DayShiftTotal,
     int NightShiftTotal);
 
@@ -82,9 +82,10 @@ public sealed record AiReadHourlyCapacityDto(
     string TimeLabel,
     string ShiftCode,
     int TotalCount,
-    int OkCount,
-    int NgCount,
-    decimal OkRate,
+    int? OkCount,
+    int? NgCount,
+    decimal? OkRate,
+    string PlcCode,
     string? PlcName = null);
 
 public sealed record AiReadProductionFieldSchemaDto(
@@ -412,7 +413,8 @@ public sealed record GetAiReadCapacitySummaryQuery(
     DateOnly StartDate,
     DateOnly EndDate,
     string? PlcName = null,
-    int? MaxRows = null) : IAiReadQuery<Result<AiReadListResponse<AiReadCapacitySummaryDto>>>;
+    int? MaxRows = null,
+    string? PlcCode = null) : IAiReadQuery<Result<AiReadListResponse<AiReadCapacitySummaryDto>>>;
 
 public sealed class GetAiReadCapacitySummaryHandler(
     ICapacityQueryService capacityQueryService,
@@ -442,7 +444,7 @@ public sealed class GetAiReadCapacitySummaryHandler(
             request.DeviceId,
             request.StartDate,
             request.EndDate,
-            request.PlcName,
+            request.PlcCode ?? request.PlcName,
             cancellationToken);
 
         var items = data
@@ -465,6 +467,7 @@ public sealed class GetAiReadCapacitySummaryHandler(
                 ("startDate", AiReadQueryGuard.ScopeDate(request.StartDate)),
                 ("endDate", AiReadQueryGuard.ScopeDate(request.EndDate)),
                 ("plcName", AiReadQueryGuard.ScopeText(request.PlcName)),
+                ("plcCode", AiReadQueryGuard.ScopeText(request.PlcCode)),
                 ("delegatedUserId", AiReadQueryGuard.ScopeGuid(scopeAccessor.DelegatedUserId))),
             items.Count,
             data.Count > items.Count));
@@ -477,7 +480,8 @@ public sealed record GetAiReadCapacityHourlyQuery(
     DateOnly? Date = null,
     string? Preset = null,
     string? PlcName = null,
-    int? MaxRows = null) : IAiReadQuery<Result<AiReadListResponse<AiReadHourlyCapacityDto>>>;
+    int? MaxRows = null,
+    string? PlcCode = null) : IAiReadQuery<Result<AiReadListResponse<AiReadHourlyCapacityDto>>>;
 
 public sealed class GetAiReadCapacityHourlyHandler(
     ICapacityQueryService capacityQueryService,
@@ -511,7 +515,7 @@ public sealed class GetAiReadCapacityHourlyHandler(
             request.DeviceId,
             range!.StartTime,
             range.EndTime,
-            request.PlcName,
+            request.PlcCode ?? request.PlcName,
             cancellationToken);
         var items = rows
             .Take(maxRows)
@@ -525,7 +529,10 @@ public sealed class GetAiReadCapacityHourlyHandler(
                 row.TotalCount,
                 row.OkCount,
                 row.NgCount,
-                row.TotalCount > 0 ? Math.Round(row.OkCount * 100m / row.TotalCount, 2) : 0m,
+                row.TotalCount > 0 && row.OkCount.HasValue
+                    ? Math.Round(row.OkCount.Value * 100m / row.TotalCount, 2)
+                    : null,
+                row.PlcCode,
                 row.PlcName))
             .ToList();
 
@@ -542,6 +549,7 @@ public sealed class GetAiReadCapacityHourlyHandler(
                 ("startTime", AiReadQueryGuard.ScopeDateTime(range.StartTime)),
                 ("endTime", AiReadQueryGuard.ScopeDateTime(range.EndTime)),
                 ("plcName", AiReadQueryGuard.ScopeText(request.PlcName)),
+                ("plcCode", AiReadQueryGuard.ScopeText(request.PlcCode)),
                 ("delegatedUserId", AiReadQueryGuard.ScopeGuid(scopeAccessor.DelegatedUserId))),
             items.Count,
             rows.Count > items.Count));
@@ -759,9 +767,12 @@ public sealed class GetAiReadProductionRecordsHandler(
                 item.Result,
                 item.CompletedTime.HasValue ? AiReadQueryGuard.NormalizeUtc(item.CompletedTime.Value) : null,
                 item.ReceivedAt.HasValue ? AiReadQueryGuard.NormalizeUtc(item.ReceivedAt.Value) : null,
-                item.Fields
-                    .Where(field => exposedFieldKeys.Contains(field.Key))
-                    .ToDictionary(field => field.Key, field => field.Value, StringComparer.Ordinal),
+                definition is null
+                    ? new Dictionary<string, object?>(StringComparer.Ordinal)
+                    : PassStationPublicFieldProjection.Project(
+                        definition,
+                        item.Fields,
+                        exposedFieldKeys),
                 fieldDefinitions
                     .Select(field => new AiReadProductionFieldSchemaDto(
                         field.Key,

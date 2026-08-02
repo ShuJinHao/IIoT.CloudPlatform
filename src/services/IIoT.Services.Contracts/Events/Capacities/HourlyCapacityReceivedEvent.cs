@@ -21,13 +21,19 @@ public record HourlyCapacityReceivedEvent : IIntegrationEvent
     public int Minute { get; init; }
     public string TimeLabel { get; init; } = string.Empty;
     public int TotalCount { get; init; }
-    public int OkCount { get; init; }
-    public int NgCount { get; init; }
+    public int? OkCount { get; init; }
+    public int? NgCount { get; init; }
+
+    public string? ProcessType { get; init; }
+
+    public string PlcCode { get; init; } = string.Empty;
 
     /// <summary>
     /// 产生该产能数据的 PLC 名称。
     /// </summary>
     public string? PlcName { get; init; }
+
+    public bool PlcNameIsTrusted { get; init; }
 
     public DateTime ReceivedAtUtc { get; init; }
 }

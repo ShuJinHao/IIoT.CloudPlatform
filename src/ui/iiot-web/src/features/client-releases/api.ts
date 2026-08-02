@@ -137,6 +137,7 @@ export interface GenerateEdgeInstallerPackagePayload {
 export interface EdgeInstallerPackageDownload {
   blob: Blob;
   fileName: string;
+  generationId: string;
 }
 
 const parseDownloadFileName = (contentDisposition?: string): string | null => {
@@ -163,9 +164,14 @@ export const generateEdgeInstallerPackageApi = async (
     timeout: 120000,
   });
   const contentDisposition = response.headers['content-disposition'] as string | undefined;
+  const generationId = response.headers['x-iiot-installer-generation-id'] as string | undefined;
+  if (!generationId) {
+    throw new Error('安装包响应缺少 generationId。');
+  }
   return {
     blob: response.data,
     fileName: parseDownloadFileName(contentDisposition) || 'IIoT.EdgeClient-installer.exe',
+    generationId,
   };
 };
 

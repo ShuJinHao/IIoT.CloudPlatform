@@ -17,6 +17,12 @@ export interface PassStationFilters {
   endTime: string;
 }
 
+export interface PassStationProcessOption {
+  id: string;
+  processCode: string;
+  processName: string;
+}
+
 export function localDate() {
   const date = new Date();
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;

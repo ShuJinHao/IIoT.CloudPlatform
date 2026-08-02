@@ -20,6 +20,7 @@ public sealed class PassStationReceiveService(
         string messageType,
         string? requestId,
         string deduplicationKey,
+        string contentFingerprint,
         IPassStationEvent @event,
         CancellationToken cancellationToken)
     {
@@ -29,9 +30,18 @@ public sealed class PassStationReceiveService(
         if (itemCount == 0)
             return Result.Failure("数据接收失败: 过站数据列表不能为空");
 
-        var exists = await deviceIdentityQuery.ExistsAsync(deviceId, cancellationToken);
-        if (!exists)
+        var device = await deviceIdentityQuery.GetByDeviceIdAsync(deviceId, cancellationToken);
+        if (device is null)
             return Result.Failure("数据接收失败: 设备不存在");
+
+        var registeredProcess = NormalizeProcessType(device.ProcessCode);
+        if (registeredProcess is null)
+            return Result.Failure("数据接收失败: 设备未登记有效工序");
+        if (!string.Equals(registeredProcess, @event.TypeKey, StringComparison.Ordinal)
+            || !string.Equals(registeredProcess, @event.ProcessType, StringComparison.Ordinal))
+        {
+            return Result.Forbidden("数据接收失败: 设备登记工序与上报工序不一致");
+        }
 
         var registration = await uploadReceiveRegistry.RegisterAndEnqueueAsync(
             deviceId,
@@ -39,9 +49,16 @@ public sealed class PassStationReceiveService(
             requestId,
             deduplicationKey,
             @event,
-            cancellationToken);
+            cancellationToken,
+            contentFingerprint);
         return Result.Success(registration.IsDuplicate
             ? EdgeUploadAcceptedResponse.Duplicate(registration.OutboxMessageId)
             : EdgeUploadAcceptedResponse.Accepted(registration.OutboxMessageId));
+    }
+
+    private static string? NormalizeProcessType(string? value)
+    {
+        value = value?.Trim();
+        return string.IsNullOrWhiteSpace(value) ? null : value.ToLowerInvariant();
     }
 }

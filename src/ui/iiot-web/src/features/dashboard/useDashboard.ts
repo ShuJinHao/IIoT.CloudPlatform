@@ -25,7 +25,6 @@ import { useAuthStore } from '../../stores/auth';
 import { resolveDashboardLoadError } from './errors';
 import {
   mapDashboardEvent,
-  todayIsoDate,
   type AnalysisLink,
   type DashboardCard,
   type DashboardEvent,
@@ -75,8 +74,10 @@ export function useDashboard() {
   const warningDevices = ref(0);
   const errorDevices = ref(0);
   const offlineDevices = ref(0);
+  const clientSoftwareStatus = ref<string | null>(null);
+  const clientStatusIssue = ref<string | null>(null);
   const todayProduction = ref(0);
-  const todayOkProduction = ref(0);
+  const reportingPlcCount = ref(0);
   const alertCount = ref(0);
   const hourly = ref<{ label: string; value: number }[]>([]);
   const events = ref<DashboardEvent[]>([]);
@@ -140,27 +141,26 @@ export function useDashboard() {
     todayProduction.value.toLocaleString(browserLocale.value),
   );
   const hasHourlyData = computed(() => hourly.value.length > 0);
-  const passRate = computed(() =>
-    todayProduction.value > 0
-      ? (todayOkProduction.value / todayProduction.value) * 100
-      : 0,
-  );
   const productionDisplay = computed(() =>
     sourceStates.capacity.status === 'ready'
       ? formattedProduction.value
       : '--',
   );
-  const passRateDisplay = computed(() =>
+  const reportingPlcDisplay = computed(() =>
     sourceStates.capacity.status === 'ready'
-      ? `${passRate.value.toFixed(1)}%`
+      ? reportingPlcCount.value
       : '--',
   );
   const clientStatusDisplay = computed(() => {
     if (sourceStates.deviceStatus.status !== 'ready') return '--';
-    if (errorDevices.value > 0) return t('dashboard.statusError');
-    if (warningDevices.value > 0) return t('dashboard.statusWarning');
-    if (onlineDevices.value > 0) return t('dashboard.statusNormal');
-    return t('dashboard.statusOffline');
+    switch (clientSoftwareStatus.value) {
+      case 'Running': return t('dashboard.statusRunning');
+      case 'Starting': return t('dashboard.statusStarting');
+      case 'Stopped': return t('dashboard.statusStopped');
+      case 'RuntimeHeartbeatStale': return t('dashboard.statusHeartbeatStale');
+      case 'MissingRuntimeHeartbeat': return t('dashboard.statusHeartbeatMissing');
+      default: return t('dashboard.statusUnknown');
+    }
   });
   const alertCountDisplay = computed(() =>
     sourceStates.alertCount.status === 'ready' ? alertCount.value : '--',
@@ -170,6 +170,7 @@ export function useDashboard() {
       day: '2-digit',
       month: 'short',
       year: 'numeric',
+      timeZone: 'Asia/Shanghai',
     }),
   );
 
@@ -206,19 +207,22 @@ export function useDashboard() {
       id: 'active-clients',
       label: t('dashboard.activeClients'),
       value: clientStatusDisplay.value,
-      helper: sourceHelper('deviceStatus', t('dashboard.activeClientsHelper', {
-        device: selectedDevice.value?.deviceName ?? '--',
-        code: selectedDevice.value?.code ?? '--',
-      })),
+      helper: sourceHelper(
+        'deviceStatus',
+        clientStatusIssue.value || t('dashboard.activeClientsHelper', {
+          device: selectedDevice.value?.deviceName ?? '--',
+          code: selectedDevice.value?.code ?? '--',
+        }),
+      ),
       background: 'var(--chart-2)',
       icon: Activity,
       status: sourceStates.deviceStatus.status,
     },
     {
-      id: 'pass-rate',
-      label: t('dashboard.passRate'),
-      value: passRateDisplay.value,
-      helper: sourceHelper('capacity', t('dashboard.passRateHelper')),
+      id: 'reporting-plcs',
+      label: t('dashboard.reportingPlcs'),
+      value: reportingPlcDisplay.value,
+      helper: sourceHelper('capacity', t('dashboard.reportingPlcsHelper')),
       background: 'var(--chart-3)',
       icon: Gauge,
       status: sourceStates.capacity.status,
@@ -252,10 +256,10 @@ export function useDashboard() {
     { label: t('dashboard.passTraceReview'), to: '/pass-station', icon: Route },
   ]);
   const statusRows = computed(() => [
-    { label: t('dashboard.online'), value: onlineDevices.value, color: 'var(--success)' },
-    { label: t('dashboard.warning'), value: warningDevices.value, color: 'var(--warn)' },
-    { label: t('dashboard.error'), value: errorDevices.value, color: 'var(--error)' },
-    { label: t('dashboard.offline'), value: offlineDevices.value, color: 'var(--text-2)' },
+    { label: t('dashboard.running'), value: onlineDevices.value, color: 'var(--success)' },
+    { label: t('dashboard.starting'), value: warningDevices.value, color: 'var(--warn)' },
+    { label: t('dashboard.unknown'), value: errorDevices.value, color: 'var(--error)' },
+    { label: t('dashboard.stoppedOrStale'), value: offlineDevices.value, color: 'var(--text-2)' },
   ]);
   const statusSummary = computed(() =>
     sourceHelper('deviceStatus', t('dashboard.clientStatusSummary', {
@@ -291,8 +295,10 @@ export function useDashboard() {
     warningDevices.value = 0;
     errorDevices.value = 0;
     offlineDevices.value = 0;
+    clientSoftwareStatus.value = null;
+    clientStatusIssue.value = null;
     todayProduction.value = 0;
-    todayOkProduction.value = 0;
+    reportingPlcCount.value = 0;
     alertCount.value = 0;
     hourly.value = [];
     events.value = [];
@@ -353,18 +359,21 @@ export function useDashboard() {
           warningDevices.value = statusSummary.warning;
           errorDevices.value = statusSummary.error;
           offlineDevices.value = statusSummary.offline;
+          clientSoftwareStatus.value = statusSummary.softwareStatus ?? null;
+          clientStatusIssue.value = statusSummary.issue ?? null;
         },
       ),
       loadSource('capacity', generation, () =>
-        getHourlyByDeviceApi({ deviceId, date: todayIsoDate() }), (hourlyData) => {
+        getHourlyByDeviceApi({ deviceId }), (hourlyData) => {
           todayProduction.value = hourlyData.reduce(
             (sum, item) => sum + (item.totalCount ?? 0),
             0,
           );
-          todayOkProduction.value = hourlyData.reduce(
-            (sum, item) => sum + (item.okCount ?? 0),
-            0,
-          );
+          reportingPlcCount.value = new Set(
+            hourlyData
+              .map((item) => item.plcCode?.trim())
+              .filter((plcCode): plcCode is string => Boolean(plcCode)),
+          ).size;
           const buckets = new Map<string, { order: number; value: number }>();
           hourlyData.forEach((item) => {
             const label = item.timeLabel

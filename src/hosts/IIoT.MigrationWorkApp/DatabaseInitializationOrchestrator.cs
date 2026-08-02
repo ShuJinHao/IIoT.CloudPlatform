@@ -6,6 +6,7 @@ using IIoT.EntityFrameworkCore;
 using IIoT.EntityFrameworkCore.Identity;
 using IIoT.MigrationWorkApp.SeedData;
 using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Events.PassStations;
 using IIoT.Services.Contracts.Identity;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -187,6 +188,7 @@ public sealed class DatabaseInitializationOrchestrator
             await dbContext.Database.BeginTransactionAsync(cancellationToken);
         await EnsureIdentitySchemaCompatibilityAsync(cancellationToken);
         await EnsureDeviceCodeSchemaCompatibilityAsync(cancellationToken);
+        await BackfillPassStationContentFingerprintsAsync(cancellationToken);
 
         var pendingMigrations = await dbContext.Database
             .GetPendingMigrationsAsync(cancellationToken);
@@ -197,6 +199,102 @@ public sealed class DatabaseInitializationOrchestrator
         }
 
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    internal async Task BackfillPassStationContentFingerprintsAsync(
+        CancellationToken cancellationToken)
+    {
+        var registrations = await dbContext.UploadReceiveRegistrations
+            .Where(registration => registration.MessageType.StartsWith("pass-station:")
+                                   && registration.ContentFingerprint == null)
+            .OrderBy(registration => registration.Id)
+            .ToListAsync(cancellationToken);
+        if (registrations.Count == 0)
+            return;
+
+        var outboxIds = registrations
+            .Select(registration => registration.OutboxMessageId)
+            .Distinct()
+            .ToArray();
+        var outboxes = await dbContext.OutboxMessages
+            .Where(message => outboxIds.Contains(message.Id))
+            .ToDictionaryAsync(message => message.Id, cancellationToken);
+
+        var failures = new List<Guid>();
+        var fingerprints = new Dictionary<Guid, string>();
+        foreach (var registration in registrations)
+        {
+            if (!outboxes.TryGetValue(registration.OutboxMessageId, out var outbox))
+            {
+                failures.Add(registration.Id);
+                continue;
+            }
+
+            try
+            {
+                var @event = JsonSerializer.Deserialize<PassStationBatchReceivedEvent>(
+                    outbox.Payload,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                var expectedType = registration.MessageType["pass-station:".Length..];
+                if (@event is null
+                    || @event.DeviceId != registration.DeviceId
+                    || string.IsNullOrWhiteSpace(@event.TypeKey)
+                    || @event.Items is null
+                    || @event.Items.Any(item => item is null)
+                    || !string.Equals(
+                        @event.TypeKey.Trim(),
+                        expectedType,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    failures.Add(registration.Id);
+                    continue;
+                }
+
+                fingerprints.Add(
+                    registration.Id,
+                    PassStationContentFingerprint.Compute(@event));
+            }
+            catch (JsonException)
+            {
+                failures.Add(registration.Id);
+            }
+            catch (ArgumentException)
+            {
+                failures.Add(registration.Id);
+            }
+            catch (InvalidOperationException)
+            {
+                failures.Add(registration.Id);
+            }
+            catch (NullReferenceException)
+            {
+                failures.Add(registration.Id);
+            }
+        }
+
+        if (failures.Count > 0)
+        {
+            throw new InvalidOperationException(
+                "Cannot reconstruct pass-station upload content fingerprints from retained Outbox records. "
+                + $"RegistrationIds=[{string.Join(",", failures)}]");
+        }
+
+        foreach (var registration in registrations)
+            registration.BackfillContentFingerprint(fingerprints[registration.Id]);
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        var remainingIds = await dbContext.UploadReceiveRegistrations
+            .Where(registration => registration.MessageType.StartsWith("pass-station:")
+                                   && registration.ContentFingerprint == null)
+            .OrderBy(registration => registration.Id)
+            .Select(registration => registration.Id)
+            .ToListAsync(cancellationToken);
+        if (remainingIds.Count > 0)
+        {
+            throw new InvalidOperationException(
+                "Pass-station upload content fingerprint backfill postcondition failed. "
+                + $"RegistrationIds=[{string.Join(",", remainingIds)}]");
+        }
     }
 
     internal async Task EnsureDeviceCodeSchemaCompatibilityAsync(CancellationToken cancellationToken)

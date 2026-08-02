@@ -95,3 +95,41 @@ export const getPassStationListApi = (params: GetPassStationListParams) =>
 
 export const getPassStationDetailApi = (typeKey: string, id: string) =>
   http.get<PassStationDetailDto>(`${basePath}/${encodeURIComponent(typeKey)}/${id}`);
+
+const parseDownloadFileName = (contentDisposition?: string): string | null => {
+  if (!contentDisposition) return null;
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(contentDisposition);
+  if (encoded?.[1]) {
+    try {
+      return decodeURIComponent(encoded[1].replace(/"/g, '').trim());
+    } catch {
+      return encoded[1].replace(/"/g, '').trim();
+    }
+  }
+  const plain = /filename="?([^";]+)"?/i.exec(contentDisposition);
+  return plain?.[1]?.trim() || null;
+};
+
+export const exportPassStationsApi = async (params: GetPassStationListParams) => {
+  const response = await http.getRaw<Blob>(
+    `${basePath}/${encodeURIComponent(params.typeKey)}/export`,
+    {
+      responseType: 'blob',
+      timeout: 30000,
+      params: {
+        mode: params.mode,
+        processId: params.processId || undefined,
+        deviceId: params.deviceId || undefined,
+        barcode: params.barcode || undefined,
+        startTime: params.startTime || undefined,
+        endTime: params.endTime || undefined,
+      },
+    },
+  );
+  const contentDisposition = response.headers['content-disposition'] as string | undefined;
+  return {
+    blob: response.data,
+    fileName: parseDownloadFileName(contentDisposition)
+      || `pass-stations-${params.typeKey}.csv`,
+  };
+};

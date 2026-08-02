@@ -6,9 +6,9 @@ export interface DailyCapacityItem {
   deviceName: string;
   date: string;
   totalCount: number;
-  okCount: number;
-  ngCount: number;
-  okRate: number;
+  okCount: number | null;
+  ngCount: number | null;
+  okRate: number | null;
   reportedAt: string;
 }
 
@@ -18,8 +18,9 @@ export interface HourlyCapacityItem {
   timeLabel: string;
   shiftCode: string;
   totalCount: number;
-  okCount: number;
-  ngCount: number;
+  okCount: number | null;
+  ngCount: number | null;
+  plcCode: string;
   plcName?: string | null;
 }
 
@@ -28,21 +29,22 @@ export interface HourlyCapacityAggregateItem {
   minute: number;
   timeLabel: string;
   totalCount: number;
-  okCount: number;
-  ngCount: number;
+  okCount: number | null;
+  ngCount: number | null;
 }
 
 export interface DailyRangeSummaryDto {
   date: string;
   totalCount: number;
-  okCount: number;
-  ngCount: number;
+  okCount: number | null;
+  ngCount: number | null;
   dayShiftTotal: number;
-  dayShiftOk: number;
-  dayShiftNg: number;
+  dayShiftOk: number | null;
+  dayShiftNg: number | null;
   nightShiftTotal: number;
-  nightShiftOk: number;
-  nightShiftNg: number;
+  nightShiftOk: number | null;
+  nightShiftNg: number | null;
+  plcCode?: string | null;
   plcName?: string | null;
 }
 
@@ -66,26 +68,28 @@ export const getDailyPagedApi = (params: {
 
 export const getHourlyByDeviceApi = (params: {
   deviceId: string;
-  date: string;
+  date?: string;
+  plcCode?: string;
   plcName?: string;
 }) =>
   http.get<HourlyCapacityItem[]>(`${basePath}/hourly`, {
     inlineFeedback: true,
     params: {
       deviceId: params.deviceId,
-      date: params.date,
+      date: params.date || undefined,
+      plcCode: params.plcCode || undefined,
       plcName: params.plcName || undefined,
     },
   });
 
 export const getHourlyAggregateApi = (params: {
-  date: string;
+  date?: string;
   processId?: string;
 }) =>
   http.get<HourlyCapacityAggregateItem[]>(`${basePath}/hourly/aggregate`, {
     inlineFeedback: true,
     params: {
-      date: params.date,
+      date: params.date || undefined,
       processId: params.processId || undefined,
     },
   });
@@ -95,6 +99,8 @@ export const getSummaryRangeApi = (params: {
   startDate: string;
   endDate: string;
   breakdownByPlc?: boolean;
+  plcCode?: string;
+  plcName?: string;
 }) =>
   http.get<DailyRangeSummaryDto[]>(`${basePath}/summary/range`, {
     inlineFeedback: true,
@@ -103,5 +109,7 @@ export const getSummaryRangeApi = (params: {
       startDate: params.startDate,
       endDate: params.endDate,
       breakdownByPlc: params.breakdownByPlc ?? true,
+      plcCode: params.plcCode || undefined,
+      plcName: params.plcName || undefined,
     },
   });
