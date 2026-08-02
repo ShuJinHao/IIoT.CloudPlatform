@@ -1,14 +1,15 @@
 import { computed, reactive, ref, watch } from 'vue';
-import { getAllActiveDevicesApi, type DeviceSelectDto } from '../devices/api';
-import { getAllProcessesApi, type ProcessSelectDto } from '../processes/api';
+import { getScopedDeviceSelectApi, type ScopedDeviceSelectDto } from '../devices/api';
 import type { PagedMetaData } from '../../core/types/pagination';
-import { notifyWarning } from '../../utils/feedback';
+import { notifySuccess, notifyWarning } from '../../utils/feedback';
 import {
+  exportPassStationsApi,
   getPassStationDetailApi,
   getPassStationListApi,
   getPassStationTypesApi,
   type PassStationDetailDto,
   type PassStationListItemDto,
+  type GetPassStationListParams,
   type PassStationQueryMode,
 } from './api';
 import { createPassStationColumns } from './columns';
@@ -25,6 +26,7 @@ import {
   queryModeLabels,
   toUtcIso,
   type PassStationFilters,
+  type PassStationProcessOption,
 } from './types';
 
 const emptyMetaData = (): PagedMetaData => ({
@@ -36,14 +38,18 @@ const emptyMetaData = (): PagedMetaData => ({
 
 export function usePassStation() {
   const loading = ref(false);
+  const selectLoading = ref(false);
+  const selectError = ref<string | null>(null);
+  const queryError = ref<string | null>(null);
+  const exporting = ref(false);
   const searched = ref(false);
   const currentPage = ref(1);
   const currentMode = ref<PassStationQueryMode>('barcode-process');
   const currentProcessId = ref<string | null>(null);
   const records = ref<PassStationListItemDto[]>([]);
   const metaData = ref<PagedMetaData>(emptyMetaData());
-  const allProcesses = ref<ProcessSelectDto[]>([]);
-  const allDevices = ref<DeviceSelectDto[]>([]);
+  const allProcesses = ref<PassStationProcessOption[]>([]);
+  const allDevices = ref<ScopedDeviceSelectDto[]>([]);
   const schemaMap = ref<Record<string, PassStationSchema>>({});
   const showDetail = ref(false);
   const detailLoading = ref(false);
@@ -69,7 +75,7 @@ export function usePassStation() {
     value: process.id,
   })));
   const filteredDevices = computed(() => {
-    if (!currentProcessId.value) return [] as DeviceSelectDto[];
+    if (!currentProcessId.value) return [] as ScopedDeviceSelectDto[];
     return allDevices.value.filter((device) => device.processId === currentProcessId.value);
   });
   const deviceOptions = computed(() => filteredDevices.value.map((device) => ({
@@ -94,17 +100,60 @@ export function usePassStation() {
   }
 
   async function fetchSelectData() {
-    const [processes, devices, schemas] = await Promise.all([
-      getAllProcessesApi().catch(() => [] as ProcessSelectDto[]),
-      getAllActiveDevicesApi().catch(() => [] as DeviceSelectDto[]),
-      getPassStationTypesApi().catch(() => []),
-    ]);
-    allProcesses.value = processes;
-    allDevices.value = devices;
-    schemaMap.value = buildPassStationSchemaMap(schemas);
+    selectLoading.value = true;
+    selectError.value = null;
+    try {
+      const [devices, schemas] = await Promise.all([
+        getScopedDeviceSelectApi(),
+        getPassStationTypesApi(),
+      ]);
+      allDevices.value = devices;
+      const processById = new Map<string, PassStationProcessOption>();
+      devices.forEach((device) => {
+        processById.set(device.processId, {
+          id: device.processId,
+          processCode: device.processCode,
+          processName: device.processName,
+        });
+      });
+      allProcesses.value = [...processById.values()];
+      schemaMap.value = buildPassStationSchemaMap(schemas);
 
-    const firstSupported = supportedProcesses.value[0];
-    if (!currentProcessId.value && firstSupported) currentProcessId.value = firstSupported.id;
+      const firstSupported = supportedProcesses.value[0];
+      if (!currentProcessId.value && firstSupported) currentProcessId.value = firstSupported.id;
+    } catch {
+      allProcesses.value = [];
+      allDevices.value = [];
+      schemaMap.value = {};
+      currentProcessId.value = null;
+      selectError.value = '授权设备与过站契约加载失败，请重试。';
+    } finally {
+      selectLoading.value = false;
+    }
+  }
+
+  function buildCurrentQueryParams(): GetPassStationListParams | null {
+    if (!currentSchema.value || !currentProcess.value) return null;
+    return {
+      typeKey: currentSchema.value.typeKey,
+      mode: currentMode.value,
+      pagination: { PageNumber: currentPage.value, PageSize: PAGE_SIZE },
+      processId: currentMode.value === 'barcode-process' || currentMode.value === 'time-process'
+        ? currentProcess.value.id
+        : undefined,
+      deviceId: currentMode.value === 'device-barcode' || currentMode.value === 'device-time' || currentMode.value === 'device-latest'
+        ? filters.deviceId || undefined
+        : undefined,
+      barcode: currentMode.value === 'barcode-process' || currentMode.value === 'device-barcode'
+        ? filters.barcode.trim()
+        : undefined,
+      startTime: currentMode.value === 'time-process' || currentMode.value === 'device-time'
+        ? toUtcIso(filters.startTime)
+        : undefined,
+      endTime: currentMode.value === 'time-process' || currentMode.value === 'device-time'
+        ? toUtcIso(filters.endTime)
+        : undefined,
+    };
   }
 
   async function fetchData() {
@@ -115,33 +164,18 @@ export function usePassStation() {
 
     loading.value = true;
     searched.value = true;
+    queryError.value = null;
     try {
-      const response = await getPassStationListApi({
-        typeKey: currentSchema.value.typeKey,
-        mode: currentMode.value,
-        pagination: { PageNumber: currentPage.value, PageSize: PAGE_SIZE },
-        processId: currentMode.value === 'barcode-process' || currentMode.value === 'time-process'
-          ? currentProcess.value.id
-          : undefined,
-        deviceId: currentMode.value === 'device-barcode' || currentMode.value === 'device-time' || currentMode.value === 'device-latest'
-          ? filters.deviceId || undefined
-          : undefined,
-        barcode: currentMode.value === 'barcode-process' || currentMode.value === 'device-barcode'
-          ? filters.barcode.trim()
-          : undefined,
-        startTime: currentMode.value === 'time-process' || currentMode.value === 'device-time'
-          ? toUtcIso(filters.startTime)
-          : undefined,
-        endTime: currentMode.value === 'time-process' || currentMode.value === 'device-time'
-          ? toUtcIso(filters.endTime)
-          : undefined,
-      });
+      const params = buildCurrentQueryParams();
+      if (!params) return;
+      const response = await getPassStationListApi(params);
       metaData.value = response.metaData;
       records.value = response.items;
     } catch {
       records.value = [];
       metaData.value = emptyMetaData();
       currentPage.value = 1;
+      queryError.value = '过站记录加载失败，请重试。';
     } finally {
       loading.value = false;
     }
@@ -155,6 +189,30 @@ export function usePassStation() {
     }
     currentPage.value = 1;
     await fetchData();
+  }
+
+  async function doExport() {
+    const validationMessage = validateCurrentQuery();
+    if (validationMessage) {
+      notifyWarning(validationMessage);
+      return;
+    }
+    const params = buildCurrentQueryParams();
+    if (!params) return;
+
+    exporting.value = true;
+    try {
+      const download = await exportPassStationsApi(params);
+      const url = URL.createObjectURL(download.blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = download.fileName;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      notifySuccess('过站 CSV 已生成。');
+    } finally {
+      exporting.value = false;
+    }
   }
 
   async function onPageChange(page: number) {
@@ -225,6 +283,10 @@ export function usePassStation() {
   return {
     PAGE_SIZE,
     loading,
+    selectLoading,
+    selectError,
+    queryError,
+    exporting,
     searched,
     currentPage,
     currentMode,
@@ -245,6 +307,7 @@ export function usePassStation() {
     detailData,
     fetchSelectData,
     doSearch,
+    doExport,
     onPageChange,
     switchMode,
   };

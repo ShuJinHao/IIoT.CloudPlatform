@@ -4,6 +4,7 @@ import {
   getClientReleaseCatalogApi,
   getClientReleaseComponentDeletionsApi,
   getClientReleaseHistoryApi,
+  generateEdgeInstallerPackageApi,
   hardDeleteClientReleaseComponentApi,
   retryClientReleaseComponentDeletionApi,
 } from './api';
@@ -79,5 +80,39 @@ describe('client release permanent delete API', () => {
     expect(httpMock.post.mock.calls[0]![0]).toBe(
       '/human/client-releases/component-deletions/deletion-guid-9/retry',
     );
+  });
+});
+
+describe('edge installer generation API', () => {
+  it('requires and returns the immutable generation id response header', async () => {
+    const blob = new Blob(['installer']);
+    httpMock.postRaw.mockResolvedValueOnce({
+      data: blob,
+      headers: {
+        'content-disposition': 'attachment; filename="IIoT.EdgeClient-installer.exe"',
+        'x-iiot-installer-generation-id': '11111111-1111-1111-1111-111111111111',
+      },
+    } as never);
+
+    const result = await generateEdgeInstallerPackageApi({
+      selections: [{ moduleId: 'CP', deviceId: 'device-1' }],
+    });
+
+    expect(result).toEqual({
+      blob,
+      fileName: 'IIoT.EdgeClient-installer.exe',
+      generationId: '11111111-1111-1111-1111-111111111111',
+    });
+  });
+
+  it('rejects a download response without generationId', async () => {
+    httpMock.postRaw.mockResolvedValueOnce({
+      data: new Blob(['installer']),
+      headers: {},
+    } as never);
+
+    await expect(generateEdgeInstallerPackageApi({
+      selections: [{ moduleId: 'CP', deviceId: 'device-1' }],
+    })).rejects.toThrow('generationId');
   });
 });

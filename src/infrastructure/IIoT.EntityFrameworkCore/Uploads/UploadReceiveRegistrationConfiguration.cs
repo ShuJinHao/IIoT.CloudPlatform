@@ -33,6 +33,10 @@ internal sealed class UploadReceiveRegistrationConfiguration
             .HasMaxLength(160)
             .IsRequired();
 
+        builder.Property(x => x.ContentFingerprint)
+            .HasColumnName("content_fingerprint")
+            .HasMaxLength(64);
+
         builder.Property(x => x.OutboxMessageId)
             .HasColumnName("outbox_message_id")
             .IsRequired();

@@ -1,7 +1,8 @@
 import type { CapacityDetailRow, CapacityQueryMode } from './types';
 
-const escapeCsv = (value: string | number) => {
-  const text = String(value);
+const escapeCsv = (value: string | number | null) => {
+  const raw = value === null ? '' : String(value);
+  const text = typeof value === 'string' && /^[=+@-]/.test(raw) ? `'${raw}` : raw;
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 };
 
@@ -10,6 +11,7 @@ const shiftText = (shift: string) =>
 
 export function buildCapacityCsv(rows: CapacityDetailRow[]): string {
   const header = [
+    'PLC 编码',
     'PLC 名称',
     '时间范围',
     '班次',
@@ -19,13 +21,14 @@ export function buildCapacityCsv(rows: CapacityDetailRow[]): string {
     '良率',
   ];
   const body = rows.map((row) => [
+    row.plcCode,
     row.plcName,
     row.period,
     shiftText(row.shift),
     row.total,
     row.ok,
     row.ng,
-    `${row.rate.toFixed(2)}%`,
+    row.rate === null ? null : `${row.rate.toFixed(2)}%`,
   ]);
   return `\uFEFF${[header, ...body]
     .map((values) => values.map(escapeCsv).join(','))

@@ -1,6 +1,11 @@
 <template>
   <NiondTableCard class="passstation-page__table-card">
-    <div v-if="!searched && !loading" class="hint-empty">
+    <EmptyState v-if="error && !loading" title="过站记录加载失败" :description="error">
+      <template #action>
+        <UiButton secondary size="small" @click="$emit('retry')">重试</UiButton>
+      </template>
+    </EmptyState>
+    <div v-else-if="!searched && !loading" class="hint-empty">
       <EmptyState title="请填写查询条件后执行查询" description="未查询前不显示数据，避免误展示无关记录。" />
     </div>
     <UiDataTable v-else class="passstation-page__table" :columns="columns" :data="records" :loading="loading" :bordered="false" :single-line="false" :row-key="rowKey" :row-props="rowProps" size="small" />
@@ -14,12 +19,13 @@
 import NiondTableCard from '../../components/layout/NiondTableCard.vue';
 import EmptyState from '../../components/states/EmptyState.vue';
 import UiDataTable from '../../components/ui/UiDataTable.vue';
+import UiButton from '../../components/ui/UiButton.vue';
 import UiPagination from '../../components/ui/UiPagination.vue';
 import type { UiDataTableColumn } from '../../components/ui/types';
 import type { PagedMetaData } from '../../core/types/pagination';
 import type { PassStationListItemDto } from './api';
 
-defineEmits<{ pageChange: [page: number] }>();
+defineEmits<{ pageChange: [page: number]; retry: [] }>();
 defineProps<{
   searched: boolean;
   loading: boolean;
@@ -30,5 +36,6 @@ defineProps<{
   metaData: PagedMetaData;
   currentPage: number;
   pageSize: number;
+  error: string | null;
 }>();
 </script>

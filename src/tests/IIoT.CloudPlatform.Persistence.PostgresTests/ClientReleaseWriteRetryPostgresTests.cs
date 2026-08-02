@@ -34,6 +34,98 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task InstallerGenerationStore_ShouldRecoverWriteFaultAndKeepRecordImmutable(
+        bool throwAfterCommit)
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var fault = new ArmableSaveChangesFault(throwAfterCommit);
+        var options = CreateWriteOptions(budget.ConnectionString, fault);
+        var store = new EfEdgeInstallerGenerationStore(
+            options,
+            NullLogger<EfEdgeInstallerGenerationStore>.Instance);
+        var generationId = Guid.NewGuid();
+        var record = new EdgeInstallerGenerationRecord(
+            generationId,
+            Guid.NewGuid(),
+            "installer-operator",
+            new DateTime(2026, 8, 2, 1, 30, 0, DateTimeKind.Utc),
+            "stable",
+            "win-x64",
+            "1.2.0",
+            new string('a', 64),
+            "IIoT.EdgeClient-installer.exe",
+            new string('b', 64),
+            1024,
+            [new EdgeInstallerGenerationBindingFact(
+                "CP",
+                Guid.NewGuid(),
+                "DEV-CP01",
+                "正极模切客户端",
+                Guid.NewGuid())],
+            [new EdgeInstallerGenerationPluginFact(
+                "CP",
+                "2.3.4",
+                new string('c', 64))]);
+
+        try
+        {
+            fault.Arm();
+            Assert.True(await store.TryAddConfirmedAsync(record, budget.Token));
+            Assert.Equal(1, fault.ExceptionsThrown);
+            Assert.True(await store.TryAddConfirmedAsync(record, budget.Token));
+
+            var persisted = await store.GetByIdAsync(generationId, budget.Token);
+            Assert.NotNull(persisted);
+            Assert.Equal(record.PackageSha256, persisted.PackageSha256);
+            Assert.True(JsonElement.DeepEquals(
+                JsonDocument.Parse(record.BindingsJson).RootElement,
+                JsonDocument.Parse(persisted.BindingsJson).RootElement));
+            Assert.True(JsonElement.DeepEquals(
+                JsonDocument.Parse(record.PluginsJson).RootElement,
+                JsonDocument.Parse(persisted.PluginsJson).RootElement));
+
+            var conflicting = new EdgeInstallerGenerationRecord(
+                generationId,
+                record.OperatorUserId,
+                record.OperatorName,
+                record.GeneratedAtUtc,
+                record.Channel,
+                record.TargetRuntime,
+                record.HostVersion,
+                record.HostSha256,
+                record.FileName,
+                new string('d', 64),
+                record.PackageSize,
+                [new EdgeInstallerGenerationBindingFact(
+                    "CP",
+                    Guid.NewGuid(),
+                    "DEV-CP01",
+                    "正极模切客户端",
+                    Guid.NewGuid())],
+                [new EdgeInstallerGenerationPluginFact(
+                    "CP",
+                    "2.3.4",
+                    new string('c', 64))]);
+            Assert.False(await store.TryAddConfirmedAsync(conflicting, budget.Token));
+            Assert.Equal(
+                record.PackageSha256,
+                (await store.GetByIdAsync(generationId, budget.Token))!.PackageSha256);
+        }
+        finally
+        {
+            await using var cleanup = new IIoTDbContext(
+                CreateObservationOptions(budget.ConnectionString));
+            await cleanup.EdgeInstallerGenerationRecords
+                .Where(candidate => candidate.Id == generationId)
+                .ExecuteDeleteAsync(CancellationToken.None);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task ClientReleaseWrites_ShouldReplayTransientAndRecoverCommitConfirmationLoss(
         bool throwAfterCommit)
     {
@@ -557,9 +649,10 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
                         new EdgeInstallerArtifactOptions
                         {
                             RootPath = installerRoot
-                        }),
+                    }),
                     CreateUnitOfWork(dbContext),
-                    observationReader)
+                    observationReader,
+                    new InMemoryEdgeInstallerGenerationStore())
                 .Handle(
                     new GenerateEdgeInstallerPackageCommand(
                         [

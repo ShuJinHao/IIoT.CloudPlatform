@@ -2,7 +2,7 @@ import type { Component } from 'vue';
 import type { DeviceLogListItemDto } from '../device-logs/api';
 
 export interface DashboardCard {
-  id: 'production' | 'active-clients' | 'pass-rate' | 'alert-records';
+  id: 'production' | 'active-clients' | 'reporting-plcs' | 'alert-records';
   label: string;
   value: string | number;
   helper: string;

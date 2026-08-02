@@ -13,6 +13,7 @@ using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Events.Capacities;
 using IIoT.Services.Contracts.Events.DeviceLogs;
 using IIoT.Services.Contracts.Events.PassStations;
+using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.Contracts.RecordQueries;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
@@ -103,6 +104,8 @@ public sealed class PassStationContractSnapshotTests
             """));
         Assert.True(validator.Validate(new ReceivePassStationBatchCommand(
             " CP ", Guid.NewGuid(), [validItem], "request-1", 1, "CP")).IsValid);
+        Assert.True(validator.Validate(new ReceivePassStationBatchCommand(
+            "cp", Guid.NewGuid(), [validItem], "request-2", 2, "cp")).IsValid);
         var compatibleItemWithoutClipSlot = validItem with
         {
             Payload = ParseJson("""
@@ -123,7 +126,7 @@ public sealed class PassStationContractSnapshotTests
         AssertFailure(validator, new("cp", Guid.NewGuid(), []), nameof(ReceivePassStationBatchCommand.Items));
         AssertFailure(validator, new("cp", Guid.NewGuid(), Enumerable.Repeat(validItem, 1001).ToList()), nameof(ReceivePassStationBatchCommand.Items));
         AssertFailure(validator, new("cp", Guid.NewGuid(), [validItem], new string('r', 129)), nameof(ReceivePassStationBatchCommand.RequestId));
-        AssertFailure(validator, new("cp", Guid.NewGuid(), [validItem], SchemaVersion: 2), nameof(ReceivePassStationBatchCommand.SchemaVersion));
+        AssertFailure(validator, new("cp", Guid.NewGuid(), [validItem], SchemaVersion: 2), nameof(ReceivePassStationBatchCommand.ProcessType));
         AssertFailure(validator, new("cp", Guid.NewGuid(), [validItem], ProcessType: new string('p', 33)), nameof(ReceivePassStationBatchCommand.ProcessType));
         AssertFailure(validator, new("cp", Guid.NewGuid(), [validItem], ProcessType: "coating"), nameof(ReceivePassStationBatchCommand.ProcessType));
         AssertFailure(validator, new("missing", Guid.NewGuid(), [validItem]), nameof(ReceivePassStationBatchCommand.TypeKey));
@@ -152,6 +155,75 @@ public sealed class PassStationContractSnapshotTests
             "Payload.clipSlot");
         var oversizedPayload = JsonSerializer.Serialize(Enumerable.Range(0, 65).ToDictionary(index => $"f{index}", index => index));
         AssertItemFailure(validator, validItem with { Payload = ParseJson(oversizedPayload) }, nameof(PassStationItemInput.Payload));
+
+        AssertFailure(
+            validator,
+            new ReceivePassStationBatchCommand(
+                "cp",
+                Guid.NewGuid(),
+                [validItem with { CellResult = "PASS" }],
+                SchemaVersion: 2,
+                ProcessType: "cp"),
+            $"Items[0].{nameof(PassStationItemInput.CellResult)}");
+        AssertFailure(
+            validator,
+            new ReceivePassStationBatchCommand(
+                "cp",
+                Guid.NewGuid(),
+                [validItem with { CompletedTime = DateTime.SpecifyKind(validItem.CompletedTime, DateTimeKind.Unspecified) }],
+                SchemaVersion: 2,
+                ProcessType: "cp"),
+            $"Items[0].{nameof(PassStationItemInput.CompletedTime)}");
+        AssertFailure(
+            validator,
+            new ReceivePassStationBatchCommand(
+                "cp",
+                Guid.NewGuid(),
+                [compatibleItemWithoutClipSlot],
+                SchemaVersion: 2,
+                ProcessType: "cp"),
+            "Items[0].Payload.clipSlot");
+    }
+
+    [Fact]
+    public void StrictV2ProviderExample_ShouldMatchEdgeConsumerSnapshot()
+    {
+        var snapshotBytes = File.ReadAllBytes(CloudRepositoryPath.Find(
+            "scripts", "tests", "baselines", "cloud-pass-station-contract-v2.json"));
+        Assert.Equal(
+            "3ecfd0c47605dbc099a84c0b5b91ee8e53b4b45e2d4dec4bad3f7d24c5b23e40",
+            Convert.ToHexString(SHA256.HashData(snapshotBytes)).ToLowerInvariant());
+        using var snapshot = JsonDocument.Parse(snapshotBytes);
+        var contract = snapshot.RootElement;
+
+        Assert.Equal(2, contract.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(
+            [1, 2],
+            contract.GetProperty("compatibility").GetProperty("providerContinuesToAccept")
+                .EnumerateArray()
+                .Select(item => item.GetInt32())
+                .ToArray());
+        Assert.Equal(
+            CloudWriteConflictException.Code,
+            contract.GetProperty("request").GetProperty("rules").GetProperty("requestIdDifferentContentCode").GetString());
+
+        var example = contract.GetProperty("example");
+        var item = Assert.Single(example.GetProperty("items").EnumerateArray());
+        var command = new ReceivePassStationBatchCommand(
+            "cp",
+            example.GetProperty("deviceId").GetGuid(),
+            [new PassStationItemInput(
+                item.GetProperty("barcode").GetString()!,
+                item.GetProperty("cellResult").GetString()!,
+                item.GetProperty("completedTime").GetDateTime(),
+                item.GetProperty("payload").Clone())],
+            example.GetProperty("requestId").GetString(),
+            example.GetProperty("schemaVersion").GetInt32(),
+            example.GetProperty("processType").GetString());
+
+        Assert.True(new ReceivePassStationBatchCommandValidator(CreateSchemaProvider())
+            .Validate(command)
+            .IsValid);
     }
 
     [Fact]
@@ -179,7 +251,7 @@ public sealed class PassStationContractSnapshotTests
                 .EnumerateArray()
                 .Single(field => field.GetProperty("key").GetString() == "clipSlot");
             Assert.Equal("enum", clipSlot.GetProperty("type").GetString());
-            Assert.False(clipSlot.GetProperty("required").GetBoolean());
+            Assert.True(clipSlot.GetProperty("required").GetBoolean());
             Assert.Equal(
                 ["MG1", "MG2"],
                 clipSlot.GetProperty("options")
@@ -258,7 +330,7 @@ public sealed class PassStationContractSnapshotTests
                             Key = "clipSlot",
                             Label = "弹夹位",
                             Type = PassStationFieldTypes.Enum,
-                            Required = false,
+                            Required = true,
                             Options = ["MG1", "MG2"]
                         },
                         new PassStationFieldDefinitionDto { Key = "startTime", Label = "开始时间", Type = PassStationFieldTypes.DateTime, Required = true },

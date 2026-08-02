@@ -26,6 +26,7 @@ using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Events.Capacities;
+using IIoT.Services.Contracts.Events.PassStations;
 using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.Contracts.RecordQueries;
@@ -269,6 +270,83 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 .AsNoTracking()
                 .CountAsync(
                     candidate => candidate.Id == registered.OutboxMessageId,
+                    budget.Token));
+    }
+
+    [Fact]
+    public async Task PassStationRequestId_ShouldDeduplicateConcurrentSameContentAndConflictOnDifferentContent()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        await using var firstContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"pass-request-first-{Guid.NewGuid():N}");
+        await using var secondContext = CreateRetryContext(
+            budget.ConnectionString,
+            $"pass-request-second-{Guid.NewGuid():N}");
+        var firstRegistry = new EfUploadReceiveRegistry(firstContext);
+        var secondRegistry = new EfUploadReceiveRegistry(secondContext);
+        var deviceId = Guid.NewGuid();
+        var requestId = $"pass-{Guid.NewGuid():N}";
+        var deduplicationKey = $"request:{requestId}";
+        var completedTime = new DateTime(2026, 8, 2, 1, 30, 0, DateTimeKind.Utc);
+        var sameContent = CreatePassStationEvent(deviceId, "CP-CLIP-001", completedTime);
+        var sameFingerprint = PassStationContentFingerprint.Compute(sameContent);
+
+        var results = await Task.WhenAll(
+            firstRegistry.RegisterAndEnqueueAsync(
+                deviceId,
+                "pass-station:cp",
+                requestId,
+                deduplicationKey,
+                sameContent,
+                budget.Token,
+                sameFingerprint),
+            secondRegistry.RegisterAndEnqueueAsync(
+                deviceId,
+                "pass-station:cp",
+                requestId,
+                deduplicationKey,
+                sameContent with { EventId = Guid.NewGuid() },
+                budget.Token,
+                sameFingerprint));
+
+        Assert.Single(results, result => !result.IsDuplicate);
+        Assert.Single(results, result => result.IsDuplicate);
+        Assert.Single(results.Select(result => result.OutboxMessageId).Distinct());
+
+        var differentContent = CreatePassStationEvent(
+            deviceId,
+            "CP-CLIP-CHANGED",
+            completedTime);
+        var conflict = await Assert.ThrowsAsync<CloudWriteConflictException>(() =>
+            firstRegistry.RegisterAndEnqueueAsync(
+                deviceId,
+                "pass-station:cp",
+                requestId,
+                deduplicationKey,
+                differentContent,
+                budget.Token,
+                PassStationContentFingerprint.Compute(differentContent)));
+        Assert.Equal(CloudWriteConflictException.Code, conflict.ProblemCode);
+
+        firstContext.ChangeTracker.Clear();
+        var registration = await firstContext.UploadReceiveRegistrations
+            .AsNoTracking()
+            .SingleAsync(
+                candidate => candidate.DeviceId == deviceId
+                             && candidate.MessageType == "pass-station:cp"
+                             && candidate.DeduplicationKey == deduplicationKey,
+                budget.Token);
+        Assert.Equal(sameFingerprint, registration.ContentFingerprint);
+        Assert.Equal(2, registration.SeenCount);
+        Assert.Equal(
+            1,
+            await firstContext.OutboxMessages
+                .AsNoTracking()
+                .CountAsync(
+                    message => message.Id == registration.OutboxMessageId,
                     budget.Token));
     }
 
@@ -5846,6 +5924,29 @@ public sealed class ProductionRetryTransactionPostgresTests(
         Assert.Equal(12, impact.TotalAssociatedRows);
         return new SeededDevice(device.Id);
     }
+
+    private static PassStationBatchReceivedEvent CreatePassStationEvent(
+        Guid deviceId,
+        string barcode,
+        DateTime completedTime)
+        => new()
+        {
+            DeviceId = deviceId,
+            TypeKey = "cp",
+            ProcessType = "cp",
+            SchemaVersion = 2,
+            Items =
+            [
+                new PassStationBatchItem
+                {
+                    Barcode = barcode,
+                    CellResult = "OK",
+                    CompletedTime = completedTime,
+                    PayloadJson = "{\"clipSlot\":\"MG1\",\"plcCode\":\"P2-CP01\",\"plcName\":\"正极模切一号 PLC\",\"punchingQuantity\":120,\"punchingSpeed\":1.25,\"startTime\":\"2026-08-02T01:25:00Z\"}",
+                    DeduplicationKey = $"record:{barcode}"
+                }
+            ]
+        };
 
     private static async Task<int> CountOutboxAsync(
         IIoTDbContext dbContext,

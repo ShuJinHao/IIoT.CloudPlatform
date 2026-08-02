@@ -114,6 +114,9 @@ const http = {
   get<T>(url: string, config?: HttpRequestConfig) {
     return unwrap<T>(client.get<ApiResult<T> | T>(url, config), config?.inlineFeedback);
   },
+  getRaw<T>(url: string, config?: HttpRequestConfig) {
+    return client.get<T>(url, config).catch((error) => handleHttpError(error, config?.inlineFeedback));
+  },
   post<T>(url: string, data?: unknown, config?: HttpRequestConfig) {
     return unwrap<T>(client.post<ApiResult<T> | T>(url, data, config), config?.inlineFeedback);
   },

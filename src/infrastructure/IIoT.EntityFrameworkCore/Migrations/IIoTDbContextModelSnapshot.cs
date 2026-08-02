@@ -845,6 +845,86 @@ namespace IIoT.EntityFrameworkCore.Migrations
                     b.ToTable("edge_device_runtime_heartbeats", (string)null);
                 });
 
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.EdgeInstallerGenerationRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("generation_id");
+
+                    b.Property<string>("BindingsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("bindings_json");
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("channel");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("file_name");
+
+                    b.Property<DateTime>("GeneratedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("generated_at_utc");
+
+                    b.Property<string>("HostSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("host_sha256");
+
+                    b.Property<string>("HostVersion")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("host_version");
+
+                    b.Property<string>("OperatorName")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("operator_name");
+
+                    b.Property<Guid?>("OperatorUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("operator_user_id");
+
+                    b.Property<string>("PackageSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("package_sha256");
+
+                    b.Property<long>("PackageSize")
+                        .HasColumnType("bigint")
+                        .HasColumnName("package_size");
+
+                    b.Property<string>("PluginsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("plugins_json");
+
+                    b.Property<string>("TargetRuntime")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("target_runtime");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("GeneratedAtUtc")
+                        .HasDatabaseName("ix_edge_installer_generation_records_generated_at");
+
+                    b.HasIndex("OperatorUserId")
+                        .HasDatabaseName("ix_edge_installer_generation_records_operator");
+
+                    b.ToTable("edge_installer_generation_records", (string)null);
+                });
+
             modelBuilder.Entity("IIoT.Core.Production.Aggregates.Devices.Device", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1385,6 +1465,11 @@ namespace IIoT.EntityFrameworkCore.Migrations
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
+
+                    b.Property<string>("ContentFingerprint")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("content_fingerprint");
 
                     b.Property<string>("DeduplicationKey")
                         .IsRequired()

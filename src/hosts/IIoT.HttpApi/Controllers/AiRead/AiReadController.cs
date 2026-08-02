@@ -103,10 +103,11 @@ public sealed class AiReadController : ApiControllerBase
         [FromQuery] DateOnly endDate,
         [FromQuery] string? plcName = null,
         [FromQuery] int? maxRows = null,
+        [FromQuery] string? plcCode = null,
         CancellationToken cancellationToken = default)
     {
         return ReturnResult(await Sender.Send(
-            new GetAiReadCapacitySummaryQuery(deviceId, startDate, endDate, plcName, maxRows),
+            new GetAiReadCapacitySummaryQuery(deviceId, startDate, endDate, plcName, maxRows, plcCode),
             cancellationToken));
     }
 
@@ -134,10 +135,11 @@ public sealed class AiReadController : ApiControllerBase
         [FromQuery] string? preset = null,
         [FromQuery] string? plcName = null,
         [FromQuery] int? maxRows = null,
+        [FromQuery] string? plcCode = null,
         CancellationToken cancellationToken = default)
     {
         return ReturnResult(await Sender.Send(
-            new GetAiReadCapacityHourlyQuery(deviceId, date, preset, plcName, maxRows),
+            new GetAiReadCapacityHourlyQuery(deviceId, date, preset, plcName, maxRows, plcCode),
             cancellationToken));
     }
 

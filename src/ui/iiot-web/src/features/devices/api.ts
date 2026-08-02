@@ -32,6 +32,8 @@ export interface DeviceStatusSummaryDto {
   error: number;
   offline: number;
   generatedAt: string;
+  softwareStatus?: string | null;
+  issue?: string | null;
 }
 
 export interface RegisterDevicePayload {

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using FluentValidation;
 using IIoT.ProductionService.Commands;
@@ -226,6 +227,9 @@ public sealed class ReceiveHourlyCapacityCommandValidator : AbstractValidator<Re
     public ReceiveHourlyCapacityCommandValidator()
     {
         RuleFor(x => x.DeviceId).NotEmpty();
+        RuleFor(x => x.SchemaVersion)
+            .Must(version => version is 1 or 2)
+            .WithMessage("产能数据 schemaVersion 不受支持。");
         RuleFor(x => x.RequestId)
             .MaximumLength(UploadValidationLimits.MaxRequestIdLength)
             .When(x => x.RequestId is not null);
@@ -247,11 +251,38 @@ public sealed class ReceiveHourlyCapacityCommandValidator : AbstractValidator<Re
         RuleFor(x => x.NgCount)
             .InclusiveBetween(0, UploadValidationLimits.MaxHourlyCapacityCount);
         RuleFor(x => x)
-            .Must(x => x.OkCount + x.NgCount <= x.TotalCount)
+            .Must(x => !x.OkCount.HasValue
+                       || !x.NgCount.HasValue
+                       || x.OkCount.Value + x.NgCount.Value <= x.TotalCount)
             .WithMessage("OK 数量与 NG 数量之和不能超过总数。");
         RuleFor(x => x.PlcName)
             .MaximumLength(UploadValidationLimits.MaxMediumCodeLength)
             .When(x => x.PlcName is not null);
+        RuleFor(x => x.ProcessType)
+            .MaximumLength(UploadValidationLimits.MaxShortCodeLength)
+            .When(x => x.ProcessType is not null);
+        RuleFor(x => x.PlcCode)
+            .MaximumLength(UploadValidationLimits.MaxPlcCodeLength)
+            .When(x => x.PlcCode is not null);
+        RuleFor(x => x)
+            .Custom((command, context) =>
+            {
+                if (command.SchemaVersion == 1)
+                {
+                    if (!command.OkCount.HasValue || !command.NgCount.HasValue)
+                        context.AddFailure(nameof(ReceiveHourlyCapacityCommand.OkCount), "产能 v1 必须提供 OK/NG 数量。");
+                    return;
+                }
+
+                if (string.IsNullOrWhiteSpace(command.ProcessType))
+                    context.AddFailure(nameof(ReceiveHourlyCapacityCommand.ProcessType), "产能 v2 必须提供 processType。");
+                if (string.IsNullOrWhiteSpace(command.PlcCode))
+                    context.AddFailure(nameof(ReceiveHourlyCapacityCommand.PlcCode), "产能 v2 必须提供 plcCode。");
+                if (string.IsNullOrWhiteSpace(command.PlcName))
+                    context.AddFailure(nameof(ReceiveHourlyCapacityCommand.PlcName), "产能 v2 必须提供真实 plcName。");
+                if (command.OkCount.HasValue != command.NgCount.HasValue)
+                    context.AddFailure(nameof(ReceiveHourlyCapacityCommand.OkCount), "产能 v2 的 OK/NG 数量必须同时为空或同时提供。");
+            });
     }
 }
 
@@ -262,7 +293,7 @@ public sealed class ReceivePassStationBatchCommandValidator : AbstractValidator<
         RuleFor(x => x.TypeKey).NotEmpty();
         RuleFor(x => x.DeviceId).NotEmpty();
         RuleFor(x => x.SchemaVersion)
-            .Equal(1)
+            .Must(version => version is 1 or 2)
             .WithMessage("过站数据 schemaVersion 不受支持。");
         RuleFor(x => x.ProcessType)
             .MaximumLength(UploadValidationLimits.MaxShortCodeLength)
@@ -286,6 +317,11 @@ public sealed class ReceivePassStationBatchCommandValidator : AbstractValidator<
                 }
 
                 var processType = PassStationPayloadJson.NormalizeOptionalProcessType(command.ProcessType);
+                if (command.SchemaVersion == 2 && processType is null)
+                {
+                    context.AddFailure(nameof(ReceivePassStationBatchCommand.ProcessType), "过站 v2 数据必须提供 processType。");
+                    return;
+                }
                 if (processType is not null && !string.Equals(processType, definition.TypeKey, StringComparison.Ordinal))
                 {
                     context.AddFailure(nameof(ReceivePassStationBatchCommand.ProcessType), "过站数据 processType 必须与 typeKey 保持一致。");
@@ -297,7 +333,7 @@ public sealed class ReceivePassStationBatchCommandValidator : AbstractValidator<
 
                 for (var index = 0; index < command.Items.Count; index++)
                 {
-                    ValidateItem(command.Items[index], index, definition, context);
+                    ValidateItem(command.Items[index], index, command.SchemaVersion == 2, definition, context);
                 }
             });
     }
@@ -305,6 +341,7 @@ public sealed class ReceivePassStationBatchCommandValidator : AbstractValidator<
     private static void ValidateItem(
         PassStationItemInput item,
         int index,
+        bool isStrictV2,
         PassStationTypeDefinitionDto definition,
         ValidationContext<ReceivePassStationBatchCommand> context)
     {
@@ -317,8 +354,12 @@ public sealed class ReceivePassStationBatchCommandValidator : AbstractValidator<
             context.AddFailure($"{prefix}.{nameof(PassStationItemInput.CellResult)}", "过站结果不能为空。");
         if (item.CellResult?.Length > UploadValidationLimits.MaxShortCodeLength)
             context.AddFailure($"{prefix}.{nameof(PassStationItemInput.CellResult)}", $"过站结果不能超过 {UploadValidationLimits.MaxShortCodeLength} 个字符。");
+        if (isStrictV2 && item.CellResult is not "OK" and not "NG")
+            context.AddFailure($"{prefix}.{nameof(PassStationItemInput.CellResult)}", "过站 v2 结果只能是 OK 或 NG。");
         if (!UploadValidationRules.BeReasonableTimestamp(item.CompletedTime))
             context.AddFailure($"{prefix}.{nameof(PassStationItemInput.CompletedTime)}", "完成时间必须在有效范围内。");
+        if (isStrictV2 && item.CompletedTime.Kind != DateTimeKind.Utc)
+            context.AddFailure($"{prefix}.{nameof(PassStationItemInput.CompletedTime)}", "过站 v2 完成时间必须为 UTC。");
         if (item.Payload.ValueKind != JsonValueKind.Object)
         {
             context.AddFailure($"{prefix}.{nameof(PassStationItemInput.Payload)}", "过站扩展数据必须是 JSON 对象。");
@@ -341,7 +382,7 @@ public sealed class ReceivePassStationBatchCommandValidator : AbstractValidator<
         foreach (var field in definition.Fields)
         {
             payload.TryGetValue(field.Key, out var value);
-            ValidatePayloadField(prefix, field, value, context);
+            ValidatePayloadField(prefix, field, value, isStrictV2, item.CompletedTime, context);
         }
     }
 
@@ -349,11 +390,13 @@ public sealed class ReceivePassStationBatchCommandValidator : AbstractValidator<
         string prefix,
         PassStationFieldDefinitionDto field,
         JsonElement value,
+        bool isStrictV2,
+        DateTime completedTime,
         ValidationContext<ReceivePassStationBatchCommand> context)
     {
         var fieldName = $"{prefix}.Payload.{field.Key}";
         var missing = value.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null;
-        if (field.Required && missing)
+        if (isStrictV2 && field.Required && missing)
         {
             context.AddFailure(fieldName, $"字段 [{field.Label}] 不能为空。");
             return;
@@ -366,8 +409,10 @@ public sealed class ReceivePassStationBatchCommandValidator : AbstractValidator<
         {
             case PassStationFieldTypes.String:
             case PassStationFieldTypes.Enum:
+                ValidateStringLikeField(fieldName, field, value, isStrictV2, context);
+                break;
             case PassStationFieldTypes.DateTime:
-                ValidateStringLikeField(fieldName, field, value, context);
+                ValidateDateTimeField(fieldName, field, value, isStrictV2, completedTime, context);
                 break;
             case PassStationFieldTypes.Number:
             case PassStationFieldTypes.Integer:
@@ -384,6 +429,7 @@ public sealed class ReceivePassStationBatchCommandValidator : AbstractValidator<
         string fieldName,
         PassStationFieldDefinitionDto field,
         JsonElement value,
+        bool isStrictV2,
         ValidationContext<ReceivePassStationBatchCommand> context)
     {
         if (value.ValueKind != JsonValueKind.String)
@@ -393,14 +439,46 @@ public sealed class ReceivePassStationBatchCommandValidator : AbstractValidator<
         }
 
         var text = value.GetString() ?? string.Empty;
-        if (field.Required && string.IsNullOrWhiteSpace(text))
+        if (isStrictV2 && field.Required && string.IsNullOrWhiteSpace(text))
             context.AddFailure(fieldName, $"字段 [{field.Label}] 不能为空。");
         if (field.MaxLength is not null && text.Length > field.MaxLength)
             context.AddFailure(fieldName, $"字段 [{field.Label}] 不能超过 {field.MaxLength} 个字符。");
         if (field.Type == PassStationFieldTypes.Enum && field.Options is not null && !field.Options.Contains(text))
             context.AddFailure(fieldName, $"字段 [{field.Label}] 不在允许选项内。");
-        if (field.Type == PassStationFieldTypes.DateTime && !DateTime.TryParse(text, out _))
+    }
+
+    private static void ValidateDateTimeField(
+        string fieldName,
+        PassStationFieldDefinitionDto field,
+        JsonElement value,
+        bool isStrictV2,
+        DateTime completedTime,
+        ValidationContext<ReceivePassStationBatchCommand> context)
+    {
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            context.AddFailure(fieldName, $"字段 [{field.Label}] 必须是字符串。");
+            return;
+        }
+
+        var text = value.GetString() ?? string.Empty;
+        if (!DateTimeOffset.TryParse(
+                text,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.RoundtripKind,
+                out var parsed))
+        {
             context.AddFailure(fieldName, $"字段 [{field.Label}] 必须是有效时间。");
+            return;
+        }
+
+        if (!isStrictV2)
+            return;
+
+        if (parsed.Offset != TimeSpan.Zero)
+            context.AddFailure(fieldName, $"字段 [{field.Label}] 必须为 UTC。");
+        if (parsed.UtcDateTime > completedTime.ToUniversalTime())
+            context.AddFailure(fieldName, $"字段 [{field.Label}] 不能晚于完成时间。");
     }
 
     private static void ValidateNumberField(
@@ -421,6 +499,12 @@ public sealed class ReceivePassStationBatchCommandValidator : AbstractValidator<
             context.AddFailure(fieldName, $"字段 [{field.Label}] 不能小于 {field.Min}。");
         if (field.Max is not null && number > field.Max)
             context.AddFailure(fieldName, $"字段 [{field.Label}] 不能大于 {field.Max}。");
+        if (field.Precision is not null)
+        {
+            var scale = (decimal.GetBits(number)[3] >> 16) & 0x7f;
+            if (scale > field.Precision)
+                context.AddFailure(fieldName, $"字段 [{field.Label}] 小数位不能超过 {field.Precision}。");
+        }
     }
 }
 

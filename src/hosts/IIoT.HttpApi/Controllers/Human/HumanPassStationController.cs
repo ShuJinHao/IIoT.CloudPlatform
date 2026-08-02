@@ -58,6 +58,36 @@ public class HumanPassStationController : ApiControllerBase
             cancellationToken));
     }
 
+    [HttpGet("{typeKey}/export")]
+    public async Task<IActionResult> ExportByType(
+        [FromRoute] string typeKey,
+        [FromQuery] string mode,
+        [FromQuery] Guid? processId,
+        [FromQuery] Guid? deviceId,
+        [FromQuery] string? barcode,
+        [FromQuery] DateTime? startTime,
+        [FromQuery] DateTime? endTime,
+        CancellationToken cancellationToken)
+    {
+        var result = await Sender.Send(
+            new ExportPassStationsByTypeQuery(
+                new PassStationQueryRequest(
+                    Normalize(typeKey),
+                    Normalize(mode),
+                    new Pagination { PageNumber = 1, PageSize = 1 },
+                    processId,
+                    deviceId,
+                    barcode?.Trim(),
+                    startTime,
+                    endTime)),
+            cancellationToken);
+        if (!result.IsSuccess)
+            return ReturnResult(result);
+
+        Response.Headers.CacheControl = "no-store";
+        return File(result.Value!.Content, result.Value.ContentType, result.Value.FileName);
+    }
+
     private static string Normalize(string value)
     {
         return value?.Trim().ToLowerInvariant() ?? string.Empty;

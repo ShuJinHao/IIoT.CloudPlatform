@@ -14,26 +14,26 @@ public static class CacheKeys
 
     public static string RecipesByDevice(Guid deviceId) => $"iiot:recipes:device:v1:{deviceId}";
 
-    public static string CapacityHourly(Guid deviceId, DateOnly date, string? plcName) =>
-        $"iiot:capacity:hourly:v1:{deviceId}:{date:yyyyMMdd}:{plcName ?? "all"}";
+    public static string CapacityHourly(Guid deviceId, DateOnly date, string? plcCode) =>
+        $"iiot:capacity:hourly:v2:{deviceId}:{date:yyyyMMdd}:{plcCode ?? "all"}";
 
-    public static string CapacityHourlyPattern(Guid deviceId) => $"iiot:capacity:hourly:v1:{deviceId}:*";
+    public static string CapacityHourlyPattern(Guid deviceId) => $"iiot:capacity:hourly:v2:{deviceId}:*";
 
-    public static string CapacitySummary(Guid deviceId, DateOnly date, string? plcName) =>
-        $"iiot:capacity:summary:v1:{deviceId}:{date:yyyyMMdd}:{plcName ?? "all"}";
+    public static string CapacitySummary(Guid deviceId, DateOnly date, string? plcCode) =>
+        $"iiot:capacity:summary:v2:{deviceId}:{date:yyyyMMdd}:{plcCode ?? "all"}";
 
-    public static string CapacitySummaryPattern(Guid deviceId) => $"iiot:capacity:summary:v1:{deviceId}:*";
+    public static string CapacitySummaryPattern(Guid deviceId) => $"iiot:capacity:summary:v2:{deviceId}:*";
 
     public static string CapacityRange(
         Guid deviceId,
         DateOnly startDate,
         DateOnly endDate,
-        string? plcName,
+        string? plcCode,
         bool breakdownByPlc = false) =>
-        $"iiot:capacity:range:v1:{deviceId}:{startDate:yyyyMMdd}:{endDate:yyyyMMdd}:{plcName ?? "all"}"
+        $"iiot:capacity:range:v2:{deviceId}:{startDate:yyyyMMdd}:{endDate:yyyyMMdd}:{plcCode ?? "all"}"
         + (breakdownByPlc ? ":by-plc" : string.Empty);
 
-    public static string CapacityRangePattern(Guid deviceId) => $"iiot:capacity:range:v1:{deviceId}:*";
+    public static string CapacityRangePattern(Guid deviceId) => $"iiot:capacity:range:v2:{deviceId}:*";
 
     public static string CapacityPaged(DateOnly? date, Guid? deviceId, int pageNumber, int pageSize) =>
         $"iiot:capacity:paged:v1:{date:yyyyMMdd}:{deviceId}:{pageNumber}:{pageSize}";

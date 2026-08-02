@@ -31,7 +31,7 @@
             "key": "clipSlot",
             "label": "弹夹位",
             "type": "enum",
-            "required": false,
+            "required": true,
             "options": [
               "MG1",
               "MG2"
@@ -122,7 +122,7 @@
             "key": "clipSlot",
             "label": "弹夹位",
             "type": "enum",
-            "required": false,
+            "required": true,
             "options": [
               "MG1",
               "MG2"

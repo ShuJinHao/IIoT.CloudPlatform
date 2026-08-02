@@ -16,6 +16,8 @@ public sealed class UploadReceiveRegistration
 
     public string DeduplicationKey { get; private set; } = string.Empty;
 
+    public string? ContentFingerprint { get; private set; }
+
     public Guid OutboxMessageId { get; private set; }
 
     public DateTimeOffset ReceivedAtUtc { get; private set; }
@@ -29,7 +31,8 @@ public sealed class UploadReceiveRegistration
         string messageType,
         string? requestId,
         string deduplicationKey,
-        Guid outboxMessageId)
+        Guid outboxMessageId,
+        string? contentFingerprint = null)
         => Create(
             Guid.NewGuid(),
             deviceId,
@@ -37,7 +40,8 @@ public sealed class UploadReceiveRegistration
             requestId,
             deduplicationKey,
             outboxMessageId,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            contentFingerprint);
 
     public static UploadReceiveRegistration Create(
         Guid registrationId,
@@ -46,7 +50,8 @@ public sealed class UploadReceiveRegistration
         string? requestId,
         string deduplicationKey,
         Guid outboxMessageId,
-        DateTimeOffset receivedAtUtc)
+        DateTimeOffset receivedAtUtc,
+        string? contentFingerprint = null)
     {
         return new UploadReceiveRegistration
         {
@@ -55,6 +60,7 @@ public sealed class UploadReceiveRegistration
             MessageType = messageType,
             RequestId = requestId,
             DeduplicationKey = deduplicationKey,
+            ContentFingerprint = contentFingerprint,
             OutboxMessageId = outboxMessageId,
             ReceivedAtUtc = receivedAtUtc,
             LastSeenAtUtc = receivedAtUtc,
@@ -70,5 +76,19 @@ public sealed class UploadReceiveRegistration
         }
 
         SeenCount++;
+    }
+
+    public void BackfillContentFingerprint(string contentFingerprint)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentFingerprint);
+        if (contentFingerprint.Length != 64)
+            throw new ArgumentOutOfRangeException(nameof(contentFingerprint));
+        if (ContentFingerprint is not null
+            && !string.Equals(ContentFingerprint, contentFingerprint, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Upload content fingerprint is immutable.");
+        }
+
+        ContentFingerprint = contentFingerprint;
     }
 }

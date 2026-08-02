@@ -17,7 +17,8 @@ public sealed class EfUploadReceiveRegistry(IIoTDbContext dbContext)
         string? requestId,
         string deduplicationKey,
         IIntegrationEvent integrationEvent,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? contentFingerprint = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(messageType);
         ArgumentException.ThrowIfNullOrWhiteSpace(deduplicationKey);
@@ -47,6 +48,7 @@ public sealed class EfUploadReceiveRegistry(IIoTDbContext dbContext)
                         messageType,
                         requestId,
                         deduplicationKey,
+                        contentFingerprint,
                         targetOutboxMessage,
                         receivedAtUtc,
                         callbackToken);
@@ -69,6 +71,7 @@ public sealed class EfUploadReceiveRegistry(IIoTDbContext dbContext)
                 messageType,
                 requestId,
                 deduplicationKey,
+                contentFingerprint,
                 targetOutboxMessage,
                 receivedAtUtc);
         }
@@ -83,6 +86,7 @@ public sealed class EfUploadReceiveRegistry(IIoTDbContext dbContext)
         string messageType,
         string? requestId,
         string deduplicationKey,
+        string? contentFingerprint,
         OutboxMessage targetOutboxMessage,
         DateTimeOffset receivedAtUtc,
         CancellationToken cancellationToken)
@@ -101,6 +105,7 @@ public sealed class EfUploadReceiveRegistry(IIoTDbContext dbContext)
                 existing,
                 registrationId,
                 requestId,
+                contentFingerprint,
                 targetOutboxMessage,
                 receivedAtUtc,
                 recordDuplicateObservation: true,
@@ -114,7 +119,8 @@ public sealed class EfUploadReceiveRegistry(IIoTDbContext dbContext)
             requestId,
             deduplicationKey,
             targetOutboxMessage.Id,
-            receivedAtUtc);
+            receivedAtUtc,
+            contentFingerprint);
 
         context.UploadReceiveRegistrations.Add(registration);
         context.OutboxMessages.Add(targetOutboxMessage);
@@ -140,6 +146,7 @@ public sealed class EfUploadReceiveRegistry(IIoTDbContext dbContext)
                     existing,
                     registrationId,
                     requestId,
+                    contentFingerprint,
                     targetOutboxMessage,
                     receivedAtUtc,
                     recordDuplicateObservation: true,
@@ -167,11 +174,21 @@ public sealed class EfUploadReceiveRegistry(IIoTDbContext dbContext)
         UploadReceiveRegistration registration,
         Guid targetRegistrationId,
         string? targetRequestId,
+        string? targetContentFingerprint,
         OutboxMessage targetOutboxMessage,
         DateTimeOffset seenAtUtc,
         bool recordDuplicateObservation,
         CancellationToken cancellationToken)
     {
+        if (targetContentFingerprint is not null
+            && !string.Equals(
+                registration.ContentFingerprint,
+                targetContentFingerprint,
+                StringComparison.Ordinal))
+        {
+            throw new CloudWriteConflictException();
+        }
+
         if (registration.Id == targetRegistrationId)
         {
             if (registration.OutboxMessageId != targetOutboxMessage.Id
@@ -326,6 +343,7 @@ public sealed class EfUploadReceiveRegistry(IIoTDbContext dbContext)
         string messageType,
         string? requestId,
         string deduplicationKey,
+        string? contentFingerprint,
         OutboxMessage targetOutboxMessage,
         DateTimeOffset receivedAtUtc)
     {
@@ -349,6 +367,7 @@ public sealed class EfUploadReceiveRegistry(IIoTDbContext dbContext)
                 existing,
                 registrationId,
                 requestId,
+                contentFingerprint,
                 targetOutboxMessage,
                 receivedAtUtc,
                 recordDuplicateObservation: false,

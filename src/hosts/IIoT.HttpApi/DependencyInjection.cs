@@ -13,6 +13,7 @@ using IIoT.Infrastructure.Authentication;
 using IIoT.MasterDataService.Commands.Processes;
 using IIoT.ProductionService;
 using IIoT.ProductionService.AiRead;
+using IIoT.ProductionService.BusinessTime;
 using IIoT.ProductionService.Caching;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.PassStations;
@@ -68,6 +69,10 @@ public static class DependencyInjection
         builder.AddValidatedOptions<AiReadOptions>(
             AiReadOptions.SectionName,
             static options => options.Validate());
+        builder.AddValidatedOptions<BusinessTimeOptions>(
+            BusinessTimeOptions.SectionName,
+            static options => options.Validate());
+        builder.Services.AddSingleton<IBusinessTimeProvider, BusinessTimeProvider>();
         builder.AddValidatedOptions<EdgeInstallerArtifactOptions>(
             EdgeInstallerArtifactOptions.SectionName,
             static options => options.Validate());
@@ -303,7 +308,12 @@ public static class DependencyInjection
                         "Content-Type",
                         RefreshTokenHeaderNames.RefreshToken,
                         BootstrapSecretHeaderNames.Secret)
-                    .WithExposedHeaders(RefreshTokenHeaderNames.ExposedHeaders);
+                    .WithExposedHeaders(
+                        [
+                            .. RefreshTokenHeaderNames.ExposedHeaders,
+                            InstallerPackageHeaderNames.GenerationId,
+                            "Content-Disposition"
+                        ]);
             });
         });
 

@@ -12,9 +12,13 @@ public sealed record HourlyCapacityWriteModel(
     int Minute,
     string TimeLabel,
     int TotalCount,
-    int OkCount,
-    int NgCount,
-    string PlcName,
+    int? OkCount,
+    int? NgCount,
+    int SchemaVersion,
+    string? ProcessType,
+    string PlcCode,
+    string? PlcName,
+    bool PlcNameIsTrusted,
     DateTime ReportedAt);
 
 public interface IHourlyCapacityRecordRepository

@@ -39,7 +39,7 @@ internal sealed class AiProductionRecordQueryService(IDbConnectionFactory connec
             FROM pass_station_records r
             INNER JOIN devices d ON r.device_id = d.id
             {conditions}
-            ORDER BY r.completed_time DESC
+            ORDER BY r.completed_time DESC, r.id DESC
             OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY
             """;
         var countSql = $"""

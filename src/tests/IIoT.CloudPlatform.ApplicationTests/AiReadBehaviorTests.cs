@@ -882,7 +882,10 @@ public sealed class AiReadBehaviorTests
                         ["startTime"] = "2026-07-24T00:00:00Z",
                         ["punchingQuantity"] = 123,
                         ["punchingSpeed"] = 1.25m,
-                        ["clipSlot"] = "MG1"
+                        ["clipSlot"] = "MG1",
+                        ["processType"] = "cp",
+                        ["uploadTargets"] = 3,
+                        ["secretTransportField"] = "must-not-leak"
                     })
             ],
             TotalCount = 1
@@ -915,6 +918,9 @@ public sealed class AiReadBehaviorTests
         Assert.Equal("MG1", item.Fields["clipSlot"]);
         Assert.False(item.Fields.ContainsKey("plcCode"));
         Assert.False(item.Fields.ContainsKey("startTime"));
+        Assert.False(item.Fields.ContainsKey("processType"));
+        Assert.False(item.Fields.ContainsKey("uploadTargets"));
+        Assert.False(item.Fields.ContainsKey("secretTransportField"));
         Assert.Contains(item.FieldSchema, field => field.Key == "plcName" && field.Label == "PLC 名称");
         Assert.Contains(item.FieldSchema, field => field.Key == "clipSlot" && field.Label == "弹夹位");
         Assert.Equal("P2-CP05", queryService.LastRequest!.PlcCode);

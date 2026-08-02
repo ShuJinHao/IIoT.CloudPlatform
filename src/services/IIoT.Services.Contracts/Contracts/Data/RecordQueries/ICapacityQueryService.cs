@@ -8,14 +8,14 @@ public interface ICapacityQueryService : IReadOnlyQueryPort
     Task<List<HourlyCapacityDto>> GetHourlyByDeviceIdAsync(
         Guid deviceId,
         DateOnly date,
-        string? plcName = null,
+        string? plcCode = null,
         CancellationToken cancellationToken = default);
 
     Task<List<HourlyCapacityPointDto>> GetHourlyRangeByDeviceIdAsync(
         Guid deviceId,
         DateTime startTime,
         DateTime endTime,
-        string? plcName = null,
+        string? plcCode = null,
         CancellationToken cancellationToken = default);
 
     Task<List<HourlyCapacityAggregateDto>> GetHourlyAggregateAsync(
@@ -27,14 +27,14 @@ public interface ICapacityQueryService : IReadOnlyQueryPort
     Task<DailySummaryDto?> GetSummaryByDeviceIdAsync(
         Guid deviceId,
         DateOnly date,
-        string? plcName = null,
+        string? plcCode = null,
         CancellationToken cancellationToken = default);
 
     Task<List<DailyRangeSummaryDto>> GetSummaryRangeAsync(
         Guid deviceId,
         DateOnly startDate,
         DateOnly endDate,
-        string? plcName = null,
+        string? plcCode = null,
         CancellationToken cancellationToken = default,
         bool breakdownByPlc = false);
 
@@ -52,9 +52,10 @@ public record HourlyCapacityDto(
     string TimeLabel,
     string ShiftCode,
     int TotalCount,
-    int OkCount,
-    int NgCount,
-    string? PlcName = null);
+    int? OkCount,
+    int? NgCount,
+    string? PlcName = null,
+    string PlcCode = "");
 
 public record HourlyCapacityPointDto(
     DateTime Time,
@@ -64,48 +65,50 @@ public record HourlyCapacityPointDto(
     string TimeLabel,
     string ShiftCode,
     int TotalCount,
-    int OkCount,
-    int NgCount,
-    string? PlcName = null);
+    int? OkCount,
+    int? NgCount,
+    string? PlcName = null,
+    string PlcCode = "");
 
 public record HourlyCapacityAggregateDto(
     int Hour,
     int Minute,
     string TimeLabel,
     long TotalCount,
-    long OkCount,
-    long NgCount);
+    long? OkCount,
+    long? NgCount);
 
 public record DailySummaryDto(
     int TotalCount,
-    int OkCount,
-    int NgCount,
+    int? OkCount,
+    int? NgCount,
     int DayShiftTotal,
-    int DayShiftOk,
-    int DayShiftNg,
+    int? DayShiftOk,
+    int? DayShiftNg,
     int NightShiftTotal,
-    int NightShiftOk,
-    int NightShiftNg);
+    int? NightShiftOk,
+    int? NightShiftNg);
 
 public record DailyRangeSummaryDto(
     DateOnly Date,
     int TotalCount,
-    int OkCount,
-    int NgCount,
+    int? OkCount,
+    int? NgCount,
     int DayShiftTotal,
-    int DayShiftOk,
-    int DayShiftNg,
+    int? DayShiftOk,
+    int? DayShiftNg,
     int NightShiftTotal,
-    int NightShiftOk,
-    int NightShiftNg,
-    string? PlcName = null);
+    int? NightShiftOk,
+    int? NightShiftNg,
+    string? PlcName = null,
+    string? PlcCode = null);
 
 public record DailyCapacityPagedItemDto(
     Guid DeviceId,
     string DeviceName,
     DateOnly Date,
     long TotalCount,
-    long OkCount,
-    long NgCount,
-    decimal OkRate,
+    long? OkCount,
+    long? NgCount,
+    decimal? OkRate,
     DateTime ReportedAt);

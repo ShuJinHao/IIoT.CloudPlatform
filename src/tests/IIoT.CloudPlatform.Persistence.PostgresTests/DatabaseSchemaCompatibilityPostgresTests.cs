@@ -4,7 +4,10 @@ using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Aggregates.EdgeHosts;
 using IIoT.EntityFrameworkCore;
 using IIoT.EntityFrameworkCore.Migrations;
+using IIoT.EntityFrameworkCore.Outbox;
+using IIoT.EntityFrameworkCore.Uploads;
 using IIoT.MigrationWorkApp;
+using IIoT.Services.Contracts.Events.PassStations;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Migrations.Operations;
 using Microsoft.Extensions.Configuration;
@@ -320,6 +323,85 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
                     "SELECT COUNT(*) FROM information_schema.columns WHERE lower(table_name) = 'aspnetusers' AND column_name = 'is_enabled'",
                     testToken,
                     static value => Convert.ToInt64(value)));
+        }
+        finally
+        {
+            await PostgresTestBudget.RollbackAsync(transaction);
+        }
+    }
+
+    [Fact]
+    public async Task PassStationFingerprintBackfill_ShouldUseRetainedOutboxAndListUnrecoverableRegistrations()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        await using var connection = new NpgsqlConnection(budget.ConnectionString);
+        await connection.OpenAsync(budget.Token);
+        await using var transaction = await connection.BeginTransactionAsync(budget.Token);
+        var options = new DbContextOptionsBuilder<IIoTDbContext>()
+            .UseNpgsql(connection)
+            .Options;
+        await using var dbContext = new IIoTDbContext(options);
+        await dbContext.Database.UseTransactionAsync(transaction, budget.Token);
+        var orchestrator = new DatabaseInitializationOrchestrator(
+            dbContext,
+            null!,
+            null!,
+            null!,
+            null!,
+            new ConfigurationBuilder().Build(),
+            NullLogger<DatabaseInitializationOrchestrator>.Instance);
+        var deviceId = Guid.NewGuid();
+        var @event = new PassStationBatchReceivedEvent
+        {
+            DeviceId = deviceId,
+            TypeKey = "cp",
+            ProcessType = string.Empty,
+            SchemaVersion = 1,
+            Items =
+            [
+                new PassStationBatchItem
+                {
+                    Barcode = "CP-LEGACY-001",
+                    CellResult = "OK",
+                    CompletedTime = new DateTime(2026, 8, 2, 1, 30, 0, DateTimeKind.Utc),
+                    PayloadJson = "{\"plcCode\":\"P2-CP01\"}",
+                    DeduplicationKey = "legacy-record"
+                }
+            ]
+        };
+        var outbox = OutboxMessage.FromIntegrationEvent(@event);
+        var registration = UploadReceiveRegistration.Create(
+            deviceId,
+            "pass-station:cp",
+            "legacy-request",
+            "request:legacy-request",
+            outbox.Id);
+        dbContext.OutboxMessages.Add(outbox);
+        dbContext.UploadReceiveRegistrations.Add(registration);
+        await dbContext.SaveChangesAsync(budget.Token);
+
+        try
+        {
+            await orchestrator.BackfillPassStationContentFingerprintsAsync(budget.Token);
+            dbContext.ChangeTracker.Clear();
+            var persisted = await dbContext.UploadReceiveRegistrations
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == registration.Id, budget.Token);
+            Assert.Equal(PassStationContentFingerprint.Compute(@event), persisted.ContentFingerprint);
+
+            var unrecoverable = UploadReceiveRegistration.Create(
+                deviceId,
+                "pass-station:cp",
+                "missing-outbox",
+                "request:missing-outbox",
+                Guid.NewGuid());
+            dbContext.UploadReceiveRegistrations.Add(unrecoverable);
+            await dbContext.SaveChangesAsync(budget.Token);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                orchestrator.BackfillPassStationContentFingerprintsAsync(budget.Token));
+            Assert.Contains(unrecoverable.Id.ToString(), exception.Message, StringComparison.Ordinal);
+            Assert.Contains("retained Outbox", exception.Message, StringComparison.Ordinal);
         }
         finally
         {

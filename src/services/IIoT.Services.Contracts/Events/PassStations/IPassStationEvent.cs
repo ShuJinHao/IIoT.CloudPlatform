@@ -7,4 +7,6 @@ public interface IPassStationEvent : IIntegrationEvent
     Guid DeviceId { get; }
 
     string TypeKey { get; }
+
+    string ProcessType { get; }
 }

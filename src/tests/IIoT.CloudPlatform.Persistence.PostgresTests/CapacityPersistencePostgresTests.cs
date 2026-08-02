@@ -163,6 +163,104 @@ public sealed class CapacityPersistencePostgresTests(
     }
 
     [Fact]
+    public async Task Queries_ShouldExposeStableCodeHideLegacyAliasNameAndPropagateUnknownQuality()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        var device = await InsertDeviceAsync(budget.ConnectionString, budget.Token);
+        var connectionFactory = new NpgsqlConnectionFactory(budget.ConnectionString);
+        var repository = new HourlyCapacityRecordRepository(connectionFactory);
+        var queryService = new CapacityQueryService(connectionFactory);
+        var date = DateOnly.FromDateTime(DateTime.UtcNow);
+        var reportedAt = DateTime.UtcNow;
+
+        try
+        {
+            await repository.UpsertAsync(
+                new HourlyCapacityWriteModel(
+                    Guid.NewGuid(),
+                    device.DeviceId,
+                    date,
+                    "D",
+                    10,
+                    0,
+                    "10:00",
+                    3,
+                    3,
+                    0,
+                    1,
+                    null,
+                    "LEGACY-PLC-IDENTITY",
+                    "LEGACY-PLC-IDENTITY",
+                    false,
+                    reportedAt),
+                budget.Token);
+            await repository.UpsertAsync(
+                new HourlyCapacityWriteModel(
+                    Guid.NewGuid(),
+                    device.DeviceId,
+                    date,
+                    "D",
+                    10,
+                    30,
+                    "10:30",
+                    4,
+                    null,
+                    null,
+                    2,
+                    "cp",
+                    "P2-CP01",
+                    "正极模切一号 PLC",
+                    true,
+                    reportedAt.AddMinutes(1)),
+                budget.Token);
+
+            var hourly = await queryService.GetHourlyByDeviceIdAsync(
+                device.DeviceId,
+                date,
+                cancellationToken: budget.Token);
+            Assert.Equal(["LEGACY-PLC-IDENTITY", "P2-CP01"], hourly.Select(item => item.PlcCode));
+            Assert.Null(hourly[0].PlcName);
+            Assert.Equal("正极模切一号 PLC", hourly[1].PlcName);
+            Assert.Null(hourly[1].OkCount);
+            Assert.Null(hourly[1].NgCount);
+
+            var legacyOnly = Assert.Single(await queryService.GetHourlyByDeviceIdAsync(
+                device.DeviceId,
+                date,
+                "LEGACY-PLC-IDENTITY",
+                budget.Token));
+            Assert.Equal(3, legacyOnly.TotalCount);
+            Assert.Null(legacyOnly.PlcName);
+
+            var summary = await queryService.GetSummaryByDeviceIdAsync(
+                device.DeviceId,
+                date,
+                cancellationToken: budget.Token);
+            Assert.NotNull(summary);
+            Assert.Equal(7, summary.TotalCount);
+            Assert.Null(summary.OkCount);
+            Assert.Null(summary.NgCount);
+
+            var detailByPlc = await queryService.GetSummaryRangeAsync(
+                device.DeviceId,
+                date,
+                date,
+                cancellationToken: budget.Token,
+                breakdownByPlc: true);
+            Assert.Equal(7, detailByPlc.Sum(item => item.TotalCount));
+            Assert.Contains(detailByPlc, item => item.PlcCode == "LEGACY-PLC-IDENTITY" && item.PlcName is null);
+            Assert.Contains(detailByPlc, item => item.PlcCode == "P2-CP01" && item.PlcName == "正极模切一号 PLC");
+        }
+        finally
+        {
+            await CleanupAsync(
+                budget.ConnectionString,
+                device.DeviceId,
+                device.ProcessId);
+        }
+    }
+
+    [Fact]
     public async Task PassStationAndDeviceLogWrites_ShouldRemainIdempotent()
     {
         using var budget = await PostgresTestBudget.CreateAsync(fixture);
@@ -251,7 +349,11 @@ public sealed class CapacityPersistencePostgresTests(
             totalCount,
             okCount,
             ngCount,
+            2,
+            "cp",
             plcName,
+            plcName,
+            true,
             reportedAt);
 
     private static async Task<(Guid DeviceId, Guid ProcessId)> InsertDeviceAsync(

@@ -8,7 +8,8 @@ public interface IUploadReceiveRegistry
         string? requestId,
         string deduplicationKey,
         IIntegrationEvent integrationEvent,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        string? contentFingerprint = null);
 }
 
 public interface IUploadReceiveObservationRetentionPruner

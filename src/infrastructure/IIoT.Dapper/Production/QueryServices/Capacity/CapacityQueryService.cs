@@ -10,15 +10,15 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
     {
         public string ShiftCode { get; set; } = string.Empty;
         public int TotalCount { get; set; }
-        public int OkCount { get; set; }
-        public int NgCount { get; set; }
+        public int? OkCount { get; set; }
+        public int? NgCount { get; set; }
     }
     // 指定设备某天的小时明细。
 
     public async Task<List<HourlyCapacityDto>> GetHourlyByDeviceIdAsync(
         Guid deviceId,
         DateOnly date,
-        string? plcName = null,
+        string? plcCode = null,
         CancellationToken cancellationToken = default)
     {
         using var connection = connectionFactory.CreateConnection();
@@ -32,16 +32,17 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
                 h.total_count AS TotalCount,
                 h.ok_count    AS OkCount,
                 h.ng_count    AS NgCount,
-                h.plc_name    AS PlcName
+                CASE WHEN h.plc_name_is_trusted THEN h.plc_name ELSE NULL END AS PlcName,
+                h.plc_code    AS PlcCode
             FROM hourly_capacity h
             WHERE h.device_id = @DeviceId
               AND h.date = @Date
-              AND (@PlcName IS NULL OR h.plc_name = @PlcName)
-            ORDER BY h.hour, h.minute, h.plc_name";
+              AND (@PlcCode IS NULL OR h.plc_code = @PlcCode)
+            ORDER BY h.hour, h.minute, h.plc_code";
 
         var cmd = new ReadOnlyCommandDefinition(
             sql,
-            new { DeviceId = deviceId, Date = date, PlcName = plcName },
+            new { DeviceId = deviceId, Date = date, PlcCode = plcCode },
             cancellationToken: cancellationToken);
 
         var rows = await connection.QueryAsync<HourlyCapacityDto>(cmd);
@@ -52,7 +53,7 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
         Guid deviceId,
         DateTime startTime,
         DateTime endTime,
-        string? plcName = null,
+        string? plcCode = null,
         CancellationToken cancellationToken = default)
     {
         using var connection = connectionFactory.CreateConnection();
@@ -68,7 +69,8 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
                 q.total_count AS TotalCount,
                 q.ok_count    AS OkCount,
                 q.ng_count    AS NgCount,
-                q.plc_name    AS PlcName
+                q.plc_name    AS PlcName,
+                q.plc_code    AS PlcCode
             FROM (
                 SELECT
                     h.date,
@@ -79,7 +81,8 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
                     h.total_count,
                     h.ok_count,
                     h.ng_count,
-                    h.plc_name,
+                    h.plc_code,
+                    CASE WHEN h.plc_name_is_trusted THEN h.plc_name ELSE NULL END AS plc_name,
                     (h.date::timestamp + pg_catalog.make_interval(
                         hours => h.hour::integer,
                         mins => h.minute::integer)) AS bucket_time
@@ -87,11 +90,11 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
                 WHERE h.device_id = @DeviceId
                   AND h.date >= @StartDate
                   AND h.date <= @EndDate
-                  AND (@PlcName IS NULL OR h.plc_name = @PlcName)
+                  AND (@PlcCode IS NULL OR h.plc_code = @PlcCode)
             ) q
             WHERE q.bucket_time >= @StartTime
               AND q.bucket_time <= @EndTime
-            ORDER BY q.bucket_time ASC, q.plc_name ASC
+            ORDER BY q.bucket_time ASC, q.plc_code ASC
             """;
 
         var cmd = new ReadOnlyCommandDefinition(
@@ -103,7 +106,7 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
                 EndDate = DateOnly.FromDateTime(endTime),
                 StartTime = startTime,
                 EndTime = endTime,
-                PlcName = plcName
+                PlcCode = plcCode
             },
             cancellationToken: cancellationToken);
 
@@ -146,8 +149,10 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
                 h.minute                             AS Minute,
                 pg_catalog.min(h.time_label::text) AS TimeLabel,
                 COALESCE(pg_catalog.sum(h.total_count::integer), 0)::bigint AS TotalCount,
-                COALESCE(pg_catalog.sum(h.ok_count::integer),    0)::bigint AS OkCount,
-                COALESCE(pg_catalog.sum(h.ng_count::integer),    0)::bigint AS NgCount
+                CASE WHEN pg_catalog.count(*) FILTER (WHERE h.ok_count IS NULL) > 0
+                    THEN NULL ELSE COALESCE(pg_catalog.sum(h.ok_count::integer), 0)::bigint END AS OkCount,
+                CASE WHEN pg_catalog.count(*) FILTER (WHERE h.ng_count IS NULL) > 0
+                    THEN NULL ELSE COALESCE(pg_catalog.sum(h.ng_count::integer), 0)::bigint END AS NgCount
             FROM hourly_capacity h
             INNER JOIN devices d ON h.device_id = d.id
             {conditions}
@@ -167,7 +172,7 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
     public async Task<DailySummaryDto?> GetSummaryByDeviceIdAsync(
         Guid deviceId,
         DateOnly date,
-        string? plcName = null,
+        string? plcCode = null,
         CancellationToken cancellationToken = default)
     {
         using var connection = connectionFactory.CreateConnection();
@@ -176,17 +181,19 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
             SELECT
                 h.shift_code                    AS ShiftCode,
                 COALESCE(pg_catalog.sum(h.total_count::integer), 0) AS TotalCount,
-                COALESCE(pg_catalog.sum(h.ok_count::integer),    0) AS OkCount,
-                COALESCE(pg_catalog.sum(h.ng_count::integer),    0) AS NgCount
+                CASE WHEN pg_catalog.count(*) FILTER (WHERE h.ok_count IS NULL) > 0
+                    THEN NULL ELSE COALESCE(pg_catalog.sum(h.ok_count::integer), 0)::integer END AS OkCount,
+                CASE WHEN pg_catalog.count(*) FILTER (WHERE h.ng_count IS NULL) > 0
+                    THEN NULL ELSE COALESCE(pg_catalog.sum(h.ng_count::integer), 0)::integer END AS NgCount
             FROM hourly_capacity h
             WHERE h.device_id = @DeviceId
               AND h.date = @Date
-              AND (@PlcName IS NULL OR h.plc_name = @PlcName)
+              AND (@PlcCode IS NULL OR h.plc_code = @PlcCode)
             GROUP BY h.shift_code";
 
         var cmd = new ReadOnlyCommandDefinition(
             sql,
-            new { DeviceId = deviceId, Date = date, PlcName = plcName },
+            new { DeviceId = deviceId, Date = date, PlcCode = plcCode },
             cancellationToken: cancellationToken);
 
         var rows = (await connection.QueryAsync<DailySummaryRow>(cmd)).ToList();
@@ -202,8 +209,9 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
         public DateOnly Date { get; set; }
         public string ShiftCode { get; set; } = string.Empty;
         public int TotalCount { get; set; }
-        public int OkCount { get; set; }
-        public int NgCount { get; set; }
+        public int? OkCount { get; set; }
+        public int? NgCount { get; set; }
+        public string? PlcCode { get; set; }
         public string? PlcName { get; set; }
     }
 
@@ -211,40 +219,42 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
         Guid deviceId,
         DateOnly startDate,
         DateOnly endDate,
-        string? plcName = null,
+        string? plcCode = null,
         CancellationToken cancellationToken = default,
         bool breakdownByPlc = false)
     {
         using var connection = connectionFactory.CreateConnection();
 
         var plcSelect = breakdownByPlc
-            ? ", h.plc_name AS PlcName"
-            : ", NULL::text AS PlcName";
+            ? ", h.plc_code AS PlcCode, CASE WHEN pg_catalog.count(*) FILTER (WHERE NOT h.plc_name_is_trusted) > 0 THEN NULL ELSE pg_catalog.min(h.plc_name::text) END AS PlcName"
+            : ", NULL::text AS PlcCode, NULL::text AS PlcName";
         var plcGroup = breakdownByPlc
-            ? ", h.plc_name"
+            ? ", h.plc_code"
             : string.Empty;
         var plcOrder = breakdownByPlc
-            ? ", h.plc_name ASC"
+            ? ", h.plc_code ASC"
             : string.Empty;
         var sql = $@"
             SELECT
                 h.date                          AS Date,
                 h.shift_code                    AS ShiftCode,
                 COALESCE(pg_catalog.sum(h.total_count::integer), 0) AS TotalCount,
-                COALESCE(pg_catalog.sum(h.ok_count::integer),    0) AS OkCount,
-                COALESCE(pg_catalog.sum(h.ng_count::integer),    0) AS NgCount
+                CASE WHEN pg_catalog.count(*) FILTER (WHERE h.ok_count IS NULL) > 0
+                    THEN NULL ELSE COALESCE(pg_catalog.sum(h.ok_count::integer), 0)::integer END AS OkCount,
+                CASE WHEN pg_catalog.count(*) FILTER (WHERE h.ng_count IS NULL) > 0
+                    THEN NULL ELSE COALESCE(pg_catalog.sum(h.ng_count::integer), 0)::integer END AS NgCount
                 {plcSelect}
             FROM hourly_capacity h
             WHERE h.device_id = @DeviceId
               AND h.date >= @StartDate
               AND h.date <= @EndDate
-              AND (@PlcName IS NULL OR h.plc_name = @PlcName)
+              AND (@PlcCode IS NULL OR h.plc_code = @PlcCode)
             GROUP BY h.date, h.shift_code{plcGroup}
             ORDER BY h.date ASC{plcOrder}, h.shift_code ASC";
 
         var cmd = new ReadOnlyCommandDefinition(
             sql,
-            new { DeviceId = deviceId, StartDate = startDate, EndDate = endDate, PlcName = plcName },
+            new { DeviceId = deviceId, StartDate = startDate, EndDate = endDate, PlcCode = plcCode },
             cancellationToken: cancellationToken);
 
         var rows = (await connection.QueryAsync<DailyRangeRow>(cmd)).ToList();
@@ -256,6 +266,7 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
         var result = rows
             .GroupBy(r => (
                 r.Date,
+                PlcCode: breakdownByPlc ? r.PlcCode : null,
                 PlcName: breakdownByPlc ? r.PlcName : null))
             .Select(g =>
             {
@@ -263,29 +274,30 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
                 var night = g.FirstOrDefault(x => x.ShiftCode.Equals("N", StringComparison.OrdinalIgnoreCase));
 
                 var dayTotal = day?.TotalCount ?? 0;
-                var dayOk = day?.OkCount ?? 0;
-                var dayNg = day?.NgCount ?? 0;
+                var dayOk = day is null ? 0 : day.OkCount;
+                var dayNg = day is null ? 0 : day.NgCount;
 
                 var nightTotal = night?.TotalCount ?? 0;
-                var nightOk = night?.OkCount ?? 0;
-                var nightNg = night?.NgCount ?? 0;
+                var nightOk = night is null ? 0 : night.OkCount;
+                var nightNg = night is null ? 0 : night.NgCount;
 
                 return new DailyRangeSummaryDto(
                     Date: g.Key.Date,
                     TotalCount: dayTotal + nightTotal,
-                    OkCount: dayOk + nightOk,
-                    NgCount: dayNg + nightNg,
+                    OkCount: AddQuality(dayOk, nightOk),
+                    NgCount: AddQuality(dayNg, nightNg),
                     DayShiftTotal: dayTotal,
                     DayShiftOk: dayOk,
                     DayShiftNg: dayNg,
                     NightShiftTotal: nightTotal,
                     NightShiftOk: nightOk,
                     NightShiftNg: nightNg,
-                    PlcName: g.Key.PlcName
+                    PlcName: g.Key.PlcName,
+                    PlcCode: g.Key.PlcCode
                 );
             })
             .OrderBy(x => x.Date)
-            .ThenBy(x => x.PlcName, StringComparer.Ordinal)
+            .ThenBy(x => x.PlcCode, StringComparer.Ordinal)
             .ToList();
 
         return result;
@@ -329,8 +341,10 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
                 d.device_name  AS DeviceName,
                 h.date         AS Date,
                 COALESCE(pg_catalog.sum(h.total_count::integer), 0) AS TotalCount,
-                COALESCE(pg_catalog.sum(h.ok_count::integer),    0) AS OkCount,
-                COALESCE(pg_catalog.sum(h.ng_count::integer),    0) AS NgCount,
+                CASE WHEN pg_catalog.count(*) FILTER (WHERE h.ok_count IS NULL) > 0
+                    THEN NULL ELSE COALESCE(pg_catalog.sum(h.ok_count::integer), 0)::bigint END AS OkCount,
+                CASE WHEN pg_catalog.count(*) FILTER (WHERE h.ng_count IS NULL) > 0
+                    THEN NULL ELSE COALESCE(pg_catalog.sum(h.ng_count::integer), 0)::bigint END AS NgCount,
                 pg_catalog.max(h.reported_at::timestamptz) AS ReportedAt
             FROM hourly_capacity h
             INNER JOIN devices d ON h.device_id = d.id
@@ -369,12 +383,12 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
                 row.TotalCount,
                 row.OkCount,
                 row.NgCount,
-                row.TotalCount > 0
+                row.TotalCount > 0 && row.OkCount.HasValue
                     ? decimal.Round(
-                        row.OkCount * 100m / row.TotalCount,
+                        row.OkCount.Value * 100m / row.TotalCount,
                         2,
                         MidpointRounding.AwayFromZero)
-                    : 0m,
+                    : null,
                 row.ReportedAt))
             .ToList();
         var totalCount = await connection.ExecuteScalarAsync<int>(countCmd);
@@ -388,8 +402,8 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
         public string DeviceName { get; set; } = string.Empty;
         public DateOnly Date { get; set; }
         public long TotalCount { get; set; }
-        public long OkCount { get; set; }
-        public long NgCount { get; set; }
+        public long? OkCount { get; set; }
+        public long? NgCount { get; set; }
         public DateTime ReportedAt { get; set; }
     }
 
@@ -397,8 +411,8 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
 
     private static DailySummaryDto MergeSummaryRows(List<DailySummaryRow> rows)
     {
-        int dayTotal = 0, dayOk = 0, dayNg = 0;
-        int nightTotal = 0, nightOk = 0, nightNg = 0;
+        int dayTotal = 0, nightTotal = 0;
+        int? dayOk = 0, dayNg = 0, nightOk = 0, nightNg = 0;
 
         foreach (var row in rows)
         {
@@ -415,8 +429,8 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
 
         return new DailySummaryDto(
             TotalCount: dayTotal + nightTotal,
-            OkCount: dayOk + nightOk,
-            NgCount: dayNg + nightNg,
+            OkCount: AddQuality(dayOk, nightOk),
+            NgCount: AddQuality(dayNg, nightNg),
             DayShiftTotal: dayTotal,
             DayShiftOk: dayOk,
             DayShiftNg: dayNg,
@@ -425,4 +439,7 @@ internal class CapacityQueryService(IDbConnectionFactory connectionFactory) : IC
             NightShiftNg: nightNg
         );
     }
+
+    private static int? AddQuality(int? left, int? right)
+        => left.HasValue && right.HasValue ? left.Value + right.Value : null;
 }

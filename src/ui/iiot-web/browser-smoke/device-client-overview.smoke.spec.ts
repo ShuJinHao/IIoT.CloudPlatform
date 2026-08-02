@@ -100,6 +100,14 @@ function releaseDetails(deviceId: string, suffix: string, currentVersion: string
     lastRuntimeHeartbeatAtUtc: '2026-07-23T01:00:00Z',
     reportedAtUtc: '2026-07-23T00:30:00Z',
     receivedAtUtc: null,
+    runtimeHostVersion: currentVersion,
+    runtimeHostApiVersion: '1.0.0',
+    reportedHostVersion: currentVersion,
+    reportedHostApiVersion: '1.0.0',
+    latestPublishedHostVersion: currentVersion,
+    latestPublishedHostApiVersion: '1.0.0',
+    latestPublishedAtUtc: '2026-07-22T08:00:00Z',
+    latestPublishedHostPackageSha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     plugins: [],
   };
 }

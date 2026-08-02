@@ -9,7 +9,10 @@ interface DashboardColumnOptions {
   onDetail: (deviceId: string, deviceName: string) => void;
 }
 
-export function renderRateBar(rate: number) {
+export function renderRateBar(rate: number | null) {
+  if (rate === null) {
+    return h('span', { class: 'cell-mono text-[var(--text-2)]' }, '—');
+  }
   const tone = rateAccent(rate);
   return h('div', { class: 'rate-cell' }, [
     h('div', { class: 'rate-cell__track' }, [
@@ -121,7 +124,7 @@ export function createCapacityDetailColumns(
       key: 'plcName',
       minWidth: 150,
       render(row) {
-        return h('span', { class: 'cell-plc' }, row.plcName);
+        return h('span', { class: 'cell-plc', title: row.plcDisplay }, row.plcDisplay);
       },
     },
     {
@@ -183,6 +186,9 @@ export function createCapacityDetailColumns(
       width: 100,
       align: 'right',
       render(row) {
+        if (row.rate === null) {
+          return h('span', { class: 'cell-mono text-[var(--text-2)]' }, '—');
+        }
         const tone = rateAccent(row.rate);
         const toneClass = tone === 'success' ? 'ok' : tone === 'warn' ? 'warn' : 'ng';
         return h(

@@ -8,9 +8,13 @@ create table if not exists hourly_capacity
     minute        int         not null,
     time_label    varchar(20) not null,
     total_count   int         not null,
-    ok_count      int         not null,
-    ng_count      int         not null,
-    plc_name      varchar(50) not null default '',
+    ok_count      int,
+    ng_count      int,
+    schema_version int        not null default 1,
+    process_type  varchar(32),
+    plc_code      varchar(64) not null default '',
+    plc_name      varchar(128) not null default '',
+    plc_name_is_trusted boolean not null default false,
     reported_at   timestamptz not null,
     primary key (id, date)
 );
@@ -20,6 +24,3 @@ create index if not exists ix_hourly_capacity_device_date
 
 create index if not exists ix_hourly_capacity_date_slot
     on hourly_capacity (date, hour, minute);
-
-create unique index if not exists ux_hourly_capacity_device_slot_plc
-    on hourly_capacity (device_id, date, shift_code, hour, minute, plc_name);

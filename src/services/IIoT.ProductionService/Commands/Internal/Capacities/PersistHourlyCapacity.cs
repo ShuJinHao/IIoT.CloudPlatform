@@ -48,18 +48,22 @@ public class PersistHourlyCapacityHandler(
             TotalCount: evt.TotalCount,
             OkCount: evt.OkCount,
             NgCount: evt.NgCount,
-            PlcName: evt.PlcName ?? string.Empty,
+            SchemaVersion: evt.SchemaVersion,
+            ProcessType: evt.ProcessType,
+            PlcCode: evt.PlcCode,
+            PlcName: evt.PlcName,
+            PlcNameIsTrusted: evt.PlcNameIsTrusted,
             ReportedAt: reportedAt);
 
         await repository.UpsertAsync(writeModel, cancellationToken);
         await cacheService.RemoveAsync(
-            CacheKeys.CapacityHourly(evt.DeviceId, evt.Date, evt.PlcName),
+            CacheKeys.CapacityHourly(evt.DeviceId, evt.Date, evt.PlcCode),
             cancellationToken);
         await cacheService.RemoveAsync(
-            CacheKeys.CapacitySummary(evt.DeviceId, evt.Date, evt.PlcName),
+            CacheKeys.CapacitySummary(evt.DeviceId, evt.Date, evt.PlcCode),
             cancellationToken);
         await cacheService.RemoveAsync(
-            CacheKeys.CapacityRange(evt.DeviceId, evt.Date, evt.Date, evt.PlcName),
+            CacheKeys.CapacityRange(evt.DeviceId, evt.Date, evt.Date, evt.PlcCode),
             cancellationToken);
         await cacheService.RemoveByPatternAsync(
             CacheKeys.CapacityHourlyPattern(evt.DeviceId),

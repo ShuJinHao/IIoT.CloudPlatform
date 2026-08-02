@@ -4,12 +4,14 @@ namespace IIoT.Services.Contracts.RecordQueries;
 
 public interface IDeviceOperationalStatusQueryService : IReadOnlyQueryPort
 {
-    Task<DeviceStatusSummaryDto> GetStatusSummaryAsync(
-        DateTimeOffset offlineCutoff,
-        DateTimeOffset statusWindowStart,
+    Task<IReadOnlyList<DeviceOperationalStatusTarget>> GetScopedDevicesAsync(
         IReadOnlyCollection<Guid>? deviceIds = null,
         CancellationToken cancellationToken = default);
 }
+
+public sealed record DeviceOperationalStatusTarget(
+    Guid DeviceId,
+    string ClientCode);
 
 public record DeviceStatusSummaryDto(
     int Total,
@@ -17,4 +19,6 @@ public record DeviceStatusSummaryDto(
     int Warning,
     int Error,
     int Offline,
-    DateTimeOffset GeneratedAt);
+    DateTimeOffset GeneratedAt,
+    string? SoftwareStatus = null,
+    string? Issue = null);

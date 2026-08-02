@@ -184,6 +184,9 @@ internal static class PersistenceWriteInventory
         ["src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs::DatabaseInitializationOrchestrator.RecordTablesExistAsync(CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs",
             "LegacyDeviceAndIdentitySchemas_ShouldUpgradeAgainstRealPostgres"),
+        ["src/hosts/IIoT.MigrationWorkApp/DatabaseInitializationOrchestrator.cs::DatabaseInitializationOrchestrator.BackfillPassStationContentFingerprintsAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DatabaseSchemaCompatibilityPostgresTests.cs",
+            "PassStationFingerprintBackfill_ShouldUseRetainedOutboxAndListUnrecoverableRegistrations"),
         ["src/hosts/IIoT.MigrationWorkApp/SeedData/SystemInitData.cs::SystemInitData.SeedAttemptAsync(IIoTDbContext,UserManager<ApplicationUser>,RoleManager<IdentityRole<Guid>>,IConfiguration,SeedRetryTarget,CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/SingleAdminInvariantPostgresTests.cs",
             "PasswordRepairCommitConfirmationLoss_ShouldConfirmTargetWithoutSecondAdmin"),
@@ -229,6 +232,9 @@ internal static class PersistenceWriteInventory
         ["src/infrastructure/IIoT.EntityFrameworkCore/ClientReleases/EfDeviceClientStateStore.cs::EfDeviceClientStateStore.SaveChangesAsync(CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
             "ClientReleaseWrites_ShouldReplayTransientAndRecoverCommitConfirmationLoss"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/ClientReleases/EfEdgeInstallerGenerationStore.cs::EfEdgeInstallerGenerationStore.WriteAttemptAsync(EdgeInstallerGenerationRecord,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
+            "InstallerGenerationStore_ShouldRecoverWriteFaultAndKeepRecordImmutable"),
         ["src/infrastructure/IIoT.EntityFrameworkCore/EdgeHosts/EfEdgeHostPlcRuntimeStateStore.cs::EfEdgeHostPlcRuntimeStateStore.SaveChangesAsync(CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
             "EdgeReports_ShouldRecoverCommitConfirmationLoss"),
@@ -358,9 +364,9 @@ internal static class PersistenceWriteInventory
         ["src/infrastructure/IIoT.EntityFrameworkCore/Uploads/EfUploadReceiveObservationRetentionPruner.cs::EfUploadReceiveObservationRetentionPruner.PruneBatchAttemptAsync(DateTimeOffset,CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
             "UploadRegistrationAndOutbox_ShouldRecoverCommitLossAsOneLogicalMessage"),
-        ["src/infrastructure/IIoT.EntityFrameworkCore/Uploads/EfUploadReceiveRegistry.cs::EfUploadReceiveRegistry.RegisterAttemptAsync(Guid,Guid,string,string?,string,OutboxMessage,DateTimeOffset,CancellationToken)"] = new(
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Uploads/EfUploadReceiveRegistry.cs::EfUploadReceiveRegistry.RegisterAttemptAsync(Guid,Guid,string,string?,string,string?,OutboxMessage,DateTimeOffset,CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
-            "UploadRegistrationAndOutbox_ShouldRecoverCommitLossAsOneLogicalMessage"),
+            "PassStationRequestId_ShouldDeduplicateConcurrentSameContentAndConflictOnDifferentContent"),
         ["src/infrastructure/IIoT.EntityFrameworkCore/Uploads/EfUploadReceiveRegistry.cs::EfUploadReceiveRegistry.RecordDuplicateObservationAsync(IIoTDbContext,UploadReceiveRegistration,Guid,DateTimeOffset,CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
             "UploadRegistrationAndOutbox_ShouldRecoverCommitLossAsOneLogicalMessage"),

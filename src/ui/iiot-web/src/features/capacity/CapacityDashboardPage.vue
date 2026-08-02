@@ -6,14 +6,14 @@
     subtitle="当前权限范围内的设备日汇总；卡片仅统计当前页全部 PLC"
   >
     <div class="capacity-page__stats">
-      <StatCard label="本页完工弹夹数" :value="formatInt(totalStats.total)" unit="个" accent="brand" />
-      <StatCard label="本页合格弹夹数" :value="formatInt(totalStats.ok)" unit="个" accent="success" />
-      <StatCard label="本页不合格弹夹数" :value="formatInt(totalStats.ng)" unit="个" accent="error" />
+      <StatCard label="本页完工弹夹数" :value="listError ? '—' : formatInt(totalStats.total)" :unit="listError ? '' : '个'" accent="brand" />
+      <StatCard label="本页合格弹夹数" :value="listError ? '—' : formatInt(totalStats.ok)" :unit="listError ? '' : '个'" accent="success" />
+      <StatCard label="本页不合格弹夹数" :value="listError ? '—' : formatInt(totalStats.ng)" :unit="listError ? '' : '个'" accent="error" />
       <StatCard
         label="本页综合良率"
-        :value="totalStats.ratePercent.toFixed(1)"
-        unit="%"
-        :accent="rateAccent(totalStats.ratePercent)"
+        :value="listError || totalStats.ratePercent === null ? '—' : totalStats.ratePercent.toFixed(1)"
+        :unit="listError || totalStats.ratePercent === null ? '' : '%'"
+        :accent="listError || totalStats.ratePercent === null ? 'info' : rateAccent(totalStats.ratePercent)"
       />
     </div>
 
