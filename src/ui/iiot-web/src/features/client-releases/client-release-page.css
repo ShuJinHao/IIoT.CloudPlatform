@@ -224,6 +224,59 @@
   overflow-wrap: anywhere;
 }
 
+.release-detail-facts,
+.release-detail-artifacts {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.release-detail-facts > div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.release-detail-facts span,
+.release-detail-artifacts small {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.release-detail-facts code,
+.release-detail-artifacts code,
+.release-detail-notes pre {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.release-detail-artifacts h3 {
+  margin: 0;
+  font-size: var(--fs-md);
+}
+
+.release-detail-artifacts ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.release-detail-artifacts li {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.release-detail-artifacts li > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .binding-panel {
   display: grid;
   gap: var(--space-4);

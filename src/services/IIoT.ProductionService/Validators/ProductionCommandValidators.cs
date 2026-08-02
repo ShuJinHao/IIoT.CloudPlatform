@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using FluentValidation;
+using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.ProductionService.Commands;
 using IIoT.ProductionService.Commands.Bootstrap.Devices;
 using IIoT.ProductionService.Commands.Capacities;
@@ -63,7 +64,11 @@ public sealed class GenerateEdgeInstallerPackageCommandValidator : AbstractValid
         });
         RuleFor(x => x.Channel).MaximumLength(64).When(x => x.Channel is not null);
         RuleFor(x => x.TargetRuntime).MaximumLength(64).When(x => x.TargetRuntime is not null);
-        RuleFor(x => x.HostVersion).MaximumLength(64).When(x => x.HostVersion is not null);
+        RuleFor(x => x.HostVersion)
+            .MaximumLength(64)
+            .Must(value => value is null || ClientReleaseSemanticVersion.IsValid(value))
+            .WithMessage("宿主版本必须符合 MAJOR.MINOR.PATCH[-prerelease]。")
+            .When(x => x.HostVersion is not null);
         RuleFor(x => x.BaseUrl)
             .Cascade(CascadeMode.Stop)
             .NotEmpty()
@@ -81,8 +86,16 @@ public sealed class ReportDeviceRuntimeHeartbeatCommandValidator : AbstractValid
         RuleFor(x => x.ClientCode).NotEmpty().MaximumLength(64);
         RuleFor(x => x.RuntimeInstanceId).NotEmpty().MaximumLength(128);
         RuleFor(x => x.MachineProfile).MaximumLength(128).When(x => x.MachineProfile is not null);
-        RuleFor(x => x.HostVersion).NotEmpty().MaximumLength(64);
-        RuleFor(x => x.HostApiVersion).NotEmpty().MaximumLength(64);
+        RuleFor(x => x.HostVersion)
+            .NotEmpty()
+            .MaximumLength(64)
+            .Must(ClientReleaseSemanticVersion.IsValid)
+            .WithMessage("宿主版本必须符合 MAJOR.MINOR.PATCH[-prerelease]。");
+        RuleFor(x => x.HostApiVersion)
+            .NotEmpty()
+            .MaximumLength(64)
+            .Must(ClientReleaseSemanticVersion.IsValid)
+            .WithMessage("Host API 版本必须符合 MAJOR.MINOR.PATCH[-prerelease]。");
         RuleFor(x => x.Status)
             .NotEmpty()
             .Must(value => new[] { "Starting", "Running", "Stopping", "Stopped" }
@@ -168,8 +181,16 @@ public sealed class ReportDeviceClientVersionCommandValidator : AbstractValidato
     {
         RuleFor(x => x.DeviceId).NotEmpty();
         RuleFor(x => x.ClientCode).NotEmpty().MaximumLength(64);
-        RuleFor(x => x.HostVersion).NotEmpty().MaximumLength(64);
-        RuleFor(x => x.HostApiVersion).NotEmpty().MaximumLength(64);
+        RuleFor(x => x.HostVersion)
+            .NotEmpty()
+            .MaximumLength(64)
+            .Must(ClientReleaseSemanticVersion.IsValid)
+            .WithMessage("宿主版本必须符合 MAJOR.MINOR.PATCH[-prerelease]。");
+        RuleFor(x => x.HostApiVersion)
+            .NotEmpty()
+            .MaximumLength(64)
+            .Must(ClientReleaseSemanticVersion.IsValid)
+            .WithMessage("Host API 版本必须符合 MAJOR.MINOR.PATCH[-prerelease]。");
         RuleFor(x => x.Channel).NotEmpty().MaximumLength(64);
         RuleFor(x => x.ReportedAtUtc)
             .Must(UploadValidationRules.BeReasonableTimestamp)
@@ -201,8 +222,16 @@ public sealed class DeviceClientPluginVersionReportItemValidator : AbstractValid
     {
         RuleFor(x => x.ModuleId).NotEmpty().MaximumLength(128);
         RuleFor(x => x.DisplayName).MaximumLength(128).When(x => x.DisplayName is not null);
-        RuleFor(x => x.Version).NotEmpty().MaximumLength(64);
-        RuleFor(x => x.HostApiVersion).MaximumLength(64).When(x => x.HostApiVersion is not null);
+        RuleFor(x => x.Version)
+            .NotEmpty()
+            .MaximumLength(64)
+            .Must(ClientReleaseSemanticVersion.IsValid)
+            .WithMessage("插件版本必须符合 MAJOR.MINOR.PATCH[-prerelease]。");
+        RuleFor(x => x.HostApiVersion)
+            .MaximumLength(64)
+            .Must(value => value is null || ClientReleaseSemanticVersion.IsValid(value))
+            .WithMessage("Host API 版本必须符合 MAJOR.MINOR.PATCH[-prerelease]。")
+            .When(x => x.HostApiVersion is not null);
     }
 }
 

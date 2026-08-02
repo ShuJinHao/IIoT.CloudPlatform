@@ -9,6 +9,7 @@ using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
@@ -47,6 +48,7 @@ public sealed class PublishEdgePluginPackageHandler(
     IRepository<ClientReleaseComponent> componentRepository,
     IClientReleaseVersionObservationReader observationReader,
     IClientReleaseRetentionService retentionService,
+    IDeviceClientStateStore clientStateStore,
     ICurrentUser currentUser,
     IAuditTrailService auditTrailService,
     ILogger<PublishEdgePluginPackageHandler> logger)
@@ -202,6 +204,11 @@ public sealed class PublishEdgePluginPackageHandler(
                 expectedState.Publisher,
                 expectedState.PublishedAtUtc,
                 artifacts);
+            await ClientReleasePublishedLimit.EnforceBeforeCommitAsync(
+                retentionService,
+                clientStateStore,
+                [component],
+                cancellationToken);
             saveChangesInvoked = true;
             try
             {
@@ -625,10 +632,13 @@ public sealed class PublishEdgePluginPackageHandler(
 
         if (string.IsNullOrWhiteSpace(manifest.ModuleId)
             || string.IsNullOrWhiteSpace(manifest.DisplayName)
-            || string.IsNullOrWhiteSpace(manifest.Version)
-            || string.IsNullOrWhiteSpace(manifest.HostApiVersion)
-            || string.IsNullOrWhiteSpace(manifest.MinHostVersion)
-            || string.IsNullOrWhiteSpace(manifest.MaxHostVersion)
+            || !ClientReleaseSemanticVersion.IsValid(manifest.Version)
+            || !ClientReleaseSemanticVersion.IsValid(manifest.HostApiVersion)
+            || !ClientReleaseSemanticVersion.IsValid(manifest.MinHostVersion)
+            || !ClientReleaseSemanticVersion.IsValid(manifest.MaxHostVersion)
+            || ClientReleaseSemanticVersion.Compare(
+                manifest.MinHostVersion,
+                manifest.MaxHostVersion) > 0
             || string.IsNullOrWhiteSpace(manifest.TargetRuntime)
             || string.IsNullOrWhiteSpace(manifest.PackageFileName)
             || string.IsNullOrWhiteSpace(manifest.ReleaseNotes))

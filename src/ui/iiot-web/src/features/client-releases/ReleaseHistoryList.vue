@@ -10,6 +10,13 @@
           {{ component.componentKind === 'Host' ? '宿主' : '工序插件' }}
         </UiTag>
         <span class="history-component__channel">{{ component.channel }} / {{ component.targetRuntime }}</span>
+        <UiButton
+          v-if="canHardDelete && component.canHardDelete"
+          size="tiny"
+          secondary
+          type="error"
+          @click="$emit('hard-delete', component)"
+        >永久删除插件</UiButton>
       </div>
     </div>
     <ul class="history-version-list">
@@ -23,6 +30,7 @@
         <span v-if="version.deletionFailure" class="history-version__failure" :title="version.deletionFailure">
           失败：{{ version.deletionFailure }}
         </span>
+        <UiButton size="tiny" secondary type="info" @click="$emit('detail', version, component)">详情</UiButton>
       </li>
     </ul>
   </div>
@@ -30,11 +38,18 @@
 
 <script setup lang="ts">
 import UiTag from '../../components/ui/UiTag.vue';
+import UiButton from '../../components/ui/UiButton.vue';
 import type { ClientReleaseHistoryComponentDto, ClientReleaseHistoryVersionDto } from './api';
 import { formatDate, statusText, statusTone } from './types';
 
 defineProps<{
   items: ClientReleaseHistoryComponentDto[];
+  canHardDelete: boolean;
+}>();
+
+defineEmits<{
+  detail: [version: ClientReleaseHistoryVersionDto, component: ClientReleaseHistoryComponentDto];
+  'hard-delete': [component: ClientReleaseHistoryComponentDto];
 }>();
 
 // 按状态显示真实可用时间；Archived 没有删除时间，不显示“删除于 -”。
@@ -42,7 +57,7 @@ function versionTimeLabel(version: ClientReleaseHistoryVersionDto): string | nul
   if (version.deletedAtUtc) {
     return `删除于 ${formatDate(version.deletedAtUtc)}`;
   }
-  if (version.status === 'Archived') {
+  if (version.status === 'Archived' || version.status === 'Deprecated') {
     return version.publishedAtUtc ? `发布于 ${formatDate(version.publishedAtUtc)}` : null;
   }
   return null;

@@ -22,7 +22,8 @@ public sealed class ClientReleaseHistoryQueryService(IIoTDbContext dbContext)
                 (channel == null || component.Channel == channel)
                 && (targetRuntime == null || component.TargetRuntime == targetRuntime)
                 && component.Versions.Any(version =>
-                    version.Status == ClientReleaseStatus.Archived
+                    version.Status == ClientReleaseStatus.Deprecated
+                    || version.Status == ClientReleaseStatus.Archived
                     || version.Status == ClientReleaseStatus.Deleted
                     || version.Status == ClientReleaseStatus.DeleteFailed));
 
@@ -41,9 +42,14 @@ public sealed class ClientReleaseHistoryQueryService(IIoTDbContext dbContext)
                 component.DisplayName,
                 component.Channel,
                 component.TargetRuntime,
+                CanHardDelete = component.ComponentKind == ClientReleaseComponentKind.Plugin
+                    && component.Versions.All(version =>
+                        version.Status == ClientReleaseStatus.Archived
+                        || version.Status == ClientReleaseStatus.Deleted),
                 LatestHistoryAtUtc = component.Versions
                     .Where(version =>
-                        version.Status == ClientReleaseStatus.Archived
+                        version.Status == ClientReleaseStatus.Deprecated
+                        || version.Status == ClientReleaseStatus.Archived
                         || version.Status == ClientReleaseStatus.Deleted
                         || version.Status == ClientReleaseStatus.DeleteFailed)
                     .Max(version => version.DeletedAtUtc ?? version.PublishedAtUtc ?? version.CreatedAtUtc)
@@ -66,7 +72,8 @@ public sealed class ClientReleaseHistoryQueryService(IIoTDbContext dbContext)
             .AsNoTracking()
             .Where(version =>
                 componentIds.Contains(version.ClientReleaseComponentId)
-                && (version.Status == ClientReleaseStatus.Archived
+                && (version.Status == ClientReleaseStatus.Deprecated
+                    || version.Status == ClientReleaseStatus.Archived
                     || version.Status == ClientReleaseStatus.Deleted
                     || version.Status == ClientReleaseStatus.DeleteFailed))
             .OrderByDescending(version => version.DeletedAtUtc ?? version.PublishedAtUtc ?? version.CreatedAtUtc)
@@ -81,9 +88,48 @@ public sealed class ClientReleaseHistoryQueryService(IIoTDbContext dbContext)
                 version.PublishedAtUtc,
                 version.DeletedAtUtc,
                 version.DeletionReason,
-                version.DeletionFailure
+                version.DeletionFailure,
+                version.ReleaseNotes,
+                version.Sha256,
+                version.PackageSize,
+                version.Publisher,
+                version.Signature,
+                version.DownloadUrl,
+                version.HostApiVersion,
+                version.TargetFramework,
+                version.MinHostVersion,
+                version.MaxHostVersion,
+                version.DependenciesJson
             })
             .ToListAsync(cancellationToken);
+
+        var versionIds = versionRows.Select(version => version.Id).ToArray();
+        var artifactRows = await dbContext.Set<ClientReleaseArtifact>()
+            .AsNoTracking()
+            .Where(artifact => versionIds.Contains(artifact.ClientReleaseVersionId))
+            .OrderBy(artifact => artifact.RelativePath)
+            .ThenBy(artifact => artifact.Id)
+            .Select(artifact => new
+            {
+                artifact.ClientReleaseVersionId,
+                artifact.ArtifactKind,
+                artifact.RelativePath,
+                artifact.Sha256,
+                artifact.Size
+            })
+            .ToListAsync(cancellationToken);
+
+        var artifactsByVersion = artifactRows
+            .GroupBy(artifact => artifact.ClientReleaseVersionId)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<ClientReleaseHistoryArtifactReadItem>)group
+                    .Select(artifact => new ClientReleaseHistoryArtifactReadItem(
+                        artifact.ArtifactKind.ToString(),
+                        artifact.RelativePath,
+                        artifact.Sha256,
+                        artifact.Size))
+                    .ToList());
 
         var versionsByComponent = versionRows
             .GroupBy(version => version.ClientReleaseComponentId)
@@ -98,7 +144,19 @@ public sealed class ClientReleaseHistoryQueryService(IIoTDbContext dbContext)
                         version.PublishedAtUtc,
                         version.DeletedAtUtc,
                         version.DeletionReason,
-                        version.DeletionFailure))
+                        version.DeletionFailure,
+                        version.ReleaseNotes,
+                        version.Sha256,
+                        version.PackageSize,
+                        version.Publisher,
+                        version.Signature,
+                        version.DownloadUrl,
+                        version.HostApiVersion,
+                        version.TargetFramework,
+                        version.MinHostVersion,
+                        version.MaxHostVersion,
+                        version.DependenciesJson,
+                        artifactsByVersion.GetValueOrDefault(version.Id, [])))
                     .ToList());
 
         var items = componentPage
@@ -109,7 +167,8 @@ public sealed class ClientReleaseHistoryQueryService(IIoTDbContext dbContext)
                 component.DisplayName,
                 component.Channel,
                 component.TargetRuntime,
-                versionsByComponent.GetValueOrDefault(component.Id, [])))
+                versionsByComponent.GetValueOrDefault(component.Id, []),
+                component.CanHardDelete))
             .ToList();
 
         return (items, totalCount);

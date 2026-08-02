@@ -21,7 +21,10 @@ namespace IIoT.ProductionService.Commands.ClientReleases;
 [DistributedLock(
     ClientReleasePublishLock.Resource,
     TimeoutSeconds = ClientReleasePublishLock.AcquireTimeoutSeconds)]
-public sealed record HardDeleteClientReleaseComponentCommand(Guid ComponentId, string? Reason = null)
+public sealed record HardDeleteClientReleaseComponentCommand(
+    Guid ComponentId,
+    string? Reason = null,
+    string? Confirmation = null)
     : IHumanCommand<Result<ClientReleaseComponentHardDeletionResultDto>>;
 
 public sealed record ClientReleaseComponentHardDeletionResultDto(
@@ -67,8 +70,23 @@ public sealed class HardDeleteClientReleaseComponentHandler(
         var channel = component.Channel;
         var versions = component.Versions
             .Select(version => version.Version)
-            .OrderBy(version => version, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(version => version, Comparer<string>.Create(ClientReleaseSemanticVersion.Compare))
             .ToList();
+        var validationError = ResolveValidationError(component, request);
+        if (validationError is not null)
+        {
+            await WriteRequestAuditAsync(
+                component.Id,
+                componentKind,
+                componentName,
+                channel,
+                versions,
+                succeeded: false,
+                validationError,
+                cancellationToken);
+            return Result.Invalid(validationError);
+        }
+
         var baselineObservation =
             await CloudWriteCommitRecovery
                 .TryObserveOptionalAttemptAsync(
@@ -115,7 +133,7 @@ public sealed class HardDeleteClientReleaseComponentHandler(
             channel,
             component.TargetRuntime,
             versions,
-            request.Reason,
+            request.Reason!.Trim(),
             ClientReleaseAuditActor.ParseId(currentUser.Id),
             currentUser.UserName,
             fileTargets,
@@ -291,6 +309,42 @@ public sealed class HardDeleteClientReleaseComponentHandler(
                && ClientReleaseWriteCommitRecovery.MatchesDeletionTarget(
                    current.Deletion,
                    expectedDeletion);
+    }
+
+    private static string? ResolveValidationError(
+        ClientReleaseComponent component,
+        HardDeleteClientReleaseComponentCommand request)
+    {
+        if (component.ComponentKind != ClientReleaseComponentKind.Plugin)
+        {
+            return "Host 组件不允许整体删除。";
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Reason))
+        {
+            return "整体删除必须提供非空原因。";
+        }
+
+        var expectedConfirmation = $"DELETE {component.ComponentKey}";
+        if (!string.Equals(
+                request.Confirmation,
+                expectedConfirmation,
+                StringComparison.Ordinal))
+        {
+            return $"二次确认不匹配，请精确输入 {expectedConfirmation}。";
+        }
+
+        if (component.Versions.Any(version =>
+                version.Status is ClientReleaseStatus.Draft
+                    or ClientReleaseStatus.Published
+                    or ClientReleaseStatus.Deprecated
+                    or ClientReleaseStatus.DeleteRequested
+                    or ClientReleaseStatus.DeleteFailed))
+        {
+            return "仅允许整体删除全部版本均已归档或已删除的插件。";
+        }
+
+        return null;
     }
 
     private async Task<string?> ResolveInUseReasonAsync(

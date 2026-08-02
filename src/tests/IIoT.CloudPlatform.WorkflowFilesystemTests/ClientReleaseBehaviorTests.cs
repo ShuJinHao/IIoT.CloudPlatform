@@ -97,7 +97,7 @@ public sealed class ClientReleaseBehaviorTests
         var component = CreateHostComponent(
             "stable",
             "1.0.0",
-            "1",
+            "1.0.0",
             "win-x64",
             "net10.0",
             "/edge-updates/installers/stable/1.0.0/installer-artifact.json",
@@ -111,7 +111,7 @@ public sealed class ClientReleaseBehaviorTests
         component.UpdateHostMetadata();
         component.UpsertHostVersion(
             "1.0.1",
-            "1",
+            "1.0.0",
             "net10.0",
             "/edge-updates/installers/stable/1.0.1/installer-artifact.json",
             new string('b', 64),
@@ -131,7 +131,7 @@ public sealed class ClientReleaseBehaviorTests
         var component = CreateHostComponent(
             "stable",
             "1.0.0",
-            "1",
+            "1.0.0",
             "win-x64",
             "net10.0",
             "/edge-updates/installers/stable/1.0.0/installer-artifact.json",
@@ -144,7 +144,7 @@ public sealed class ClientReleaseBehaviorTests
 
         component.UpsertHostVersion(
             "1.0.0",
-            "1",
+            "1.0.0",
             "net10.0",
             "/edge-updates/installers/stable/1.0.0/installer-artifact.json",
             new string('b', 64),
@@ -165,7 +165,7 @@ public sealed class ClientReleaseBehaviorTests
             "匀浆",
             "stable",
             "1.0.0",
-            "1",
+            "1.0.0",
             "1.0.0",
             "99.0.0",
             "win-x64",
@@ -181,7 +181,7 @@ public sealed class ClientReleaseBehaviorTests
         component.UpdatePluginMetadata("匀浆", null, null, null);
         component.UpsertPluginVersion(
             "1.0.1",
-            "1",
+            "1.0.0",
             "1.0.0",
             "99.0.0",
             "net10.0",
@@ -205,7 +205,7 @@ public sealed class ClientReleaseBehaviorTests
         SetUpdatedAtUtc(component, existingVersionUpdateBaseline);
         component.UpsertPluginVersion(
             "1.0.1",
-            "1",
+            "1.0.0",
             "1.0.0",
             "99.0.0",
             "net10.0",
@@ -443,6 +443,38 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Theory]
+    [InlineData("01.2.3")]
+    [InlineData("1.2.3+build.1")]
+    [InlineData("1.2.3-alpha.01")]
+    public async Task PublishEdgeReleaseBundleHandler_ShouldRejectInvalidVersionBeforeWriting(
+        string invalidVersion)
+    {
+        var edgeRoot = CreateTempDirectory("iiot-edge-invalid-version-root");
+        var bundle = CreateEdgeReleaseBundle(invalidVersion);
+        try
+        {
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            var handler = CreatePublishHandler(
+                edgeRoot,
+                componentRepository,
+                new NoopRetentionService(),
+                new RecordingAuditTrailService());
+
+            var result = await PublishBundleAsync(handler, bundle.ZipPath);
+
+            Assert.False(result.IsSuccess);
+            Assert.Contains("MAJOR.MINOR.PATCH", result.Errors?.First() ?? string.Empty);
+            Assert.Empty(componentRepository.Items);
+            Assert.False(Directory.Exists(Path.Combine(edgeRoot, "installers", "stable", invalidVersion)));
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            bundle.Dispose();
+        }
+    }
+
+    [Theory]
     [InlineData("duplicate-id", "重复的插件 moduleId")]
     [InlineData("duplicate-directory", "重复的插件目录")]
     [InlineData("modules-null", "manifest 不完整")]
@@ -641,6 +673,38 @@ public sealed class ClientReleaseBehaviorTests
             AssertGatewayReadableFile(package);
             Assert.Equal(ClientReleaseFileFacts.ComputeSha256(package), release.Sha256);
             Assert.Contains(auditTrail.Entries, entry => entry.Succeeded && entry.OperationType == "ClientRelease.PublishPlugin");
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            wrapper.Dispose();
+        }
+    }
+
+    [Theory]
+    [InlineData("01.0.0")]
+    [InlineData("1.0.0+build.1")]
+    [InlineData("1.0.0-rc.01")]
+    public async Task PublishEdgePluginPackageHandler_ShouldRejectInvalidVersionBeforeWriting(
+        string invalidVersion)
+    {
+        var edgeRoot = CreateTempDirectory("iiot-edge-plugin-invalid-version-root");
+        var wrapper = CreatePluginReleaseWrapper("Homogenization", invalidVersion);
+        try
+        {
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            var handler = CreatePluginPackageHandler(
+                edgeRoot,
+                componentRepository,
+                new NoopRetentionService(),
+                new RecordingAuditTrailService());
+
+            var result = await PublishPluginPackageAsync(handler, wrapper.ZipPath);
+
+            Assert.False(result.IsSuccess);
+            Assert.Empty(componentRepository.Items);
+            Assert.False(Directory.Exists(
+                Path.Combine(edgeRoot, "plugins", "stable", "Homogenization", invalidVersion)));
         }
         finally
         {
@@ -1430,10 +1494,44 @@ public sealed class ClientReleaseBehaviorTests
         var wrapper = CreatePluginReleaseWrapper("Homogenization", "1.1.4");
         try
         {
+            var repository = new InMemoryRepository<ClientReleaseComponent>();
+            var component = CreatePluginComponent(
+                "Homogenization",
+                "Homogenization",
+                "stable",
+                "1.1.1",
+                "1.0.0",
+                "1.0.0",
+                "99.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/plugins/stable/Homogenization/1.1.1/plugin.zip",
+                new string('1', 64),
+                1024,
+                "oldest",
+                ClientReleaseStatus.Published);
+            foreach (var version in new[] { "1.1.2", "1.1.3" })
+            {
+                component.UpsertPluginVersion(
+                    version,
+                    "1.0.0",
+                    "1.0.0",
+                    "99.0.0",
+                    "net10.0",
+                    $"/edge-updates/plugins/stable/Homogenization/{version}/plugin.zip",
+                    new string(version[^1], 64),
+                    1024,
+                    version,
+                    "[]",
+                    ClientReleaseStatus.Published,
+                    null,
+                    "IIoT");
+            }
+            repository.Items.Add(component);
             var auditTrail = new RecordingAuditTrailService();
             var publisher = CreatePluginPackageHandler(
                 edgeRoot,
-                new InMemoryRepository<ClientReleaseComponent>(),
+                repository,
                 new ThrowingRetentionService(sensitiveFailure),
                 auditTrail);
 
@@ -1447,6 +1545,12 @@ public sealed class ClientReleaseBehaviorTests
                 auditTrail.Entries,
                 entry => entry.Summary.Contains(sensitiveFailure, StringComparison.Ordinal)
                          || entry.FailureReason?.Contains(sensitiveFailure, StringComparison.Ordinal) == true);
+            Assert.Equal(
+                3,
+                component.Versions.Count(version => version.Status == ClientReleaseStatus.Published));
+            Assert.Equal(
+                ClientReleaseStatus.Archived,
+                component.Versions.Single(version => version.Version == "1.1.1").Status);
         }
         finally
         {
@@ -1463,6 +1567,32 @@ public sealed class ClientReleaseBehaviorTests
         try
         {
             var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            var host = CreateHostComponent(
+                "stable",
+                "1.1.9",
+                "1.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/installers/stable/1.1.9/installer-artifact.json",
+                new string('9', 64),
+                1024,
+                "oldest",
+                ClientReleaseStatus.Published);
+            foreach (var version in new[] { "1.2.0", "1.2.1" })
+            {
+                host.UpsertHostVersion(
+                    version,
+                    "1.0.0",
+                    "net10.0",
+                    $"/edge-updates/installers/stable/{version}/installer-artifact.json",
+                    new string(version[^1], 64),
+                    1024,
+                    version,
+                    ClientReleaseStatus.Published,
+                    null,
+                    "IIoT");
+            }
+            componentRepository.Items.Add(host);
             var auditTrail = new RecordingAuditTrailService();
             var handler = CreatePublishHandler(
                 edgeRoot,
@@ -1483,6 +1613,12 @@ public sealed class ClientReleaseBehaviorTests
                          || entry.FailureReason?.Contains("retention down", StringComparison.Ordinal) == true);
             Assert.True(Directory.Exists(Path.Combine(edgeRoot, "installers", "stable", "1.2.2")));
             Assert.Equal(2, componentRepository.Items.Count);
+            Assert.Equal(
+                3,
+                host.Versions.Count(version => version.Status == ClientReleaseStatus.Published));
+            Assert.Equal(
+                ClientReleaseStatus.Archived,
+                host.Versions.Single(version => version.Version == "1.1.9").Status);
         }
         finally
         {
@@ -2514,14 +2650,36 @@ public sealed class ClientReleaseBehaviorTests
                 policyRepository: policyRepository));
 
         var result = await handler.Handle(
-            new UpdateClientReleaseRetentionPolicyCommand(5),
+            new UpdateClientReleaseRetentionPolicyCommand(2),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
         Assert.Equal(
-            5,
+            2,
             Assert.Single(policyRepository.Items)
                 .MaxVersionsPerComponent);
+    }
+
+    [Fact]
+    public async Task UpdateRetentionPolicyHandler_ShouldRejectMoreThanThreeWithoutWriting()
+    {
+        var policyRepository =
+            new InMemoryRepository<ClientReleaseRetentionPolicy>();
+        var handler = new UpdateClientReleaseRetentionPolicyHandler(
+            policyRepository,
+            new InMemoryRepository<ClientReleaseComponent>(),
+            new NoopRetentionService(),
+            new RecordingUnitOfWork(),
+            new InMemoryClientReleaseWriteObservationReader(
+                policyRepository: policyRepository));
+
+        var result = await handler.Handle(
+            new UpdateClientReleaseRetentionPolicyCommand(4),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("1 到 3", result.Errors?.First() ?? string.Empty);
+        Assert.Empty(policyRepository.Items);
     }
 
     [Fact]
@@ -2543,7 +2701,7 @@ public sealed class ClientReleaseBehaviorTests
 
         await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
             () => handler.Handle(
-                new UpdateClientReleaseRetentionPolicyCommand(5),
+                new UpdateClientReleaseRetentionPolicyCommand(2),
                 CancellationToken.None));
 
         Assert.Empty(policyRepository.Items);
@@ -2563,7 +2721,7 @@ public sealed class ClientReleaseBehaviorTests
                 AfterOperationAsync = _ =>
                 {
                     Assert.Single(policyRepository.Items).Update(
-                        9,
+                        3,
                         DateTime.UtcNow.AddMinutes(1));
                     throw new TimeoutException(
                         "simulated failure after concurrent drift");
@@ -2574,11 +2732,11 @@ public sealed class ClientReleaseBehaviorTests
 
         await Assert.ThrowsAsync<CloudWriteConflictException>(
             () => handler.Handle(
-                new UpdateClientReleaseRetentionPolicyCommand(5),
+                new UpdateClientReleaseRetentionPolicyCommand(2),
                 CancellationToken.None));
 
         Assert.Equal(
-            9,
+            3,
             Assert.Single(policyRepository.Items)
                 .MaxVersionsPerComponent);
     }
@@ -2606,7 +2764,7 @@ public sealed class ClientReleaseBehaviorTests
 
         var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => handler.Handle(
-                new UpdateClientReleaseRetentionPolicyCommand(5),
+                new UpdateClientReleaseRetentionPolicyCommand(2),
                 cancellation.Token));
 
         Assert.Equal(cancellation.Token, exception.CancellationToken);
@@ -3891,7 +4049,7 @@ public sealed class ClientReleaseBehaviorTests
                 packageSha,
                 packageSize,
                 "错误工序，管理员永久删除",
-                ClientReleaseStatus.Published);
+                ClientReleaseStatus.Archived);
             var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
             componentRepository.Items.Add(component);
             var deletionStore = new InMemoryClientReleaseComponentDeletionStore();
@@ -3919,7 +4077,10 @@ public sealed class ClientReleaseBehaviorTests
                 unitOfWork: unitOfWork);
 
             var result = await handler.Handle(
-                new HardDeleteClientReleaseComponentCommand(component.Id, "错误工序"),
+                new HardDeleteClientReleaseComponentCommand(
+                    component.Id,
+                    "错误工序",
+                    $"DELETE {component.ComponentKey}"),
                 CancellationToken.None);
 
             Assert.True(result.IsSuccess);
@@ -3978,7 +4139,7 @@ public sealed class ClientReleaseBehaviorTests
                 packageSha,
                 packageSize,
                 "success audit cancellation",
-                ClientReleaseStatus.Published);
+                ClientReleaseStatus.Archived);
             var componentRepository =
                 new InMemoryRepository<ClientReleaseComponent>();
             componentRepository.Items.Add(component);
@@ -3996,7 +4157,8 @@ public sealed class ClientReleaseBehaviorTests
             var handling = handler.Handle(
                 new HardDeleteClientReleaseComponentCommand(
                     component.Id,
-                    "success audit cancellation"),
+                    "success audit cancellation",
+                    $"DELETE {component.ComponentKey}"),
                 cancellation.Token);
 
             await auditTrail.AuditEntered.WaitAsync(
@@ -4070,7 +4232,7 @@ public sealed class ClientReleaseBehaviorTests
                 packageSha,
                 packageSize,
                 "failure audit cancellation",
-                ClientReleaseStatus.Published);
+                ClientReleaseStatus.Archived);
             var componentRepository =
                 new InMemoryRepository<ClientReleaseComponent>();
             componentRepository.Items.Add(component);
@@ -4098,7 +4260,8 @@ public sealed class ClientReleaseBehaviorTests
             var handling = handler.Handle(
                 new HardDeleteClientReleaseComponentCommand(
                     component.Id,
-                    "failure audit cancellation"),
+                    "failure audit cancellation",
+                    $"DELETE {component.ComponentKey}"),
                 cancellation.Token);
 
             await auditTrail.AuditEntered.WaitAsync(
@@ -4169,7 +4332,7 @@ public sealed class ClientReleaseBehaviorTests
                 packageSha,
                 packageSize,
                 "concurrent metadata drift",
-                ClientReleaseStatus.Published);
+                ClientReleaseStatus.Archived);
             var componentRepository =
                 new InMemoryRepository<ClientReleaseComponent>();
             componentRepository.Items.Add(component);
@@ -4197,7 +4360,8 @@ public sealed class ClientReleaseBehaviorTests
                 () => handler.Handle(
                     new HardDeleteClientReleaseComponentCommand(
                         component.Id,
-                        "concurrent metadata drift"),
+                        "concurrent metadata drift",
+                        $"DELETE {component.ComponentKey}"),
                     CancellationToken.None));
 
             Assert.Empty(componentRepository.Items);
@@ -4244,7 +4408,7 @@ public sealed class ClientReleaseBehaviorTests
                 packageSha,
                 packageSize,
                 "baseline unknown",
-                ClientReleaseStatus.Published);
+                ClientReleaseStatus.Archived);
             var componentRepository =
                 new InMemoryRepository<ClientReleaseComponent>();
             componentRepository.Items.Add(component);
@@ -4267,7 +4431,8 @@ public sealed class ClientReleaseBehaviorTests
                 () => handler.Handle(
                     new HardDeleteClientReleaseComponentCommand(
                         component.Id,
-                        "baseline unknown"),
+                        "baseline unknown",
+                        $"DELETE {component.ComponentKey}"),
                     CancellationToken.None));
 
             Assert.Single(componentRepository.Items);
@@ -4304,7 +4469,7 @@ public sealed class ClientReleaseBehaviorTests
                 new string('a', 64),
                 1024,
                 "仍在使用",
-                ClientReleaseStatus.Published);
+                ClientReleaseStatus.Archived);
             var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
             componentRepository.Items.Add(component);
             var deletionStore = new InMemoryClientReleaseComponentDeletionStore();
@@ -4326,7 +4491,10 @@ public sealed class ClientReleaseBehaviorTests
                 clientStateStore);
 
             var result = await handler.Handle(
-                new HardDeleteClientReleaseComponentCommand(component.Id),
+                new HardDeleteClientReleaseComponentCommand(
+                    component.Id,
+                    "测试在用阻断",
+                    $"DELETE {component.ComponentKey}"),
                 CancellationToken.None);
 
             Assert.False(result.IsSuccess);
@@ -4336,6 +4504,114 @@ public sealed class ClientReleaseBehaviorTests
             Assert.Contains(auditTrail.Entries, entry =>
                 entry.OperationType == "ClientRelease.HardDeleteComponent"
                 && !entry.Succeeded);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(ClientReleaseStatus.Draft)]
+    [InlineData(ClientReleaseStatus.Published)]
+    [InlineData(ClientReleaseStatus.Deprecated)]
+    public async Task HardDeleteClientReleaseComponentHandler_ShouldRejectActiveOrDeprecatedPlugin(
+        ClientReleaseStatus status)
+    {
+        var edgeRoot = CreateTempDirectory("iiot-hard-delete-active-plugin-root");
+        try
+        {
+            var component = CreatePluginComponent(
+                "ActiveModule",
+                "活动插件",
+                "stable",
+                "1.0.0",
+                "1.0.0",
+                "1.0.0",
+                "2.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/plugins/stable/ActiveModule/1.0.0/plugin.zip",
+                new string('a', 64),
+                1,
+                "active",
+                status);
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(component);
+            var deletionStore = new InMemoryClientReleaseComponentDeletionStore();
+            var handler = CreateHardDeleteHandler(
+                edgeRoot,
+                componentRepository,
+                deletionStore,
+                new RecordingAuditTrailService());
+
+            var result = await handler.Handle(
+                new HardDeleteClientReleaseComponentCommand(
+                    component.Id,
+                    "test",
+                    $"DELETE {component.ComponentKey}"),
+                CancellationToken.None);
+
+            Assert.False(result.IsSuccess);
+            Assert.Contains("已归档或已删除", result.Errors?.First() ?? string.Empty);
+            Assert.Single(componentRepository.Items, component);
+            Assert.Empty(deletionStore.Items);
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+        }
+    }
+
+    [Fact]
+    public async Task HardDeleteClientReleaseComponentHandler_ShouldRequireReasonAndExactConfirmation()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-hard-delete-confirmation-root");
+        try
+        {
+            var component = CreatePluginComponent(
+                "ArchivedModule",
+                "已归档插件",
+                "stable",
+                "1.0.0",
+                "1.0.0",
+                "1.0.0",
+                "2.0.0",
+                "win-x64",
+                "net10.0",
+                "/edge-updates/plugins/stable/ArchivedModule/1.0.0/plugin.zip",
+                new string('a', 64),
+                1,
+                "archived",
+                ClientReleaseStatus.Archived);
+            var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
+            componentRepository.Items.Add(component);
+            var deletionStore = new InMemoryClientReleaseComponentDeletionStore();
+            var handler = CreateHardDeleteHandler(
+                edgeRoot,
+                componentRepository,
+                deletionStore,
+                new RecordingAuditTrailService());
+
+            var missingReason = await handler.Handle(
+                new HardDeleteClientReleaseComponentCommand(
+                    component.Id,
+                    " ",
+                    $"DELETE {component.ComponentKey}"),
+                CancellationToken.None);
+            var wrongConfirmation = await handler.Handle(
+                new HardDeleteClientReleaseComponentCommand(
+                    component.Id,
+                    "test",
+                    component.ComponentKey),
+                CancellationToken.None);
+
+            Assert.False(missingReason.IsSuccess);
+            Assert.Contains("非空原因", missingReason.Errors?.First() ?? string.Empty);
+            Assert.False(wrongConfirmation.IsSuccess);
+            Assert.Contains("二次确认不匹配", wrongConfirmation.Errors?.First() ?? string.Empty);
+            Assert.Single(componentRepository.Items, component);
+            Assert.Empty(deletionStore.Items);
         }
         finally
         {
@@ -4409,6 +4685,21 @@ public sealed class ClientReleaseBehaviorTests
             8192,
             null,
             ClientReleaseStatus.Draft));
+        componentRepository.Items.Add(CreatePluginComponent(
+            "Legacy",
+            "旧插件",
+            "stable",
+            "9.0.0",
+            "1.0.0",
+            "1.0.0",
+            "9.9.9",
+            "win-x64",
+            "net10.0",
+            "https://download.example.test/plugins/legacy-9.0.0.zip",
+            new string('e', 64),
+            16384,
+            "deprecated",
+            ClientReleaseStatus.Deprecated));
 
         var handler = new GetPublicClientDownloadsHandler(
             componentRepository,
@@ -4441,7 +4732,7 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
-    public async Task HardDeleteClientReleaseComponentHandler_ShouldRebuildHostVelopackManifestsAndRemoveOrphanNupkg()
+    public async Task HardDeleteClientReleaseComponentHandler_ShouldRejectHostWithoutTouchingVelopackArtifacts()
     {
         var edgeRoot = CreateTempDirectory("iiot-hard-delete-host-manifest-root");
         try
@@ -4547,25 +4838,27 @@ public sealed class ClientReleaseBehaviorTests
                 auditTrail);
 
             var result = await handler.Handle(
-                new HardDeleteClientReleaseComponentCommand(component.Id, "wrong channel"),
+                new HardDeleteClientReleaseComponentCommand(
+                    component.Id,
+                    "wrong channel",
+                    $"DELETE {component.ComponentKey}"),
                 CancellationToken.None);
 
-            Assert.True(result.IsSuccess);
-            Assert.Empty(componentRepository.Items);
+            Assert.False(result.IsSuccess);
+            Assert.Contains("Host 组件不允许整体删除", result.Errors?.First() ?? string.Empty);
+            Assert.Single(componentRepository.Items, component);
             Assert.Empty(deletionStore.Items);
-            Assert.False(Directory.Exists(installer100));
-            Assert.False(Directory.Exists(installer110));
-            Assert.False(File.Exists(Path.Combine(velopackRoot, "IIoT.EdgeClient-1.0.0-full.nupkg")));
-            Assert.False(File.Exists(Path.Combine(velopackRoot, "IIoT.EdgeClient-1.1.0-full.nupkg")));
-
-            // 删除的是该 channel 唯一 Host，没有任何存活 Host，channel manifest 已无服务对象，应被统一清理。
-            Assert.False(File.Exists(Path.Combine(velopackRoot, "releases.stable.json")));
-            Assert.False(File.Exists(Path.Combine(velopackRoot, "assets.stable.json")));
-            Assert.False(File.Exists(Path.Combine(velopackRoot, "RELEASES")));
+            Assert.True(Directory.Exists(installer100));
+            Assert.True(Directory.Exists(installer110));
+            Assert.True(File.Exists(Path.Combine(velopackRoot, "IIoT.EdgeClient-1.0.0-full.nupkg")));
+            Assert.True(File.Exists(Path.Combine(velopackRoot, "IIoT.EdgeClient-1.1.0-full.nupkg")));
+            Assert.True(File.Exists(Path.Combine(velopackRoot, "releases.stable.json")));
+            Assert.True(File.Exists(Path.Combine(velopackRoot, "assets.stable.json")));
+            Assert.True(File.Exists(Path.Combine(velopackRoot, "RELEASES")));
 
             Assert.Contains(auditTrail.Entries, entry =>
                 entry.OperationType == "ClientRelease.HardDeleteComponent"
-                && entry.Succeeded);
+                && !entry.Succeeded);
         }
         finally
         {
@@ -4574,7 +4867,7 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
-    public async Task HardDeleteClientReleaseComponentHandler_ShouldKeepSharedManifestAndNupkg_WhenAnotherRuntimeHostSurvives()
+    public async Task HardDeleteClientReleaseComponentHandler_ShouldRejectOneHostWhenAnotherRuntimeHostExists()
     {
         var edgeRoot = CreateTempDirectory("iiot-hard-delete-host-cross-runtime-root");
         try
@@ -4671,12 +4964,15 @@ public sealed class ClientReleaseBehaviorTests
                 auditTrail);
 
             var result = await handler.Handle(
-                new HardDeleteClientReleaseComponentCommand(target.Id),
+                new HardDeleteClientReleaseComponentCommand(
+                    target.Id,
+                    "test hard delete",
+                    $"DELETE {target.ComponentKey}"),
                 CancellationToken.None);
 
-            Assert.True(result.IsSuccess);
-            Assert.False(Directory.Exists(installer100));
-            // 仍有存活 linux-x64 Host：共享 manifest 与共享 nupkg 都保留，manifest 仍引用它。
+            Assert.False(result.IsSuccess);
+            Assert.Contains("Host 组件不允许整体删除", result.Errors?.First() ?? string.Empty);
+            Assert.True(Directory.Exists(installer100));
             Assert.True(File.Exists(Path.Combine(velopackRoot, "IIoT.EdgeClient-1.0.0-full.nupkg")));
             Assert.True(File.Exists(Path.Combine(velopackRoot, "releases.stable.json")));
             Assert.True(File.Exists(Path.Combine(velopackRoot, "assets.stable.json")));
@@ -4687,7 +4983,8 @@ public sealed class ClientReleaseBehaviorTests
             Assert.Contains(
                 "IIoT.EdgeClient-1.0.0-full.nupkg",
                 File.ReadAllText(Path.Combine(velopackRoot, "RELEASES")));
-            Assert.Single(componentRepository.Items, survivor);
+            Assert.Equal(2, componentRepository.Items.Count);
+            Assert.Empty(deletionStore.Items);
         }
         finally
         {
@@ -4696,7 +4993,7 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
-    public async Task HardDeleteClientReleaseComponentHandler_ShouldRemoveOrphanNupkgAndManifest_WhenNoSurvivingHost()
+    public async Task HardDeleteClientReleaseComponentHandler_ShouldRejectTheOnlyHostWithoutRemovingArtifacts()
     {
         var edgeRoot = CreateTempDirectory("iiot-hard-delete-host-orphan-nupkg-root");
         try
@@ -4760,14 +5057,19 @@ public sealed class ClientReleaseBehaviorTests
                 auditTrail);
 
             var result = await handler.Handle(
-                new HardDeleteClientReleaseComponentCommand(component.Id),
+                new HardDeleteClientReleaseComponentCommand(
+                    component.Id,
+                    "test hard delete",
+                    $"DELETE {component.ComponentKey}"),
                 CancellationToken.None);
 
-            Assert.True(result.IsSuccess);
-            Assert.False(Directory.Exists(installer100));
-            Assert.False(File.Exists(Path.Combine(velopackRoot, "IIoT.EdgeClient-1.0.0-full.nupkg")));
-            // 无存活 Host，channel manifest 一并清理。
-            Assert.False(File.Exists(Path.Combine(velopackRoot, "releases.stable.json")));
+            Assert.False(result.IsSuccess);
+            Assert.Contains("Host 组件不允许整体删除", result.Errors?.First() ?? string.Empty);
+            Assert.True(Directory.Exists(installer100));
+            Assert.True(File.Exists(Path.Combine(velopackRoot, "IIoT.EdgeClient-1.0.0-full.nupkg")));
+            Assert.True(File.Exists(Path.Combine(velopackRoot, "releases.stable.json")));
+            Assert.Single(componentRepository.Items, component);
+            Assert.Empty(deletionStore.Items);
         }
         finally
         {
@@ -4776,7 +5078,7 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
-    public async Task HardDeleteClientReleaseComponentHandler_ShouldReturnManifestRebuildFailure_WhenManifestIsInvalidJson()
+    public async Task HardDeleteClientReleaseComponentHandler_ShouldRejectHostBeforeReadingInvalidManifest()
     {
         var edgeRoot = CreateTempDirectory("iiot-hard-delete-host-invalid-manifest-root");
         try
@@ -4865,24 +5167,22 @@ public sealed class ClientReleaseBehaviorTests
                 auditTrail);
 
             var result = await handler.Handle(
-                new HardDeleteClientReleaseComponentCommand(component.Id),
+                new HardDeleteClientReleaseComponentCommand(
+                    component.Id,
+                    "test hard delete",
+                    $"DELETE {component.ComponentKey}"),
                 CancellationToken.None);
 
             Assert.False(result.IsSuccess);
             Assert.Contains(
-                ClientReleaseComponentDeletionExecutor.FailureManifestRebuild,
+                "Host 组件不允许整体删除",
                 result.Errors?.First() ?? string.Empty);
             Assert.True(File.Exists(Path.Combine(velopackRoot, "releases.stable.json")));
-            // 组件元数据已删除，持久化删除操作保持 Failed，可修复 manifest 后按操作 ID 重试。
-            Assert.Single(componentRepository.Items, survivor);
-            var operation = Assert.Single(deletionStore.Items);
-            Assert.Equal(ClientReleaseComponentDeletionStatus.Failed, operation.Status);
-            Assert.Equal(ClientReleaseComponentDeletionExecutor.FailureManifestRebuild, operation.FailureCode);
-            Assert.Equal(component.Id, operation.ComponentId);
+            Assert.Equal(2, componentRepository.Items.Count);
+            Assert.Empty(deletionStore.Items);
             Assert.Contains(auditTrail.Entries, entry =>
                 entry.OperationType == "ClientRelease.HardDeleteComponent"
-                && !entry.Succeeded
-                && entry.FailureReason == ClientReleaseComponentDeletionExecutor.FailureManifestRebuild);
+                && !entry.Succeeded);
         }
         finally
         {
@@ -4915,7 +5215,7 @@ public sealed class ClientReleaseBehaviorTests
                 packageSha,
                 packageSize,
                 "错误工序，管理员永久删除",
-                ClientReleaseStatus.Published);
+                ClientReleaseStatus.Archived);
 
             // 第一次提交在元数据事务里持久化删除操作，随后模拟进程中断：
             // 清理处理器一启动就“崩溃”，请求失败但操作已留在 store（Requested）。
@@ -4944,7 +5244,10 @@ public sealed class ClientReleaseBehaviorTests
 
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 firstHandler.Handle(
-                    new HardDeleteClientReleaseComponentCommand(component.Id, "错误工序"),
+                    new HardDeleteClientReleaseComponentCommand(
+                        component.Id,
+                        "错误工序",
+                        $"DELETE {component.ComponentKey}"),
                     CancellationToken.None));
             Assert.Empty(committedComponentRepository.Items);
             var operation = Assert.Single(deletionStore.Items);
@@ -5007,7 +5310,7 @@ public sealed class ClientReleaseBehaviorTests
                 packageSha,
                 packageSize,
                 "提交后取消",
-                ClientReleaseStatus.Published);
+                ClientReleaseStatus.Archived);
 
             var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
             componentRepository.Items.Add(component);
@@ -5052,7 +5355,10 @@ public sealed class ClientReleaseBehaviorTests
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
                 handler.Handle(
-                    new HardDeleteClientReleaseComponentCommand(component.Id, "提交后取消"),
+                    new HardDeleteClientReleaseComponentCommand(
+                        component.Id,
+                        "提交后取消",
+                        $"DELETE {component.ComponentKey}"),
                     cancellation.Token));
 
             // 数据库提交发生在取消之前：后续文件清理、成功审计和操作记录删除使用
@@ -5148,20 +5454,40 @@ public sealed class ClientReleaseBehaviorTests
             WriteFile(Path.Combine(velopackRoot, "releases.stable.json"), "not json");
 
             var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
-            componentRepository.Items.Add(component);
             componentRepository.Items.Add(survivor);
             var deletionStore = new InMemoryClientReleaseComponentDeletionStore();
             var auditTrail = new RecordingAuditTrailService();
-            var firstHandler = CreateHardDeleteHandler(
-                edgeRoot,
-                componentRepository,
-                deletionStore,
-                auditTrail);
-            var first = await firstHandler.Handle(
-                new HardDeleteClientReleaseComponentCommand(component.Id),
-                CancellationToken.None);
-            Assert.False(first.IsSuccess);
-            var operation = Assert.Single(deletionStore.Items);
+            var operation = new ClientReleaseComponentDeletion(
+                component.Id,
+                "Host",
+                component.ComponentKey,
+                channel,
+                component.TargetRuntime,
+                ["1.0.0"],
+                "legacy host deletion recovery",
+                Guid.NewGuid(),
+                "tester",
+                [
+                    new ClientReleaseComponentDeletionFileTarget(
+                        "installers/stable/1.0.0",
+                        ClientReleaseArtifactKind.InstallerDirectory.ToString(),
+                        null,
+                        null),
+                    new ClientReleaseComponentDeletionFileTarget(
+                        "installers/stable/1.0.0/installer-artifact.json",
+                        ClientReleaseArtifactKind.ManifestFile.ToString(),
+                        targetFactSha,
+                        targetFactSize)
+                ]);
+            deletionStore.Add(operation);
+            var first = await CreateDeletionProcessor(
+                    edgeRoot,
+                    componentRepository,
+                    deletionStore,
+                    auditTrail)
+                .ProcessAsync(operation, CancellationToken.None);
+
+            Assert.False(first.Succeeded);
             Assert.Equal(ClientReleaseComponentDeletionStatus.Failed, operation.Status);
             Assert.Equal(1, operation.RetryCount);
 
@@ -5264,6 +5590,35 @@ public sealed class ClientReleaseBehaviorTests
             {
                 TryDeleteDirectory(directory);
             }
+        }
+    }
+
+    [Fact]
+    public void ClientReleaseMissingFiles_ShouldTreatArtifactBelowSymlinkAsMissing()
+    {
+        if (!ExternalDirectorySymlink.IsSupported)
+        {
+            return;
+        }
+
+        var edgeRoot = CreateTempDirectory("iiot-release-history-symlink-root");
+        try
+        {
+            using var symlink = ExternalDirectorySymlink.Create(
+                Path.Combine(edgeRoot, "plugins"),
+                "history-artifact");
+            var outsidePackage = Path.Combine(symlink.OutsideRoot, "AP", "2.0.19", "plugin.zip");
+            Directory.CreateDirectory(Path.GetDirectoryName(outsidePackage)!);
+            WriteFile(outsidePackage, "outside");
+
+            Assert.False(ClientReleaseMissingFiles.IsArtifactPresent(
+                edgeRoot,
+                ClientReleaseArtifactKind.PackageFile,
+                "plugins/AP/2.0.19/plugin.zip"));
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
         }
     }
 
@@ -5572,6 +5927,15 @@ public sealed class ClientReleaseBehaviorTests
                     new ClientReleaseArtifact(ClientReleaseArtifactKind.InstallerDirectory, "installers/stable/0.8.0"),
                     new ClientReleaseArtifact(ClientReleaseArtifactKind.ManifestFile, "installers/stable/0.8.0/installer-artifact.json", new string('d', 64), 80)
                 ]);
+            mixed.UpsertHostVersion(
+                "9.0.0", "1.0.0", "net10.0",
+                "/edge-updates/installers/stable/9.0.0/installer-artifact.json",
+                new string('9', 64), 900, null, ClientReleaseStatus.Deprecated, null, "IIoT",
+                artifacts:
+                [
+                    new ClientReleaseArtifact(ClientReleaseArtifactKind.InstallerDirectory, "installers/stable/9.0.0"),
+                    new ClientReleaseArtifact(ClientReleaseArtifactKind.ManifestFile, "installers/stable/9.0.0/installer-artifact.json", new string('9', 64), 900)
+                ]);
             componentRepository.Items.Add(mixed);
 
             // 只剩归档版本的组件不得进入主 catalog。
@@ -5597,6 +5961,9 @@ public sealed class ClientReleaseBehaviorTests
             Directory.CreateDirectory(publishedDir);
             WriteFile(Path.Combine(publishedDir, "installer-artifact.json"), "{}");
             WriteFile(
+                Path.Combine(edgeRoot, "installers", channel, "9.0.0", "installer-artifact.json"),
+                "deprecated but present");
+            WriteFile(
                 Path.Combine(edgeRoot, "plugins", channel, "CurrentModule", "1.0.0", "current.zip"),
                 "plugin");
 
@@ -5611,7 +5978,7 @@ public sealed class ClientReleaseBehaviorTests
 
             Assert.True(result.IsSuccess);
             // 主 catalog 只暴露文件真实存在的活动版本（Published 1.0.0）；
-            // Archived 0.8.0 被状态过滤排除，Draft 0.9.0 因文件缺失被存在性过滤排除，都不进主列表。
+            // Archived/Deprecated 被状态过滤排除，Draft 0.9.0 因文件缺失被存在性过滤排除，都不进主列表。
             var entry = Assert.Single(result.Value!.Host.Versions);
             Assert.Equal("1.0.0", entry.Version);
             Assert.Equal("Published", entry.Status);
@@ -5723,10 +6090,32 @@ public sealed class ClientReleaseBehaviorTests
                         deletedAtUtc.AddDays(-1),
                         deletedAtUtc,
                         "管理员确认的硬删除原因",
-                        null)
-                ])
+                        null,
+                        ReleaseNotes: "完整发布说明",
+                        Sha256: new string('f', 64),
+                        PackageSize: 2048,
+                        Publisher: "admin",
+                        Signature: "signature",
+                        DownloadUrl: "/edge-updates/plugins/stable/RemovedModule/2.0.0/plugin.zip",
+                        HostApiVersion: "2.0.0",
+                        TargetFramework: "net10.0",
+                        MinHostVersion: "2.0.14",
+                        MaxHostVersion: "2.0.14",
+                        DependenciesJson: "[{\"moduleId\":\"Base\"}]",
+                        Artifacts:
+                        [
+                            new ClientReleaseHistoryArtifactReadItem(
+                                "PackageFile",
+                                "plugins/stable/RemovedModule/2.0.0/plugin.zip",
+                                new string('f', 64),
+                                2048)
+                        ])
+                ],
+                CanHardDelete: true)
         ]);
-        var handler = new GetClientReleaseHistoryHandler(queryService);
+        var handler = new GetClientReleaseHistoryHandler(
+            queryService,
+            Options.Create(new EdgeInstallerArtifactOptions()));
 
         var result = await handler.Handle(
             new GetClientReleaseHistoryQuery(new Pagination { PageNumber = 1, PageSize = 10 }, channel, "win-x64"),
@@ -5747,6 +6136,18 @@ public sealed class ClientReleaseBehaviorTests
         Assert.Equal("Deleted", pluginVersion.Status);
         Assert.Equal("管理员确认的硬删除原因", pluginVersion.DeletionReason);
         Assert.NotNull(pluginVersion.DeletedAtUtc);
+        Assert.True(pluginHistory.CanHardDelete);
+        Assert.Equal("完整发布说明", pluginVersion.ReleaseNotes);
+        Assert.Equal(new string('f', 64), pluginVersion.Sha256);
+        Assert.Equal(2048, pluginVersion.PackageSize);
+        Assert.Equal("admin", pluginVersion.Publisher);
+        Assert.Equal("signature", pluginVersion.Signature);
+        Assert.Equal("2.0.0", pluginVersion.HostApiVersion);
+        Assert.Equal("2.0.14", pluginVersion.MinHostVersion);
+        Assert.Equal("Base", pluginVersion.Dependencies[0].GetProperty("moduleId").GetString());
+        var artifact = Assert.Single(pluginVersion.Artifacts);
+        Assert.Equal("PackageFile", artifact.ArtifactKind);
+        Assert.False(artifact.FilesPresent);
     }
 
     [Fact]
@@ -5774,7 +6175,9 @@ public sealed class ClientReleaseBehaviorTests
                 ]))
             .ToList();
         var queryService = new StubClientReleaseHistoryQueryService(history);
-        var handler = new GetClientReleaseHistoryHandler(queryService);
+        var handler = new GetClientReleaseHistoryHandler(
+            queryService,
+            Options.Create(new EdgeInstallerArtifactOptions()));
 
         var page1 = await handler.Handle(
             new GetClientReleaseHistoryQuery(new Pagination { PageNumber = 1, PageSize = 2 }, channel, "win-x64"),
@@ -5836,7 +6239,7 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
-    public async Task HardDeleteClientReleaseComponentHandler_ShouldKeepAllManifests_WhenTargetsUseRealPublishArtifactSet()
+    public async Task HardDeleteClientReleaseComponentHandler_ShouldRejectHostWithRealPublishArtifactSet()
     {
         var edgeRoot = CreateTempDirectory("iiot-hard-delete-real-publish-artifacts-root");
         try
@@ -5993,27 +6396,31 @@ public sealed class ClientReleaseBehaviorTests
             var handler = CreateHardDeleteHandler(edgeRoot, componentRepository, deletionStore, auditTrail);
 
             var result = await handler.Handle(
-                new HardDeleteClientReleaseComponentCommand(target.Id),
+                new HardDeleteClientReleaseComponentCommand(
+                    target.Id,
+                    "test hard delete",
+                    $"DELETE {target.ComponentKey}"),
                 CancellationToken.None);
 
-            Assert.True(result.IsSuccess);
-            // channel manifest 绝不作为普通文件目标删除：跨 runtime 存活 Host 的更新清单必须保留。
+            Assert.False(result.IsSuccess);
+            Assert.Contains("Host 组件不允许整体删除", result.Errors?.First() ?? string.Empty);
             Assert.True(File.Exists(Path.Combine(velopackRoot, "RELEASES")));
             Assert.True(File.Exists(Path.Combine(velopackRoot, "releases.stable.json")));
             Assert.True(File.Exists(Path.Combine(velopackRoot, "assets.stable.json")));
-            // 目标自己的 nupkg 被剔除，存活 Host 的 nupkg 保留。
-            Assert.False(File.Exists(Path.Combine(velopackRoot, "IIoT.EdgeClient-1.0.0-full.nupkg")));
+            Assert.True(File.Exists(Path.Combine(velopackRoot, "IIoT.EdgeClient-1.0.0-full.nupkg")));
             Assert.True(File.Exists(Path.Combine(velopackRoot, "IIoT.EdgeClient-2.0.0-full.nupkg")));
             Assert.True(File.Exists(Path.Combine(velopackRoot, "IIoT.EdgeClient-stable-Setup.exe")));
             Assert.True(File.Exists(Path.Combine(velopackRoot, "IIoT.EdgeClient-stable-Portable.zip")));
-            Assert.DoesNotContain(
+            Assert.Contains(
                 "IIoT.EdgeClient-1.0.0-full.nupkg",
                 File.ReadAllText(Path.Combine(velopackRoot, "releases.stable.json")));
             Assert.Contains(
                 "IIoT.EdgeClient-2.0.0-full.nupkg",
                 File.ReadAllText(Path.Combine(velopackRoot, "releases.stable.json")));
-            Assert.False(Directory.Exists(Path.Combine(edgeRoot, "installers", channel, "1.0.0")));
+            Assert.True(Directory.Exists(Path.Combine(edgeRoot, "installers", channel, "1.0.0")));
             Assert.True(Directory.Exists(Path.Combine(edgeRoot, "installers", channel, "2.0.0")));
+            Assert.Equal(2, componentRepository.Items.Count);
+            Assert.Empty(deletionStore.Items);
         }
         finally
         {
@@ -6050,7 +6457,7 @@ public sealed class ClientReleaseBehaviorTests
                 packageSha,
                 packageSize,
                 "持久化后祖先被替换",
-                ClientReleaseStatus.Published);
+                ClientReleaseStatus.Archived);
 
             // 元数据提交后、文件清理前进程中断，操作保持 Requested。
             var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
@@ -6077,7 +6484,10 @@ public sealed class ClientReleaseBehaviorTests
                 commitObservation);
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 firstHandler.Handle(
-                    new HardDeleteClientReleaseComponentCommand(component.Id, "持久化后祖先被替换"),
+                    new HardDeleteClientReleaseComponentCommand(
+                        component.Id,
+                        "持久化后祖先被替换",
+                        $"DELETE {component.ComponentKey}"),
                     CancellationToken.None));
             var operation = Assert.Single(deletionStore.Items);
             Assert.Equal(ClientReleaseComponentDeletionStatus.Requested, operation.Status);
@@ -6151,7 +6561,7 @@ public sealed class ClientReleaseBehaviorTests
                 packageSha,
                 packageSize,
                 "持久化后文件被替换",
-                ClientReleaseStatus.Published);
+                ClientReleaseStatus.Archived);
 
             var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
             componentRepository.Items.Add(component);
@@ -6177,7 +6587,10 @@ public sealed class ClientReleaseBehaviorTests
                 commitObservation);
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 firstHandler.Handle(
-                    new HardDeleteClientReleaseComponentCommand(component.Id, "持久化后文件被替换"),
+                    new HardDeleteClientReleaseComponentCommand(
+                        component.Id,
+                        "持久化后文件被替换",
+                        $"DELETE {component.ComponentKey}"),
                     CancellationToken.None));
             var operation = Assert.Single(deletionStore.Items);
 
@@ -6219,7 +6632,14 @@ public sealed class ClientReleaseBehaviorTests
         try
         {
             // 只有元数据、没有任何已登记文件的错误组件也必须能永久删除。
-            var component = ClientReleaseComponent.CreateHost("stable", "win-x64");
+            var component = ClientReleaseComponent.CreatePlugin(
+                "MetadataOnly",
+                "Metadata Only",
+                null,
+                null,
+                null,
+                "stable",
+                "win-x64");
             var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
             componentRepository.Items.Add(component);
             var deletionStore = new InMemoryClientReleaseComponentDeletionStore();
@@ -6227,7 +6647,10 @@ public sealed class ClientReleaseBehaviorTests
             var handler = CreateHardDeleteHandler(edgeRoot, componentRepository, deletionStore, auditTrail);
 
             var result = await handler.Handle(
-                new HardDeleteClientReleaseComponentCommand(component.Id, "元数据残留，清理错误组件"),
+                new HardDeleteClientReleaseComponentCommand(
+                    component.Id,
+                    "元数据残留，清理错误组件",
+                    $"DELETE {component.ComponentKey}"),
                 CancellationToken.None);
 
             Assert.True(result.IsSuccess);
@@ -6244,7 +6667,7 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
-    public async Task HardDeleteClientReleaseComponentHandler_ShouldFailClosed_WhenManifestMetadataIsMissingAndHostSurvives()
+    public async Task HardDeleteClientReleaseComponentHandler_ShouldRejectHostBeforeManifestRecoveryPlanning()
     {
         var edgeRoot = CreateTempDirectory("iiot-hard-delete-manifest-missing-root");
         try
@@ -6327,19 +6750,19 @@ public sealed class ClientReleaseBehaviorTests
             var handler = CreateHardDeleteHandler(edgeRoot, componentRepository, deletionStore, auditTrail);
 
             var result = await handler.Handle(
-                new HardDeleteClientReleaseComponentCommand(target.Id),
+                new HardDeleteClientReleaseComponentCommand(
+                    target.Id,
+                    "test hard delete",
+                    $"DELETE {target.ComponentKey}"),
                 CancellationToken.None);
 
             Assert.False(result.IsSuccess);
             Assert.Contains(
-                ClientReleaseComponentDeletionExecutor.FailureManifestRebuild,
+                "Host 组件不允许整体删除",
                 result.Errors?.First() ?? string.Empty);
             Assert.True(File.Exists(Path.Combine(velopackRoot, "IIoT.EdgeClient-2.0.0-full.nupkg")));
-            var operation = Assert.Single(deletionStore.Items);
-            Assert.Equal(ClientReleaseComponentDeletionStatus.Failed, operation.Status);
-            Assert.Equal(
-                ClientReleaseComponentDeletionExecutor.FailureManifestRebuild,
-                operation.FailureCode);
+            Assert.Equal(2, componentRepository.Items.Count);
+            Assert.Empty(deletionStore.Items);
         }
         finally
         {
@@ -6500,7 +6923,7 @@ public sealed class ClientReleaseBehaviorTests
                 packageSha,
                 packageSize,
                 "多文件有界摘要",
-                ClientReleaseStatus.Published);
+                ClientReleaseStatus.Archived);
 
             var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
             componentRepository.Items.Add(component);
@@ -6509,7 +6932,10 @@ public sealed class ClientReleaseBehaviorTests
             var handler = CreateHardDeleteHandler(edgeRoot, componentRepository, deletionStore, auditTrail);
 
             var result = await handler.Handle(
-                new HardDeleteClientReleaseComponentCommand(component.Id, "多文件有界摘要"),
+                new HardDeleteClientReleaseComponentCommand(
+                    component.Id,
+                    "多文件有界摘要",
+                    $"DELETE {component.ComponentKey}"),
                 CancellationToken.None);
 
             Assert.True(result.IsSuccess);
@@ -6555,7 +6981,7 @@ public sealed class ClientReleaseBehaviorTests
                 packageSha,
                 packageSize,
                 "审计写不稳",
-                ClientReleaseStatus.Published);
+                ClientReleaseStatus.Archived);
 
             var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
             componentRepository.Items.Add(component);
@@ -6565,7 +6991,10 @@ public sealed class ClientReleaseBehaviorTests
             var handler = CreateHardDeleteHandler(edgeRoot, componentRepository, deletionStore, auditTrail);
 
             var result = await handler.Handle(
-                new HardDeleteClientReleaseComponentCommand(component.Id, "审计写不稳"),
+                new HardDeleteClientReleaseComponentCommand(
+                    component.Id,
+                    "审计写不稳",
+                    $"DELETE {component.ComponentKey}"),
                 CancellationToken.None);
 
             // 审计未写稳时不得向调用方报告永久删除已完成。
@@ -6608,7 +7037,7 @@ public sealed class ClientReleaseBehaviorTests
                 packageSha,
                 packageSize,
                 "audit-replay-reason",
-                ClientReleaseStatus.Published);
+                ClientReleaseStatus.Archived);
 
             var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
             componentRepository.Items.Add(component);
@@ -6621,7 +7050,10 @@ public sealed class ClientReleaseBehaviorTests
                 deletionStore,
                 unconfirmedAudit);
             var first = await firstHandler.Handle(
-                new HardDeleteClientReleaseComponentCommand(component.Id, "audit-replay-reason"),
+                new HardDeleteClientReleaseComponentCommand(
+                    component.Id,
+                    "audit-replay-reason",
+                    $"DELETE {component.ComponentKey}"),
                 CancellationToken.None);
             // 第一轮审计写不稳：不得报告完成，操作留在 CleanupCompleted。
             Assert.False(first.IsSuccess);
@@ -6794,7 +7226,8 @@ public sealed class ClientReleaseBehaviorTests
         InMemoryRepository<ClientReleaseComponent> componentRepository,
         IClientReleaseRetentionService retentionService,
         RecordingAuditTrailService auditTrail,
-        IClientReleaseVersionObservationReader? observationReader = null)
+        IClientReleaseVersionObservationReader? observationReader = null,
+        IDeviceClientStateStore? clientStateStore = null)
     {
         var source = new ClientReleaseUploadTestSource();
         var handler = new PublishEdgeReleaseBundleHandler(
@@ -6802,6 +7235,7 @@ public sealed class ClientReleaseBehaviorTests
             componentRepository,
             observationReader ?? new NotObservedReleaseReader(),
             retentionService,
+            clientStateStore ?? new InMemoryDeviceClientStateStore(),
             new TestCurrentUser(),
             auditTrail,
             NullLogger<PublishEdgeReleaseBundleHandler>.Instance);
@@ -6814,7 +7248,8 @@ public sealed class ClientReleaseBehaviorTests
         InMemoryRepository<ClientReleaseComponent> componentRepository,
         IClientReleaseRetentionService retentionService,
         RecordingAuditTrailService auditTrail,
-        IClientReleaseVersionObservationReader? observationReader = null)
+        IClientReleaseVersionObservationReader? observationReader = null,
+        IDeviceClientStateStore? clientStateStore = null)
     {
         var source = new ClientReleaseUploadTestSource();
         var handler = new PublishEdgePluginPackageHandler(
@@ -6822,6 +7257,7 @@ public sealed class ClientReleaseBehaviorTests
             componentRepository,
             observationReader ?? new NotObservedReleaseReader(),
             retentionService,
+            clientStateStore ?? new InMemoryDeviceClientStateStore(),
             new TestCurrentUser(),
             auditTrail,
             NullLogger<PublishEdgePluginPackageHandler>.Instance);

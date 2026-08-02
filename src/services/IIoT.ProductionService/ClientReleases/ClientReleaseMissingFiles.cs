@@ -19,23 +19,10 @@ internal static class ClientReleaseMissingFiles
             {
                 foreach (var artifact in version.Artifacts)
                 {
-                    var fullPath = Path.GetFullPath(Path.Combine(edgeRoot, artifact.RelativePath));
-                    if (!ClientReleaseFileFacts.IsStrictChildPath(edgeRoot, fullPath))
-                    {
-                        missing.Add(artifact.RelativePath);
-                        continue;
-                    }
-
-                    var exists = artifact.ArtifactKind switch
-                    {
-                        ClientReleaseArtifactKind.InstallerDirectory
-                            or ClientReleaseArtifactKind.PluginPackageDirectory => Directory.Exists(fullPath),
-                        ClientReleaseArtifactKind.ManifestFile
-                            or ClientReleaseArtifactKind.PackageFile
-                            or ClientReleaseArtifactKind.VelopackFile => File.Exists(fullPath),
-                        _ => false
-                    };
-                    if (!exists)
+                    if (!IsArtifactPresent(
+                            edgeRoot,
+                            artifact.ArtifactKind,
+                            artifact.RelativePath))
                     {
                         missing.Add(artifact.RelativePath);
                     }
@@ -44,5 +31,59 @@ internal static class ClientReleaseMissingFiles
         }
 
         return missing;
+    }
+
+    public static bool IsArtifactPresent(
+        string edgeRoot,
+        ClientReleaseArtifactKind artifactKind,
+        string relativePath)
+    {
+        try
+        {
+            var fullPath = Path.GetFullPath(Path.Combine(edgeRoot, relativePath));
+            if (!ClientReleaseFileFacts.IsStrictChildPath(edgeRoot, fullPath))
+            {
+                return false;
+            }
+
+            return artifactKind switch
+            {
+                ClientReleaseArtifactKind.InstallerDirectory
+                    or ClientReleaseArtifactKind.PluginPackageDirectory =>
+                    ClientReleaseControlledDirectory.IsExistingDirectory(
+                        edgeRoot,
+                        fullPath),
+                ClientReleaseArtifactKind.ManifestFile
+                    or ClientReleaseArtifactKind.PackageFile
+                    or ClientReleaseArtifactKind.VelopackFile =>
+                    File.Exists(fullPath)
+                    && Path.GetDirectoryName(fullPath) is { } parent
+                    && ClientReleaseControlledDirectory.IsExistingDirectory(
+                        edgeRoot,
+                        parent)
+                    && (File.GetAttributes(fullPath) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0,
+                _ => false
+            };
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+        catch (System.Security.SecurityException)
+        {
+            return false;
+        }
     }
 }

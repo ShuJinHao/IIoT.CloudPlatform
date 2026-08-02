@@ -13,7 +13,7 @@ using Microsoft.Extensions.Options;
 namespace IIoT.ProductionService.Queries.ClientReleases;
 
 /// <summary>
-/// Human 发布管理主 catalog：只返回活动版本（Draft/Published/Deprecated），
+/// Human 发布管理主 catalog：只返回活动版本（Draft/Published），
 /// 归档、已删除和待删除版本不属于主 catalog，历史由独立历史查询承载。
 /// spec 默认排除 Archived/Deleted/DeleteRequested/DeleteFailed，没有活动版本的组件自然不返回。
 /// </summary>

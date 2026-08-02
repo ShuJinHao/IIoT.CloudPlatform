@@ -29,7 +29,15 @@ public sealed class GetClientReleaseRetentionPolicyHandler(
             cancellationToken);
 
         return Result.Success(policy is null
-            ? new ClientReleaseRetentionPolicyDto(options.Value.MaxVersionsPerComponent, DateTime.UnixEpoch)
-            : new ClientReleaseRetentionPolicyDto(policy.MaxVersionsPerComponent, policy.UpdatedAtUtc));
+            ? new ClientReleaseRetentionPolicyDto(
+                Math.Min(
+                    options.Value.MaxVersionsPerComponent,
+                    ClientReleaseRetentionPolicy.MaximumPublishedVersions),
+                DateTime.UnixEpoch)
+            : new ClientReleaseRetentionPolicyDto(
+                Math.Min(
+                    policy.MaxVersionsPerComponent,
+                    ClientReleaseRetentionPolicy.MaximumPublishedVersions),
+                policy.UpdatedAtUtc));
     }
 }

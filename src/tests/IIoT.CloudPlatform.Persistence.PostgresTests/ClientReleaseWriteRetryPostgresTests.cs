@@ -484,6 +484,8 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
             packageRelativePath,
             FileSha256(packagePath),
             new FileInfo(packagePath).Length);
+        Assert.Single(component.Versions)
+            .ChangeStatus(ClientReleaseStatus.Archived);
         var componentId = component.Id;
         dbContext.ClientReleaseComponents.Add(component);
         await dbContext.SaveChangesAsync(cancellationToken);
@@ -529,7 +531,8 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
             .Handle(
                 new HardDeleteClientReleaseComponentCommand(
                     componentId,
-                    "postgres retry verification"),
+                    "postgres retry verification",
+                    $"DELETE {moduleId}"),
                 cancellationToken);
 
         Assert.True(result.IsSuccess);

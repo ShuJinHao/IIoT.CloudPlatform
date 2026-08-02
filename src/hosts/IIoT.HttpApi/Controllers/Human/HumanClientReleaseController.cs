@@ -100,7 +100,10 @@ public sealed class HumanClientReleaseController : ApiControllerBase
         CancellationToken cancellationToken)
     {
         return ReturnResult(await Sender.Send(
-            new HardDeleteClientReleaseComponentCommand(componentId, request?.Reason),
+            new HardDeleteClientReleaseComponentCommand(
+                componentId,
+                request?.Reason,
+                request?.Confirmation),
             cancellationToken));
     }
 
@@ -163,4 +166,6 @@ public sealed class HumanClientReleaseController : ApiControllerBase
 
 public sealed record DeleteClientReleasePackageRequest(string? Reason);
 
-public sealed record HardDeleteClientReleaseComponentRequest(string? Reason);
+public sealed record HardDeleteClientReleaseComponentRequest(
+    string? Reason,
+    string? Confirmation);

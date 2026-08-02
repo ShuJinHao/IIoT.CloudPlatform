@@ -6,7 +6,7 @@
       </p>
       <div class="hard-delete-field">
         <span class="hard-delete-label">
-          确认内容（请输入 {{ target.kind === 'plugin' ? 'Module ID' : '宿主名称' }}：
+          确认内容（请精确输入：
           <code>{{ expectedConfirm }}</code>）
         </span>
         <UiInput
@@ -53,10 +53,10 @@ import { computed, ref, watch } from 'vue';
 import UiButton from '../../components/ui/UiButton.vue';
 import UiInput from '../../components/ui/UiInput.vue';
 import UiModal from '../../components/ui/UiModal.vue';
-import type { HardDeleteProblem, ReleaseCatalogRow } from './types';
+import type { HardDeleteProblem, HardDeleteTarget } from './types';
 
 const props = defineProps<{
-  target: ReleaseCatalogRow | null;
+  target: HardDeleteTarget | null;
   submitting: boolean;
   problem?: HardDeleteProblem | null;
 }>();
@@ -74,7 +74,7 @@ const confirmError = ref('');
 const reasonError = ref('');
 
 const expectedConfirm = computed(() =>
-  props.target ? (props.target.kind === 'plugin' ? props.target.componentCode : props.target.componentName) : '',
+  props.target ? `DELETE ${props.target.componentCode}` : '',
 );
 
 watch(show, (visible) => {

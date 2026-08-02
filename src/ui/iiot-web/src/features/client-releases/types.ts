@@ -34,7 +34,7 @@ export interface ReleaseCatalogRow {
   componentCode: string;
   componentId: string;
   currentVersion: ReleaseVersionEntry;
-  // 当前版本之外的其它活动版本（Draft/Published/Deprecated）；真正的 Archived/Deleted 历史走独立历史查询。
+  // 当前版本之外的其它活动版本（Draft/Published）；Deprecated/Archived/Deleted 历史走独立历史查询。
   otherVersions: ReleaseVersionEntry[];
 }
 
@@ -49,6 +49,30 @@ export interface ReleaseDetail {
   publishedAt: string;
   packageSize: string;
   releaseNotes: string;
+  sha256: string;
+  publisher: string;
+  signature: string;
+  downloadUrl: string;
+  hostApiVersion: string;
+  targetFramework: string;
+  compatibilityWindow: string;
+  dependencies: string;
+  artifacts: ReleaseArtifactDetail[];
+}
+
+export interface ReleaseArtifactDetail {
+  artifactKind: string;
+  relativePath: string;
+  sha256: string;
+  size: string;
+  filesPresent: boolean;
+}
+
+export interface HardDeleteTarget {
+  componentId: string;
+  kind: ReleaseKind;
+  componentName: string;
+  componentCode: string;
 }
 
 export function statusTone(status: string): TagTone {

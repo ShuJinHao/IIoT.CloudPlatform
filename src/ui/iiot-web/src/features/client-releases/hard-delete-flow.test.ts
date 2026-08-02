@@ -12,7 +12,7 @@ import type {
 } from './api';
 import ReleaseHardDeleteModal from './ReleaseHardDeleteModal.vue';
 import { useClientReleases } from './useClientReleases';
-import type { HardDeleteProblem, ReleaseCatalogRow } from './types';
+import type { HardDeleteProblem, HardDeleteTarget } from './types';
 
 // ===== API 模块整体打桩：组件/组合式函数走真实流程，只有边界是假的 =====
 const apiMocks = vi.hoisted(() => ({
@@ -118,8 +118,8 @@ function makeHardDeleteResult(): ClientReleaseHardDeletionResultDto {
   return {
     deletionId: DELETION_ID,
     componentId: COMPONENT_ID,
-    componentKind: 'Host',
-    componentName: '通用宿主',
+    componentKind: 'Plugin',
+    componentName: 'AP',
     channel: 'stable',
     versions: ['2.4.0'],
     filesDeleted: true,
@@ -164,23 +164,54 @@ function makeRetryResult(overrides: Partial<ClientReleaseComponentDeletionRetryR
   };
 }
 
+function makeHardDeleteHistoryComponent(): ClientReleaseHistoryComponentDto {
+  return {
+    componentId: COMPONENT_ID,
+    componentKind: 'Plugin',
+    moduleId: 'AP',
+    displayName: 'AP 插件',
+    channel: 'stable',
+    targetRuntime: 'win-x64',
+    canHardDelete: true,
+    versions: [{
+      id: 'archived-version-id',
+      version: '2.0.19',
+      status: 'Archived',
+      createdAtUtc: '2026-07-01T00:00:00Z',
+      publishedAtUtc: '2026-07-02T00:00:00Z',
+      deletedAtUtc: null,
+      deletionReason: null,
+      deletionFailure: null,
+      releaseNotes: 'retired',
+      sha256: 'b'.repeat(64),
+      packageSize: 1024,
+      publisher: 'admin',
+      signature: null,
+      downloadUrl: '/edge-updates/plugins/AP.zip',
+      hostApiVersion: '2.0.0',
+      targetFramework: 'net10.0',
+      minHostVersion: '2.0.14',
+      maxHostVersion: '2.0.14',
+      dependencies: [],
+      artifacts: [],
+    }],
+  };
+}
+
 function mockHappyApis() {
   apiMocks.getClientReleaseCatalogApi.mockResolvedValue(makeCatalog());
-  apiMocks.getClientReleaseHistoryApi.mockResolvedValue(makeHistoryPage([]));
+  apiMocks.getClientReleaseHistoryApi.mockResolvedValue(
+    makeHistoryPage([makeHardDeleteHistoryComponent()]),
+  );
   apiMocks.getClientReleaseComponentDeletionsApi.mockResolvedValue([]);
 }
 
-function makeRow(): ReleaseCatalogRow {
-  const version = makeHostVersion();
+function makeHardDeleteTarget(): HardDeleteTarget {
   return {
-    key: 'host:stable:win-x64',
-    kind: 'host',
-    kindLabel: '宿主',
-    componentName: '通用宿主',
-    componentCode: 'win-x64',
+    kind: 'plugin',
+    componentName: 'AP 插件',
+    componentCode: 'AP',
     componentId: COMPONENT_ID,
-    currentVersion: version,
-    otherVersions: [],
   };
 }
 
@@ -192,7 +223,7 @@ function mountModal(problem: HardDeleteProblem | null = null) {
     components: { ReleaseHardDeleteModal },
     setup() {
       const state = reactive({ show: true, confirmText: '', reason: '' });
-      return { state, problem, target: makeRow(), events };
+      return { state, problem, target: makeHardDeleteTarget(), events };
     },
     template: `
       <ReleaseHardDeleteModal
@@ -252,14 +283,14 @@ describe('ReleaseHardDeleteModal（真实组件挂载）', () => {
     await fillModal('错误的确认内容', '退役旧组件');
     await clickHardDeleteButton();
 
-    await expectInlineError('确认内容不正确，请输入：通用宿主');
+    await expectInlineError('确认内容不正确，请输入：DELETE AP');
     expect(events.submitCount).toBe(0);
     expect(document.body.querySelector('.hard-delete-error')).toBeTruthy();
   });
 
   it('删除原因为空白时内联提示且不发出 submit', async () => {
     const { events } = mountModal();
-    await fillModal('通用宿主', '   ');
+    await fillModal('DELETE AP', '   ');
     await clickHardDeleteButton();
 
     await expectInlineError('请填写非空删除原因。');
@@ -268,7 +299,7 @@ describe('ReleaseHardDeleteModal（真实组件挂载）', () => {
 
   it('确认内容匹配且原因非空时才发出 submit', async () => {
     const { events } = mountModal();
-    await fillModal('通用宿主', '退役旧组件');
+    await fillModal('DELETE AP', '退役旧组件');
     await clickHardDeleteButton();
 
     await vi.waitFor(() => {
@@ -326,15 +357,34 @@ describe('useClientReleases 永久删除/重试/历史流（API 打桩、逻辑�
     expect(state.canHardDelete.value).toBe(false);
   });
 
+  it('非 Admin 即使持有发布权限也不能触发删文件动作', async () => {
+    authMock.isAdmin = false;
+    authMock.permissionResult = true;
+    feedbackMocks.requestConfirmation.mockResolvedValue(true);
+    const state = await setupReadyState();
+
+    await state.deleteReleaseFiles(state.releaseCatalogRows.value[0]!.currentVersion, null);
+
+    expect(state.canManageReleases.value).toBe(true);
+    expect(state.canHardDelete.value).toBe(false);
+    expect(feedbackMocks.requestConfirmation).not.toHaveBeenCalled();
+    expect(apiMocks.deleteClientReleaseFilesApi).not.toHaveBeenCalled();
+  });
+
   it('提交永久删除：用 componentId 和 trim 后的原因发请求，成功后关闭弹窗并提示', async () => {
     apiMocks.hardDeleteClientReleaseComponentApi.mockResolvedValue(makeHardDeleteResult());
     const state = await setupReadyState();
 
-    state.openHardDeleteModal(state.releaseCatalogRows.value[0]!);
+    state.openHardDeleteModal(state.historyItems.value[0]!);
     state.hardDeleteReason.value = '  退役旧组件  ';
+    state.hardDeleteConfirmText.value = 'DELETE AP';
     await state.submitHardDelete();
 
-    expect(apiMocks.hardDeleteClientReleaseComponentApi).toHaveBeenCalledWith(COMPONENT_ID, '退役旧组件');
+    expect(apiMocks.hardDeleteClientReleaseComponentApi).toHaveBeenCalledWith(
+      COMPONENT_ID,
+      '退役旧组件',
+      'DELETE AP',
+    );
     expect(state.showHardDeleteModal.value).toBe(false);
     expect(feedbackMocks.notifySuccess).toHaveBeenCalledTimes(1);
     expect(state.hardDeleteProblem.value).toBeNull();
@@ -342,7 +392,7 @@ describe('useClientReleases 永久删除/重试/历史流（API 打桩、逻辑�
 
   it('原因为空白时直接拦截，不发 DELETE', async () => {
     const state = await setupReadyState();
-    state.openHardDeleteModal(state.releaseCatalogRows.value[0]!);
+    state.openHardDeleteModal(state.historyItems.value[0]!);
     state.hardDeleteReason.value = '   ';
     await state.submitHardDelete();
 
@@ -366,8 +416,9 @@ describe('useClientReleases 永久删除/重试/历史流（API 打桩、逻辑�
     apiMocks.getClientReleaseComponentDeletionsApi.mockResolvedValue([makeDeletionDto()]);
     const state = await setupReadyState();
 
-    state.openHardDeleteModal(state.releaseCatalogRows.value[0]!);
+    state.openHardDeleteModal(state.historyItems.value[0]!);
     state.hardDeleteReason.value = '退役旧组件';
+    state.hardDeleteConfirmText.value = 'DELETE AP';
     await state.submitHardDelete();
 
     expect(feedbackMocks.notifySuccess).not.toHaveBeenCalled();
@@ -412,6 +463,7 @@ describe('useClientReleases 永久删除/重试/历史流（API 打桩、逻辑�
       displayName: '通用宿主',
       channel: 'stable',
       targetRuntime: 'win-x64',
+      canHardDelete: false,
       versions: [{
         id: 'history-version-1',
         version: '1.9.0',
@@ -421,6 +473,18 @@ describe('useClientReleases 永久删除/重试/历史流（API 打桩、逻辑�
         deletedAtUtc: '2026-07-01T00:00:00Z',
         deletionReason: '退役',
         deletionFailure: null,
+        releaseNotes: '历史说明',
+        sha256: 'c'.repeat(64),
+        packageSize: 1024,
+        publisher: 'admin',
+        signature: null,
+        downloadUrl: '/edge-updates/host/1.9.0',
+        hostApiVersion: '2.0.0',
+        targetFramework: 'net10.0',
+        minHostVersion: null,
+        maxHostVersion: null,
+        dependencies: [],
+        artifacts: [],
       }],
     };
     const deferred = <T,>() => {

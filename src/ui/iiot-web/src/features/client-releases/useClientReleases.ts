@@ -12,6 +12,7 @@ import {
   type ClientReleaseCatalogDto,
   type ClientReleaseComponentDeletionDto,
   type ClientReleaseHistoryComponentDto,
+  type ClientReleaseHistoryVersionDto,
 } from './api';
 import { createHistoryColumns, createReleaseCatalogColumns } from './columns';
 import { useAuthStore } from '../../stores/auth';
@@ -29,6 +30,7 @@ import {
   statusText,
   statusTone,
   type HardDeleteProblem,
+  type HardDeleteTarget,
   type ReleaseCatalogRow,
   type ReleaseDetail,
   type ReleaseVersionEntry,
@@ -76,7 +78,7 @@ export function useClientReleases() {
 
   // ===== 永久删除确认弹窗 =====
   const showHardDeleteModal = ref(false);
-  const hardDeleteTarget = ref<ReleaseCatalogRow | null>(null);
+  const hardDeleteTarget = ref<HardDeleteTarget | null>(null);
   const hardDeleteConfirmText = ref('');
   const hardDeleteReason = ref('');
   const hardDeleteProblem = ref<HardDeleteProblem | null>(null);
@@ -161,10 +163,10 @@ export function useClientReleases() {
     onOpenUrl: openUrl,
     onArchive: archiveReleaseVersion,
     onDeleteFiles: deleteReleaseFiles,
-    onHardDelete: openHardDeleteModal,
   }));
   const historyColumns = computed(() => createHistoryColumns({
     isPublishRoute: () => isPublishRoute.value,
+    canHardDelete: () => canHardDelete.value,
     selectedRow: () => selectedReleaseRow.value,
     onDetail: openReleaseDetailModal,
     onOpenUrl: openUrl,
@@ -239,6 +241,55 @@ export function useClientReleases() {
       publishedAt: formatDate(version.publishedAtUtc),
       packageSize: formatSize(version.packageSize),
       releaseNotes: formatReleaseNotes(version.releaseNotes, '暂无更新内容'),
+      sha256: version.sha256 || '-',
+      publisher: version.publisher || '-',
+      signature: version.signature || '-',
+      downloadUrl: version.downloadUrl || '-',
+      hostApiVersion: version.hostApiVersion || '-',
+      targetFramework: version.targetFramework || '-',
+      compatibilityWindow: 'minHostVersion' in version
+        ? `${version.minHostVersion} — ${version.maxHostVersion}`
+        : '-',
+      dependencies: 'dependencies' in version
+        ? JSON.stringify(version.dependencies ?? [], null, 2)
+        : '[]',
+      artifacts: [],
+    };
+    showReleaseDetailModal.value = true;
+  }
+
+  function openHistoryReleaseDetailModal(
+    version: ClientReleaseHistoryVersionDto,
+    component: ClientReleaseHistoryComponentDto,
+  ) {
+    selectedReleaseDetail.value = {
+      kind: component.componentKind === 'Host' ? 'host' : 'plugin',
+      kindLabel: component.componentKind === 'Host' ? '宿主' : '工序插件',
+      componentName: component.displayName || component.moduleId,
+      componentCode: component.moduleId,
+      version: version.version,
+      statusText: statusText(version.status),
+      statusTone: statusTone(version.status),
+      publishedAt: formatDate(version.publishedAtUtc),
+      packageSize: formatSize(version.packageSize),
+      releaseNotes: formatReleaseNotes(version.releaseNotes, '暂无更新内容'),
+      sha256: version.sha256 || '-',
+      publisher: version.publisher || '-',
+      signature: version.signature || '-',
+      downloadUrl: version.downloadUrl || '-',
+      hostApiVersion: version.hostApiVersion || '-',
+      targetFramework: version.targetFramework || '-',
+      compatibilityWindow: version.minHostVersion && version.maxHostVersion
+        ? `${version.minHostVersion} — ${version.maxHostVersion}`
+        : '-',
+      dependencies: JSON.stringify(version.dependencies ?? [], null, 2),
+      artifacts: version.artifacts.map((artifact) => ({
+        artifactKind: artifact.artifactKind,
+        relativePath: artifact.relativePath,
+        sha256: artifact.sha256 || '-',
+        size: artifact.size == null ? '-' : formatSize(artifact.size),
+        filesPresent: artifact.filesPresent,
+      })),
     };
     showReleaseDetailModal.value = true;
   }
@@ -270,7 +321,7 @@ export function useClientReleases() {
   }
 
   async function deleteReleaseFiles(version: ReleaseVersionEntry, row: ReleaseCatalogRow | null) {
-    if (!canManageReleases.value) return;
+    if (!canHardDelete.value) return;
     const confirmed = await requestConfirmation({
       type: 'error',
       title: '删除发布文件',
@@ -293,9 +344,14 @@ export function useClientReleases() {
 
   // ===== 永久删除 =====
 
-  function openHardDeleteModal(row: ReleaseCatalogRow) {
-    if (!canHardDelete.value) return;
-    hardDeleteTarget.value = row;
+  function openHardDeleteModal(component: ClientReleaseHistoryComponentDto) {
+    if (!canHardDelete.value || !component.canHardDelete || component.componentKind !== 'Plugin') return;
+    hardDeleteTarget.value = {
+      componentId: component.componentId,
+      kind: 'plugin',
+      componentName: component.displayName || component.moduleId,
+      componentCode: component.moduleId,
+    };
     hardDeleteConfirmText.value = '';
     hardDeleteReason.value = '';
     hardDeleteProblem.value = null;
@@ -353,7 +409,11 @@ export function useClientReleases() {
     submitting.value = true;
     try {
       // 必须使用组件 ID（componentId），禁止用 version.id。
-      const result = await hardDeleteClientReleaseComponentApi(target.componentId, reason);
+      const result = await hardDeleteClientReleaseComponentApi(
+        target.componentId,
+        reason,
+        hardDeleteConfirmText.value,
+      );
       closeHardDeleteModal();
       notifySuccess(result.warning || `已永久删除组件 ${result.componentName}。`);
       await Promise.all([fetchCatalog(), fetchHistory(), fetchDeletions()]);
@@ -445,6 +505,7 @@ export function useClientReleases() {
     goInstallerCenter,
     archiveReleaseVersion,
     deleteReleaseFiles,
+    openHistoryReleaseDetailModal,
     openHardDeleteModal,
     closeHardDeleteModal,
     submitHardDelete,

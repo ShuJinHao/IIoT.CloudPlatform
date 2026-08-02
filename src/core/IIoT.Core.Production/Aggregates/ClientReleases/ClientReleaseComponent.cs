@@ -673,10 +673,20 @@ public sealed class ClientReleaseVersion : BaseEntity<Guid>
         DateTime? publishedAtUtc,
         IEnumerable<ClientReleaseArtifact>? artifacts)
     {
-        Version = ClientReleaseComponent.NormalizeRequired(version, nameof(version));
-        HostApiVersion = ClientReleaseComponent.NormalizeRequired(hostApiVersion, nameof(hostApiVersion));
-        MinHostVersion = ClientReleaseComponent.NormalizeOptional(minHostVersion);
-        MaxHostVersion = ClientReleaseComponent.NormalizeOptional(maxHostVersion);
+        Version = ClientReleaseSemanticVersion.Require(version, nameof(version));
+        HostApiVersion = ClientReleaseSemanticVersion.Require(hostApiVersion, nameof(hostApiVersion));
+        MinHostVersion = minHostVersion is null
+            ? null
+            : ClientReleaseSemanticVersion.Require(minHostVersion, nameof(minHostVersion));
+        MaxHostVersion = maxHostVersion is null
+            ? null
+            : ClientReleaseSemanticVersion.Require(maxHostVersion, nameof(maxHostVersion));
+        if (MinHostVersion is not null
+            && MaxHostVersion is not null
+            && ClientReleaseSemanticVersion.Compare(MinHostVersion, MaxHostVersion) > 0)
+        {
+            throw new ArgumentException("插件最小宿主版本不能高于最大宿主版本。", nameof(minHostVersion));
+        }
         TargetFramework = ClientReleaseComponent.NormalizeOptional(targetFramework);
         DownloadUrl = ClientReleaseComponent.NormalizeRequired(downloadUrl, nameof(downloadUrl));
         Sha256 = ClientReleaseComponent.NormalizeRequired(sha256, nameof(sha256));

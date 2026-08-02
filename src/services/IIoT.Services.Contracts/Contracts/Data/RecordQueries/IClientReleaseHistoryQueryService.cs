@@ -15,7 +15,8 @@ public sealed record ClientReleaseHistoryComponentReadItem(
     string DisplayName,
     string Channel,
     string TargetRuntime,
-    IReadOnlyList<ClientReleaseHistoryVersionReadItem> Versions);
+    IReadOnlyList<ClientReleaseHistoryVersionReadItem> Versions,
+    bool CanHardDelete = false);
 
 public sealed record ClientReleaseHistoryVersionReadItem(
     Guid Id,
@@ -25,7 +26,25 @@ public sealed record ClientReleaseHistoryVersionReadItem(
     DateTime? PublishedAtUtc,
     DateTime? DeletedAtUtc,
     string? DeletionReason,
-    string? DeletionFailure);
+    string? DeletionFailure,
+    string? ReleaseNotes = null,
+    string Sha256 = "",
+    long PackageSize = 0,
+    string? Publisher = null,
+    string? Signature = null,
+    string DownloadUrl = "",
+    string HostApiVersion = "",
+    string? TargetFramework = null,
+    string? MinHostVersion = null,
+    string? MaxHostVersion = null,
+    string DependenciesJson = "[]",
+    IReadOnlyList<ClientReleaseHistoryArtifactReadItem>? Artifacts = null);
+
+public sealed record ClientReleaseHistoryArtifactReadItem(
+    string ArtifactKind,
+    string RelativePath,
+    string? Sha256,
+    long? Size);
 
 /// <summary>
 /// Human 客户端发布历史专用只读端口。

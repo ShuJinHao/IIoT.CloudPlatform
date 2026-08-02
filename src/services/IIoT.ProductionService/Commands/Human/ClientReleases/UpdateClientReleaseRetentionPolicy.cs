@@ -32,9 +32,10 @@ public sealed class UpdateClientReleaseRetentionPolicyHandler(
         UpdateClientReleaseRetentionPolicyCommand request,
         CancellationToken cancellationToken)
     {
-        if (request.MaxVersionsPerComponent is < 1 or > 20)
+        if (request.MaxVersionsPerComponent is < 1 or > ClientReleaseRetentionPolicy.MaximumPublishedVersions)
         {
-            return Result.Invalid("每个组件保留版本数必须在 1 到 20 之间。");
+            return Result.Invalid(
+                $"每个组件可分发版本数必须在 1 到 {ClientReleaseRetentionPolicy.MaximumPublishedVersions} 之间。");
         }
 
         var baselineObservation =
