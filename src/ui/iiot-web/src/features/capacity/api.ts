@@ -54,7 +54,7 @@ export const getDailyPagedApi = (params: {
   PageNumber?: number;
   PageSize?: number;
   date?: string;
-  deviceId?: string;
+  deviceId: string;
 }) =>
   http.get<PagedList<DailyCapacityItem>>(`${basePath}/daily`, {
     inlineFeedback: true,
@@ -62,7 +62,7 @@ export const getDailyPagedApi = (params: {
       PageNumber: params.PageNumber ?? 1,
       PageSize: params.PageSize ?? 10,
       date: params.date || undefined,
-      deviceId: params.deviceId || undefined,
+      deviceId: params.deviceId,
     },
   });
 

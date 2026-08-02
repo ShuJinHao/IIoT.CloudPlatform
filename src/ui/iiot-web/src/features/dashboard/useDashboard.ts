@@ -1,6 +1,5 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router';
 import {
   Activity,
   BarChart3,
@@ -16,11 +15,9 @@ import {
 } from '../device-logs/api';
 import {
   getDeviceStatusSummaryApi,
-  getScopedDeviceSelectApi,
-  type ScopedDeviceSelectDto,
 } from '../devices/api';
-import type { UiSelectOption } from '../../components/ui/types';
 import type { AppLocale } from '../../i18n';
+import { useProductionContext } from '../../shared/production-context';
 import { useAuthStore } from '../../stores/auth';
 import { resolveDashboardLoadError } from './errors';
 import {
@@ -44,32 +41,27 @@ function createSourceState(): DashboardSourceState {
   return { status: 'loading', error: '' };
 }
 
-interface DashboardProcessContext {
-  id: string;
-  code: string;
-  name: string;
-}
-
-type DashboardContextStatus = 'loading' | 'ready' | 'error';
-
-function queryValue(value: unknown): string | null {
-  if (typeof value === 'string' && value.trim()) return value;
-  if (Array.isArray(value) && typeof value[0] === 'string' && value[0].trim()) {
-    return value[0];
-  }
-  return null;
-}
-
 export function useDashboard() {
   const authStore = useAuthStore();
   const { t, locale } = useI18n();
-  const route = useRoute();
-  const router = useRouter();
-  const authorizedDevices = ref<ScopedDeviceSelectDto[]>([]);
-  const selectedProcessId = ref<string | null>(null);
-  const selectedDeviceId = ref<string | null>(null);
-  const contextStatus = ref<DashboardContextStatus>('loading');
-  const contextError = ref('');
+  const productionContext = useProductionContext();
+  const {
+    processOptions,
+    deviceOptions,
+    selectedProcessId,
+    selectedDeviceId,
+    selectedProcess,
+    selectedDevice,
+    context,
+    status: contextStatus,
+    error: contextError,
+    state: contextState,
+    selectionRevision,
+    hasAuthorizedDevices,
+    loadContext,
+    selectProcess,
+    selectDevice,
+  } = productionContext;
   const onlineDevices = ref(0);
   const warningDevices = ref(0);
   const errorDevices = ref(0);
@@ -87,7 +79,6 @@ export function useDashboard() {
     alertCount: createSourceState(),
     recentLogs: createSourceState(),
   });
-  let contextRequestGeneration = 0;
   let requestGeneration = 0;
 
   const currentLocale = computed(() => locale.value as AppLocale);
@@ -99,44 +90,6 @@ export function useDashboard() {
     if (currentLocale.value === 'zh-CN' && authStore.role === 'Admin') return '管理员';
     return authStore.role;
   });
-  const processes = computed<DashboardProcessContext[]>(() => {
-    const uniqueProcesses = new Map<string, DashboardProcessContext>();
-    authorizedDevices.value.forEach((device) => {
-      if (uniqueProcesses.has(device.processId)) return;
-      uniqueProcesses.set(device.processId, {
-        id: device.processId,
-        code: device.processCode,
-        name: device.processName,
-      });
-    });
-    return Array.from(uniqueProcesses.values()).sort((left, right) =>
-      left.code.localeCompare(right.code, currentLocale.value));
-  });
-  const processOptions = computed<UiSelectOption[]>(() =>
-    processes.value.map((process) => ({
-      label: `${process.name} · ${process.code}`,
-      value: process.id,
-    })));
-  const selectedProcess = computed(() =>
-    processes.value.find((process) => process.id === selectedProcessId.value) ?? null);
-  const devicesForSelectedProcess = computed(() => {
-    if (!selectedProcessId.value) return [];
-    return authorizedDevices.value
-      .filter((device) => device.processId === selectedProcessId.value)
-      .sort((left, right) =>
-        left.code.localeCompare(right.code, currentLocale.value)
-        || left.deviceName.localeCompare(right.deviceName, currentLocale.value));
-  });
-  const deviceOptions = computed<UiSelectOption[]>(() =>
-    devicesForSelectedProcess.value.map((device) => ({
-      label: `${device.deviceName} · ${device.code}`,
-      value: device.id,
-    })));
-  const selectedDevice = computed(() =>
-    authorizedDevices.value.find((device) =>
-      device.id === selectedDeviceId.value
-      && device.processId === selectedProcessId.value) ?? null);
-  const hasAuthorizedDevices = computed(() => authorizedDevices.value.length > 0);
   const formattedProduction = computed(() =>
     todayProduction.value.toLocaleString(browserLocale.value),
   );
@@ -211,7 +164,7 @@ export function useDashboard() {
         'deviceStatus',
         clientStatusIssue.value || t('dashboard.activeClientsHelper', {
           device: selectedDevice.value?.deviceName ?? '--',
-          code: selectedDevice.value?.code ?? '--',
+          code: selectedDevice.value?.deviceCode ?? '--',
         }),
       ),
       background: 'var(--chart-2)',
@@ -311,17 +264,6 @@ export function useDashboard() {
     });
   }
 
-  function clearDashboardSelection(
-    processId: string | null,
-    deviceId: string | null,
-  ) {
-    requestGeneration++;
-    selectedProcessId.value = processId;
-    selectedDeviceId.value = deviceId;
-    resetDashboardData();
-    resetSourceStates();
-  }
-
   async function loadSource<T>(
     key: DashboardSourceKey,
     generation: number,
@@ -343,7 +285,7 @@ export function useDashboard() {
   }
 
   async function loadDashboard(deviceId = selectedDeviceId.value) {
-    if (!deviceId || selectedDevice.value?.id !== deviceId) return;
+    if (!deviceId || selectedDevice.value?.deviceId !== deviceId) return;
 
     const generation = ++requestGeneration;
     resetDashboardData();
@@ -408,98 +350,12 @@ export function useDashboard() {
     ]);
   }
 
-  function replaceContextQuery(processId: string | null, deviceId: string | null) {
-    const query: LocationQueryRaw = { ...route.query };
-    if (processId) query.processId = processId;
-    else delete query.processId;
-    if (deviceId) query.deviceId = deviceId;
-    else delete query.deviceId;
-    return router.replace({ query });
-  }
-
-  function applyRouteContext() {
-    if (contextStatus.value !== 'ready') return;
-
-    const processId = queryValue(route.query.processId);
-    const deviceId = queryValue(route.query.deviceId);
-    const process = processId
-      ? processes.value.find((item) => item.id === processId)
-      : null;
-    const device = deviceId
-      ? authorizedDevices.value.find((item) => item.id === deviceId)
-      : null;
-    const validProcessOnly = Boolean(process && !deviceId);
-    const validPair = Boolean(
-      process
-      && device
-      && device.processId === process.id,
-    );
-
-    if (validProcessOnly) {
-      if (selectedProcessId.value !== processId || selectedDeviceId.value !== null) {
-        clearDashboardSelection(processId, null);
-      }
-      return;
-    }
-
-    if (validPair) {
-      if (selectedProcessId.value === processId && selectedDeviceId.value === deviceId) {
-        return;
-      }
-      clearDashboardSelection(processId, deviceId);
-      void loadDashboard(deviceId);
-      return;
-    }
-
-    if (selectedProcessId.value !== null || selectedDeviceId.value !== null) {
-      clearDashboardSelection(null, null);
-    }
-    if (processId || deviceId) {
-      void replaceContextQuery(null, null);
-    }
-  }
-
-  async function selectProcess(processId: string | null) {
-    const normalizedProcessId = processId
-      && processes.value.some((process) => process.id === processId)
-      ? processId
-      : null;
-    await replaceContextQuery(normalizedProcessId, null);
-  }
-
-  async function selectDevice(deviceId: string | null) {
-    const normalizedDeviceId = deviceId
-      && devicesForSelectedProcess.value.some((device) => device.id === deviceId)
-      ? deviceId
-      : null;
-    await replaceContextQuery(selectedProcessId.value, normalizedDeviceId);
-  }
-
-  async function loadContext() {
-    const generation = ++contextRequestGeneration;
-    contextStatus.value = 'loading';
-    contextError.value = '';
-    clearDashboardSelection(null, null);
-
-    try {
-      const devices = await getScopedDeviceSelectApi();
-      if (generation !== contextRequestGeneration) return;
-      authorizedDevices.value = devices;
-      contextStatus.value = 'ready';
-      applyRouteContext();
-    } catch (error) {
-      const message = await resolveDashboardLoadError(error);
-      if (generation !== contextRequestGeneration) return;
-      authorizedDevices.value = [];
-      contextStatus.value = 'error';
-      contextError.value = message;
-    }
-  }
-
-  watch(
-    () => [route.query.processId, route.query.deviceId],
-    applyRouteContext,
-  );
+  watch(selectionRevision, () => {
+    requestGeneration++;
+    resetDashboardData();
+    resetSourceStates();
+    if (context.value) void loadDashboard(context.value.deviceId);
+  }, { flush: 'sync' });
 
   return {
     authStore,
@@ -515,6 +371,8 @@ export function useDashboard() {
     sourceStates,
     contextStatus,
     contextError,
+    contextState,
+    context,
     processOptions,
     deviceOptions,
     selectedProcessId,

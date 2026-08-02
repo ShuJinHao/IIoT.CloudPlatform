@@ -2,6 +2,17 @@ import type { PassStationQueryMode } from './api';
 
 export const PAGE_SIZE = 10;
 
+export type DevicePassStationQueryMode = Extract<
+  PassStationQueryMode,
+  'device-barcode' | 'device-time' | 'device-latest'
+>;
+
+export const deviceQueryModes: DevicePassStationQueryMode[] = [
+  'device-barcode',
+  'device-time',
+  'device-latest',
+];
+
 export const queryModeLabels: Record<PassStationQueryMode, string> = {
   'barcode-process': '弹夹号 + 工序',
   'time-process': '时间 + 工序',
@@ -11,16 +22,9 @@ export const queryModeLabels: Record<PassStationQueryMode, string> = {
 };
 
 export interface PassStationFilters {
-  deviceId: string | null;
   barcode: string;
   startTime: string;
   endTime: string;
-}
-
-export interface PassStationProcessOption {
-  id: string;
-  processCode: string;
-  processName: string;
 }
 
 export function localDate() {

@@ -3,12 +3,10 @@
   color: var(--text-0);
 }
 
-.passstation-page__context-card,
 .passstation-page__filter-card {
   margin-bottom: var(--space-4);
 }
 
-.context-row,
 .filter-row,
 .latest-hint,
 .detail-result-banner,
@@ -17,20 +15,12 @@
   align-items: center;
 }
 
-.context-row,
 .filter-row {
   align-items: flex-end;
   gap: var(--space-4);
   flex-wrap: wrap;
 }
 
-.context-hint {
-  padding-bottom: 6px;
-  color: var(--text-1);
-  font-size: var(--fs-sm);
-}
-
-.context-hint__code,
 .cell-barcode {
   padding: 2px 8px;
   border-radius: var(--radius-sm);

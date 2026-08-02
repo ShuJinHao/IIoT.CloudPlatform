@@ -1,6 +1,7 @@
-import { computed, reactive, ref } from 'vue';
+import { reactive, ref, watch } from 'vue';
+import { resolveRequestErrorMessage } from '../../core/http/resolveRequestError';
 import type { PagedList } from '../../core/types/pagination';
-import { getScopedDeviceSelectApi, type DeviceSelectDto } from '../devices/api';
+import { useProductionContext } from '../../shared/production-context';
 import { notifyWarning } from '../../utils/feedback';
 import {
   getLogsByDeviceAndDateApi,
@@ -21,26 +22,39 @@ import {
 } from './types';
 
 export function useDeviceLogs() {
+  const productionContext = useProductionContext();
+  const {
+    processOptions,
+    deviceOptions,
+    selectedProcessId,
+    selectedDeviceId,
+    context,
+    status: contextStatus,
+    error: contextError,
+    state: contextState,
+    selectionRevision,
+    hasAuthorizedDevices,
+    loadContext,
+    selectProcess,
+    selectDevice,
+  } = productionContext;
   const currentMode = ref<DeviceLogQueryMode>('level');
-  const selectedDeviceId = ref<string | null>(null);
   const loading = ref(false);
+  const queryError = ref('');
   const searched = ref(false);
   const currentPage = ref(1);
   const records = ref<DeviceLogListItemDto[]>([]);
   const metaData = ref(emptyDeviceLogMetaData());
   const filters = reactive(createDeviceLogFilters());
-  const allDevices = ref<DeviceSelectDto[]>([]);
-  const deviceLoadError = ref('');
+  let requestGeneration = 0;
 
-  const deviceOptions = computed(() =>
-    allDevices.value.map((device) => ({
-      label: device.deviceName,
-      value: device.id,
-    })),
-  );
   const rowKey = (row: DeviceLogListItemDto) => row.id;
 
   function resetResults() {
+    requestGeneration++;
+    loading.value = false;
+    queryError.value = '';
+    searched.value = false;
     currentPage.value = 1;
     records.value = [];
     metaData.value = emptyDeviceLogMetaData();
@@ -49,23 +63,7 @@ export function useDeviceLogs() {
   function switchMode(mode: DeviceLogQueryMode) {
     currentMode.value = mode;
     resetResults();
-    searched.value = false;
     resetDeviceLogDateTime(filters);
-  }
-
-  function onDeviceChange() {
-    resetResults();
-    searched.value = false;
-  }
-
-  async function fetchDevices() {
-    try {
-      deviceLoadError.value = '';
-      allDevices.value = await getScopedDeviceSelectApi();
-    } catch {
-      allDevices.value = [];
-      deviceLoadError.value = '设备列表加载失败，请检查权限或稍后重试。';
-    }
   }
 
   async function requestLogs(deviceId: string) {
@@ -111,34 +109,42 @@ export function useDeviceLogs() {
   }
 
   async function fetchData() {
-    if (!selectedDeviceId.value) {
-      notifyWarning('请先选择设备。');
+    const activeContext = context.value;
+    if (!activeContext) return;
+    const generation = ++requestGeneration;
+    loading.value = true;
+    searched.value = true;
+    queryError.value = '';
+    records.value = [];
+    metaData.value = emptyDeviceLogMetaData();
+    try {
+      const response: PagedList<DeviceLogListItemDto> = await requestLogs(
+        activeContext.deviceId,
+      );
+      if (generation !== requestGeneration) return;
+      metaData.value = response.metaData;
+      records.value = response.items;
+    } catch (error) {
+      const message = await resolveRequestErrorMessage(
+        error,
+        '设备日志加载失败，请检查服务状态后重试。',
+      );
+      if (generation === requestGeneration) queryError.value = message;
+    } finally {
+      if (generation === requestGeneration) loading.value = false;
+    }
+  }
+
+  async function doSearch() {
+    if (!context.value) {
+      notifyWarning('请先完整选择工序和设备。');
       return;
     }
-
     const validationMessage = validateDeviceLogSearch(currentMode.value, filters);
     if (validationMessage) {
       notifyWarning(validationMessage);
       return;
     }
-
-    loading.value = true;
-    searched.value = true;
-
-    try {
-      const response: PagedList<DeviceLogListItemDto> = await requestLogs(selectedDeviceId.value);
-      metaData.value = response.metaData;
-      records.value = response.items;
-    } catch {
-      records.value = [];
-      metaData.value = emptyDeviceLogMetaData();
-      currentPage.value = 1;
-    } finally {
-      loading.value = false;
-    }
-  }
-
-  async function doSearch() {
     currentPage.value = 1;
     await fetchData();
   }
@@ -148,20 +154,30 @@ export function useDeviceLogs() {
     await fetchData();
   }
 
+  watch(selectionRevision, resetResults, { flush: 'sync' });
+
   return {
     currentMode,
-    selectedDeviceId,
     loading,
+    queryError,
     searched,
     currentPage,
     records,
     metaData,
     filters,
-    deviceLoadError,
+    processOptions,
     deviceOptions,
-    fetchDevices,
+    selectedProcessId,
+    selectedDeviceId,
+    context,
+    contextStatus,
+    contextError,
+    contextState,
+    hasAuthorizedDevices,
+    initialize: loadContext,
+    selectProcess,
+    selectDevice,
     switchMode,
-    onDeviceChange,
     doSearch,
     onPageChange,
     rowKey,

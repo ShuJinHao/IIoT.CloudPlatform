@@ -33,6 +33,7 @@ export interface UseListPageReturn<TItem, TFilter> {
   totalPages: Ref<number>;
   isEmpty: Ref<boolean>;
   refresh: () => Promise<void>;
+  clear: () => void;
   gotoPage: (p: number) => void;
   resetFilter: () => void;
 }
@@ -52,6 +53,7 @@ export function useListPage<
   const filter = reactive(
     { ...(options.initialFilter ?? ({} as TFilter)) },
   ) as Reactive<TFilter>;
+  let requestGeneration = 0;
 
   const totalPages = computed(() =>
     Math.max(1, Math.ceil(total.value / pageSize.value)),
@@ -59,6 +61,7 @@ export function useListPage<
   const isEmpty = computed(() => !loading.value && items.value.length === 0);
 
   async function refresh() {
+    const generation = ++requestGeneration;
     loading.value = true;
     error.value = null;
     try {
@@ -67,15 +70,31 @@ export function useListPage<
         pageSize: pageSize.value,
         filter: { ...(filter as object) } as TFilter,
       });
+      if (generation !== requestGeneration) return;
       items.value = result.items;
       total.value = result.total;
     } catch (e) {
-      error.value = e instanceof Error ? e : new Error(String(e));
+      if (generation !== requestGeneration) return;
+      if (e instanceof Error) {
+        error.value = e;
+      } else {
+        const wrapped = new Error('请求失败。') as Error & { cause?: unknown };
+        wrapped.cause = e;
+        error.value = wrapped;
+      }
       items.value = [];
       total.value = 0;
     } finally {
-      loading.value = false;
+      if (generation === requestGeneration) loading.value = false;
     }
+  }
+
+  function clear() {
+    requestGeneration++;
+    items.value = [];
+    total.value = 0;
+    loading.value = false;
+    error.value = null;
   }
 
   function gotoPage(p: number) {
@@ -113,6 +132,7 @@ export function useListPage<
     totalPages,
     isEmpty,
     refresh,
+    clear,
     gotoPage,
     resetFilter,
   };
