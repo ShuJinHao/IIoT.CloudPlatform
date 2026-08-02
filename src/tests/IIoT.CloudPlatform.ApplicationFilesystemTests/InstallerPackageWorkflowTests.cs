@@ -389,6 +389,18 @@ public sealed class InstallerPackageWorkflowTests
             "2.0.0",
             "9.9.9",
             "win-x64");
+        AddPublishedPluginVersion(
+            plugin,
+            edgeRoot,
+            PrimaryModuleId,
+            "4.0.0",
+            "1.0.0",
+            "1.0.0",
+            "9.9.9",
+            "win-x64");
+        plugin.ChangeVersionStatus(
+            plugin.FindVersion("4.0.0")!.Id,
+            ClientReleaseStatus.Deprecated);
         var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
         componentRepository.ListResult.Add(CreatePublishedHostComponent());
         componentRepository.ListResult.Add(plugin);

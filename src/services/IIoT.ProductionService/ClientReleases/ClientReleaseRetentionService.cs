@@ -42,7 +42,9 @@ public sealed class ClientReleaseRetentionService(
             new ClientReleaseRetentionPolicyByIdSpec(),
             cancellationToken);
 
-        return policy?.MaxVersionsPerComponent ?? options.Value.MaxVersionsPerComponent;
+        return Math.Min(
+            policy?.MaxVersionsPerComponent ?? options.Value.MaxVersionsPerComponent,
+            ClientReleaseRetentionPolicy.MaximumPublishedVersions);
     }
 
     public async Task ApplyHostPolicyAsync(
@@ -190,24 +192,10 @@ public sealed class ClientReleaseRetentionService(
                     .GetVersionSnapshotsByDevicesAsync(
                         cancellationToken:
                         callbackCancellationToken);
-            var targets = ordered
-                .Skip(maxVersions)
-                .ToDictionary(
-                    release => release.Id,
-                    release => componentKind
-                               == ClientReleaseComponentKind.Host
-                        ? IsHostInUse(
-                            attemptComponent,
-                            release,
-                            snapshots)
-                            ? ClientReleaseStatus.Deprecated
-                            : ClientReleaseStatus.Archived
-                        : IsPluginInUse(
-                            attemptComponent,
-                            release,
-                            snapshots)
-                            ? ClientReleaseStatus.Deprecated
-                            : ClientReleaseStatus.Archived);
+            var targets = ClientReleasePublishedLimit.ResolveTargets(
+                attemptComponent,
+                maxVersions,
+                snapshots);
             if (targets.Count == 0)
             {
                 lastWritePlan = null;
@@ -295,6 +283,85 @@ public sealed class ClientReleaseRetentionService(
         return true;
     }
 
+    private sealed record RetentionWritePlan(
+        IReadOnlyDictionary<Guid, ClientReleaseVersionWriteState>
+            BaselineById,
+        IReadOnlyDictionary<Guid, ClientReleaseStatus> Targets)
+    {
+        public Guid[] VersionIds { get; } =
+            Targets.Keys
+                .OrderBy(id => id)
+                .ToArray();
+    }
+}
+
+internal static class ClientReleasePublishedLimit
+{
+    private static readonly IComparer<string> VersionComparer =
+        Comparer<string>.Create(ClientReleaseMapping.CompareVersions);
+
+    public static IReadOnlyDictionary<Guid, ClientReleaseStatus> ResolveTargets(
+        ClientReleaseComponent component,
+        int maxPublishedVersions,
+        IEnumerable<DeviceClientVersionSnapshot> snapshots)
+    {
+        var maximum = Math.Clamp(
+            maxPublishedVersions,
+            1,
+            ClientReleaseRetentionPolicy.MaximumPublishedVersions);
+        var ordered = component.Versions
+            .Where(release => release.Status == ClientReleaseStatus.Published)
+            .OrderByDescending(release => release.Version, VersionComparer)
+            .ThenByDescending(release => release.PublishedAtUtc ?? release.CreatedAtUtc)
+            .ToList();
+
+        return ordered
+            .Skip(maximum)
+            .ToDictionary(
+                release => release.Id,
+                release => component.ComponentKind == ClientReleaseComponentKind.Host
+                    ? IsHostInUse(component, release, snapshots)
+                        ? ClientReleaseStatus.Deprecated
+                        : ClientReleaseStatus.Archived
+                    : IsPluginInUse(component, release, snapshots)
+                        ? ClientReleaseStatus.Deprecated
+                        : ClientReleaseStatus.Archived);
+    }
+
+    public static async Task EnforceBeforeCommitAsync(
+        IClientReleaseRetentionPolicyReader policyReader,
+        IDeviceClientStateStore clientStateStore,
+        IEnumerable<ClientReleaseComponent> components,
+        CancellationToken cancellationToken)
+    {
+        var candidates = components
+            .DistinctBy(component => component.Id)
+            .ToList();
+        var maximum = Math.Clamp(
+            await policyReader.GetMaxVersionsPerComponentAsync(cancellationToken),
+            1,
+            ClientReleaseRetentionPolicy.MaximumPublishedVersions);
+        if (candidates.All(component => component.Versions.Count(version =>
+                version.Status == ClientReleaseStatus.Published) <= maximum))
+        {
+            return;
+        }
+
+        var snapshots = await clientStateStore.GetVersionSnapshotsByDevicesAsync(
+            cancellationToken: cancellationToken);
+        var changedAtUtc = ClientReleaseWriteCommitRecovery.NormalizeUtc(DateTime.UtcNow);
+        foreach (var component in candidates)
+        {
+            foreach (var (versionId, targetStatus) in ResolveTargets(
+                         component,
+                         maximum,
+                         snapshots))
+            {
+                component.ChangeVersionStatus(versionId, targetStatus, changedAtUtc);
+            }
+        }
+    }
+
     private static bool IsHostInUse(
         ClientReleaseComponent component,
         ClientReleaseVersion release,
@@ -320,14 +387,4 @@ public sealed class ClientReleaseRetentionService(
                     || string.Equals(plugin.HostApiVersion, release.HostApiVersion, StringComparison.OrdinalIgnoreCase))));
     }
 
-    private sealed record RetentionWritePlan(
-        IReadOnlyDictionary<Guid, ClientReleaseVersionWriteState>
-            BaselineById,
-        IReadOnlyDictionary<Guid, ClientReleaseStatus> Targets)
-    {
-        public Guid[] VersionIds { get; } =
-            Targets.Keys
-                .OrderBy(id => id)
-                .ToArray();
-    }
 }

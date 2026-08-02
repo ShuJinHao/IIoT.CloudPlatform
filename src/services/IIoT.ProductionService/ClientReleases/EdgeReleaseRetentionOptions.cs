@@ -1,3 +1,5 @@
+using IIoT.Core.Production.Aggregates.ClientReleases;
+
 namespace IIoT.ProductionService.ClientReleases;
 
 public sealed class EdgeReleaseRetentionOptions
@@ -8,10 +10,10 @@ public sealed class EdgeReleaseRetentionOptions
 
     public void Validate()
     {
-        if (MaxVersionsPerComponent is < 1 or > 20)
+        if (MaxVersionsPerComponent is < 1 or > ClientReleaseRetentionPolicy.MaximumPublishedVersions)
         {
             throw new InvalidOperationException(
-                $"{SectionName}:{nameof(MaxVersionsPerComponent)} 必须在 1 到 20 之间。");
+                $"{SectionName}:{nameof(MaxVersionsPerComponent)} 必须在 1 到 {ClientReleaseRetentionPolicy.MaximumPublishedVersions} 之间。");
         }
     }
 }

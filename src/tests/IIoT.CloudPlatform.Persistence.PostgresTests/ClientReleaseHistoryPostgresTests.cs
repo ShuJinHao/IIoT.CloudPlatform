@@ -28,6 +28,8 @@ public sealed class ClientReleaseHistoryPostgresTests(
         var activeOnly = CreatePluginComponent("ActiveOnly", channel, "win-x64", ClientReleaseStatus.Published);
         var archived = CreatePluginComponent("Archived", channel, "win-x64", ClientReleaseStatus.Published);
         SingleVersion(archived).ChangeStatus(ClientReleaseStatus.Archived);
+        var deprecated = CreatePluginComponent("Deprecated", channel, "win-x64", ClientReleaseStatus.Published);
+        SingleVersion(deprecated).ChangeStatus(ClientReleaseStatus.Deprecated);
         var deleted = CreatePluginComponent("Deleted", channel, "win-x64", ClientReleaseStatus.Published);
         SingleVersion(deleted).MarkDeleted("管理员删除");
         var failed = CreatePluginComponent("DeleteFailed", channel, "win-x64", ClientReleaseStatus.Published);
@@ -46,6 +48,7 @@ public sealed class ClientReleaseHistoryPostgresTests(
             seed.ClientReleaseComponents.AddRange(
                 activeOnly,
                 archived,
+                deprecated,
                 deleted,
                 failed,
                 otherRuntime,
@@ -53,6 +56,7 @@ public sealed class ClientReleaseHistoryPostgresTests(
             await seed.SaveChangesAsync();
 
             await SetHistoryTimestampAsync(seed, SingleVersion(archived), tieAtUtc, deleted: false);
+            await SetHistoryTimestampAsync(seed, SingleVersion(deprecated), tieAtUtc, deleted: false);
             await SetHistoryTimestampAsync(seed, SingleVersion(deleted), tieAtUtc, deleted: true);
             await SetHistoryTimestampAsync(seed, SingleVersion(failed), tieAtUtc, deleted: false);
         }
@@ -61,23 +65,28 @@ public sealed class ClientReleaseHistoryPostgresTests(
         var firstPass = await ReadAllPagesAsync(options, channel);
         var secondPass = await ReadAllPagesAsync(options, channel);
 
-        Assert.Equal(3, firstPass.TotalCount);
-        Assert.Equal(3, firstPass.Items.Count);
+        Assert.Equal(4, firstPass.TotalCount);
+        Assert.Equal(4, firstPass.Items.Count);
         Assert.Equal(
             firstPass.Items.Select(item => item.ComponentId),
             secondPass.Items.Select(item => item.ComponentId));
-        Assert.Equal(3, firstPass.Items.Select(item => item.ComponentId).Distinct().Count());
+        Assert.Equal(4, firstPass.Items.Select(item => item.ComponentId).Distinct().Count());
         Assert.DoesNotContain(firstPass.Items, item => item.ComponentId == activeOnly.Id);
         Assert.DoesNotContain(firstPass.Items, item => item.ComponentId == otherRuntime.Id);
         Assert.DoesNotContain(firstPass.Items, item => item.ComponentId == otherChannel.Id);
         Assert.All(firstPass.Items, item => Assert.Single(item.Versions));
         Assert.Equal(
-            ["Archived", "DeleteFailed", "Deleted"],
+            ["Archived", "DeleteFailed", "Deleted", "Deprecated"],
             firstPass.Items
                 .SelectMany(item => item.Versions)
                 .Select(version => version.Status)
                 .OrderBy(status => status, StringComparer.Ordinal)
                 .ToArray());
+        Assert.All(firstPass.Items, item => Assert.Single(Assert.Single(item.Versions).Artifacts!));
+        Assert.True(firstPass.Items.Single(item => item.ComponentId == archived.Id).CanHardDelete);
+        Assert.True(firstPass.Items.Single(item => item.ComponentId == deleted.Id).CanHardDelete);
+        Assert.False(firstPass.Items.Single(item => item.ComponentId == deprecated.Id).CanHardDelete);
+        Assert.False(firstPass.Items.Single(item => item.ComponentId == failed.Id).CanHardDelete);
 
         Assert.Contains(
             interceptor.CommandTexts,
@@ -134,7 +143,15 @@ public sealed class ClientReleaseHistoryPostgresTests(
             "[]",
             status,
             null,
-            "IIoT");
+            "IIoT",
+            artifacts:
+            [
+                new ClientReleaseArtifact(
+                    ClientReleaseArtifactKind.PackageFile,
+                    $"plugins/{channel}/{moduleId}/1.0.0/plugin.zip",
+                    new string('a', 64),
+                    128)
+            ]);
         return component;
     }
 

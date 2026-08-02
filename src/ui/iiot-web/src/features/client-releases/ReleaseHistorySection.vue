@@ -3,7 +3,7 @@
     <div class="table-heading">
       <div>
         <h2>历史版本</h2>
-        <p>已归档、已删除和删除失败的版本；独立于上方活动 catalog</p>
+        <p>已弃用、已归档、已删除和删除失败的版本；独立于上方活动 catalog</p>
       </div>
     </div>
     <div class="history-body">
@@ -13,7 +13,12 @@
         <UiButton size="small" secondary @click="$emit('retry')">重试</UiButton>
       </div>
       <template v-else-if="items.length > 0">
-        <ReleaseHistoryList :items="items" />
+        <ReleaseHistoryList
+          :items="items"
+          :can-hard-delete="canHardDelete"
+          @detail="(version, component) => $emit('detail', version, component)"
+          @hard-delete="(component) => $emit('hard-delete', component)"
+        />
         <UiPagination
           class="history-pagination"
           :page="page"
@@ -23,7 +28,7 @@
           @update:page="$emit('update:page', $event)"
         />
       </template>
-      <EmptyState v-else title="暂无历史版本" description="当前条件下没有已归档、已删除或删除失败的版本。" />
+      <EmptyState v-else title="暂无历史版本" description="当前条件下没有已弃用、已归档、已删除或删除失败的版本。" />
     </div>
   </NiondTableCard>
 </template>
@@ -34,7 +39,10 @@ import NiondTableCard from '../../components/layout/NiondTableCard.vue';
 import EmptyState from '../../components/states/EmptyState.vue';
 import UiButton from '../../components/ui/UiButton.vue';
 import UiPagination from '../../components/ui/UiPagination.vue';
-import type { ClientReleaseHistoryComponentDto } from './api';
+import type {
+  ClientReleaseHistoryComponentDto,
+  ClientReleaseHistoryVersionDto,
+} from './api';
 import ReleaseHistoryList from './ReleaseHistoryList.vue';
 
 const props = defineProps<{
@@ -44,11 +52,14 @@ const props = defineProps<{
   pageSize: number;
   loading: boolean;
   error?: Error | null;
+  canHardDelete: boolean;
 }>();
 
 defineEmits<{
   'update:page': [value: number];
   retry: [];
+  detail: [version: ClientReleaseHistoryVersionDto, component: ClientReleaseHistoryComponentDto];
+  'hard-delete': [component: ClientReleaseHistoryComponentDto];
 }>();
 
 const pageCount = computed(() => Math.max(1, Math.ceil(props.total / props.pageSize)));

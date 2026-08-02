@@ -64,10 +64,14 @@ describe('client release history API', () => {
 
 describe('client release permanent delete API', () => {
   it('deletes by componentId with the reason, not by version id', () => {
-    hardDeleteClientReleaseComponentApi('component-guid-1', '退役旧组件');
+    hardDeleteClientReleaseComponentApi(
+      'component-guid-1',
+      '退役旧组件',
+      'DELETE AP',
+    );
     const [url, config] = httpMock.delete.mock.calls[0]!;
     expect(url).toBe('/human/client-releases/components/component-guid-1');
-    expect(config?.data).toEqual({ reason: '退役旧组件' });
+    expect(config?.data).toEqual({ reason: '退役旧组件', confirmation: 'DELETE AP' });
   });
 
   it('lists pending component deletions', () => {

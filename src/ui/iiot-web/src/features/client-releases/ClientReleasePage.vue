@@ -26,8 +26,11 @@
         :page-size="historyPageSize"
         :loading="loadingHistory"
         :error="historyError"
+        :can-hard-delete="canHardDelete"
         @update:page="gotoHistoryPage"
         @retry="fetchHistory"
+        @detail="openHistoryReleaseDetailModal"
+        @hard-delete="openHardDeleteModal"
       />
     </template>
     <NiondTableCard v-else>
@@ -78,6 +81,7 @@ const {
   releaseCatalogRows, selectedOtherVersions, historyModalTitle, releaseCatalogColumns,
   historyColumns,
   refresh, fetchHistory, gotoHistoryPage, goPublishManager, goInstallerCenter,
+  openHistoryReleaseDetailModal, openHardDeleteModal,
   closeHardDeleteModal, submitHardDelete, retryDeletion,
 } = state;
 

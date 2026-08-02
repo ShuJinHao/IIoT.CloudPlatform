@@ -175,7 +175,15 @@ export const generateEdgeInstallerPackageApi = async (
   };
 };
 
-// ===== 发布历史（Archived/Deleted/DeleteFailed） =====
+// ===== 发布历史（Deprecated/Archived/Deleted/DeleteFailed） =====
+
+export interface ClientReleaseHistoryArtifactDto {
+  artifactKind: string;
+  relativePath: string;
+  sha256?: string | null;
+  size?: number | null;
+  filesPresent: boolean;
+}
 
 export interface ClientReleaseHistoryVersionDto {
   id: string;
@@ -186,6 +194,18 @@ export interface ClientReleaseHistoryVersionDto {
   deletedAtUtc?: string | null;
   deletionReason?: string | null;
   deletionFailure?: string | null;
+  releaseNotes?: string | null;
+  sha256: string;
+  packageSize: number;
+  publisher?: string | null;
+  signature?: string | null;
+  downloadUrl: string;
+  hostApiVersion: string;
+  targetFramework?: string | null;
+  minHostVersion?: string | null;
+  maxHostVersion?: string | null;
+  dependencies: unknown;
+  artifacts: ClientReleaseHistoryArtifactDto[];
 }
 
 export interface ClientReleaseHistoryComponentDto {
@@ -195,6 +215,7 @@ export interface ClientReleaseHistoryComponentDto {
   displayName: string;
   channel: string;
   targetRuntime: string;
+  canHardDelete: boolean;
   versions: ClientReleaseHistoryVersionDto[];
 }
 
@@ -230,9 +251,13 @@ export interface ClientReleaseHardDeletionResultDto {
   warning?: string | null;
 }
 
-export const hardDeleteClientReleaseComponentApi = (componentId: string, reason: string) =>
+export const hardDeleteClientReleaseComponentApi = (
+  componentId: string,
+  reason: string,
+  confirmation: string,
+) =>
   http.delete<ClientReleaseHardDeletionResultDto>(`${basePath}/components/${componentId}`, {
-    data: { reason },
+    data: { reason, confirmation },
     // 错误由删除弹窗内联呈现 ProblemDetails，httpClient 不再额外弹全局通知，避免双层弹窗。
     inlineFeedback: true,
   });

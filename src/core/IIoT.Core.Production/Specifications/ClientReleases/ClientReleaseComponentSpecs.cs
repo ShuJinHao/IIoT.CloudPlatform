@@ -81,14 +81,11 @@ public sealed class ClientReleaseComponentsByChannelSpec : Specification<ClientR
             (string.IsNullOrEmpty(normalizedChannel) || component.Channel == normalizedChannel)
             && (string.IsNullOrEmpty(normalizedTargetRuntime) || component.TargetRuntime == normalizedTargetRuntime)
             && component.Versions.Any(version =>
-                (!onlyPublished
-                    || version.Status == ClientReleaseStatus.Published
-                    || version.Status == ClientReleaseStatus.Deprecated)
-                && (includeArchived
-                    || (version.Status != ClientReleaseStatus.Archived
-                        && version.Status != ClientReleaseStatus.Deleted
-                        && version.Status != ClientReleaseStatus.DeleteFailed
-                        && version.Status != ClientReleaseStatus.DeleteRequested)));
+                onlyPublished
+                    ? version.Status == ClientReleaseStatus.Published
+                    : includeArchived
+                        || version.Status == ClientReleaseStatus.Draft
+                        || version.Status == ClientReleaseStatus.Published);
 
         AddInclude(component => component.Versions);
         AddInclude("Versions.Artifacts");

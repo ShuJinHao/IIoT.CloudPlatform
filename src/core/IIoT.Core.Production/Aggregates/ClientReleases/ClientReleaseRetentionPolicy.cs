@@ -7,6 +7,8 @@ namespace IIoT.Core.Production.Aggregates.ClientReleases;
 /// </summary>
 public sealed class ClientReleaseRetentionPolicy : BaseEntity<Guid>, IAggregateRoot<Guid>
 {
+    public const int MaximumPublishedVersions = 3;
+
     public static readonly Guid SingletonId = Guid.Parse("11f8c47a-58d0-4998-b2de-fbd299f8cb9d");
 
     private ClientReleaseRetentionPolicy()
@@ -42,11 +44,11 @@ public sealed class ClientReleaseRetentionPolicy : BaseEntity<Guid>, IAggregateR
 
     private void Validate()
     {
-        if (MaxVersionsPerComponent is < 1 or > 20)
+        if (MaxVersionsPerComponent is < 1 or > MaximumPublishedVersions)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(MaxVersionsPerComponent),
-                "每个组件保留版本数必须在 1 到 20 之间。");
+                $"每个组件可分发版本数必须在 1 到 {MaximumPublishedVersions} 之间。");
         }
     }
 }

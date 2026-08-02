@@ -504,12 +504,7 @@ internal static class ClientReleaseMapping
             return 1;
         }
 
-        if (Version.TryParse(left, out var leftVersion) && Version.TryParse(right, out var rightVersion))
-        {
-            return leftVersion.CompareTo(rightVersion);
-        }
-
-        return string.Compare(left, right, StringComparison.OrdinalIgnoreCase);
+        return ClientReleaseSemanticVersion.Compare(left, right);
     }
 
     public static IReadOnlyList<(ClientReleaseComponent Component, ClientReleaseVersion Version)> OrderVersions(
@@ -525,8 +520,10 @@ internal static class ClientReleaseMapping
 
     private static bool IsVersionInRange(string hostVersion, string minHostVersion, string maxHostVersion)
     {
-        return CompareVersions(hostVersion, minHostVersion) >= 0
-            && CompareVersions(hostVersion, maxHostVersion) <= 0;
+        return ClientReleaseSemanticVersion.IsInRange(
+            hostVersion,
+            minHostVersion,
+            maxHostVersion);
     }
 
     private static bool ShouldExposeVersion(
@@ -534,14 +531,12 @@ internal static class ClientReleaseMapping
         bool onlyPublished,
         bool includeArchived)
     {
-        var publishedMatch = !onlyPublished
-            || version.Status == ClientReleaseStatus.Published
-            || version.Status == ClientReleaseStatus.Deprecated;
-        var archiveMatch = includeArchived
-            || (version.Status != ClientReleaseStatus.Archived
-                && version.Status != ClientReleaseStatus.Deleted
-                && version.Status != ClientReleaseStatus.DeleteFailed
-                && version.Status != ClientReleaseStatus.DeleteRequested);
-        return publishedMatch && archiveMatch;
+        if (onlyPublished)
+        {
+            return version.Status == ClientReleaseStatus.Published;
+        }
+
+        return includeArchived
+            || version.Status is ClientReleaseStatus.Draft or ClientReleaseStatus.Published;
     }
 }

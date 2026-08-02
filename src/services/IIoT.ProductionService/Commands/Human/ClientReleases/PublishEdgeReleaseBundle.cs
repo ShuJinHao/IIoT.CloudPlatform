@@ -11,6 +11,7 @@ using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
@@ -51,6 +52,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
     IRepository<ClientReleaseComponent> componentRepository,
     IClientReleaseVersionObservationReader observationReader,
     IClientReleaseRetentionService retentionService,
+    IDeviceClientStateStore clientStateStore,
     ICurrentUser currentUser,
     IAuditTrailService auditTrailService,
     ILogger<PublishEdgeReleaseBundleHandler> logger)
@@ -60,10 +62,6 @@ public sealed class PublishEdgeReleaseBundleHandler(
     {
         PropertyNameCaseInsensitive = true
     };
-
-    private static readonly Regex SemVerPattern = new(
-        @"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly string[] ForbiddenFileNameSuffixes =
     [
@@ -636,12 +634,12 @@ public sealed class PublishEdgeReleaseBundleHandler(
             return "生产服务器只允许发布 stable 渠道。";
         }
 
-        if (string.IsNullOrWhiteSpace(manifest.Version) || !SemVerPattern.IsMatch(manifest.Version))
+        if (!ClientReleaseSemanticVersion.IsValid(manifest.Version))
         {
-            return "Edge 发布包版本号必须是 SemVer。";
+            return "Edge 发布包版本号必须符合 MAJOR.MINOR.PATCH[-prerelease]。";
         }
 
-        if (string.IsNullOrWhiteSpace(manifest.HostApiVersion)
+        if (!ClientReleaseSemanticVersion.IsValid(manifest.HostApiVersion)
             || string.IsNullOrWhiteSpace(manifest.TargetRuntime)
             || string.IsNullOrWhiteSpace(manifest.InstallerStubFile)
             || string.IsNullOrWhiteSpace(manifest.LauncherDirectory)
@@ -666,11 +664,13 @@ public sealed class PublishEdgeReleaseBundleHandler(
         {
             if (module is null
                 || string.IsNullOrWhiteSpace(module.ModuleId)
-                || string.IsNullOrWhiteSpace(module.Version)
-                || !SemVerPattern.IsMatch(module.Version)
-                || string.IsNullOrWhiteSpace(module.HostApiVersion)
-                || string.IsNullOrWhiteSpace(module.MinHostVersion)
-                || string.IsNullOrWhiteSpace(module.MaxHostVersion)
+                || !ClientReleaseSemanticVersion.IsValid(module.Version)
+                || !ClientReleaseSemanticVersion.IsValid(module.HostApiVersion)
+                || !ClientReleaseSemanticVersion.IsValid(module.MinHostVersion)
+                || !ClientReleaseSemanticVersion.IsValid(module.MaxHostVersion)
+                || ClientReleaseSemanticVersion.Compare(
+                    module.MinHostVersion,
+                    module.MaxHostVersion) > 0
                 || string.IsNullOrWhiteSpace(module.PluginDirectory)
                 || !IsSafeRelativePath(module.PluginDirectory))
             {
@@ -924,9 +924,10 @@ public sealed class PublishEdgeReleaseBundleHandler(
         }
 
         var expected = new List<ClientReleaseExpectedVersionState>(pluginPackages.Count + 1);
+        var affectedComponents = new List<ClientReleaseComponent>(pluginPackages.Count + 1);
 
         var hostComponent = await componentRepository.GetSingleOrDefaultAsync(
-            new ClientReleaseComponentRootByIdentitySpec(
+            new ClientReleaseComponentByIdentitySpec(
                 ClientReleaseComponentKind.Host,
                 ClientReleaseComponent.HostComponentKey,
                 manifest.Channel,
@@ -940,6 +941,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 manifest.TargetRuntime);
             componentRepository.Add(hostComponent);
         }
+        affectedComponents.Add(hostComponent);
 
         hostComponent.UpdateHostMetadata();
         var manifestFact = ClientReleaseFileFacts.GetFileFact(
@@ -984,7 +986,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
             }
 
             var pluginComponent = await componentRepository.GetSingleOrDefaultAsync(
-                new ClientReleaseComponentRootByIdentitySpec(
+                new ClientReleaseComponentByIdentitySpec(
                     ClientReleaseComponentKind.Plugin,
                     module.ModuleId,
                     manifest.Channel,
@@ -1011,6 +1013,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
                     null,
                     null);
             }
+            affectedComponents.Add(pluginComponent);
 
             if (pluginComponent.FindVersion(module.Version) is not null)
             {
@@ -1041,6 +1044,12 @@ public sealed class PublishEdgeReleaseBundleHandler(
                     package.PackageSize));
             expected.Add(ClientReleaseExpectedVersionState.From(pluginComponent, pluginVersion));
         }
+
+        await ClientReleasePublishedLimit.EnforceBeforeCommitAsync(
+            retentionService,
+            clientStateStore,
+            affectedComponents,
+            cancellationToken);
 
         return expected;
     }
