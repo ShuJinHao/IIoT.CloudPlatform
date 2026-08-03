@@ -19,6 +19,7 @@ public sealed class ProductionContractShapeTests
 
         Assert.NotNull(manifestType);
         Assert.NotNull(manifestType!.GetProperty("VelopackSetupFile"));
+        Assert.NotNull(manifestType.GetProperty("InstallerBindingSchemaVersion"));
     }
 
     [Fact]

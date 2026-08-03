@@ -629,6 +629,11 @@ public sealed class PublishEdgeReleaseBundleHandler(
             return "Edge 发布包 manifest schemaVersion 不受支持。";
         }
 
+        if (manifest.InstallerBindingSchemaVersion != 2)
+        {
+            return "Edge 发布包必须声明 installerBindingSchemaVersion=2。";
+        }
+
         if (!string.Equals(manifest.Channel, "stable", StringComparison.OrdinalIgnoreCase))
         {
             return "生产服务器只允许发布 stable 渠道。";

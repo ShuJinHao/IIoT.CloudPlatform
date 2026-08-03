@@ -481,6 +481,7 @@ public sealed class ClientReleaseBehaviorTests
     [InlineData("modules-empty-with-plugin-files", "空插件清单仍包含插件文件")]
     [InlineData("module-null", "非法插件声明")]
     [InlineData("module-version-traversal", "非法插件声明")]
+    [InlineData("legacy-binding-schema", "installerBindingSchemaVersion=2")]
     public async Task PublishEdgeReleaseBundleHandler_ShouldRejectInvalidModuleOwnershipBeforePublishing(
         string invalidCase,
         string expectedError)
@@ -512,6 +513,9 @@ public sealed class ClientReleaseBehaviorTests
                         break;
                     case "module-version-traversal":
                         modules[0]!["version"] = "../escape";
+                        break;
+                    case "legacy-binding-schema":
+                        manifest["installerBindingSchemaVersion"] = 1;
                         break;
                     default:
                         throw new InvalidOperationException($"Unknown invalid manifest case: {invalidCase}");
@@ -7333,6 +7337,7 @@ public sealed class ClientReleaseBehaviorTests
         var manifest = new
         {
             schemaVersion = ClientReleaseCatalogSchema.Version,
+            installerBindingSchemaVersion = 2,
             channel = "stable",
             version,
             hostApiVersion = "1.0.0",
@@ -8090,6 +8095,7 @@ public sealed class ClientReleaseBehaviorTests
             $$"""
             {
               "schemaVersion": 2,
+              "installerBindingSchemaVersion": 2,
               "channel": "{{channel}}",
               "version": "{{version}}",
               "hostApiVersion": "1.0.0",

@@ -860,6 +860,7 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
                 new
                 {
                     schemaVersion = 2,
+                    installerBindingSchemaVersion = 2,
                     channel,
                     version,
                     hostApiVersion = "1.0.0",
