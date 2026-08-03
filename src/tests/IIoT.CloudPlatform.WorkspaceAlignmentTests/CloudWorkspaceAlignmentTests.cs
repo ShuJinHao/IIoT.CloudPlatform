@@ -67,6 +67,7 @@ public sealed class CloudWorkspaceAlignmentTests : IAsyncLifetime
         var secondDay = firstDay.AddDays(1);
         var startTime = new DateTimeOffset(firstDay.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc));
         var endTime = new DateTimeOffset(secondDay.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc));
+        const string nullablePlcCode = "P2-CP-NULL";
 
         await _driver.AuthenticateAsAdminAsync();
         var runningDevice = await _driver.CreateTestDeviceRegistrationAsync("x0-running");
@@ -75,6 +76,7 @@ public sealed class CloudWorkspaceAlignmentTests : IAsyncLifetime
 
         await SeedClientReleaseVersionsAsync(channel, targetRuntime);
         await SeedReadOnlyBusinessDataAsync(runningDevice, firstDay, secondDay);
+        await SeedNullableCapacityAsync(runningDevice, firstDay, nullablePlcCode);
         await SeedRuntimeStateAsync(runningDevice, "Running", DateTime.UtcNow.AddMinutes(-1));
         await SeedRuntimeStateAsync(staleDevice, "Running", DateTime.UtcNow.AddHours(-25));
 
@@ -128,6 +130,7 @@ public sealed class CloudWorkspaceAlignmentTests : IAsyncLifetime
         environment["CLOUD_AI_READ_LIVE_CHANNEL"] = channel;
         environment["CLOUD_AI_READ_LIVE_TARGET_RUNTIME"] = targetRuntime;
         environment["CLOUD_AI_READ_LIVE_HOURLY_DATE"] = firstDay.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        environment["CLOUD_AI_READ_LIVE_NULLABLE_PLC_CODE"] = nullablePlcCode;
         environment["CLOUD_AI_READ_LIVE_START_TIME"] = startTime.ToString("O");
         environment["CLOUD_AI_READ_LIVE_END_TIME"] = endTime.ToString("O");
         environment["CLOUD_AI_READ_LIVE_SENTINEL"] = sentinel;
@@ -316,16 +319,73 @@ public sealed class CloudWorkspaceAlignmentTests : IAsyncLifetime
             DeviceId = device.DeviceId,
             Items = new[]
             {
-                CreateAlignmentPassStationItem("X0-LIVE-0001", firstTime, "OK", 110, 1.1m),
-                CreateAlignmentPassStationItem("X0-LIVE-0002", secondTime, "NG", 120, 1.2m)
+                CreateAlignmentPassStationItem("X0-LIVE-0001", firstTime, "OK", "MG1", 110, 1.1m),
+                CreateAlignmentPassStationItem("X0-LIVE-0002", secondTime, "NG", "MG2", 120, 1.2m)
             }
         });
+    }
+
+    private async Task SeedNullableCapacityAsync(
+        TestDeviceRegistration device,
+        DateOnly date,
+        string plcCode)
+    {
+        var connectionString = await _fixture.GetConnectionStringAsync(
+            ConnectionResourceNames.IiotDatabase);
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            insert into hourly_capacity (
+                id,
+                device_id,
+                date,
+                shift_code,
+                hour,
+                minute,
+                time_label,
+                total_count,
+                ok_count,
+                ng_count,
+                schema_version,
+                process_type,
+                plc_code,
+                plc_name,
+                plc_name_is_trusted,
+                reported_at)
+            values (
+                @id,
+                @deviceId,
+                @date,
+                'D',
+                12,
+                30,
+                '12:30',
+                5,
+                null,
+                null,
+                2,
+                'cp',
+                @plcCode,
+                '正极模切空质量',
+                true,
+                @reportedAt)
+            """,
+            connection);
+        command.Parameters.AddWithValue("id", Guid.NewGuid());
+        command.Parameters.AddWithValue("deviceId", device.DeviceId);
+        command.Parameters.AddWithValue("date", date);
+        command.Parameters.AddWithValue("plcCode", plcCode);
+        command.Parameters.AddWithValue("reportedAt", DateTime.UtcNow);
+        if (await command.ExecuteNonQueryAsync() != 1)
+            throw new InvalidOperationException("Unable to seed nullable Cloud AiRead capacity evidence.");
     }
 
     private static object CreateAlignmentPassStationItem(
         string barcode,
         DateTime completedAt,
         string cellResult,
+        string clipSlot,
         int quantity,
         decimal speed)
     {
@@ -338,6 +398,7 @@ public sealed class CloudWorkspaceAlignmentTests : IAsyncLifetime
             {
                 PlcCode = "P2-CP01",
                 PlcName = "正极模切01",
+                ClipSlot = clipSlot,
                 StartTime = completedAt.AddMinutes(-5),
                 PunchingQuantity = quantity,
                 PunchingSpeed = speed
