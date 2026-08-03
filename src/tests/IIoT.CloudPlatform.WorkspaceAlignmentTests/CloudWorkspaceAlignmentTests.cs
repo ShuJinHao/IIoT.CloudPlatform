@@ -71,6 +71,7 @@ public sealed class CloudWorkspaceAlignmentTests : IAsyncLifetime
 
         await _driver.AuthenticateAsAdminAsync();
         var runningDevice = await _driver.CreateTestDeviceRegistrationAsync("x0-running");
+        await BindDeviceToCpProcessAsync(runningDevice);
         var missingDevice = await _driver.CreateTestDeviceRegistrationAsync("x0-missing");
         var staleDevice = await _driver.CreateTestDeviceRegistrationAsync("x0-stale");
 
@@ -269,6 +270,25 @@ public sealed class CloudWorkspaceAlignmentTests : IAsyncLifetime
         }
 
         await transaction.CommitAsync();
+    }
+
+    private async Task BindDeviceToCpProcessAsync(TestDeviceRegistration device)
+    {
+        var connectionString = await _fixture.GetConnectionStringAsync(
+            ConnectionResourceNames.IiotDatabase);
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            update mfg_processes
+            set process_code = 'cp',
+                process_name = '正极模切'
+            where id = @processId
+            """,
+            connection);
+        command.Parameters.AddWithValue("processId", device.ProcessId);
+        if (await command.ExecuteNonQueryAsync() != 1)
+            throw new InvalidOperationException("Unable to bind the live alignment device to the CP process.");
     }
 
     private async Task SeedReadOnlyBusinessDataAsync(
