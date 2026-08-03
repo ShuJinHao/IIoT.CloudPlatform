@@ -1,23 +1,27 @@
 import { computed, reactive, ref } from 'vue';
 import { useListPage } from '../../core/list-page';
 import type { PagedMetaData } from '../../core/types/pagination';
-import { getAllProcessesApi, type ProcessSelectDto } from '../processes/api';
 import { useAuthStore } from '../../stores/auth';
 import { Permissions } from '../../types/permissions';
 import { notifySuccess, notifyWarning } from '../../utils/feedback';
 import {
   deleteDeviceApi,
   getDeviceDeletionImpactApi,
+  getDeviceLedgerProcessOptionsApi,
   getDevicePagedListApi,
+  getDeviceProcessMigrationImpactApi,
+  migrateDeviceProcessApi,
   registerDeviceApi,
   updateDeviceProfileApi,
   type DeviceDeletionImpactDto,
+  type DeviceLedgerProcessOptionDto,
   type DeviceListItemDto,
 } from './api';
 import {
   isDeviceDeleteConfirmDisabled,
   type DeviceConfirmDialogState,
   type DeviceDeletionImpactRow,
+  type DeviceProcessMigrationDialogState,
 } from './types';
 
 const PAGE_SIZE = 10;
@@ -33,7 +37,10 @@ export function useDevices() {
   const authStore = useAuthStore();
   const submitting = ref(false);
   const metaData = ref<PagedMetaData>(emptyMetaData());
-  const allProcesses = ref<ProcessSelectDto[]>([]);
+  const allProcesses = ref<DeviceLedgerProcessOptionDto[]>([]);
+  const selectedProcessId = ref<string | null>(null);
+  const processLoading = ref(false);
+  const processError = ref('');
   const showRegisterModal = ref(false);
   const showDetailPanel = ref(false);
   const showEditModal = ref(false);
@@ -41,6 +48,15 @@ export function useDevices() {
   const editTarget = ref<DeviceListItemDto | null>(null);
   const registerForm = reactive({ deviceName: '', processId: null as string | null });
   const editForm = reactive({ deviceName: '' });
+  const migrationDialog = reactive<DeviceProcessMigrationDialogState>({
+    show: false,
+    device: null,
+    targetProcessId: null,
+    impact: null,
+    loading: false,
+    error: '',
+    confirmInput: '',
+  });
   const confirmDialog = reactive<DeviceConfirmDialogState>({
     show: false,
     title: '',
@@ -53,14 +69,18 @@ export function useDevices() {
     onConfirm: async () => {},
   });
 
-  const listPage = useListPage<DeviceListItemDto, { keyword: string }>({
-    initialFilter: { keyword: '' },
+  const listPage = useListPage<
+    DeviceListItemDto,
+    { keyword: string; processId: string | null }
+  >({
+    initialFilter: { keyword: '', processId: null },
     initialPageSize: PAGE_SIZE,
     immediate: false,
     fetcher: async ({ page, pageSize, filter }) => {
       const response = await getDevicePagedListApi({
         PaginationParams: { PageNumber: page, PageSize: pageSize },
         Keyword: filter.keyword || undefined,
+        ProcessId: filter.processId || undefined,
       });
       metaData.value = response.metaData;
       return {
@@ -99,6 +119,11 @@ export function useDevices() {
       Permissions.Device.CascadeDelete,
     ]),
   );
+  const canMigrateDevice = computed(() =>
+    authStore.isAdmin
+    && authStore.hasPermission(Permissions.Device.MigrateProcess),
+  );
+  const listError = computed(() => listPage.error.value?.message ?? '');
   const deletionImpactRows = computed<DeviceDeletionImpactRow[]>(() => {
     const impact = confirmDialog.impact;
     if (!impact) return [];
@@ -122,16 +147,28 @@ export function useDevices() {
   );
 
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  let migrationRequestGeneration = 0;
 
   async function fetchProcesses() {
+    processLoading.value = true;
+    processError.value = '';
     try {
-      allProcesses.value = await getAllProcessesApi();
-    } catch {
+      allProcesses.value = await getDeviceLedgerProcessOptionsApi();
+    } catch (error) {
       allProcesses.value = [];
+      processError.value = errorMessage(error, '工序列表加载失败，请重试。');
+    } finally {
+      processLoading.value = false;
     }
   }
 
   async function fetchList() {
+    if (!selectedProcessId.value) {
+      listPage.clear();
+      metaData.value = emptyMetaData();
+      return;
+    }
+
     await listPage.refresh();
     if (listPage.error.value) {
       metaData.value = emptyMetaData();
@@ -140,7 +177,34 @@ export function useDevices() {
   }
 
   async function initialize() {
-    await Promise.all([fetchList(), fetchProcesses()]);
+    selectedProcessId.value = null;
+    listPage.filter.processId = null;
+    listPage.clear();
+    metaData.value = emptyMetaData();
+    await fetchProcesses();
+  }
+
+  async function selectProcess(value: string | number | boolean | null) {
+    const processId = typeof value === 'string'
+      && allProcesses.value.some(process => process.id === value)
+      ? value
+      : null;
+    if (selectedProcessId.value === processId) return;
+
+    selectedProcessId.value = processId;
+    listPage.filter.processId = processId;
+    keyword.value = '';
+    listPage.page.value = 1;
+    listPage.clear();
+    metaData.value = emptyMetaData();
+    showDetailPanel.value = false;
+    selectedDevice.value = null;
+    showEditModal.value = false;
+    confirmDialog.show = false;
+    closeMigrationDialog();
+    if (processId) {
+      await fetchList();
+    }
   }
 
   function onSearchInput() {
@@ -179,9 +243,12 @@ export function useDevices() {
   }
 
   async function openRegisterModal() {
+    if (!selectedProcessId.value) {
+      notifyWarning('请先选择所属工序。');
+      return;
+    }
     registerForm.deviceName = '';
-    registerForm.processId = null;
-    await fetchProcesses();
+    registerForm.processId = selectedProcessId.value;
     showRegisterModal.value = true;
   }
 
@@ -276,6 +343,101 @@ export function useDevices() {
     });
   }
 
+  function openMigrationDialog(device: DeviceListItemDto) {
+    if (!canMigrateDevice.value) return;
+    migrationRequestGeneration += 1;
+    Object.assign(migrationDialog, {
+      show: true,
+      device,
+      targetProcessId: null,
+      impact: null,
+      loading: false,
+      error: '',
+      confirmInput: '',
+    });
+  }
+
+  function closeMigrationDialog() {
+    migrationRequestGeneration += 1;
+    Object.assign(migrationDialog, {
+      show: false,
+      device: null,
+      targetProcessId: null,
+      impact: null,
+      loading: false,
+      error: '',
+      confirmInput: '',
+    });
+  }
+
+  async function selectMigrationTarget(targetProcessId: string | null) {
+    const device = migrationDialog.device;
+    const generation = ++migrationRequestGeneration;
+    migrationDialog.targetProcessId = targetProcessId;
+    migrationDialog.impact = null;
+    migrationDialog.error = '';
+    migrationDialog.confirmInput = '';
+    if (!device || !targetProcessId) {
+      migrationDialog.loading = false;
+      return;
+    }
+
+    migrationDialog.loading = true;
+    try {
+      const impact = await getDeviceProcessMigrationImpactApi(
+        device.id,
+        targetProcessId,
+      );
+      if (generation !== migrationRequestGeneration) return;
+      migrationDialog.impact = impact;
+    } catch (error) {
+      if (generation !== migrationRequestGeneration) return;
+      migrationDialog.error = errorMessage(error, '迁移影响预检失败，请重试。');
+    } finally {
+      if (generation === migrationRequestGeneration) {
+        migrationDialog.loading = false;
+      }
+    }
+  }
+
+  async function submitMigration() {
+    const device = migrationDialog.device;
+    const impact = migrationDialog.impact;
+    if (!canMigrateDevice.value
+      || !device
+      || !impact?.canMigrate
+      || migrationDialog.confirmInput !== impact.confirmationText) {
+      return;
+    }
+
+    submitting.value = true;
+    try {
+      await migrateDeviceProcessApi(device.id, {
+        expectedSourceProcessId: impact.sourceProcess.id,
+        targetProcessId: impact.targetProcess.id,
+        expectedRowVersion: impact.rowVersion,
+        confirmationText: migrationDialog.confirmInput,
+      });
+      closeMigrationDialog();
+      if (selectedDevice.value?.id === device.id) {
+        showDetailPanel.value = false;
+        selectedDevice.value = null;
+      }
+      notifySuccess('设备工序已迁移，设备身份与客户端状态保持不变。');
+      await refreshAfterMutation();
+    } catch {
+      /* feedback handled by http client */
+    } finally {
+      submitting.value = false;
+    }
+  }
+
+  function errorMessage(error: unknown, fallback: string) {
+    return error instanceof Error && error.message.trim()
+      ? error.message
+      : fallback;
+  }
+
   return {
     authStore,
     devices: listPage.items,
@@ -284,8 +446,13 @@ export function useDevices() {
     currentPage: listPage.page,
     metaData,
     submitting,
+    selectedProcessId,
+    processLoading,
+    processError,
+    listError,
     canUpdateDevice,
     canDeleteDevice,
+    canMigrateDevice,
     processOptions,
     processNameMap,
     showRegisterModal,
@@ -297,8 +464,11 @@ export function useDevices() {
     confirmDialog,
     deletionImpactRows,
     confirmDisabled,
+    migrationDialog,
     initialize,
+    fetchProcesses,
     fetchList,
+    selectProcess,
     onSearchInput,
     onClearKeyword,
     onPageChange,
@@ -309,5 +479,8 @@ export function useDevices() {
     openEditModal,
     submitEdit,
     handleDelete,
+    openMigrationDialog,
+    selectMigrationTarget,
+    submitMigration,
   };
 }

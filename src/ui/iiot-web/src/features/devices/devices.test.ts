@@ -2,7 +2,11 @@ import { mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, nextTick, reactive } from 'vue';
 import { Permissions } from '../../types/permissions';
-import type { DeviceDeletionImpactDto, DeviceListItemDto } from './api';
+import type {
+  DeviceDeletionImpactDto,
+  DeviceListItemDto,
+  DeviceProcessMigrationImpactDto,
+} from './api';
 import { createDeviceColumns } from './columns';
 import { deviceRoutes } from './routes';
 import { isDeviceDeleteConfirmDisabled } from './types';
@@ -11,18 +15,15 @@ import { useDevices } from './useDevices';
 const deviceApiMocks = vi.hoisted(() => ({
   getDevicePagedListApi: vi.fn(),
   getDeviceDeletionImpactApi: vi.fn(),
+  getDeviceLedgerProcessOptionsApi: vi.fn(),
+  getDeviceProcessMigrationImpactApi: vi.fn(),
+  migrateDeviceProcessApi: vi.fn(),
   deleteDeviceApi: vi.fn(),
   registerDeviceApi: vi.fn(),
   updateDeviceProfileApi: vi.fn(),
 }));
 
 vi.mock('./api', () => deviceApiMocks);
-
-const processApiMocks = vi.hoisted(() => ({
-  getAllProcessesApi: vi.fn(),
-}));
-
-vi.mock('../processes/api', () => processApiMocks);
 
 const feedbackMocks = vi.hoisted(() => ({
   notifySuccess: vi.fn(),
@@ -78,6 +79,38 @@ const deletionImpact: DeviceDeletionImpactDto = {
   totalAssociatedRows: 78,
 };
 
+const processOptions = [
+  { id: 'process-1', processCode: 'CP', processName: '正极模切' },
+  { id: 'process-2', processCode: 'AP', processName: '负极模切' },
+];
+
+const migrationImpact: DeviceProcessMigrationImpactDto = {
+  deviceId: device.id,
+  deviceName: device.deviceName,
+  clientCode: device.code,
+  sourceProcess: processOptions[0]!,
+  targetProcess: processOptions[1]!,
+  rowVersion: 42,
+  relatedCounts: {
+    recipes: 0,
+    capacities: 0,
+    deviceLogs: 1,
+    passStations: 0,
+    clientStates: 1,
+    clientVersionSnapshots: 1,
+    clientPluginVersions: 1,
+    runtimeHeartbeats: 1,
+    uploadReceiveRegistrations: 0,
+    employeeDeviceAccesses: 1,
+    refreshTokenSessions: 1,
+    edgeHostPlcRuntimeStates: 0,
+    totalAssociatedRows: 7,
+  },
+  blockers: [],
+  confirmationText: 'MIGRATE DEVICE-0001 TO AP',
+  canMigrate: true,
+};
+
 function emptyDevicePage() {
   return {
     items: [],
@@ -94,10 +127,12 @@ function mountDeviceActions(canDeleteDevice: () => boolean) {
   const actionColumn = createDeviceColumns({
     canUpdateDevice: () => false,
     canDeleteDevice,
+    canMigrateDevice: () => false,
     processLabel: () => '注液',
     onDetail: vi.fn(),
     onEdit: vi.fn(),
     onDelete: vi.fn(),
+    onMigrate: vi.fn(),
   }).find((column) => column.key === 'actions');
 
   expect(actionColumn?.render, '设备操作列必须提供 render').toBeTypeOf('function');
@@ -125,7 +160,14 @@ describe('devices feature guards', () => {
     deviceApiMocks.getDevicePagedListApi.mockResolvedValue(emptyDevicePage());
     deviceApiMocks.getDeviceDeletionImpactApi.mockResolvedValue(deletionImpact);
     deviceApiMocks.deleteDeviceApi.mockResolvedValue(true);
-    processApiMocks.getAllProcessesApi.mockResolvedValue([]);
+    deviceApiMocks.getDeviceLedgerProcessOptionsApi.mockResolvedValue(processOptions);
+    deviceApiMocks.getDeviceProcessMigrationImpactApi.mockResolvedValue(migrationImpact);
+    deviceApiMocks.migrateDeviceProcessApi.mockResolvedValue({
+      deviceId: device.id,
+      sourceProcessId: 'process-1',
+      targetProcessId: 'process-2',
+      rowVersion: 43,
+    });
   });
 
   it('requires device read permission on the device route', () => {
@@ -140,6 +182,60 @@ describe('devices feature guards', () => {
     expect(isDeviceDeleteConfirmDisabled('一号注液机', '')).toBe(false);
     expect(isDeviceDeleteConfirmDisabled('一号注液机', '一号')).toBe(false);
     expect(isDeviceDeleteConfirmDisabled('一号注液机', '一号注液机')).toBe(false);
+  });
+
+  it('loads process options without selecting the first process or querying devices', async () => {
+    const state = useDevices();
+
+    await state.initialize();
+
+    expect(state.selectedProcessId.value).toBeNull();
+    expect(state.processOptions.value).toHaveLength(2);
+    expect(deviceApiMocks.getDeviceLedgerProcessOptionsApi).toHaveBeenCalledTimes(1);
+    expect(deviceApiMocks.getDevicePagedListApi).not.toHaveBeenCalled();
+  });
+
+  it('queries only the selected process and locks new-device creation to it', async () => {
+    authMock.state!.isAdmin = true;
+    const state = useDevices();
+    await state.initialize();
+
+    await state.selectProcess('process-2');
+    await state.openRegisterModal();
+
+    expect(deviceApiMocks.getDevicePagedListApi).toHaveBeenCalledWith({
+      PaginationParams: { PageNumber: 1, PageSize: 10 },
+      Keyword: undefined,
+      ProcessId: 'process-2',
+    });
+    expect(state.registerForm.processId).toBe('process-2');
+    expect(state.showRegisterModal.value).toBe(true);
+  });
+
+  it('requires Admin and exact preflight confirmation for process migration', async () => {
+    authMock.state!.isAdmin = true;
+    const state = useDevices();
+
+    state.openMigrationDialog(device);
+    await state.selectMigrationTarget('process-2');
+
+    expect(deviceApiMocks.getDeviceProcessMigrationImpactApi)
+      .toHaveBeenCalledWith(device.id, 'process-2');
+    expect(state.migrationDialog.impact).toEqual(migrationImpact);
+
+    state.migrationDialog.confirmInput = 'wrong';
+    await state.submitMigration();
+    expect(deviceApiMocks.migrateDeviceProcessApi).not.toHaveBeenCalled();
+
+    state.migrationDialog.confirmInput = migrationImpact.confirmationText;
+    await state.submitMigration();
+    expect(deviceApiMocks.migrateDeviceProcessApi).toHaveBeenCalledWith(device.id, {
+      expectedSourceProcessId: 'process-1',
+      targetProcessId: 'process-2',
+      expectedRowVersion: 42,
+      confirmationText: migrationImpact.confirmationText,
+    });
+    expect(state.migrationDialog.show).toBe(false);
   });
 
   it('hides and blocks deletion for a non-Admin even with both deletion permissions', async () => {

@@ -28,6 +28,16 @@ public class HumanDeviceController : ApiControllerBase
         return ReturnResult(await Sender.Send(new GetDeviceSelectListQuery(), cancellationToken));
     }
 
+    [HttpGet("processes/select")]
+    public async Task<IActionResult> GetLedgerProcessOptions(
+        CancellationToken cancellationToken)
+    {
+        return ReturnResult(
+            await Sender.Send(
+                new GetDeviceLedgerProcessOptionsQuery(),
+                cancellationToken));
+    }
+
     [HttpGet("employee-access-candidates")]
     [Authorize(Policy = HttpApiPolicies.RequireHumanUserToken)]
     public async Task<IActionResult> GetEmployeeAccessCandidates(CancellationToken cancellationToken)
@@ -60,6 +70,20 @@ public class HumanDeviceController : ApiControllerBase
         return ReturnResult(await Sender.Send(new GetDeviceDeletionImpactQuery(id), cancellationToken));
     }
 
+    [HttpGet("{id}/process-migration-impact")]
+    public async Task<IActionResult> GetProcessMigrationImpact(
+        [FromRoute] Guid id,
+        [FromQuery] Guid targetProcessId,
+        CancellationToken cancellationToken)
+    {
+        return ReturnResult(
+            await Sender.Send(
+                new GetDeviceProcessMigrationImpactQuery(
+                    id,
+                    targetProcessId),
+                cancellationToken));
+    }
+
     [HttpPost]
     public async Task<IActionResult> Register(
         [FromBody] RegisterDeviceCommand command,
@@ -77,6 +101,18 @@ public class HumanDeviceController : ApiControllerBase
         CancellationToken cancellationToken)
     {
         return ReturnResult(await Sender.Send(command with { DeviceId = id }, cancellationToken));
+    }
+
+    [HttpPost("{id}/process-migration")]
+    public async Task<IActionResult> MigrateProcess(
+        [FromRoute] Guid id,
+        [FromBody] MigrateDeviceProcessCommand command,
+        CancellationToken cancellationToken)
+    {
+        return ReturnResult(
+            await Sender.Send(
+                command with { DeviceId = id },
+                cancellationToken));
     }
 
     [HttpDelete("{id}")]

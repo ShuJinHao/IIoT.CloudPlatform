@@ -32,6 +32,31 @@ public sealed class DeviceCacheInvalidationService(
             cancellationToken);
     }
 
+    public async Task InvalidateAfterProcessMigrationOnceAsync(
+        Guid domainEventId,
+        Guid deviceId,
+        Guid sourceProcessId,
+        Guid targetProcessId,
+        CancellationToken cancellationToken = default)
+    {
+        await idempotentInvalidation.InvalidateOnceAsync(
+            domainEventId,
+            "device-process-migrate",
+            [
+                CacheKeys.AllDevices(),
+                CacheKeys.DevicesByProcess(sourceProcessId),
+                CacheKeys.DevicesByProcess(targetProcessId),
+                CacheKeys.RecipesByDevice(deviceId)
+            ],
+            [
+                CacheKeys.CapacityHourlyPattern(deviceId),
+                CacheKeys.CapacitySummaryPattern(deviceId),
+                CacheKeys.CapacityRangePattern(deviceId),
+                CacheKeys.CapacityPagedByDevicePattern(deviceId)
+            ],
+            cancellationToken);
+    }
+
     public async Task InvalidateAfterDeleteOnceAsync(
         Guid domainEventId,
         DeviceCacheDescriptor device,

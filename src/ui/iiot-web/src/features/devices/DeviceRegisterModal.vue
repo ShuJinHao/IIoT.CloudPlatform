@@ -7,7 +7,13 @@
       </div>
       <div class="form-field">
         <label class="form-label">所属工序 <span class="required">*</span></label>
-        <UiSelect v-model:value="form.processId" :options="processOptions" placeholder="请选择工序" />
+          <UiSelect
+            v-model:value="form.processId"
+            :options="processOptions"
+            placeholder="请先在设备台账选择工序"
+            disabled
+          />
+          <span class="form-hint">工序由设备台账当前上下文锁定，创建后如需调整必须走迁移预检。</span>
       </div>
       <div class="hint-card">
         <div class="hint-card__title">设备 Code 由云端自动生成</div>

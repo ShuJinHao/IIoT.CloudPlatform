@@ -39,6 +39,22 @@ public sealed class DeviceRenamedCacheInvalidationHandler(
     }
 }
 
+public sealed class DeviceProcessMigratedCacheInvalidationHandler(
+    IDeviceCacheInvalidationService cacheInvalidationService,
+    IDomainEventDispatchContext dispatchContext)
+    : INotificationHandler<DeviceProcessMigratedDomainEvent>
+{
+    public Task Handle(
+        DeviceProcessMigratedDomainEvent notification,
+        CancellationToken cancellationToken)
+        => cacheInvalidationService.InvalidateAfterProcessMigrationOnceAsync(
+            dispatchContext.MessageId,
+            notification.DeviceId,
+            notification.SourceProcessId,
+            notification.TargetProcessId,
+            cancellationToken);
+}
+
 public sealed class DeviceDeletedCacheInvalidationHandler(
     IDeviceCacheInvalidationService cacheInvalidationService,
     IDomainEventDispatchContext dispatchContext)

@@ -18,7 +18,11 @@ public record DeviceListItemDto(
 );
 
 [AuthorizeRequirement("Device.Read")]
-public record GetMyDevicesPagedQuery(Pagination PaginationParams, string? Keyword = null) : IHumanQuery<Result<PagedList<DeviceListItemDto>>>;
+public record GetMyDevicesPagedQuery(
+    Pagination PaginationParams,
+    string? Keyword = null,
+    Guid? ProcessId = null)
+    : IHumanQuery<Result<PagedList<DeviceListItemDto>>>;
 
 public class GetMyDevicesPagedHandler(
     ICurrentUserDeviceAccessService currentUserDeviceAccessService,
@@ -45,13 +49,25 @@ public class GetMyDevicesPagedHandler(
         var skip = (request.PaginationParams.PageNumber - 1) * request.PaginationParams.PageSize;
         var take = request.PaginationParams.PageSize;
 
-        var countSpec = new DevicePagedSpec(0, 0, allowedDeviceIds, request.Keyword, isPaging: false);
+        var countSpec = new DevicePagedSpec(
+            0,
+            0,
+            allowedDeviceIds,
+            request.Keyword,
+            request.ProcessId,
+            isPaging: false);
         var totalCount = await deviceRepository.CountAsync(countSpec, cancellationToken);
 
         List<Device> list = [];
         if (totalCount > 0)
         {
-            var pagedSpec = new DevicePagedSpec(skip, take, allowedDeviceIds, request.Keyword, isPaging: true);
+            var pagedSpec = new DevicePagedSpec(
+                skip,
+                take,
+                allowedDeviceIds,
+                request.Keyword,
+                request.ProcessId,
+                isPaging: true);
             list = await deviceRepository.GetListAsync(pagedSpec, cancellationToken);
         }
 

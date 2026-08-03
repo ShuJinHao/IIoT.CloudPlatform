@@ -26,6 +26,7 @@ export const Permissions = {
     Read:       'Device.Read',
     Create:     'Device.Create',
     Update:     'Device.Update',
+    MigrateProcess: 'Device.MigrateProcess',
     Delete:     'Device.Delete',
     CascadeDelete: 'Device.CascadeDelete',
   },

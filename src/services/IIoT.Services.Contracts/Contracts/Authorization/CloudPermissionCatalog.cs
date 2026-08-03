@@ -29,6 +29,7 @@ public static class CloudPermissionCatalog
         public const string Read = "Device.Read";
         public const string Create = "Device.Create";
         public const string Update = "Device.Update";
+        public const string MigrateProcess = "Device.MigrateProcess";
         public const string Delete = "Device.Delete";
         public const string CascadeDelete = "Device.CascadeDelete";
     }
@@ -100,6 +101,7 @@ public static class CloudPermissionCatalog
         Device.Read,
         Device.Create,
         Device.Update,
+        Device.MigrateProcess,
         Device.Delete,
         Device.CascadeDelete,
         DeviceClientOverview.Read,
@@ -134,6 +136,7 @@ public static class CloudPermissionCatalog
         Role.Update,
         Employee.Terminate,
         Device.Create,
+        Device.MigrateProcess,
         Device.Delete,
         Device.CascadeDelete,
         ClientRelease.HardDelete

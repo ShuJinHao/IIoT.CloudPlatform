@@ -1596,6 +1596,7 @@ public sealed class ApplicationFlowGuardTests
     {
         var deviceId = Guid.NewGuid();
         var processId = Guid.NewGuid();
+        var targetProcessId = Guid.NewGuid();
         var domainEventId = Guid.NewGuid();
         var cacheInvalidation = new RecordingDeviceCacheInvalidationService();
         var dispatchContext = new StaticDomainEventDispatchContext(domainEventId);
@@ -1606,6 +1607,16 @@ public sealed class ApplicationFlowGuardTests
         await new DeviceRenamedCacheInvalidationHandler(cacheInvalidation, dispatchContext).Handle(
             new DeviceRenamedDomainEvent(deviceId, "Device-02", "DEV-CACHE001", processId),
             CancellationToken.None);
+        await new DeviceProcessMigratedCacheInvalidationHandler(
+            cacheInvalidation,
+            dispatchContext).Handle(
+                new DeviceProcessMigratedDomainEvent(
+                    deviceId,
+                    "Device-02",
+                    "DEV-CACHE001",
+                    processId,
+                    targetProcessId),
+                CancellationToken.None);
         await new DeviceDeletedCacheInvalidationHandler(cacheInvalidation, dispatchContext).Handle(
             new DeviceDeletedDomainEvent(deviceId, "DEV-CACHE001", processId),
             CancellationToken.None);
@@ -1614,10 +1625,14 @@ public sealed class ApplicationFlowGuardTests
         Assert.Contains(cacheInvalidation.RenamedDevices, x =>
             x.DeviceId == deviceId
             && x.ProcessId == processId);
+        Assert.Contains(cacheInvalidation.MigratedDevices, x =>
+            x.DeviceId == deviceId
+            && x.SourceProcessId == processId
+            && x.TargetProcessId == targetProcessId);
         Assert.Contains(cacheInvalidation.DeletedDevices, x =>
             x.DeviceId == deviceId
             && x.ProcessId == processId);
-        Assert.Equal(3, cacheInvalidation.DomainEventIds.Count);
+        Assert.Equal(4, cacheInvalidation.DomainEventIds.Count);
         Assert.All(cacheInvalidation.DomainEventIds, id => Assert.Equal(domainEventId, id));
 
         var idempotentInvalidation = new RecordingIdempotentCacheInvalidationService();
@@ -1632,6 +1647,12 @@ public sealed class ApplicationFlowGuardTests
         await service.InvalidateAfterRenameOnceAsync(
             domainEventId,
             descriptor,
+            cancellation.Token);
+        await service.InvalidateAfterProcessMigrationOnceAsync(
+            domainEventId,
+            deviceId,
+            processId,
+            targetProcessId,
             cancellation.Token);
         await service.InvalidateAfterDeleteOnceAsync(
             domainEventId,
@@ -1655,6 +1676,26 @@ public sealed class ApplicationFlowGuardTests
                     [CacheKeys.AllDevices(), CacheKeys.DevicesByProcess(processId)],
                     operation.Keys);
                 Assert.Empty(operation.Patterns);
+            },
+            operation =>
+            {
+                Assert.Equal("device-process-migrate", operation.OperationScope);
+                Assert.Equal(
+                    [
+                        CacheKeys.AllDevices(),
+                        CacheKeys.DevicesByProcess(processId),
+                        CacheKeys.DevicesByProcess(targetProcessId),
+                        CacheKeys.RecipesByDevice(deviceId)
+                    ],
+                    operation.Keys);
+                Assert.Equal(
+                    [
+                        CacheKeys.CapacityHourlyPattern(deviceId),
+                        CacheKeys.CapacitySummaryPattern(deviceId),
+                        CacheKeys.CapacityRangePattern(deviceId),
+                        CacheKeys.CapacityPagedByDevicePattern(deviceId)
+                    ],
+                    operation.Patterns);
             },
             operation =>
             {
