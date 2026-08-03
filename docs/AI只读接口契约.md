@@ -76,9 +76,15 @@ GET /api/v1/ai/read/production-records
 - `fieldMode`：只允许 `list` 或 `full`。
 - `maxRows`：必须被 `AiReadOptions.MaxRows` 截断。
 
+Cloud 是八个 typed GET 响应字段的 canonical provider owner，以下字段语义不得由 consumer 猜造或补值：
+
+- `capacity/summary` 的 `okCount`、`ngCount` 为 nullable；Cloud 没有可靠质量事实时返回 `null`，不得补零。
+- `capacity/hourly` 每行必须返回非空稳定 `plcCode`；`okCount`、`ngCount`、`okRate` 为 nullable，质量事实缺失时保持 `null`。
+- `production-records` 的 CP/AP v2 记录通过 `fields.clipSlot` 返回 `MG1` 或 `MG2`，并在 `fieldSchema` 中声明该字段；历史缺字段记录只允许保持缺失，不得伪造槽位。
+
 跨类型查询必须提供 `deviceId` 或 `processId`。指定 `deviceId` 时必须通过 `AiReadQueryGuard.ValidateDeviceAllowed` 校验 delegated device scope。
 
-当前生产 `typeKey` 只有 `cp` 与 `ap`。它们返回中文 Cloud 客户端名、Cloud `deviceId`、弹夹号、结果、完成时间，以及 schema 字段 `plcCode`、`plcName`、`startTime`、`punchingQuantity`、`punchingSpeed`。普通 AI 用户不得看到 Cloud 内部 ClientCode；`P2-CPUC` / `P1-APUC` 是 MES 身份，不是 AI 查询或展示字段。
+当前生产 `typeKey` 只有 `cp` 与 `ap`。它们返回中文 Cloud 客户端名、Cloud `deviceId`、弹夹号、结果、完成时间，以及 schema 字段 `plcCode`、`plcName`、`clipSlot`、`startTime`、`punchingQuantity`、`punchingSpeed`。普通 AI 用户不得看到 Cloud 内部 ClientCode；`P2-CPUC` / `P1-APUC` 是 MES 身份，不是 AI 查询或展示字段。
 
 ## 5. 字段和数据过滤
 

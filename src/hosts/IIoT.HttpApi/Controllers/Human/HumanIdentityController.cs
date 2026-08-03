@@ -80,6 +80,16 @@ public class HumanIdentityController : ApiControllerBase
         return ReturnBodyResult(result, session => session.AccessToken);
     }
 
+    [Authorize(Policy = HttpApiPolicies.RequireHumanUserToken)]
+    [EnableRateLimiting(HttpApiRateLimitPolicies.GeneralApi)]
+    [HttpGet("session")]
+    public async Task<IActionResult> GetSession(CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(
+            new GetHumanIdentitySessionQuery(),
+            cancellationToken));
+    }
+
     [EnableRateLimiting(HttpApiRateLimitPolicies.GeneralApi)]
     [HttpPut("password")]
     public async Task<IActionResult> ChangePassword(

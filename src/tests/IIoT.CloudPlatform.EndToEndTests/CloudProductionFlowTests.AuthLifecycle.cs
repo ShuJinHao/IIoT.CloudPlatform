@@ -13,26 +13,51 @@ public sealed partial class CloudProductionFlowTests
     [Fact]
     public async Task HumanIdentity_Refresh_ShouldBeRejectedAfterEmployeeDeactivation()
     {
+        await AuthenticateAsAdminAsync();
+        var employeeNo = $"E-SESSION-{Guid.NewGuid():N}";
+        const string password = "TestPass123!";
+        using var onboardResponse = await _fixture.HttpClient.PostAsJsonAsync(
+            "/api/v1/human/employees",
+            new
+            {
+                EmployeeNo = employeeNo,
+                RealName = "Session Lifecycle Employee",
+                Password = password
+            });
+        onboardResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+        var employeeId = await onboardResponse.Content.ReadFromJsonAsync<Guid>();
+        employeeId.Should().NotBe(Guid.Empty);
+
         _fixture.ClearAuthToken();
 
         using var loginResponse = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/human/identity/login", new
         {
-            EmployeeNo = IIoTAppFixture.SeedAdminEmployeeNo,
-            Password = IIoTAppFixture.SeedAdminPassword
+            EmployeeNo = employeeNo,
+            Password = password
         });
 
         loginResponse.StatusCode.Should().Be(HttpStatusCode.OK);
         var session = await ReadIssuedAuthSessionAsync(loginResponse);
         _fixture.SetAuthToken(session.AccessToken);
 
-        var connectionString = await _fixture.GetConnectionStringAsync(ConnectionResourceNames.IiotDatabase);
-        var adminEmployeeId = await GetEmployeeIdByEmployeeNoAsync(connectionString, IIoTAppFixture.SeedAdminEmployeeNo);
+        using (var currentSessionResponse = await _fixture.HttpClient.GetAsync("/api/v1/human/identity/session"))
+        {
+            currentSessionResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        }
+
+        await AuthenticateAsAdminAsync();
         using (var deactivateRequest = new HttpRequestMessage(
                    HttpMethod.Put,
-                   $"/api/v1/human/employees/{adminEmployeeId}/deactivate"))
+                   $"/api/v1/human/employees/{employeeId}/deactivate"))
         using (var deactivateResponse = await _fixture.HttpClient.SendAsync(deactivateRequest))
         {
             deactivateResponse.IsSuccessStatusCode.Should().BeTrue();
+        }
+
+        _fixture.SetAuthToken(session.AccessToken);
+        using (var sessionResponse = await _fixture.HttpClient.GetAsync("/api/v1/human/identity/session"))
+        {
+            sessionResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         }
 
         _fixture.ClearAuthToken();

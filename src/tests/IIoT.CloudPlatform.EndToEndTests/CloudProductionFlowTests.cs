@@ -340,6 +340,43 @@ public sealed partial class CloudProductionFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HumanIdentity_Session_ShouldReturnTrustedSnapshotAndRejectMachineToken()
+    {
+        _fixture.ClearAuthToken();
+
+        using var loginResponse = await _fixture.HttpClient.PostAsJsonAsync("/api/v1/human/identity/login", new
+        {
+            EmployeeNo = IIoTAppFixture.SeedAdminEmployeeNo,
+            Password = IIoTAppFixture.SeedAdminPassword
+        });
+        loginResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        var issued = await ReadIssuedAuthSessionAsync(loginResponse);
+        _fixture.SetAuthToken(issued.AccessToken);
+
+        using (var sessionResponse = await _fixture.HttpClient.GetAsync("/api/v1/human/identity/session"))
+        {
+            sessionResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+            using var document = JsonDocument.Parse(await sessionResponse.Content.ReadAsStringAsync());
+            var root = document.RootElement;
+            Guid.Parse(root.GetProperty("userId").GetString()!).Should().NotBe(Guid.Empty);
+            root.GetProperty("employeeNo").GetString().Should().Be(IIoTAppFixture.SeedAdminEmployeeNo);
+            root.GetProperty("displayName").GetString().Should().NotBeNullOrWhiteSpace();
+            root.GetProperty("roles").EnumerateArray()
+                .Select(value => value.GetString())
+                .Should().Contain("Admin");
+            root.GetProperty("permissions").ValueKind.Should().Be(JsonValueKind.Array);
+            root.TryGetProperty("accessToken", out _).Should().BeFalse();
+            root.TryGetProperty("refreshToken", out _).Should().BeFalse();
+            root.TryGetProperty("secret", out _).Should().BeFalse();
+        }
+
+        var device = await CreateTestDeviceRegistrationAsync("human-session-machine-reject");
+        await AuthenticateAsEdgeAsync(device.DeviceId);
+        using var machineResponse = await _fixture.HttpClient.GetAsync("/api/v1/human/identity/session");
+        machineResponse.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
     public async Task HumanIdentity_ConcurrentRefresh_ShouldOnlyRotateOnce()
     {
         _fixture.ClearAuthToken();

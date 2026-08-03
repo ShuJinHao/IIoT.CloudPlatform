@@ -1,6 +1,8 @@
 using System.IdentityModel.Tokens.Jwt;
+using System.Reflection;
 using System.Security.Claims;
 using IIoT.HttpApi;
+using IIoT.HttpApi.Controllers;
 using IIoT.HttpApi.Controllers.Oidc;
 using IIoT.HttpApi.Infrastructure;
 using IIoT.HttpApi.Infrastructure.Authentication;
@@ -10,6 +12,7 @@ using IIoT.Services.CrossCutting.DependencyInjection;
 using IIoT.Services.Contracts.Identity;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 
@@ -87,6 +90,22 @@ public sealed class AuthorizationPipelineTests
             HttpApiPolicies.RequireHumanUserToken);
 
         Assert.False(result.Succeeded);
+    }
+
+    [Fact]
+    public void HumanIdentitySessionEndpoint_ShouldRequireHumanJwtPolicyAndGetOnly()
+    {
+        var method = typeof(HumanIdentityController).GetMethod(
+            nameof(HumanIdentityController.GetSession),
+            BindingFlags.Public | BindingFlags.Instance);
+
+        Assert.NotNull(method);
+        var authorize = Assert.Single(method.GetCustomAttributes<AuthorizeAttribute>());
+        Assert.Equal(HttpApiPolicies.RequireHumanUserToken, authorize.Policy);
+        Assert.Empty(method.GetCustomAttributes<AllowAnonymousAttribute>());
+        Assert.Equal(
+            "session",
+            Assert.Single(method.GetCustomAttributes<HttpGetAttribute>()).Template);
     }
 
     [Fact]
