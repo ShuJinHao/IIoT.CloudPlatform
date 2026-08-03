@@ -358,6 +358,12 @@ internal static class PersistenceWriteInventory
         ["src/infrastructure/IIoT.EntityFrameworkCore/QueryServices/EfDeviceDeletionDependencyService.cs::EfDeviceDeletionDependencyService.DeleteAssociatedRowsAsync(Guid,CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
             "CommitConfirmationLoss_ShouldNotDuplicateAllEmployeeWritesOrDeviceDelete"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/QueryServices/EfDeviceDeletionDependencyService.cs::EfDeviceDeletionDependencyService.MigrateProcessAsync(Guid,Guid,Guid,uint,DeviceProcessMigrationAuditContext,CancellationToken)::ExecuteTransactionAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DeviceProcessMigrationPostgresTests.cs",
+            "Migration_ShouldAtomicallyChangeOnlyProcessAndAdvanceRowVersion"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/QueryServices/EfDeviceDeletionDependencyService.cs::EfDeviceDeletionDependencyService.LockProcessSemanticTablesAsync(CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/DeviceProcessMigrationPostgresTests.cs",
+            "Migration_ShouldWaitForConcurrentSemanticWriteThenRejectItsCommittedHistory"),
         ["src/infrastructure/IIoT.EntityFrameworkCore/Repository/EfRepository.cs::EfRepository<T>.SaveChangesAsync(CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
             "ProductionRetryStrategy_ShouldReplayAllEmployeeWritesAccessAndDeviceDelete"),
