@@ -16,6 +16,13 @@ public interface IDeviceCacheInvalidationService
         DeviceCacheDescriptor device,
         CancellationToken cancellationToken = default);
 
+    Task InvalidateAfterProcessMigrationOnceAsync(
+        Guid domainEventId,
+        Guid deviceId,
+        Guid sourceProcessId,
+        Guid targetProcessId,
+        CancellationToken cancellationToken = default);
+
     Task InvalidateAfterDeleteOnceAsync(
         Guid domainEventId,
         DeviceCacheDescriptor device,

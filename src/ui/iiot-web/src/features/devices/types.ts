@@ -1,4 +1,8 @@
-import type { DeviceDeletionImpactDto } from './api';
+import type {
+  DeviceDeletionImpactDto,
+  DeviceListItemDto,
+  DeviceProcessMigrationImpactDto,
+} from './api';
 
 export interface DeviceRegisterForm {
   deviceName: string;
@@ -24,6 +28,16 @@ export interface DeviceConfirmDialogState {
 export interface DeviceDeletionImpactRow {
   label: string;
   value: number;
+}
+
+export interface DeviceProcessMigrationDialogState {
+  show: boolean;
+  device: DeviceListItemDto | null;
+  targetProcessId: string | null;
+  impact: DeviceProcessMigrationImpactDto | null;
+  loading: boolean;
+  error: string;
+  confirmInput: string;
 }
 
 export function isDeviceDeleteConfirmDisabled(

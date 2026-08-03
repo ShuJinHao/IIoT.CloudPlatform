@@ -6328,6 +6328,21 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 expectedRowVersion);
             return LastDeletionResult;
         }
+
+        public Task<DeviceProcessMigrationResult> MigrateProcessAsync(
+            Guid deviceId,
+            Guid expectedSourceProcessId,
+            Guid targetProcessId,
+            uint expectedRowVersion,
+            DeviceProcessMigrationAuditContext auditContext,
+            CancellationToken cancellationToken = default)
+            => inner.MigrateProcessAsync(
+                deviceId,
+                expectedSourceProcessId,
+                targetProcessId,
+                expectedRowVersion,
+                auditContext,
+                cancellationToken);
     }
 
     private abstract class WriteAwareTransactionInterceptor

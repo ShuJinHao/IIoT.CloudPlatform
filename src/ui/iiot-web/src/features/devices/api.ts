@@ -50,6 +50,67 @@ export interface UpdateDeviceProfilePayload {
   deviceName: string;
 }
 
+export interface DeviceLedgerProcessOptionDto {
+  id: string;
+  processCode: string;
+  processName: string;
+}
+
+export interface DeviceProcessMigrationProcessDto {
+  id: string;
+  processCode: string;
+  processName: string;
+}
+
+export interface DeviceProcessMigrationRelatedCountsDto {
+  recipes: number;
+  capacities: number;
+  deviceLogs: number;
+  passStations: number;
+  clientStates: number;
+  clientVersionSnapshots: number;
+  clientPluginVersions: number;
+  runtimeHeartbeats: number;
+  uploadReceiveRegistrations: number;
+  employeeDeviceAccesses: number;
+  refreshTokenSessions: number;
+  edgeHostPlcRuntimeStates: number;
+  totalAssociatedRows: number;
+}
+
+export interface DeviceProcessMigrationBlockerDto {
+  code: string;
+  message: string;
+  count: number;
+}
+
+export interface DeviceProcessMigrationImpactDto {
+  deviceId: string;
+  deviceName: string;
+  clientCode: string;
+  sourceProcess: DeviceProcessMigrationProcessDto;
+  targetProcess: DeviceProcessMigrationProcessDto;
+  rowVersion: number;
+  relatedCounts: DeviceProcessMigrationRelatedCountsDto;
+  blockers: DeviceProcessMigrationBlockerDto[];
+  confirmationText: string;
+  canMigrate: boolean;
+}
+
+export interface MigrateDeviceProcessPayload {
+  expectedSourceProcessId: string;
+  targetProcessId: string;
+  expectedRowVersion: number;
+  confirmationText: string;
+}
+
+export interface DeviceProcessMigrationResultDto {
+  deviceId: string;
+  sourceProcessId: string;
+  targetProcessId: string;
+  rowVersion: number;
+}
+
 export interface DeviceDeletionImpactDto {
   deviceId: string;
   deviceName: string;
@@ -75,13 +136,21 @@ const basePath = '/human/devices';
 export const getDevicePagedListApi = (params: {
   PaginationParams?: Pagination;
   Keyword?: string;
+  ProcessId?: string;
 }) => {
   return http.get<PagedList<DeviceListItemDto>>(basePath, {
     params: {
       'PaginationParams.PageNumber': params.PaginationParams?.PageNumber ?? 1,
       'PaginationParams.PageSize': params.PaginationParams?.PageSize ?? 10,
       Keyword: params.Keyword || undefined,
+      ProcessId: params.ProcessId || undefined,
     },
+  });
+};
+
+export const getDeviceLedgerProcessOptionsApi = () => {
+  return http.get<DeviceLedgerProcessOptionDto[]>(`${basePath}/processes/select`, {
+    inlineFeedback: true,
   });
 };
 
@@ -124,4 +193,27 @@ export const deleteDeviceApi = (id: string) => {
 
 export const getDeviceDeletionImpactApi = (id: string) => {
   return http.get<DeviceDeletionImpactDto>(`${basePath}/${id}/deletion-impact`);
+};
+
+export const getDeviceProcessMigrationImpactApi = (
+  id: string,
+  targetProcessId: string,
+) => {
+  return http.get<DeviceProcessMigrationImpactDto>(
+    `${basePath}/${id}/process-migration-impact`,
+    {
+      inlineFeedback: true,
+      params: { targetProcessId },
+    },
+  );
+};
+
+export const migrateDeviceProcessApi = (
+  id: string,
+  payload: MigrateDeviceProcessPayload,
+) => {
+  return http.post<DeviceProcessMigrationResultDto>(
+    `${basePath}/${id}/process-migration`,
+    payload,
+  );
 };

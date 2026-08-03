@@ -23,6 +23,39 @@ public interface IDeviceDeletionDependencyQueryService
         Guid deviceId,
         CancellationToken cancellationToken = default,
         uint? expectedRowVersion = null);
+
+    Task<DeviceProcessMigrationResult> MigrateProcessAsync(
+        Guid deviceId,
+        Guid expectedSourceProcessId,
+        Guid targetProcessId,
+        uint expectedRowVersion,
+        DeviceProcessMigrationAuditContext auditContext,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed record DeviceProcessMigrationAuditContext(
+    Guid? ActorUserId,
+    string? ActorEmployeeNo,
+    DateTime ExecutedAtUtc);
+
+public enum DeviceProcessMigrationStatus
+{
+    Migrated,
+    DeviceNotFound,
+    TargetProcessNotFound,
+    SameProcess,
+    Blocked
+}
+
+public sealed record DeviceProcessMigrationResult(
+    DeviceProcessMigrationStatus Status,
+    Guid DeviceId,
+    Guid? SourceProcessId,
+    Guid TargetProcessId,
+    uint? RowVersion,
+    DeviceDeletionImpact Impact)
+{
+    public bool Migrated => Status == DeviceProcessMigrationStatus.Migrated;
 }
 
 public sealed record DeviceDeletionImpact(

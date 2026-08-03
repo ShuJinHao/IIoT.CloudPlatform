@@ -20,6 +20,7 @@ public class DevicePagedSpec : Specification<Device>
         int take,
         List<Guid>? allowedDeviceIds = null,
         string? keyword = null,
+        Guid? processId = null,
         bool isPaging = true)
     {
         var keywordValue = keyword?.Trim();
@@ -27,6 +28,7 @@ public class DevicePagedSpec : Specification<Device>
 
         FilterCondition = d =>
             (allowedDeviceIds == null || allowedDeviceIds.Contains(d.Id))
+            && (!processId.HasValue || d.ProcessId == processId.Value)
             && (string.IsNullOrEmpty(normalizedKeyword)
                 || d.DeviceName.Contains(keywordValue!)
                 || d.Code.Contains(normalizedKeyword));

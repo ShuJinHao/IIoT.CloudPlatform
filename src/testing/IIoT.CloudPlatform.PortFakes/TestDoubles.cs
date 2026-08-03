@@ -1354,6 +1354,9 @@ internal sealed class RecordingDeviceCacheInvalidationService : IDeviceCacheInva
 
     public List<DeviceCacheDescriptor> RenamedDevices { get; } = [];
 
+    public List<(Guid DeviceId, Guid SourceProcessId, Guid TargetProcessId)>
+        MigratedDevices { get; } = [];
+
     public List<DeviceCacheDescriptor> DeletedDevices { get; } = [];
 
     public Task InvalidateListsAfterRegisterOnceAsync(
@@ -1373,6 +1376,18 @@ internal sealed class RecordingDeviceCacheInvalidationService : IDeviceCacheInva
     {
         DomainEventIds.Add(domainEventId);
         RenamedDevices.Add(device);
+        return Task.CompletedTask;
+    }
+
+    public Task InvalidateAfterProcessMigrationOnceAsync(
+        Guid domainEventId,
+        Guid deviceId,
+        Guid sourceProcessId,
+        Guid targetProcessId,
+        CancellationToken cancellationToken = default)
+    {
+        DomainEventIds.Add(domainEventId);
+        MigratedDevices.Add((deviceId, sourceProcessId, targetProcessId));
         return Task.CompletedTask;
     }
 
@@ -1987,6 +2002,14 @@ internal sealed class StubDeviceDeletionDependencyQueryService : IDeviceDeletion
     public DeviceDeletionDependencies Dependencies { get; set; } = new(false, false, false, false);
     public DeviceDeletionImpact Impact { get; set; } = new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     public bool CascadeDeleteResult { get; set; } = true;
+    public DeviceProcessMigrationStatus MigrationStatus { get; set; } =
+        DeviceProcessMigrationStatus.Migrated;
+    public Guid? LastMigrationDeviceId { get; private set; }
+    public Guid? LastExpectedSourceProcessId { get; private set; }
+    public Guid? LastTargetProcessId { get; private set; }
+    public uint? LastExpectedRowVersion { get; private set; }
+    public DeviceProcessMigrationAuditContext? LastMigrationAuditContext
+        { get; private set; }
 
     public Task<DeviceDeletionDependencies> GetDependenciesAsync(
         Guid deviceId,
@@ -2008,6 +2031,30 @@ internal sealed class StubDeviceDeletionDependencyQueryService : IDeviceDeletion
         uint? expectedRowVersion = null)
     {
         return Task.FromResult(new DeviceCascadeDeletionResult(CascadeDeleteResult, Impact));
+    }
+
+    public Task<DeviceProcessMigrationResult> MigrateProcessAsync(
+        Guid deviceId,
+        Guid expectedSourceProcessId,
+        Guid targetProcessId,
+        uint expectedRowVersion,
+        DeviceProcessMigrationAuditContext auditContext,
+        CancellationToken cancellationToken = default)
+    {
+        LastMigrationDeviceId = deviceId;
+        LastExpectedSourceProcessId = expectedSourceProcessId;
+        LastTargetProcessId = targetProcessId;
+        LastExpectedRowVersion = expectedRowVersion;
+        LastMigrationAuditContext = auditContext;
+        return Task.FromResult(new DeviceProcessMigrationResult(
+            MigrationStatus,
+            deviceId,
+            expectedSourceProcessId,
+            targetProcessId,
+            MigrationStatus == DeviceProcessMigrationStatus.Migrated
+                ? expectedRowVersion + 1
+                : expectedRowVersion,
+            Impact));
     }
 }
 

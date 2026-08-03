@@ -7,10 +7,12 @@ import type { DeviceListItemDto } from './api';
 interface DeviceColumnOptions {
   canUpdateDevice: () => boolean;
   canDeleteDevice: () => boolean;
+  canMigrateDevice: () => boolean;
   processLabel: (processId: string) => string;
   onDetail: (device: DeviceListItemDto) => void;
   onEdit: (device: DeviceListItemDto) => void;
   onDelete: (device: DeviceListItemDto) => void;
+  onMigrate: (device: DeviceListItemDto) => void;
 }
 
 export function createDeviceColumns(
@@ -58,7 +60,7 @@ export function createDeviceColumns(
     {
       title: '操作',
       key: 'actions',
-      width: 180,
+      width: 250,
       align: 'right',
       render(row) {
         const actions = [
@@ -85,6 +87,21 @@ export function createDeviceColumns(
                 onClick: () => options.onEdit(row),
               },
               { default: () => '编辑' },
+            ),
+          );
+        }
+
+        if (options.canMigrateDevice()) {
+          actions.push(
+            h(
+              UiButton,
+              {
+                size: 'tiny',
+                type: 'warning',
+                secondary: true,
+                onClick: () => options.onMigrate(row),
+              },
+              { default: () => '迁移工序' },
             ),
           );
         }

@@ -89,6 +89,26 @@ public class Device : BaseEntity<Guid>, IAggregateRoot<Guid>
         BootstrapSecretHash = bootstrapSecretHash.Trim();
     }
 
+    public void MigrateProcess(Guid targetProcessId)
+    {
+        if (targetProcessId == Guid.Empty)
+            throw new ArgumentException("目标工序不能为空。", nameof(targetProcessId));
+
+        if (ProcessId == targetProcessId)
+        {
+            return;
+        }
+
+        var sourceProcessId = ProcessId;
+        ProcessId = targetProcessId;
+        AddDomainEvent(new DeviceProcessMigratedDomainEvent(
+            Id,
+            DeviceName,
+            Code,
+            sourceProcessId,
+            targetProcessId));
+    }
+
     public void MarkDeleted()
     {
         AddDomainEvent(new DeviceDeletedDomainEvent(Id, Code, ProcessId));

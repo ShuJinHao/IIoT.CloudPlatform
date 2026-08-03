@@ -14,6 +14,13 @@ public sealed record DeviceRenamedDomainEvent(
     string Code,
     Guid ProcessId) : IDomainEvent;
 
+public sealed record DeviceProcessMigratedDomainEvent(
+    Guid DeviceId,
+    string DeviceName,
+    string Code,
+    Guid SourceProcessId,
+    Guid TargetProcessId) : IDomainEvent;
+
 public sealed record DeviceDeletedDomainEvent(
     Guid DeviceId,
     string Code,

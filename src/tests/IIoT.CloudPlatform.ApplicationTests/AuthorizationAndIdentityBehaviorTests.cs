@@ -2014,6 +2014,23 @@ public sealed class AuthorizationAndIdentityBehaviorTests
                 true,
                 new DeviceDeletionImpact(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)));
         }
+
+        public Task<DeviceProcessMigrationResult> MigrateProcessAsync(
+            Guid deviceId,
+            Guid expectedSourceProcessId,
+            Guid targetProcessId,
+            uint expectedRowVersion,
+            DeviceProcessMigrationAuditContext auditContext,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new DeviceProcessMigrationResult(
+                DeviceProcessMigrationStatus.Migrated,
+                deviceId,
+                expectedSourceProcessId,
+                targetProcessId,
+                expectedRowVersion + 1,
+                new DeviceDeletionImpact(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)));
+        }
     }
 
     [AuthorizeRequirement(ClientReleasePermissions.Publish)]
