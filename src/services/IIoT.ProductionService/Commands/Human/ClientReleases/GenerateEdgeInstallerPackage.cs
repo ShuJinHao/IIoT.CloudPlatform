@@ -54,6 +54,12 @@ public sealed class GenerateEdgeInstallerPackageHandler(
     private const string HostPluginManifestFileName = "iiot-enabled-plugins.json";
     private const string RemovedPluginBindingFileName = "iiot-plugin-binding.json";
     private const string UpdateConfigFileName = "launcher.update.json";
+    private const int InstallerBindingSchemaVersion = 2;
+    private static readonly EdgeBindingPathsDto InstallerBindingPaths = new(
+        "/api/v1/bootstrap/device-instance",
+        "/api/v1/edge/client-releases/device/{deviceId}/catalog",
+        "/api/v1/edge/client-releases/version-reports",
+        "/api/v1/edge/runtime-heartbeats");
     private static readonly IComparer<string> VersionComparer = Comparer<string>.Create(ClientReleaseMapping.CompareVersions);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -159,8 +165,9 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             .Select(target => target.Binding)
             .ToList();
         var bindingBundle = new EdgeBindingBundleDto(
-            1,
+            InstallerBindingSchemaVersion,
             publicBaseUrl,
+            InstallerBindingPaths,
             ClientReleaseWriteCommitRecovery.NormalizeUtc(
                 DateTime.UtcNow),
             bindings);
@@ -369,6 +376,13 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             || manifest.Modules is null)
         {
             return ArtifactLoadResult.Fail("生成安装包失败：安装素材清单不完整。");
+        }
+
+        if (manifest.InstallerBindingSchemaVersion
+            != InstallerBindingSchemaVersion)
+        {
+            return ArtifactLoadResult.Fail(
+                "生成安装包失败：宿主安装素材不支持 binding schema v2。");
         }
 
         if (manifest.Modules.Any(module =>
@@ -1449,6 +1463,8 @@ public sealed class GenerateEdgeInstallerPackageHandler(
 internal sealed class EdgeInstallerArtifactManifest
 {
     public int SchemaVersion { get; set; }
+
+    public int InstallerBindingSchemaVersion { get; set; }
 
     public string Channel { get; set; } = string.Empty;
 

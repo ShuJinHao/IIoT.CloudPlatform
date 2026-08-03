@@ -133,6 +133,53 @@ public sealed class InstallerPackageWorkflowTests
     }
 
     [Fact]
+    public async Task GenerateEdgeInstallerPackageHandler_ShouldRejectLegacyHostBeforeRotatingSecret()
+    {
+        var oldSecret = BootstrapSecretGenerator.Generate();
+        var device = new Device("正极模切客户端", "DEV-AAAAAAAAAA", Guid.NewGuid());
+        device.SetBootstrapSecretHash(BootstrapSecretHasher.Hash(oldSecret));
+        var oldHash = device.BootstrapSecretHash;
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.Add(device);
+        var edgeRoot = CreateInstallerArtifactFixture(
+            "stable",
+            "1.2.0",
+            installerBindingSchemaVersion: 1);
+        var componentRepository = CreatePublishedReleaseComponentRepository(edgeRoot);
+
+        try
+        {
+            var handler = CreateInstallerPackageHandler(
+                deviceRepository,
+                componentRepository,
+                GetInstallerRoot(edgeRoot),
+                new RecordingAuditTrailService());
+
+            var result = await handler.Handle(
+                new GenerateEdgeInstallerPackageCommand(
+                    [new EdgeBindingSelection(PrimaryModuleId, device.Id)],
+                    HostVersion: "1.2.0",
+                    BaseUrl: "http://cloud.local"),
+                CancellationToken.None);
+
+            Assert.False(result.IsSuccess);
+            Assert.Contains(
+                result.Errors ?? [],
+                error => error.Contains("binding schema v2", StringComparison.Ordinal));
+            Assert.Equal(oldHash, device.BootstrapSecretHash);
+            Assert.True(BootstrapSecretHasher.Verify(oldSecret, device.BootstrapSecretHash!));
+            Assert.Empty(deviceRepository.UpdatedEntities);
+        }
+        finally
+        {
+            if (Directory.Exists(edgeRoot))
+            {
+                Directory.Delete(edgeRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task GenerateEdgeInstallerPackageHandler_ShouldFailBeforeRotatingSecret_WhenVelopackSetupFileMissingFromManifest()
     {
         var oldSecret = BootstrapSecretGenerator.Generate();
@@ -280,6 +327,20 @@ public sealed class InstallerPackageWorkflowTests
 
             var bindingJson = ReadZipEntryText(archive, "launcher/iiot-binding.json");
             using var binding = JsonDocument.Parse(bindingJson);
+            Assert.Equal(2, binding.RootElement.GetProperty("schemaVersion").GetInt32());
+            var bindingPaths = binding.RootElement.GetProperty("paths");
+            Assert.Equal(
+                "/api/v1/bootstrap/device-instance",
+                bindingPaths.GetProperty("deviceInstance").GetString());
+            Assert.Equal(
+                "/api/v1/edge/client-releases/device/{deviceId}/catalog",
+                bindingPaths.GetProperty("clientReleaseCatalogTemplate").GetString());
+            Assert.Equal(
+                "/api/v1/edge/client-releases/version-reports",
+                bindingPaths.GetProperty("clientVersionReport").GetString());
+            Assert.Equal(
+                "/api/v1/edge/runtime-heartbeats",
+                bindingPaths.GetProperty("runtimeHeartbeat").GetString());
             var bindingItem = binding.RootElement.GetProperty("bindings")[0];
             var bootstrapSecret = bindingItem.GetProperty("bootstrapSecret").GetString();
             Assert.Equal("http://cloud.local", binding.RootElement.GetProperty("baseUrl").GetString());
@@ -1485,7 +1546,8 @@ public sealed class InstallerPackageWorkflowTests
         string version,
         string targetRuntime = "win-x64",
         bool includeVelopackSetupFile = true,
-        bool writeVelopackSetupFile = true)
+        bool writeVelopackSetupFile = true,
+        int installerBindingSchemaVersion = 2)
     {
         var edgeRoot = Path.Combine(Path.GetTempPath(), $"iiot-edge-updates-{Guid.NewGuid():N}");
         var installerRoot = GetInstallerRoot(edgeRoot);
@@ -1509,6 +1571,7 @@ public sealed class InstallerPackageWorkflowTests
         var manifest = $$"""
         {
           "schemaVersion": 2,
+          "installerBindingSchemaVersion": {{installerBindingSchemaVersion}},
           "channel": "{{channel}}",
           "version": "{{version}}",
           "hostApiVersion": "1.0.0",

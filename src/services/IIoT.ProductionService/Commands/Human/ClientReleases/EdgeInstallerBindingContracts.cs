@@ -8,8 +8,15 @@ public sealed record EdgeBindingSelection(
 public sealed record EdgeBindingBundleDto(
     int SchemaVersion,
     string? BaseUrl,
+    EdgeBindingPathsDto Paths,
     DateTime GeneratedAtUtc,
     IReadOnlyList<EdgeBindingItemDto> Bindings);
+
+public sealed record EdgeBindingPathsDto(
+    string DeviceInstance,
+    string ClientReleaseCatalogTemplate,
+    string ClientVersionReport,
+    string RuntimeHeartbeat);
 
 public sealed record EdgeBindingItemDto(
     string ModuleId,
