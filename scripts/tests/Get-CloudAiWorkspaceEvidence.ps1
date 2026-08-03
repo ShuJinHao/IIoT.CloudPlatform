@@ -66,12 +66,15 @@ $aiRoot = Resolve-ExactGitRoot $AiRepositoryRoot 'AICopilot.slnx' 'AICopilot'
 
 $cloudContractSources = @(
     'src/hosts/IIoT.HttpApi/Controllers/AiRead/AiReadController.cs',
+    'src/services/IIoT.ProductionService/Queries/AiRead/AiReadQueries.cs',
     'src/services/IIoT.Services.Contracts/Contracts/AiRead/AiReadResponseContracts.cs',
     'src/services/IIoT.Services.Contracts/Contracts/Authorization/AiReadPermissions.cs',
     'src/services/IIoT.Services.Contracts/Contracts/Identity/IIoTClaimTypes.cs'
 )
 $aiContractSources = @(
     'src/infrastructure/AICopilot.Infrastructure/CloudRead/CloudAiReadClient.cs',
+    'src/infrastructure/AICopilot.Infrastructure/CloudRead/CloudAiReadDocumentAdapter.cs',
+    'src/infrastructure/AICopilot.Infrastructure/CloudRead/CloudAiReadProviderItemContractValidator.cs',
     'src/services/AICopilot.Services.Contracts/Contracts/CloudAiReadContracts.cs',
     'src/tests/AICopilot.InProcessTests/CloudAiReadClientContractTests.cs',
     'src/tests/AICopilot.CloudAiReadLiveTests/CloudAiReadLiveContractTests.cs'

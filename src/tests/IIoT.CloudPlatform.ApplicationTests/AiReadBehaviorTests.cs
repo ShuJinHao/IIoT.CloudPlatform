@@ -329,6 +329,43 @@ public sealed class AiReadBehaviorTests
     }
 
     [Fact]
+    public async Task AiReadCapacitySummary_ShouldPreserveUnknownOkAndNgCounts()
+    {
+        var deviceId = Guid.NewGuid();
+        var date = DateOnly.FromDateTime(DateTime.UtcNow);
+        var handler = new GetAiReadCapacitySummaryHandler(
+            new StubCapacityQueryService
+            {
+                SummaryRangeResult =
+                [
+                    new DailyRangeSummaryDto(
+                        date,
+                        TotalCount: 10,
+                        OkCount: null,
+                        NgCount: null,
+                        DayShiftTotal: 10,
+                        DayShiftOk: null,
+                        DayShiftNg: null,
+                        NightShiftTotal: 0,
+                        NightShiftOk: null,
+                        NightShiftNg: null)
+                ]
+            },
+            new TestAiReadScopeAccessor { DelegatedDeviceIds = [deviceId] },
+            Options.Create(new AiReadOptions()));
+
+        var result = await handler.Handle(
+            new GetAiReadCapacitySummaryQuery(deviceId, date, date),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var item = Assert.Single(result.Value!.Items);
+        Assert.Equal(10, item.TotalCount);
+        Assert.Null(item.OkCount);
+        Assert.Null(item.NgCount);
+    }
+
+    [Fact]
     public async Task AiReadDevices_ShouldReturnDeviceCode()
     {
         var processId = Guid.NewGuid();
@@ -1125,6 +1162,48 @@ public sealed class AiReadBehaviorTests
         Assert.Equal(deviceId, queryService.LastHourlyDeviceId);
         Assert.NotNull(queryService.LastHourlyRangeStart);
         Assert.NotNull(queryService.LastHourlyRangeEnd);
+    }
+
+    [Fact]
+    public async Task AiReadCapacityHourly_ShouldPreserveUnknownCountsAndRequiredPlcCode()
+    {
+        var deviceId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+        var queryService = new StubCapacityQueryService
+        {
+            HourlyRangeResult =
+            [
+                new HourlyCapacityPointDto(
+                    now,
+                    DateOnly.FromDateTime(now),
+                    now.Hour,
+                    now.Minute,
+                    $"{now.Hour:00}:{now.Minute:00}",
+                    "D",
+                    TotalCount: 12,
+                    OkCount: null,
+                    NgCount: null,
+                    PlcName: "正极模切",
+                    PlcCode: "P2-CP01")
+            ]
+        };
+        var handler = new GetAiReadCapacityHourlyHandler(
+            queryService,
+            new TestAiReadScopeAccessor { DelegatedDeviceIds = [deviceId] },
+            Options.Create(new AiReadOptions()));
+
+        var result = await handler.Handle(
+            new GetAiReadCapacityHourlyQuery(deviceId, Preset: "last_24h"),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var item = Assert.Single(result.Value!.Items);
+        Assert.Equal(12, item.TotalCount);
+        Assert.Null(item.OkCount);
+        Assert.Null(item.NgCount);
+        Assert.Null(item.OkRate);
+        Assert.Equal("P2-CP01", item.PlcCode);
+        Assert.Equal("正极模切", item.PlcName);
     }
 
     private static HttpContextAccessor CreateAccessor(

@@ -1738,6 +1738,82 @@ public sealed class AuthorizationAndIdentityBehaviorTests
     }
 
     [Fact]
+    public async Task HumanIdentitySessionHandler_ShouldReturnOnlyLiveServerIdentityFacts()
+    {
+        var subjectId = Guid.NewGuid();
+        var account = IdentityAccount.Create(subjectId, "E-SESSION-001");
+        var identityStore = new RecordingIdentityAccountStore
+        {
+            AccountById = account
+        };
+        identityStore.RolesByUserId[subjectId] = [SystemRoles.Admin];
+        var handler = new GetHumanIdentitySessionHandler(
+            new TestCurrentUser
+            {
+                Id = subjectId.ToString(),
+                UserName = "stale-client-name",
+                Roles = ["stale-client-role"],
+                Permissions = ["stale-client-permission"],
+                ActorType = IIoTClaimTypes.HumanActor,
+                IsAuthenticated = true
+            },
+            identityStore,
+            new StubCloudOidcUserProfileService
+            {
+                Profile = CreateActiveProfile(subjectId, account.EmployeeNo, "status-current") with
+                {
+                    RealName = "服务端员工姓名"
+                }
+            },
+            new StubPermissionProvider
+            {
+                Permissions = ["Device.Read", "Recipe.Read"]
+            });
+
+        var result = await handler.Handle(
+            new GetHumanIdentitySessionQuery(),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(subjectId, result.Value!.UserId);
+        Assert.Equal(account.EmployeeNo, result.Value.EmployeeNo);
+        Assert.Equal("服务端员工姓名", result.Value.DisplayName);
+        Assert.Equal([SystemRoles.Admin], result.Value.Roles);
+        Assert.Equal(["Device.Read", "Recipe.Read"], result.Value.Permissions);
+        Assert.DoesNotContain("stale-client-role", result.Value.Roles);
+        Assert.DoesNotContain("stale-client-permission", result.Value.Permissions);
+    }
+
+    [Fact]
+    public async Task HumanIdentitySessionHandler_ShouldFailClosedWhenLiveStatusIsUnavailable()
+    {
+        var subjectId = Guid.NewGuid();
+        var handler = new GetHumanIdentitySessionHandler(
+            new TestCurrentUser
+            {
+                Id = subjectId.ToString(),
+                ActorType = IIoTClaimTypes.HumanActor,
+                IsAuthenticated = true
+            },
+            new RecordingIdentityAccountStore
+            {
+                AccountById = IdentityAccount.Create(subjectId, "E-SESSION-002")
+            },
+            new StubCloudOidcUserProfileService
+            {
+                ExceptionToThrow = new InvalidOperationException("identity store unavailable")
+            },
+            new StubPermissionProvider());
+
+        var result = await handler.Handle(
+            new GetHumanIdentitySessionQuery(),
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ResultStatus.Unauthorized, result.Status);
+    }
+
+    [Fact]
     public async Task LoginUserHandler_ShouldIssueCurrentStatusVersionOnlyForActiveHuman()
     {
         var subjectId = Guid.NewGuid();
@@ -1979,9 +2055,11 @@ public sealed class AuthorizationAndIdentityBehaviorTests
 
     private sealed class StubPermissionProvider : IPermissionProvider
     {
+        public IList<string> Permissions { get; init; } = [];
+
         public Task<IList<string>> GetPermissionsAsync(Guid userId, CancellationToken cancellationToken = default)
         {
-            return Task.FromResult<IList<string>>([]);
+            return Task.FromResult(Permissions);
         }
     }
 
