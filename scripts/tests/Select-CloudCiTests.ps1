@@ -478,6 +478,9 @@ $webChanged = [Collections.Generic.List[string]]::new()
 $webAffected = $false
 $webFull = $Mode -in @('Quality', 'Full')
 $deploymentAffected = $false
+$releaseInputDeploymentContractPrefixes = @(
+    'src/services/IIoT.ProductionService/Commands/Human/ClientReleases/'
+)
 $unclassified = [Collections.Generic.List[string]]::new()
 $deferredFiles = [Collections.Generic.List[string]]::new()
 $retiredBusinessFiles = [Collections.Generic.List[string]]::new()
@@ -636,6 +639,19 @@ if ($Mode -eq 'Quality') {
                     -Category DeploymentContract -Reason "affected:$file"
             }
             continue
+        }
+
+        if (@($releaseInputDeploymentContractPrefixes | Where-Object {
+                    $file.StartsWith($_, [StringComparison]::Ordinal)
+                }).Count -gt 0) {
+            $deploymentAffected = $true
+            $deploymentProject = @($testProjects | Where-Object Name -eq 'IIoT.CloudPlatform.DeploymentTests')
+            if ($deploymentProject.Count -ne 1) {
+                $unclassified.Add($file)
+            } else {
+                Add-SelectedProject -Selected $selected -Project $deploymentProject[0] `
+                    -Category DeploymentContract -Reason "affected-release-input:$file"
+            }
         }
 
         $owner = @($projectDirectories | Where-Object {
