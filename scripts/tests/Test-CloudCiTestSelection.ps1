@@ -477,6 +477,23 @@ try {
         throw 'Cloud AnalyzerTests must explicitly cover Architecture and Security without inventory lookup.'
     }
 
+    $releaseInputOutput = Join-Path $temporaryRoot 'release-input.json'
+    $releaseInputFile = 'src/services/IIoT.ProductionService/Commands/Human/ClientReleases/GenerateEdgeInstallerPackage.cs'
+    & $selector `
+        -RepositoryRoot $root `
+        -ChangedFiles @($releaseInputFile) `
+        -OutputPath $releaseInputOutput `
+        -GitHubOutputPath ''
+    $releaseInput = Get-Content $releaseInputOutput -Raw | ConvertFrom-Json
+    $releaseDeploymentProject = @($releaseInput.selectedDotNetProjects |
+        Where-Object projectName -eq 'IIoT.CloudPlatform.DeploymentTests')
+    if (-not [bool]$releaseInput.deploymentAffected -or
+        @($releaseInput.selectedDotNetProjects.categories) -notcontains 'DeploymentContract' -or
+        $releaseDeploymentProject.Count -ne 1 -or
+        @($releaseDeploymentProject[0].reasons) -notcontains "affected-release-input:$releaseInputFile") {
+        throw 'Cloud release-input source changes did not retain the DeploymentContract lane.'
+    }
+
     $manualOutput = Join-Path $temporaryRoot 'manual.json'
     & $selector `
         -RepositoryRoot $root `
