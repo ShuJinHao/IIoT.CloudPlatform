@@ -89,7 +89,12 @@ public sealed class EfClientReleaseVersionObservationReader(
                 version.DeletedAtUtc,
                 version.DeletionReason,
                 version.DeletionFailure,
-                artifacts));
+                artifacts,
+                version.DataCapabilitiesJson,
+                version.FileManifestSha256,
+                version.DependencyClosureSha256,
+                version.DependencyHostVersion,
+                version.DependencyHostFileManifestSha256));
         }
 
         return observations;

@@ -190,12 +190,15 @@ internal static class PersistenceWriteInventory
         ["src/hosts/IIoT.MigrationWorkApp/SeedData/SystemInitData.cs::SystemInitData.SeedAttemptAsync(IIoTDbContext,UserManager<ApplicationUser>,RoleManager<IdentityRole<Guid>>,IConfiguration,SeedRetryTarget,CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/SingleAdminInvariantPostgresTests.cs",
             "PasswordRepairCommitConfirmationLoss_ShouldConfirmTargetWithoutSecondAdmin"),
-        ["src/hosts/IIoT.MigrationWorkApp/SeedData/SystemInitData.cs::SystemInitData.AcquireSingleAdminSeedLockAsync(IIoTDbContext,CancellationToken)"] = new(
+        ["src/hosts/IIoT.MigrationWorkApp/SeedData/SystemInitData.cs::SystemInitData.AcquireAdminSeedLockAsync(IIoTDbContext,CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/SingleAdminInvariantPostgresTests.cs",
             "PasswordRepairCommitConfirmationLoss_ShouldConfirmTargetWithoutSecondAdmin"),
         ["src/hosts/IIoT.MigrationWorkApp/SeedData/SystemInitData.cs::SystemInitData.EnsureRolePermissionTemplatesAsync(RoleManager<IdentityRole<Guid>>,IReadOnlyDictionary<string, Guid>,CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/SingleAdminInvariantPostgresTests.cs",
             "PasswordRepairCommitConfirmationLoss_ShouldConfirmTargetWithoutSecondAdmin"),
+        ["src/hosts/IIoT.MigrationWorkApp/SeedData/SystemInitData.cs::SystemInitData.EnsureAdminDelegatedAiReadPermissionsAsync(RoleManager<IdentityRole<Guid>>,IdentityRole<Guid>,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/SingleAdminInvariantPostgresTests.cs",
+            "EmptyDatabase_FirstSeed_ShouldCreateOneCompleteAdmin"),
         ["src/hosts/IIoT.MigrationWorkApp/SeedData/SystemInitData.cs::SystemInitData.EnsureRoleAsync(RoleManager<IdentityRole<Guid>>,string,Guid,CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/SingleAdminInvariantPostgresTests.cs",
             "PasswordRepairCommitConfirmationLoss_ShouldConfirmTargetWithoutSecondAdmin"),
@@ -235,6 +238,24 @@ internal static class PersistenceWriteInventory
         ["src/infrastructure/IIoT.EntityFrameworkCore/ClientReleases/EfEdgeInstallerGenerationStore.cs::EfEdgeInstallerGenerationStore.WriteAttemptAsync(EdgeInstallerGenerationRecord,CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
             "InstallerGenerationStore_ShouldRecoverWriteFaultAndKeepRecordImmutable"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/ClientReleases/EfEdgeInstallerGenerationStore.cs::EfEdgeInstallerGenerationStore.WriteAttemptAsync(EdgeInstallerGenerationRecord,IReadOnlyCollection<EdgeInstallerPendingCredential>,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
+            "InstallerPendingActivationLifecycle_ShouldPersistReadyConfirmAndExpiry"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/ClientReleases/EfEdgeInstallerGenerationStore.cs::EfEdgeInstallerGenerationStore.GetPendingAsync(Guid,Guid,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
+            "InstallerPendingActivationLifecycle_ShouldPersistReadyConfirmAndExpiry"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/ClientReleases/EfEdgeInstallerGenerationStore.cs::EfEdgeInstallerGenerationStore.TryActivateAsync(Guid,Guid,int,DateTime,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
+            "InstallerPendingActivationLifecycle_ShouldPersistReadyConfirmAndExpiry"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/ClientReleases/EfEdgeInstallerGenerationStore.cs::EfEdgeInstallerGenerationStore.ConfirmActivationAsync(Guid,Guid,int,DateTime,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
+            "InstallerPendingActivationLifecycle_ShouldPersistReadyConfirmAndExpiry"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/ClientReleases/EfEdgeInstallerGenerationStore.cs::EfEdgeInstallerGenerationStore.ExpireOverdueAsync(IIoTDbContext,DateTime,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
+            "InstallerPendingActivationLifecycle_ShouldPersistReadyConfirmAndExpiry"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/ClientReleases/EfProductionBindingApplyStore.cs::EfProductionBindingApplyStore.ApplyAttemptAsync(ProductionBindingApplyRequest,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
+            "ProductionBindingApplyStore_ShouldPersistBindingAndAuditAtomically"),
         ["src/infrastructure/IIoT.EntityFrameworkCore/EdgeHosts/EfEdgeHostPlcRuntimeStateStore.cs::EfEdgeHostPlcRuntimeStateStore.SaveChangesAsync(CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
             "EdgeReports_ShouldRecoverCommitConfirmationLoss"),
@@ -259,6 +280,9 @@ internal static class PersistenceWriteInventory
         ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/EfRefreshTokenService.cs::EfRefreshTokenService.IssueAttemptAsync(RefreshTokenSession,bool,CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
             "HumanRefreshRotation_ShouldRecoverCommitLossAndRejectSourceReplay"),
+        ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/EfRefreshTokenService.cs::EfRefreshTokenService.IssueReplacingAttemptAsync(RefreshTokenSession,string,CancellationToken)"] = new(
+            "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ClientReleaseWriteRetryPostgresTests.cs",
+            "EdgeRefreshReplacement_ShouldRevokePriorSessionAndPersistReplacement"),
         ["src/infrastructure/IIoT.EntityFrameworkCore/Identity/EfRefreshTokenService.cs::EfRefreshTokenService.RotateAttemptAsync(RotationTarget,Result<RefreshTokenRotationResult>,CancellationToken)"] = new(
             "src/tests/IIoT.CloudPlatform.Persistence.PostgresTests/ProductionRetryTransactionPostgresTests.cs",
             "HumanRefreshRotation_ShouldRecoverCommitLossAndRejectSourceReplay"),
@@ -1383,6 +1407,10 @@ internal static class PersistenceWriteInventory
 
         if ((typeName == "IIoT.EntityFrameworkCore.Uploads.EfUploadReceiveRegistry" &&
              methodName == "RecordDuplicateObservationAsync") ||
+            (typeName ==
+                 "IIoT.EntityFrameworkCore.ClientReleases.EfEdgeInstallerGenerationStore" &&
+             methodName is "GetPendingAsync" or "TryActivateAsync" or
+                 "ConfirmActivationAsync" or "ExpireOverdueAsync") ||
             (typeName ==
                  "IIoT.ProductionService.Commands.ClientReleases.PublishEdgePluginPackageHandler" &&
              methodName == "Handle") ||

@@ -39,6 +39,7 @@ export interface DeviceStatusSummaryDto {
 export interface RegisterDevicePayload {
   deviceName: string;
   processId: string;
+  pluginComponentId: string;
 }
 
 export interface CreateDeviceResultDto {
@@ -54,6 +55,14 @@ export interface DeviceLedgerProcessOptionDto {
   id: string;
   processCode: string;
   processName: string;
+}
+
+export interface AvailableDevicePluginSeriesDto {
+  componentId: string;
+  moduleId: string;
+  supportedProcessType: string;
+  latestPublishedVersion: string;
+  businessDocumentRef: string | null;
 }
 
 export interface DeviceProcessMigrationProcessDto {
@@ -75,6 +84,7 @@ export interface DeviceProcessMigrationRelatedCountsDto {
   employeeDeviceAccesses: number;
   refreshTokenSessions: number;
   edgeHostPlcRuntimeStates: number;
+  installerPendingCredentials: number;
   totalAssociatedRows: number;
 }
 
@@ -152,6 +162,16 @@ export const getDeviceLedgerProcessOptionsApi = () => {
   return http.get<DeviceLedgerProcessOptionDto[]>(`${basePath}/processes/select`, {
     inlineFeedback: true,
   });
+};
+
+export const getAvailableDevicePluginSeriesApi = (processId: string) => {
+  return http.get<AvailableDevicePluginSeriesDto[]>(
+    `${basePath}/plugin-series/available`,
+    {
+      inlineFeedback: true,
+      params: { processId },
+    },
+  );
 };
 
 export const getAllActiveDevicesApi = () => {

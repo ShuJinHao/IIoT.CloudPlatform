@@ -55,6 +55,70 @@ public sealed class EfRefreshTokenService(
             cancellationToken);
     }
 
+    public async Task<RefreshTokenEnvelope> IssueReplacingAsync(
+        string actorType,
+        Guid subjectId,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorType);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        if (string.Equals(
+                actorType,
+                IIoTClaimTypes.HumanActor,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Human refresh sessions cannot use device replacement issuance.");
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var now = NormalizeTimestamp(DateTimeOffset.UtcNow);
+        var token = GenerateToken(identityStatusVersion: null);
+        var session = CreateSession(
+            Guid.NewGuid(),
+            actorType,
+            subjectId,
+            token,
+            now);
+        var envelope = new RefreshTokenEnvelope(token, session.ExpiresAtUtc);
+        try
+        {
+            await using var strategyContext = _createContext();
+            var strategy = strategyContext.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(
+                callbackToken => IssueReplacingAttemptAsync(
+                    session,
+                    reason.Trim(),
+                    callbackToken),
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (RefreshTokenSubjectUnavailableException)
+        {
+            throw new InvalidOperationException(
+                "Edge device refresh replacement cannot be issued because the device no longer exists.");
+        }
+        catch (CloudWriteConflictException)
+        {
+            throw;
+        }
+        catch
+        {
+            // The replacement row and all prior revocations share one DB
+            // transaction. Observing the replacement proves the full switch
+            // committed; absence is an unknown outcome, never permission to
+            // revoke the old sessions separately.
+            await ObserveIssueOutcomeAsync(session);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return envelope;
+    }
+
     public async Task<Result<RefreshTokenRotationResult>> RotateAsync(
         string actorType,
         string refreshToken,
@@ -358,6 +422,74 @@ public sealed class EfRefreshTokenService(
         context.RefreshTokenSessions.Add(target);
         await context.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    private async Task IssueReplacingAttemptAsync(
+        RefreshTokenSession target,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        await using var context = _createContext();
+        await using var transaction =
+            await context.Database.BeginTransactionAsync(cancellationToken);
+
+        await DeviceDeletionTransactionLock.AcquireAsync(
+            context,
+            target.SubjectId,
+            cancellationToken);
+        if (!await context.Devices
+                .AsNoTracking()
+                .AnyAsync(device => device.Id == target.SubjectId, cancellationToken))
+        {
+            throw new RefreshTokenSubjectUnavailableException();
+        }
+
+        var committed = await context.RefreshTokenSessions
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                session => session.Id == target.Id,
+                cancellationToken);
+        if (committed is not null)
+        {
+            if (!MatchesSession(committed, target))
+                throw new CloudWriteConflictException();
+            await transaction.CommitAsync(cancellationToken);
+            return;
+        }
+
+        if (await context.RefreshTokenSessions
+                .AsNoTracking()
+                .AnyAsync(
+                    session => session.TokenHash == target.TokenHash,
+                    cancellationToken))
+        {
+            throw new CloudWriteConflictException();
+        }
+
+        var priorSessions = await context.RefreshTokenSessions
+            .Where(session =>
+                session.ActorType == target.ActorType
+                && session.SubjectId == target.SubjectId
+                && !session.RevokedAtUtc.HasValue
+                && session.ExpiresAtUtc > target.CreatedAtUtc)
+            .ToListAsync(cancellationToken);
+        foreach (var prior in priorSessions)
+        {
+            prior.RevokedAtUtc = target.CreatedAtUtc;
+            prior.RevokedReason = reason;
+            prior.ReplacedByTokenId = target.Id;
+        }
+
+        context.RefreshTokenSessions.Add(target);
+        try
+        {
+            await context.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw new CloudWriteConflictException();
+        }
     }
 
     private async Task<Result<RefreshTokenRotationResult>> RotateAttemptAsync(

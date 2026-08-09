@@ -28,6 +28,7 @@ public sealed class EfEdgeHostPlcRuntimeStateStore(IIoTDbContext dbContext) : IE
         }
 
         return await dbContext.EdgeHostPlcRuntimeStates
+            .AsNoTracking()
             .Where(state => deviceIds == null || deviceIds.Contains(state.DeviceId))
             .OrderByDescending(state => state.LastSeenAtUtc)
             .ThenBy(state => state.PlcCode)

@@ -86,6 +86,7 @@ public sealed class DeviceProcessMigrationBehaviorTests
             repository,
             processQueries,
             dependencies,
+            new StubDevicePluginBindingQueryService(),
             new StubCurrentUserDeviceAccessService { IsAdministrator = true });
 
         var result = await handler.Handle(
@@ -146,6 +147,7 @@ public sealed class DeviceProcessMigrationBehaviorTests
             },
             repository,
             processQueries,
+            new StubDevicePluginBindingQueryService(),
             migration,
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
             audit);

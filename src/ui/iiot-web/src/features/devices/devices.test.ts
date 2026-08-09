@@ -76,7 +76,8 @@ const deletionImpact: DeviceDeletionImpactDto = {
   employeeDeviceAccesses: 10,
   refreshTokenSessions: 11,
   edgeHostPlcRuntimeStates: 12,
-  totalAssociatedRows: 78,
+  installerPendingCredentials: 13,
+  totalAssociatedRows: 91,
 };
 
 const processOptions = [
@@ -104,6 +105,7 @@ const migrationImpact: DeviceProcessMigrationImpactDto = {
     employeeDeviceAccesses: 1,
     refreshTokenSessions: 1,
     edgeHostPlcRuntimeStates: 0,
+    installerPendingCredentials: 0,
     totalAssociatedRows: 7,
   },
   blockers: [],

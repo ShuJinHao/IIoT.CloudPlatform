@@ -15,11 +15,24 @@ public sealed partial class PassStationTypesOptions
             throw new InvalidOperationException("PassStationTypes must define at least one pass station type.");
 
         var typeKeys = new HashSet<string>(StringComparer.Ordinal);
+        var aliases = new HashSet<string>(StringComparer.Ordinal);
         foreach (var type in Types)
         {
             ValidateType(type);
-            if (!typeKeys.Add(Normalize(type.TypeKey)))
+            var typeKey = Normalize(type.TypeKey);
+            if (!typeKeys.Add(typeKey) || aliases.Contains(typeKey))
                 throw new InvalidOperationException($"PassStation type '{type.TypeKey}' is duplicated.");
+            foreach (var legacyTypeKey in type.LegacyTypeKeys)
+            {
+                var alias = Normalize(legacyTypeKey);
+                if (!IsSafeKey(alias)
+                    || typeKeys.Contains(alias)
+                    || !aliases.Add(alias))
+                {
+                    throw new InvalidOperationException(
+                        $"PassStation legacy type key '{legacyTypeKey}' is invalid or duplicated.");
+                }
+            }
         }
     }
 

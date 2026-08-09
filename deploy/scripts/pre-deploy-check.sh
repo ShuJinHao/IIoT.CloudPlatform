@@ -78,6 +78,7 @@ printf 'preflight_release_lock=available-or-owned path=%s\n' "$DEPLOY_RELEASE_LO
 printf 'preflight_cleanup_lock=available path=%s\n' "$POST_RELEASE_CLEANUP_LOCK_FILE"
 
 ensure_required_secret_values_changed
+ensure_identity_status_signing_secret
 ensure_required_public_values_changed
 ensure_bootstrap_secret_not_disabled
 ensure_oidc_http_boundary

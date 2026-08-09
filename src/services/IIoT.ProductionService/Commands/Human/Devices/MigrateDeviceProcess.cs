@@ -45,6 +45,7 @@ public sealed class MigrateDeviceProcessHandler(
     ICurrentUser currentUser,
     IReadRepository<Device> deviceRepository,
     IProcessReadQueryService processReadQueryService,
+    IDevicePluginBindingQueryService bindingQueryService,
     IDeviceDeletionDependencyQueryService migrationService,
     ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IAuditTrailService auditTrailService)
@@ -109,6 +110,22 @@ public sealed class MigrateDeviceProcessHandler(
             return await FailAsync(
                 request,
                 target is null ? "目标工序不存在。" : "设备当前工序主数据不存在。",
+                device,
+                cancellationToken);
+        }
+
+        var binding = await bindingQueryService.GetByDeviceIdAsync(
+            device.Id,
+            cancellationToken);
+        if (binding is not null
+            && !string.Equals(
+                binding.SupportedProcessType,
+                target.ProcessCode,
+                StringComparison.Ordinal))
+        {
+            return await FailAsync(
+                request,
+                "设备工序迁移失败：已绑定插件不支持目标工序。",
                 device,
                 cancellationToken);
         }

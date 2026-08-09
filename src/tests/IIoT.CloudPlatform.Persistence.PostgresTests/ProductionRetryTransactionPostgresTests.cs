@@ -3602,7 +3602,10 @@ public sealed class ProductionRetryTransactionPostgresTests(
             $"REGCANCEL-{Guid.NewGuid():N}"[..24],
             "Registration cancellation process");
         process.ClearDomainEvents();
+        var registrationPlugin = CreatePublishedRegistrationPlugin(
+            process.ProcessCode);
         dbContext.MfgProcesses.Add(process);
+        dbContext.ClientReleaseComponents.Add(registrationPlugin);
         await dbContext.SaveChangesAsync(budget.Token);
         dbContext.ChangeTracker.Clear();
         var audit = new RecordingAuditTrailService();
@@ -3613,7 +3616,10 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 IsAdministrator = true
             },
             new EfRepository<Device>(dbContext),
+            new EfRepository<DevicePluginBinding>(dbContext),
+            new EfRepository<ClientReleaseComponent>(dbContext),
             new ProcessReadQueryService(dbContext),
+            new DevicePluginBindingQueryService(dbContext),
             new DeviceReadQueryService(dbContext),
             audit,
             CreateUnitOfWork(dbContext),
@@ -3626,7 +3632,8 @@ public sealed class ProductionRetryTransactionPostgresTests(
         var result = await handler.Handle(
             new RegisterDeviceCommand(
                 $"Registration cancellation {Guid.NewGuid():N}",
-                process.Id),
+                process.Id,
+                registrationPlugin.Id),
             cancellation.Token);
 
         Assert.True(result.IsSuccess);
@@ -4117,7 +4124,10 @@ public sealed class ProductionRetryTransactionPostgresTests(
             $"TXB1D-{unique[..12]}",
             $"Device process {unique}");
         deviceProcess.ClearDomainEvents();
+        var devicePlugin = CreatePublishedRegistrationPlugin(
+            deviceProcess.ProcessCode);
         dbContext.MfgProcesses.Add(deviceProcess);
+        dbContext.ClientReleaseComponents.Add(devicePlugin);
         await dbContext.SaveChangesAsync(cancellationToken);
         dbContext.ChangeTracker.Clear();
         var audit = new RecordingAuditTrailService();
@@ -4127,7 +4137,10 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 HumanAdmin(),
                 access,
                 new EfRepository<Device>(dbContext),
+                new EfRepository<DevicePluginBinding>(dbContext),
+                new EfRepository<ClientReleaseComponent>(dbContext),
                 new ProcessReadQueryService(dbContext),
+                new DevicePluginBindingQueryService(dbContext),
                 new DeviceReadQueryService(dbContext),
                 audit,
                 CreateUnitOfWork(dbContext),
@@ -4136,7 +4149,8 @@ public sealed class ProductionRetryTransactionPostgresTests(
             .Handle(
                 new RegisterDeviceCommand(
                     $"Retry device {unique}",
-                    deviceProcess.Id),
+                    deviceProcess.Id,
+                    devicePlugin.Id),
                 cancellationToken);
         Assert.True(registerDevice.IsSuccess);
         var deviceId = registerDevice.Value!.Id;
@@ -4329,7 +4343,30 @@ public sealed class ProductionRetryTransactionPostgresTests(
 
         armCommitFailure();
         var versionResult = await new ReportDeviceClientVersionHandler(
+                new TestCurrentUser
+                {
+                    DeviceId = device.Id,
+                    ClientCode = device.Code,
+                    ActorType = IIoTClaimTypes.EdgeDeviceActor,
+                    IsAuthenticated = true
+                },
                 identity,
+                new StubDevicePluginBindingQueryService
+                {
+                    Bindings =
+                    [
+                        new DevicePluginBindingReadItem(
+                            Guid.NewGuid(),
+                            device.Id,
+                            Guid.NewGuid(),
+                            "ap.runtime",
+                            "AP runtime",
+                            process.ProcessCode,
+                            "stable",
+                            "win-x64",
+                            "[]")
+                    ]
+                },
                 new EfDeviceClientStateStore(dbContext),
                 CreateUnitOfWork(dbContext),
                 observationReader,
@@ -4811,6 +4848,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
             new EmployeeMutationObservationReader(dbContextOptions),
             HumanAdmin(),
             new EfAuditTrailService(
+                dbContext,
                 dbContextOptions,
                 NullLogger<EfAuditTrailService>.Instance));
 
@@ -5785,6 +5823,40 @@ public sealed class ProductionRetryTransactionPostgresTests(
         await dbContext.SaveChangesAsync(cancellationToken);
         dbContext.ChangeTracker.Clear();
         return new SeededEmployee(employee.Id, employeeNo, realName);
+    }
+
+    private static ClientReleaseComponent CreatePublishedRegistrationPlugin(
+        string processType)
+    {
+        var component = ClientReleaseComponent.CreatePlugin(
+            $"REG-{Guid.NewGuid():N}",
+            "Registration test plugin",
+            null,
+            null,
+            null,
+            "stable",
+            "win-x64");
+        component.ConfigurePluginContract(
+            processType,
+            "docs/registration-test-plugin.md",
+            2,
+            new string('a', 64),
+            "[]");
+        component.UpsertPluginVersion(
+            "2.0.12",
+            "2.0.0",
+            "2.0.0",
+            "9.9.9",
+            "net10.0-windows",
+            "/edge-updates/registration-test-plugin.zip",
+            new string('b', 64),
+            1024,
+            null,
+            "[]",
+            ClientReleaseStatus.Published,
+            null,
+            "test");
+        return component;
     }
 
     private static (MfgProcess Process, Device Device) CreateProcessAndDevice(

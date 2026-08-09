@@ -6,6 +6,7 @@ using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.Contracts.RecordQueries;
 using Microsoft.EntityFrameworkCore;
+using IIoT.SharedKernel.Domain;
 
 namespace IIoT.EntityFrameworkCore.Persistence;
 
@@ -21,7 +22,12 @@ public sealed class CloudWriteObservationReader(
         Guid processId,
         string processCode,
         CancellationToken cancellationToken)
-        => ObserveConsistentAsync(
+    {
+        var normalizedProcessCode =
+            BusinessIdentityNormalization.NormalizeClassificationCode(
+                processCode,
+                nameof(processCode));
+        return ObserveConsistentAsync(
             async (context, token) =>
             {
                 var target = await context.MfgProcesses
@@ -35,7 +41,8 @@ public sealed class CloudWriteObservationReader(
                     .SingleOrDefaultAsync(token);
                 var codeOwnerId = await context.MfgProcesses
                     .AsNoTracking()
-                    .Where(process => process.ProcessCode == processCode)
+                    .Where(process =>
+                        process.ProcessCode == normalizedProcessCode)
                     .Select(process => (Guid?)process.Id)
                     .SingleOrDefaultAsync(token);
                 var hasDevices = await context.Devices
@@ -51,6 +58,7 @@ public sealed class CloudWriteObservationReader(
                     hasRecipes);
             },
             cancellationToken);
+    }
 
     public Task<DeviceWriteObservation> ObserveDeviceAsync(
         Guid deviceId,
@@ -58,7 +66,12 @@ public sealed class CloudWriteObservationReader(
         string clientCode,
         Guid processId,
         CancellationToken cancellationToken)
-        => ObserveConsistentAsync(
+    {
+        var normalizedDeviceName =
+            BusinessIdentityNormalization.NormalizeDisplayNameKey(
+                deviceName,
+                nameof(deviceName));
+        return ObserveConsistentAsync(
             async (context, token) =>
             {
                 var target = await context.Devices
@@ -73,7 +86,8 @@ public sealed class CloudWriteObservationReader(
                     .SingleOrDefaultAsync(token);
                 var nameOwnerId = await context.Devices
                     .AsNoTracking()
-                    .Where(device => device.DeviceName == deviceName)
+                    .Where(device =>
+                        device.NormalizedDeviceName == normalizedDeviceName)
                     .Select(device => (Guid?)device.Id)
                     .SingleOrDefaultAsync(token);
                 var codeOwnerId = await context.Devices
@@ -96,6 +110,7 @@ public sealed class CloudWriteObservationReader(
                     impact);
             },
             cancellationToken);
+    }
 
     public Task<RecipeWriteObservation> ObserveRecipeAsync(
         Guid recipeId,
@@ -195,7 +210,8 @@ public sealed class CloudWriteObservationReader(
                             current.StationCode,
                             current.Protocol,
                             current.Address,
-                            current.LastError))
+                            current.LastError,
+                            current.Enabled))
                     .ToListAsync(token);
 
                 return new DeviceReportWriteObservation(
@@ -222,7 +238,13 @@ public sealed class CloudWriteObservationReader(
                             state.PlcSnapshotReportedAtUtc.Value,
                             state.PlcSnapshotReceivedAtUtc.Value,
                             EdgeHostPlcRuntimeSnapshotFingerprint.Compute(
-                                plcStates)));
+                                plcStates,
+                                state.PlcSnapshotIsAuthoritative,
+                                state.PlcSnapshotConfigurationVersion,
+                                state.PlcSnapshotExplicitClear),
+                            state.PlcSnapshotIsAuthoritative,
+                            state.PlcSnapshotConfigurationVersion,
+                            state.PlcSnapshotExplicitClear));
             },
             cancellationToken);
 
@@ -480,7 +502,12 @@ public sealed class CloudWriteObservationReader(
                     from refresh_token_sessions
                     where "ActorType" = {IIoTClaimTypes.EdgeDeviceActor} and "SubjectId" = {deviceId}
                 ) as "RefreshTokenSessions",
-                (select count(*)::bigint from edge_host_plc_runtime_states where device_id = {deviceId}) as "EdgeHostPlcRuntimeStates"
+                (select count(*)::bigint from edge_host_plc_runtime_states where device_id = {deviceId}) as "EdgeHostPlcRuntimeStates",
+                (
+                    select count(*)::bigint
+                    from edge_installer_pending_credentials credential
+                    where credential."DeviceId" = {deviceId}
+                ) as "InstallerPendingCredentials"
             """)
             .SingleAsync(cancellationToken);
         return row.ToContract();
@@ -500,6 +527,7 @@ public sealed class CloudWriteObservationReader(
         public long EmployeeDeviceAccesses { get; init; }
         public long RefreshTokenSessions { get; init; }
         public long EdgeHostPlcRuntimeStates { get; init; }
+        public long InstallerPendingCredentials { get; init; }
 
         public DeviceDeletionImpact ToContract()
             => new(
@@ -514,6 +542,7 @@ public sealed class CloudWriteObservationReader(
                 EmployeeDeviceAccesses,
                 RefreshTokenSessions,
                 RuntimeHeartbeats,
-                EdgeHostPlcRuntimeStates);
+                EdgeHostPlcRuntimeStates,
+                InstallerPendingCredentials);
     }
 }

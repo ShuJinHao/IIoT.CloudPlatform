@@ -1,18 +1,40 @@
 using IIoT.HttpApi.Infrastructure;
 using IIoT.ProductionService.Queries.AiRead;
+using IIoT.ProductionService.Queries.DeviceMetadata;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 
 namespace IIoT.HttpApi.Controllers;
 
-[Authorize(Policy = HttpApiPolicies.RequireAiReadToken)]
+[Authorize(Policy = HttpApiPolicies.RequireAiReadDelegation)]
 [EnableRateLimiting(HttpApiRateLimitPolicies.AiRead)]
 [Route("api/v1/ai/read")]
 [ApiController]
 [Tags("AI Read")]
 public sealed class AiReadController : ApiControllerBase
 {
+    [HttpGet("device-plcs")]
+    public async Task<IActionResult> GetDevicePlcs(
+        [FromQuery] Guid deviceId,
+        CancellationToken cancellationToken = default)
+    {
+        return ReturnResult(await Sender.Send(
+            new GetAiReadDevicePlcsQuery(deviceId),
+            cancellationToken));
+    }
+
+    [HttpGet("data-schemas")]
+    public async Task<IActionResult> GetDataSchemas(
+        [FromQuery] Guid deviceId,
+        [FromQuery] string? plcCode = null,
+        CancellationToken cancellationToken = default)
+    {
+        return ReturnResult(await Sender.Send(
+            new GetAiReadDeviceDataSchemasQuery(deviceId, plcCode),
+            cancellationToken));
+    }
+
     [HttpGet("devices")]
     public async Task<IActionResult> GetDevices(
         [FromQuery] Guid? deviceId = null,

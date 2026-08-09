@@ -1,9 +1,11 @@
 using IIoT.Services.Contracts.RecordQueries;
+using IIoT.SharedKernel.Domain;
 using Microsoft.EntityFrameworkCore;
 
 namespace IIoT.EntityFrameworkCore.QueryServices;
 
-public sealed class ProcessReadQueryService(IIoTDbContext dbContext) : IProcessReadQueryService
+public sealed class ProcessReadQueryService(IIoTDbContext dbContext)
+    : IProcessReadQueryService, IAiReadProcessQueryService
 {
     public async Task<IReadOnlyList<ProcessReadItem>> GetByIdsAsync(
         IReadOnlyCollection<Guid> processIds,
@@ -63,6 +65,51 @@ public sealed class ProcessReadQueryService(IIoTDbContext dbContext) : IProcessR
         return (items, totalCount);
     }
 
+    async Task<(IReadOnlyList<ProcessReadItem> Items, int TotalCount)>
+        IAiReadProcessQueryService.GetPagedAsync(
+            Guid? processId,
+            string? keyword,
+            IReadOnlyCollection<Guid>? allowedDeviceIds,
+            int skip,
+            int take,
+            CancellationToken cancellationToken)
+    {
+        var normalizedKeyword = keyword?.Trim();
+        var query = dbContext.MfgProcesses.AsNoTracking();
+        if (allowedDeviceIds is not null)
+        {
+            var scopedDeviceIds = allowedDeviceIds.Distinct().ToArray();
+            query = query.Where(process => dbContext.Devices.Any(device =>
+                scopedDeviceIds.Contains(device.Id) && device.ProcessId == process.Id));
+        }
+
+        if (processId.HasValue)
+        {
+            query = query.Where(process => process.Id == processId.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(normalizedKeyword))
+        {
+            query = query.Where(process =>
+                process.ProcessCode.Contains(normalizedKeyword) ||
+                process.ProcessName.Contains(normalizedKeyword));
+        }
+
+        var totalCount = await query.CountAsync(cancellationToken);
+        var items = await query
+            .OrderBy(process => process.ProcessCode)
+            .ThenBy(process => process.Id)
+            .Skip(skip)
+            .Take(take)
+            .Select(process => new ProcessReadItem(
+                process.Id,
+                process.ProcessCode,
+                process.ProcessName))
+            .ToListAsync(cancellationToken);
+
+        return (items, totalCount);
+    }
+
     public Task<bool> ExistsAsync(
         Guid processId,
         CancellationToken cancellationToken = default)
@@ -77,9 +124,13 @@ public sealed class ProcessReadQueryService(IIoTDbContext dbContext) : IProcessR
         Guid? excludingProcessId = null,
         CancellationToken cancellationToken = default)
     {
+        var normalizedProcessCode =
+            BusinessIdentityNormalization.NormalizeClassificationCode(
+                processCode,
+                nameof(processCode));
         var query = dbContext.MfgProcesses
             .AsNoTracking()
-            .Where(process => process.ProcessCode == processCode);
+            .Where(process => process.ProcessCode == normalizedProcessCode);
 
         if (excludingProcessId.HasValue)
         {

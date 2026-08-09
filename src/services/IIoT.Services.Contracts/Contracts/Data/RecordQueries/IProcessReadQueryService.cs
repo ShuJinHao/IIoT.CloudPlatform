@@ -41,3 +41,14 @@ public interface IProcessReadQueryService : IReadOnlyQueryPort
         Guid processId,
         CancellationToken cancellationToken = default);
 }
+
+public interface IAiReadProcessQueryService : IReadOnlyQueryPort
+{
+    Task<(IReadOnlyList<ProcessReadItem> Items, int TotalCount)> GetPagedAsync(
+        Guid? processId,
+        string? keyword,
+        IReadOnlyCollection<Guid>? allowedDeviceIds,
+        int skip,
+        int take,
+        CancellationToken cancellationToken = default);
+}

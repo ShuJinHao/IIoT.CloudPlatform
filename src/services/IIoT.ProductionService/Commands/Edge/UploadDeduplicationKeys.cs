@@ -6,6 +6,7 @@ using IIoT.ProductionService.Commands.Capacities;
 using IIoT.ProductionService.Commands.DeviceLogs;
 using IIoT.ProductionService.Commands.PassStations;
 using IIoT.SharedKernel.Result;
+using IIoT.SharedKernel.Domain;
 
 namespace IIoT.ProductionService.Commands;
 
@@ -62,7 +63,11 @@ internal static class UploadDeduplicationKeys
                     request.OkCount,
                     request.NgCount,
                     request.SchemaVersion,
-                    ProcessType = request.ProcessType?.Trim().ToLowerInvariant(),
+                    ProcessType = string.IsNullOrWhiteSpace(request.ProcessType)
+                        ? null
+                        : BusinessIdentityNormalization.NormalizeClassificationCode(
+                            request.ProcessType,
+                            nameof(request.ProcessType)),
                     PlcCode = request.PlcCode?.Trim(),
                     PlcName = request.PlcName?.Trim()
                 });
@@ -98,6 +103,7 @@ internal static class UploadDeduplicationKeys
                 Items = (request.Items ?? [])
                     .Select(item => new
                     {
+                        CompletionId = item.CompletionId?.Trim(),
                         item.Barcode,
                         item.CellResult,
                         CompletedTime = NormalizeDateTime(item.CompletedTime),
@@ -110,6 +116,7 @@ internal static class UploadDeduplicationKeys
     public static string ForPassStationRecord(
         string typeKey,
         Guid deviceId,
+        string? completionId,
         string barcode,
         string cellResult,
         DateTime completedTime,
@@ -120,6 +127,7 @@ internal static class UploadDeduplicationKeys
             {
                 TypeKey = PassStationPayloadJson.NormalizeTypeKey(typeKey),
                 DeviceId = deviceId,
+                CompletionId = completionId?.Trim(),
                 Barcode = barcode.Trim(),
                 CellResult = cellResult.Trim(),
                 CompletedTime = NormalizeDateTime(completedTime),

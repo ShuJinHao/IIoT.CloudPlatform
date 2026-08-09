@@ -6,6 +6,7 @@ using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.Contracts.Uploads;
 using IIoT.Services.CrossCutting.Caching;
 using IIoT.SharedKernel.Messaging;
+using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Result;
 
 namespace IIoT.ProductionService.Commands.Capacities;
@@ -113,7 +114,17 @@ public class ReceiveHourlyCapacityHandler(
 
     private static string? Normalize(string? value)
     {
-        value = value?.Trim();
-        return string.IsNullOrWhiteSpace(value) ? null : value.ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        try
+        {
+            return BusinessIdentityNormalization.NormalizeClassificationCode(
+                value,
+                nameof(value));
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
     }
 }

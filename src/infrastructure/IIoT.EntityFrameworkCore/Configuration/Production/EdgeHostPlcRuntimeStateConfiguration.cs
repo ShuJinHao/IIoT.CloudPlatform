@@ -57,6 +57,9 @@ public sealed class EdgeHostPlcRuntimeStateConfiguration : IEntityTypeConfigurat
             .HasMaxLength(EdgeHostPlcRuntimeState.LastErrorMaxLength)
             .HasColumnName("last_error");
 
+        builder.Property(state => state.Enabled)
+            .HasColumnName("enabled");
+
         builder.Property(state => state.LastSeenAtUtc)
             .IsRequired()
             .HasColumnName("last_seen_at_utc");

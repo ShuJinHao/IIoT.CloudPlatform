@@ -21,7 +21,12 @@ internal sealed record ClientReleaseExpectedVersionState(
     string? Signature,
     string? Publisher,
     DateTime? PublishedAtUtc,
-    IReadOnlyList<ClientReleaseArtifactObservation> Artifacts)
+    IReadOnlyList<ClientReleaseArtifactObservation> Artifacts,
+    string DataCapabilitiesJson = "[]",
+    string? FileManifestSha256 = null,
+    string? DependencyClosureSha256 = null,
+    string? DependencyHostVersion = null,
+    string? DependencyHostFileManifestSha256 = null)
 {
     public static ClientReleaseExpectedVersionState From(
         ClientReleaseComponent component,
@@ -56,7 +61,12 @@ internal sealed record ClientReleaseExpectedVersionState(
                     artifact.RelativePath,
                     artifact.Sha256,
                     artifact.Size))
-                .ToArray());
+                .ToArray(),
+            version.DataCapabilitiesJson,
+            version.FileManifestSha256,
+            version.DependencyClosureSha256,
+            version.DependencyHostVersion,
+            version.DependencyHostFileManifestSha256);
     }
 }
 
@@ -84,6 +94,11 @@ internal static class ClientReleaseExpectedVersionMatcher
             || observed.PackageSize != expected.PackageSize
             || !string.Equals(observed.ReleaseNotes, expected.ReleaseNotes, StringComparison.Ordinal)
             || !string.Equals(observed.DependenciesJson, expected.DependenciesJson, StringComparison.Ordinal)
+            || !string.Equals(observed.DataCapabilitiesJson, expected.DataCapabilitiesJson, StringComparison.Ordinal)
+            || !string.Equals(observed.FileManifestSha256, expected.FileManifestSha256, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(observed.DependencyClosureSha256, expected.DependencyClosureSha256, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(observed.DependencyHostVersion, expected.DependencyHostVersion, StringComparison.Ordinal)
+            || !string.Equals(observed.DependencyHostFileManifestSha256, expected.DependencyHostFileManifestSha256, StringComparison.OrdinalIgnoreCase)
             || observed.Status != ClientReleaseStatus.Published
             || !string.Equals(observed.Signature, expected.Signature, StringComparison.Ordinal)
             || !string.Equals(observed.Publisher, expected.Publisher, StringComparison.Ordinal)

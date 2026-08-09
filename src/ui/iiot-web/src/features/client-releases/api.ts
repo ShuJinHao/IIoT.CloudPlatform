@@ -121,18 +121,40 @@ export const deleteClientReleaseFilesApi = (releaseId: string, reason?: string |
     data: { reason: reason ?? null },
   });
 
-export interface EdgeBindingSelection {
-  moduleId: string;
-  deviceId: string;
+export interface GenerateEdgeInstallerPackagePayload {
+  baseUrl?: string | null;
+  deviceIds: string[];
+  planFingerprint: string;
 }
 
-export interface GenerateEdgeInstallerPackagePayload {
-  channel?: string | null;
-  targetRuntime?: string | null;
-  hostVersion?: string | null;
-  baseUrl?: string | null;
-  selections: EdgeBindingSelection[];
+export interface EdgeInstallerPlanDeviceDto {
+  deviceId: string;
+  clientCode: string;
+  deviceName: string;
+  processId: string;
+  processType: string;
+  bindingId: string;
+  componentId: string;
+  moduleId: string;
+  pluginVersion: string;
+  pluginSha256: string;
+  hostApiVersion: string;
+  targetFramework?: string | null;
 }
+
+export interface EdgeInstallerPlanDto {
+  planFingerprint: string;
+  channel: string;
+  targetRuntime: string;
+  hostVersion: string;
+  hostSha256: string;
+  hostApiVersion: string;
+  targetFramework?: string | null;
+  devices: EdgeInstallerPlanDeviceDto[];
+}
+
+export const getEdgeInstallerPlanApi = (deviceIds: string[]) =>
+  http.post<EdgeInstallerPlanDto>(`${basePath}/installer-plan`, { deviceIds });
 
 export interface EdgeInstallerPackageDownload {
   blob: Blob;

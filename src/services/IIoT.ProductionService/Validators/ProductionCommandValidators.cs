@@ -56,19 +56,31 @@ public sealed class GenerateEdgeInstallerPackageCommandValidator : AbstractValid
 {
     public GenerateEdgeInstallerPackageCommandValidator()
     {
-        RuleFor(x => x.Selections).NotNull().NotEmpty();
-        RuleForEach(x => x.Selections).ChildRules(selection =>
+        RuleForEach(x => x.DeviceIds ?? Array.Empty<Guid>()).NotEmpty();
+        RuleFor(x => x.PlanFingerprint)
+            .NotEmpty()
+            .Matches("^[a-fA-F0-9]{64}$")
+            .When(x => x.DeviceIds is not null);
+        RuleFor(x => x).Custom((command, context) =>
         {
-            selection.RuleFor(x => x.ModuleId).NotEmpty().MaximumLength(128);
-            selection.RuleFor(x => x.DeviceId).NotEmpty();
+            if (command.DeviceIds is not { Count: > 0 })
+            {
+                context.AddFailure(nameof(command.DeviceIds), "必须提交已确认的设备列表。");
+            }
+            if (command.Selections is { Count: > 0 }
+                || command.Channel is not null
+                || command.TargetRuntime is not null
+                || command.HostVersion is not null)
+            {
+                context.AddFailure(
+                    "生产安装包端点不接受旧版插件选择或宿主参数。");
+            }
+            if (command.DeviceIds?.Distinct().Count()
+                != command.DeviceIds?.Count)
+            {
+                context.AddFailure(nameof(command.DeviceIds), "设备不能重复。");
+            }
         });
-        RuleFor(x => x.Channel).MaximumLength(64).When(x => x.Channel is not null);
-        RuleFor(x => x.TargetRuntime).MaximumLength(64).When(x => x.TargetRuntime is not null);
-        RuleFor(x => x.HostVersion)
-            .MaximumLength(64)
-            .Must(value => value is null || ClientReleaseSemanticVersion.IsValid(value))
-            .WithMessage("宿主版本必须符合 MAJOR.MINOR.PATCH[-prerelease]。")
-            .When(x => x.HostVersion is not null);
         RuleFor(x => x.BaseUrl)
             .Cascade(CascadeMode.Stop)
             .NotEmpty()
@@ -232,6 +244,12 @@ public sealed class DeviceClientPluginVersionReportItemValidator : AbstractValid
             .Must(value => value is null || ClientReleaseSemanticVersion.IsValid(value))
             .WithMessage("Host API 版本必须符合 MAJOR.MINOR.PATCH[-prerelease]。")
             .When(x => x.HostApiVersion is not null);
+        RuleFor(x => x.PackageSha256)
+            .Matches("^[0-9a-fA-F]{64}$")
+            .When(x => x.PackageSha256 is not null);
+        RuleFor(x => x.ClientCode)
+            .MaximumLength(64)
+            .When(x => x.ClientCode is not null);
     }
 }
 
@@ -257,7 +275,7 @@ public sealed class ReceiveHourlyCapacityCommandValidator : AbstractValidator<Re
     {
         RuleFor(x => x.DeviceId).NotEmpty();
         RuleFor(x => x.SchemaVersion)
-            .Must(version => version is 1 or 2)
+            .Must(version => version is 1 or 2 or 3)
             .WithMessage("产能数据 schemaVersion 不受支持。");
         RuleFor(x => x.RequestId)
             .MaximumLength(UploadValidationLimits.MaxRequestIdLength)
@@ -317,12 +335,13 @@ public sealed class ReceiveHourlyCapacityCommandValidator : AbstractValidator<Re
 
 public sealed class ReceivePassStationBatchCommandValidator : AbstractValidator<ReceivePassStationBatchCommand>
 {
-    public ReceivePassStationBatchCommandValidator(IPassStationSchemaProvider schemaProvider)
+    public ReceivePassStationBatchCommandValidator()
     {
         RuleFor(x => x.TypeKey).NotEmpty();
+        RuleFor(x => x.TypeKey).MaximumLength(UploadValidationLimits.MaxMediumCodeLength);
         RuleFor(x => x.DeviceId).NotEmpty();
         RuleFor(x => x.SchemaVersion)
-            .Must(version => version is 1 or 2)
+            .Must(version => version is 1 or 2 or 3)
             .WithMessage("过站数据 schemaVersion 不受支持。");
         RuleFor(x => x.ProcessType)
             .MaximumLength(UploadValidationLimits.MaxShortCodeLength)
@@ -330,6 +349,9 @@ public sealed class ReceivePassStationBatchCommandValidator : AbstractValidator<
         RuleFor(x => x.RequestId)
             .MaximumLength(UploadValidationLimits.MaxRequestIdLength)
             .When(x => x.RequestId is not null);
+        RuleFor(x => x.ClientCode)
+            .MaximumLength(UploadValidationLimits.MaxMediumCodeLength)
+            .When(x => x.ClientCode is not null);
         RuleFor(x => x.Items)
             .NotNull()
             .NotEmpty()
@@ -338,31 +360,41 @@ public sealed class ReceivePassStationBatchCommandValidator : AbstractValidator<
         RuleFor(x => x)
             .Custom((command, context) =>
             {
-                var definition = schemaProvider.Find(command.TypeKey ?? string.Empty);
-                if (definition is null)
-                {
-                    context.AddFailure(nameof(ReceivePassStationBatchCommand.TypeKey), $"过站类型 [{command.TypeKey}] 不存在。");
-                    return;
-                }
-
                 var processType = PassStationPayloadJson.NormalizeOptionalProcessType(command.ProcessType);
-                if (command.SchemaVersion == 2 && processType is null)
+                if (command.SchemaVersion >= 2 && processType is null)
                 {
-                    context.AddFailure(nameof(ReceivePassStationBatchCommand.ProcessType), "过站 v2 数据必须提供 processType。");
+                    context.AddFailure(nameof(ReceivePassStationBatchCommand.ProcessType), "过站 v2/v3 数据必须提供 processType。");
                     return;
                 }
-                if (processType is not null && !string.Equals(processType, definition.TypeKey, StringComparison.Ordinal))
+                if (command.SchemaVersion == 3
+                    && string.IsNullOrWhiteSpace(command.ClientCode))
                 {
-                    context.AddFailure(nameof(ReceivePassStationBatchCommand.ProcessType), "过站数据 processType 必须与 typeKey 保持一致。");
+                    context.AddFailure(nameof(ReceivePassStationBatchCommand.ClientCode), "过站 v3 数据必须提供 clientCode。");
                     return;
                 }
-
                 if (command.Items is null)
                     return;
 
                 for (var index = 0; index < command.Items.Count; index++)
                 {
-                    ValidateItem(command.Items[index], index, command.SchemaVersion == 2, definition, context);
+                    ValidateItem(
+                        command.Items[index],
+                        index,
+                        command.SchemaVersion >= 2,
+                        command.SchemaVersion == 3,
+                        command.ClientCode,
+                        command.TypeKey,
+                        context);
+                }
+                if (command.SchemaVersion == 3
+                    && command.Items
+                        .Select(item => item.CompletionId?.Trim())
+                        .Distinct(StringComparer.Ordinal)
+                        .Count() != command.Items.Count)
+                {
+                    context.AddFailure(
+                        nameof(command.Items),
+                        "过站 v3 同一批次 completionId 不能重复。");
                 }
             });
     }
@@ -371,7 +403,9 @@ public sealed class ReceivePassStationBatchCommandValidator : AbstractValidator<
         PassStationItemInput item,
         int index,
         bool isStrictV2,
-        PassStationTypeDefinitionDto definition,
+        bool requiresCompletionId,
+        string? batchClientCode,
+        string batchTypeKey,
         ValidationContext<ReceivePassStationBatchCommand> context)
     {
         var prefix = $"{nameof(ReceivePassStationBatchCommand.Items)}[{index}]";
@@ -381,14 +415,44 @@ public sealed class ReceivePassStationBatchCommandValidator : AbstractValidator<
             context.AddFailure($"{prefix}.{nameof(PassStationItemInput.Barcode)}", $"过站条码不能超过 {UploadValidationLimits.MaxMediumCodeLength} 个字符。");
         if (string.IsNullOrWhiteSpace(item.CellResult))
             context.AddFailure($"{prefix}.{nameof(PassStationItemInput.CellResult)}", "过站结果不能为空。");
+        if (requiresCompletionId && string.IsNullOrWhiteSpace(item.CompletionId))
+            context.AddFailure($"{prefix}.{nameof(PassStationItemInput.CompletionId)}", "过站 v3 completionId 不能为空。");
+        if (item.CompletionId?.Length > UploadValidationLimits.MaxRequestIdLength)
+            context.AddFailure($"{prefix}.{nameof(PassStationItemInput.CompletionId)}", $"completionId 不能超过 {UploadValidationLimits.MaxRequestIdLength} 个字符。");
+        if (requiresCompletionId && string.IsNullOrWhiteSpace(item.ClientCode))
+            context.AddFailure($"{prefix}.{nameof(PassStationItemInput.ClientCode)}", "过站 v3 clientCode 不能为空。");
+        if (item.ClientCode?.Length > UploadValidationLimits.MaxMediumCodeLength)
+            context.AddFailure($"{prefix}.{nameof(PassStationItemInput.ClientCode)}", $"clientCode 不能超过 {UploadValidationLimits.MaxMediumCodeLength} 个字符。");
+        if (requiresCompletionId
+            && !string.Equals(
+                item.ClientCode?.Trim(),
+                batchClientCode?.Trim(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            context.AddFailure($"{prefix}.{nameof(PassStationItemInput.ClientCode)}", "过站 v3 clientCode 必须与批次身份一致。");
+        }
+        if (requiresCompletionId && string.IsNullOrWhiteSpace(item.TypeKey))
+            context.AddFailure($"{prefix}.{nameof(PassStationItemInput.TypeKey)}", "过站 v3 typeKey 不能为空。");
+        if (item.TypeKey?.Length > UploadValidationLimits.MaxMediumCodeLength)
+            context.AddFailure($"{prefix}.{nameof(PassStationItemInput.TypeKey)}", $"typeKey 不能超过 {UploadValidationLimits.MaxMediumCodeLength} 个字符。");
+        if (requiresCompletionId
+            && !string.Equals(
+                item.TypeKey?.Trim(),
+                batchTypeKey.Trim(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            context.AddFailure($"{prefix}.{nameof(PassStationItemInput.TypeKey)}", "过站 v3 typeKey 必须与请求路由一致。");
+        }
+        if (item.PlcCode?.Length > UploadValidationLimits.MaxMediumCodeLength)
+            context.AddFailure($"{prefix}.{nameof(PassStationItemInput.PlcCode)}", $"plcCode 不能超过 {UploadValidationLimits.MaxMediumCodeLength} 个字符。");
         if (item.CellResult?.Length > UploadValidationLimits.MaxShortCodeLength)
             context.AddFailure($"{prefix}.{nameof(PassStationItemInput.CellResult)}", $"过站结果不能超过 {UploadValidationLimits.MaxShortCodeLength} 个字符。");
         if (isStrictV2 && item.CellResult is not "OK" and not "NG")
-            context.AddFailure($"{prefix}.{nameof(PassStationItemInput.CellResult)}", "过站 v2 结果只能是 OK 或 NG。");
+            context.AddFailure($"{prefix}.{nameof(PassStationItemInput.CellResult)}", "过站 v2/v3 结果只能是 OK 或 NG。");
         if (!UploadValidationRules.BeReasonableTimestamp(item.CompletedTime))
             context.AddFailure($"{prefix}.{nameof(PassStationItemInput.CompletedTime)}", "完成时间必须在有效范围内。");
         if (isStrictV2 && item.CompletedTime.Kind != DateTimeKind.Utc)
-            context.AddFailure($"{prefix}.{nameof(PassStationItemInput.CompletedTime)}", "过站 v2 完成时间必须为 UTC。");
+            context.AddFailure($"{prefix}.{nameof(PassStationItemInput.CompletedTime)}", "过站 v2/v3 完成时间必须为 UTC。");
         if (item.Payload.ValueKind != JsonValueKind.Object)
         {
             context.AddFailure($"{prefix}.{nameof(PassStationItemInput.Payload)}", "过站扩展数据必须是 JSON 对象。");
@@ -400,19 +464,10 @@ public sealed class ReceivePassStationBatchCommandValidator : AbstractValidator<
         if (payload.Count > UploadValidationLimits.MaxPassStationPayloadFields)
             context.AddFailure($"{prefix}.{nameof(PassStationItemInput.Payload)}", $"过站扩展字段不能超过 {UploadValidationLimits.MaxPassStationPayloadFields} 个。");
 
-        var knownFields = definition.Fields.ToDictionary(field => field.Key, StringComparer.Ordinal);
-        foreach (var actualField in payload.Keys)
-        {
-            if (!knownFields.ContainsKey(actualField)
-                && !PassStationPayloadJson.IsAcceptedTransportMetadata(actualField))
-                context.AddFailure($"{prefix}.Payload.{actualField}", $"字段 [{actualField}] 不属于过站类型 [{definition.TypeKey}]。");
-        }
-
-        foreach (var field in definition.Fields)
-        {
-            payload.TryGetValue(field.Key, out var value);
-            ValidatePayloadField(prefix, field, value, isStrictV2, item.CompletedTime, context);
-        }
+        // 业务字段、数据类型和必填性必须以设备当前实际安装
+        // 插件版本的 data-capabilities.json 为准。该动态校验在
+        // ReceivePassStationBatchHandler 解析 DeviceId 与实际版本后执行；
+        // FluentValidation 层只负责传输结构和容量边界。
     }
 
     private static void ValidatePayloadField(

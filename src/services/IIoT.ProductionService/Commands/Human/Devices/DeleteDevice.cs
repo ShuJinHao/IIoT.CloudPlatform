@@ -218,7 +218,9 @@ public class DeleteDeviceHandler(
                     impact.EmployeeDeviceAccesses,
                 refresh_token_sessions = impact.RefreshTokenSessions,
                 edge_host_plc_runtime_states =
-                    impact.EdgeHostPlcRuntimeStates
+                    impact.EdgeHostPlcRuntimeStates,
+                edge_installer_pending_credentials =
+                    impact.InstallerPendingCredentials
             }
         });
 }

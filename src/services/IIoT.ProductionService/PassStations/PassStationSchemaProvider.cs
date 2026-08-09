@@ -15,7 +15,14 @@ public sealed class PassStationSchemaProvider : IPassStationSchemaProvider
             .Select(NormalizeDefinition)
             .OrderBy(x => x.TypeKey, StringComparer.Ordinal)
             .ToArray();
-        _lookup = _types.ToDictionary(x => x.TypeKey, StringComparer.Ordinal);
+        _lookup = new Dictionary<string, PassStationTypeDefinitionDto>(
+            StringComparer.Ordinal);
+        foreach (var type in _types)
+        {
+            _lookup.Add(type.TypeKey, type);
+            foreach (var alias in type.LegacyTypeKeys)
+                _lookup.Add(alias, type);
+        }
     }
 
     public IReadOnlyList<PassStationTypeDefinitionDto> GetAll()
@@ -35,6 +42,9 @@ public sealed class PassStationSchemaProvider : IPassStationSchemaProvider
             TypeKey = Normalize(definition.TypeKey),
             DisplayName = definition.DisplayName.Trim(),
             Description = definition.Description.Trim(),
+            LegacyTypeKeys = definition.LegacyTypeKeys
+                .Select(Normalize)
+                .ToList(),
             Fields = definition.Fields
                 .Select(field => new PassStationFieldDefinitionDto
                 {

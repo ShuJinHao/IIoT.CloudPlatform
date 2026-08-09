@@ -11,6 +11,7 @@ using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.SharedKernel.Configuration;
 using IIoT.SharedKernel.Repository;
@@ -63,6 +64,9 @@ public static class DependencyInjection
             });
 
         builder.Services.AddScoped<IPermissionProvider, PermissionProvider>();
+        builder.Services.AddScoped<
+            IAiReadDelegatedAuthorizationService,
+            DelegatedAiReadAuthorizationService>();
 
         builder.Services.AddScoped(typeof(IReadRepository<>), typeof(EfReadRepository<>));
         builder.Services.AddScoped(typeof(IRepository<>), typeof(EfRepository<>));
@@ -107,8 +111,13 @@ public static class DependencyInjection
             provider.GetRequiredService<CloudWriteObservationReader>());
         builder.Services.AddScoped<IClientReleaseWriteObservationReader>(provider =>
             provider.GetRequiredService<CloudWriteObservationReader>());
-        builder.Services.AddScoped<IProcessReadQueryService, QueryServices.ProcessReadQueryService>();
+        builder.Services.AddScoped<QueryServices.ProcessReadQueryService>();
+        builder.Services.AddScoped<IProcessReadQueryService>(provider =>
+            provider.GetRequiredService<QueryServices.ProcessReadQueryService>());
+        builder.Services.AddScoped<IAiReadProcessQueryService>(provider =>
+            provider.GetRequiredService<QueryServices.ProcessReadQueryService>());
         builder.Services.AddScoped<IAiReadDeviceQueryService, QueryServices.AiReadDeviceQueryService>();
+        builder.Services.AddScoped<IDevicePluginBindingQueryService, QueryServices.DevicePluginBindingQueryService>();
         builder.Services.AddScoped<IClientReleaseHistoryQueryService, QueryServices.ClientReleaseHistoryQueryService>();
         builder.Services.AddScoped<IDeviceReadQueryService, QueryServices.DeviceReadQueryService>();
         builder.Services.AddScoped<IRecipeReadQueryService, QueryServices.RecipeReadQueryService>();
@@ -120,7 +129,14 @@ public static class DependencyInjection
             provider.GetRequiredService<IDeviceClientStateStore>());
         builder.Services.AddScoped<IClientReleaseComponentDeletionStore, EfClientReleaseComponentDeletionStore>();
         builder.Services.AddScoped<IEdgeInstallerGenerationStore, EfEdgeInstallerGenerationStore>();
-        builder.Services.AddScoped<IEdgeHostPlcRuntimeStateStore, EfEdgeHostPlcRuntimeStateStore>();
+        builder.Services.AddScoped<
+            IProductionBindingApplyStore,
+            EfProductionBindingApplyStore>();
+        builder.Services.AddScoped<EfEdgeHostPlcRuntimeStateStore>();
+        builder.Services.AddScoped<IEdgeHostPlcRuntimeStateStore>(provider =>
+            provider.GetRequiredService<EfEdgeHostPlcRuntimeStateStore>());
+        builder.Services.AddScoped<IEdgeHostPlcRuntimeStateQueryService>(provider =>
+            provider.GetRequiredService<EfEdgeHostPlcRuntimeStateStore>());
 
         builder.Services.AddIdentityCore<ApplicationUser>(options =>
         {

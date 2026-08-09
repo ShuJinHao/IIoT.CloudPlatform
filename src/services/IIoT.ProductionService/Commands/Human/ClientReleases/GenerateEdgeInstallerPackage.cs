@@ -25,11 +25,13 @@ namespace IIoT.ProductionService.Commands.ClientReleases;
 
 [AuthorizeRequirement(ClientReleasePermissions.GenerateInstaller)]
 public sealed record GenerateEdgeInstallerPackageCommand(
-    IReadOnlyList<EdgeBindingSelection> Selections,
+    IReadOnlyList<EdgeBindingSelection>? Selections = null,
     string? Channel = null,
     string? TargetRuntime = null,
     string? HostVersion = null,
-    string? BaseUrl = null) : IHumanCommand<Result<EdgeInstallerPackageDto>>;
+    string? BaseUrl = null,
+    IReadOnlyList<Guid>? DeviceIds = null,
+    string? PlanFingerprint = null) : IHumanCommand<Result<EdgeInstallerPackageDto>>;
 
 public sealed record EdgeInstallerPackageDto(
     string FileName,
@@ -44,22 +46,17 @@ public sealed class GenerateEdgeInstallerPackageHandler(
     IReadRepository<ClientReleaseComponent> componentRepository,
     IAuditTrailService auditTrailService,
     IOptions<EdgeInstallerArtifactOptions> options,
-    IUnitOfWork unitOfWork,
     IClientReleaseWriteObservationReader observationReader,
-    IEdgeInstallerGenerationStore installerGenerationStore)
+    IEdgeInstallerGenerationStore installerGenerationStore,
+    IEdgeInstallerPlanService installerPlanService)
     : ICommandHandler<GenerateEdgeInstallerPackageCommand, Result<EdgeInstallerPackageDto>>
 {
     private static readonly byte[] InstallerMagic = "IIOTEDG1"u8.ToArray();
     private const string BindingFileName = "iiot-binding.json";
     private const string HostPluginManifestFileName = "iiot-enabled-plugins.json";
+    private const string LauncherProfileCatalogFileName = "launcher.profiles.json";
     private const string RemovedPluginBindingFileName = "iiot-plugin-binding.json";
     private const string UpdateConfigFileName = "launcher.update.json";
-    private const int InstallerBindingSchemaVersion = 2;
-    private static readonly EdgeBindingPathsDto InstallerBindingPaths = new(
-        "/api/v1/bootstrap/device-instance",
-        "/api/v1/edge/client-releases/device/{deviceId}/catalog",
-        "/api/v1/edge/client-releases/version-reports",
-        "/api/v1/edge/runtime-heartbeats");
     private static readonly IComparer<string> VersionComparer = Comparer<string>.Create(ClientReleaseMapping.CompareVersions);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -71,25 +68,71 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         GenerateEdgeInstallerPackageCommand request,
         CancellationToken cancellationToken)
     {
-        var channel = NormalizeDefault(request.Channel, "stable");
-        var targetRuntime = NormalizeDefault(request.TargetRuntime, "win-x64");
+        if (request.DeviceIds is not { Count: > 0 }
+            || request.Selections is { Count: > 0 }
+            || request.Channel is not null
+            || request.TargetRuntime is not null
+            || request.HostVersion is not null)
+        {
+            return await FailAsync(
+                "生成安装包失败：只能提交已确认的设备列表和计划指纹，不接受旧版插件组合或宿主参数。",
+                cancellationToken);
+        }
+
+        var planResult = await installerPlanService.BuildAsync(
+            request.DeviceIds,
+            cancellationToken);
+        if (!planResult.IsSuccess)
+            return await FailAsync(
+                planResult.Errors?.FirstOrDefault()
+                ?? "生成安装包失败：安装计划无法确认。",
+                cancellationToken);
+
+        var approvedPlan = planResult.Value!;
+        if (string.IsNullOrWhiteSpace(request.PlanFingerprint)
+            || !string.Equals(
+                approvedPlan.PlanFingerprint,
+                request.PlanFingerprint.Trim(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return await FailAsync(
+                "生成安装包失败：安装计划已变更，请刷新后重新确认。",
+                cancellationToken);
+        }
+
+        var channel = approvedPlan.Channel;
+        var targetRuntime = approvedPlan.TargetRuntime;
+        var requestedHostVersion = approvedPlan.HostVersion;
+        IReadOnlyList<EdgeBindingSelection> requestedSelections = approvedPlan.Devices
+            .Select(device => new EdgeBindingSelection(
+                device.ModuleId,
+                device.DeviceId,
+                device.PluginVersion))
+            .ToArray();
         if (!EdgeInstallerPublicBaseUrl.TryNormalize(request.BaseUrl, out var publicBaseUrl, out var baseUrlError))
         {
             return await FailAsync($"生成安装包失败：{baseUrlError}", cancellationToken);
         }
 
-        if (!TryNormalizeSelections(request.Selections, out var selections, out var selectionError))
+        if (!TryNormalizeSelections(requestedSelections, out var selections, out var selectionError))
         {
             return await FailAsync(selectionError!, cancellationToken);
         }
 
-        var host = await ResolveHostReleaseAsync(channel, targetRuntime, request.HostVersion, cancellationToken);
+        var host = await ResolveHostReleaseAsync(
+            channel,
+            targetRuntime,
+            requestedHostVersion,
+            cancellationToken);
         if (host is null)
         {
             return await FailAsync("生成安装包失败：没有找到已发布的客户端宿主版本。", cancellationToken);
         }
 
-        var artifactResult = LoadArtifact(channel, host.Version.Version);
+        var artifactResult = LoadArtifact(
+            channel,
+            host.Version.Version,
+            host.Version.FileManifestSha256);
         if (!artifactResult.IsSuccess)
         {
             return await FailAsync(artifactResult.Error!, cancellationToken);
@@ -118,13 +161,17 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 targetRuntime,
                 host.Version.Version,
                 host.Version.HostApiVersion,
+                host.Version.FileManifestSha256,
+                selection.PluginVersion,
                 cancellationToken);
             if (!pluginResolution.IsSuccess)
             {
                 return await FailAsync(pluginResolution.Error!, cancellationToken);
             }
 
-            var packageResult = LoadPluginPackage(pluginResolution.Selection!);
+            var packageResult = LoadPluginPackage(
+                pluginResolution.Selection!,
+                artifact);
             if (!packageResult.IsSuccess)
             {
                 return await FailAsync(packageResult.Error!, cancellationToken);
@@ -138,6 +185,14 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         {
             return await FailAsync(devices.Error!, cancellationToken);
         }
+
+        selectedPlugins = selectedPlugins
+            .Select((plugin, index) => plugin with
+            {
+                PluginDirectory = devices.DevicesById![
+                    selections[index].DeviceId].Code + "/app"
+            })
+            .ToList();
 
         var requestedDeviceIds = selections
             .Select(selection => selection.DeviceId)
@@ -158,18 +213,26 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             throw new CloudWriteConflictException();
         }
 
+        var generationId = Guid.NewGuid();
+        var generatedAtUtc = ClientReleaseWriteCommitRecovery.NormalizeUtc(
+            DateTime.UtcNow);
+        var expiresAtUtc = generatedAtUtc.AddDays(7);
         var secretTargets = CreateDeviceSecretTargets(
+            generationId,
+            expiresAtUtc,
             selections,
-            devices.DevicesById!);
+            devices.DevicesById!,
+            selectedPlugins);
         var bindings = secretTargets
             .Select(target => target.Binding)
             .ToList();
         var bindingBundle = new EdgeBindingBundleDto(
-            InstallerBindingSchemaVersion,
+            EdgeBindingWireSchema.SchemaVersion,
+            generationId,
+            generatedAtUtc,
+            expiresAtUtc,
             publicBaseUrl,
-            InstallerBindingPaths,
-            ClientReleaseWriteCommitRecovery.NormalizeUtc(
-                DateTime.UtcNow),
+            EdgeBindingWireSchema.Paths,
             bindings);
         Stream packageStream;
         try
@@ -178,7 +241,8 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 artifact,
                 selectedPlugins,
                 bindingBundle,
-                targetRuntime);
+                targetRuntime,
+                options.Value);
         }
         catch (ClientReleaseValidationException)
         {
@@ -200,8 +264,11 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         try
         {
             var fileName = BuildDownloadFileName(bindings, host.Version.Version);
-            var generationId = Guid.NewGuid();
             var packageFact = ComputePackageFact(packageStream);
+            var persistedPackagePath = await PersistReadyPackageAsync(
+                packageStream,
+                generationId,
+                cancellationToken);
             var generationRecord = new EdgeInstallerGenerationRecord(
                 generationId,
                 ClientReleaseAuditActor.ParseId(currentUser.Id),
@@ -222,17 +289,14 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                         device.Id,
                         device.Code,
                         device.DeviceName,
-                        device.ProcessId);
+                        device.ProcessId,
+                        device.Code);
                 }),
                 selectedPlugins.Select(plugin => new EdgeInstallerGenerationPluginFact(
                     plugin.ModuleId,
                     plugin.Version,
                     plugin.Sha256)));
 
-            await PersistDeviceSecretsAsync(
-                baselineObservation,
-                secretTargets,
-                cancellationToken);
             await WriteSuccessAuditAsync(
                 bindings,
                 devices.DevicesById!,
@@ -240,8 +304,11 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 cancellationToken);
             if (!await installerGenerationStore.TryAddConfirmedAsync(
                     generationRecord,
+                    secretTargets.Select(target => target.PendingCredential)
+                        .ToArray(),
                     cancellationToken))
             {
+                TryDeleteReadyPackage(persistedPackagePath);
                 throw new CloudWriteCommitUnknownException();
             }
 
@@ -257,6 +324,58 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             throw;
         }
 
+    }
+
+    private async Task<string> PersistReadyPackageAsync(
+        Stream packageStream,
+        Guid generationId,
+        CancellationToken cancellationToken)
+    {
+        var directory = Path.GetFullPath(Path.Combine(
+            options.Value.RootPath,
+            "generated"));
+        Directory.CreateDirectory(directory);
+        var path = Path.GetFullPath(Path.Combine(
+            directory,
+            $"{generationId:N}.exe"));
+        if (!path.StartsWith(
+                directory + Path.DirectorySeparatorChar,
+                StringComparison.Ordinal))
+            throw new InvalidDataException("Generated package path escaped root.");
+
+        packageStream.Position = 0;
+        await using (var target = new FileStream(
+                         path,
+                         FileMode.CreateNew,
+                         FileAccess.Write,
+                         FileShare.Read,
+                         1024 * 1024,
+                         FileOptions.Asynchronous | FileOptions.WriteThrough))
+        {
+            await packageStream.CopyToAsync(target, cancellationToken);
+            await target.FlushAsync(cancellationToken);
+        }
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                path,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+        packageStream.Position = 0;
+        return path;
+    }
+
+    private static void TryDeleteReadyPackage(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            // Orphan cleanup is handled by the installer retention job.
+        }
     }
 
     private async Task<HostReleaseSelection?> ResolveHostReleaseAsync(
@@ -300,6 +419,8 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         string targetRuntime,
         string hostVersion,
         string hostApiVersion,
+        string? hostFileManifestSha256,
+        string? requestedPluginVersion,
         CancellationToken cancellationToken)
     {
         var component = await componentRepository.GetSingleOrDefaultAsync(
@@ -326,19 +447,34 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 $"生成安装包失败：插件 {moduleId} 未登记为已发布版本。");
         }
 
-        var compatible = published.FirstOrDefault(release =>
+        var candidates = string.IsNullOrWhiteSpace(requestedPluginVersion)
+            ? published
+            : published.Where(release => string.Equals(
+                    release.Version,
+                    requestedPluginVersion.Trim(),
+                    StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        var compatible = candidates.FirstOrDefault(release =>
             ClientReleaseMapping.IsCompatibleWithHost(
                 release,
                 hostVersion,
                 hostApiVersion,
-                out _));
+                out _)
+            && HasExactHostEvidence(
+                component,
+                release,
+                hostVersion,
+                hostFileManifestSha256));
         return compatible is null
             ? PluginReleaseResolution.Fail(
                 $"生成安装包失败：插件 {moduleId} 没有与宿主 {hostVersion} 兼容的已发布版本。")
             : PluginReleaseResolution.Success(new PluginReleaseSelection(component, compatible));
     }
 
-    private ArtifactLoadResult LoadArtifact(string channel, string version)
+    private ArtifactLoadResult LoadArtifact(
+        string channel,
+        string version,
+        string? expectedHostFileManifestSha256)
     {
         var rootPath = options.Value.RootPath;
         var artifactRoot = Path.GetFullPath(Path.Combine(rootPath, channel, version));
@@ -369,7 +505,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         if (manifest is null
             || string.IsNullOrWhiteSpace(manifest.InstallerStubFile)
             || !IsSafeRelativeFile(manifest.InstallerStubFile)
-            || manifest.SchemaVersion != 2
+            || manifest.SchemaVersion != 3
             || !IsSafeZipDirectory(manifest.LauncherDirectory)
             || !IsSafeZipDirectory(manifest.HostDirectory)
             || !IsSafeZipDirectory(manifest.PluginsRoot)
@@ -379,10 +515,10 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         }
 
         if (manifest.InstallerBindingSchemaVersion
-            != InstallerBindingSchemaVersion)
+            != EdgeBindingWireSchema.SchemaVersion)
         {
             return ArtifactLoadResult.Fail(
-                "生成安装包失败：宿主安装素材不支持 binding schema v2。");
+                "生成安装包失败：宿主安装素材不支持 binding schema v3。");
         }
 
         if (manifest.Modules.Any(module =>
@@ -402,15 +538,226 @@ public sealed class GenerateEdgeInstallerPackageHandler(
 
         manifest.RootPath = artifactRoot;
         manifest.InstallerStubPath = ResolveArtifactPath(artifactRoot, manifest.InstallerStubFile);
-        if (!File.Exists(manifest.InstallerStubPath))
+        if (!ClientReleaseFileFacts.IsSha256(manifest.InstallerStubSha256)
+            || manifest.InstallerStubSize <= 0
+            || !ClientReleaseFileFacts.IsExactRegularFile(
+                manifest.InstallerStubPath,
+                manifest.InstallerStubSha256!,
+                manifest.InstallerStubSize))
         {
-            return ArtifactLoadResult.Fail("生成安装包失败：安装器外壳缺失。");
+            return ArtifactLoadResult.Fail("生成安装包失败：安装器外壳缺失或完整性已变更。");
+        }
+
+        var launcherDirectory = ResolveArtifactDirectoryPath(
+            manifest,
+            manifest.LauncherDirectory);
+        if (!IsExactDirectory(
+                launcherDirectory,
+                manifest.LauncherDirectorySha256,
+                manifest.LauncherDirectorySize))
+        {
+            return ArtifactLoadResult.Fail("生成安装包失败：Launcher 源产物缺失或完整性已变更。");
+        }
+
+        var hostDirectory = ResolveArtifactDirectoryPath(
+            manifest,
+            manifest.HostDirectory);
+        if (!IsExactDirectory(
+                hostDirectory,
+                manifest.HostDirectorySha256,
+                manifest.HostDirectorySize))
+        {
+            return ArtifactLoadResult.Fail("生成安装包失败：Host 源产物缺失或完整性已变更。");
+        }
+
+        var hostManifestError = ValidateHostFileManifest(
+            artifactRoot,
+            hostDirectory,
+            manifest,
+            expectedHostFileManifestSha256);
+        if (hostManifestError is not null)
+        {
+            return ArtifactLoadResult.Fail(hostManifestError);
+        }
+
+        if (string.IsNullOrWhiteSpace(manifest.VelopackSetupFile)
+            || !IsSafeRelativeFile(manifest.VelopackSetupFile))
+        {
+            return ArtifactLoadResult.Fail("生成安装包失败：Velopack Setup 声明不完整。");
+        }
+        var setupPath = ResolveArtifactPath(
+            artifactRoot,
+            manifest.VelopackSetupFile);
+        if (!ClientReleaseFileFacts.IsSha256(manifest.VelopackSetupSha256)
+            || manifest.VelopackSetupSize <= 0
+            || !ClientReleaseFileFacts.IsExactRegularFile(
+                setupPath,
+                manifest.VelopackSetupSha256!,
+                manifest.VelopackSetupSize))
+        {
+            return ArtifactLoadResult.Fail("生成安装包失败：Velopack Setup 缺失或完整性已变更。");
         }
 
         return ArtifactLoadResult.Success(manifest);
     }
 
-    private PluginPackageLoadResult LoadPluginPackage(PluginReleaseSelection selection)
+    private static string? ValidateHostFileManifest(
+        string artifactRoot,
+        string hostDirectory,
+        EdgeInstallerArtifactManifest artifact,
+        string? expectedSha256)
+    {
+        var hasArtifactEvidence = !string.IsNullOrWhiteSpace(
+                                      artifact.HostFileManifest)
+                                  || artifact.HostFileManifestSha256 is not null
+                                  || artifact.HostFileManifestFileCount != 0;
+        if (!hasArtifactEvidence && expectedSha256 is null)
+        {
+            return null;
+        }
+
+        if (!IsSafeRelativeFile(artifact.HostFileManifest)
+            || !ClientReleaseFileFacts.IsSha256(
+                artifact.HostFileManifestSha256)
+            || artifact.HostFileManifestFileCount <= 0
+            || !ClientReleaseFileFacts.IsSha256(expectedSha256)
+            || !string.Equals(
+                artifact.HostFileManifestSha256,
+                expectedSha256,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return "生成安装包失败：Host 逐文件清单与发布记录不一致。";
+        }
+
+        var path = ResolveArtifactPath(
+            artifactRoot,
+            artifact.HostFileManifest);
+        if (!File.Exists(path))
+        {
+            return "生成安装包失败：Host 逐文件清单缺失。";
+        }
+
+        var bytes = File.ReadAllBytes(path);
+        var digest = Convert.ToHexString(SHA256.HashData(bytes));
+        if (!string.Equals(
+                digest,
+                expectedSha256,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return "生成安装包失败：Host 逐文件清单摘要已变更。";
+        }
+
+        InstallerHostFileManifest? manifest;
+        try
+        {
+            manifest = JsonSerializer.Deserialize<InstallerHostFileManifest>(
+                bytes,
+                JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return "生成安装包失败：Host 逐文件清单无法解析。";
+        }
+
+        if (manifest is null
+            || manifest.SchemaVersion != 1
+            || !string.Equals(manifest.Component, "Host", StringComparison.Ordinal)
+            || !string.Equals(manifest.Version, artifact.Version, StringComparison.Ordinal)
+            || manifest.Files is null
+            || manifest.Files.Count == 0
+            || manifest.Files.Count != artifact.HostFileManifestFileCount)
+        {
+            return "生成安装包失败：Host 逐文件清单与精确版本不一致。";
+        }
+
+        var declared = new Dictionary<string, InstallerHostFileManifestEntry>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var item in manifest.Files)
+        {
+            var relativePath = item.Path.Replace('\\', '/');
+            if (!IsSafeRelativeFile(relativePath)
+                || !declared.TryAdd(relativePath, item)
+                || item.Size < 0
+                || !ClientReleaseFileFacts.IsSha256(item.Sha256)
+                || !string.Equals(item.Component, "Host", StringComparison.Ordinal)
+                || !string.Equals(item.Version, artifact.Version, StringComparison.Ordinal))
+            {
+                return "生成安装包失败：Host 逐文件清单文件项无效。";
+            }
+        }
+
+        var actual = Directory
+            .EnumerateFiles(hostDirectory, "*", SearchOption.AllDirectories)
+            .Select(file => Path.GetRelativePath(hostDirectory, file)
+                .Replace('\\', '/'))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!actual.SetEquals(declared.Keys))
+        {
+            return "生成安装包失败：Host 逐文件清单与实际依赖闭包不一致。";
+        }
+
+        foreach (var (relativePath, item) in declared)
+        {
+            var file = Path.Combine(
+                hostDirectory,
+                relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (!ClientReleaseFileFacts.IsExactRegularFile(
+                    file,
+                    item.Sha256,
+                    item.Size))
+            {
+                return "生成安装包失败：Host 逐文件清单的文件证据不一致。";
+            }
+        }
+
+        return null;
+    }
+
+    private static bool HasExactHostEvidence(
+        ClientReleaseComponent component,
+        ClientReleaseVersion pluginVersion,
+        string hostVersion,
+        string? hostFileManifestSha256)
+    {
+        var hasAnyEvidence = pluginVersion.DependencyClosureSha256 is not null
+                             || pluginVersion.DependencyHostVersion is not null
+                             || pluginVersion.DependencyHostFileManifestSha256 is not null;
+        if (!hasAnyEvidence)
+        {
+            return component.ManifestSchemaVersion < 3;
+        }
+
+        return ClientReleaseFileFacts.IsSha256(
+                   pluginVersion.DependencyClosureSha256)
+               && ClientReleaseFileFacts.IsSha256(
+                   pluginVersion.DependencyHostFileManifestSha256)
+               && ClientReleaseFileFacts.IsSha256(hostFileManifestSha256)
+               && string.Equals(
+                   pluginVersion.DependencyHostVersion,
+                   hostVersion,
+                   StringComparison.Ordinal)
+               && string.Equals(
+                   pluginVersion.DependencyHostFileManifestSha256,
+                   hostFileManifestSha256,
+                   StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsExactDirectory(
+        string directory,
+        string? expectedSha256,
+        long expectedSize)
+        => Directory.Exists(directory)
+           && ClientReleaseFileFacts.IsSha256(expectedSha256)
+           && expectedSize > 0
+           && ClientReleaseFileFacts.GetDirectorySize(directory) == expectedSize
+           && string.Equals(
+               ClientReleaseFileFacts.ComputeDirectorySha256(directory),
+               expectedSha256,
+               StringComparison.OrdinalIgnoreCase);
+
+    private PluginPackageLoadResult LoadPluginPackage(
+        PluginReleaseSelection selection,
+        EdgeInstallerArtifactManifest artifact)
     {
         var moduleId = selection.Component.ComponentKey;
         var version = selection.Version;
@@ -491,7 +838,10 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 $"生成安装包失败：插件 {moduleId} 的安装包不存在或完整性校验失败。");
         }
 
-        var archiveError = ValidatePluginPackageArchive(packagePath, selection);
+        var archiveError = ValidatePluginPackageArchive(
+            packagePath,
+            selection,
+            artifact);
         if (archiveError is not null)
         {
             return PluginPackageLoadResult.Fail(archiveError);
@@ -504,19 +854,25 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 : selection.Component.DisplayName,
             version.Version,
             packageArtifact.Sha256!,
+            selection.Component.SupportedProcessType
+                ?? throw new InvalidDataException(
+                    "Plugin supported process type is missing."),
             moduleId,
             packagePath));
     }
 
     private static string? ValidatePluginPackageArchive(
         string packagePath,
-        PluginReleaseSelection selection)
+        PluginReleaseSelection selection,
+        EdgeInstallerArtifactManifest artifact)
     {
         try
         {
             using var archive = ZipFile.OpenRead(packagePath);
-            var entries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var entries = new Dictionary<string, ZipArchiveEntry>(StringComparer.OrdinalIgnoreCase);
             ZipArchiveEntry? pluginManifestEntry = null;
+            ZipArchiveEntry? fileManifestEntry = null;
+            ZipArchiveEntry? dependencyClosureEntry = null;
             foreach (var entry in archive.Entries)
             {
                 var normalized = ClientReleaseZipArchive.NormalizeEntryPath(
@@ -528,7 +884,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                     continue;
                 }
 
-                if (!IsSafeZipEntry(normalized) || !entries.Add(normalized))
+                if (!IsSafeZipEntry(normalized) || !entries.TryAdd(normalized, entry))
                 {
                     return $"生成安装包失败：插件 {selection.Component.ComponentKey} 的安装包包含非法或重复路径。";
                 }
@@ -536,6 +892,14 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 if (string.Equals(normalized, "plugin.json", StringComparison.OrdinalIgnoreCase))
                 {
                     pluginManifestEntry = entry;
+                }
+                if (string.Equals(normalized, "file-manifest.json", StringComparison.OrdinalIgnoreCase))
+                {
+                    fileManifestEntry = entry;
+                }
+                if (string.Equals(normalized, "dependency-closure.json", StringComparison.OrdinalIgnoreCase))
+                {
+                    dependencyClosureEntry = entry;
                 }
             }
 
@@ -558,10 +922,26 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 || !string.Equals(minHostVersion, selection.Version.MinHostVersion, StringComparison.Ordinal)
                 || !string.Equals(maxHostVersion, selection.Version.MaxHostVersion, StringComparison.Ordinal)
                 || !IsSafeRelativeFile(entryAssembly)
-                || !entries.Contains(entryAssembly))
+                || !entries.ContainsKey(entryAssembly))
             {
                 return $"生成安装包失败：插件 {selection.Component.ComponentKey} 的 plugin.json 与发布记录不一致。";
             }
+
+            var fileManifestError = ValidateInstalledPluginFileManifest(
+                entries,
+                fileManifestEntry,
+                selection);
+            if (fileManifestError is not null)
+                return fileManifestError;
+
+            var dependencyClosureError = ValidateInstalledDependencyClosure(
+                entries,
+                dependencyClosureEntry,
+                selection,
+                entryAssembly,
+                artifact);
+            if (dependencyClosureError is not null)
+                return dependencyClosureError;
 
             return null;
         }
@@ -584,6 +964,334 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         catch (ClientReleaseValidationException)
         {
             return $"生成安装包失败：插件 {selection.Component.ComponentKey} 的安装包包含非法路径。";
+        }
+    }
+
+    private static string? ValidateInstalledPluginFileManifest(
+        IReadOnlyDictionary<string, ZipArchiveEntry> entries,
+        ZipArchiveEntry? fileManifestEntry,
+        PluginReleaseSelection selection)
+    {
+        var moduleId = selection.Component.ComponentKey;
+        if (fileManifestEntry is null
+            || !ClientReleaseFileFacts.IsSha256(
+                selection.Version.FileManifestSha256))
+        {
+            return $"生成安装包失败：插件 {moduleId} 缺少权威 file-manifest.json。";
+        }
+
+        byte[] bytes;
+        using (var source = fileManifestEntry.Open())
+        using (var memory = new MemoryStream())
+        {
+            source.CopyTo(memory);
+            bytes = memory.ToArray();
+        }
+        var digest = Convert.ToHexString(SHA256.HashData(bytes));
+        if (!string.Equals(
+                digest,
+                selection.Version.FileManifestSha256,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return $"生成安装包失败：插件 {moduleId} 的 file-manifest.json 摘要已变更。";
+        }
+
+        InstallerPluginFileManifest? manifest;
+        try
+        {
+            manifest = JsonSerializer.Deserialize<InstallerPluginFileManifest>(
+                bytes,
+                JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return $"生成安装包失败：插件 {moduleId} 的 file-manifest.json 无法解析。";
+        }
+        if (manifest is null
+            || manifest.SchemaVersion != 1
+            || !string.Equals(manifest.Component, moduleId, StringComparison.Ordinal)
+            || !string.Equals(
+                manifest.Version,
+                selection.Version.Version,
+                StringComparison.Ordinal)
+            || manifest.Files is null
+            || manifest.Files.Count == 0)
+        {
+            return $"生成安装包失败：插件 {moduleId} 的 file-manifest.json 与精确版本不一致。";
+        }
+
+        var declared = new Dictionary<string, InstallerPluginFileManifestEntry>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var item in manifest.Files)
+        {
+            var path = ClientReleaseZipArchive.NormalizeEntryPath(
+                item.Path,
+                $"插件 {moduleId} file manifest");
+            if (string.IsNullOrWhiteSpace(path)
+                || string.Equals(path, "file-manifest.json", StringComparison.OrdinalIgnoreCase)
+                || !declared.TryAdd(path, item)
+                || item.Size < 0
+                || !ClientReleaseFileFacts.IsSha256(item.Sha256)
+                || !string.Equals(item.Component, moduleId, StringComparison.Ordinal)
+                || !string.Equals(item.Version, selection.Version.Version, StringComparison.Ordinal))
+            {
+                return $"生成安装包失败：插件 {moduleId} 的 file-manifest.json 文件项无效。";
+            }
+        }
+
+        var actual = entries.Keys
+            .Where(path => !string.Equals(
+                path,
+                "file-manifest.json",
+                StringComparison.OrdinalIgnoreCase))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!actual.SetEquals(declared.Keys))
+        {
+            return $"生成安装包失败：插件 {moduleId} 文件集与 file-manifest.json 不一致。";
+        }
+
+        foreach (var pair in declared)
+        {
+            using var source = entries[pair.Key].Open();
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            var buffer = new byte[128 * 1024];
+            long size = 0;
+            int read;
+            while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                hash.AppendData(buffer, 0, read);
+                size += read;
+            }
+            if (size != pair.Value.Size
+                || !string.Equals(
+                    Convert.ToHexString(hash.GetHashAndReset()),
+                    pair.Value.Sha256,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return $"生成安装包失败：插件 {moduleId} 文件哈希不一致: {pair.Key}。";
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ValidateInstalledDependencyClosure(
+        IReadOnlyDictionary<string, ZipArchiveEntry> entries,
+        ZipArchiveEntry? closureEntry,
+        PluginReleaseSelection selection,
+        string entryAssembly,
+        EdgeInstallerArtifactManifest artifact)
+    {
+        var version = selection.Version;
+        var hasAnyEvidence = version.DependencyClosureSha256 is not null
+                             || version.DependencyHostVersion is not null
+                             || version.DependencyHostFileManifestSha256 is not null;
+        if (!hasAnyEvidence && selection.Component.ManifestSchemaVersion < 3)
+        {
+            return null;
+        }
+
+        var moduleId = selection.Component.ComponentKey;
+        if (closureEntry is null
+            || !ClientReleaseFileFacts.IsSha256(version.DependencyClosureSha256)
+            || !ClientReleaseFileFacts.IsSha256(
+                version.DependencyHostFileManifestSha256)
+            || string.IsNullOrWhiteSpace(version.DependencyHostVersion))
+        {
+            return $"生成安装包失败：插件 {moduleId} 缺少权威 dependency-closure.json。";
+        }
+
+        byte[] bytes;
+        using (var source = closureEntry.Open())
+        using (var memory = new MemoryStream())
+        {
+            source.CopyTo(memory);
+            bytes = memory.ToArray();
+        }
+
+        var digest = Convert.ToHexString(SHA256.HashData(bytes));
+        if (!string.Equals(
+                digest,
+                version.DependencyClosureSha256,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return $"生成安装包失败：插件 {moduleId} 的 dependency-closure.json 摘要已变更。";
+        }
+
+        IReadOnlyDictionary<string, InstallerHostFileManifestEntry>? hostFiles = null;
+        try
+        {
+            using var document = JsonDocument.Parse(bytes);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("schemaVersion", out var schemaVersion)
+                || !schemaVersion.TryGetInt32(out var schema)
+                || schema != 2
+                || !TryGetRequiredString(root, "entryAssembly", out var closureEntryAssembly)
+                || !string.Equals(closureEntryAssembly, entryAssembly, StringComparison.Ordinal)
+                || !root.TryGetProperty("plugin", out var plugin)
+                || plugin.ValueKind != JsonValueKind.Object
+                || !TryGetRequiredString(plugin, "moduleId", out var closureModuleId)
+                || !TryGetRequiredString(plugin, "version", out var closureVersion)
+                || !TryGetRequiredString(plugin, "targetRuntime", out var targetRuntime)
+                || !string.Equals(closureModuleId, moduleId, StringComparison.Ordinal)
+                || !string.Equals(closureVersion, version.Version, StringComparison.Ordinal)
+                || !string.Equals(targetRuntime, selection.Component.TargetRuntime, StringComparison.Ordinal)
+                || !root.TryGetProperty("host", out var host)
+                || host.ValueKind != JsonValueKind.Object
+                || !TryGetRequiredString(host, "component", out var hostComponent)
+                || !TryGetRequiredString(host, "version", out var hostVersion)
+                || !TryGetRequiredString(host, "fileManifestSha256", out var hostManifestSha)
+                || hostComponent is not ("Host" or "IIoT.Edge.Host")
+                || !string.Equals(hostVersion, version.DependencyHostVersion, StringComparison.Ordinal)
+                || !string.Equals(
+                    hostManifestSha,
+                    version.DependencyHostFileManifestSha256,
+                    StringComparison.OrdinalIgnoreCase)
+                || !root.TryGetProperty("dependencies", out var dependencies)
+                || dependencies.ValueKind != JsonValueKind.Array
+                || dependencies.GetArrayLength() == 0)
+            {
+                return $"生成安装包失败：插件 {moduleId} 的依赖闭包与精确 Host 证据不一致。";
+            }
+
+            var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var entryMatches = 0;
+            foreach (var dependency in dependencies.EnumerateArray())
+            {
+                if (!TryGetRequiredString(dependency, "publishPath", out var publishPath)
+                    || !IsSafeRelativeFile(publishPath)
+                    || !paths.Add(publishPath)
+                    || !TryGetRequiredString(dependency, "source", out var source)
+                    || source is not ("host" or "plugin")
+                    || !dependency.TryGetProperty("size", out var sizeElement)
+                    || !sizeElement.TryGetInt64(out var size)
+                    || size < 0
+                    || !TryGetRequiredString(dependency, "sha256", out var sha256)
+                    || !ClientReleaseFileFacts.IsSha256(sha256))
+                {
+                    return $"生成安装包失败：插件 {moduleId} 的依赖闭包文件项无效。";
+                }
+
+                if (source == "plugin"
+                    && (!entries.TryGetValue(publishPath, out var packageEntry)
+                        || packageEntry.Length != size))
+                {
+                    return $"生成安装包失败：插件 {moduleId} 的自有依赖未随包携带。";
+                }
+                else if (source == "host")
+                {
+                    hostFiles ??= ReadValidatedHostFiles(artifact);
+                    if (hostFiles is null
+                        || !hostFiles.TryGetValue(publishPath, out var hostFile)
+                        || hostFile.Size != size
+                        || !string.Equals(
+                            hostFile.Sha256,
+                            sha256,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        return $"生成安装包失败：插件 {moduleId} 声明的 Host 公共依赖不属于所选精确 Host。";
+                    }
+                }
+
+                if (string.Equals(publishPath, entryAssembly, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (source != "plugin")
+                    {
+                        return $"生成安装包失败：插件 {moduleId} 入口不能由 Host 代管。";
+                    }
+
+                    entryMatches++;
+                }
+            }
+
+            if (entryMatches != 1)
+            {
+                return $"生成安装包失败：插件 {moduleId} 入口未在依赖闭包中唯一声明。";
+            }
+        }
+        catch (JsonException)
+        {
+            return $"生成安装包失败：插件 {moduleId} 的 dependency-closure.json 无法解析。";
+        }
+
+        return null;
+    }
+
+    private static IReadOnlyDictionary<string, InstallerHostFileManifestEntry>?
+        ReadValidatedHostFiles(EdgeInstallerArtifactManifest artifact)
+    {
+        if (!IsSafeRelativeFile(artifact.HostFileManifest)
+            || !ClientReleaseFileFacts.IsSha256(
+                artifact.HostFileManifestSha256))
+        {
+            return null;
+        }
+
+        var path = ResolveArtifactPath(
+            artifact.RootPath,
+            artifact.HostFileManifest);
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        var bytes = File.ReadAllBytes(path);
+        if (!string.Equals(
+                Convert.ToHexString(SHA256.HashData(bytes)),
+                artifact.HostFileManifestSha256,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        try
+        {
+            var manifest = JsonSerializer.Deserialize<InstallerHostFileManifest>(
+                bytes,
+                JsonOptions);
+            if (manifest?.Files is null
+                || manifest.SchemaVersion != 1
+                || !string.Equals(
+                    manifest.Component,
+                    "Host",
+                    StringComparison.Ordinal)
+                || !string.Equals(
+                    manifest.Version,
+                    artifact.Version,
+                    StringComparison.Ordinal)
+                || manifest.Files.Count == 0
+                || manifest.Files.Count != artifact.HostFileManifestFileCount)
+            {
+                return null;
+            }
+
+            var result = new Dictionary<string, InstallerHostFileManifestEntry>(
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var file in manifest.Files)
+            {
+                var relativePath = file.Path.Replace('\\', '/');
+                if (!IsSafeRelativeFile(relativePath)
+                    || !ClientReleaseFileFacts.IsSha256(file.Sha256)
+                    || file.Size < 0
+                    || !string.Equals(
+                        file.Component,
+                        "Host",
+                        StringComparison.Ordinal)
+                    || !string.Equals(
+                        file.Version,
+                        artifact.Version,
+                        StringComparison.Ordinal)
+                    || !result.TryAdd(relativePath, file))
+                {
+                    return null;
+                }
+            }
+
+            return result;
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 
@@ -639,183 +1347,57 @@ public sealed class GenerateEdgeInstallerPackageHandler(
 
     private static List<DeviceBootstrapSecretTarget>
         CreateDeviceSecretTargets(
+        Guid generationId,
+        DateTime expiresAtUtc,
         IReadOnlyList<EdgeBindingSelection> selections,
-        IReadOnlyDictionary<Guid, Device> deviceById)
+        IReadOnlyDictionary<Guid, Device> deviceById,
+        IReadOnlyList<EdgeInstallerPluginPackage> plugins)
     {
         var targets =
             new List<DeviceBootstrapSecretTarget>(selections.Count);
-        foreach (var selection in selections)
+        for (var index = 0; index < selections.Count; index++)
         {
+            var selection = selections[index];
+            var plugin = plugins[index];
             var device = deviceById[selection.DeviceId];
             var bootstrapSecret = BootstrapSecretGenerator.Generate();
             var targetHash = BootstrapSecretHasher.Hash(
                 bootstrapSecret);
+            var pluginRoot = $"plugins/{device.Code}";
+            var pendingCredential = new EdgeInstallerPendingCredential(
+                generationId,
+                device.Id,
+                device.Code,
+                targetHash,
+                selection.ModuleId,
+                plugin.Version,
+                plugin.Sha256,
+                expiresAtUtc);
             targets.Add(new DeviceBootstrapSecretTarget(
                 device.Id,
-                targetHash,
+                pendingCredential,
                 new EdgeBindingItemDto(
-                    selection.ModuleId,
                     device.Code,
-                    bootstrapSecret,
                     device.DeviceName,
-                    device.ProcessId)));
+                    device.ProcessId,
+                    plugin.SupportedProcessType,
+                    selection.ModuleId,
+                    plugin.Version,
+                    plugin.Sha256,
+                    $"{pluginRoot}/app",
+                    $"{pluginRoot}/config",
+                    $"{pluginRoot}/db",
+                    $"{pluginRoot}/data",
+                    $"{pluginRoot}/logs",
+                    $"{pluginRoot}/cache",
+                    $"{pluginRoot}/context",
+                    $"{pluginRoot}/buffers",
+                    new EdgePendingCredentialDto(
+                        $"IIoT.Edge/Pending/{generationId:D}/{device.Code}",
+                        bootstrapSecret))));
         }
 
         return targets;
-    }
-
-    private async Task PersistDeviceSecretsAsync(
-        IReadOnlyCollection<DeviceBootstrapWriteState> baseline,
-        IReadOnlyCollection<DeviceBootstrapSecretTarget> targets,
-        CancellationToken cancellationToken)
-    {
-        var requestedDeviceIds = targets
-            .Select(target => target.DeviceId)
-            .OrderBy(deviceId => deviceId)
-            .ToArray();
-        var targetHashes = targets.ToDictionary(
-            target => target.DeviceId,
-            target => target.SecretHash);
-        try
-        {
-            await unitOfWork.ExecuteResilientAsync(
-                ExecuteAttemptAsync,
-                cancellationToken);
-        }
-        catch (OperationCanceledException)
-            when (cancellationToken.IsCancellationRequested)
-        {
-            var current =
-                await CloudWriteCommitRecovery.TryObserveCommitAsync(
-                    token => observationReader
-                        .ObserveDeviceBootstrapAsync(
-                            requestedDeviceIds,
-                            token));
-            if (current is not null
-                && ClientReleaseWriteCommitRecovery
-                    .MatchesDeviceBootstrapTarget(
-                        current,
-                        baseline,
-                        targetHashes))
-            {
-                return;
-            }
-
-            throw new OperationCanceledException(cancellationToken);
-        }
-        catch (CloudWriteException)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            throw;
-        }
-        catch
-        {
-            var current =
-                await CloudWriteCommitRecovery.TryObserveCommitAsync(
-                    token => observationReader
-                        .ObserveDeviceBootstrapAsync(
-                            requestedDeviceIds,
-                            token));
-            if (current is not null
-                && ClientReleaseWriteCommitRecovery
-                    .MatchesDeviceBootstrapTarget(
-                        current,
-                        baseline,
-                        targetHashes))
-            {
-                return;
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            if (current is null
-                || ClientReleaseWriteCommitRecovery
-                    .MatchesDeviceBootstrapBaseline(
-                        current,
-                        baseline))
-            {
-                throw new CloudWriteCommitUnknownException();
-            }
-
-            if (!ClientReleaseWriteCommitRecovery
-                    .MatchesDeviceBootstrapTarget(
-                        current,
-                        baseline,
-                        targetHashes))
-            {
-                throw new CloudWriteConflictException();
-            }
-        }
-
-        var confirmed =
-            await CloudWriteCommitRecovery.TryObserveCommitAsync(
-                token => observationReader.ObserveDeviceBootstrapAsync(
-                    requestedDeviceIds,
-                    token));
-        if (ClientReleaseWriteCommitRecovery
-            .MatchesDeviceBootstrapTarget(
-                confirmed ?? [],
-                baseline,
-                targetHashes))
-        {
-            return;
-        }
-
-        cancellationToken.ThrowIfCancellationRequested();
-        throw ClientReleaseWriteCommitRecovery
-            .MatchesDeviceBootstrapBaseline(confirmed ?? [], baseline)
-            ? new CloudWriteCommitUnknownException()
-            : new CloudWriteConflictException();
-
-        async Task<bool> ExecuteAttemptAsync(
-            CancellationToken callbackCancellationToken)
-        {
-            var current =
-                await CloudWriteCommitRecovery.TryObserveAttemptAsync(
-                    token => observationReader
-                        .ObserveDeviceBootstrapAsync(
-                            requestedDeviceIds,
-                            token),
-                    callbackCancellationToken)
-                ?? throw new CloudWriteCommitUnknownException();
-            if (ClientReleaseWriteCommitRecovery
-                .MatchesDeviceBootstrapTarget(
-                    current,
-                    baseline,
-                    targetHashes))
-            {
-                return true;
-            }
-
-            if (!ClientReleaseWriteCommitRecovery
-                    .MatchesDeviceBootstrapBaseline(
-                        current,
-                        baseline))
-            {
-                throw new CloudWriteConflictException();
-            }
-
-            var devices = await deviceRepository.GetListAsync(
-                new DevicePagedSpec(
-                    0,
-                    0,
-                    requestedDeviceIds.ToList(),
-                    isPaging: false),
-                callbackCancellationToken);
-            if (!LoadedDevicesMatchObservation(devices, baseline))
-            {
-                throw new CloudWriteConflictException();
-            }
-
-            foreach (var device in devices)
-            {
-                device.SetBootstrapSecretHash(
-                    targetHashes[device.Id]);
-            }
-
-            await deviceRepository.SaveChangesAsync(
-                callbackCancellationToken);
-            return true;
-        }
     }
 
     private static bool LoadedDevicesMatchObservation(
@@ -918,7 +1500,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                         device.Id.ToString(),
                         executedAtUtc,
                         true,
-                        $"生成客户端首装包时更新设备 {device.DeviceName}（{device.Code}）的启动凭据。",
+                        $"为设备 {device.DeviceName}（{device.Code}）生成带独立待激活凭据的客户端首装包，未替换现场旧凭据。",
                         null,
                         $"edge-installer-secret:{executedAtUtc.Ticks:x}:{device.Id:N}"));
         }
@@ -934,7 +1516,8 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         EdgeInstallerArtifactManifest artifact,
         IReadOnlyCollection<EdgeInstallerPluginPackage> selectedPlugins,
         EdgeBindingBundleDto bindingBundle,
-        string targetRuntime)
+        string targetRuntime,
+        EdgeInstallerArtifactOptions artifactOptions)
     {
         var tempPath = Path.Combine(
             Path.GetTempPath(),
@@ -959,7 +1542,8 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 artifact,
                 selectedPlugins,
                 bindingBundle,
-                targetRuntime);
+                targetRuntime,
+                artifactOptions);
 
             Span<byte> trailer = stackalloc byte[16];
             BinaryPrimitives.WriteInt64LittleEndian(trailer[..8], payloadLength);
@@ -980,7 +1564,8 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         EdgeInstallerArtifactManifest artifact,
         IReadOnlyCollection<EdgeInstallerPluginPackage> selectedPlugins,
         EdgeBindingBundleDto bindingBundle,
-        string targetRuntime)
+        string targetRuntime,
+        EdgeInstallerArtifactOptions artifactOptions)
     {
         var payloadTempPath = Path.Combine(
             Path.GetTempPath(),
@@ -993,7 +1578,13 @@ public sealed class GenerateEdgeInstallerPackageHandler(
             bufferSize: 1024 * 1024,
             FileOptions.Asynchronous | FileOptions.DeleteOnClose | FileOptions.SequentialScan);
 
-        WritePayloadZip(payloadStream, artifact, selectedPlugins, bindingBundle, targetRuntime);
+        WritePayloadZip(
+            payloadStream,
+            artifact,
+            selectedPlugins,
+            bindingBundle,
+            targetRuntime,
+            artifactOptions);
         payloadStream.Position = 0;
         payloadStream.CopyTo(packageStream);
         return payloadStream.Length;
@@ -1004,7 +1595,8 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         EdgeInstallerArtifactManifest artifact,
         IReadOnlyCollection<EdgeInstallerPluginPackage> selectedPlugins,
         EdgeBindingBundleDto bindingBundle,
-        string targetRuntime)
+        string targetRuntime,
+        EdgeInstallerArtifactOptions artifactOptions)
     {
         using (var target = new ZipArchive(packageStream, ZipArchiveMode.Create, leaveOpen: true))
         {
@@ -1061,6 +1653,20 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 BuildUpdateConfig(bindingBundle, artifact.Channel, targetRuntime),
                 writtenEntries);
         }
+
+        EdgePayloadManifestWriter.AppendSignedManifest(
+            packageStream,
+            bindingBundle.GenerationId,
+            bindingBundle.GeneratedAtUtc,
+            artifact.Version,
+            artifact.LauncherDirectory,
+            artifact.HostDirectory,
+            artifact.PluginsRoot,
+            selectedPlugins.ToDictionary(
+                plugin => plugin.PluginDirectory,
+                plugin => plugin.Version,
+                StringComparer.OrdinalIgnoreCase),
+            artifactOptions);
     }
 
     private static HashSet<string> BuildGeneratedEntryNames(
@@ -1070,7 +1676,9 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         {
             CombineZipPath(artifact.LauncherDirectory, BindingFileName),
             CombineZipPath(artifact.LauncherDirectory, HostPluginManifestFileName),
-            CombineZipPath(artifact.LauncherDirectory, UpdateConfigFileName)
+            CombineZipPath(artifact.LauncherDirectory, UpdateConfigFileName),
+            CombineZipPath(artifact.LauncherDirectory, LauncherProfileCatalogFileName),
+            EdgePayloadManifestContract.FileName
         };
 
         return entries;
@@ -1089,13 +1697,14 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                     plugin.ModuleId,
                     plugin.DisplayName,
                     plugin.Version,
-                    plugin.PluginDirectory,
+                    plugin.Sha256,
+                    binding.ClientCode,
                     binding.ClientCode,
                     binding.DeviceName,
                     binding.ProcessId);
             })
             .ToList();
-        return new EdgeInstallerHostPluginManifest(1, bindingBundle.GeneratedAtUtc, plugins);
+        return new EdgeInstallerHostPluginManifest(2, bindingBundle.GeneratedAtUtc, plugins);
     }
 
     private static EdgeInstallerUpdateConfig BuildUpdateConfig(
@@ -1338,7 +1947,12 @@ public sealed class GenerateEdgeInstallerPackageHandler(
                 return false;
             }
 
-            normalized.Add(new EdgeBindingSelection(moduleId, selection.DeviceId));
+            normalized.Add(new EdgeBindingSelection(
+                moduleId,
+                selection.DeviceId,
+                string.IsNullOrWhiteSpace(selection.PluginVersion)
+                    ? null
+                    : selection.PluginVersion.Trim()));
         }
 
         return true;
@@ -1382,12 +1996,6 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         return new InstallerPackageFact(sha256, size);
     }
 
-    private static string NormalizeDefault(string? value, string defaultValue)
-    {
-        var normalized = value?.Trim();
-        return string.IsNullOrWhiteSpace(normalized) ? defaultValue : normalized;
-    }
-
     private sealed record HostReleaseSelection(
         ClientReleaseComponent Component,
         ClientReleaseVersion Version);
@@ -1396,7 +2004,7 @@ public sealed class GenerateEdgeInstallerPackageHandler(
 
     private sealed record DeviceBootstrapSecretTarget(
         Guid DeviceId,
-        string SecretHash,
+        EdgeInstallerPendingCredential PendingCredential,
         EdgeBindingItemDto Binding);
 
     private sealed record PluginReleaseSelection(
@@ -1420,8 +2028,45 @@ public sealed class GenerateEdgeInstallerPackageHandler(
         string DisplayName,
         string Version,
         string Sha256,
+        string SupportedProcessType,
         string PluginDirectory,
         string PackagePath);
+
+    private sealed class InstallerPluginFileManifest
+    {
+        public int SchemaVersion { get; set; }
+        public string Component { get; set; } = string.Empty;
+        public string Version { get; set; } = string.Empty;
+        public List<InstallerPluginFileManifestEntry>? Files { get; set; }
+    }
+
+    private sealed class InstallerPluginFileManifestEntry
+    {
+        public string Path { get; set; } = string.Empty;
+        public long Size { get; set; }
+        public string Sha256 { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty;
+        public string Component { get; set; } = string.Empty;
+        public string Version { get; set; } = string.Empty;
+    }
+
+    private sealed class InstallerHostFileManifest
+    {
+        public int SchemaVersion { get; set; }
+        public string Component { get; set; } = string.Empty;
+        public string Version { get; set; } = string.Empty;
+        public List<InstallerHostFileManifestEntry>? Files { get; set; }
+    }
+
+    private sealed class InstallerHostFileManifestEntry
+    {
+        public string Path { get; set; } = string.Empty;
+        public long Size { get; set; }
+        public string Sha256 { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty;
+        public string Component { get; set; } = string.Empty;
+        public string Version { get; set; } = string.Empty;
+    }
 
     private sealed record PluginPackageLoadResult(
         bool IsSuccess,
@@ -1494,11 +2139,21 @@ internal sealed class EdgeInstallerArtifactManifest
 
     public string LauncherDirectory { get; set; } = "launcher";
 
+    public string? LauncherDirectorySha256 { get; set; }
+
+    public long LauncherDirectorySize { get; set; }
+
     public string HostDirectory { get; set; } = "host";
 
     public string? HostDirectorySha256 { get; set; }
 
     public long HostDirectorySize { get; set; }
+
+    public string HostFileManifest { get; set; } = string.Empty;
+
+    public string? HostFileManifestSha256 { get; set; }
+
+    public int HostFileManifestFileCount { get; set; }
 
     public string PluginsRoot { get; set; } = "plugins";
 
@@ -1547,6 +2202,7 @@ internal sealed record EdgeInstallerHostPluginItem(
     string ModuleId,
     string DisplayName,
     string Version,
+    string PackageSha256,
     string PluginDirectory,
     string ClientCode,
     string DeviceName,

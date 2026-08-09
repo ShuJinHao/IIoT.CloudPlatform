@@ -43,6 +43,7 @@ public sealed class ClientReleaseHistoryQueryService(IIoTDbContext dbContext)
                 component.Channel,
                 component.TargetRuntime,
                 CanHardDelete = component.ComponentKind == ClientReleaseComponentKind.Plugin
+                    && !component.WasEverDeviceBound
                     && component.Versions.All(version =>
                         version.Status == ClientReleaseStatus.Archived
                         || version.Status == ClientReleaseStatus.Deleted),

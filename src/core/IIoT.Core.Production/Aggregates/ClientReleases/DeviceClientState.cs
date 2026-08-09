@@ -74,6 +74,12 @@ public sealed class DeviceClientState : BaseEntity<Guid>
 
     public string? PlcSnapshotContentSha256 { get; private set; }
 
+    public bool PlcSnapshotIsAuthoritative { get; private set; }
+
+    public string? PlcSnapshotConfigurationVersion { get; private set; }
+
+    public bool PlcSnapshotExplicitClear { get; private set; }
+
     public DateTime CreatedAtUtc { get; private set; }
 
     public DateTime UpdatedAtUtc { get; private set; }
@@ -122,12 +128,19 @@ public sealed class DeviceClientState : BaseEntity<Guid>
     public void ApplyPlcSnapshot(
         DateTime reportedAtUtc,
         DateTime receivedAtUtc,
-        string contentSha256)
+        string contentSha256,
+        bool isAuthoritative = true,
+        string? configurationVersion = null,
+        bool explicitClear = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(contentSha256);
         PlcSnapshotReportedAtUtc = NormalizeUtc(reportedAtUtc);
         PlcSnapshotReceivedAtUtc = NormalizeUtc(receivedAtUtc);
         PlcSnapshotContentSha256 = contentSha256.Trim().ToLowerInvariant();
+        PlcSnapshotIsAuthoritative = isAuthoritative;
+        PlcSnapshotConfigurationVersion = NormalizeOptional(
+            configurationVersion);
+        PlcSnapshotExplicitClear = explicitClear;
         UpdatedAtUtc = NormalizeUtc(receivedAtUtc);
     }
 

@@ -26,7 +26,9 @@ public sealed class AiReadHttpContractTests
             .GetCustomAttribute<AuthorizeAiReadAttribute>();
 
         Assert.Equal("api/v1/ai/read", controller.GetCustomAttribute<RouteAttribute>()?.Template);
-        Assert.Equal(HttpApiPolicies.RequireAiReadToken, controller.GetCustomAttribute<AuthorizeAttribute>()?.Policy);
+        Assert.Equal(
+            HttpApiPolicies.RequireAiReadDelegation,
+            controller.GetCustomAttribute<AuthorizeAttribute>()?.Policy);
         Assert.Equal(HttpApiRateLimitPolicies.AiRead, controller.GetCustomAttribute<EnableRateLimitingAttribute>()?.PolicyName);
         Assert.Equal("production-records", productionRecords.GetCustomAttribute<HttpGetAttribute>()?.Template);
         Assert.Equal(AiReadPermissions.ProductionRecord, authorization?.Permission);

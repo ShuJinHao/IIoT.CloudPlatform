@@ -1,14 +1,12 @@
-using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.Contracts;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Result;
 
 namespace IIoT.IdentityService.Queries;
 
-[AuthorizeAiRead(AiReadPermissions.IdentityStatus)]
 public sealed record GetCloudIdentityStatusQuery(
     Guid CloudUserId,
-    string? TenantId) : IAiReadQuery<Result<CloudIdentityStatusDto>>;
+    string? TenantId) : IQuery<Result<CloudIdentityStatusDto>>;
 
 public sealed class GetCloudIdentityStatusHandler(
     ICloudOidcUserProfileService profileService)

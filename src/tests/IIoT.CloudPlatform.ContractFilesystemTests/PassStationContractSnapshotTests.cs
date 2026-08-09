@@ -69,6 +69,18 @@ public sealed class PassStationContractSnapshotTests
         Assert.Equal(typeof(Guid), typeof(PassStationBatchUploadRequest).GetProperty(nameof(PassStationBatchUploadRequest.DeviceId))!.PropertyType);
         Assert.Equal(typeof(DateTime), typeof(PassStationItemInput).GetProperty(nameof(PassStationItemInput.CompletedTime))!.PropertyType);
         Assert.Equal(typeof(JsonElement), typeof(PassStationItemInput).GetProperty(nameof(PassStationItemInput.Payload))!.PropertyType);
+        Assert.Equal(
+            NullabilityState.Nullable,
+            nullability.Create(typeof(PassStationItemInput).GetProperty(nameof(PassStationItemInput.CompletionId))!).ReadState);
+        Assert.Equal(
+            NullabilityState.Nullable,
+            nullability.Create(typeof(PassStationItemInput).GetProperty(nameof(PassStationItemInput.ClientCode))!).ReadState);
+        Assert.Equal(
+            NullabilityState.Nullable,
+            nullability.Create(typeof(PassStationItemInput).GetProperty(nameof(PassStationItemInput.TypeKey))!).ReadState);
+        Assert.Equal(
+            NullabilityState.Nullable,
+            nullability.Create(typeof(PassStationItemInput).GetProperty(nameof(PassStationItemInput.PlcCode))!).ReadState);
         var uploadConstructor = Assert.Single(typeof(PassStationBatchUploadRequest).GetConstructors());
         Assert.Equal(1, uploadConstructor.GetParameters().Single(parameter => parameter.Name == "SchemaVersion").DefaultValue);
 
@@ -87,7 +99,7 @@ public sealed class PassStationContractSnapshotTests
                 .Select(value => value.GetString()!)
                 .ToArray());
 
-        var validator = new ReceivePassStationBatchCommandValidator(CreateSchemaProvider());
+        var validator = new ReceivePassStationBatchCommandValidator();
         var validItem = new PassStationItemInput(
             "CP-CLIP-001",
             "OK",
@@ -128,8 +140,16 @@ public sealed class PassStationContractSnapshotTests
         AssertFailure(validator, new("cp", Guid.NewGuid(), [validItem], new string('r', 129)), nameof(ReceivePassStationBatchCommand.RequestId));
         AssertFailure(validator, new("cp", Guid.NewGuid(), [validItem], SchemaVersion: 2), nameof(ReceivePassStationBatchCommand.ProcessType));
         AssertFailure(validator, new("cp", Guid.NewGuid(), [validItem], ProcessType: new string('p', 33)), nameof(ReceivePassStationBatchCommand.ProcessType));
-        AssertFailure(validator, new("cp", Guid.NewGuid(), [validItem], ProcessType: "coating"), nameof(ReceivePassStationBatchCommand.ProcessType));
-        AssertFailure(validator, new("missing", Guid.NewGuid(), [validItem]), nameof(ReceivePassStationBatchCommand.TypeKey));
+        Assert.True(validator.Validate(new ReceivePassStationBatchCommand(
+            "die-cutting-completion",
+            Guid.NewGuid(),
+            [validItem],
+            SchemaVersion: 2,
+            ProcessType: "diecut")).IsValid);
+        Assert.True(validator.Validate(new ReceivePassStationBatchCommand(
+            "future-capability",
+            Guid.NewGuid(),
+            [validItem])).IsValid);
         AssertItemFailure(validator, validItem with { Barcode = " " }, nameof(PassStationItemInput.Barcode));
         AssertItemFailure(validator, validItem with { Barcode = new string('b', 129) }, nameof(PassStationItemInput.Barcode));
         AssertItemFailure(validator, validItem with { CellResult = " " }, nameof(PassStationItemInput.CellResult));
@@ -137,22 +157,17 @@ public sealed class PassStationContractSnapshotTests
         AssertItemFailure(validator, validItem with { CompletedTime = new DateTime(1999, 12, 31, 23, 59, 59, DateTimeKind.Utc) }, nameof(PassStationItemInput.CompletedTime));
         AssertItemFailure(validator, validItem with { CompletedTime = DateTime.UtcNow.AddDays(2) }, nameof(PassStationItemInput.CompletedTime));
         AssertItemFailure(validator, validItem with { Payload = ParseJson("[]") }, nameof(PassStationItemInput.Payload));
-        AssertItemFailure(
-            validator,
-            validItem with
+        Assert.True(validator.Validate(new ReceivePassStationBatchCommand(
+            "cp",
+            Guid.NewGuid(),
+            [validItem with
             {
                 Payload = ParseJson("""
                 {
-                  "plcCode": "P2-CP01",
-                  "plcName": "正极模切01",
-                  "clipSlot": "MG3",
-                  "startTime": "2026-07-24T00:00:00Z",
-                  "punchingQuantity": 120,
-                  "punchingSpeed": 1.25
+                  "futurePluginField": "由实际安装插件能力动态校验"
                 }
                 """)
-            },
-            "Payload.clipSlot");
+            }])).IsValid);
         var oversizedPayload = JsonSerializer.Serialize(Enumerable.Range(0, 65).ToDictionary(index => $"f{index}", index => index));
         AssertItemFailure(validator, validItem with { Payload = ParseJson(oversizedPayload) }, nameof(PassStationItemInput.Payload));
 
@@ -174,15 +189,12 @@ public sealed class PassStationContractSnapshotTests
                 SchemaVersion: 2,
                 ProcessType: "cp"),
             $"Items[0].{nameof(PassStationItemInput.CompletedTime)}");
-        AssertFailure(
-            validator,
-            new ReceivePassStationBatchCommand(
-                "cp",
-                Guid.NewGuid(),
-                [compatibleItemWithoutClipSlot],
-                SchemaVersion: 2,
-                ProcessType: "cp"),
-            "Items[0].Payload.clipSlot");
+        Assert.True(validator.Validate(new ReceivePassStationBatchCommand(
+            "cp",
+            Guid.NewGuid(),
+            [compatibleItemWithoutClipSlot],
+            SchemaVersion: 2,
+            ProcessType: "cp")).IsValid);
     }
 
     [Fact]
@@ -221,13 +233,59 @@ public sealed class PassStationContractSnapshotTests
             example.GetProperty("schemaVersion").GetInt32(),
             example.GetProperty("processType").GetString());
 
-        Assert.True(new ReceivePassStationBatchCommandValidator(CreateSchemaProvider())
+        Assert.True(new ReceivePassStationBatchCommandValidator()
             .Validate(command)
             .IsValid);
     }
 
     [Fact]
-    public void ProductionPassStationCatalog_ShouldContainOnlyCpAndAp()
+    public void StrictV3ProviderExample_ShouldMatchEdgeConsumerSnapshot()
+    {
+        var snapshotBytes = File.ReadAllBytes(CloudRepositoryPath.Find(
+            "scripts", "tests", "baselines", "cloud-pass-station-contract-v3.json"));
+        Assert.Equal(
+            "a4ab8dabc09d7f6d72d1f4b7c28efdfc39900c90a67f96325eeb768be2325cd2",
+            Convert.ToHexString(SHA256.HashData(snapshotBytes)).ToLowerInvariant());
+        using var snapshot = JsonDocument.Parse(snapshotBytes);
+        var contract = snapshot.RootElement;
+
+        Assert.Equal(3, contract.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(
+            [1, 2, 3],
+            contract.GetProperty("compatibility").GetProperty("providerContinuesToAccept")
+                .EnumerateArray()
+                .Select(item => item.GetInt32())
+                .ToArray());
+        Assert.Equal(
+            CloudWriteConflictException.Code,
+            contract.GetProperty("request").GetProperty("rules").GetProperty("requestIdDifferentContentCode").GetString());
+
+        var example = contract.GetProperty("example");
+        var item = Assert.Single(example.GetProperty("items").EnumerateArray());
+        var command = new ReceivePassStationBatchCommand(
+            example.GetProperty("routeTypeKey").GetString()!,
+            example.GetProperty("deviceId").GetGuid(),
+            [new PassStationItemInput(
+                item.GetProperty("barcode").GetString()!,
+                item.GetProperty("cellResult").GetString()!,
+                item.GetProperty("completedTime").GetDateTime(),
+                item.GetProperty("payload").Clone(),
+                item.GetProperty("completionId").GetString(),
+                item.GetProperty("clientCode").GetString(),
+                item.GetProperty("typeKey").GetString(),
+                item.GetProperty("plcCode").GetString())],
+            example.GetProperty("requestId").GetString(),
+            example.GetProperty("schemaVersion").GetInt32(),
+            example.GetProperty("processType").GetString(),
+            example.GetProperty("clientCode").GetString());
+
+        Assert.True(new ReceivePassStationBatchCommandValidator()
+            .Validate(command)
+            .IsValid);
+    }
+
+    [Fact]
+    public void CurrentProductionPassStationCatalog_ShouldExposeDieCuttingCompletionWithLegacyAliases()
     {
         using var document = JsonDocument.Parse(File.ReadAllBytes(CloudRepositoryPath.Find(
             "src", "hosts", "IIoT.HttpApi", "config", "pass-station-types.json")));
@@ -237,36 +295,37 @@ public sealed class PassStationContractSnapshotTests
             .EnumerateArray()
             .ToArray();
 
-        Assert.Equal(["cp", "ap"], types.Select(type => type.GetProperty("typeKey").GetString()!).ToArray());
-        Assert.Equal(["正极模切", "负极模切"], types.Select(type => type.GetProperty("displayName").GetString()!).ToArray());
-        Assert.All(types, type => Assert.Equal(
+        var currentType = Assert.Single(
+            types,
+            type => type.GetProperty("typeKey").GetString() == "die-cutting-completion");
+        Assert.Equal(
+            ["ap", "cp"],
+            currentType.GetProperty("legacyTypeKeys")
+                .EnumerateArray()
+                .Select(value => value.GetString()!)
+                .Order(StringComparer.Ordinal)
+                .ToArray());
+        Assert.Equal(
             ["plcCode", "plcName", "clipSlot", "startTime", "punchingQuantity", "punchingSpeed"],
-            type.GetProperty("fields")
+            currentType.GetProperty("fields")
                 .EnumerateArray()
                 .Select(field => field.GetProperty("key").GetString()!)
-                .ToArray()));
-        Assert.All(types, type =>
-        {
-            var clipSlot = type.GetProperty("fields")
+                .ToArray());
+        var clipSlot = currentType.GetProperty("fields")
+            .EnumerateArray()
+            .Single(field => field.GetProperty("key").GetString() == "clipSlot");
+        Assert.Equal("enum", clipSlot.GetProperty("type").GetString());
+        Assert.True(clipSlot.GetProperty("required").GetBoolean());
+        Assert.Equal(
+            ["MG1", "MG2"],
+            clipSlot.GetProperty("options")
                 .EnumerateArray()
-                .Single(field => field.GetProperty("key").GetString() == "clipSlot");
-            Assert.Equal("enum", clipSlot.GetProperty("type").GetString());
-            Assert.True(clipSlot.GetProperty("required").GetBoolean());
-            Assert.Equal(
-                ["MG1", "MG2"],
-                clipSlot.GetProperty("options")
-                    .EnumerateArray()
-                    .Select(option => option.GetString()!)
-                    .ToArray());
-            Assert.Contains("clipSlot", type.GetProperty("listColumns").EnumerateArray().Select(column => column.GetString()!));
-            Assert.Contains(
-                type.GetProperty("detailSections").EnumerateArray(),
-                section => section.GetProperty("fields").EnumerateArray().Any(field => field.GetString() == "clipSlot"));
-        });
-        var source = document.RootElement.GetRawText();
-        Assert.DoesNotContain("injection", source, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("stacking", source, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("homogenization", source, StringComparison.OrdinalIgnoreCase);
+                .Select(option => option.GetString()!)
+                .ToArray());
+        Assert.Contains("clipSlot", currentType.GetProperty("listColumns").EnumerateArray().Select(column => column.GetString()!));
+        Assert.Contains(
+            currentType.GetProperty("detailSections").EnumerateArray(),
+            section => section.GetProperty("fields").EnumerateArray().Any(field => field.GetString() == "clipSlot"));
     }
 
     [Fact]

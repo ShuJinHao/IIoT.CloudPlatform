@@ -18,6 +18,11 @@ public class DeviceConfiguration : IEntityTypeConfiguration<Device>
             .HasMaxLength(100)
             .HasColumnName("device_name");
 
+        builder.Property(d => d.NormalizedDeviceName)
+            .IsRequired()
+            .HasMaxLength(100)
+            .HasColumnName("normalized_device_name");
+
         builder.Property(d => d.Code)
             .IsRequired()
             .HasMaxLength(50)
@@ -39,9 +44,9 @@ public class DeviceConfiguration : IEntityTypeConfiguration<Device>
             .IsUnique()
             .HasDatabaseName("ix_devices_client_code");
 
-        builder.HasIndex(d => d.DeviceName)
+        builder.HasIndex(d => d.NormalizedDeviceName)
             .IsUnique()
-            .HasDatabaseName("ix_devices_device_name");
+            .HasDatabaseName("ux_devices_normalized_device_name");
 
         builder.HasIndex(d => d.ProcessId)
             .HasDatabaseName("ix_devices_process_id");

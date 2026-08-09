@@ -108,7 +108,13 @@ public sealed class HttpControllerContractTests
         Assert.Equal("api/v1/human/edge-hosts", GetRequiredAttribute<RouteAttribute>(human).Template);
         Assert.Equal(HttpApiRateLimitPolicies.GeneralApi, GetRequiredAttribute<EnableRateLimitingAttribute>(human).PolicyName);
         Assert.Equal(
-            [null, "{deviceId:guid}", "{deviceId:guid}/plc-runtime-states"],
+            [
+                null,
+                "{deviceId:guid}",
+                "{deviceId:guid}/plc-runtime-states",
+                "{deviceId:guid}/plcs",
+                "{deviceId:guid}/data-schemas"
+            ],
             humanActions.Select(action => GetRequiredAttribute<HttpGetAttribute>(action).Template));
         Assert.DoesNotContain(humanActions, action => action.GetCustomAttributes<HttpMethodAttribute>()
             .Any(attribute => attribute.HttpMethods.Any(verb => !string.Equals(verb, "GET", StringComparison.Ordinal))));

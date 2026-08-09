@@ -1,4 +1,5 @@
 using IIoT.Core.Production.Aggregates.Devices;
+using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Core.Production.Specifications.Devices;
 using IIoT.ProductionService.Security;
 using IIoT.Services.Contracts;
@@ -21,13 +22,17 @@ public record DeviceIdentityDto(
     string ClientCode,
     Guid ProcessId,
     string UploadAccessToken,
-    DateTimeOffset UploadAccessTokenExpiresAtUtc
+    DateTimeOffset UploadAccessTokenExpiresAtUtc,
+    string SessionKind = "Formal",
+    string? ActivationToken = null,
+    DateTimeOffset? ActivationTokenExpiresAtUtc = null,
+    Guid? GenerationId = null
 );
 
 public sealed record BootstrapDeviceSessionResult(
     DeviceIdentityDto DeviceIdentity,
-    string RefreshToken,
-    DateTimeOffset RefreshTokenExpiresAtUtc);
+    string? RefreshToken,
+    DateTimeOffset? RefreshTokenExpiresAtUtc);
 
 public record GetDeviceByInstanceQuery(
     string Code,
@@ -37,7 +42,8 @@ public record GetDeviceByInstanceQuery(
 public class GetDeviceByInstanceHandler(
     IReadRepository<Device> deviceRepository,
     IJwtTokenGenerator jwtTokenGenerator,
-    IRefreshTokenService refreshTokenService
+    IRefreshTokenService refreshTokenService,
+    IEdgeInstallerGenerationStore installerGenerationStore
 ) : IQueryHandler<GetDeviceByInstanceQuery, Result<BootstrapDeviceSessionResult>>
 {
     public async Task<Result<BootstrapDeviceSessionResult>> Handle(
@@ -56,6 +62,38 @@ public class GetDeviceByInstanceHandler(
         if (device is null)
         {
             return Result.Failure($"设备寻址失败：未找到寻址码为 [{code}] 的设备。");
+        }
+
+        var pendingCredentials = await installerGenerationStore
+            .GetPendingByClientCodeAsync(
+                device.Code,
+                DateTime.UtcNow,
+                cancellationToken);
+        var pending = pendingCredentials.FirstOrDefault(candidate =>
+            BootstrapSecretHasher.Verify(
+                request.BootstrapSecret,
+                candidate.SecretHash));
+        if (pending is not null)
+        {
+            var activationToken = jwtTokenGenerator.GenerateEdgeActivationToken(
+                pending.GenerationId,
+                device.Id,
+                device.Code,
+                device.ProcessId);
+            return Result.Success(new BootstrapDeviceSessionResult(
+                new DeviceIdentityDto(
+                    device.Id,
+                    device.DeviceName,
+                    device.Code,
+                    device.ProcessId,
+                    string.Empty,
+                    activationToken.ExpiresAtUtc,
+                    "ActivationOnly",
+                    activationToken.Token,
+                    activationToken.ExpiresAtUtc,
+                    pending.GenerationId),
+                null,
+                null));
         }
 
         if (!BootstrapSecretHasher.Verify(request.BootstrapSecret, device.BootstrapSecretHash))

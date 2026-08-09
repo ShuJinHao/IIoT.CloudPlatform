@@ -70,7 +70,8 @@ public sealed record DeviceDeletionImpact(
     long EmployeeDeviceAccesses,
     long RefreshTokenSessions,
     long RuntimeHeartbeats = 0,
-    long EdgeHostPlcRuntimeStates = 0)
+    long EdgeHostPlcRuntimeStates = 0,
+    long InstallerPendingCredentials = 0)
 {
     public long TotalAssociatedRows =>
         Recipes
@@ -84,7 +85,8 @@ public sealed record DeviceDeletionImpact(
         + UploadReceiveRegistrations
         + EmployeeDeviceAccesses
         + RefreshTokenSessions
-        + EdgeHostPlcRuntimeStates;
+        + EdgeHostPlcRuntimeStates
+        + InstallerPendingCredentials;
 }
 
 public sealed record DeviceCascadeDeletionResult(

@@ -28,7 +28,8 @@ public class EdgePassStationController : ApiControllerBase
                 request.Items,
                 request.RequestId,
                 request.SchemaVersion,
-                request.ProcessType),
+                request.ProcessType,
+                request.ClientCode),
             cancellationToken));
     }
 }

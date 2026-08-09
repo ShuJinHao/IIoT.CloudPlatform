@@ -142,6 +142,55 @@ public sealed class HumanClientReleaseController : ApiControllerBase
         return File(result.Value!.Content, result.Value.ContentType, result.Value.FileName);
     }
 
+    [HttpPost("installer-plan")]
+    public async Task<IActionResult> GetInstallerPlan(
+        [FromBody] GetEdgeInstallerPlanQuery query,
+        CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(query, cancellationToken));
+    }
+
+    [HttpGet("installer-packages/{generationId:guid}")]
+    public async Task<IActionResult> DownloadExistingInstallerPackage(
+        [FromRoute] Guid generationId,
+        CancellationToken cancellationToken)
+    {
+        var result = await Sender.Send(
+            new GetEdgeInstallerPackageByGenerationQuery(generationId),
+            cancellationToken);
+        if (!result.IsSuccess)
+            return ReturnResult(result);
+
+        Response.Headers.CacheControl = "no-store";
+        Response.Headers[InstallerPackageHeaderNames.GenerationId] =
+            result.Value!.GenerationId.ToString("D");
+        return File(
+            result.Value.Content,
+            result.Value.ContentType,
+            result.Value.FileName);
+    }
+
+    [HttpGet("production-bindings/{deviceId:guid}/analysis")]
+    public async Task<IActionResult> AnalyzeProductionBinding(
+        [FromRoute] Guid deviceId,
+        CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(
+            new AnalyzeProductionBindingQuery(deviceId),
+            cancellationToken));
+    }
+
+    [HttpPost("production-bindings/{deviceId:guid}/apply")]
+    public async Task<IActionResult> ApplyProductionBinding(
+        [FromRoute] Guid deviceId,
+        [FromBody] ApplyProductionBindingRequest request,
+        CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(
+            new ApplyProductionBindingCommand(deviceId, request.Fingerprint),
+            cancellationToken));
+    }
+
     [HttpPost("edge-release-bundles")]
     [RequestSizeLimit(EdgeReleaseUploadOptions.DefaultMaxBundleBytes)]
     public async Task<IActionResult> PublishEdgeReleaseBundle(CancellationToken cancellationToken)
@@ -169,3 +218,5 @@ public sealed record DeleteClientReleasePackageRequest(string? Reason);
 public sealed record HardDeleteClientReleaseComponentRequest(
     string? Reason,
     string? Confirmation);
+
+public sealed record ApplyProductionBindingRequest(string Fingerprint);

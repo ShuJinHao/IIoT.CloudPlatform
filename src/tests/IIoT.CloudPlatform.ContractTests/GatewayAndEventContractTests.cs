@@ -4,7 +4,9 @@ using IIoT.DataWorker.Consumers;
 using IIoT.DataWorker.Outbox;
 using IIoT.EntityFrameworkCore.Outbox;
 using IIoT.Gateway.Infrastructure;
+using IIoT.HttpApi.Infrastructure;
 using IIoT.MasterDataService.Caching;
+using IIoT.MigrationWorkApp;
 using IIoT.Services.Contracts.Events.Capacities;
 using IIoT.Services.Contracts.Events.DeviceLogs;
 using IIoT.Services.Contracts.Events.PassStations;
@@ -60,6 +62,42 @@ public sealed class GatewayAndEventContractTests
             AppHostTestingGuard.EnsureAllowed(
                 disableDataWorkerOutboxDispatcher: true,
                 Environments.Production));
+        Assert.Contains("restricted to the Testing environment", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MigrationWorkAppTestingGuard_RestrictsIdentityOnlyInitializationToTesting()
+    {
+        MigrationWorkAppTestingGuard.EnsureAllowed(
+            skipRecordSchemaAndTimescale: false,
+            Environments.Production);
+        MigrationWorkAppTestingGuard.EnsureAllowed(
+            skipRecordSchemaAndTimescale: true,
+            "Testing");
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            MigrationWorkAppTestingGuard.EnsureAllowed(
+                skipRecordSchemaAndTimescale: true,
+                Environments.Production));
+        Assert.Contains(
+            MigrationWorkAppTestingGuard.SkipRecordSchemaAndTimescaleConfigurationKey,
+            error.Message,
+            StringComparison.Ordinal);
+        Assert.Contains("restricted to the Testing environment", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HttpApiTestingConfiguration_RestrictsIdentityOnlyPassStationOverrideToTesting()
+    {
+        HttpApiTestingConfiguration.EnsureAllowed(enabled: false, Environments.Production);
+        HttpApiTestingConfiguration.EnsureAllowed(enabled: true, "Testing");
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            HttpApiTestingConfiguration.EnsureAllowed(enabled: true, Environments.Production));
+        Assert.Contains(
+            HttpApiTestingConfiguration.IdentityOnlyHostConfigurationKey,
+            error.Message,
+            StringComparison.Ordinal);
         Assert.Contains("restricted to the Testing environment", error.Message, StringComparison.Ordinal);
     }
 

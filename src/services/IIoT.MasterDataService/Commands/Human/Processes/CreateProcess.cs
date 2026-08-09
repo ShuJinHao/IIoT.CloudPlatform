@@ -3,6 +3,7 @@ using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.CrossCutting.Persistence;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Persistence;
+using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Messaging;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
@@ -26,7 +27,11 @@ public class CreateProcessHandler(
         CreateProcessCommand request,
         CancellationToken cancellationToken)
     {
-        var code = request.ProcessCode?.Trim() ?? string.Empty;
+        var code = string.IsNullOrWhiteSpace(request.ProcessCode)
+            ? string.Empty
+            : BusinessIdentityNormalization.NormalizeClassificationCode(
+                request.ProcessCode,
+                nameof(request.ProcessCode));
         var name = request.ProcessName?.Trim() ?? string.Empty;
 
         if (string.IsNullOrEmpty(code))

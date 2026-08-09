@@ -16,8 +16,13 @@ var postgresVolumeName = builder.Configuration["AppHost:PostgresVolumeName"] ?? 
 var rabbitMqVolumeName = builder.Configuration["AppHost:RabbitMqVolumeName"] ?? "rabbitmq-iiot";
 var disableDataWorkerOutboxDispatcher = builder.Configuration.GetValue<bool>(
     "AppHost:Testing:DisableDataWorkerOutboxDispatcher");
+var skipMigrationRecordSchemaAndTimescale = builder.Configuration.GetValue<bool>(
+    "AppHost:Testing:SkipMigrationRecordSchemaAndTimescale");
 AppHostTestingGuard.EnsureAllowed(
     disableDataWorkerOutboxDispatcher,
+    builder.Environment.EnvironmentName);
+AppHostTestingGuard.EnsureAllowed(
+    skipMigrationRecordSchemaAndTimescale,
     builder.Environment.EnvironmentName);
 
 var postgres = builder.AddPostgres("postgres", password: password)
@@ -38,11 +43,31 @@ var migration = builder.AddProject<Projects.IIoT_MigrationWorkApp>("iiot-migrati
     .WithEnvironment("SEED_ADMIN_NO", seedAdminNo)
     .WithEnvironment("SEED_ADMIN_PASSWORD", seedAdminPassword);
 
+if (skipMigrationRecordSchemaAndTimescale)
+{
+    migration
+        .WithEnvironment("DOTNET_ENVIRONMENT", builder.Environment.EnvironmentName)
+        .WithEnvironment("ALLOW_INTRANET_HTTP_OIDC", "true")
+        .WithEnvironment(
+            "MigrationWorkApp__Testing__SkipRecordSchemaAndTimescale",
+            "true");
+}
+
 var apiService = builder.AddProject<Projects.IIoT_HttpApi>("iiot-httpapi")
     .WithReference(postgres)
     .WithReference(redis)
     .WithReference(rabbitmq)
     .WaitForCompletion(migration);
+
+if (skipMigrationRecordSchemaAndTimescale)
+{
+    apiService
+        .WithEnvironment("DOTNET_ENVIRONMENT", builder.Environment.EnvironmentName)
+        .WithEnvironment("ALLOW_INTRANET_HTTP_OIDC", "true")
+        .WithEnvironment(
+            "HttpApi__Testing__IdentityOnlyHost",
+            "true");
+}
 
 var gatewayService = builder.AddProject<Projects.IIoT_Gateway>("iiot-gateway")
     .WithReference(apiService)

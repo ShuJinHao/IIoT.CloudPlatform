@@ -34,7 +34,7 @@
       />
     </template>
     <NiondTableCard v-else>
-      <EdgeBindingDownloadPanel :plugin-components="catalog?.plugins ?? []" :channel="channelDisplay" :target-runtime="targetRuntime || 'win-x64'" :host-version="selectedHostPackageVersion" />
+      <EdgeBindingDownloadPanel />
     </NiondTableCard>
 
     <ReleaseHistoryModal v-model:show="showHistoryModal" :title="historyModalTitle" :selected-row="selectedReleaseRow" :versions="selectedOtherVersions" :columns="historyColumns" />

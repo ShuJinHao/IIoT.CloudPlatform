@@ -17,6 +17,9 @@ builder.WebHost.ConfigureKestrel(options =>
         ?? EdgeReleaseUploadOptions.DefaultMaxBundleBytes;
 });
 builder.Configuration.AddJsonFile("config/pass-station-types.json", optional: false, reloadOnChange: false);
+HttpApiTestingConfiguration.ApplyIdentityOnlyPassStationType(
+    builder.Configuration,
+    builder.Environment.EnvironmentName);
 
 builder.AddSerilog("httpapi");
 builder.AddServiceDefaults();

@@ -3,6 +3,7 @@ using IIoT.Services.Contracts.Events.PassStations;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.Contracts.Uploads;
 using IIoT.SharedKernel.Result;
+using IIoT.SharedKernel.Domain;
 
 namespace IIoT.ProductionService.Commands.PassStations;
 
@@ -37,8 +38,10 @@ public sealed class PassStationReceiveService(
         var registeredProcess = NormalizeProcessType(device.ProcessCode);
         if (registeredProcess is null)
             return Result.Failure("数据接收失败: 设备未登记有效工序");
-        if (!string.Equals(registeredProcess, @event.TypeKey, StringComparison.Ordinal)
-            || !string.Equals(registeredProcess, @event.ProcessType, StringComparison.Ordinal))
+        if (!string.Equals(
+                registeredProcess,
+                @event.ProcessType,
+                StringComparison.Ordinal))
         {
             return Result.Forbidden("数据接收失败: 设备登记工序与上报工序不一致");
         }
@@ -58,7 +61,17 @@ public sealed class PassStationReceiveService(
 
     private static string? NormalizeProcessType(string? value)
     {
-        value = value?.Trim();
-        return string.IsNullOrWhiteSpace(value) ? null : value.ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        try
+        {
+            return BusinessIdentityNormalization.NormalizeClassificationCode(
+                value,
+                nameof(value));
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
     }
 }

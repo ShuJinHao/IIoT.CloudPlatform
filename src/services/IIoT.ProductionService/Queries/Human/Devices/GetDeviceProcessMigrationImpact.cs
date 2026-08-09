@@ -52,6 +52,7 @@ public sealed class GetDeviceProcessMigrationImpactHandler(
     IReadRepository<Device> deviceRepository,
     IProcessReadQueryService processReadQueryService,
     IDeviceDeletionDependencyQueryService dependencyQueryService,
+    IDevicePluginBindingQueryService bindingQueryService,
     ICurrentUserDeviceAccessService currentUserDeviceAccessService)
     : IQueryHandler<
         GetDeviceProcessMigrationImpactQuery,
@@ -107,6 +108,24 @@ public sealed class GetDeviceProcessMigrationImpactHandler(
             device.ProcessId,
             target.Id,
             impact);
+        var binding = await bindingQueryService.GetByDeviceIdAsync(
+            device.Id,
+            cancellationToken);
+        if (binding is not null
+            && !string.Equals(
+                binding.SupportedProcessType,
+                target.ProcessCode,
+                StringComparison.Ordinal))
+        {
+            blockers =
+            [
+                ..blockers,
+                new DeviceProcessMigrationBlockerDto(
+                    "plugin_process_mismatch",
+                    "已绑定设备插件不支持目标工序，禁止迁移。",
+                    1)
+            ];
+        }
         var confirmationText = DeviceProcessMigrationPolicy.BuildConfirmationText(
             device.Code,
             target.ProcessCode);

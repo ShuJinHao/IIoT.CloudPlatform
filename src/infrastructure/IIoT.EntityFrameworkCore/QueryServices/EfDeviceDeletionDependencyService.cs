@@ -58,7 +58,12 @@ public sealed class EfDeviceDeletionDependencyService(
                     select count(*)::bigint
                     from edge_host_plc_runtime_states state
                     where state.device_id = {deviceId}
-                ) as "EdgeHostPlcRuntimeStates"
+                ) as "EdgeHostPlcRuntimeStates",
+                (
+                    select count(*)::bigint
+                    from edge_installer_pending_credentials credential
+                    where credential."DeviceId" = {deviceId}
+                ) as "InstallerPendingCredentials"
             """)
             .SingleAsync(cancellationToken);
 
@@ -513,7 +518,8 @@ public sealed class EfDeviceDeletionDependencyService(
             impact.EmployeeDeviceAccesses + additionalImpact.EmployeeDeviceAccesses,
             impact.RefreshTokenSessions + additionalImpact.RefreshTokenSessions,
             impact.RuntimeHeartbeats + additionalImpact.RuntimeHeartbeats,
-            impact.EdgeHostPlcRuntimeStates + additionalImpact.EdgeHostPlcRuntimeStates);
+            impact.EdgeHostPlcRuntimeStates + additionalImpact.EdgeHostPlcRuntimeStates,
+            impact.InstallerPendingCredentials + additionalImpact.InstallerPendingCredentials);
     }
 
     private async Task<uint?> LockDeviceAsync(
@@ -649,6 +655,9 @@ public sealed class EfDeviceDeletionDependencyService(
         CancellationToken cancellationToken)
     {
         await dbContext.Database.ExecuteSqlInterpolatedAsync($"""
+            delete from device_plugin_bindings
+            where device_id = {deviceId};
+
             delete from edge_host_plc_runtime_states
             where device_id = {deviceId};
 
@@ -717,6 +726,8 @@ public sealed class EfDeviceDeletionDependencyService(
 
         public long EdgeHostPlcRuntimeStates { get; set; }
 
+        public long InstallerPendingCredentials { get; set; }
+
         public DeviceDeletionImpact ToContract()
         {
             return new DeviceDeletionImpact(
@@ -731,7 +742,8 @@ public sealed class EfDeviceDeletionDependencyService(
                 EmployeeDeviceAccesses,
                 RefreshTokenSessions,
                 RuntimeHeartbeats,
-                EdgeHostPlcRuntimeStates);
+                EdgeHostPlcRuntimeStates,
+                InstallerPendingCredentials);
         }
     }
 

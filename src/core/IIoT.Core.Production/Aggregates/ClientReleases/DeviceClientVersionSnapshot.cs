@@ -221,6 +221,7 @@ public sealed class DeviceClientVersionSnapshot : BaseEntity<Guid>
                     plugin.DisplayName,
                     plugin.Version,
                     plugin.HostApiVersion,
+                    plugin.PackageSha256,
                     plugin.Enabled
                 })
                 .ToArray()

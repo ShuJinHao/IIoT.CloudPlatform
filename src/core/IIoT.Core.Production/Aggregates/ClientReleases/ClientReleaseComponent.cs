@@ -1,4 +1,5 @@
 using IIoT.SharedKernel.Domain;
+using System.Text.Json;
 
 namespace IIoT.Core.Production.Aggregates.ClientReleases;
 
@@ -55,6 +56,24 @@ public sealed class ClientReleaseComponent : BaseEntity<Guid>, IAggregateRoot<Gu
 
     public string TargetRuntime { get; private set; } = null!;
 
+    /// <summary>Canonical Cloud process classification supported by this plugin series.</summary>
+    public string? SupportedProcessType { get; private set; }
+
+    public string? BusinessDocumentRef { get; private set; }
+
+    public int ManifestSchemaVersion { get; private set; } = 1;
+
+    public string? FileManifestSha256 { get; private set; }
+
+    public string DataCapabilitiesJson { get; private set; } = "[]";
+
+    /// <summary>
+    /// Irreversible one-device/one-plugin-series marker. Removing a device may
+    /// remove its live binding row, but it must never make this series
+    /// available for a different device.
+    /// </summary>
+    public bool WasEverDeviceBound { get; private set; }
+
     public DateTime CreatedAtUtc { get; private set; }
 
     public DateTime UpdatedAtUtc { get; private set; }
@@ -62,6 +81,18 @@ public sealed class ClientReleaseComponent : BaseEntity<Guid>, IAggregateRoot<Gu
     public uint RowVersion { get; private set; }
 
     public IReadOnlyCollection<ClientReleaseVersion> Versions => _versions.AsReadOnly();
+
+    public void MarkDeviceBound()
+    {
+        EnsureKind(ClientReleaseComponentKind.Plugin);
+        if (WasEverDeviceBound)
+        {
+            return;
+        }
+
+        WasEverDeviceBound = true;
+        Touch();
+    }
 
     public static ClientReleaseComponent CreateHost(
         string channel,
@@ -139,6 +170,54 @@ public sealed class ClientReleaseComponent : BaseEntity<Guid>, IAggregateRoot<Gu
         Description = normalizedDescription;
         IconKind = normalizedIconKind;
         AccentColor = normalizedAccentColor;
+        Touch();
+    }
+
+    public void ConfigurePluginContract(
+        string supportedProcessType,
+        string? businessDocumentRef,
+        int manifestSchemaVersion,
+        string? fileManifestSha256,
+        string? dataCapabilitiesJson)
+    {
+        EnsureKind(ClientReleaseComponentKind.Plugin);
+        if (manifestSchemaVersion <= 0)
+            throw new ArgumentOutOfRangeException(nameof(manifestSchemaVersion));
+
+        var normalizedProcessType =
+            BusinessIdentityNormalization.NormalizeClassificationCode(
+                supportedProcessType,
+                nameof(supportedProcessType));
+        if (SupportedProcessType is not null
+            && !string.Equals(
+                SupportedProcessType,
+                normalizedProcessType,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "同一插件发布系列不能更换支持的工序分类。");
+        }
+        var normalizedDocument = NormalizeOptional(businessDocumentRef);
+        var normalizedManifestSha = NormalizeOptional(fileManifestSha256)?.ToLowerInvariant();
+        if (normalizedManifestSha is not null
+            && (normalizedManifestSha.Length != 64
+                || normalizedManifestSha.Any(character => !Uri.IsHexDigit(character))))
+        {
+            throw new ArgumentException("文件清单摘要必须是 SHA-256。", nameof(fileManifestSha256));
+        }
+
+        var capabilities = string.IsNullOrWhiteSpace(dataCapabilitiesJson)
+            ? "[]"
+            : dataCapabilitiesJson.Trim();
+        using var parsedCapabilities = System.Text.Json.JsonDocument.Parse(capabilities);
+        if (parsedCapabilities.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array)
+            throw new ArgumentException("数据能力必须是 JSON 数组。", nameof(dataCapabilitiesJson));
+
+        SupportedProcessType = normalizedProcessType;
+        BusinessDocumentRef = normalizedDocument;
+        ManifestSchemaVersion = manifestSchemaVersion;
+        FileManifestSha256 = normalizedManifestSha;
+        DataCapabilitiesJson = capabilities;
         Touch();
     }
 
@@ -434,6 +513,20 @@ public sealed class ClientReleaseVersion : BaseEntity<Guid>
 
     public string DependenciesJson { get; private set; } = "[]";
 
+    /// <summary>该精确插件版本声明的业务记录能力，不从其它版本继承。</summary>
+    public string DataCapabilitiesJson { get; private set; } = "[]";
+
+    public string? FileManifestSha256 { get; private set; }
+
+    /// <summary>该插件精确版本的 dependency-closure.json 摘要。</summary>
+    public string? DependencyClosureSha256 { get; private set; }
+
+    /// <summary>依赖闭包实际取证的精确 Host 版本。</summary>
+    public string? DependencyHostVersion { get; private set; }
+
+    /// <summary>依赖闭包实际取证的 Host 逐文件清单摘要。</summary>
+    public string? DependencyHostFileManifestSha256 { get; private set; }
+
     public ClientReleaseStatus Status { get; private set; }
 
     public string? Signature { get; private set; }
@@ -654,6 +747,93 @@ public sealed class ClientReleaseVersion : BaseEntity<Guid>
             artifact.AssignVersion(Id);
             _artifacts.Add(artifact);
         }
+    }
+
+    public void ConfigurePluginManifest(
+        string? dataCapabilitiesJson,
+        string? fileManifestSha256,
+        string? dependencyClosureSha256 = null,
+        string? dependencyHostVersion = null,
+        string? dependencyHostFileManifestSha256 = null)
+    {
+        var capabilities = string.IsNullOrWhiteSpace(dataCapabilitiesJson)
+            ? "[]"
+            : dataCapabilitiesJson.Trim();
+        using var document = JsonDocument.Parse(capabilities);
+        if (document.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            throw new ArgumentException(
+                "插件版本数据能力必须是 JSON 数组。",
+                nameof(dataCapabilitiesJson));
+        }
+
+        var manifestSha = NormalizeSha256(
+            fileManifestSha256,
+            nameof(fileManifestSha256),
+            "插件版本文件清单摘要必须是 SHA-256。");
+        var closureSha = NormalizeSha256(
+            dependencyClosureSha256,
+            nameof(dependencyClosureSha256),
+            "插件版本依赖闭包摘要必须是 SHA-256。");
+        var hostManifestSha = NormalizeSha256(
+            dependencyHostFileManifestSha256,
+            nameof(dependencyHostFileManifestSha256),
+            "插件版本依赖的 Host 文件清单摘要必须是 SHA-256。");
+        var hostVersion = ClientReleaseComponent.NormalizeOptional(
+            dependencyHostVersion);
+        var exactEvidenceCount = new object?[]
+        {
+            closureSha,
+            hostVersion,
+            hostManifestSha
+        }.Count(value => value is not null);
+        if (exactEvidenceCount is not (0 or 3))
+        {
+            throw new ArgumentException(
+                "插件版本必须完整声明依赖闭包、精确 Host 版本和 Host 文件清单。",
+                nameof(dependencyClosureSha256));
+        }
+
+        if (hostVersion is not null)
+        {
+            hostVersion = ClientReleaseSemanticVersion.Require(
+                hostVersion,
+                nameof(dependencyHostVersion));
+        }
+
+        DataCapabilitiesJson = capabilities;
+        FileManifestSha256 = manifestSha;
+        DependencyClosureSha256 = closureSha;
+        DependencyHostVersion = hostVersion;
+        DependencyHostFileManifestSha256 = hostManifestSha;
+    }
+
+    public void ConfigureHostManifest(string? fileManifestSha256)
+    {
+        FileManifestSha256 = NormalizeSha256(
+            fileManifestSha256,
+            nameof(fileManifestSha256),
+            "Host 版本文件清单摘要必须是 SHA-256。");
+        DependencyClosureSha256 = null;
+        DependencyHostVersion = null;
+        DependencyHostFileManifestSha256 = null;
+    }
+
+    private static string? NormalizeSha256(
+        string? value,
+        string paramName,
+        string errorMessage)
+    {
+        var normalized = ClientReleaseComponent.NormalizeOptional(value)?
+            .ToLowerInvariant();
+        if (normalized is not null
+            && (normalized.Length != 64
+                || normalized.Any(character => !Uri.IsHexDigit(character))))
+        {
+            throw new ArgumentException(errorMessage, paramName);
+        }
+
+        return normalized;
     }
 
     private void Apply(

@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.RateLimiting;
 
 namespace IIoT.HttpApi.Controllers;
 
-[Authorize(Policy = HttpApiPolicies.RequireAiReadToken)]
+[Authorize(Policy = HttpApiPolicies.RequireAiIdentityStatusToken)]
 [EnableRateLimiting(HttpApiRateLimitPolicies.AiRead)]
 [Route("api/v1/ai/identity")]
 [ApiController]

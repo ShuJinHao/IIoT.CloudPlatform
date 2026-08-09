@@ -654,6 +654,22 @@ require_env_value() {
   fi
 }
 
+ensure_identity_status_signing_secret() {
+  require_env_value AI_IDENTITY_STATUS_TOKEN_SIGNING_SECRET
+  case "$AI_IDENTITY_STATUS_TOKEN_SIGNING_SECRET" in
+    __REPLACE_*|replace-*|changeme|CHANGE_ME)
+      printf 'Identity-status signing secret is still a template value.\n' >&2
+      exit 64
+      ;;
+  esac
+  identity_status_secret_bytes=$(LC_ALL=C printf '%s' \
+    "$AI_IDENTITY_STATUS_TOKEN_SIGNING_SECRET" | wc -c | tr -d '[:space:]')
+  if [ "$identity_status_secret_bytes" -lt 32 ]; then
+    printf 'Identity-status signing secret must contain at least 32 UTF-8 bytes.\n' >&2
+    exit 64
+  fi
+}
+
 require_app_image_values() {
   for key in $APP_IMAGE_KEYS
   do

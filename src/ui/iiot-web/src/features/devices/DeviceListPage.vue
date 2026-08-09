@@ -98,7 +98,16 @@
       </div>
     </NiondTableCard>
 
-    <DeviceRegisterModal v-model:show="showRegisterModal" :form="registerForm" :process-options="processOptions" :submitting="submitting" @submit="submitRegister" />
+    <DeviceRegisterModal
+      v-model:show="showRegisterModal"
+      :form="registerForm"
+      :process-options="processOptions"
+      :plugin-series-options="availablePluginSeriesOptions"
+      :plugin-series-loading="availablePluginSeriesLoading"
+      :plugin-series-error="availablePluginSeriesError"
+      :submitting="submitting"
+      @submit="submitRegister"
+    />
     <DeviceEditModal v-model:show="showEditModal" :form="editForm" :submitting="submitting" @submit="submitEdit" />
     <DeviceDetailDrawer v-model:show="showDetailPanel" :device="selectedDevice" :process-name-map="processNameMap" />
     <DeviceDeleteConfirm
@@ -158,6 +167,9 @@ const {
   canDeleteDevice,
   canMigrateDevice,
   processOptions,
+  availablePluginSeriesOptions,
+  availablePluginSeriesLoading,
+  availablePluginSeriesError,
   processNameMap,
   showRegisterModal,
   registerForm,

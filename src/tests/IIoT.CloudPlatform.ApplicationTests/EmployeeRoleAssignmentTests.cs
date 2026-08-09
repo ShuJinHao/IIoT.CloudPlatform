@@ -375,7 +375,7 @@ public sealed class EmployeeRoleAssignmentTests
     [Theory]
     [InlineData(false, IIoTClaimTypes.HumanActor)]
     [InlineData(true, IIoTClaimTypes.EdgeDeviceActor)]
-    [InlineData(true, IIoTClaimTypes.AiServiceActor)]
+    [InlineData(true, IIoTClaimTypes.AiDelegatedUserActor)]
     [InlineData(true, IIoTClaimTypes.EdgeReleasePublisherActor)]
     public async Task NonHumanOrAnonymousActor_ShouldBeRejectedWithoutTargetOrRoleAccess(
         bool authenticated,

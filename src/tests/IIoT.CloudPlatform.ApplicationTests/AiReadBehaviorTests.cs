@@ -126,10 +126,21 @@ public sealed class AiReadBehaviorTests
     }
 
     [Fact]
-    public async Task AiReadAuthorization_ShouldAllowAiServiceAccountWithRequiredPermission()
+    public async Task AiReadAuthorization_ShouldAllowCurrentDelegatedUserWithLivePermission()
     {
+        var cloudUserId = Guid.NewGuid();
+        var authorizationService = new StubAiReadDelegatedAuthorizationService
+        {
+            Authorization = new AiReadDelegatedAuthorization(cloudUserId, false, [Guid.NewGuid()])
+        };
+        var authorizationContext = new RecordingAiReadAuthorizationContext();
         var behavior = new AiReadAuthorizationBehavior<ValidAiReadQuery, Result<bool>>(
-            CreateAccessor(IIoTClaimTypes.AiServiceActor, [AiReadPermissions.Device]));
+            CreateAccessor(
+                IIoTClaimTypes.AiDelegatedUserActor,
+                [],
+                cloudUserId: cloudUserId),
+            authorizationService,
+            authorizationContext);
 
         var result = await behavior.Handle(
             new ValidAiReadQuery(),
@@ -137,13 +148,19 @@ public sealed class AiReadBehaviorTests
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
+        Assert.Equal(cloudUserId, authorizationService.LastCloudUserId);
+        Assert.Equal("status-v1", authorizationService.LastIssuedStatusVersion);
+        Assert.Equal([AiReadPermissions.Device], authorizationService.LastRequiredPermissions);
+        Assert.True(authorizationContext.IsInitialized);
     }
 
     [Fact]
     public async Task AiReadAuthorization_ShouldRejectHumanActorEvenWithAiReadPermission()
     {
         var behavior = new AiReadAuthorizationBehavior<ValidAiReadQuery, Result<bool>>(
-            CreateAccessor(IIoTClaimTypes.HumanActor, [AiReadPermissions.Device]));
+            CreateAccessor(IIoTClaimTypes.HumanActor, []),
+            new StubAiReadDelegatedAuthorizationService(),
+            new RecordingAiReadAuthorizationContext());
 
         await Assert.ThrowsAsync<ForbiddenException>(() =>
             behavior.Handle(
@@ -156,7 +173,9 @@ public sealed class AiReadBehaviorTests
     public async Task AiReadAuthorization_ShouldRejectMissingAiReadPermission()
     {
         var behavior = new AiReadAuthorizationBehavior<ValidAiReadQuery, Result<bool>>(
-            CreateAccessor(IIoTClaimTypes.AiServiceActor, []));
+            CreateAccessor(IIoTClaimTypes.AiDelegatedUserActor, []),
+            new StubAiReadDelegatedAuthorizationService { Authorization = null },
+            new RecordingAiReadAuthorizationContext());
 
         await Assert.ThrowsAsync<ForbiddenException>(() =>
             behavior.Handle(
@@ -165,12 +184,153 @@ public sealed class AiReadBehaviorTests
                 CancellationToken.None));
     }
 
+    [Theory]
+    [InlineData("aud", "wrong-audience")]
+    [InlineData("scope", "wrong.scope")]
+    [InlineData("sub", "00000000-0000-0000-0000-000000000001")]
+    [InlineData(IIoTClaimTypes.IdentityStatusVersion, "")]
+    public async Task AiReadAuthorization_ShouldRejectMalformedDelegationBeforeLiveAuthorization(
+        string claimType,
+        string replacementValue)
+    {
+        var accessor = CreateAccessor(IIoTClaimTypes.AiDelegatedUserActor, []);
+        ReplaceSingleClaim(accessor, claimType, replacementValue);
+        var authorizationService = new StubAiReadDelegatedAuthorizationService();
+        var behavior = new AiReadAuthorizationBehavior<ValidAiReadQuery, Result<bool>>(
+            accessor,
+            authorizationService,
+            new RecordingAiReadAuthorizationContext());
+
+        await Assert.ThrowsAsync<ForbiddenException>(() => behavior.Handle(
+            new ValidAiReadQuery(),
+            _ => Task.FromResult(Result.Success(true)),
+            CancellationToken.None));
+
+        Assert.Equal(0, authorizationService.Calls);
+    }
+
+    [Theory]
+    [InlineData("aud", "iiot-cloud-ai-read")]
+    [InlineData("scope", "iiot.ai.read")]
+    [InlineData("sub", "current-user")]
+    [InlineData(IIoTClaimTypes.ActorType, IIoTClaimTypes.AiDelegatedUserActor)]
+    [InlineData(IIoTClaimTypes.DelegatedUserId, "current-user")]
+    [InlineData(IIoTClaimTypes.IdentityStatusVersion, "status-v1")]
+    public async Task AiReadAuthorization_ShouldRejectDuplicateDelegationClaims(
+        string claimType,
+        string duplicateValue)
+    {
+        var accessor = CreateAccessor(IIoTClaimTypes.AiDelegatedUserActor, []);
+        var identity = Assert.IsType<ClaimsIdentity>(accessor.HttpContext!.User.Identity);
+        var value = string.Equals(duplicateValue, "current-user", StringComparison.Ordinal)
+            ? Assert.Single(identity.FindAll(claimType)).Value
+            : duplicateValue;
+        identity.AddClaim(new Claim(claimType, value));
+        var authorizationService = new StubAiReadDelegatedAuthorizationService();
+        var behavior = new AiReadAuthorizationBehavior<ValidAiReadQuery, Result<bool>>(
+            accessor,
+            authorizationService,
+            new RecordingAiReadAuthorizationContext());
+
+        await Assert.ThrowsAsync<ForbiddenException>(() => behavior.Handle(
+            new ValidAiReadQuery(),
+            _ => Task.FromResult(Result.Success(true)),
+            CancellationToken.None));
+
+        Assert.Equal(0, authorizationService.Calls);
+    }
+
+    [Theory]
+    [InlineData("iiot.ai.read iiot.ai.read")]
+    [InlineData(" iiot.ai.read")]
+    [InlineData("iiot.ai.read ")]
+    [InlineData("iiot.ai.read  profile")]
+    [InlineData("iiot.ai.read\tprofile")]
+    public async Task AiReadAuthorization_ShouldRejectMalformedScopeEncoding(
+        string scopeValue)
+    {
+        var accessor = CreateAccessor(IIoTClaimTypes.AiDelegatedUserActor, []);
+        ReplaceSingleClaim(accessor, "scope", scopeValue);
+        var authorizationService = new StubAiReadDelegatedAuthorizationService();
+        var behavior = new AiReadAuthorizationBehavior<ValidAiReadQuery, Result<bool>>(
+            accessor,
+            authorizationService,
+            new RecordingAiReadAuthorizationContext());
+
+        await Assert.ThrowsAsync<ForbiddenException>(() => behavior.Handle(
+            new ValidAiReadQuery(),
+            _ => Task.FromResult(Result.Success(true)),
+            CancellationToken.None));
+
+        Assert.Equal(0, authorizationService.Calls);
+    }
+
+    [Fact]
+    public async Task AiReadAuthorization_ShouldAllowSingleWellFormedOidcScopeClaim()
+    {
+        var accessor = CreateAccessor(IIoTClaimTypes.AiDelegatedUserActor, []);
+        ReplaceSingleClaim(accessor, "scope", "openid profile iiot.ai.read");
+        var behavior = new AiReadAuthorizationBehavior<ValidAiReadQuery, Result<bool>>(
+            accessor,
+            new StubAiReadDelegatedAuthorizationService(),
+            new RecordingAiReadAuthorizationContext());
+
+        var result = await behavior.Handle(
+            new ValidAiReadQuery(),
+            _ => Task.FromResult(Result.Success(true)),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+    }
+
+    [Theory]
+    [InlineData(IIoTClaimTypes.Permission, AiReadPermissions.Device)]
+    [InlineData(IIoTClaimTypes.DelegatedDeviceId, "00000000-0000-0000-0000-000000000001")]
+    public async Task AiReadAuthorization_ShouldRejectAuthorizationSnapshotClaims(
+        string claimType,
+        string claimValue)
+    {
+        var accessor = CreateAccessor(
+            IIoTClaimTypes.AiDelegatedUserActor,
+            [],
+            [new Claim(claimType, claimValue)]);
+        var authorizationService = new StubAiReadDelegatedAuthorizationService();
+        var behavior = new AiReadAuthorizationBehavior<ValidAiReadQuery, Result<bool>>(
+            accessor,
+            authorizationService,
+            new RecordingAiReadAuthorizationContext());
+
+        await Assert.ThrowsAsync<ForbiddenException>(() => behavior.Handle(
+            new ValidAiReadQuery(),
+            _ => Task.FromResult(Result.Success(true)),
+            CancellationToken.None));
+
+        Assert.Equal(0, authorizationService.Calls);
+    }
+
+    [Fact]
+    public async Task AiReadAuthorization_ShouldRejectIdentityStatusSystemActor()
+    {
+        var authorizationService = new StubAiReadDelegatedAuthorizationService();
+        var behavior = new AiReadAuthorizationBehavior<ValidAiReadQuery, Result<bool>>(
+            CreateAccessor(IIoTClaimTypes.AiIdentityStatusActor, []),
+            authorizationService,
+            new RecordingAiReadAuthorizationContext());
+
+        await Assert.ThrowsAsync<ForbiddenException>(() => behavior.Handle(
+            new ValidAiReadQuery(),
+            _ => Task.FromResult(Result.Success(true)),
+            CancellationToken.None));
+
+        Assert.Equal(0, authorizationService.Calls);
+    }
+
     [Fact]
     public async Task AiReadAudit_ShouldWriteMetadataWithoutPromptPayload()
     {
         var auditTrail = new RecordingAuditTrailService();
         var behavior = new AiReadAuditBehavior<AuditedAiReadQuery, Result<AiReadListResponse<int>>>(
-            CreateAccessor(IIoTClaimTypes.AiServiceActor, [AiReadPermissions.Device]),
+            CreateAccessor(IIoTClaimTypes.AiDelegatedUserActor, []),
             auditTrail);
 
         var response = new AiReadListResponse<int>(
@@ -200,7 +360,7 @@ public sealed class AiReadBehaviorTests
         const string sentinel = "SENSITIVE;token=do-not-store";
         var auditTrail = new RecordingAuditTrailService();
         var behavior = new AiReadAuditBehavior<AuditedAiReadQuery, Result<AiReadListResponse<int>>>(
-            CreateAccessor(IIoTClaimTypes.AiServiceActor, [AiReadPermissions.Device]),
+            CreateAccessor(IIoTClaimTypes.AiDelegatedUserActor, []),
             auditTrail);
         Result<AiReadListResponse<int>> invalid = Result.Invalid(sentinel);
 
@@ -231,8 +391,8 @@ public sealed class AiReadBehaviorTests
         var auditTrail = new RecordingAuditTrailService();
         var behavior = new AiReadAuditBehavior<AuditedAiReadQuery, Result<AiReadListResponse<int>>>(
             CreateAccessor(
-                IIoTClaimTypes.AiServiceActor,
-                [AiReadPermissions.Device],
+                IIoTClaimTypes.AiDelegatedUserActor,
+                [],
                 [new Claim(IIoTClaimTypes.DelegatedUserId, sentinel)]),
             auditTrail);
 
@@ -534,6 +694,7 @@ public sealed class AiReadBehaviorTests
             "负极模切"));
         var handler = new GetAiReadProcessesHandler(
             processReadService,
+            new TestAiReadScopeAccessor(),
             Options.Create(new AiReadOptions()));
 
         var result = await handler.Handle(
@@ -558,6 +719,7 @@ public sealed class AiReadBehaviorTests
         ]);
         var handler = new GetAiReadProcessesHandler(
             processReadService,
+            new TestAiReadScopeAccessor(),
             Options.Create(new AiReadOptions()));
 
         var result = await handler.Handle(
@@ -578,6 +740,7 @@ public sealed class AiReadBehaviorTests
             Options.Create(new AiReadOptions()));
         var processHandler = new GetAiReadProcessesHandler(
             new StubProcessReadQueryService(),
+            new TestAiReadScopeAccessor(),
             Options.Create(new AiReadOptions()));
         var stateHandler = new GetAiReadDeviceClientStatesHandler(
             new StubAiReadDeviceQueryService(),
@@ -669,7 +832,7 @@ public sealed class AiReadBehaviorTests
         var deviceId = Guid.NewGuid();
         var queryService = new StubAiProductionRecordQueryService();
         var handler = new GetAiReadProductionRecordsHandler(
-            CreatePassStationSchemaProvider(),
+            new StubDevicePluginDataCapabilityResolver(CreatePassStationSchemaProvider()),
             queryService,
             new TestAiReadScopeAccessor { DelegatedDeviceIds = [deviceId] },
             Options.Create(new AiReadOptions()));
@@ -928,7 +1091,7 @@ public sealed class AiReadBehaviorTests
             TotalCount = 1
         };
         var handler = new GetAiReadProductionRecordsHandler(
-            CreatePassStationSchemaProvider(),
+            new StubDevicePluginDataCapabilityResolver(CreatePassStationSchemaProvider()),
             queryService,
             new TestAiReadScopeAccessor { DelegatedDeviceIds = [deviceId] },
             Options.Create(new AiReadOptions()));
@@ -953,13 +1116,13 @@ public sealed class AiReadBehaviorTests
         Assert.Equal(123, item.Fields["punchingQuantity"]);
         Assert.Equal(1.25m, item.Fields["punchingSpeed"]);
         Assert.Equal("MG1", item.Fields["clipSlot"]);
-        Assert.False(item.Fields.ContainsKey("plcCode"));
-        Assert.False(item.Fields.ContainsKey("startTime"));
+        Assert.Equal("P2-CP05", item.Fields["plcCode"]);
+        Assert.Equal("2026-07-24T00:00:00Z", item.Fields["startTime"]);
         Assert.False(item.Fields.ContainsKey("processType"));
         Assert.False(item.Fields.ContainsKey("uploadTargets"));
         Assert.False(item.Fields.ContainsKey("secretTransportField"));
-        Assert.Contains(item.FieldSchema, field => field.Key == "plcName" && field.Label == "PLC 名称");
-        Assert.Contains(item.FieldSchema, field => field.Key == "clipSlot" && field.Label == "弹夹位");
+        Assert.Contains(item.FieldSchema, field => field.Key == "plcName" && field.Label == "plcName");
+        Assert.Contains(item.FieldSchema, field => field.Key == "clipSlot" && field.Label == "clipSlot");
         Assert.Equal("P2-CP05", queryService.LastRequest!.PlcCode);
         Assert.Equal("正极模切05", queryService.LastRequest.PlcName);
     }
@@ -991,7 +1154,7 @@ public sealed class AiReadBehaviorTests
             TotalCount = 1
         };
         var handler = new GetAiReadProductionRecordsHandler(
-            CreatePassStationSchemaProvider(),
+            new StubDevicePluginDataCapabilityResolver(CreatePassStationSchemaProvider()),
             queryService,
             new TestAiReadScopeAccessor { DelegatedDeviceIds = [deviceId] },
             Options.Create(new AiReadOptions()));
@@ -1018,7 +1181,7 @@ public sealed class AiReadBehaviorTests
     public async Task AiReadProductionRecords_ShouldRejectGlobalQueryWithoutDeviceOrProcessOrType()
     {
         var handler = new GetAiReadProductionRecordsHandler(
-            CreatePassStationSchemaProvider(),
+            new StubDevicePluginDataCapabilityResolver(CreatePassStationSchemaProvider()),
             new StubAiProductionRecordQueryService(),
             new TestAiReadScopeAccessor(),
             Options.Create(new AiReadOptions()));
@@ -1036,7 +1199,7 @@ public sealed class AiReadBehaviorTests
     {
         var deviceId = Guid.NewGuid();
         var handler = new GetAiReadProductionRecordsHandler(
-            CreatePassStationSchemaProvider(),
+            new StubDevicePluginDataCapabilityResolver(CreatePassStationSchemaProvider()),
             new StubAiProductionRecordQueryService(),
             new TestAiReadScopeAccessor { DelegatedDeviceIds = [deviceId] },
             Options.Create(new AiReadOptions()));
@@ -1055,13 +1218,13 @@ public sealed class AiReadBehaviorTests
     }
 
     [Fact]
-    public async Task AiReadProductionRecords_ShouldFilterByProcessAndDelegatedScope()
+    public async Task AiReadProductionRecords_ShouldRejectProcessOnlyScopeWithoutSealedDeviceAndType()
     {
         var processId = Guid.NewGuid();
         var allowedDeviceId = Guid.NewGuid();
         var queryService = new StubAiProductionRecordQueryService();
         var handler = new GetAiReadProductionRecordsHandler(
-            CreatePassStationSchemaProvider(),
+            new StubDevicePluginDataCapabilityResolver(CreatePassStationSchemaProvider()),
             queryService,
             new TestAiReadScopeAccessor { DelegatedDeviceIds = [allowedDeviceId] },
             Options.Create(new AiReadOptions()));
@@ -1072,9 +1235,9 @@ public sealed class AiReadBehaviorTests
                 Preset: "last_24h"),
             CancellationToken.None);
 
-        Assert.True(result.IsSuccess);
-        Assert.Equal(processId, queryService.LastRequest!.ProcessId);
-        Assert.Contains(allowedDeviceId, queryService.LastAllowedDeviceIds!);
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ResultStatus.Invalid, result.Status);
+        Assert.Null(queryService.LastRequest);
     }
 
     [Fact]
@@ -1209,13 +1372,20 @@ public sealed class AiReadBehaviorTests
     private static HttpContextAccessor CreateAccessor(
         string actorType,
         IEnumerable<string> permissions,
-        IEnumerable<Claim>? additionalClaims = null)
+        IEnumerable<Claim>? additionalClaims = null,
+        Guid? cloudUserId = null)
     {
+        var userId = cloudUserId ?? Guid.NewGuid();
         var claims = new List<Claim>
         {
-            new(ClaimTypes.NameIdentifier, Guid.NewGuid().ToString()),
+            new(ClaimTypes.NameIdentifier, userId.ToString("D")),
             new(ClaimTypes.Name, "ai-read-test"),
-            new(IIoTClaimTypes.ActorType, actorType)
+            new(IIoTClaimTypes.ActorType, actorType),
+            new("sub", userId.ToString("D")),
+            new("aud", AiReadDelegationDefaults.Audience),
+            new("scope", AiReadDelegationDefaults.Scope),
+            new(IIoTClaimTypes.DelegatedUserId, userId.ToString("D")),
+            new(IIoTClaimTypes.IdentityStatusVersion, "status-v1")
         };
         claims.AddRange(permissions.Select(permission => new Claim(IIoTClaimTypes.Permission, permission)));
         if (additionalClaims is not null)
@@ -1228,6 +1398,61 @@ public sealed class AiReadBehaviorTests
                 User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"))
             }
         };
+    }
+
+    private static void ReplaceSingleClaim(
+        HttpContextAccessor accessor,
+        string claimType,
+        string replacementValue)
+    {
+        var identity = Assert.IsType<ClaimsIdentity>(accessor.HttpContext!.User.Identity);
+        foreach (var claim in identity.FindAll(claimType).ToArray())
+        {
+            identity.RemoveClaim(claim);
+        }
+
+        identity.AddClaim(new Claim(claimType, replacementValue));
+    }
+
+    private sealed class StubAiReadDelegatedAuthorizationService : IAiReadDelegatedAuthorizationService
+    {
+        public AiReadDelegatedAuthorization? Authorization { get; init; } =
+            new(Guid.NewGuid(), false, []);
+
+        public Guid? LastCloudUserId { get; private set; }
+
+        public string? LastIssuedStatusVersion { get; private set; }
+
+        public IReadOnlyCollection<string>? LastRequiredPermissions { get; private set; }
+
+        public int Calls { get; private set; }
+
+        public Task<AiReadDelegatedAuthorization?> AuthorizeAsync(
+            Guid cloudUserId,
+            string issuedStatusVersion,
+            IReadOnlyCollection<string> requiredPermissions,
+            CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            LastCloudUserId = cloudUserId;
+            LastIssuedStatusVersion = issuedStatusVersion;
+            LastRequiredPermissions = requiredPermissions.ToArray();
+            return Task.FromResult(Authorization);
+        }
+    }
+
+    private sealed class RecordingAiReadAuthorizationContext : IAiReadAuthorizationContext
+    {
+        public bool IsInitialized { get; private set; }
+
+        public AiReadDelegatedAuthorization? Authorization { get; private set; }
+
+        public void Initialize(AiReadDelegatedAuthorization authorization)
+        {
+            Assert.False(IsInitialized);
+            Authorization = authorization;
+            IsInitialized = true;
+        }
     }
 
     private static PassStationSchemaProvider CreatePassStationSchemaProvider()

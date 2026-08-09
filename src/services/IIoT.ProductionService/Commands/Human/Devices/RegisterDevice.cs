@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using IIoT.Core.Production.Aggregates.ClientReleases;
+using IIoT.Core.Production.Specifications.ClientReleases;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Services.Contracts;
@@ -10,6 +11,7 @@ using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.CrossCutting.Persistence;
 using IIoT.SharedKernel.Messaging;
+using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Repository;
 using IIoT.SharedKernel.Result;
 
@@ -20,7 +22,8 @@ namespace IIoT.ProductionService.Commands.Devices;
 [DistributedLock("iiot:lock:device-create:{DeviceName}", TimeoutSeconds = 5)]
 public record RegisterDeviceCommand(
     string DeviceName,
-    Guid ProcessId
+    Guid ProcessId,
+    Guid PluginComponentId
 ) : IHumanCommand<Result<CreateDeviceResultDto>>;
 
 public sealed record CreateDeviceResultDto(
@@ -31,7 +34,10 @@ public class RegisterDeviceHandler(
     ICurrentUser currentUser,
     ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IRepository<Device> deviceRepository,
+    IRepository<DevicePluginBinding> bindingRepository,
+    IRepository<ClientReleaseComponent> componentRepository,
     IProcessReadQueryService processReadQueryService,
+    IDevicePluginBindingQueryService bindingQueryService,
     IDeviceReadQueryService deviceReadQueryService,
     IAuditTrailService auditTrailService,
     IUnitOfWork unitOfWork,
@@ -47,17 +53,69 @@ public class RegisterDeviceHandler(
             return await FailAsync(request, "只有管理员可以注册设备", cancellationToken);
 
         var deviceName = request.DeviceName?.Trim() ?? string.Empty;
+        var normalizedDeviceName = string.IsNullOrWhiteSpace(deviceName)
+            ? string.Empty
+            : BusinessIdentityNormalization.NormalizeDisplayNameKey(
+                deviceName,
+                nameof(request.DeviceName));
 
         if (string.IsNullOrEmpty(deviceName))
             return await FailAsync(request, "设备名称不能为空", cancellationToken);
         if (request.ProcessId == Guid.Empty)
             return await FailAsync(request, "工序不能为空", cancellationToken);
+        if (request.PluginComponentId == Guid.Empty)
+            return await FailAsync(request, "请选择已发布且未绑定的设备插件。", cancellationToken);
 
-        var processExists = await processReadQueryService.ExistsAsync(
-            request.ProcessId,
-            cancellationToken);
-        if (!processExists)
+        var process = (await processReadQueryService.GetByIdsAsync(
+            [request.ProcessId],
+            cancellationToken)).SingleOrDefault();
+        if (process is null)
             return await FailAsync(request, "设备注册失败：指定工序不存在", cancellationToken);
+
+        var component = await componentRepository.GetSingleOrDefaultAsync(
+            new ClientReleaseComponentByComponentIdSpec(
+                request.PluginComponentId),
+            cancellationToken);
+        if (component is null
+            || component.ComponentKind != ClientReleaseComponentKind.Plugin
+            || component.Versions.All(version =>
+                version.Status != ClientReleaseStatus.Published))
+        {
+            return await FailAsync(
+                request,
+                "设备注册失败：插件发布系列不存在或尚未正式发布",
+                cancellationToken);
+        }
+
+        if (string.IsNullOrWhiteSpace(component.SupportedProcessType)
+            || !string.Equals(
+                component.SupportedProcessType,
+                process.ProcessCode,
+                StringComparison.Ordinal))
+        {
+            return await FailAsync(
+                request,
+                "设备注册失败：插件支持工序与所选 Cloud 工序不一致",
+                cancellationToken);
+        }
+
+        if (await bindingQueryService.IsComponentBoundAsync(
+                request.PluginComponentId,
+                cancellationToken))
+        {
+            return await FailAsync(
+                request,
+                "设备注册失败：该独立插件发布系列已绑定其它设备",
+                cancellationToken);
+        }
+
+        if (component.WasEverDeviceBound)
+        {
+            return await FailAsync(
+                request,
+                "设备注册失败：该独立插件发布系列曾经绑定设备，不能重新绑定",
+                cancellationToken);
+        }
 
         if (await deviceReadQueryService.NameExistsAsync(
                 deviceName,
@@ -80,7 +138,6 @@ public class RegisterDeviceHandler(
         var auditExecutedAtUtc = DateTime.UtcNow;
         var writeAttempted = false;
         var commitAttempted = false;
-        var commitRecovered = false;
         uint? targetRowVersion = null;
         Result<CreateDeviceResultDto> result;
         try
@@ -102,33 +159,6 @@ public class RegisterDeviceHandler(
         catch (Exception) when (commitAttempted)
         {
             result = await ResolveCommitAsync();
-            commitRecovered = true;
-        }
-
-        if (result.IsSuccess)
-        {
-            var auditEntry = new AuditTrailEntry(
-                ParseActorUserId(currentUser.Id),
-                currentUser.UserName,
-                "Device.Register",
-                "Device",
-                deviceId.ToString(),
-                auditExecutedAtUtc,
-                true,
-                $"注册设备 {deviceName}（{code}）到工序 {request.ProcessId}。",
-                IdempotencyKey: $"device-register:{deviceId:N}");
-            if (commitRecovered)
-            {
-                await CloudWriteCommitRecovery.ConfirmRecoveredAuditAsync(
-                    auditTrailService,
-                    auditEntry);
-            }
-            else
-            {
-                await auditTrailService.TryWriteAsync(
-                    auditEntry,
-                    cancellationToken);
-            }
         }
 
         return result;
@@ -167,12 +197,28 @@ public class RegisterDeviceHandler(
                 code,
                 request.ProcessId);
             deviceRepository.Add(device);
+            bindingRepository.Add(new DevicePluginBinding(
+                deviceId,
+                request.PluginComponentId,
+                process.ProcessCode,
+                auditExecutedAtUtc));
+            component.MarkDeviceBound();
             clientStateStore.AddState(
                 new DeviceClientState(
                     deviceId,
                     code,
                     clientStateId,
                     auditExecutedAtUtc));
+            auditTrailService.Stage(new AuditTrailEntry(
+                ParseActorUserId(currentUser.Id),
+                currentUser.UserName,
+                "Device.Register",
+                "Device",
+                deviceId.ToString(),
+                auditExecutedAtUtc,
+                true,
+                $"注册设备 {deviceName}（{code}）到工序 {request.ProcessId}。",
+                IdempotencyKey: $"device-register:{deviceId:N}"));
             await deviceRepository.SaveChangesAsync(callbackToken);
             targetRowVersion = device.RowVersion;
             commitAttempted = true;
@@ -221,8 +267,10 @@ public class RegisterDeviceHandler(
             => current.Target is not null
                && current.Target.Id == deviceId
                && string.Equals(
-                   current.Target.DeviceName,
-                   deviceName,
+                   BusinessIdentityNormalization.NormalizeDisplayNameKey(
+                       current.Target.DeviceName,
+                       nameof(current.Target.DeviceName)),
+                   normalizedDeviceName,
                    StringComparison.Ordinal)
                && string.Equals(
                    current.Target.ClientCode,

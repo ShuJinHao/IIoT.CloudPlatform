@@ -30,6 +30,7 @@ using IIoT.ProductionService.Queries.Devices;
 using IIoT.ProductionService.Queries.DeviceLogs;
 using IIoT.ProductionService.Queries.PassStations;
 using IIoT.ProductionService.Queries.Recipes;
+using IIoT.ProductionService.Queries.ClientReleases;
 using IIoT.ProductionService.Security;
 using IIoT.ProductionService.Validators;
 using IIoT.Services.CrossCutting.Caching;
@@ -38,7 +39,6 @@ using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
-using IIoT.Services.Contracts.Persistence;
 using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.Contracts.Events.Capacities;
 using IIoT.Services.Contracts.Events.DeviceLogs;
@@ -57,6 +57,12 @@ public sealed class InstallerPackageWorkflowTests
     private const string PrimaryModuleId = "CP";
     private const string SecondaryModuleId = "AP";
     private const string VelopackSetupFixtureFile = "velopack/IIoT.EdgeClient-stable-Setup.exe";
+    private static readonly Lazy<string> PayloadSigningPrivateKeyPem =
+        new(() =>
+        {
+            using var rsa = RSA.Create(2048);
+            return rsa.ExportRSAPrivateKeyPem();
+        });
 
     [Fact]
     public async Task GenerateEdgeInstallerPackageHandler_ShouldFailBeforeRotatingSecret_WhenBaseUrlMissing()
@@ -68,24 +74,34 @@ public sealed class InstallerPackageWorkflowTests
         var deviceRepository = new InMemoryRepository<Device>();
         deviceRepository.Add(device);
 
-        var handler = CreateInstallerPackageHandler(
-            deviceRepository,
-            new InMemoryRepository<ClientReleaseComponent>(),
-            Path.Combine(Path.GetTempPath(), $"iiot-baseurl-guard-{Guid.NewGuid():N}"),
-            new RecordingAuditTrailService());
+        var edgeRoot = CreateInstallerArtifactFixture("stable", "1.2.0");
+        try
+        {
+            var handler = CreateInstallerPackageHandler(
+                deviceRepository,
+                CreatePublishedReleaseComponentRepository(edgeRoot),
+                GetInstallerRoot(edgeRoot),
+                new RecordingAuditTrailService());
 
-        var result = await handler.Handle(
-            new GenerateEdgeInstallerPackageCommand(
-                [new EdgeBindingSelection(PrimaryModuleId, device.Id)],
-                HostVersion: "1.2.0"),
-            CancellationToken.None);
+            var result = await handler.Handle(
+                [device.Id],
+                baseUrl: null,
+                CancellationToken.None);
 
-        Assert.False(result.IsSuccess);
-        Assert.NotNull(result.Errors);
-        Assert.Contains(result.Errors, error => error.Contains("云端地址必须填写", StringComparison.Ordinal));
-        Assert.Equal(oldHash, device.BootstrapSecretHash);
-        Assert.True(BootstrapSecretHasher.Verify(oldSecret, device.BootstrapSecretHash!));
-        Assert.Empty(deviceRepository.UpdatedEntities);
+            Assert.False(result.IsSuccess);
+            Assert.NotNull(result.Errors);
+            Assert.Contains(result.Errors, error => error.Contains("云端地址必须填写", StringComparison.Ordinal));
+            Assert.Equal(oldHash, device.BootstrapSecretHash);
+            Assert.True(BootstrapSecretHasher.Verify(oldSecret, device.BootstrapSecretHash!));
+            Assert.Empty(deviceRepository.UpdatedEntities);
+        }
+        finally
+        {
+            if (Directory.Exists(edgeRoot))
+            {
+                Directory.Delete(edgeRoot, recursive: true);
+            }
+        }
     }
 
     [Fact]
@@ -97,10 +113,11 @@ public sealed class InstallerPackageWorkflowTests
         var oldHash = device.BootstrapSecretHash;
         var deviceRepository = new InMemoryRepository<Device>();
         deviceRepository.Add(device);
-        var componentRepository = new InMemoryRepository<ClientReleaseComponent>();
-        componentRepository.ListResult.Add(CreatePublishedHostComponent());
-
-        var artifactRoot = Path.Combine(Path.GetTempPath(), $"iiot-missing-installer-{Guid.NewGuid():N}");
+        var edgeRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"iiot-missing-installer-{Guid.NewGuid():N}");
+        var componentRepository = CreatePublishedReleaseComponentRepository(edgeRoot);
+        var artifactRoot = GetInstallerRoot(edgeRoot);
         try
         {
             var handler = CreateInstallerPackageHandler(
@@ -110,10 +127,8 @@ public sealed class InstallerPackageWorkflowTests
                 new RecordingAuditTrailService());
 
             var result = await handler.Handle(
-                new GenerateEdgeInstallerPackageCommand(
-                    [new EdgeBindingSelection(PrimaryModuleId, device.Id)],
-                    HostVersion: "1.2.0",
-                    BaseUrl: "http://cloud.local"),
+                [device.Id],
+                "http://cloud.local",
                 CancellationToken.None);
 
             Assert.False(result.IsSuccess);
@@ -125,9 +140,9 @@ public sealed class InstallerPackageWorkflowTests
         }
         finally
         {
-            if (Directory.Exists(artifactRoot))
+            if (Directory.Exists(edgeRoot))
             {
-                Directory.Delete(artifactRoot, recursive: true);
+                Directory.Delete(edgeRoot, recursive: true);
             }
         }
     }
@@ -144,7 +159,7 @@ public sealed class InstallerPackageWorkflowTests
         var edgeRoot = CreateInstallerArtifactFixture(
             "stable",
             "1.2.0",
-            installerBindingSchemaVersion: 1);
+            installerBindingSchemaVersion: 2);
         var componentRepository = CreatePublishedReleaseComponentRepository(edgeRoot);
 
         try
@@ -156,16 +171,14 @@ public sealed class InstallerPackageWorkflowTests
                 new RecordingAuditTrailService());
 
             var result = await handler.Handle(
-                new GenerateEdgeInstallerPackageCommand(
-                    [new EdgeBindingSelection(PrimaryModuleId, device.Id)],
-                    HostVersion: "1.2.0",
-                    BaseUrl: "http://cloud.local"),
+                [device.Id],
+                "http://cloud.local",
                 CancellationToken.None);
 
             Assert.False(result.IsSuccess);
             Assert.Contains(
                 result.Errors ?? [],
-                error => error.Contains("binding schema v2", StringComparison.Ordinal));
+                error => error.Contains("binding schema v3", StringComparison.Ordinal));
             Assert.Equal(oldHash, device.BootstrapSecretHash);
             Assert.True(BootstrapSecretHasher.Verify(oldSecret, device.BootstrapSecretHash!));
             Assert.Empty(deviceRepository.UpdatedEntities);
@@ -203,15 +216,13 @@ public sealed class InstallerPackageWorkflowTests
                 new RecordingAuditTrailService());
 
             var result = await handler.Handle(
-                new GenerateEdgeInstallerPackageCommand(
-                    [new EdgeBindingSelection(PrimaryModuleId, device.Id)],
-                    HostVersion: "1.2.0",
-                    BaseUrl: "http://cloud.local"),
+                [device.Id],
+                "http://cloud.local",
                 CancellationToken.None);
 
             Assert.False(result.IsSuccess);
             Assert.NotNull(result.Errors);
-            Assert.Contains(result.Errors, error => error.Contains("安装素材未包含 Velopack Setup", StringComparison.Ordinal));
+            Assert.Contains(result.Errors, error => error.Contains("Velopack Setup 声明不完整", StringComparison.Ordinal));
             Assert.Equal(oldHash, device.BootstrapSecretHash);
             Assert.True(BootstrapSecretHasher.Verify(oldSecret, device.BootstrapSecretHash!));
             Assert.Empty(deviceRepository.UpdatedEntities);
@@ -249,15 +260,13 @@ public sealed class InstallerPackageWorkflowTests
                 new RecordingAuditTrailService());
 
             var result = await handler.Handle(
-                new GenerateEdgeInstallerPackageCommand(
-                    [new EdgeBindingSelection(PrimaryModuleId, device.Id)],
-                    HostVersion: "1.2.0",
-                    BaseUrl: "http://cloud.local"),
+                [device.Id],
+                "http://cloud.local",
                 CancellationToken.None);
 
             Assert.False(result.IsSuccess);
             Assert.NotNull(result.Errors);
-            Assert.Contains(result.Errors, error => error.Contains("安装素材缺少 Velopack Setup 文件", StringComparison.Ordinal));
+            Assert.Contains(result.Errors, error => error.Contains("Velopack Setup 缺失或完整性已变更", StringComparison.Ordinal));
             Assert.Equal(oldHash, device.BootstrapSecretHash);
             Assert.True(BootstrapSecretHasher.Verify(oldSecret, device.BootstrapSecretHash!));
             Assert.Empty(deviceRepository.UpdatedEntities);
@@ -272,9 +281,9 @@ public sealed class InstallerPackageWorkflowTests
     }
 
     [Fact]
-    public async Task GenerateEdgeInstallerPackageHandler_ShouldPackageSelectedRuntimeAndInjectJsonConfigs()
+    public async Task GenerateEdgeInstallerPackageHandler_ShouldPackageAutomaticallySelectedRuntimeAndInjectJsonConfigs()
     {
-        const string targetRuntime = "win-arm64";
+        const string targetRuntime = "win-x64";
         var device = new Device("正极模切客户端", "DEV-AAAAAAAAAA", Guid.NewGuid());
         var deviceRepository = new InMemoryRepository<Device>();
         deviceRepository.Add(device);
@@ -293,14 +302,13 @@ public sealed class InstallerPackageWorkflowTests
                 installerGenerationStore: generationStore);
 
             var result = await handler.Handle(
-                new GenerateEdgeInstallerPackageCommand(
-                    [new EdgeBindingSelection(PrimaryModuleId, device.Id)],
-                    TargetRuntime: targetRuntime,
-                    HostVersion: "1.2.0",
-                    BaseUrl: "http://cloud.local/"),
+                [device.Id],
+                "http://cloud.local/",
                 CancellationToken.None);
 
-            Assert.True(result.IsSuccess);
+            Assert.True(
+                result.IsSuccess,
+                string.Join(" | ", result.Errors ?? []));
             var package = result.Value!;
             Assert.EndsWith(".exe", package.FileName, StringComparison.OrdinalIgnoreCase);
             Assert.Equal("application/vnd.microsoft.portable-executable", package.ContentType);
@@ -317,20 +325,23 @@ public sealed class InstallerPackageWorkflowTests
             Assert.NotNull(archive.GetEntry("launcher/IIoT.Edge.Launcher.dll"));
             Assert.NotNull(archive.GetEntry("launcher/iiot-binding.json"));
             Assert.NotNull(archive.GetEntry("launcher/iiot-enabled-plugins.json"));
+            Assert.Null(archive.GetEntry("launcher/launcher.profiles.json"));
             Assert.NotNull(archive.GetEntry("host/IIoT.Edge.Shell.dll"));
             Assert.NotNull(archive.GetEntry(VelopackSetupFixtureFile));
-            Assert.NotNull(archive.GetEntry("plugins/CP/plugin.json"));
-            Assert.NotNull(archive.GetEntry("plugins/CP/IIoT.Edge.Module.CP.dll"));
-            Assert.Null(archive.GetEntry("plugins/CP/iiot-plugin-binding.json"));
-            Assert.Null(archive.GetEntry("plugins/AP/plugin.json"));
-            Assert.Null(archive.GetEntry("plugins/AP/iiot-plugin-binding.json"));
+            Assert.NotNull(archive.GetEntry($"plugins/{device.Code}/app/plugin.json"));
+            Assert.NotNull(archive.GetEntry($"plugins/{device.Code}/app/IIoT.Edge.Module.CP.dll"));
+            Assert.Null(archive.GetEntry($"plugins/{device.Code}/app/iiot-plugin-binding.json"));
+            Assert.DoesNotContain(
+                archive.Entries,
+                entry => entry.FullName.Contains("IIoT.Edge.Module.AP.dll", StringComparison.Ordinal));
 
             var bindingJson = ReadZipEntryText(archive, "launcher/iiot-binding.json");
             using var binding = JsonDocument.Parse(bindingJson);
-            Assert.Equal(2, binding.RootElement.GetProperty("schemaVersion").GetInt32());
+            Assert.Equal(3, binding.RootElement.GetProperty("schemaVersion").GetInt32());
             var bindingPaths = binding.RootElement.GetProperty("paths");
+            Assert.Equal(17, bindingPaths.EnumerateObject().Count());
             Assert.Equal(
-                "/api/v1/bootstrap/device-instance",
+                "/api/v1/edge/bootstrap/device-instance",
                 bindingPaths.GetProperty("deviceInstance").GetString());
             Assert.Equal(
                 "/api/v1/edge/client-releases/device/{deviceId}/catalog",
@@ -341,13 +352,27 @@ public sealed class InstallerPackageWorkflowTests
             Assert.Equal(
                 "/api/v1/edge/runtime-heartbeats",
                 bindingPaths.GetProperty("runtimeHeartbeat").GetString());
+            Assert.Equal(
+                "/api/v1/edge/pass-stations/{typeKey}/batch",
+                bindingPaths.GetProperty("passStationBatchTemplate").GetString());
+            Assert.Equal(
+                "/api/v1/edge/edge-hosts/plc-runtime-states",
+                bindingPaths.GetProperty("edgeHostPlcRuntimeStates").GetString());
             var bindingItem = binding.RootElement.GetProperty("bindings")[0];
-            var bootstrapSecret = bindingItem.GetProperty("bootstrapSecret").GetString();
+            var bootstrapSecret = bindingItem
+                .GetProperty("pendingCredential")
+                .GetProperty("secret")
+                .GetString();
             Assert.Equal("http://cloud.local", binding.RootElement.GetProperty("baseUrl").GetString());
             Assert.Equal(PrimaryModuleId, bindingItem.GetProperty("moduleId").GetString());
             Assert.Equal(device.Code, bindingItem.GetProperty("clientCode").GetString());
             Assert.False(string.IsNullOrWhiteSpace(bootstrapSecret));
-            Assert.True(BootstrapSecretHasher.Verify(bootstrapSecret!, device.BootstrapSecretHash!));
+            var pendingCredential = Assert.Single(
+                generationStore.PendingCredentials);
+            Assert.True(BootstrapSecretHasher.Verify(
+                bootstrapSecret!,
+                pendingCredential.SecretHash));
+            Assert.Null(device.BootstrapSecretHash);
 
             var updateConfigJson = ReadZipEntryText(archive, "launcher/launcher.update.json");
             using var updateConfig = JsonDocument.Parse(updateConfigJson);
@@ -362,8 +387,11 @@ public sealed class InstallerPackageWorkflowTests
             var hostPlugin = hostConfig.RootElement.GetProperty("plugins")[0];
             Assert.Equal(PrimaryModuleId, hostPlugin.GetProperty("moduleId").GetString());
             Assert.Equal("2.3.4", hostPlugin.GetProperty("version").GetString());
-            Assert.Equal(PrimaryModuleId, hostPlugin.GetProperty("pluginDirectory").GetString());
+            Assert.Equal(device.Code, hostPlugin.GetProperty("pluginDirectory").GetString());
             Assert.Equal(device.Code, hostPlugin.GetProperty("clientCode").GetString());
+            Assert.Equal(
+                bindingItem.GetProperty("packageSha256").GetString(),
+                hostPlugin.GetProperty("packageSha256").GetString());
 
             var generationRecord = Assert.Single(generationStore.Records).Value;
             Assert.Equal(package.GenerationId, generationRecord.Id);
@@ -375,6 +403,18 @@ public sealed class InstallerPackageWorkflowTests
             Assert.Contains("2.3.4", generationRecord.PluginsJson, StringComparison.Ordinal);
             Assert.DoesNotContain(bootstrapSecret!, generationRecord.BindingsJson, StringComparison.Ordinal);
             Assert.DoesNotContain(bootstrapSecret!, generationRecord.PluginsJson, StringComparison.Ordinal);
+
+            if (!OperatingSystem.IsWindows())
+            {
+                var persistedPackagePath = Path.Combine(
+                    GetInstallerRoot(edgeRoot),
+                    "generated",
+                    $"{package.GenerationId:N}.exe");
+                var mode = File.GetUnixFileMode(persistedPackagePath);
+                Assert.Equal(
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite,
+                    mode);
+            }
 
             Assert.DoesNotContain(auditTrail.Entries, entry =>
                 entry.Summary.Contains(bootstrapSecret!, StringComparison.Ordinal)
@@ -413,10 +453,8 @@ public sealed class InstallerPackageWorkflowTests
 
             await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(() =>
                 handler.Handle(
-                    new GenerateEdgeInstallerPackageCommand(
-                        [new EdgeBindingSelection(PrimaryModuleId, device.Id)],
-                        HostVersion: "1.2.0",
-                        BaseUrl: "http://cloud.local"),
+                    [device.Id],
+                    "http://cloud.local",
                     CancellationToken.None));
 
             Assert.Empty(generationStore.Records);
@@ -475,13 +513,13 @@ public sealed class InstallerPackageWorkflowTests
                 new RecordingAuditTrailService());
 
             var result = await handler.Handle(
-                new GenerateEdgeInstallerPackageCommand(
-                    [new EdgeBindingSelection(PrimaryModuleId, device.Id)],
-                    HostVersion: "1.2.0",
-                    BaseUrl: "http://cloud.local"),
+                [device.Id],
+                "http://cloud.local",
                 CancellationToken.None);
 
-            Assert.True(result.IsSuccess);
+            Assert.True(
+                result.IsSuccess,
+                string.Join(" | ", result.Errors ?? []));
             await using var packageContent = result.Value!.Content;
             using var packageBuffer = new MemoryStream();
             await packageContent.CopyToAsync(packageBuffer);
@@ -494,7 +532,9 @@ public sealed class InstallerPackageWorkflowTests
             Assert.Equal("2.3.4", selected.GetProperty("version").GetString());
 
             using var pluginManifest = JsonDocument.Parse(
-                ReadZipEntryText(archive, "plugins/CP/plugin.json"));
+                ReadZipEntryText(
+                    archive,
+                    $"plugins/{device.Code}/app/plugin.json"));
             Assert.Equal("2.3.4", pluginManifest.RootElement.GetProperty("version").GetString());
         }
         finally
@@ -535,10 +575,8 @@ public sealed class InstallerPackageWorkflowTests
                 new RecordingAuditTrailService());
 
             var result = await handler.Handle(
-                new GenerateEdgeInstallerPackageCommand(
-                    [new EdgeBindingSelection(PrimaryModuleId, device.Id)],
-                    HostVersion: "1.2.0",
-                    BaseUrl: "http://cloud.local"),
+                [device.Id],
+                "http://cloud.local",
                 CancellationToken.None);
 
             Assert.False(result.IsSuccess);
@@ -584,17 +622,14 @@ public sealed class InstallerPackageWorkflowTests
                 GetInstallerRoot(edgeRoot),
                 new RecordingAuditTrailService());
 
-            var result = await handler.Handle(
-                new GenerateEdgeInstallerPackageCommand(
-                    [new EdgeBindingSelection(PrimaryModuleId, device.Id)],
-                    HostVersion: "1.2.0",
-                    BaseUrl: "http://cloud.local"),
+            var plan = await handler.BuildPlanAsync(
+                [device.Id],
                 CancellationToken.None);
 
-            Assert.False(result.IsSuccess);
+            Assert.False(plan.IsSuccess);
             Assert.Contains(
-                result.Errors!,
-                error => error.Contains("没有与宿主 1.2.0 兼容的已发布版本", StringComparison.Ordinal));
+                plan.Errors!,
+                error => error.Contains("没有共同兼容的已批准", StringComparison.Ordinal));
             Assert.Equal(oldHash, device.BootstrapSecretHash);
             Assert.True(BootstrapSecretHasher.Verify(oldSecret, device.BootstrapSecretHash!));
             Assert.Empty(deviceRepository.UpdatedEntities);
@@ -638,10 +673,8 @@ public sealed class InstallerPackageWorkflowTests
                 new RecordingAuditTrailService());
 
             var result = await handler.Handle(
-                new GenerateEdgeInstallerPackageCommand(
-                    [new EdgeBindingSelection(PrimaryModuleId, device.Id)],
-                    HostVersion: "1.2.0",
-                    BaseUrl: "http://cloud.local"),
+                [device.Id],
+                "http://cloud.local",
                 CancellationToken.None);
 
             Assert.False(result.IsSuccess);
@@ -681,7 +714,7 @@ public sealed class InstallerPackageWorkflowTests
             edgeRoot,
             packageRelativePath.Replace('/', Path.DirectorySeparatorChar));
         File.Delete(packagePath);
-        WritePluginPackage(
+        var fileManifestSha256 = WritePluginPackage(
             packagePath,
             PrimaryModuleId,
             version.Version,
@@ -715,6 +748,13 @@ public sealed class InstallerPackageWorkflowTests
                     sha256,
                     packageBytes.LongLength)
             ]);
+        version.ConfigurePluginManifest("[]", fileManifestSha256);
+        plugin.ConfigurePluginContract(
+            plugin.SupportedProcessType!,
+            plugin.BusinessDocumentRef,
+            plugin.ManifestSchemaVersion,
+            fileManifestSha256,
+            plugin.DataCapabilitiesJson);
 
         try
         {
@@ -725,10 +765,8 @@ public sealed class InstallerPackageWorkflowTests
                 new RecordingAuditTrailService());
 
             var result = await handler.Handle(
-                new GenerateEdgeInstallerPackageCommand(
-                    [new EdgeBindingSelection(PrimaryModuleId, device.Id)],
-                    HostVersion: "1.2.0",
-                    BaseUrl: "http://cloud.local"),
+                [device.Id],
+                "http://cloud.local",
                 CancellationToken.None);
 
             Assert.False(result.IsSuccess);
@@ -749,7 +787,7 @@ public sealed class InstallerPackageWorkflowTests
     }
 
     [Fact]
-    public async Task GenerateEdgeInstallerPackageHandler_TransientReplay_ShouldReuseExactSecretTarget()
+    public async Task GenerateEdgeInstallerPackageHandler_ShouldPersistExactPendingSecretWithoutRotatingActiveSecret()
     {
         var oldSecret = BootstrapSecretGenerator.Generate();
         var device = new Device(
@@ -766,23 +804,7 @@ public sealed class InstallerPackageWorkflowTests
             "1.2.0");
         var componentRepository =
             CreatePublishedReleaseComponentRepository(edgeRoot);
-        string? firstTargetHash = null;
-        var unitOfWork = new InstallerFaultingUnitOfWork
-        {
-            RetryFirstAfterOperationFailure = true,
-            AfterOperationAsync = (attempt, _) =>
-            {
-                if (attempt == 1)
-                {
-                    firstTargetHash = device.BootstrapSecretHash;
-                    device.SetBootstrapSecretHash(oldHash!);
-                    throw new TimeoutException(
-                        "simulated transient before commit");
-                }
-
-                return Task.CompletedTask;
-            }
-        };
+        var generationStore = new InMemoryEdgeInstallerGenerationStore();
         var auditTrail = new RecordingAuditTrailService();
         try
         {
@@ -791,27 +813,26 @@ public sealed class InstallerPackageWorkflowTests
                 componentRepository,
                 GetInstallerRoot(edgeRoot),
                 auditTrail,
-                unitOfWork);
+                installerGenerationStore: generationStore);
 
             var result = await handler.Handle(
-                new GenerateEdgeInstallerPackageCommand(
-                    [new EdgeBindingSelection(
-                        PrimaryModuleId,
-                        device.Id)],
-                    HostVersion: "1.2.0",
-                    BaseUrl: "http://cloud.local"),
+                [device.Id],
+                "http://cloud.local",
                 CancellationToken.None);
 
-            Assert.True(result.IsSuccess);
-            Assert.Equal(2, unitOfWork.Attempts);
-            Assert.Equal(2, deviceRepository.SaveChangesCalls);
-            Assert.NotEqual(oldHash, device.BootstrapSecretHash);
-            Assert.Equal(firstTargetHash, device.BootstrapSecretHash);
+            Assert.True(
+                result.IsSuccess,
+                string.Join(" | ", result.Errors ?? []));
+            Assert.Equal(oldHash, device.BootstrapSecretHash);
+            Assert.Equal(0, deviceRepository.SaveChangesCalls);
             await using var package = result.Value!.Content;
             var secret = await ReadInstallerBootstrapSecretAsync(package);
+            var pending = Assert.Single(generationStore.PendingCredentials);
             Assert.True(BootstrapSecretHasher.Verify(
                 secret,
-                device.BootstrapSecretHash!));
+                pending.SecretHash));
+            Assert.Equal(result.Value.GenerationId, pending.GenerationId);
+            Assert.Equal(device.Id, pending.DeviceId);
             Assert.Single(
                 auditTrail.Entries,
                 entry =>
@@ -829,7 +850,7 @@ public sealed class InstallerPackageWorkflowTests
     }
 
     [Fact]
-    public async Task GenerateEdgeInstallerPackageHandler_PostCommitFailure_ShouldRecoverExactSecretTarget()
+    public async Task GenerateEdgeInstallerPackageHandler_GenerationConfirmationFailure_ShouldKeepActiveSecretAndReturnUnknown()
     {
         var oldSecret = BootstrapSecretGenerator.Generate();
         var device = new Device(
@@ -846,45 +867,28 @@ public sealed class InstallerPackageWorkflowTests
             "1.2.0");
         var componentRepository =
             CreatePublishedReleaseComponentRepository(edgeRoot);
-        var unitOfWork = new InstallerFaultingUnitOfWork
+        var generationStore = new InMemoryEdgeInstallerGenerationStore
         {
-            AfterOperationAsync = (_, _) =>
-                throw new TimeoutException(
-                    "simulated commit confirmation loss")
+            ConfirmResult = false
         };
-        var auditTrail = new RecordingAuditTrailService();
         try
         {
             var handler = CreateInstallerPackageHandler(
                 deviceRepository,
                 componentRepository,
                 GetInstallerRoot(edgeRoot),
-                auditTrail,
-                unitOfWork);
+                new RecordingAuditTrailService(),
+                installerGenerationStore: generationStore);
 
-            var result = await handler.Handle(
-                new GenerateEdgeInstallerPackageCommand(
-                    [new EdgeBindingSelection(
-                        PrimaryModuleId,
-                        device.Id)],
-                    HostVersion: "1.2.0",
-                    BaseUrl: "http://cloud.local"),
-                CancellationToken.None);
+            await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(() =>
+                handler.Handle(
+                    [device.Id],
+                    "http://cloud.local",
+                    CancellationToken.None));
 
-            Assert.True(result.IsSuccess);
-            Assert.Equal(1, unitOfWork.Attempts);
-            Assert.NotEqual(oldHash, device.BootstrapSecretHash);
-            await using var package = result.Value!.Content;
-            var secret = await ReadInstallerBootstrapSecretAsync(package);
-            Assert.True(BootstrapSecretHasher.Verify(
-                secret,
-                device.BootstrapSecretHash!));
-            Assert.Single(
-                auditTrail.Entries,
-                entry =>
-                    entry.OperationType
-                    == "Edge.GenerateInstallerPackage"
-                    && entry.Succeeded);
+            Assert.Equal(oldHash, device.BootstrapSecretHash);
+            Assert.Empty(generationStore.Records);
+            Assert.Empty(generationStore.PendingCredentials);
         }
         finally
         {
@@ -896,7 +900,7 @@ public sealed class InstallerPackageWorkflowTests
     }
 
     [Fact]
-    public async Task GenerateEdgeInstallerPackageHandler_ConcurrentSecretDriftAfterFailure_ShouldConflict()
+    public async Task GenerateEdgeInstallerPackageHandler_ConcurrentActiveSecretDriftDuringObservation_ShouldConflict()
     {
         var device = new Device(
             "正极模切客户端",
@@ -911,13 +915,13 @@ public sealed class InstallerPackageWorkflowTests
             CreatePublishedReleaseComponentRepository(edgeRoot);
         var concurrentHash = BootstrapSecretHasher.Hash(
             BootstrapSecretGenerator.Generate());
-        var unitOfWork = new InstallerFaultingUnitOfWork
+        var observer = new InstallerClientReleaseWriteObservationReader(
+            deviceRepository)
         {
-            AfterOperationAsync = (_, _) =>
+            BeforeReturn = states =>
             {
                 device.SetBootstrapSecretHash(concurrentHash);
-                throw new TimeoutException(
-                    "simulated failure after concurrent secret rotation");
+                return states;
             }
         };
         try
@@ -927,16 +931,12 @@ public sealed class InstallerPackageWorkflowTests
                 componentRepository,
                 GetInstallerRoot(edgeRoot),
                 new RecordingAuditTrailService(),
-                unitOfWork);
+                observationReader: observer);
 
             await Assert.ThrowsAsync<CloudWriteConflictException>(
                 () => handler.Handle(
-                    new GenerateEdgeInstallerPackageCommand(
-                        [new EdgeBindingSelection(
-                            PrimaryModuleId,
-                            device.Id)],
-                        HostVersion: "1.2.0",
-                        BaseUrl: "http://cloud.local"),
+                    [device.Id],
+                    "http://cloud.local",
                     CancellationToken.None));
 
             Assert.Equal(concurrentHash, device.BootstrapSecretHash);
@@ -968,11 +968,9 @@ public sealed class InstallerPackageWorkflowTests
             "1.2.0");
         var componentRepository =
             CreatePublishedReleaseComponentRepository(edgeRoot);
-        var unitOfWork = new InstallerFaultingUnitOfWork
+        var generationStore = new InMemoryEdgeInstallerGenerationStore
         {
-            BeforeOperationAsync = (_, _) =>
-                throw new TimeoutException(
-                    "simulated failure before persistence")
+            ConfirmResult = false
         };
         try
         {
@@ -981,16 +979,12 @@ public sealed class InstallerPackageWorkflowTests
                 componentRepository,
                 GetInstallerRoot(edgeRoot),
                 new RecordingAuditTrailService(),
-                unitOfWork);
+                installerGenerationStore: generationStore);
 
             await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
                 () => handler.Handle(
-                    new GenerateEdgeInstallerPackageCommand(
-                        [new EdgeBindingSelection(
-                            PrimaryModuleId,
-                            device.Id)],
-                        HostVersion: "1.2.0",
-                        BaseUrl: "http://cloud.local"),
+                    [device.Id],
+                    "http://cloud.local",
                     CancellationToken.None));
 
             Assert.Equal(oldHash, device.BootstrapSecretHash);
@@ -1023,12 +1017,13 @@ public sealed class InstallerPackageWorkflowTests
         var componentRepository =
             CreatePublishedReleaseComponentRepository(edgeRoot);
         using var cancellation = new CancellationTokenSource();
-        var unitOfWork = new InstallerFaultingUnitOfWork
+        var observer = new InstallerClientReleaseWriteObservationReader(
+            deviceRepository)
         {
-            BeforeOperationAsync = (_, _) =>
+            BeforeReturn = states =>
             {
                 cancellation.Cancel();
-                return Task.CompletedTask;
+                return states;
             }
         };
         try
@@ -1038,17 +1033,13 @@ public sealed class InstallerPackageWorkflowTests
                 componentRepository,
                 GetInstallerRoot(edgeRoot),
                 new RecordingAuditTrailService(),
-                unitOfWork);
+                observationReader: observer);
 
             var exception =
                 await Assert.ThrowsAnyAsync<OperationCanceledException>(
                     () => handler.Handle(
-                        new GenerateEdgeInstallerPackageCommand(
-                            [new EdgeBindingSelection(
-                                PrimaryModuleId,
-                                device.Id)],
-                            HostVersion: "1.2.0",
-                            BaseUrl: "http://cloud.local"),
+                        [device.Id],
+                        "http://cloud.local",
                         cancellation.Token));
 
             Assert.Equal(cancellation.Token, exception.CancellationToken);
@@ -1084,43 +1075,23 @@ public sealed class InstallerPackageWorkflowTests
             CreatePublishedReleaseComponentRepository(edgeRoot);
         using var cancellation = new CancellationTokenSource();
         var auditTrail = new ConfirmedAuditBarrier();
-        var preexistingPackages = Directory
-            .EnumerateFiles(
-                Path.GetTempPath(),
-                "iiot-edge-installer-*.exe",
-                SearchOption.TopDirectoryOnly)
-            .ToHashSet(StringComparer.Ordinal);
+        var generationStore = new InMemoryEdgeInstallerGenerationStore();
         try
         {
             var handler = CreateInstallerPackageHandler(
                 deviceRepository,
                 componentRepository,
                 GetInstallerRoot(edgeRoot),
-                auditTrail);
+                auditTrail,
+                installerGenerationStore: generationStore);
 
             var handling = handler.Handle(
-                new GenerateEdgeInstallerPackageCommand(
-                    [
-                        new EdgeBindingSelection(
-                            PrimaryModuleId,
-                            firstDevice.Id),
-                        new EdgeBindingSelection(
-                            SecondaryModuleId,
-                            secondDevice.Id)
-                    ],
-                    HostVersion: "1.2.0",
-                    BaseUrl: "http://cloud.local"),
+                [firstDevice.Id, secondDevice.Id],
+                "http://cloud.local",
                 cancellation.Token);
 
             await auditTrail.FirstAuditEntered.WaitAsync(
                 TimeSpan.FromSeconds(5));
-            var packagePath = Assert.Single(
-                Directory
-                    .EnumerateFiles(
-                        Path.GetTempPath(),
-                        "iiot-edge-installer-*.exe",
-                        SearchOption.TopDirectoryOnly),
-                path => !preexistingPackages.Contains(path));
 
             cancellation.Cancel();
             auditTrail.Release();
@@ -1129,8 +1100,8 @@ public sealed class InstallerPackageWorkflowTests
                     () => handling);
 
             Assert.Equal(cancellation.Token, exception.CancellationToken);
-            Assert.NotNull(firstDevice.BootstrapSecretHash);
-            Assert.NotNull(secondDevice.BootstrapSecretHash);
+            Assert.Null(firstDevice.BootstrapSecretHash);
+            Assert.Null(secondDevice.BootstrapSecretHash);
             Assert.Equal(2, auditTrail.Entries.Count);
             Assert.Equal(
                 2,
@@ -1141,7 +1112,8 @@ public sealed class InstallerPackageWorkflowTests
             Assert.All(
                 auditTrail.Entries,
                 entry => Assert.True(entry.Succeeded));
-            Assert.False(File.Exists(packagePath));
+            Assert.Empty(generationStore.Records);
+            Assert.Empty(generationStore.PendingCredentials);
         }
         finally
         {
@@ -1185,12 +1157,8 @@ public sealed class InstallerPackageWorkflowTests
 
             await Assert.ThrowsAsync<CloudWriteCommitUnknownException>(
                 () => handler.Handle(
-                    new GenerateEdgeInstallerPackageCommand(
-                        [new EdgeBindingSelection(
-                            PrimaryModuleId,
-                            device.Id)],
-                        HostVersion: "1.2.0",
-                        BaseUrl: "http://cloud.local"),
+                    [device.Id],
+                    "http://cloud.local",
                     CancellationToken.None));
 
             Assert.Null(device.BootstrapSecretHash);
@@ -1205,16 +1173,241 @@ public sealed class InstallerPackageWorkflowTests
         }
     }
 
-    private static GenerateEdgeInstallerPackageHandler CreateInstallerPackageHandler(
+    [Fact]
+    public async Task EdgeInstallerPlan_ShouldRejectFormalPluginWhoseExactHostManifestDoesNotMatch()
+    {
+        var device = new Device(
+            "P1正极模切",
+            "DEV-HOST-EVIDENCE",
+            Guid.NewGuid());
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.Add(device);
+        var edgeRoot = CreateInstallerArtifactFixture("stable", "1.2.0");
+        var componentRepository =
+            CreatePublishedReleaseComponentRepository(edgeRoot);
+        var host = componentRepository.ListResult.Single(component =>
+            component.ComponentKind == ClientReleaseComponentKind.Host);
+        var hostVersion = host.FindVersion("1.2.0")!;
+        hostVersion.ConfigureHostManifest(new string('a', 64));
+
+        var plugin = componentRepository.ListResult.Single(component =>
+            component.ComponentKind == ClientReleaseComponentKind.Plugin
+            && component.ComponentKey == PrimaryModuleId);
+        plugin.ConfigurePluginContract(
+            plugin.SupportedProcessType!,
+            plugin.BusinessDocumentRef,
+            manifestSchemaVersion: 3,
+            plugin.FileManifestSha256,
+            plugin.DataCapabilitiesJson);
+        var pluginVersion = plugin.FindVersion("2.3.4")!;
+        pluginVersion.ConfigurePluginManifest(
+            pluginVersion.DataCapabilitiesJson,
+            pluginVersion.FileManifestSha256,
+            new string('b', 64),
+            hostVersion.Version,
+            new string('c', 64));
+
+        try
+        {
+            var harness = CreateInstallerPackageHandler(
+                deviceRepository,
+                componentRepository,
+                GetInstallerRoot(edgeRoot),
+                new RecordingAuditTrailService());
+
+            var plan = await harness.BuildPlanAsync([device.Id]);
+
+            Assert.False(plan.IsSuccess);
+            Assert.Contains(
+                plan.Errors ?? [],
+                error => error.Contains(
+                    "共同兼容",
+                    StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(edgeRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ExistingInstallerDownload_ShouldRequireAccessToEveryBoundDevice()
+    {
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            $"iiot-generated-download-{Guid.NewGuid():N}");
+        var generationId = Guid.NewGuid();
+        var firstDeviceId = Guid.NewGuid();
+        var secondDeviceId = Guid.NewGuid();
+        var bytes = "MZ-authenticated-installer"u8.ToArray();
+        var packageSha256 = Convert.ToHexString(SHA256.HashData(bytes))
+            .ToLowerInvariant();
+        var generatedDirectory = Path.Combine(root, "generated");
+        Directory.CreateDirectory(generatedDirectory);
+        await File.WriteAllBytesAsync(
+            Path.Combine(generatedDirectory, $"{generationId:N}.exe"),
+            bytes);
+
+        var record = new EdgeInstallerGenerationRecord(
+            generationId,
+            Guid.NewGuid(),
+            "admin",
+            DateTime.UtcNow,
+            "stable",
+            "win-x64",
+            "2.0.12",
+            new string('a', 64),
+            "IIoT.EdgeClient-bundle.exe",
+            packageSha256,
+            bytes.LongLength,
+            [
+                new EdgeInstallerGenerationBindingFact(
+                    "P1",
+                    firstDeviceId,
+                    "DEV-P1",
+                    "P1正极模切",
+                    Guid.NewGuid()),
+                new EdgeInstallerGenerationBindingFact(
+                    "P2",
+                    secondDeviceId,
+                    "DEV-P2",
+                    "P2正极模切",
+                    Guid.NewGuid())
+            ],
+            [
+                new EdgeInstallerGenerationPluginFact(
+                    "P1",
+                    "2.0.12",
+                    new string('b', 64)),
+                new EdgeInstallerGenerationPluginFact(
+                    "P2",
+                    "2.0.12",
+                    new string('c', 64))
+            ]);
+        var store = new InMemoryEdgeInstallerGenerationStore();
+        await store.TryAddConfirmedAsync(
+            record,
+            [
+                new EdgeInstallerPendingCredential(
+                    generationId,
+                    firstDeviceId,
+                    "DEV-P1",
+                    "secret-hash-p1",
+                    "P1",
+                    "2.0.12",
+                    new string('b', 64),
+                    DateTime.UtcNow.AddDays(1)),
+                new EdgeInstallerPendingCredential(
+                    generationId,
+                    secondDeviceId,
+                    "DEV-P2",
+                    "secret-hash-p2",
+                    "P2",
+                    "2.0.12",
+                    new string('c', 64),
+                    DateTime.UtcNow.AddDays(1))
+            ]);
+
+        try
+        {
+            var access = new StubCurrentUserDeviceAccessService
+            {
+                AccessibleDeviceIds = [firstDeviceId]
+            };
+            var handler = new GetEdgeInstallerPackageByGenerationHandler(
+                store,
+                access,
+                Options.Create(new EdgeInstallerArtifactOptions
+                {
+                    RootPath = root
+                }));
+
+            var forbidden = await handler.Handle(
+                new GetEdgeInstallerPackageByGenerationQuery(generationId),
+                CancellationToken.None);
+
+            Assert.False(forbidden.IsSuccess);
+            Assert.Contains(
+                forbidden.Errors ?? [],
+                error => error.Contains("无权访问", StringComparison.Ordinal));
+
+            access.AccessibleDeviceIds = [firstDeviceId, secondDeviceId];
+            var allowed = await handler.Handle(
+                new GetEdgeInstallerPackageByGenerationQuery(generationId),
+                CancellationToken.None);
+
+            Assert.True(
+                allowed.IsSuccess,
+                string.Join(" | ", allowed.Errors ?? []));
+            await using var stream = allowed.Value!.Content;
+            using var copy = new MemoryStream();
+            await stream.CopyToAsync(copy);
+            Assert.Equal(bytes, copy.ToArray());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static InstallerPackageTestHarness CreateInstallerPackageHandler(
         InMemoryRepository<Device> deviceRepository,
         InMemoryRepository<ClientReleaseComponent> componentRepository,
         string artifactRoot,
         IAuditTrailService auditTrail,
-        IUnitOfWork? unitOfWork = null,
         IClientReleaseWriteObservationReader? observationReader = null,
         IEdgeInstallerGenerationStore? installerGenerationStore = null)
     {
-        return new GenerateEdgeInstallerPackageHandler(
+        var devices = deviceRepository.ListResult.Count > 0
+            ? deviceRepository.ListResult
+            : deviceRepository.SingleOrDefaultResult is null
+                ? []
+                : [deviceRepository.SingleOrDefaultResult];
+        var plugins = componentRepository.ListResult
+            .Where(component =>
+                component.ComponentKind == ClientReleaseComponentKind.Plugin)
+            .OrderBy(component => component.ComponentKey, StringComparer.Ordinal)
+            .ToArray();
+        var bindings = devices
+            .OrderBy(device => device.Id)
+            .Select(device =>
+            {
+                var expectedModuleId = device.DeviceName.Contains(
+                    "负极",
+                    StringComparison.Ordinal)
+                    ? SecondaryModuleId
+                    : PrimaryModuleId;
+                var plugin = plugins.SingleOrDefault(component =>
+                                 string.Equals(
+                                     component.ComponentKey,
+                                     expectedModuleId,
+                                     StringComparison.Ordinal))
+                             ?? plugins.Single();
+                return new DevicePluginBindingReadItem(
+                Guid.NewGuid(),
+                device.Id,
+                plugin.Id,
+                plugin.ComponentKey,
+                plugin.DisplayName,
+                plugin.SupportedProcessType ?? plugin.ComponentKey,
+                plugin.Channel,
+                plugin.TargetRuntime,
+                plugin.DataCapabilitiesJson);
+            })
+            .ToArray();
+        var access = new StubCurrentUserDeviceAccessService
+        {
+            IsAdministrator = true
+        };
+        var planService = new EdgeInstallerPlanService(
+            access,
+            deviceRepository,
+            componentRepository,
+            new StubDevicePluginBindingQueryService
+            {
+                Bindings = bindings
+            });
+        var handler = new GenerateEdgeInstallerPackageHandler(
             new TestCurrentUser
             {
                 Id = Guid.NewGuid().ToString(),
@@ -1222,20 +1415,52 @@ public sealed class InstallerPackageWorkflowTests
                 Roles = [SystemRoles.Admin],
                 IsAuthenticated = true
             },
-            new StubCurrentUserDeviceAccessService { IsAdministrator = true },
+            access,
             deviceRepository,
             componentRepository,
             auditTrail,
             Options.Create(new EdgeInstallerArtifactOptions
             {
-                RootPath = artifactRoot
+                RootPath = artifactRoot,
+                PayloadSigningKeyId = "installer-test-key",
+                PayloadSigningPrivateKeyPem = PayloadSigningPrivateKeyPem.Value
             }),
-            unitOfWork ?? new RecordingUnitOfWork(),
             observationReader
             ?? new InstallerClientReleaseWriteObservationReader(
                 deviceRepository),
             installerGenerationStore
-            ?? new InMemoryEdgeInstallerGenerationStore());
+            ?? new InMemoryEdgeInstallerGenerationStore(),
+            planService);
+        return new InstallerPackageTestHarness(handler, planService);
+    }
+
+    private sealed class InstallerPackageTestHarness(
+        GenerateEdgeInstallerPackageHandler handler,
+        IEdgeInstallerPlanService planService)
+    {
+        public Task<Result<EdgeInstallerPlanDto>> BuildPlanAsync(
+            IReadOnlyList<Guid> deviceIds,
+            CancellationToken cancellationToken = default)
+            => planService.BuildAsync(deviceIds, cancellationToken);
+
+        public async Task<Result<EdgeInstallerPackageDto>> Handle(
+            IReadOnlyList<Guid> deviceIds,
+            string? baseUrl,
+            CancellationToken cancellationToken)
+        {
+            var plan = await planService.BuildAsync(
+                deviceIds,
+                cancellationToken);
+            Assert.True(
+                plan.IsSuccess,
+                string.Join(" | ", plan.Errors ?? []));
+            return await handler.Handle(
+                new GenerateEdgeInstallerPackageCommand(
+                    BaseUrl: baseUrl,
+                    DeviceIds: deviceIds,
+                    PlanFingerprint: plan.Value!.PlanFingerprint),
+                cancellationToken);
+        }
     }
 
     private sealed class ConfirmedAuditBarrier : IAuditTrailService
@@ -1272,76 +1497,19 @@ public sealed class InstallerPackageWorkflowTests
         }
     }
 
-    private sealed class InstallerFaultingUnitOfWork : IUnitOfWork
-    {
-        public int Attempts { get; private set; }
-
-        public bool RetryFirstAfterOperationFailure { get; init; }
-
-        public Func<int, CancellationToken, Task>? BeforeOperationAsync
-        {
-            get;
-            init;
-        }
-
-        public Func<int, CancellationToken, Task>? AfterOperationAsync
-        {
-            get;
-            init;
-        }
-
-        public async Task<TResult> ExecuteResilientAsync<TResult>(
-            Func<CancellationToken, Task<TResult>> operation,
-            CancellationToken cancellationToken = default)
-        {
-            while (true)
-            {
-                Attempts += 1;
-                if (BeforeOperationAsync is not null)
-                {
-                    await BeforeOperationAsync(
-                        Attempts,
-                        cancellationToken);
-                }
-
-                var result = await operation(cancellationToken);
-                try
-                {
-                    if (AfterOperationAsync is not null)
-                    {
-                        await AfterOperationAsync(
-                            Attempts,
-                            cancellationToken);
-                    }
-
-                    return result;
-                }
-                catch when (
-                    RetryFirstAfterOperationFailure
-                    && Attempts == 1)
-                {
-                }
-            }
-        }
-
-        public Task BeginTransactionAsync(
-            CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
-
-        public Task CommitAsync(
-            CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
-
-        public Task RollbackAsync(
-            CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
-    }
-
     private sealed class InstallerClientReleaseWriteObservationReader(
         InMemoryRepository<Device> deviceRepository)
         : IClientReleaseWriteObservationReader
     {
         public Exception? ExceptionToThrow { get; init; }
+
+        public Func<
+            IReadOnlyList<DeviceBootstrapWriteState>,
+            IReadOnlyList<DeviceBootstrapWriteState>>? BeforeReturn
+        {
+            get;
+            init;
+        }
 
         public Task<ClientReleaseVersionWriteState?> ObserveVersionAsync(
             Guid versionId,
@@ -1407,7 +1575,8 @@ public sealed class InstallerPackageWorkflowTests
                         device.BootstrapSecretHash,
                         device.RowVersion))
                     .ToList();
-            return Task.FromResult(result);
+            return Task.FromResult(
+                BeforeReturn is null ? result : BeforeReturn(result));
         }
     }
 
@@ -1477,7 +1646,7 @@ public sealed class InstallerPackageWorkflowTests
             null,
             "stable",
             targetRuntime);
-        AddPublishedPluginVersion(
+        var fileManifestSha256 = AddPublishedPluginVersion(
             component,
             edgeRoot,
             moduleId,
@@ -1486,6 +1655,12 @@ public sealed class InstallerPackageWorkflowTests
             minHostVersion,
             maxHostVersion,
             targetRuntime);
+        component.ConfigurePluginContract(
+            "DIECUT",
+            $"docs/plugins/{moduleId}.md",
+            manifestSchemaVersion: 1,
+            fileManifestSha256,
+            dataCapabilitiesJson: "[]");
         return component;
     }
 
@@ -1503,7 +1678,7 @@ public sealed class InstallerPackageWorkflowTests
         var packagePath = Path.Combine(
             edgeRoot,
             packageRelativePath.Replace('/', Path.DirectorySeparatorChar));
-        WritePluginPackage(
+        var fileManifestSha256 = WritePluginPackage(
             packagePath,
             moduleId,
             version,
@@ -1513,7 +1688,7 @@ public sealed class InstallerPackageWorkflowTests
         var packageBytes = File.ReadAllBytes(packagePath);
         var sha256 = Convert.ToHexString(SHA256.HashData(packageBytes)).ToLowerInvariant();
 
-        component.UpsertPluginVersion(
+        var release = component.UpsertPluginVersion(
             version,
             hostApiVersion,
             minHostVersion,
@@ -1538,7 +1713,8 @@ public sealed class InstallerPackageWorkflowTests
                     sha256,
                     packageBytes.LongLength)
             ]);
-        return packagePath;
+        release.ConfigurePluginManifest("[]", fileManifestSha256);
+        return fileManifestSha256;
     }
 
     private static string CreateInstallerArtifactFixture(
@@ -1547,14 +1723,17 @@ public sealed class InstallerPackageWorkflowTests
         string targetRuntime = "win-x64",
         bool includeVelopackSetupFile = true,
         bool writeVelopackSetupFile = true,
-        int installerBindingSchemaVersion = 2)
+        int installerBindingSchemaVersion = 3)
     {
         var edgeRoot = Path.Combine(Path.GetTempPath(), $"iiot-edge-updates-{Guid.NewGuid():N}");
         var installerRoot = GetInstallerRoot(edgeRoot);
         var artifactDirectory = Path.Combine(installerRoot, channel, version);
         Directory.CreateDirectory(artifactDirectory);
 
-        File.WriteAllBytes(Path.Combine(artifactDirectory, "IIoT.Edge.Setup.exe"), "MZ-STUB"u8.ToArray());
+        var installerStubPath = Path.Combine(
+            artifactDirectory,
+            "IIoT.Edge.Setup.exe");
+        File.WriteAllBytes(installerStubPath, "MZ-STUB"u8.ToArray());
         WriteFixtureFile(artifactDirectory, "launcher/IIoT.Edge.Launcher.dll", "launcher");
         WriteFixtureFile(artifactDirectory, "launcher/launcher.profiles.json", "{}");
         WriteFixtureFile(artifactDirectory, "host/IIoT.Edge.Shell.dll", "shell");
@@ -1564,13 +1743,32 @@ public sealed class InstallerPackageWorkflowTests
             WriteFixtureFile(artifactDirectory, VelopackSetupFixtureFile, "velopack setup");
         }
 
+        var launcherRoot = Path.Combine(artifactDirectory, "launcher");
+        var hostRoot = Path.Combine(artifactDirectory, "host");
+        var velopackSetupPath = Path.Combine(
+            artifactDirectory,
+            VelopackSetupFixtureFile.Replace(
+                '/',
+                Path.DirectorySeparatorChar));
+        var installerStubBytes = File.ReadAllBytes(installerStubPath);
+        var installerStubSha256 = Convert.ToHexString(
+            SHA256.HashData(installerStubBytes)).ToLowerInvariant();
+        var velopackSetupSha256 = writeVelopackSetupFile
+            ? Convert.ToHexString(
+                SHA256.HashData(File.ReadAllBytes(velopackSetupPath)))
+                .ToLowerInvariant()
+            : new string('b', 64);
+        var velopackSetupSize = writeVelopackSetupFile
+            ? new FileInfo(velopackSetupPath).Length
+            : 1;
+
         var velopackSetupManifestProperty = includeVelopackSetupFile
             ? $"  \"velopackSetupFile\": \"{VelopackSetupFixtureFile}\","
             : string.Empty;
 
         var manifest = $$"""
         {
-          "schemaVersion": 2,
+          "schemaVersion": 3,
           "installerBindingSchemaVersion": {{installerBindingSchemaVersion}},
           "channel": "{{channel}}",
           "version": "{{version}}",
@@ -1578,10 +1776,18 @@ public sealed class InstallerPackageWorkflowTests
           "targetRuntime": "{{targetRuntime}}",
           "targetFramework": "net10.0",
           "installerStubFile": "IIoT.Edge.Setup.exe",
+          "installerStubSha256": "{{installerStubSha256}}",
+          "installerStubSize": {{installerStubBytes.LongLength}},
           "launcherDirectory": "launcher",
+          "launcherDirectorySha256": "{{ComputeDirectorySha256(launcherRoot)}}",
+          "launcherDirectorySize": {{GetDirectorySize(launcherRoot)}},
           "hostDirectory": "host",
+          "hostDirectorySha256": "{{ComputeDirectorySha256(hostRoot)}}",
+          "hostDirectorySize": {{GetDirectorySize(hostRoot)}},
           "pluginsRoot": "plugins",
         {{velopackSetupManifestProperty}}
+          "velopackSetupSha256": "{{velopackSetupSha256}}",
+          "velopackSetupSize": {{velopackSetupSize}},
           "modules": []
         }
         """;
@@ -1592,7 +1798,37 @@ public sealed class InstallerPackageWorkflowTests
     private static string GetInstallerRoot(string edgeRoot)
         => Path.Combine(edgeRoot, "installers");
 
-    private static void WritePluginPackage(
+    private static string ComputeDirectorySha256(string directory)
+    {
+        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var file in Directory
+                     .EnumerateFiles(
+                         directory,
+                         "*",
+                         SearchOption.AllDirectories)
+                     .OrderBy(
+                         path => Path.GetRelativePath(directory, path)
+                             .Replace('\\', '/'),
+                         StringComparer.Ordinal))
+        {
+            var relativePath = Path.GetRelativePath(directory, file)
+                .Replace('\\', '/');
+            hasher.AppendData(Encoding.UTF8.GetBytes(relativePath));
+            hasher.AppendData([0]);
+            hasher.AppendData(File.ReadAllBytes(file));
+            hasher.AppendData([10]);
+        }
+
+        return Convert.ToHexString(hasher.GetHashAndReset())
+            .ToLowerInvariant();
+    }
+
+    private static long GetDirectorySize(string directory)
+        => Directory
+            .EnumerateFiles(directory, "*", SearchOption.AllDirectories)
+            .Sum(file => new FileInfo(file).Length);
+
+    private static string WritePluginPackage(
         string packagePath,
         string moduleId,
         string version,
@@ -1602,33 +1838,70 @@ public sealed class InstallerPackageWorkflowTests
         string? unsafeEntryPath = null)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(packagePath)!);
+        var pluginJson = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            moduleId,
+            version,
+            hostApiVersion,
+            minHostVersion,
+            maxHostVersion,
+            entryAssembly = $"IIoT.Edge.Module.{moduleId}.dll"
+        });
+        var assemblyBytes = Encoding.UTF8.GetBytes($"{moduleId}-{version}");
+        var files = new List<(string Path, byte[] Bytes)>
+        {
+            ("plugin.json", pluginJson),
+            ($"IIoT.Edge.Module.{moduleId}.dll", assemblyBytes)
+        };
+        if (!string.IsNullOrWhiteSpace(unsafeEntryPath))
+        {
+            files.Add((unsafeEntryPath, "unsafe"u8.ToArray()));
+        }
+        var fileManifestBytes = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            schemaVersion = 1,
+            component = moduleId,
+            version,
+            files = files.Select(file => new
+            {
+                path = file.Path,
+                size = file.Bytes.LongLength,
+                sha256 = Convert.ToHexString(SHA256.HashData(file.Bytes))
+                    .ToLowerInvariant(),
+                type = "file",
+                component = moduleId,
+                version
+            })
+        });
+
         using var archive = ZipFile.Open(packagePath, ZipArchiveMode.Create);
         var manifestEntry = archive.CreateEntry("plugin.json");
-        using (var writer = new StreamWriter(manifestEntry.Open(), new UTF8Encoding(false)))
+        using (var stream = manifestEntry.Open())
         {
-            writer.Write(JsonSerializer.Serialize(new
-            {
-                moduleId,
-                version,
-                hostApiVersion,
-                minHostVersion,
-                maxHostVersion,
-                entryAssembly = $"IIoT.Edge.Module.{moduleId}.dll"
-            }));
+            stream.Write(pluginJson);
         }
 
         var assemblyEntry = archive.CreateEntry($"IIoT.Edge.Module.{moduleId}.dll");
-        using (var assemblyWriter = new StreamWriter(assemblyEntry.Open(), new UTF8Encoding(false)))
+        using (var stream = assemblyEntry.Open())
         {
-            assemblyWriter.Write($"{moduleId}-{version}");
+            stream.Write(assemblyBytes);
         }
 
         if (!string.IsNullOrWhiteSpace(unsafeEntryPath))
         {
             var unsafeEntry = archive.CreateEntry(unsafeEntryPath);
-            using var unsafeWriter = new StreamWriter(unsafeEntry.Open(), new UTF8Encoding(false));
-            unsafeWriter.Write("unsafe");
+            using var stream = unsafeEntry.Open();
+            stream.Write("unsafe"u8);
         }
+
+        var fileManifestEntry = archive.CreateEntry("file-manifest.json");
+        using (var stream = fileManifestEntry.Open())
+        {
+            stream.Write(fileManifestBytes);
+        }
+
+        return Convert.ToHexString(SHA256.HashData(fileManifestBytes))
+            .ToLowerInvariant();
     }
 
     private static byte[] ReadInstallerPayload(byte[] package)
@@ -1657,10 +1930,11 @@ public sealed class InstallerPackageWorkflowTests
                 "launcher/iiot-binding.json"));
         return binding.RootElement
                    .GetProperty("bindings")[0]
-                   .GetProperty("bootstrapSecret")
+                   .GetProperty("pendingCredential")
+                   .GetProperty("secret")
                    .GetString()
                ?? throw new InvalidDataException(
-                   "Generated installer binding is missing bootstrapSecret.");
+                   "Generated installer binding is missing pending credential secret.");
     }
 
     private static void WriteFixtureFile(string artifactDirectory, string relativePath, string content)

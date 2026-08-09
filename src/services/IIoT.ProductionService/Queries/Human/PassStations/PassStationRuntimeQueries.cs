@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using IIoT.ProductionService.ClientReleases;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.RecordQueries;
@@ -32,6 +33,7 @@ public sealed record GetPassStationListByTypeQuery(
 
 public sealed class GetPassStationListByTypeHandler(
     IPassStationSchemaProvider schemaProvider,
+    IDevicePluginDataCapabilityResolver capabilityResolver,
     IPassStationRecordQueryService queryService,
     ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IProcessReadQueryService processReadQueryService)
@@ -41,29 +43,33 @@ public sealed class GetPassStationListByTypeHandler(
         GetPassStationListByTypeQuery request,
         CancellationToken cancellationToken)
     {
-        var typeKey = PassStationQueryRuntime.NormalizeTypeKey(request.Request.TypeKey);
-        var definition = schemaProvider.Find(typeKey);
-        if (definition is null)
-            return Result.NotFound($"过站类型 [{request.Request.TypeKey}] 不存在。");
-
-        var normalizedRequest = request.Request with { TypeKey = definition.TypeKey };
-        var validation = PassStationQueryRuntime.ValidateListRequest(normalizedRequest, definition);
-        if (validation is not null)
-            return validation;
-
         var allowedDeviceIds = await PassStationQueryRuntime.ResolveAllowedDeviceIdsAsync(
-            normalizedRequest,
+            request.Request,
             currentUserDeviceAccessService,
             processReadQueryService,
             cancellationToken);
         if (!allowedDeviceIds.IsSuccess)
             return Result.Invalid(allowedDeviceIds.ErrorMessage!);
         if (allowedDeviceIds.ShouldReturnEmpty)
-            return Result.Success(new PagedList<PassStationListItemDto>([], 0, normalizedRequest.Pagination));
+            return Result.Success(new PagedList<PassStationListItemDto>([], 0, request.Request.Pagination));
+
+        var capability = await PassStationQueryRuntime.ResolveCapabilityAsync(
+            request.Request.TypeKey,
+            allowedDeviceIds.DeviceIds ?? [],
+            capabilityResolver,
+            schemaProvider,
+            cancellationToken);
+        if (!capability.IsSuccess)
+            return Result.From(capability);
+        var definition = capability.Value!.Definition;
+        var normalizedRequest = request.Request with { TypeKey = definition.TypeKey };
+        var validation = PassStationQueryRuntime.ValidateListRequest(normalizedRequest, definition);
+        if (validation is not null)
+            return validation;
 
         var (items, totalCount) = await queryService.GetByConditionAsync(
             normalizedRequest,
-            allowedDeviceIds.DeviceIds,
+            capability.Value.DeviceIds,
             cancellationToken);
 
         var projectedItems = items
@@ -87,6 +93,7 @@ public sealed record GetPassStationDetailByTypeQuery(
 
 public sealed class GetPassStationDetailByTypeHandler(
     IPassStationSchemaProvider schemaProvider,
+    IDevicePluginDataCapabilityResolver capabilityResolver,
     IPassStationRecordQueryService queryService,
     ICurrentUserDeviceAccessService currentUserDeviceAccessService)
     : IQueryHandler<GetPassStationDetailByTypeQuery, Result<PassStationDetailDto>>
@@ -95,21 +102,27 @@ public sealed class GetPassStationDetailByTypeHandler(
         GetPassStationDetailByTypeQuery request,
         CancellationToken cancellationToken)
     {
-        var definition = schemaProvider.Find(request.TypeKey);
-        if (definition is null)
-            return Result.NotFound($"过站类型 [{request.TypeKey}] 不存在。");
-
         var scope = await currentUserDeviceAccessService.GetAccessibleDeviceIdsAsync(cancellationToken);
         if (!scope.IsSuccess)
             return Result.Invalid(scope.Errors?.ToArray() ?? ["用户凭证异常。"]);
 
         var detail = await queryService.GetDetailAsync(
-            definition.TypeKey,
+            PassStationQueryRuntime.NormalizeTypeKey(request.TypeKey),
             request.Id,
             scope.Value,
             cancellationToken);
         if (detail is null)
             return Result.NotFound("未找到该过站记录。");
+
+        var capability = await PassStationQueryRuntime.ResolveCapabilityAsync(
+            request.TypeKey,
+            [detail.DeviceId],
+            capabilityResolver,
+            schemaProvider,
+            cancellationToken);
+        if (!capability.IsSuccess)
+            return Result.From(capability);
+        var definition = capability.Value!.Definition;
 
         return Result.Success(detail with
         {
@@ -130,6 +143,7 @@ public sealed record ExportPassStationsByTypeQuery(
 
 public sealed class ExportPassStationsByTypeHandler(
     IPassStationSchemaProvider schemaProvider,
+    IDevicePluginDataCapabilityResolver capabilityResolver,
     IPassStationRecordQueryService queryService,
     ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IProcessReadQueryService processReadQueryService)
@@ -141,11 +155,34 @@ public sealed class ExportPassStationsByTypeHandler(
         ExportPassStationsByTypeQuery request,
         CancellationToken cancellationToken)
     {
-        var typeKey = PassStationQueryRuntime.NormalizeTypeKey(request.Request.TypeKey);
-        var definition = schemaProvider.Find(typeKey);
-        if (definition is null)
-            return Result.NotFound($"过站类型 [{request.Request.TypeKey}] 不存在。");
+        var allowedDeviceIds = await PassStationQueryRuntime.ResolveAllowedDeviceIdsAsync(
+            request.Request,
+            currentUserDeviceAccessService,
+            processReadQueryService,
+            cancellationToken);
+        if (!allowedDeviceIds.IsSuccess)
+            return Result.Invalid(allowedDeviceIds.ErrorMessage!);
 
+        if (allowedDeviceIds.ShouldReturnEmpty)
+        {
+            var legacyDefinition = schemaProvider.Find(request.Request.TypeKey);
+            if (legacyDefinition is null)
+                return Result.NotFound($"过站类型 [{request.Request.TypeKey}] 不存在。");
+            return Result.Success(PassStationCsvExport.Create(
+                legacyDefinition,
+                [],
+                DateTimeOffset.UtcNow));
+        }
+
+        var capability = await PassStationQueryRuntime.ResolveCapabilityAsync(
+            request.Request.TypeKey,
+            allowedDeviceIds.DeviceIds ?? [],
+            capabilityResolver,
+            schemaProvider,
+            cancellationToken);
+        if (!capability.IsSuccess)
+            return Result.From(capability);
+        var definition = capability.Value!.Definition;
         var normalizedRequest = request.Request with
         {
             TypeKey = definition.TypeKey,
@@ -155,25 +192,9 @@ public sealed class ExportPassStationsByTypeHandler(
         if (validation is not null)
             return Result.Invalid(validation.Errors?.ToArray() ?? ["过站导出条件无效。"]);
 
-        var allowedDeviceIds = await PassStationQueryRuntime.ResolveAllowedDeviceIdsAsync(
-            normalizedRequest,
-            currentUserDeviceAccessService,
-            processReadQueryService,
-            cancellationToken);
-        if (!allowedDeviceIds.IsSuccess)
-            return Result.Invalid(allowedDeviceIds.ErrorMessage!);
-
-        if (allowedDeviceIds.ShouldReturnEmpty)
-        {
-            return Result.Success(PassStationCsvExport.Create(
-                definition,
-                [],
-                DateTimeOffset.UtcNow));
-        }
-
         var items = await queryService.GetForExportAsync(
             normalizedRequest,
-            allowedDeviceIds.DeviceIds,
+            capability.Value.DeviceIds,
             ExportLimit + 1,
             cancellationToken);
         if (items.Count > ExportLimit)
@@ -263,8 +284,136 @@ internal sealed record AllowedDeviceResolution(
     public bool IsSuccess => ErrorMessage is null;
 }
 
+internal sealed record PassStationQueryCapabilityResolution(
+    PassStationTypeDefinitionDto Definition,
+    IReadOnlyCollection<Guid> DeviceIds,
+    bool IsLegacyFallback);
+
 internal static class PassStationQueryRuntime
 {
+    private static readonly string[] CommonColumns =
+        ["id", "deviceId", "barcode", "cellResult", "completedTime", "receivedAt"];
+
+    public static async Task<Result<PassStationQueryCapabilityResolution>>
+        ResolveCapabilityAsync(
+            string typeKey,
+            IReadOnlyCollection<Guid> candidateDeviceIds,
+            IDevicePluginDataCapabilityResolver capabilityResolver,
+            IPassStationSchemaProvider legacySchemaProvider,
+            CancellationToken cancellationToken)
+    {
+        var normalizedTypeKey = NormalizeTypeKey(typeKey);
+        if (string.IsNullOrWhiteSpace(normalizedTypeKey))
+            return Result.Invalid("业务记录类别不能为空。");
+        if (candidateDeviceIds.Count == 0)
+            return Result.Invalid("查询必须封印至少一台具体设备。");
+
+        var resolved = new List<(Guid DeviceId, ResolvedDevicePluginDataCapability Value)>();
+        var unavailable = false;
+        foreach (var deviceId in candidateDeviceIds.Distinct())
+        {
+            var current = await capabilityResolver.ResolveAsync(
+                deviceId,
+                normalizedTypeKey,
+                cancellationToken);
+            if (current.IsSuccess)
+            {
+                resolved.Add((deviceId, current.Value!));
+                continue;
+            }
+
+            if (current.Status == ResultStatus.Invalid
+                && current.Errors?.Any(error => error.Contains(
+                    "capability_unavailable",
+                    StringComparison.Ordinal)) == true)
+            {
+                unavailable = true;
+                continue;
+            }
+
+            if (current.Status is not ResultStatus.Forbidden)
+                return Result.From(current);
+        }
+
+        if (resolved.Count == 0)
+        {
+            // Explicit v2 compatibility only: a device without an authoritative
+            // installed-version capability may use the frozen static schema.
+            var legacy = unavailable
+                ? legacySchemaProvider.Find(normalizedTypeKey)
+                : null;
+            return legacy is null
+                ? Result.NotFound($"业务记录类别 [{typeKey}] 不属于当前设备插件。")
+                : Result.Success(new PassStationQueryCapabilityResolution(
+                    legacy,
+                    candidateDeviceIds,
+                    true));
+        }
+
+        if (unavailable)
+        {
+            return Result.Invalid(
+                "capability_unavailable: 跨设备查询中有设备缺少实际安装版本能力，不得静默忽略。");
+        }
+
+        var first = resolved[0].Value.Capability;
+        if (resolved.Skip(1).Any(item => !Compatible(first, item.Value.Capability)))
+        {
+            return Result.Invalid(
+                "所选设备的 TypeKey Schema 不完全兼容，请先选择唯一设备。");
+        }
+
+        return Result.Success(new PassStationQueryCapabilityResolution(
+            ToDefinition(first),
+            resolved.Select(item => item.DeviceId).ToArray(),
+            false));
+    }
+
+    private static bool Compatible(
+        PluginDataCapability left,
+        PluginDataCapability right)
+        => string.Equals(left.TypeKey, right.TypeKey, StringComparison.OrdinalIgnoreCase)
+           && left.SchemaVersion == right.SchemaVersion
+           && string.Equals(left.SchemaName, right.SchemaName, StringComparison.Ordinal)
+           && string.Equals(left.Scope, right.Scope, StringComparison.OrdinalIgnoreCase)
+           && left.QueryModes.SequenceEqual(right.QueryModes, StringComparer.Ordinal)
+           && left.Fields.SequenceEqual(right.Fields);
+
+    internal static PassStationTypeDefinitionDto ToDefinition(
+        PluginDataCapability capability)
+    {
+        var publicFields = capability.Fields
+            .Where(field => field.IsPublic)
+            .Select(field => new PassStationFieldDefinitionDto
+            {
+                Key = field.Name,
+                Label = field.Name,
+                Type = field.DataType,
+                Required = !field.Nullable
+            })
+            .ToList();
+        return new PassStationTypeDefinitionDto
+        {
+            TypeKey = capability.TypeKey,
+            DisplayName = capability.DisplayName,
+            Description = string.Empty,
+            LegacyTypeKeys = capability.LegacyTypeKeys.ToList(),
+            Fields = publicFields,
+            ListColumns = CommonColumns
+                .Concat(publicFields.Select(field => field.Key))
+                .ToList(),
+            DetailSections =
+            [
+                new PassStationDetailSectionDto
+                {
+                    Title = capability.DisplayName,
+                    Fields = publicFields.Select(field => field.Key).ToList()
+                }
+            ],
+            SupportedModes = capability.QueryModes.ToList()
+        };
+    }
+
     public static Result<PagedList<PassStationListItemDto>>? ValidateListRequest(
         PassStationQueryRequest request,
         PassStationTypeDefinitionDto definition)
@@ -346,6 +495,14 @@ internal static class PassStationQueryRuntime
             }
 
             return new AllowedDeviceResolution(processDeviceIds, false, null);
+        }
+
+        if (request.DeviceId.HasValue)
+        {
+            return new AllowedDeviceResolution(
+                [request.DeviceId.Value],
+                false,
+                null);
         }
 
         if (!request.DeviceId.HasValue && allowedDeviceIds is { Count: 0 })

@@ -10,14 +10,14 @@ internal sealed class PassStationRecordRepository(IDbConnectionFactory connectio
         insert into pass_station_records
         (
             id, device_id, type_key, barcode, cell_result,
-            completed_time, received_at, deduplication_key, payload_jsonb
+            completed_time, received_at, completion_id, deduplication_key, payload_jsonb
         )
         values
         (
             @Id, @DeviceId, @TypeKey, @Barcode, @CellResult,
-            @CompletedTime, @ReceivedAt, @DeduplicationKey, cast(@PayloadJson as jsonb)
+            @CompletedTime, @ReceivedAt, @CompletionId, @DeduplicationKey, cast(@PayloadJson as jsonb)
         )
-        on conflict (type_key, deduplication_key, completed_time) do nothing;
+        on conflict do nothing;
         """;
 
     public async Task InsertBatchAsync(

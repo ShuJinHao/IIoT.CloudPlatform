@@ -15,7 +15,7 @@ namespace IIoT.MigrationWorkApp.SeedData;
 
 public static class SystemInitData
 {
-    internal const long SingleAdminSeedAdvisoryLockKey = 0x49494F545F41444D;
+    internal const long AdminSeedAdvisoryLockKey = 0x49494F545F41444D;
 
     internal static SeedRetryTarget CreateRetryTarget()
     {
@@ -66,7 +66,7 @@ public static class SystemInitData
             await dbContext.Database.BeginTransactionAsync(cancellationToken);
         try
         {
-            await AcquireSingleAdminSeedLockAsync(
+            await AcquireAdminSeedLockAsync(
                 dbContext,
                 cancellationToken);
             await SeedCoreAsync(
@@ -99,7 +99,6 @@ public static class SystemInitData
         var adminAssignments = await ReadCanonicalAdminAssignmentsAsync(
             dbContext,
             cancellationToken);
-        ThrowIfMultipleAdmins(adminAssignments, "SeedLockedPreflight");
 
         SeedAdminOptions? seedAdmin = null;
         ExistingAdminState? existingAdmin = null;
@@ -117,27 +116,35 @@ public static class SystemInitData
         }
         else
         {
-            existingAdmin = await RequireCompleteAdminAsync(
+            var existingAdmins = await RequireCompleteAdminsAsync(
                 dbContext,
-                adminAssignments[0],
+                adminAssignments,
                 cancellationToken);
 
-            if (!resetPasswordRequested)
+            if (resetPasswordRequested)
             {
-                ThrowIfAdminDisabled(existingAdmin);
+                seedAdmin = SeedAdminOptions.Load(configuration);
+                existingAdmin = EnsureResetTargetsExistingAdmin(
+                    seedAdmin,
+                    existingAdmins);
+                targetPassword = seedAdmin.RequirePassword();
             }
             else
             {
-                seedAdmin = SeedAdminOptions.Load(configuration);
-                EnsureResetTargetsExistingAdmin(seedAdmin, existingAdmin);
-                targetPassword = seedAdmin.RequirePassword();
+                ThrowIfNoEnabledActiveAdmin(existingAdmins, "SeedLockedPreflight");
+                existingAdmin = existingAdmins.First(admin =>
+                    admin.IdentityEnabled && admin.EmployeeActive);
             }
         }
 
-        await EnsureRoleAsync(
+        var adminRole = await EnsureRoleAsync(
             roleManager,
             SystemRoles.Admin,
             retryTarget.RoleIds[SystemRoles.Admin],
+            cancellationToken);
+        await EnsureAdminDelegatedAiReadPermissionsAsync(
+            roleManager,
+            adminRole,
             cancellationToken);
         await EnsureRolePermissionTemplatesAsync(
             roleManager,
@@ -166,23 +173,42 @@ public static class SystemInitData
         else
         {
             Console.WriteLine(
-                $"ℹ️ 检测到唯一且完整启用的管理员账号 [{existingAdmin.EmployeeNo}]，账号播种幂等跳过。");
+                $"ℹ️ 检测到 {adminAssignments.Count} 个规范 Admin，且至少一个账号启用、员工在职；账号播种幂等跳过。");
         }
 
-        await AssertSingleAdminInvariantAsync(dbContext, cancellationToken);
+        await AssertAdminInvariantAsync(dbContext, cancellationToken);
     }
 
-    internal static async Task EnsureSingleAdminAssignmentPreflightAsync(
+    internal static async Task EnsureAdminAssignmentPreflightAsync(
         IIoTDbContext dbContext,
+        IConfiguration configuration,
         CancellationToken cancellationToken)
     {
         var assignments = await ReadCanonicalAdminAssignmentsAsync(
             dbContext,
             cancellationToken);
-        ThrowIfMultipleAdmins(assignments, "MigrationPreflight");
+        if (assignments.Count == 0)
+        {
+            return;
+        }
+
+        var states = await RequireCompleteAdminsAsync(
+            dbContext,
+            assignments,
+            cancellationToken);
+
+        if (SeedAdminOptions.IsPasswordResetRequested(configuration))
+        {
+            var seedAdmin = SeedAdminOptions.Load(configuration);
+            _ = seedAdmin.RequirePassword();
+            _ = EnsureResetTargetsExistingAdmin(seedAdmin, states);
+            return;
+        }
+
+        ThrowIfNoEnabledActiveAdmin(states, "MigrationPreflight");
     }
 
-    private static async Task AcquireSingleAdminSeedLockAsync(
+    private static async Task AcquireAdminSeedLockAsync(
         IIoTDbContext dbContext,
         CancellationToken cancellationToken)
     {
@@ -193,7 +219,7 @@ public static class SystemInitData
         }
 
         await dbContext.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT pg_advisory_xact_lock({SingleAdminSeedAdvisoryLockKey});",
+            $"SELECT pg_advisory_xact_lock({AdminSeedAdvisoryLockKey});",
             cancellationToken);
     }
 
@@ -216,23 +242,21 @@ public static class SystemInitData
             .ToArrayAsync(cancellationToken);
     }
 
-    private static void ThrowIfMultipleAdmins(
+    private static async Task<IReadOnlyList<ExistingAdminState>> RequireCompleteAdminsAsync(
+        IIoTDbContext dbContext,
         IReadOnlyList<CanonicalAdminAssignment> assignments,
-        string conflictType)
+        CancellationToken cancellationToken)
     {
-        if (assignments.Count <= 1)
+        var states = new List<ExistingAdminState>(assignments.Count);
+        foreach (var assignment in assignments)
         {
-            return;
+            states.Add(await RequireCompleteAdminAsync(
+                dbContext,
+                assignment,
+                cancellationToken));
         }
 
-        var details = assignments.Select(assignment =>
-            $"accountId={assignment.AccountId}, "
-            + $"employeeNo={JsonSerializer.Serialize(assignment.EmployeeNo)}, "
-            + $"conflictType={conflictType}");
-        throw new InvalidOperationException(
-            "唯一 Admin 身份预检失败：检测到多个规范 Admin 账号。"
-            + " 未执行自动删除、降级、合并或账号改写。冲突账号："
-            + string.Join("; ", details));
+        return states;
     }
 
     private static async Task<ExistingAdminState> RequireCompleteAdminAsync(
@@ -274,7 +298,7 @@ public static class SystemInitData
                 StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "唯一 Admin 身份预检失败：Identity 与 Employee 工号不一致。"
+                "Admin 身份预检失败：Identity 与 Employee 工号不一致。"
                 + $" accountId={identityUser.Id}, "
                 + $"identityEmployeeNo={JsonSerializer.Serialize(identityUser.UserName)}, "
                 + $"employeeNo={JsonSerializer.Serialize(employee.EmployeeNo)}, "
@@ -295,47 +319,55 @@ public static class SystemInitData
         string? employeeNo)
     {
         return new InvalidOperationException(
-            "唯一 Admin 身份预检失败：管理员身份状态不完整。"
+            "Admin 身份预检失败：管理员身份状态不完整。"
             + $" accountId={accountId}, "
             + $"employeeNo={JsonSerializer.Serialize(employeeNo)}, "
             + $"conflictType={conflictType}。"
             + " 未执行自动补造、迁移或账号改写。");
     }
 
-    private static void ThrowIfAdminDisabled(ExistingAdminState existingAdmin)
+    private static void ThrowIfNoEnabledActiveAdmin(
+        IReadOnlyCollection<ExistingAdminState> existingAdmins,
+        string conflictType)
     {
-        if (existingAdmin.IdentityEnabled && existingAdmin.EmployeeActive)
+        if (existingAdmins.Any(admin => admin.IdentityEnabled && admin.EmployeeActive))
         {
             return;
         }
 
+        var details = existingAdmins.Select(admin =>
+            $"accountId={admin.AccountId}, "
+            + $"employeeNo={JsonSerializer.Serialize(admin.EmployeeNo)}, "
+            + $"identityEnabled={admin.IdentityEnabled}, "
+            + $"employeeActive={admin.EmployeeActive}");
         throw new InvalidOperationException(
-            "唯一 Admin 身份预检失败：管理员账号或员工档案已停用。"
-            + $" accountId={existingAdmin.AccountId}, "
-            + $"employeeNo={JsonSerializer.Serialize(existingAdmin.EmployeeNo)}, "
-            + "conflictType=AdminDisabledResetRequired。"
+            "Admin 身份预检失败：至少需要一个账号启用且员工在职的规范 Admin。"
+            + $" conflictType={conflictType}NoEnabledActiveAdmin。"
+            + " 当前 Admin："
+            + string.Join("; ", details)
+            + "。"
             + $" 请显式设置 {SeedAdminOptions.ResetPasswordKey}=true 后再执行修复。");
     }
 
-    private static void EnsureResetTargetsExistingAdmin(
+    private static ExistingAdminState EnsureResetTargetsExistingAdmin(
         SeedAdminOptions seedAdmin,
-        ExistingAdminState existingAdmin)
+        IReadOnlyCollection<ExistingAdminState> existingAdmins)
     {
-        if (string.Equals(
-            seedAdmin.EmployeeNo,
-            existingAdmin.EmployeeNo,
-            StringComparison.Ordinal))
+        var existingAdmin = existingAdmins.SingleOrDefault(admin =>
+            string.Equals(
+                seedAdmin.EmployeeNo,
+                admin.EmployeeNo,
+                StringComparison.Ordinal));
+        if (existingAdmin is not null)
         {
-            return;
+            return existingAdmin;
         }
 
         throw new InvalidOperationException(
-            "唯一 Admin 密码修复目标不匹配。"
-            + $" accountId={existingAdmin.AccountId}, "
-            + $"employeeNo={JsonSerializer.Serialize(existingAdmin.EmployeeNo)}, "
+            "Admin 密码修复目标不匹配。"
             + $"requestedEmployeeNo={JsonSerializer.Serialize(seedAdmin.EmployeeNo)}, "
             + "conflictType=SeedAdminNumberMismatch。"
-            + " 未创建第二个账号，也未修改现有管理员。");
+            + " 目标必须精确命中一个既有规范 Admin；未提升普通账号，也未修改其他管理员。");
     }
 
     private static async Task EnsureSeedTargetIsUnusedAsync(
@@ -387,6 +419,18 @@ public static class SystemInitData
 
     private static void ValidateRolePermissionTemplates()
     {
+        var adminAiReadValidation = CloudPermissionCatalog.Normalize(
+            SystemRolePermissionTemplates.AdminDelegatedAiReadPermissions);
+        if (!adminAiReadValidation.IsValid ||
+            adminAiReadValidation.Permissions.Count !=
+            SystemRolePermissionTemplates.AdminDelegatedAiReadPermissions.Count ||
+            adminAiReadValidation.Permissions.Any(permission =>
+                !permission.StartsWith("AiRead.", StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException(
+                "Admin 交互式 AiRead 权限模板包含未知、重复或非 AiRead 权限。");
+        }
+
         foreach (var (roleName, permissions) in SystemRolePermissionTemplates.Templates)
         {
             if (string.IsNullOrWhiteSpace(roleName)
@@ -417,6 +461,43 @@ public static class SystemInitData
             {
                 throw new InvalidOperationException(
                     "DeviceAdmin 内置模板不得重新携带设备注册或删除权限。");
+            }
+        }
+    }
+
+    private static async Task EnsureAdminDelegatedAiReadPermissionsAsync(
+        RoleManager<IdentityRole<Guid>> roleManager,
+        IdentityRole<Guid> adminRole,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var claims = await roleManager.GetClaimsAsync(adminRole);
+        cancellationToken.ThrowIfCancellationRequested();
+        var existingPermissions = claims
+            .Where(claim => claim.Type == IIoTClaimTypes.Permission)
+            .Select(claim => claim.Value.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var permission in SystemRolePermissionTemplates.AdminDelegatedAiReadPermissions)
+        {
+            if (existingPermissions.Contains(permission))
+            {
+                continue;
+            }
+
+            var addResult = await roleManager.AddClaimAsync(
+                adminRole,
+                new Claim(IIoTClaimTypes.Permission, permission));
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!addResult.Succeeded)
+            {
+                Console.WriteLine($"❌ Admin 交互式 AiRead 权限 [{permission}] 播种失败！");
+                foreach (var error in addResult.Errors)
+                {
+                    Console.WriteLine($"   - [{error.Code}]: {error.Description}");
+                }
+
+                throw new Exception("Admin 交互式 AiRead 权限播种失败。");
             }
         }
     }
@@ -635,7 +716,7 @@ public static class SystemInitData
                 StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "唯一 Admin 密码修复期间检测到身份漂移。"
+                "Admin 密码修复期间检测到身份漂移。"
                 + $" accountId={existingAdmin.AccountId}, "
                 + $"identityEmployeeNo={JsonSerializer.Serialize(identityUser.UserName)}, "
                 + $"employeeNo={JsonSerializer.Serialize(employee.EmployeeNo)}, "
@@ -669,10 +750,10 @@ public static class SystemInitData
         employee.Activate();
         await dbContext.SaveChangesAsync(cancellationToken);
         Console.WriteLine(
-            $"✅ 唯一管理员账号 [{existingAdmin.EmployeeNo}] 已准备按显式运维开关修复；原员工 ID 与姓名保持不变。");
+            $"✅ 管理员账号 [{existingAdmin.EmployeeNo}] 已准备按显式运维开关精确修复；原员工 ID 与姓名保持不变。");
     }
 
-    private static async Task AssertSingleAdminInvariantAsync(
+    private static async Task AssertAdminInvariantAsync(
         IIoTDbContext dbContext,
         CancellationToken cancellationToken)
     {
@@ -680,30 +761,18 @@ public static class SystemInitData
         var assignments = await ReadCanonicalAdminAssignmentsAsync(
             dbContext,
             cancellationToken);
-        if (assignments.Count != 1)
+        if (assignments.Count < 1)
         {
-            var details = assignments.Select(assignment =>
-                $"accountId={assignment.AccountId}, "
-                + $"employeeNo={JsonSerializer.Serialize(assignment.EmployeeNo)}, "
-                + "conflictType=FinalAdminCountInvalid");
             throw new InvalidOperationException(
-                "管理员播种提交前复核失败：规范 Admin 数量必须恰好为 1。"
-                + " 冲突账号："
-                + string.Join("; ", details));
+                "管理员播种提交前复核失败：规范 Admin 数量必须至少为 1。"
+                + " conflictType=FinalAdminCountInvalid。");
         }
 
-        var state = await RequireCompleteAdminAsync(
+        var states = await RequireCompleteAdminsAsync(
             dbContext,
-            assignments[0],
+            assignments,
             cancellationToken);
-        if (!state.IdentityEnabled || !state.EmployeeActive)
-        {
-            throw new InvalidOperationException(
-                "管理员播种提交前复核失败：唯一 Admin 必须保持启用且在职。"
-                + $" accountId={state.AccountId}, "
-                + $"employeeNo={JsonSerializer.Serialize(state.EmployeeNo)}, "
-                + "conflictType=FinalAdminDisabled。");
-        }
+        ThrowIfNoEnabledActiveAdmin(states, "FinalAdminInvariant");
     }
 
     private static async Task ResetPasswordAsync(

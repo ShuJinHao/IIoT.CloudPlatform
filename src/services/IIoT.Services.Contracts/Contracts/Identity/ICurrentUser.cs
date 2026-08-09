@@ -18,5 +18,9 @@ public interface ICurrentUser
 
     Guid? DeviceId { get; }
 
+    string? ClientCode => null;
+
+    Guid? InstallerGenerationId => null;
+
     bool IsAuthenticated { get; }
 }

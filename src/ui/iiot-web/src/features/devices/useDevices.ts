@@ -8,6 +8,7 @@ import {
   deleteDeviceApi,
   getDeviceDeletionImpactApi,
   getDeviceLedgerProcessOptionsApi,
+  getAvailableDevicePluginSeriesApi,
   getDevicePagedListApi,
   getDeviceProcessMigrationImpactApi,
   migrateDeviceProcessApi,
@@ -15,6 +16,7 @@ import {
   updateDeviceProfileApi,
   type DeviceDeletionImpactDto,
   type DeviceLedgerProcessOptionDto,
+  type AvailableDevicePluginSeriesDto,
   type DeviceListItemDto,
 } from './api';
 import {
@@ -46,7 +48,14 @@ export function useDevices() {
   const showEditModal = ref(false);
   const selectedDevice = ref<DeviceListItemDto | null>(null);
   const editTarget = ref<DeviceListItemDto | null>(null);
-  const registerForm = reactive({ deviceName: '', processId: null as string | null });
+  const registerForm = reactive({
+    deviceName: '',
+    processId: null as string | null,
+    pluginComponentId: null as string | null,
+  });
+  const availablePluginSeries = ref<AvailableDevicePluginSeriesDto[]>([]);
+  const availablePluginSeriesLoading = ref(false);
+  const availablePluginSeriesError = ref('');
   const editForm = reactive({ deviceName: '' });
   const migrationDialog = reactive<DeviceProcessMigrationDialogState>({
     show: false,
@@ -109,6 +118,12 @@ export function useDevices() {
       value: p.id,
     })),
   );
+  const availablePluginSeriesOptions = computed(() =>
+    availablePluginSeries.value.map((series) => ({
+      label: `${series.moduleId} · ${series.latestPublishedVersion}`,
+      value: series.componentId,
+    })),
+  );
   const canUpdateDevice = computed(() =>
     authStore.hasPermission(Permissions.Device.Update),
   );
@@ -140,6 +155,7 @@ export function useDevices() {
       { label: '人员设备授权', value: impact.employeeDeviceAccesses },
       { label: '设备 refresh token', value: impact.refreshTokenSessions },
       { label: 'PLC 运行状态', value: impact.edgeHostPlcRuntimeStates },
+      { label: '待激活安装凭证', value: impact.installerPendingCredentials },
     ];
   });
   const confirmDisabled = computed(() =>
@@ -249,18 +265,38 @@ export function useDevices() {
     }
     registerForm.deviceName = '';
     registerForm.processId = selectedProcessId.value;
+    registerForm.pluginComponentId = null;
+    availablePluginSeries.value = [];
+    availablePluginSeriesError.value = '';
     showRegisterModal.value = true;
+    availablePluginSeriesLoading.value = true;
+    try {
+      availablePluginSeries.value = await getAvailableDevicePluginSeriesApi(
+        selectedProcessId.value,
+      );
+    } catch (error) {
+      availablePluginSeriesError.value = errorMessage(
+        error,
+        '可用设备插件加载失败，请重试。',
+      );
+    } finally {
+      availablePluginSeriesLoading.value = false;
+    }
   }
 
   async function submitRegister() {
     const deviceName = registerForm.deviceName.trim();
-    if (!deviceName || !registerForm.processId) {
-      notifyWarning('请填写设备名称并选择所属工序。');
+    if (!deviceName || !registerForm.processId || !registerForm.pluginComponentId) {
+      notifyWarning('请填写设备名称并选择已发布、未绑定的独立设备插件。');
       return;
     }
     submitting.value = true;
     try {
-      const created = await registerDeviceApi({ deviceName, processId: registerForm.processId });
+      const created = await registerDeviceApi({
+        deviceName,
+        processId: registerForm.processId,
+        pluginComponentId: registerForm.pluginComponentId,
+      });
       showRegisterModal.value = false;
       openDetailPanel({ id: created.id, code: created.code, deviceName, processId: registerForm.processId });
       notifySuccess('设备已创建。请到客户端首装生成页为该设备生成绑定安装包。');
@@ -454,6 +490,9 @@ export function useDevices() {
     canDeleteDevice,
     canMigrateDevice,
     processOptions,
+    availablePluginSeriesOptions,
+    availablePluginSeriesLoading,
+    availablePluginSeriesError,
     processNameMap,
     showRegisterModal,
     registerForm,

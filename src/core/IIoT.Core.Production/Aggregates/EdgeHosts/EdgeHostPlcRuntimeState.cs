@@ -66,6 +66,8 @@ public sealed class EdgeHostPlcRuntimeState : BaseEntity<Guid>
 
     public string? LastError { get; private set; }
 
+    public bool? Enabled { get; private set; }
+
     public DateTime LastSeenAtUtc { get; private set; }
 
     public DateTime CreatedAtUtc { get; private set; }
@@ -80,7 +82,8 @@ public sealed class EdgeHostPlcRuntimeState : BaseEntity<Guid>
         string? stationCode = null,
         string? protocol = null,
         string? address = null,
-        string? lastError = null)
+        string? lastError = null,
+        bool? enabled = null)
     {
         var normalizedLastError = NormalizeOptional(lastError, LastErrorMaxLength);
 
@@ -92,6 +95,7 @@ public sealed class EdgeHostPlcRuntimeState : BaseEntity<Guid>
         Protocol = NormalizeOptional(protocol, ProtocolMaxLength);
         Address = NormalizeOptional(address, AddressMaxLength);
         LastError = normalizedLastError;
+        Enabled = enabled;
         UpdatedAtUtc = DateTime.UtcNow;
     }
 
@@ -175,29 +179,40 @@ public sealed record EdgeHostPlcRuntimeSnapshotContent(
     string? StationCode,
     string? Protocol,
     string? Address,
-    string? LastError);
+    string? LastError,
+    bool? Enabled = null);
 
 public static class EdgeHostPlcRuntimeSnapshotFingerprint
 {
     public static string Compute(
-        IEnumerable<EdgeHostPlcRuntimeSnapshotContent> states)
+        IEnumerable<EdgeHostPlcRuntimeSnapshotContent> states,
+        bool isAuthoritative = true,
+        string? configurationVersion = null,
+        bool explicitClear = false)
     {
         var canonical = JsonSerializer.Serialize(
-            states
-                .OrderBy(state => state.PlcCode, StringComparer.OrdinalIgnoreCase)
-                .Select(state => new
-                {
-                    state.PlcCode,
-                    state.ReportedPlcName,
-                    state.IsConnected,
-                    state.RuntimeStatus,
-                    state.ObservedAtUtc,
-                    state.StationCode,
-                    state.Protocol,
-                    state.Address,
-                    state.LastError
-                })
-                .ToArray());
+            new
+            {
+                isAuthoritative,
+                configurationVersion,
+                explicitClear,
+                states = states
+                    .OrderBy(state => state.PlcCode, StringComparer.OrdinalIgnoreCase)
+                    .Select(state => new
+                    {
+                        state.PlcCode,
+                        state.ReportedPlcName,
+                        state.IsConnected,
+                        state.RuntimeStatus,
+                        state.ObservedAtUtc,
+                        state.StationCode,
+                        state.Protocol,
+                        state.Address,
+                        state.LastError,
+                        state.Enabled
+                    })
+                    .ToArray()
+            });
         return Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))
             .ToLowerInvariant();

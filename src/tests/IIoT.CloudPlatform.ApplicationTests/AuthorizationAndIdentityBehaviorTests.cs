@@ -49,7 +49,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
 
     [Theory]
     [InlineData(IIoTClaimTypes.EdgeDeviceActor)]
-    [InlineData(IIoTClaimTypes.AiServiceActor)]
+    [InlineData(IIoTClaimTypes.AiDelegatedUserActor)]
     [InlineData(null)]
     public async Task CurrentUserDeviceAccessService_ShouldNotGrantGlobalScopeToNonHumanAdmin(
         string? actorType)
@@ -1102,7 +1102,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
 
     [Theory]
     [InlineData(IIoTClaimTypes.EdgeDeviceActor)]
-    [InlineData(IIoTClaimTypes.AiServiceActor)]
+    [InlineData(IIoTClaimTypes.AiDelegatedUserActor)]
     [InlineData(IIoTClaimTypes.EdgeReleasePublisherActor)]
     public async Task DeviceImpactAdminOnly_ShouldRejectMachineAdminClaims(string actorType)
     {
@@ -1359,7 +1359,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
 
     [Theory]
     [InlineData(IIoTClaimTypes.EdgeDeviceActor)]
-    [InlineData(IIoTClaimTypes.AiServiceActor)]
+    [InlineData(IIoTClaimTypes.AiDelegatedUserActor)]
     [InlineData(null)]
     public async Task AdminOnlyBehavior_ShouldRejectNonHumanAdminRoleClaim(
         string? actorType)
@@ -1556,7 +1556,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
 
     [Theory]
     [InlineData(IIoTClaimTypes.EdgeDeviceActor)]
-    [InlineData(IIoTClaimTypes.AiServiceActor)]
+    [InlineData(IIoTClaimTypes.AiDelegatedUserActor)]
     [InlineData(null)]
     public async Task AuthorizationBehavior_ShouldNotGrantAdminBypassToNonHumanActor(
         string? actorType)

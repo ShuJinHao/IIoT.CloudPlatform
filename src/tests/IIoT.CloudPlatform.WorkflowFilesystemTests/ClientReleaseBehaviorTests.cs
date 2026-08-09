@@ -1,16 +1,21 @@
 using System.Linq.Expressions;
 using System.IO.Compression;
+using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Aggregates.Devices;
+using IIoT.Core.Production.Aggregates.EdgeHosts;
 using IIoT.Core.Production.Contracts.ClientReleases;
+using IIoT.Core.Production.Contracts.EdgeHosts;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.Commands.ClientReleases;
 using IIoT.ProductionService.Commands.ClientVersions;
 using IIoT.ProductionService.Validators;
 using IIoT.ProductionService.Queries.ClientReleases;
+using IIoT.ProductionService.Queries.DeviceMetadata;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
@@ -32,6 +37,10 @@ namespace IIoT.CloudPlatform.WorkflowTests;
 
 public sealed class ClientReleaseBehaviorTests
 {
+    private const string PluginTestSigningKeyId = "workflow-test-publisher";
+    private static readonly Lazy<(string PrivateKeyPem, string PublicKeyPem)>
+        PluginTestSigningKeys = new(CreatePluginTestSigningKeys);
+
     private static ReportDeviceClientVersionHandler CreateVersionHandler(
         Guid deviceId,
         string clientCode,
@@ -41,8 +50,31 @@ public sealed class ClientReleaseBehaviorTests
         Func<DeviceReportWriteObservation, DeviceReportWriteObservation>?
             observationTransform = null)
         => new(
+            new TestCurrentUser
+            {
+                DeviceId = deviceId,
+                ClientCode = clientCode,
+                ActorType = IIoTClaimTypes.EdgeDeviceActor,
+                IsAuthenticated = true
+            },
             new StubDeviceIdentityQueryService(
                 new DeviceIdentitySnapshot(deviceId, clientCode)),
+            new StubDevicePluginBindingQueryService
+            {
+                Bindings =
+                [
+                    new DevicePluginBindingReadItem(
+                        Guid.NewGuid(),
+                        deviceId,
+                        Guid.NewGuid(),
+                        "Homogenization",
+                        "Homogenization",
+                        "CP",
+                        "stable",
+                        "win-x64",
+                        "[]")
+                ]
+            },
             store,
             unitOfWork ?? new RecordingUnitOfWork(),
             new InMemoryDeviceReportObservationReader(
@@ -380,6 +412,14 @@ public sealed class ClientReleaseBehaviorTests
             Assert.EndsWith("installer-artifact.json", hostRelease.DownloadUrl, StringComparison.Ordinal);
             Assert.Equal(ClientReleaseFileFacts.ComputeSha256(installerStub), hostRelease.Sha256);
             Assert.Equal(new FileInfo(installerStub).Length, hostRelease.PackageSize);
+            Assert.Equal(
+                ClientReleaseFileFacts.ComputeSha256(Path.Combine(
+                    edgeRoot,
+                    "installers",
+                    "stable",
+                    "1.2.0",
+                    "host-file-manifest.json")),
+                hostRelease.FileManifestSha256);
             foreach (var fileArtifact in hostRelease.Artifacts.Where(artifact =>
                          artifact.ArtifactKind is ClientReleaseArtifactKind.ManifestFile
                              or ClientReleaseArtifactKind.PackageFile
@@ -481,7 +521,7 @@ public sealed class ClientReleaseBehaviorTests
     [InlineData("modules-empty-with-plugin-files", "空插件清单仍包含插件文件")]
     [InlineData("module-null", "非法插件声明")]
     [InlineData("module-version-traversal", "非法插件声明")]
-    [InlineData("legacy-binding-schema", "installerBindingSchemaVersion=2")]
+    [InlineData("legacy-binding-schema", "installerBindingSchemaVersion=3")]
     public async Task PublishEdgeReleaseBundleHandler_ShouldRejectInvalidModuleOwnershipBeforePublishing(
         string invalidCase,
         string expectedError)
@@ -670,6 +710,12 @@ public sealed class ClientReleaseBehaviorTests
                 "Homogenization"));
             Assert.Equal("1.1.0", release.Version);
             Assert.Equal("独立插件更新", release.ReleaseNotes);
+            Assert.True(ClientReleaseFileFacts.IsSha256(
+                release.DependencyClosureSha256));
+            Assert.Equal("2.0.12", release.DependencyHostVersion);
+            Assert.Equal(
+                new string('f', 64),
+                release.DependencyHostFileManifestSha256);
             Assert.StartsWith("/edge-updates/plugins/stable/Homogenization/1.1.0/", release.DownloadUrl);
             var package = Assert.Single(Directory.GetFiles(Path.Combine(edgeRoot, "plugins", "stable", "Homogenization", "1.1.0"), "*.zip"));
             AssertGatewayReadableDirectory(edgeRoot);
@@ -1297,11 +1343,11 @@ public sealed class ClientReleaseBehaviorTests
     }
 
     [Fact]
-    public async Task PublishEdgePluginPackageHandler_PostCommitExceptionSimulation_ShouldRecoverExactUppercaseHash()
+    public async Task PublishEdgePluginPackageHandler_PostCommitExceptionSimulation_ShouldRecoverExactCanonicalHash()
     {
         const string sensitiveFailure = "/private/release/SECRET-post-commit-response";
         var edgeRoot = CreateTempDirectory("iiot-edge-plugin-upload-root");
-        var wrapper = CreatePluginReleaseWrapper("Homogenization", "1.1.5", uppercaseSha256: true);
+        var wrapper = CreatePluginReleaseWrapper("Homogenization", "1.1.5");
         try
         {
             var repository = new InMemoryRepository<ClientReleaseComponent>
@@ -5239,6 +5285,7 @@ public sealed class ClientReleaseBehaviorTests
                 Options.Create(new EdgeInstallerArtifactOptions { RootPath = Path.Combine(edgeRoot, "installers") }),
                 committedComponentRepository,
                 new InMemoryDeviceClientStateStore(),
+                new StubDevicePluginBindingQueryService(),
                 deletionStore,
                 crashingProcessor,
                 new TestCurrentUser(),
@@ -5342,6 +5389,7 @@ public sealed class ClientReleaseBehaviorTests
                 processorOptions,
                 componentRepository,
                 new InMemoryDeviceClientStateStore(),
+                new StubDevicePluginBindingQueryService(),
                 deletionStore,
                 new CancellationAfterCommitProcessor(processor, () =>
                 {
@@ -6480,6 +6528,7 @@ public sealed class ClientReleaseBehaviorTests
                 Options.Create(new EdgeInstallerArtifactOptions { RootPath = Path.Combine(edgeRoot, "installers") }),
                 componentRepository,
                 new InMemoryDeviceClientStateStore(),
+                new StubDevicePluginBindingQueryService(),
                 deletionStore,
                 crashingProcessor,
                 new TestCurrentUser(),
@@ -6583,6 +6632,7 @@ public sealed class ClientReleaseBehaviorTests
                 Options.Create(new EdgeInstallerArtifactOptions { RootPath = Path.Combine(edgeRoot, "installers") }),
                 componentRepository,
                 new InMemoryDeviceClientStateStore(),
+                new StubDevicePluginBindingQueryService(),
                 deletionStore,
                 crashingProcessor,
                 new TestCurrentUser(),
@@ -7256,6 +7306,24 @@ public sealed class ClientReleaseBehaviorTests
         IDeviceClientStateStore? clientStateStore = null)
     {
         var source = new ClientReleaseUploadTestSource();
+        var trustedKeysPath = Path.Combine(
+            edgeRoot,
+            ".test-trusted-plugin-publishers.json");
+        WriteFile(
+            trustedKeysPath,
+            JsonSerializer.Serialize(new
+            {
+                schemaVersion = 1,
+                keys = new[]
+                {
+                    new
+                    {
+                        keyId = PluginTestSigningKeyId,
+                        algorithm = EdgePayloadManifestContract.Algorithm,
+                        publicKeyPem = PluginTestSigningKeys.Value.PublicKeyPem
+                    }
+                }
+            }));
         var handler = new PublishEdgePluginPackageHandler(
             ClientReleaseUploadTestSupport.CreateCoordinator(edgeRoot, source),
             componentRepository,
@@ -7264,6 +7332,10 @@ public sealed class ClientReleaseBehaviorTests
             clientStateStore ?? new InMemoryDeviceClientStateStore(),
             new TestCurrentUser(),
             auditTrail,
+            Options.Create(new PluginReleaseSignatureOptions
+            {
+                TrustedPublicKeysFile = trustedKeysPath
+            }),
             NullLogger<PublishEdgePluginPackageHandler>.Instance);
         return (handler, source);
     }
@@ -7287,6 +7359,190 @@ public sealed class ClientReleaseBehaviorTests
         return await publisher.Handler.Handle(
             new PublishEdgePluginPackageCommand(),
             cancellationToken);
+    }
+
+    [Fact]
+    public async Task PublishEdgeReleaseBundleHandler_ShouldRejectChangedHostFileManifestDigest()
+    {
+        var edgeRoot = CreateTempDirectory("iiot-edge-upload-root");
+        var bundle = CreateEdgeReleaseBundle(
+            "1.2.10",
+            mutateManifest: manifest =>
+                manifest["hostFileManifestSha256"] = new string('0', 64));
+        try
+        {
+            var handler = CreatePublishHandler(
+                edgeRoot,
+                new InMemoryRepository<ClientReleaseComponent>(),
+                new NoopRetentionService(),
+                new RecordingAuditTrailService());
+
+            var result = await PublishBundleAsync(handler, bundle.ZipPath);
+
+            Assert.False(result.IsSuccess);
+            Assert.Contains(
+                result.Errors ?? [],
+                error => error.Contains(
+                    "Host 逐文件清单",
+                    StringComparison.Ordinal));
+        }
+        finally
+        {
+            TryDeleteDirectory(edgeRoot);
+            bundle.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task DeviceSchemaMetadata_ShouldRejectMismatchedInstalledPackageDigest()
+    {
+        var result = await ResolveSchemaMetadataAsync(
+            installedPackageSha256: new string('e', 64),
+            snapshotReceivedAtUtc: DateTime.UtcNow,
+            isAuthoritative: true);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains(
+            result.Errors ?? [],
+            error => error.Contains("包摘要", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task DeviceSchemaMetadata_ShouldRequireFreshAuthoritativePlcSnapshot()
+    {
+        var stale = await ResolveSchemaMetadataAsync(
+            installedPackageSha256: new string('d', 64),
+            snapshotReceivedAtUtc: DateTime.UtcNow.AddMinutes(-4),
+            isAuthoritative: true);
+        var unavailable = await ResolveSchemaMetadataAsync(
+            installedPackageSha256: new string('d', 64),
+            snapshotReceivedAtUtc: DateTime.UtcNow,
+            isAuthoritative: false);
+        var current = await ResolveSchemaMetadataAsync(
+            installedPackageSha256: new string('d', 64),
+            snapshotReceivedAtUtc: DateTime.UtcNow,
+            isAuthoritative: true);
+
+        Assert.False(stale.IsSuccess);
+        Assert.False(unavailable.IsSuccess);
+        Assert.True(current.IsSuccess, string.Join("; ", current.Errors ?? []));
+        Assert.Single(current.Value!);
+    }
+
+    private static async Task<Result<IReadOnlyList<DeviceDataSchemaDto>>>
+        ResolveSchemaMetadataAsync(
+            string installedPackageSha256,
+            DateTime snapshotReceivedAtUtc,
+            bool isAuthoritative)
+    {
+        const string moduleId = "P1-DIECUT";
+        const string clientCode = "DEV-SCHEMA001";
+        const string capabilityJson =
+            """
+            [{
+              "typeKey":"diecut.completed",
+              "displayName":"模切完成记录",
+              "schemaVersion":1,
+              "schemaName":"diecut-completed",
+              "scope":"plc",
+              "legacyTypeKeys":[],
+              "queryModes":["device-time"],
+              "publicFields":["plcCode"],
+              "fields":[{"name":"plcCode","dataType":"string","nullable":false}]
+            }]
+            """;
+        var device = new Device("P1正极模切", clientCode, Guid.NewGuid());
+        var component = ClientReleaseComponent.CreatePlugin(
+            moduleId,
+            "P1正极模切",
+            null,
+            null,
+            null,
+            "stable",
+            "win-x64");
+        component.ConfigurePluginContract(
+            "DIECUT",
+            "docs/plugins/P1.md",
+            manifestSchemaVersion: 3,
+            new string('a', 64),
+            capabilityJson);
+        var version = component.UpsertPluginVersion(
+            "2.0.12",
+            "2.0.0",
+            "2.0.0",
+            "2.9.9",
+            "net10.0",
+            "/edge-updates/plugins/stable/P1-DIECUT/2.0.12/P1.zip",
+            new string('d', 64),
+            1024,
+            null,
+            "[]",
+            ClientReleaseStatus.Published,
+            null,
+            "IIoT");
+        version.ConfigurePluginManifest(
+            capabilityJson,
+            new string('a', 64),
+            new string('b', 64),
+            "2.0.12",
+            new string('c', 64));
+
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.Items.Add(device);
+        var componentRepository =
+            new InMemoryRepository<ClientReleaseComponent>();
+        componentRepository.Items.Add(component);
+        var bindingService = new StubDevicePluginBindingQueryService
+        {
+            Bindings =
+            [
+                new DevicePluginBindingReadItem(
+                    Guid.NewGuid(),
+                    device.Id,
+                    component.Id,
+                    moduleId,
+                    component.DisplayName,
+                    "DIECUT",
+                    "stable",
+                    "win-x64",
+                    capabilityJson)
+            ]
+        };
+        var stateStore = new InMemoryDeviceClientStateStore();
+        stateStore.VersionSnapshots.Add(new DeviceClientVersionSnapshot(
+            device.Id,
+            clientCode,
+            "2.0.12",
+            "2.0.0",
+            "stable",
+            DateTime.UtcNow,
+            [
+                new DeviceClientPluginVersion(
+                    moduleId,
+                    component.DisplayName,
+                    version.Version,
+                    version.HostApiVersion,
+                    enabled: true,
+                    packageSha256: installedPackageSha256)
+            ]));
+        var state = new DeviceClientState(device.Id, clientCode);
+        state.ApplyPlcSnapshot(
+            snapshotReceivedAtUtc,
+            snapshotReceivedAtUtc,
+            new string('f', 64),
+            isAuthoritative,
+            "v1");
+        stateStore.States.Add(state);
+
+        return await DevicePluginMetadataResolver.ResolveSchemasAsync(
+            device.Id,
+            null,
+            deviceRepository,
+            componentRepository,
+            bindingService,
+            stateStore,
+            new StubEdgeHostPlcRuntimeStateQueryService(),
+            CancellationToken.None);
     }
 
     private static EdgeReleaseBundleFixture CreateEdgeReleaseBundle(
@@ -7331,13 +7587,40 @@ public sealed class ClientReleaseBehaviorTests
         mutateVelopackRoot?.Invoke(velopackRoot);
 
         var setupPath = Path.Combine(installerRoot, "IIoT.Edge.Setup.exe");
+        var launcherRoot = Path.Combine(installerRoot, "launcher");
         var hostRoot = Path.Combine(installerRoot, "host");
+        var hostFileFacts = Directory
+            .EnumerateFiles(hostRoot, "*", SearchOption.AllDirectories)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Select(path => new
+            {
+                path = Path.GetRelativePath(hostRoot, path).Replace('\\', '/'),
+                size = new FileInfo(path).Length,
+                sha256 = ClientReleaseFileFacts.ComputeSha256(path),
+                type = "file",
+                component = "Host",
+                version
+            })
+            .ToArray();
+        var hostFileManifestPath = Path.Combine(
+            installerRoot,
+            "host-file-manifest.json");
+        File.WriteAllText(
+            hostFileManifestPath,
+            JsonSerializer.Serialize(new
+            {
+                schemaVersion = 1,
+                component = "Host",
+                version,
+                files = hostFileFacts
+            }, new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+            new UTF8Encoding(false));
         var velopackSetupPath = Path.Combine(installerRoot, "velopack", "IIoT.Edge.Setup.exe");
         var pluginRoot = Path.Combine(installerRoot, "plugins", "Homogenization");
         var manifest = new
         {
-            schemaVersion = ClientReleaseCatalogSchema.Version,
-            installerBindingSchemaVersion = 2,
+            schemaVersion = 3,
+            installerBindingSchemaVersion = 3,
             channel = "stable",
             version,
             hostApiVersion = "1.0.0",
@@ -7352,9 +7635,15 @@ public sealed class ClientReleaseBehaviorTests
             installerStubSha256 = ClientReleaseFileFacts.ComputeSha256(setupPath),
             installerStubSize = new FileInfo(setupPath).Length,
             launcherDirectory = "launcher",
+            launcherDirectorySha256 = ClientReleaseFileFacts.ComputeDirectorySha256(launcherRoot),
+            launcherDirectorySize = ClientReleaseFileFacts.GetDirectorySize(launcherRoot),
             hostDirectory = "host",
             hostDirectorySha256 = ClientReleaseFileFacts.ComputeDirectorySha256(hostRoot),
             hostDirectorySize = ClientReleaseFileFacts.GetDirectorySize(hostRoot),
+            hostFileManifest = "host-file-manifest.json",
+            hostFileManifestSha256 = ClientReleaseFileFacts.ComputeSha256(
+                hostFileManifestPath),
+            hostFileManifestFileCount = hostFileFacts.Length,
             pluginsRoot = "plugins",
             velopackSetupFile = "velopack/IIoT.Edge.Setup.exe",
             velopackSetupSha256 = ClientReleaseFileFacts.ComputeSha256(velopackSetupPath),
@@ -7400,11 +7689,11 @@ public sealed class ClientReleaseBehaviorTests
         string moduleId,
         string version,
         Action<string>? mutatePackageRoot = null,
-        bool uppercaseSha256 = false,
         string? createdAtUtcText = null)
     {
         var workingRoot = CreateTempDirectory("iiot-edge-plugin-wrapper");
         var packageRoot = Path.Combine(workingRoot, "package-root");
+        var entryAssembly = $"{moduleId}.dll";
         WriteFile(
             Path.Combine(packageRoot, "plugin.json"),
             $$"""
@@ -7415,11 +7704,112 @@ public sealed class ClientReleaseBehaviorTests
               "hostApiVersion": "1.0.0",
               "minHostVersion": "1.0.0",
               "maxHostVersion": "99.0.0",
-              "entryAssembly": "{{moduleId}}.dll"
+              "entryAssembly": "{{entryAssembly}}"
             }
             """);
-        WriteFile(Path.Combine(packageRoot, $"{moduleId}.dll"), $"plugin {version}");
+        var entryAssemblyPath = Path.Combine(packageRoot, entryAssembly);
+        WriteFile(entryAssemblyPath, $"plugin {version}");
+        var dataCapabilitiesPath = Path.Combine(
+            packageRoot,
+            "data-capabilities.json");
+        WriteFile(
+            dataCapabilitiesPath,
+            JsonSerializer.Serialize(new
+            {
+                schemaVersion = 1,
+                moduleId,
+                capabilities = new[]
+                {
+                    new
+                    {
+                        typeKey = "homogenization.completed",
+                        displayName = "匀浆完成记录",
+                        schemaVersion = 1,
+                        schemaName = "homogenization-completed",
+                        scope = "plc",
+                        legacyTypeKeys = Array.Empty<string>(),
+                        queryModes = new[] { "device-time" },
+                        publicFields = new[] { "plcCode" },
+                        fields = new[]
+                        {
+                            new
+                            {
+                                name = "plcCode",
+                                dataType = "string",
+                                nullable = false
+                            }
+                        }
+                    }
+                }
+            }));
+        const string dependencyHostVersion = "2.0.12";
+        var dependencyHostFileManifestSha256 = new string('f', 64);
+        var dependencyClosurePath = Path.Combine(
+            packageRoot,
+            "dependency-closure.json");
+        WriteFile(
+            dependencyClosurePath,
+            JsonSerializer.Serialize(new
+            {
+                schemaVersion = 2,
+                entryAssembly,
+                plugin = new
+                {
+                    moduleId,
+                    version,
+                    targetRuntime = "win-x64"
+                },
+                host = new
+                {
+                    component = "IIoT.Edge.Host",
+                    version = dependencyHostVersion,
+                    fileManifestSha256 = dependencyHostFileManifestSha256
+                },
+                dependencies = new[]
+                {
+                    new
+                    {
+                        library = moduleId,
+                        asset = entryAssembly,
+                        kind = "runtime",
+                        publishPath = entryAssembly,
+                        source = "plugin",
+                        owner = moduleId,
+                        size = new FileInfo(entryAssemblyPath).Length,
+                        sha256 = ClientReleaseFileFacts.ComputeSha256(entryAssemblyPath),
+                        version
+                    }
+                }
+            }));
         mutatePackageRoot?.Invoke(packageRoot);
+
+        var fileFacts = Directory
+            .EnumerateFiles(packageRoot, "*", SearchOption.AllDirectories)
+            .Where(path => !string.Equals(
+                Path.GetFileName(path),
+                "file-manifest.json",
+                StringComparison.OrdinalIgnoreCase))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Select(path => new
+            {
+                path = Path.GetRelativePath(packageRoot, path).Replace('\\', '/'),
+                size = new FileInfo(path).Length,
+                sha256 = ClientReleaseFileFacts.ComputeSha256(path),
+                type = "file",
+                component = moduleId,
+                version
+            })
+            .ToArray();
+        var fileManifestPath = Path.Combine(packageRoot, "file-manifest.json");
+        WriteFile(
+            fileManifestPath,
+            JsonSerializer.Serialize(new
+            {
+                schemaVersion = 1,
+                component = moduleId,
+                version,
+                files = fileFacts
+            }));
 
         var packageFileName = $"IIoT.EdgePlugin.{moduleId}-{version}-win-x64.zip";
         var packagePath = Path.Combine(workingRoot, packageFileName);
@@ -7428,28 +7818,72 @@ public sealed class ClientReleaseBehaviorTests
         Directory.CreateDirectory(Path.Combine(wrapperRoot, "plugin"));
         File.Copy(packagePath, Path.Combine(wrapperRoot, "plugin", packageFileName));
         var packageSha256 = ClientReleaseFileFacts.ComputeSha256(packagePath);
-        var manifest = new
+        var evidenceRoot = Path.Combine(wrapperRoot, "evidence");
+        var businessDocumentPath = Path.Combine(
+            evidenceRoot,
+            "business-document.md");
+        WriteFile(
+            businessDocumentPath,
+            $"# {moduleId} {version} 独立设备插件业务文档\n");
+        var createdAtUtc = DateTime.Parse(
+            createdAtUtcText ?? DateTime.UtcNow.ToString("O"),
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.RoundtripKind);
+        var manifest = new PublishEdgePluginPackageHandler.PluginPackageReleaseManifest
         {
-            packageSchemaVersion = 1,
-            channel = "stable",
-            moduleId,
-            processType = "homogenization",
-            displayName = "匀浆",
-            version,
-            hostApiVersion = "1.0.0",
-            minHostVersion = "1.0.0",
-            maxHostVersion = "99.0.0",
-            dependencies = Array.Empty<string>(),
-            targetRuntime = "win-x64",
-            targetFramework = "net10.0",
-            packageFileName,
-            packageSize = new FileInfo(packagePath).Length,
-            sha256 = uppercaseSha256 ? packageSha256.ToUpperInvariant() : packageSha256,
-            signature = "",
-            publisher = "IIoT",
-            releaseNotes = "独立插件更新",
-            createdAtUtc = createdAtUtcText ?? DateTime.UtcNow.ToString("O")
+            PackageSchemaVersion = 3,
+            Channel = "stable",
+            ModuleId = moduleId,
+            ProcessType = "homogenization",
+            BusinessDocumentRef = $"docs/plugins/{moduleId}.md",
+            BusinessDocumentSha256 = ClientReleaseFileFacts.ComputeSha256(
+                businessDocumentPath),
+            FileManifestSha256 = ClientReleaseFileFacts.ComputeSha256(
+                fileManifestPath),
+            FileManifestFileCount = fileFacts.Length,
+            DataCapabilitiesFileName = "data-capabilities.json",
+            DataCapabilitiesSha256 = ClientReleaseFileFacts.ComputeSha256(
+                dataCapabilitiesPath),
+            DependencyClosureSha256 = ClientReleaseFileFacts.ComputeSha256(
+                dependencyClosurePath),
+            DependencyCount = 1,
+            DependencyHostComponent = "IIoT.Edge.Host",
+            DependencyHostVersion = dependencyHostVersion,
+            DependencyHostFileManifestSha256 =
+                dependencyHostFileManifestSha256,
+            DisplayName = "匀浆",
+            Version = version,
+            HostApiVersion = "1.0.0",
+            MinHostVersion = "1.0.0",
+            MaxHostVersion = "99.0.0",
+            Dependencies = [],
+            TargetRuntime = "win-x64",
+            TargetFramework = "net10.0",
+            PackageFileName = packageFileName,
+            PackageSize = new FileInfo(packagePath).Length,
+            Sha256 = packageSha256,
+            Publisher = "IIoT",
+            SourceCommit = new string('a', 40),
+            ReleaseNotes = "独立插件更新",
+            CreatedAtUtc = createdAtUtc,
+            ReleaseSignature = new PublishEdgePluginPackageHandler
+                .PluginReleaseSignatureEnvelope
+            {
+                Algorithm = EdgePayloadManifestContract.Algorithm,
+                KeyId = PluginTestSigningKeyId,
+                Value = "pending"
+            }
         };
+        using (var rsa = RSA.Create())
+        {
+            rsa.ImportFromPem(PluginTestSigningKeys.Value.PrivateKeyPem);
+            manifest.ReleaseSignature.Value = Convert.ToBase64String(
+                rsa.SignData(
+                    PublishEdgePluginPackageHandler
+                        .CanonicalizeReleaseSignature(manifest),
+                    HashAlgorithmName.SHA256,
+                    RSASignaturePadding.Pss));
+        }
         File.WriteAllText(
             Path.Combine(wrapperRoot, "plugin-release.json"),
             JsonSerializer.Serialize(manifest, new JsonSerializerOptions(JsonSerializerDefaults.Web)),
@@ -7458,6 +7892,15 @@ public sealed class ClientReleaseBehaviorTests
         var zipPath = Path.Combine(workingRoot, "wrapper.zip");
         ZipFile.CreateFromDirectory(wrapperRoot, zipPath);
         return new EdgeReleaseBundleFixture(workingRoot, zipPath);
+    }
+
+    private static (string PrivateKeyPem, string PublicKeyPem)
+        CreatePluginTestSigningKeys()
+    {
+        using var rsa = RSA.Create(2048);
+        return (
+            rsa.ExportRSAPrivateKeyPem(),
+            rsa.ExportSubjectPublicKeyInfoPem());
     }
 
     private static string CreateTempDirectory(string prefix)
@@ -7716,7 +8159,12 @@ public sealed class ClientReleaseBehaviorTests
                             artifact.RelativePath,
                             artifact.Sha256,
                             artifact.Size))
-                        .ToList());
+                        .ToList(),
+                    version.DataCapabilitiesJson,
+                    version.FileManifestSha256,
+                    version.DependencyClosureSha256,
+                    version.DependencyHostVersion,
+                    version.DependencyHostFileManifestSha256);
                 observations.Add(mutate is null ? observation : mutate(observation));
             }
 
@@ -7736,9 +8184,72 @@ public sealed class ClientReleaseBehaviorTests
 
         public IReadOnlyCollection<string> Permissions { get; init; } = [];
 
-        public Guid? DeviceId => null;
+        public Guid? DeviceId { get; init; }
 
-        public bool IsAuthenticated => true;
+        public string? ClientCode { get; init; }
+
+        public Guid? InstallerGenerationId { get; init; }
+
+        public bool IsAuthenticated { get; init; } = true;
+    }
+
+    private sealed class StubDevicePluginBindingQueryService
+        : IDevicePluginBindingQueryService
+    {
+        public IReadOnlyList<DevicePluginBindingReadItem> Bindings { get; init; } = [];
+
+        public Task<IReadOnlyList<AvailableDevicePluginSeriesItem>> GetAvailableAsync(
+            string supportedProcessType,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<AvailableDevicePluginSeriesItem>>([]);
+
+        public Task<DevicePluginBindingReadItem?> GetByDeviceIdAsync(
+            Guid deviceId,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(
+                Bindings.SingleOrDefault(binding => binding.DeviceId == deviceId));
+
+        public Task<IReadOnlyList<DevicePluginBindingReadItem>> GetByDeviceIdsAsync(
+            IReadOnlyCollection<Guid> deviceIds,
+            CancellationToken cancellationToken = default)
+        {
+            var requested = deviceIds.ToHashSet();
+            return Task.FromResult<IReadOnlyList<DevicePluginBindingReadItem>>(
+                Bindings.Where(binding => requested.Contains(binding.DeviceId)).ToArray());
+        }
+
+        public Task<bool> IsComponentBoundAsync(
+            Guid componentId,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(
+                Bindings.Any(binding => binding.ComponentId == componentId));
+    }
+
+    private sealed class StubEdgeHostPlcRuntimeStateQueryService
+        : IEdgeHostPlcRuntimeStateQueryService
+    {
+        public IReadOnlyList<EdgeHostPlcRuntimeState> States { get; init; } = [];
+
+        public Task<IReadOnlyList<EdgeHostPlcRuntimeState>> GetByIdentityAsync(
+            Guid deviceId,
+            string clientCode,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<EdgeHostPlcRuntimeState>>(
+                States.Where(state =>
+                        state.DeviceId == deviceId
+                        && string.Equals(
+                            state.ClientCode,
+                            clientCode,
+                            StringComparison.OrdinalIgnoreCase))
+                    .ToArray());
+
+        public Task<IReadOnlyList<EdgeHostPlcRuntimeState>> GetByDevicesAsync(
+            IReadOnlyCollection<Guid>? deviceIds = null,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<EdgeHostPlcRuntimeState>>(
+                States.Where(state =>
+                        deviceIds is null || deviceIds.Contains(state.DeviceId))
+                    .ToArray());
     }
 
     private sealed class StubCurrentUserDeviceAccessService : ICurrentUserDeviceAccessService
@@ -8167,6 +8678,7 @@ public sealed class ClientReleaseBehaviorTests
             Options.Create(new EdgeInstallerArtifactOptions { RootPath = Path.Combine(edgeRoot, "installers") }),
             componentRepository,
             clientStateStore ?? new InMemoryDeviceClientStateStore(),
+            new StubDevicePluginBindingQueryService(),
             deletionStore,
             deletionProcessor ?? new ClientReleaseComponentDeletionProcessor(
                 Options.Create(new EdgeInstallerArtifactOptions

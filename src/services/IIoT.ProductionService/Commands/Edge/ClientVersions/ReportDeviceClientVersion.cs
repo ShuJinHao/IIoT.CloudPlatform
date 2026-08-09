@@ -3,6 +3,8 @@ using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.Persistence;
+using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.CrossCutting.Persistence;
 using IIoT.SharedKernel.Messaging;
@@ -14,7 +16,9 @@ public sealed record DeviceClientPluginVersionReportItem(
     string ModuleId,
     string? DisplayName,
     string Version,
-    string? HostApiVersion);
+    string? HostApiVersion,
+    string? PackageSha256 = null,
+    string? ClientCode = null);
 
 [DistributedLock("iiot:lock:device-report:{DeviceId}", TimeoutSeconds = 5)]
 public sealed record ReportDeviceClientVersionCommand(
@@ -31,7 +35,9 @@ public sealed record ReportDeviceClientVersionCommand(
     : IDeviceCommand<Result<DeviceClientVersionReportResultDto>>;
 
 public sealed class ReportDeviceClientVersionHandler(
+    ICurrentUser currentUser,
     IDeviceIdentityQueryService deviceIdentityQueryService,
+    IDevicePluginBindingQueryService bindingQueryService,
     IDeviceClientStateStore clientStateStore,
     IUnitOfWork unitOfWork,
     IDeviceReportWriteObservationReader observationReader,
@@ -44,6 +50,38 @@ public sealed class ReportDeviceClientVersionHandler(
     {
         var clientCode = request.ClientCode?.Trim().ToUpperInvariant()
                          ?? string.Empty;
+        if (currentUser.DeviceId != request.DeviceId
+            || !string.Equals(
+                currentUser.ClientCode,
+                clientCode,
+                StringComparison.Ordinal))
+        {
+            return Result.Forbidden("JWT 设备身份与版本上报目标不一致。");
+        }
+
+        var authoritativeBinding = await bindingQueryService.GetByDeviceIdAsync(
+            request.DeviceId,
+            cancellationToken);
+        if (authoritativeBinding is null)
+            return Result.Forbidden("设备没有权威一对一插件绑定。");
+        var reportedModules = (request.InstalledPlugins ?? [])
+            .Select(plugin => plugin.ModuleId?.Trim())
+            .Concat(request.EnabledPlugins ?? [])
+            .Where(moduleId => !string.IsNullOrWhiteSpace(moduleId))
+            .ToArray();
+        if (reportedModules.Any(moduleId => !string.Equals(
+                moduleId,
+                authoritativeBinding.ModuleId,
+                StringComparison.OrdinalIgnoreCase))
+            || (request.InstalledPlugins ?? []).Any(plugin =>
+                plugin.ClientCode is not null
+                && !string.Equals(
+                    plugin.ClientCode.Trim().ToUpperInvariant(),
+                    clientCode,
+                    StringComparison.Ordinal)))
+        {
+            return Result.Forbidden("版本上报包含不属于当前 ClientCode 的插件项。");
+        }
         var reportedAtUtc = NormalizeUtc(request.ReportedAtUtc);
         var receivedAtUtc = NormalizeUtc(
             timeProvider.GetUtcNow().UtcDateTime);
@@ -70,7 +108,8 @@ public sealed class ReportDeviceClientVersionHandler(
                     plugin.DisplayName,
                     plugin.Version,
                     plugin.HostApiVersion,
-                    enabled.Contains(plugin.ModuleId));
+                    enabled.Contains(plugin.ModuleId),
+                    plugin.PackageSha256);
             })
             .ToArray();
         var targetSnapshot = new DeviceClientVersionSnapshot(

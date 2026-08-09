@@ -38,6 +38,16 @@ public class HumanDeviceController : ApiControllerBase
                 cancellationToken));
     }
 
+    [HttpGet("plugin-series/available")]
+    public async Task<IActionResult> GetAvailablePluginSeries(
+        [FromQuery] Guid processId,
+        CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(
+            new GetAvailableDevicePluginSeriesQuery(processId),
+            cancellationToken));
+    }
+
     [HttpGet("employee-access-candidates")]
     [Authorize(Policy = HttpApiPolicies.RequireHumanUserToken)]
     public async Task<IActionResult> GetEmployeeAccessCandidates(CancellationToken cancellationToken)

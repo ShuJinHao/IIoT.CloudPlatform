@@ -99,7 +99,8 @@ describe('edge installer generation API', () => {
     } as never);
 
     const result = await generateEdgeInstallerPackageApi({
-      selections: [{ moduleId: 'CP', deviceId: 'device-1' }],
+      deviceIds: ['device-1'],
+      planFingerprint: 'plan-fingerprint-1',
     });
 
     expect(result).toEqual({
@@ -116,7 +117,8 @@ describe('edge installer generation API', () => {
     } as never);
 
     await expect(generateEdgeInstallerPackageApi({
-      selections: [{ moduleId: 'CP', deviceId: 'device-1' }],
+      deviceIds: ['device-1'],
+      planFingerprint: 'plan-fingerprint-1',
     })).rejects.toThrow('generationId');
   });
 });
