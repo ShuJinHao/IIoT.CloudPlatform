@@ -292,8 +292,9 @@ describe('devices feature guards', () => {
       { label: '人员设备授权', value: 10 },
       { label: '设备 refresh token', value: 11 },
       { label: 'PLC 运行状态', value: 12 },
+      { label: '待激活安装凭证', value: 13 },
     ]);
-    expect(state.deletionImpactRows.value).toHaveLength(12);
+    expect(state.deletionImpactRows.value).toHaveLength(13);
     expect(
       state.deletionImpactRows.value.reduce((total, item) => total + item.value, 0),
     ).toBe(deletionImpact.totalAssociatedRows);

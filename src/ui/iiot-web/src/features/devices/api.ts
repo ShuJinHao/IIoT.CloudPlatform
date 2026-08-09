@@ -138,6 +138,7 @@ export interface DeviceDeletionImpactDto {
   employeeDeviceAccesses: number;
   refreshTokenSessions: number;
   edgeHostPlcRuntimeStates: number;
+  installerPendingCredentials: number;
   totalAssociatedRows: number;
 }
 
