@@ -3,6 +3,7 @@ using System.Net;
 using System.Security.Claims;
 using IIoT.HttpApi.Infrastructure.Oidc;
 using IIoT.Services.Contracts.Auditing;
+using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
 using Microsoft.AspNetCore;
 using Microsoft.AspNetCore.Authentication;
@@ -279,7 +280,24 @@ public sealed class CloudOidcController(
         }
 
         principal.SetScopes(scopes);
-        principal.SetResources(options.Value.AicopilotClientId);
+        if (scopes.Contains(AiReadDelegationDefaults.Scope))
+        {
+            identity.SetClaim(
+                IIoTClaimTypes.ActorType,
+                IIoTClaimTypes.AiDelegatedUserActor);
+            identity.SetClaim(
+                IIoTClaimTypes.DelegatedUserId,
+                profile.UserId.ToString("D"));
+            principal.SetResources(AiReadDelegationDefaults.Audience);
+            principal.SetAudiences(AiReadDelegationDefaults.Audience);
+            principal.SetAccessTokenLifetime(
+                TimeSpan.FromMinutes(AiReadDelegationDefaults.LifetimeMinutes));
+        }
+        else
+        {
+            principal.SetResources(options.Value.AicopilotClientId);
+            principal.SetAudiences(options.Value.AicopilotClientId);
+        }
 
         foreach (var claim in principal.Claims)
         {
@@ -325,6 +343,8 @@ public sealed class CloudOidcController(
             "employee_active" => [Destinations.AccessToken, Destinations.IdentityToken],
             "tenant_id" => [Destinations.AccessToken, Destinations.IdentityToken],
             IIoTClaimTypes.IdentityStatusVersion => [Destinations.AccessToken, Destinations.IdentityToken],
+            IIoTClaimTypes.ActorType => [Destinations.AccessToken],
+            IIoTClaimTypes.DelegatedUserId => [Destinations.AccessToken],
             _ => [Destinations.AccessToken]
         };
     }

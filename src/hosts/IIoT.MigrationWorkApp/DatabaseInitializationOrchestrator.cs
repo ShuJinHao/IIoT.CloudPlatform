@@ -160,10 +160,25 @@ public sealed class DatabaseInitializationOrchestrator
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
+        var skipRecordSchemaAndTimescale = configuration.GetValue<bool>(
+            MigrationWorkAppTestingGuard.SkipRecordSchemaAndTimescaleConfigurationKey);
+        MigrationWorkAppTestingGuard.EnsureAllowed(
+            skipRecordSchemaAndTimescale,
+            configuration["DOTNET_ENVIRONMENT"]);
+
         await RunEfMigrationsAsync(cancellationToken);
-        await InitializeRecordSchemasAsync(cancellationToken);
-        await EnsureRecordSchemaCompatibilityAsync(cancellationToken);
-        await InitializeTimescaleDbAsync(cancellationToken);
+        if (skipRecordSchemaAndTimescale)
+        {
+            logger.LogInformation(
+                "Testing-only identity host skipped record schema and Timescale initialization.");
+        }
+        else
+        {
+            await InitializeRecordSchemasAsync(cancellationToken);
+            await EnsureRecordSchemaCompatibilityAsync(cancellationToken);
+            await InitializeTimescaleDbAsync(cancellationToken);
+        }
+
         await SeedSystemDataAsync(cancellationToken);
         await SeedOidcClientsAsync(cancellationToken);
     }
@@ -435,8 +450,9 @@ public sealed class DatabaseInitializationOrchestrator
         }
 
         await EnsureCanonicalAdminRolePreflightAsync(cancellationToken);
-        await SystemInitData.EnsureSingleAdminAssignmentPreflightAsync(
+        await SystemInitData.EnsureAdminAssignmentPreflightAsync(
             dbContext,
+            configuration,
             cancellationToken);
 
         if (!await IdentityAuthorizationTablesExistAsync(cancellationToken))
@@ -911,4 +927,20 @@ public sealed class DatabaseInitializationOrchestrator
         string? OwnerName,
         string? Permission,
         string Reason);
+}
+
+public static class MigrationWorkAppTestingGuard
+{
+    public const string SkipRecordSchemaAndTimescaleConfigurationKey =
+        "MigrationWorkApp:Testing:SkipRecordSchemaAndTimescale";
+
+    public static void EnsureAllowed(bool skipRecordSchemaAndTimescale, string? environmentName)
+    {
+        if (skipRecordSchemaAndTimescale &&
+            !string.Equals(environmentName, "Testing", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"{SkipRecordSchemaAndTimescaleConfigurationKey} is restricted to the Testing environment.");
+        }
+    }
 }

@@ -84,6 +84,7 @@ services:
       Infrastructure__Postgres__EnableRetry: "true"
       SEED_ADMIN_NO: ${SEED_ADMIN_NO}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD}
+      SEED_ADMIN_RESET_PASSWORD: ${SEED_ADMIN_RESET_PASSWORD:-false}
       ALLOW_INTRANET_HTTP_OIDC: ${ALLOW_INTRANET_HTTP_OIDC:-false}
       OidcProvider__Issuer: ${OIDC_PROVIDER_ISSUER}
       OidcProvider__AllowIntranetHttpOidc: ${ALLOW_INTRANET_HTTP_OIDC:-false}
@@ -114,6 +115,10 @@ services:
       ConnectionStrings__redis-cache: redis-cache:6379
       ConnectionStrings__eventbus: amqp://${RABBITMQ_DEFAULT_USER}:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672
       JwtSettings__Secret: ${JWTSETTINGS__SECRET}
+      AiIdentityStatusToken__Enabled: "true"
+      AiIdentityStatusToken__Issuer: "iiot-cloud-system"
+      AiIdentityStatusToken__Audience: "iiot-cloud-identity-status"
+      AiIdentityStatusToken__SigningSecret: ${AI_IDENTITY_STATUS_TOKEN_SIGNING_SECRET:?identity-status signing secret is required}
       ForwardedHeaders__Enabled: ${FORWARDED_HEADERS_ENABLED}
       ForwardedHeaders__ForwardLimit: ${FORWARDED_HEADERS_FORWARDLIMIT}
       ForwardedHeaders__KnownNetworks__0: ${FORWARDED_HEADERS_KNOWNNETWORKS__0}
@@ -123,6 +128,9 @@ services:
       Cors__AllowedOrigins__2: ${CORS_ALLOWED_ORIGIN_2}
       EdgeInstallerArtifacts__RootPath: /app/edge-updates/installers
       EdgeInstallerArtifacts__VelopackReleasesBaseUrl: ${PUBLIC_BASE_URL}/edge-updates/velopack
+      EdgeInstallerArtifacts__PayloadSigningKeyId: ${EDGE_PAYLOAD_SIGNING_KEY_ID:?EDGE_PAYLOAD_SIGNING_KEY_ID is required}
+      EdgeInstallerArtifacts__PayloadSigningPrivateKeyPemPath: /run/secrets/iiot-edge-signing/payload-private.pem
+      PluginReleaseSignatures__TrustedPublicKeysFile: /run/secrets/iiot-edge-signing/plugin-release-public-keys.json
       EdgeRelease__MaxVersionsPerComponent: ${EDGE_RELEASE_MAX_VERSIONS_PER_COMPONENT:-3}
       EdgeReleaseUpload__MaxUploadMbps: ${EDGE_RELEASE_UPLOAD_MAX_MBPS:-1000}
       EdgeReleaseUpload__MaxBundleBytes: ${EDGE_RELEASE_UPLOAD_MAX_BUNDLE_BYTES:-2147483648}
@@ -150,6 +158,8 @@ services:
       - ${OIDC_PROVIDER_CERTS_DIR:-/data/iiot-platform/cloud/deploy/certs}:/app/certs:ro
       # 内网受控 Edge HTTP 发布需要 HttpApi 写 staging 和最终发布目录；nginx 仍只读对外提供下载。
       - ${EDGE_UPDATES_DIR:-/data/iiot-platform/edge-client/edge-updates}:/app/edge-updates:rw
+      - ${EDGE_PAYLOAD_SIGNING_PRIVATE_KEY_FILE:?EDGE_PAYLOAD_SIGNING_PRIVATE_KEY_FILE is required}:/run/secrets/iiot-edge-signing/payload-private.pem:ro
+      - ${EDGE_PLUGIN_RELEASE_TRUSTED_KEYS_FILE:?EDGE_PLUGIN_RELEASE_TRUSTED_KEYS_FILE is required}:/run/secrets/iiot-edge-signing/plugin-release-public-keys.json:ro
       - httpapi-logs:/app/logs
     depends_on:
       postgres:

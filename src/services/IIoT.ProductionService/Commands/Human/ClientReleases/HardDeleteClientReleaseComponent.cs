@@ -7,6 +7,7 @@ using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.Persistence;
+using IIoT.Services.Contracts.RecordQueries;
 using IIoT.Services.CrossCutting.Attributes;
 using IIoT.Services.CrossCutting.Persistence;
 using IIoT.SharedKernel.Messaging;
@@ -43,6 +44,7 @@ public sealed class HardDeleteClientReleaseComponentHandler(
     IOptions<EdgeInstallerArtifactOptions> artifactOptions,
     IRepository<ClientReleaseComponent> componentRepository,
     IDeviceClientStateStore clientStateStore,
+    IDevicePluginBindingQueryService bindingQueryService,
     IClientReleaseComponentDeletionStore deletionStore,
     IClientReleaseComponentDeletionProcessor deletionProcessor,
     ICurrentUser currentUser,
@@ -320,6 +322,11 @@ public sealed class HardDeleteClientReleaseComponentHandler(
             return "Host 组件不允许整体删除。";
         }
 
+        if (component.WasEverDeviceBound)
+        {
+            return "该独立插件发布系列曾经绑定设备，不属于未使用的误发布记录，禁止硬删除。";
+        }
+
         if (string.IsNullOrWhiteSpace(request.Reason))
         {
             return "整体删除必须提供非空原因。";
@@ -360,6 +367,14 @@ public sealed class HardDeleteClientReleaseComponentHandler(
             return inUse
                 ? "已有设备当前宿主版本等于目标组件版本，禁止永久删除发布组件。"
                 : null;
+        }
+
+        var bound = await bindingQueryService.IsComponentBoundAsync(
+            component.Id,
+            cancellationToken);
+        if (bound)
+        {
+            return "该独立插件发布系列已绑定设备，禁止单独删除或改绑。";
         }
 
         var pluginInUse = snapshots.Any(snapshot => snapshot.InstalledPlugins.Any(plugin =>

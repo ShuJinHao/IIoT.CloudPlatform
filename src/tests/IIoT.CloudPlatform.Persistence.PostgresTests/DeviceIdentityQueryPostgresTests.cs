@@ -1,5 +1,6 @@
 using IIoT.Dapper;
 using IIoT.Dapper.Production.QueryServices.Device;
+using IIoT.SharedKernel.Domain;
 using Npgsql;
 using Xunit;
 
@@ -142,12 +143,20 @@ public sealed class DeviceIdentityQueryPostgresTests(
 
         await using var deviceCommand = new NpgsqlCommand(
             """
-            INSERT INTO devices (id, device_name, process_id, client_code)
-            VALUES (@deviceId, @deviceName, @processId, @code)
+            INSERT INTO devices
+                (id, device_name, normalized_device_name, process_id, client_code)
+            VALUES
+                (@deviceId, @deviceName, @normalizedDeviceName, @processId, @code)
             """,
             connection);
+        var deviceName = $"Postgres device {unique}";
         deviceCommand.Parameters.AddWithValue("deviceId", deviceId);
-        deviceCommand.Parameters.AddWithValue("deviceName", $"Postgres device {unique}");
+        deviceCommand.Parameters.AddWithValue("deviceName", deviceName);
+        deviceCommand.Parameters.AddWithValue(
+            "normalizedDeviceName",
+            BusinessIdentityNormalization.NormalizeDisplayNameKey(
+                deviceName,
+                nameof(deviceName)));
         deviceCommand.Parameters.AddWithValue("processId", processId);
         deviceCommand.Parameters.AddWithValue("code", code);
         await deviceCommand.ExecuteNonQueryAsync(cancellationToken);

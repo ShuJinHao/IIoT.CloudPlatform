@@ -48,6 +48,8 @@ public sealed class PassStationTypeDefinitionDto
 
     public string Description { get; set; } = string.Empty;
 
+    public List<string> LegacyTypeKeys { get; set; } = [];
+
     public List<PassStationFieldDefinitionDto> Fields { get; set; } = [];
 
     public List<string> ListColumns { get; set; } = [];

@@ -140,9 +140,123 @@ public sealed class EfPersistenceBehaviorTests
             builder.Services,
             descriptor => descriptor.ServiceType == typeof(IEdgeHostPlcRuntimeStateStore));
         Assert.Equal(ServiceLifetime.Scoped, registration.Lifetime);
-        Assert.Equal(
-            typeof(IIoT.EntityFrameworkCore.EdgeHosts.EfEdgeHostPlcRuntimeStateStore),
-            registration.ImplementationType);
+        Assert.NotNull(registration.ImplementationFactory);
+
+        using var provider = builder.Services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var writeStore = scope.ServiceProvider
+            .GetRequiredService<IEdgeHostPlcRuntimeStateStore>();
+        var queryStore = scope.ServiceProvider
+            .GetRequiredService<IEdgeHostPlcRuntimeStateQueryService>();
+        Assert.IsType<IIoT.EntityFrameworkCore.EdgeHosts.EfEdgeHostPlcRuntimeStateStore>(
+            writeStore);
+        Assert.Same(writeStore, queryStore);
+    }
+
+    [Fact]
+    public async Task EdgeHostPlcRuntimeStateStore_ShouldPersistTrackedUpdatesIncludingEnabled()
+    {
+        await using var database = await SqliteEfTestDatabase.CreateAsync();
+        await using var dbContext = database.CreateContext();
+        var process = new MfgProcess("PLC-STORE", "PLC store process");
+        var device = new Device(
+            "PLC store device",
+            "DEV-PLC-STORE",
+            process.Id);
+        var state = new EdgeHostPlcRuntimeState(
+            device.Id,
+            device.Code,
+            "PLC-01");
+        state.ReplaceReport(
+            "Before",
+            isConnected: false,
+            runtimeStatus: EdgeHostPlcRuntimeStatus.Disconnected,
+            observedAtUtc: DateTime.UtcNow.AddMinutes(-1),
+            enabled: false);
+        dbContext.MfgProcesses.Add(process);
+        dbContext.Devices.Add(device);
+        dbContext.EdgeHostPlcRuntimeStates.Add(state);
+        await dbContext.SaveChangesAsync();
+        dbContext.ChangeTracker.Clear();
+
+        var store = new IIoT.EntityFrameworkCore.EdgeHosts
+            .EfEdgeHostPlcRuntimeStateStore(dbContext);
+        var loaded = Assert.Single(await store.GetByIdentityAsync(
+            device.Id,
+            device.Code));
+        loaded.ReplaceReport(
+            "After",
+            isConnected: true,
+            runtimeStatus: EdgeHostPlcRuntimeStatus.Connected,
+            observedAtUtc: DateTime.UtcNow,
+            enabled: true);
+        await store.SaveChangesAsync();
+        dbContext.ChangeTracker.Clear();
+
+        var persisted = await dbContext.EdgeHostPlcRuntimeStates
+            .AsNoTracking()
+            .SingleAsync();
+        Assert.Equal("After", persisted.ReportedPlcName);
+        Assert.True(persisted.IsConnected);
+        Assert.True(persisted.Enabled);
+    }
+
+    [Fact]
+    public async Task DeviceDelete_ShouldRevokePendingInstallerCredentialButKeepGenerationEvidence()
+    {
+        await using var database = await SqliteEfTestDatabase.CreateAsync();
+        await using var dbContext = database.CreateContext();
+        var process = new MfgProcess("DELETE-PENDING", "Delete pending process");
+        var device = new Device(
+            "Delete pending device",
+            "DEV-DELETE-PENDING",
+            process.Id);
+        var generationId = Guid.NewGuid();
+        var generation = new EdgeInstallerGenerationRecord(
+            generationId,
+            null,
+            "test",
+            DateTime.UtcNow,
+            "stable",
+            "win-x64",
+            "2.0.12",
+            new string('a', 64),
+            $"installer-{generationId:N}.exe",
+            new string('b', 64),
+            1,
+            [new EdgeInstallerGenerationBindingFact(
+                "DELETE-PENDING",
+                device.Id,
+                device.Code,
+                device.DeviceName,
+                process.Id)],
+            [new EdgeInstallerGenerationPluginFact(
+                "DELETE-PENDING",
+                "2.0.12",
+                new string('c', 64))]);
+        var pending = new EdgeInstallerPendingCredential(
+            generationId,
+            device.Id,
+            device.Code,
+            new string('d', 64),
+            "DELETE-PENDING",
+            "2.0.12",
+            new string('b', 64),
+            DateTime.UtcNow.AddDays(7));
+        dbContext.MfgProcesses.Add(process);
+        dbContext.Devices.Add(device);
+        dbContext.EdgeInstallerGenerationRecords.Add(generation);
+        dbContext.EdgeInstallerPendingCredentials.Add(pending);
+        await dbContext.SaveChangesAsync();
+
+        dbContext.Devices.Remove(device);
+        await dbContext.SaveChangesAsync();
+        dbContext.ChangeTracker.Clear();
+
+        Assert.False(await dbContext.EdgeInstallerPendingCredentials.AnyAsync());
+        Assert.True(await dbContext.EdgeInstallerGenerationRecords
+            .AsNoTracking()
+            .AnyAsync(item => item.Id == generationId));
     }
 
     [Theory]

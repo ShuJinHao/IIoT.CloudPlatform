@@ -75,7 +75,10 @@ public interface IRecipeWriteObservationReader
 public sealed record DeviceReportState(
     DateTime ReportedAtUtc,
     DateTime ReceivedAtUtc,
-    string ContentSha256);
+    string ContentSha256,
+    bool IsAuthoritative = true,
+    string? ConfigurationVersion = null,
+    bool ExplicitClear = false);
 
 public sealed record DeviceReportWriteObservation(
     bool DeviceExists,

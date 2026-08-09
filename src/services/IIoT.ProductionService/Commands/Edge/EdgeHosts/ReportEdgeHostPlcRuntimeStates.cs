@@ -23,14 +23,18 @@ public sealed record EdgeHostPlcRuntimeStateReportItem(
     string? StationCode = null,
     string? Protocol = null,
     string? Address = null,
-    string? LastError = null);
+    string? LastError = null,
+    bool? Enabled = null);
 
 [DistributedLock("iiot:lock:device-report:{DeviceId}", TimeoutSeconds = 5)]
 public sealed record ReportEdgeHostPlcRuntimeStatesCommand(
     Guid DeviceId,
     string ClientCode,
     DateTime ReportedAtUtc,
-    IReadOnlyList<EdgeHostPlcRuntimeStateReportItem> PlcStates)
+    IReadOnlyList<EdgeHostPlcRuntimeStateReportItem> PlcStates,
+    bool? IsAuthoritative = null,
+    string? ConfigurationVersion = null,
+    bool ClearPlcList = false)
     : IDeviceCommand<Result<EdgeHostPlcRuntimeStateReportResultDto>>;
 
 public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
@@ -59,6 +63,15 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
         var reportedAtUtc = NormalizeUtc(request.ReportedAtUtc);
         var receivedAtUtc = NormalizeUtc(
             timeProvider.GetUtcNow().UtcDateTime);
+        var envelopeValidation = ValidateSnapshotEnvelope(request);
+        if (!envelopeValidation.IsSuccess)
+        {
+            return Result.From(envelopeValidation);
+        }
+
+        var configurationVersion = NormalizeConfigurationVersion(
+            request.ConfigurationVersion);
+        var isAuthoritative = request.IsAuthoritative ?? true;
         var normalizedReports = NormalizeReports(
             request,
             receivedAtUtc,
@@ -69,11 +82,17 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
         }
 
         var targetHash = EdgeHostPlcRuntimeSnapshotFingerprint.Compute(
-            normalizedReports.Select(report => report.Content));
+            normalizedReports.Select(report => report.Content),
+            isAuthoritative,
+            configurationVersion,
+            request.ClearPlcList);
         var target = new DeviceReportState(
             reportedAtUtc,
             receivedAtUtc,
-            targetHash);
+            targetHash,
+            isAuthoritative,
+            configurationVersion,
+            request.ClearPlcList);
         var stateId = Guid.NewGuid();
         DeviceReportState? baseline = null;
         var commitAttempted = false;
@@ -194,7 +213,8 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
                     report.Content.StationCode,
                     report.Content.Protocol,
                     report.Content.Address,
-                    report.Content.LastError);
+                    report.Content.LastError,
+                    report.Content.Enabled);
             }
 
             foreach (var missingState in existingStates.Where(
@@ -207,7 +227,10 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
             state.ApplyPlcSnapshot(
                 reportedAtUtc,
                 receivedAtUtc,
-                targetHash);
+                targetHash,
+                isAuthoritative,
+                configurationVersion,
+                request.ClearPlcList);
             await runtimeStateStore.SaveChangesAsync(callbackToken);
             commitAttempted = true;
             await unitOfWork.CommitAsync(callbackToken);
@@ -293,6 +316,17 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
                     "PLC 状态上报时间早于当前已接受快照。");
             }
 
+            if (request.ClearPlcList
+                && current.PlcSnapshot is not null
+                && string.Equals(
+                    current.PlcSnapshot.ConfigurationVersion,
+                    configurationVersion,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return Result.Invalid(
+                    "清空 PLC 投影必须使用新的配置清单版本。");
+            }
+
             if (current.PlcSnapshot is not null
                 && reportedAtUtc == current.PlcSnapshot.ReportedAtUtc
                 && !string.Equals(
@@ -326,6 +360,59 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
         {
             return Result.Invalid(ex.Message);
         }
+    }
+
+    private static Result ValidateSnapshotEnvelope(
+        ReportEdgeHostPlcRuntimeStatesCommand request)
+    {
+        var count = request.PlcStates?.Count ?? 0;
+        if (request.IsAuthoritative is false)
+        {
+            return Result.Invalid(
+                "PLC 快照不可用时必须跳过本轮上报，禁止写入非权威投影。");
+        }
+
+        if (count > 0 && request.ClearPlcList)
+        {
+            return Result.Invalid(
+                "PLC 快照包含数据时不能同时声明清空。");
+        }
+
+        if (request.ConfigurationVersion?.Trim().Length > 128)
+        {
+            return Result.Invalid(
+                "PLC 配置版本不能超过 128 个字符。");
+        }
+
+        if (count == 0)
+        {
+            if (request.IsAuthoritative is null)
+            {
+                return Result.Invalid(
+                    "旧版空 PLC 数组不具备清空语义，已拒绝以保留 Cloud 现有投影。");
+            }
+
+            if (request.IsAuthoritative is not true
+                || !request.ClearPlcList
+                || string.IsNullOrWhiteSpace(request.ConfigurationVersion))
+            {
+                return Result.Invalid(
+                    "清空 PLC 投影必须同时提供权威标记、新配置版本和明确清空意图。");
+            }
+        }
+
+        return Result.Success();
+    }
+
+    private static string? NormalizeConfigurationVersion(string? value)
+    {
+        var normalized = value?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        return normalized;
     }
 
     private static List<NormalizedPlcRuntimeStateReport> NormalizeReports(
@@ -367,7 +454,8 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
                     item.StationCode,
                     item.Protocol,
                     item.Address,
-                    item.LastError);
+                    item.LastError,
+                    item.Enabled);
                 reports.Add(new NormalizedPlcRuntimeStateReport(
                     id,
                     ToContent(normalizedState)));
@@ -395,7 +483,8 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
             state.StationCode,
             state.Protocol,
             state.Address,
-            state.LastError);
+            state.LastError,
+            state.Enabled);
 
     private static DeviceReportState? ToReportState(
         DeviceClientState? state,
@@ -413,8 +502,14 @@ public sealed class ReportEdgeHostPlcRuntimeStatesHandler(
                     LegacyPlcSnapshotContentMarker,
                     StringComparison.Ordinal)
                     ? EdgeHostPlcRuntimeSnapshotFingerprint.Compute(
-                        runtimeStates.Select(ToContent))
-                    : state.PlcSnapshotContentSha256);
+                        runtimeStates.Select(ToContent),
+                        state.PlcSnapshotIsAuthoritative,
+                        state.PlcSnapshotConfigurationVersion,
+                        state.PlcSnapshotExplicitClear)
+                    : state.PlcSnapshotContentSha256,
+                state.PlcSnapshotIsAuthoritative,
+                state.PlcSnapshotConfigurationVersion,
+                state.PlcSnapshotExplicitClear);
 
     private static bool MatchesSameReport(
         DeviceReportState? current,

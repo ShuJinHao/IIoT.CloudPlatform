@@ -308,7 +308,7 @@ public sealed class EmployeeDeviceAccessIntegrityTests
 
     [Theory]
     [InlineData(IIoTClaimTypes.EdgeDeviceActor)]
-    [InlineData(IIoTClaimTypes.AiServiceActor)]
+    [InlineData(IIoTClaimTypes.AiDelegatedUserActor)]
     [InlineData(IIoTClaimTypes.EdgeReleasePublisherActor)]
     public async Task MachineIdentity_ShouldBeRejectedBeforeHandler(string actorType)
     {

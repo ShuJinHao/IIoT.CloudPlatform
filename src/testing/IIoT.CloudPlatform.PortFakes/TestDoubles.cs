@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using System.Text.Json;
 using IIoT.Core.Production.Aggregates.ClientReleases;
 using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.Core.Production.Contracts.RecordRepositories;
@@ -22,10 +23,18 @@ internal sealed class InMemoryEdgeInstallerGenerationStore : IEdgeInstallerGener
 {
     public Dictionary<Guid, EdgeInstallerGenerationRecord> Records { get; } = [];
 
+    public List<EdgeInstallerPendingCredential> PendingCredentials { get; } = [];
+
     public bool ConfirmResult { get; set; } = true;
 
     public Task<bool> TryAddConfirmedAsync(
         EdgeInstallerGenerationRecord record,
+        CancellationToken cancellationToken = default)
+        => TryAddConfirmedAsync(record, [], cancellationToken);
+
+    public Task<bool> TryAddConfirmedAsync(
+        EdgeInstallerGenerationRecord record,
+        IReadOnlyCollection<EdgeInstallerPendingCredential> pendingCredentials,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -36,6 +45,7 @@ internal sealed class InMemoryEdgeInstallerGenerationStore : IEdgeInstallerGener
         }
 
         Records.Add(record.Id, record);
+        PendingCredentials.AddRange(pendingCredentials);
         return Task.FromResult(true);
     }
 
@@ -46,6 +56,103 @@ internal sealed class InMemoryEdgeInstallerGenerationStore : IEdgeInstallerGener
         cancellationToken.ThrowIfCancellationRequested();
         Records.TryGetValue(generationId, out var record);
         return Task.FromResult(record);
+    }
+
+    public Task<IReadOnlyList<EdgeInstallerGenerationRecord>> GetRecentByDeviceAsync(
+        Guid deviceId,
+        int limit = 20,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var records = Records.Values
+            .Where(record => (JsonSerializer.Deserialize<
+                    EdgeInstallerGenerationBindingFact[]>(record.BindingsJson) ?? [])
+            .Any(binding => binding.DeviceId == deviceId))
+            .OrderByDescending(record => record.GeneratedAtUtc)
+            .Take(limit <= 0 ? 1 : limit)
+            .ToArray();
+        return Task.FromResult<IReadOnlyList<EdgeInstallerGenerationRecord>>(records);
+    }
+
+    public Task<IReadOnlyList<EdgeInstallerPendingCredential>> GetPendingByClientCodeAsync(
+        string clientCode,
+        DateTime nowUtc,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var items = PendingCredentials
+            .Where(item => string.Equals(
+                item.ClientCode,
+                clientCode.Trim(),
+                StringComparison.OrdinalIgnoreCase))
+            .Where(item => item.IsUsableAt(nowUtc))
+            .ToArray();
+        return Task.FromResult<IReadOnlyList<EdgeInstallerPendingCredential>>(items);
+    }
+
+    public Task<EdgeInstallerPendingCredential?> GetPendingAsync(
+        Guid generationId,
+        Guid deviceId,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(PendingCredentials.SingleOrDefault(item =>
+            item.GenerationId == generationId && item.DeviceId == deviceId));
+    }
+
+    public async Task<EdgeInstallerActivationAttempt> TryActivateAsync(
+        Guid generationId,
+        Guid deviceId,
+        int processId,
+        DateTime readyAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        var pending = await GetPendingAsync(
+            generationId,
+            deviceId,
+            cancellationToken);
+        return pending?.BeginActivation(processId, readyAtUtc)
+               ?? EdgeInstallerActivationAttempt.Unavailable;
+    }
+
+    public async Task<EdgeInstallerActivationAttempt> ConfirmActivationAsync(
+        Guid generationId,
+        Guid deviceId,
+        int processId,
+        DateTime readyAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        var pending = await GetPendingAsync(
+            generationId,
+            deviceId,
+            cancellationToken);
+        return pending?.ConfirmActivation(processId, readyAtUtc)
+               ?? EdgeInstallerActivationAttempt.Unavailable;
+    }
+
+    public Task<bool> HasDownloadablePendingAsync(
+        Guid generationId,
+        DateTime nowUtc,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(PendingCredentials.Any(item =>
+            item.GenerationId == generationId && item.IsUsableAt(nowUtc)));
+    }
+
+    public Task<IReadOnlyList<Guid>> GetPackageCleanupCandidateIdsAsync(
+        DateTime nowUtc,
+        int limit = 100,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var ids = Records.Keys
+            .Where(id => PendingCredentials.Any(item => item.GenerationId == id))
+            .Where(id => !PendingCredentials.Any(item =>
+                item.GenerationId == id && item.IsUsableAt(nowUtc)))
+            .Take(Math.Clamp(limit, 1, 1000))
+            .ToArray();
+        return Task.FromResult<IReadOnlyList<Guid>>(ids);
     }
 }
 
@@ -279,7 +386,7 @@ internal sealed class StubDeviceIdentityQueryService : IDeviceIdentityQueryServi
     }
 }
 
-internal sealed class StubProcessReadQueryService : IProcessReadQueryService
+internal sealed class StubProcessReadQueryService : IProcessReadQueryService, IAiReadProcessQueryService
 {
     public bool Exists { get; set; }
 
@@ -288,6 +395,8 @@ internal sealed class StubProcessReadQueryService : IProcessReadQueryService
     public List<ProcessReadItem> PagedProcesses { get; } = [];
 
     public IReadOnlyCollection<Guid>? LastProcessIds { get; private set; }
+
+    public IReadOnlyCollection<Guid>? LastAllowedDeviceIds { get; private set; }
 
     public IReadOnlyList<Guid> DeviceIds { get; set; } = [];
 
@@ -331,6 +440,25 @@ internal sealed class StubProcessReadQueryService : IProcessReadQueryService
         return Task.FromResult((
             (IReadOnlyList<ProcessReadItem>)query.Skip(skip).Take(take).ToList(),
             query.Count));
+    }
+
+    public Task<(IReadOnlyList<ProcessReadItem> Items, int TotalCount)> GetPagedAsync(
+        Guid? processId,
+        string? keyword,
+        IReadOnlyCollection<Guid>? allowedDeviceIds,
+        int skip,
+        int take,
+        CancellationToken cancellationToken = default)
+    {
+        LastAllowedDeviceIds = allowedDeviceIds;
+        if (allowedDeviceIds is { Count: 0 })
+        {
+            return Task.FromResult((
+                (IReadOnlyList<ProcessReadItem>)Array.Empty<ProcessReadItem>(),
+                0));
+        }
+
+        return GetPagedAsync(processId, keyword, skip, take, cancellationToken);
     }
 
     public Task<bool> ExistsAsync(Guid processId, CancellationToken cancellationToken = default)
@@ -467,6 +595,51 @@ internal sealed class StubDeviceReadQueryService : IDeviceReadQueryService
         CancellationToken cancellationToken = default)
     {
         return Task.FromResult(NameExists);
+    }
+}
+
+internal sealed class StubDevicePluginBindingQueryService
+    : IDevicePluginBindingQueryService
+{
+    public IReadOnlyList<AvailableDevicePluginSeriesItem> Available { get; set; } = [];
+
+    public IReadOnlyList<DevicePluginBindingReadItem> Bindings { get; set; } = [];
+
+    public bool ComponentBound { get; set; }
+
+    public Task<IReadOnlyList<AvailableDevicePluginSeriesItem>> GetAvailableAsync(
+        string supportedProcessType,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(Available);
+    }
+
+    public Task<DevicePluginBindingReadItem?> GetByDeviceIdAsync(
+        Guid deviceId,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(Bindings.SingleOrDefault(item => item.DeviceId == deviceId));
+    }
+
+    public Task<IReadOnlyList<DevicePluginBindingReadItem>> GetByDeviceIdsAsync(
+        IReadOnlyCollection<Guid> deviceIds,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var requested = deviceIds.ToHashSet();
+        return Task.FromResult<IReadOnlyList<DevicePluginBindingReadItem>>(
+            Bindings.Where(item => requested.Contains(item.DeviceId)).ToArray());
+    }
+
+    public Task<bool> IsComponentBoundAsync(
+        Guid componentId,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(
+            ComponentBound || Bindings.Any(item => item.ComponentId == componentId));
     }
 }
 
@@ -1534,6 +1707,16 @@ internal sealed class StubRefreshTokenService : IRefreshTokenService
                     : 7)));
     }
 
+    public Task<RefreshTokenEnvelope> IssueReplacingAsync(
+        string actorType,
+        Guid subjectId,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        Revocations.Add((actorType, subjectId, reason));
+        return IssueAsync(actorType, subjectId, cancellationToken);
+    }
+
     public Task<Result<RefreshTokenRotationResult>> RotateAsync(
         string actorType,
         string refreshToken,
@@ -1715,6 +1898,10 @@ internal sealed class TestCurrentUser : ICurrentUser
     public IReadOnlyCollection<string> Permissions { get; init; } = [];
 
     public Guid? DeviceId { get; init; }
+
+    public string? ClientCode { get; init; }
+
+    public Guid? InstallerGenerationId { get; init; }
 
     public bool IsAuthenticated { get; init; }
 }
@@ -2079,6 +2266,17 @@ internal sealed class StubJwtTokenGenerator : IJwtTokenGenerator
         Guid processId)
     {
         return new JwtTokenResult($"edge-{deviceId:N}", DateTimeOffset.UtcNow.AddMinutes(60));
+    }
+
+    public JwtTokenResult GenerateEdgeActivationToken(
+        Guid generationId,
+        Guid deviceId,
+        string clientCode,
+        Guid processId)
+    {
+        return new JwtTokenResult(
+            $"edge-activation-{generationId:N}-{deviceId:N}",
+            DateTimeOffset.UtcNow.AddMinutes(10));
     }
 
     public JwtTokenResult GenerateEdgeReleasePublisherToken(

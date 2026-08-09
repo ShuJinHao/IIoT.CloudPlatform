@@ -28,7 +28,9 @@ public class MfgProcess : BaseEntity<Guid>, IAggregateRoot<Guid>
         ArgumentException.ThrowIfNullOrWhiteSpace(processName);
 
         Id = id;
-        ProcessCode = processCode.Trim();
+        ProcessCode = BusinessIdentityNormalization.NormalizeClassificationCode(
+            processCode,
+            nameof(processCode));
         ProcessName = processName.Trim();
         AddDomainEvent(new Events.MfgProcessCreatedDomainEvent(
             Id,
@@ -59,7 +61,9 @@ public class MfgProcess : BaseEntity<Guid>, IAggregateRoot<Guid>
         ArgumentException.ThrowIfNullOrWhiteSpace(newCode);
         ArgumentException.ThrowIfNullOrWhiteSpace(newName);
 
-        var normalizedCode = newCode.Trim();
+        var normalizedCode = BusinessIdentityNormalization.NormalizeClassificationCode(
+            newCode,
+            nameof(newCode));
         var normalizedName = newName.Trim();
         if (ProcessCode == normalizedCode && ProcessName == normalizedName)
         {

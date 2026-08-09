@@ -44,6 +44,7 @@ public sealed class ClientReleaseComponentDeletionPostgresTests(
             null,
             key);
         var service = new EfAuditTrailService(
+            new IIoTDbContext(options),
             options,
             NullLogger<EfAuditTrailService>.Instance);
 

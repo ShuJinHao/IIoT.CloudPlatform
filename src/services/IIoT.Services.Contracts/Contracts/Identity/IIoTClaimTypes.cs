@@ -1,3 +1,5 @@
+using IIoT.Services.Contracts.Authorization;
+
 namespace IIoT.Services.Contracts.Identity;
 
 /// <summary>
@@ -14,8 +16,11 @@ public static class IIoTClaimTypes
     public const string Permission = "Permission";
     public const string IdentityStatusVersion = "status_version";
     public const string EdgeDeviceActor = "edge-device";
+    public const string EdgeActivationActor = "edge-activation";
+    public const string InstallerGenerationId = "installer_generation_id";
     public const string HumanActor = "human-user";
-    public const string AiServiceActor = "ai-service-account";
+    public const string AiDelegatedUserActor = AiReadDelegationDefaults.Actor;
+    public const string AiIdentityStatusActor = AiIdentityStatusTokenDefaults.Actor;
     public const string EdgeReleasePublisherActor = "edge-release-publisher";
     public const string EdgeReleaseApiKeyId = "edge_release_api_key_id";
 }

@@ -16,13 +16,15 @@ public sealed class DeviceClientPluginVersion : IEntity<Guid>
         string? displayName,
         string version,
         string? hostApiVersion,
-        bool enabled)
+        bool enabled,
+        string? packageSha256 = null)
     {
         Id = Guid.NewGuid();
         ModuleId = NormalizeRequired(moduleId, nameof(moduleId));
         DisplayName = NormalizeOptional(displayName);
         Version = NormalizeRequired(version, nameof(version));
         HostApiVersion = NormalizeOptional(hostApiVersion);
+        PackageSha256 = NormalizeSha256(packageSha256);
         Enabled = enabled;
     }
 
@@ -38,6 +40,8 @@ public sealed class DeviceClientPluginVersion : IEntity<Guid>
 
     public string? HostApiVersion { get; private set; }
 
+    public string? PackageSha256 { get; private set; }
+
     public bool Enabled { get; private set; }
 
     private static string NormalizeRequired(string value, string paramName)
@@ -50,5 +54,17 @@ public sealed class DeviceClientPluginVersion : IEntity<Guid>
     {
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private static string? NormalizeSha256(string? value)
+    {
+        var normalized = NormalizeOptional(value)?.ToLowerInvariant();
+        if (normalized is not null
+            && (normalized.Length != 64
+                || normalized.Any(character => !Uri.IsHexDigit(character))))
+        {
+            throw new ArgumentException("PackageSha256 must be SHA-256.", nameof(value));
+        }
+        return normalized;
     }
 }

@@ -1,24 +1,27 @@
 using System.Data.Common;
 using IIoT.Core.Employees.Aggregates.Employees;
+using IIoT.Dapper.Initializers;
 using IIoT.EntityFrameworkCore;
 using IIoT.EntityFrameworkCore.Identity;
 using IIoT.MigrationWorkApp;
 using IIoT.MigrationWorkApp.SeedData;
 using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Identity;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Npgsql;
 using OpenIddict.EntityFrameworkCore;
 
 namespace IIoT.CloudPlatform.Persistence.PostgresTests;
 
-[Collection(PostgresPersistenceIntegrationCollection.Name)]
+[Collection(AdminSeedPostgresCollection.Name)]
 public sealed class SingleAdminInvariantPostgresTests(
-    ClientReleaseCommitRecoveryPostgresFixture fixture) : IAsyncLifetime
+    AdminSeedPostgresFixture fixture) : IAsyncLifetime
 {
     private const string InitialPassword = "SeedAdmin1!";
     private const string ResetPassword = "SeedAdmin2!";
@@ -94,6 +97,11 @@ public sealed class SingleAdminInvariantPostgresTests(
             state.Admin.AccountId,
             InitialPassword,
             budget.Token));
+        Assert.Equal(
+            SystemRolePermissionTemplates.AdminDelegatedAiReadPermissions
+                .OrderBy(permission => permission, StringComparer.Ordinal),
+            (await ReadRolePermissionsAsync(SystemRoles.Admin, budget.Token))
+                .OrderBy(permission => permission, StringComparer.Ordinal));
     }
 
     [Fact]
@@ -279,7 +287,7 @@ public sealed class SingleAdminInvariantPostgresTests(
     }
 
     [Fact]
-    public async Task MultipleAdmins_PreflightAndSeed_ShouldFailWithoutMutation()
+    public async Task MultipleValidAdmins_PreflightAndSeed_ShouldPassWithoutAccountMutation()
     {
         using var budget = CreateBudget();
         await ResetDataAsync(budget.Token);
@@ -293,7 +301,97 @@ public sealed class SingleAdminInvariantPostgresTests(
             "Second Admin",
             assignAdmin: true,
             budget.Token);
-        var before = await ReadStateAsync(budget.Token);
+        var before = await ReadAdminsAsync(budget.Token);
+
+        await using var provider = CreateProvider(schemaConnectionString);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var orchestrator = new DatabaseInitializationOrchestrator(
+            services.GetRequiredService<IIoTDbContext>(),
+            null!,
+            null!,
+            null!,
+            null!,
+            new ConfigurationBuilder().Build(),
+            NullLogger<DatabaseInitializationOrchestrator>.Instance);
+        await orchestrator.EnsureIdentityAuthorizationPreflightAsync(
+            budget.Token);
+        await RunSeedAsync(
+            new ConfigurationBuilder().Build(),
+            budget.Token);
+
+        var after = await ReadAdminsAsync(budget.Token);
+        Assert.Equal(before.ToArray(), after.ToArray());
+        Assert.Equal(2, (await ReadStateAsync(budget.Token)).AdminCount);
+        Assert.Contains(after, admin => admin.AccountId == firstId);
+        Assert.Contains(after, admin => admin.AccountId == secondId);
+    }
+
+    [Fact]
+    public async Task OneEnabledAndOneDisabledAdmin_PreflightAndSeed_ShouldPass()
+    {
+        using var budget = CreateBudget();
+        await ResetDataAsync(budget.Token);
+        await CreateManualAccountAsync(
+            "ADMIN-ACTIVE",
+            "Active Admin",
+            assignAdmin: true,
+            budget.Token);
+        var disabledId = await CreateManualAccountAsync(
+            "ADMIN-INACTIVE",
+            "Inactive Admin",
+            assignAdmin: true,
+            budget.Token);
+        await DisableAdminAsync(disabledId, budget.Token);
+        var before = await ReadAdminsAsync(budget.Token);
+
+        await using var provider = CreateProvider(schemaConnectionString);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var orchestrator = new DatabaseInitializationOrchestrator(
+            services.GetRequiredService<IIoTDbContext>(),
+            null!,
+            null!,
+            null!,
+            null!,
+            new ConfigurationBuilder().Build(),
+            NullLogger<DatabaseInitializationOrchestrator>.Instance);
+        await orchestrator.EnsureIdentityAuthorizationPreflightAsync(
+            budget.Token);
+        await RunSeedAsync(
+            new ConfigurationBuilder().Build(),
+            budget.Token);
+
+        var after = await ReadAdminsAsync(budget.Token);
+        Assert.Equal(before.ToArray(), after.ToArray());
+        Assert.Contains(after, admin =>
+            admin.EmployeeNo == "ADMIN-ACTIVE"
+            && admin.IdentityEnabled
+            && admin.EmployeeActive == true);
+        Assert.Contains(after, admin =>
+            admin.EmployeeNo == "ADMIN-INACTIVE"
+            && !admin.IdentityEnabled
+            && admin.EmployeeActive == false);
+    }
+
+    [Fact]
+    public async Task AllAdminsDisabled_PreflightAndSeed_ShouldFailWithoutMutation()
+    {
+        using var budget = CreateBudget();
+        await ResetDataAsync(budget.Token);
+        var firstId = await CreateManualAccountAsync(
+            "ADMIN-DISABLED-1",
+            "Disabled Admin One",
+            assignAdmin: true,
+            budget.Token);
+        var secondId = await CreateManualAccountAsync(
+            "ADMIN-DISABLED-2",
+            "Disabled Admin Two",
+            assignAdmin: true,
+            budget.Token);
+        await DisableAdminAsync(firstId, budget.Token);
+        await DisableAdminAsync(secondId, budget.Token);
+        var before = await ReadAdminsAsync(budget.Token);
 
         await using var provider = CreateProvider(schemaConnectionString);
         await using var scope = provider.CreateAsyncScope();
@@ -314,22 +412,358 @@ public sealed class SingleAdminInvariantPostgresTests(
                 new ConfigurationBuilder().Build(),
                 budget.Token));
 
-        Assert.Contains(firstId.ToString(), preflight.Message, StringComparison.Ordinal);
-        Assert.Contains(secondId.ToString(), preflight.Message, StringComparison.Ordinal);
-        Assert.Contains("ADMIN-MULTI-1", preflight.Message, StringComparison.Ordinal);
-        Assert.Contains("ADMIN-MULTI-2", preflight.Message, StringComparison.Ordinal);
         Assert.Contains(
-            "conflictType=MigrationPreflight",
+            "conflictType=MigrationPreflightNoEnabledActiveAdmin",
             preflight.Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "conflictType=SeedLockedPreflightNoEnabledActiveAdmin",
+            seed.Message,
             StringComparison.Ordinal);
         Assert.DoesNotContain(InitialPassword, preflight.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("hash", preflight.Message, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("token", preflight.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(
+            before.ToArray(),
+            (await ReadAdminsAsync(budget.Token)).ToArray());
+    }
+
+    [Fact]
+    public async Task AllAdminsDisabled_ExplicitRepairPreflight_ShouldRepairOnlyExactTarget()
+    {
+        using var budget = CreateBudget();
+        await ResetDataAsync(budget.Token);
+        var targetId = await CreateManualAccountAsync(
+            "ADMIN-RECOVERY-TARGET",
+            "Recovery Target",
+            assignAdmin: true,
+            budget.Token);
+        var otherId = await CreateManualAccountAsync(
+            "ADMIN-RECOVERY-OTHER",
+            "Recovery Other",
+            assignAdmin: true,
+            budget.Token);
+        await DisableAdminAsync(targetId, budget.Token);
+        await DisableAdminAsync(otherId, budget.Token);
+        var otherBefore = (await ReadAdminsAsync(budget.Token)).Single(
+            admin => admin.AccountId == otherId);
+        var configuration = CreateSeedConfiguration(
+            "ADMIN-RECOVERY-TARGET",
+            ResetPassword,
+            "Ignored Replacement Name",
+            resetPassword: true);
+
+        await using var provider = CreateProvider(schemaConnectionString);
+        await using var scope = provider.CreateAsyncScope();
+        var services = scope.ServiceProvider;
+        var orchestrator = new DatabaseInitializationOrchestrator(
+            services.GetRequiredService<IIoTDbContext>(),
+            null!,
+            null!,
+            null!,
+            null!,
+            configuration,
+            NullLogger<DatabaseInitializationOrchestrator>.Instance);
+
+        await orchestrator.EnsureIdentityAuthorizationPreflightAsync(budget.Token);
+        await RunSeedAsync(configuration, budget.Token);
+
+        var admins = await ReadAdminsAsync(budget.Token);
+        var target = admins.Single(admin => admin.AccountId == targetId);
+        var other = admins.Single(admin => admin.AccountId == otherId);
+        Assert.True(target.IdentityEnabled);
+        Assert.True(target.EmployeeActive);
+        Assert.Equal("Recovery Target", target.RealName);
+        Assert.True(await PasswordMatchesAsync(targetId, ResetPassword, budget.Token));
+        Assert.Equal(otherBefore, other);
+        Assert.False(other.IdentityEnabled);
+        Assert.False(other.EmployeeActive);
+        Assert.False(await PasswordMatchesAsync(otherId, ResetPassword, budget.Token));
+    }
+
+    [Fact]
+    public async Task InitializeAsync_AllAdminsDisabled_ExplicitRepair_ShouldRestoreOnlyExactTarget()
+    {
+        using var budget = CreateBudget(TimeSpan.FromSeconds(60));
+        await ResetDataAsync(budget.Token);
+        var targetId = await CreateManualAccountAsync(
+            "ADMIN-FULL-RECOVERY",
+            "Full Recovery Target",
+            assignAdmin: true,
+            budget.Token);
+        var otherId = await CreateManualAccountAsync(
+            "ADMIN-FULL-OTHER",
+            "Full Recovery Other",
+            assignAdmin: true,
+            budget.Token);
+        await DisableAdminAsync(targetId, budget.Token);
+        await DisableAdminAsync(otherId, budget.Token);
+        var before = await ReadAdminsAsync(budget.Token);
+        var otherBefore = before.Single(admin => admin.AccountId == otherId);
+        var configuration = CreateInitializationConfiguration(
+            "ADMIN-FULL-RECOVERY",
+            ResetPassword,
+            "Ignored Replacement Name",
+            resetPassword: true);
+
+        await RunInitializationAsync(configuration, budget.Token);
+
+        var after = await ReadAdminsAsync(budget.Token);
+        var target = after.Single(admin => admin.AccountId == targetId);
+        var other = after.Single(admin => admin.AccountId == otherId);
+        Assert.Equal(2, after.Count);
+        Assert.True(target.IdentityEnabled);
+        Assert.True(target.EmployeeActive);
+        Assert.Equal("Full Recovery Target", target.RealName);
+        Assert.True(await PasswordMatchesAsync(
+            targetId,
+            ResetPassword,
+            budget.Token));
+        Assert.Equal(otherBefore, other);
+        Assert.False(other.IdentityEnabled);
+        Assert.False(other.EmployeeActive);
+        Assert.True(await PasswordMatchesAsync(
+            otherId,
+            InitialPassword,
+            budget.Token));
+        Assert.Contains(after, admin =>
+            admin.IdentityEnabled && admin.EmployeeActive == true);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_AllAdminsDisabled_WithoutExplicitRepair_ShouldFailBeforeMutation()
+    {
+        using var budget = CreateBudget(TimeSpan.FromSeconds(60));
+        await ResetDataAsync(budget.Token);
+        var adminId = await CreateManualAccountAsync(
+            "ADMIN-FULL-DISABLED",
+            "Full Disabled Admin",
+            assignAdmin: true,
+            budget.Token);
+        await DisableAdminAsync(adminId, budget.Token);
+        var before = await ReadAdminsAsync(budget.Token);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            RunInitializationAsync(
+                CreateInitializationConfiguration(),
+                budget.Token));
+
         Assert.Contains(
-            "conflictType=SeedLockedPreflight",
-            seed.Message,
+            "conflictType=MigrationPreflightNoEnabledActiveAdmin",
+            exception.Message,
             StringComparison.Ordinal);
-        Assert.Equal(before, await ReadStateAsync(budget.Token));
+        Assert.Equal(
+            before.ToArray(),
+            (await ReadAdminsAsync(budget.Token)).ToArray());
+    }
+
+    [Theory]
+    [InlineData("MISSING-FULL-RECOVERY")]
+    [InlineData("ORDINARY-FULL-RECOVERY")]
+    public async Task InitializeAsync_ExplicitRepair_ShouldRejectNonAdminTarget(
+        string employeeNo)
+    {
+        using var budget = CreateBudget(TimeSpan.FromSeconds(60));
+        await ResetDataAsync(budget.Token);
+        var adminId = await CreateManualAccountAsync(
+            "ADMIN-FULL-ONLY",
+            "Full Recovery Admin",
+            assignAdmin: true,
+            budget.Token);
+        await DisableAdminAsync(adminId, budget.Token);
+        await CreateManualAccountAsync(
+            "ORDINARY-FULL-RECOVERY",
+            "Ordinary Full Recovery",
+            assignAdmin: false,
+            budget.Token);
+        var adminsBefore = await ReadAdminsAsync(budget.Token);
+        var usersBefore = (await ReadStateAsync(budget.Token)).UserCount;
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            RunInitializationAsync(
+                CreateInitializationConfiguration(
+                    employeeNo,
+                    ResetPassword,
+                    "Rejected Recovery Target",
+                    resetPassword: true),
+                budget.Token));
+
+        Assert.Contains(
+            "conflictType=SeedAdminNumberMismatch",
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            adminsBefore.ToArray(),
+            (await ReadAdminsAsync(budget.Token)).ToArray());
+        Assert.Equal(usersBefore, (await ReadStateAsync(budget.Token)).UserCount);
+        Assert.Equal(0, await CountRolesAsync("User", budget.Token));
+    }
+
+    [Fact]
+    public async Task ExplicitRepairPreflight_ShouldRejectMissingAndOrdinaryTargetsWithoutMutation()
+    {
+        using var budget = CreateBudget();
+        await ResetDataAsync(budget.Token);
+        var adminId = await CreateManualAccountAsync(
+            "ADMIN-RECOVERY-ONLY",
+            "Recovery Admin",
+            assignAdmin: true,
+            budget.Token);
+        await DisableAdminAsync(adminId, budget.Token);
+        await CreateManualAccountAsync(
+            "ORDINARY-RECOVERY-TARGET",
+            "Ordinary Recovery Target",
+            assignAdmin: false,
+            budget.Token);
+        var before = await ReadAdminsAsync(budget.Token);
+
+        foreach (var employeeNo in new[]
+                 {
+                     "MISSING-RECOVERY-TARGET",
+                     "ORDINARY-RECOVERY-TARGET"
+                 })
+        {
+            var configuration = CreateSeedConfiguration(
+                employeeNo,
+                ResetPassword,
+                "Rejected Target",
+                resetPassword: true);
+            await using var provider = CreateProvider(schemaConnectionString);
+            await using var scope = provider.CreateAsyncScope();
+            var services = scope.ServiceProvider;
+            var orchestrator = new DatabaseInitializationOrchestrator(
+                services.GetRequiredService<IIoTDbContext>(),
+                null!,
+                null!,
+                null!,
+                null!,
+                configuration,
+                NullLogger<DatabaseInitializationOrchestrator>.Instance);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => orchestrator.EnsureIdentityAuthorizationPreflightAsync(budget.Token));
+            Assert.Contains(
+                "conflictType=SeedAdminNumberMismatch",
+                exception.Message,
+                StringComparison.Ordinal);
+        }
+
+        Assert.Equal(before.ToArray(), (await ReadAdminsAsync(budget.Token)).ToArray());
+        Assert.Equal(0, await CountRolesAsync("User", budget.Token));
+    }
+
+    [Fact]
+    public async Task ConcurrentExplicitRepairs_ShouldSerializeAndRemainIdempotent()
+    {
+        using var budget = CreateBudget(TimeSpan.FromSeconds(45));
+        await ResetDataAsync(budget.Token);
+        await RunSeedAsync(
+            CreateSeedConfiguration(
+                "ADMIN-CONCURRENT-REPAIR",
+                InitialPassword,
+                "Concurrent Repair Admin"),
+            budget.Token);
+        var before = await ReadStateAsync(budget.Token);
+        await DisableAdminAsync(before.Admin!.AccountId, budget.Token);
+
+        var firstApplication = $"admin-repair-first-{Guid.NewGuid():N}";
+        var secondApplication = $"admin-repair-second-{Guid.NewGuid():N}";
+        var pause = new PauseAfterAdminSeedLockInterceptor();
+        await using var firstProvider = CreateProvider(
+            WithConnectionOptions(baseConnectionString, firstApplication),
+            pause);
+        await using var secondProvider = CreateProvider(
+            WithConnectionOptions(baseConnectionString, secondApplication));
+        var configuration = CreateSeedConfiguration(
+            "ADMIN-CONCURRENT-REPAIR",
+            ResetPassword,
+            "Ignored Replacement Name",
+            resetPassword: true);
+
+        var firstRepair = RunSeedWithProviderAsync(
+            firstProvider,
+            configuration,
+            budget.Token);
+        await pause.WaitUntilLockAcquiredAsync(budget.Token);
+        var secondRepair = RunSeedWithProviderAsync(
+            secondProvider,
+            configuration,
+            budget.Token);
+
+        try
+        {
+            await WaitForAdvisoryLockContentionAsync(
+                firstApplication,
+                secondApplication,
+                budget.Token);
+        }
+        finally
+        {
+            pause.Release();
+        }
+
+        await Task.WhenAll(firstRepair, secondRepair);
+        var after = await ReadStateAsync(budget.Token);
+        Assert.Equal(before.Admin.AccountId, after.Admin!.AccountId);
+        Assert.Equal(1, after.AdminCount);
+        Assert.True(after.Admin.IdentityEnabled);
+        Assert.True(after.Admin.EmployeeActive);
+        Assert.True(await PasswordMatchesAsync(
+            after.Admin.AccountId,
+            ResetPassword,
+            budget.Token));
+    }
+
+    [Fact]
+    public async Task PasswordRepairWithMultipleAdmins_ShouldChangeOnlyExactTarget()
+    {
+        using var budget = CreateBudget();
+        await ResetDataAsync(budget.Token);
+        var targetId = await CreateManualAccountAsync(
+            "ADMIN-REPAIR-TARGET",
+            "Repair Target",
+            assignAdmin: true,
+            budget.Token);
+        var otherId = await CreateManualAccountAsync(
+            "ADMIN-REPAIR-OTHER",
+            "Other Admin",
+            assignAdmin: true,
+            budget.Token);
+        await DisableAdminAsync(targetId, budget.Token);
+        var otherBefore = (await ReadAdminsAsync(budget.Token)).Single(
+            admin => admin.AccountId == otherId);
+
+        await RunSeedAsync(
+            CreateSeedConfiguration(
+                "ADMIN-REPAIR-TARGET",
+                ResetPassword,
+                "Ignored Replacement Name",
+                resetPassword: true),
+            budget.Token);
+
+        var admins = await ReadAdminsAsync(budget.Token);
+        var target = admins.Single(admin => admin.AccountId == targetId);
+        var other = admins.Single(admin => admin.AccountId == otherId);
+        Assert.True(target.IdentityEnabled);
+        Assert.True(target.EmployeeActive);
+        Assert.Equal("Repair Target", target.RealName);
+        Assert.True(await PasswordMatchesAsync(
+            targetId,
+            ResetPassword,
+            budget.Token));
+        Assert.False(await PasswordMatchesAsync(
+            targetId,
+            InitialPassword,
+            budget.Token));
+        Assert.Equal(otherBefore, other);
+        Assert.True(await PasswordMatchesAsync(
+            otherId,
+            InitialPassword,
+            budget.Token));
+        Assert.False(await PasswordMatchesAsync(
+            otherId,
+            ResetPassword,
+            budget.Token));
     }
 
     [Fact]
@@ -452,7 +886,7 @@ public sealed class SingleAdminInvariantPostgresTests(
                 budget.Token));
 
         Assert.Contains(
-            "conflictType=AdminDisabledResetRequired",
+            "conflictType=SeedLockedPreflightNoEnabledActiveAdmin",
             exception.Message,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -533,6 +967,20 @@ public sealed class SingleAdminInvariantPostgresTests(
             provider,
             configuration,
             cancellationToken);
+    }
+
+    private async Task RunInitializationAsync(
+        IConfiguration configuration,
+        CancellationToken cancellationToken)
+    {
+        await using var provider = CreateInitializationProvider(
+            schemaConnectionString,
+            configuration);
+        var orchestrator = new DatabaseInitializationOrchestrator(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            configuration,
+            NullLogger<DatabaseInitializationOrchestrator>.Instance);
+        await orchestrator.InitializeAsync(cancellationToken);
     }
 
     private static async Task RunSeedWithProviderAsync(
@@ -661,6 +1109,67 @@ public sealed class SingleAdminInvariantPostgresTests(
             await dbContext.Employees.CountAsync(cancellationToken),
             await dbContext.Roles.CountAsync(cancellationToken),
             admin);
+    }
+
+    private async Task<IReadOnlyList<SeededAdminState>> ReadAdminsAsync(
+        CancellationToken cancellationToken)
+    {
+        await using var provider = CreateProvider(schemaConnectionString);
+        await using var scope = provider.CreateAsyncScope();
+        var dbContext =
+            scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        var identities = await (
+                from userRole in dbContext.UserRoles.AsNoTracking()
+                join role in dbContext.Roles.AsNoTracking()
+                    on userRole.RoleId equals role.Id
+                join user in dbContext.Users.AsNoTracking()
+                    on userRole.UserId equals user.Id
+                where role.Name == SystemRoles.Admin
+                orderby user.Id
+                select new
+                {
+                    user.Id,
+                    user.UserName,
+                    user.IsEnabled
+                })
+            .ToArrayAsync(cancellationToken);
+        var admins = new List<SeededAdminState>(identities.Length);
+        foreach (var identity in identities)
+        {
+            var employee = await dbContext.Employees
+                .AsNoTracking()
+                .SingleOrDefaultAsync(
+                    candidate => candidate.Id == identity.Id,
+                    cancellationToken);
+            admins.Add(new SeededAdminState(
+                identity.Id,
+                identity.UserName,
+                identity.IsEnabled,
+                employee?.Id,
+                employee?.EmployeeNo,
+                employee?.RealName,
+                employee?.IsActive));
+        }
+
+        return admins;
+    }
+
+    private async Task<IReadOnlyList<string>> ReadRolePermissionsAsync(
+        string roleName,
+        CancellationToken cancellationToken)
+    {
+        await using var provider = CreateProvider(schemaConnectionString);
+        await using var scope = provider.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<IIoTDbContext>();
+        return await (
+                from roleClaim in dbContext.RoleClaims.AsNoTracking()
+                join role in dbContext.Roles.AsNoTracking()
+                    on roleClaim.RoleId equals role.Id
+                where role.Name == roleName &&
+                      roleClaim.ClaimType == IIoTClaimTypes.Permission &&
+                      roleClaim.ClaimValue != null
+                select roleClaim.ClaimValue!)
+            .ToArrayAsync(cancellationToken);
     }
 
     private async Task<bool> PasswordMatchesAsync(
@@ -829,6 +1338,57 @@ public sealed class SingleAdminInvariantPostgresTests(
         return services.BuildServiceProvider();
     }
 
+    private static ServiceProvider CreateInitializationProvider(
+        string connectionString,
+        IConfiguration configuration)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(configuration);
+        services.AddDbContext<IIoTDbContext>(options =>
+        {
+            options.UseNpgsql(
+                connectionString,
+                npgsql => npgsql.EnableRetryOnFailure(
+                    3,
+                    TimeSpan.FromMilliseconds(50),
+                    null));
+            options.UseOpenIddict<Guid>();
+        });
+        services.AddIdentityCore<ApplicationUser>(options =>
+            {
+                options.Password.RequiredLength = 8;
+                options.Password.RequireDigit = true;
+                options.Password.RequireLowercase = true;
+                options.Password.RequireUppercase = true;
+                options.Password.RequireNonAlphanumeric = true;
+            })
+            .AddRoles<IdentityRole<Guid>>()
+            .AddEntityFrameworkStores<IIoTDbContext>();
+        services.AddOpenIddict()
+            .AddCore(options =>
+            {
+                options.UseEntityFrameworkCore()
+                    .UseDbContext<IIoTDbContext>()
+                    .ReplaceDefaultEntities<Guid>();
+            });
+        services.AddSingleton(Options.Create(new OidcProviderOptions
+        {
+            AicopilotClientId = "aicopilot-admin-initialize-fixture",
+            AicopilotRedirectUris =
+            [
+                "https://aicopilot.example.test/signin-oidc"
+            ],
+            AicopilotPostLogoutRedirectUris =
+            [
+                "https://aicopilot.example.test/signout-callback-oidc"
+            ]
+        }));
+        services.AddScoped<IOidcClientSeeder, OpenIddictClientSeeder>();
+        services.AddScoped<IRecordSchemaInitializer, NoOpRecordSchemaInitializer>();
+        return services.BuildServiceProvider();
+    }
+
     private static IConfiguration CreateSeedConfiguration(
         string employeeNo,
         string password,
@@ -849,6 +1409,40 @@ public sealed class SingleAdminInvariantPostgresTests(
         return new ConfigurationBuilder()
             .AddInMemoryCollection(values)
             .Build();
+    }
+
+    private static IConfiguration CreateInitializationConfiguration(
+        string? employeeNo = null,
+        string? password = null,
+        string? realName = null,
+        bool resetPassword = false)
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["DOTNET_ENVIRONMENT"] = "Testing",
+            [MigrationWorkAppTestingGuard
+                .SkipRecordSchemaAndTimescaleConfigurationKey] = "true"
+        };
+        if (!string.IsNullOrWhiteSpace(employeeNo))
+        {
+            values[SeedAdminOptions.EmployeeNoKey] = employeeNo;
+            values[SeedAdminOptions.PasswordKey] = password;
+            values[SeedAdminOptions.RealNameKey] = realName;
+        }
+        if (resetPassword)
+        {
+            values[SeedAdminOptions.ResetPasswordKey] = "true";
+        }
+
+        return new ConfigurationBuilder()
+            .AddInMemoryCollection(values)
+            .Build();
+    }
+
+    private sealed class NoOpRecordSchemaInitializer : IRecordSchemaInitializer
+    {
+        public Task InitializeAsync(CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
     }
 
     private sealed class PauseAfterAdminSeedLockInterceptor

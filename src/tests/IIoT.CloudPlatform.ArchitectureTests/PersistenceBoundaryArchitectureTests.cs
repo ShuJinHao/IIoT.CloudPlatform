@@ -1101,6 +1101,7 @@ public sealed class PersistenceBoundaryArchitectureTests
         Assert.Equal(
             [
                 "IssueAttemptAsync",
+                "IssueReplacingAttemptAsync",
                 "RevokeSubjectAttemptAsync",
                 "RotateAttemptAsync"
             ],

@@ -67,6 +67,28 @@ public class JwtTokenGenerator(IOptions<JwtSettings> jwtOptions) : IJwtTokenGene
         return CreateToken(claims);
     }
 
+    public JwtTokenResult GenerateEdgeActivationToken(
+        Guid generationId,
+        Guid deviceId,
+        string clientCode,
+        Guid processId)
+    {
+        var subject = $"edge-activation:{generationId:N}:{deviceId:N}";
+        var claims = new List<Claim>
+        {
+            new(JwtRegisteredClaimNames.Sub, subject),
+            new(ClaimTypes.NameIdentifier, subject),
+            new(ClaimTypes.Name, clientCode),
+            new(IIoTClaimTypes.ActorType, IIoTClaimTypes.EdgeActivationActor),
+            new(IIoTClaimTypes.DeviceId, deviceId.ToString()),
+            new(IIoTClaimTypes.ClientCode, clientCode),
+            new(IIoTClaimTypes.ProcessId, processId.ToString()),
+            new(IIoTClaimTypes.InstallerGenerationId, generationId.ToString()),
+            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+        };
+        return CreateToken(claims);
+    }
+
     public JwtTokenResult GenerateEdgeReleasePublisherToken(
         Guid apiKeyId,
         string apiKeyName,

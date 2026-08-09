@@ -2,9 +2,13 @@
   "PassStationTypes": {
     "types": [
       {
-        "typeKey": "cp",
-        "displayName": "正极模切",
-        "description": "正极模切生产追溯数据。弹夹位使用扩展字段，弹夹号、结果、完成时间和 Cloud DeviceId 使用公共列。",
+        "typeKey": "die-cutting-completion",
+        "legacyTypeKeys": [
+          "ap",
+          "cp"
+        ],
+        "displayName": "模切完成记录",
+        "description": "当前 AP/CP 插件共用的模切完成记录公共 Schema。AP/CP 仅为历史兼容 TypeKey，不代表工序、插件或设备。",
         "supportedModes": [
           "barcode-process",
           "time-process",
@@ -80,98 +84,7 @@
             ]
           },
           {
-            "title": "正极模切数据",
-            "fields": [
-              "plcCode",
-              "plcName",
-              "clipSlot",
-              "startTime",
-              "punchingQuantity",
-              "punchingSpeed"
-            ]
-          }
-        ]
-      },
-      {
-        "typeKey": "ap",
-        "displayName": "负极模切",
-        "description": "负极模切生产追溯数据。弹夹位使用扩展字段，弹夹号、结果、完成时间和 Cloud DeviceId 使用公共列。",
-        "supportedModes": [
-          "barcode-process",
-          "time-process",
-          "device-barcode",
-          "device-time",
-          "device-latest"
-        ],
-        "fields": [
-          {
-            "key": "plcCode",
-            "label": "PLC 编码",
-            "type": "string",
-            "required": true,
-            "maxLength": 64
-          },
-          {
-            "key": "plcName",
-            "label": "PLC 名称",
-            "type": "string",
-            "required": true,
-            "maxLength": 128
-          },
-          {
-            "key": "clipSlot",
-            "label": "弹夹位",
-            "type": "enum",
-            "required": true,
-            "options": [
-              "MG1",
-              "MG2"
-            ]
-          },
-          {
-            "key": "startTime",
-            "label": "开始时间",
-            "type": "datetime",
-            "required": true
-          },
-          {
-            "key": "punchingQuantity",
-            "label": "冲切数量",
-            "type": "integer",
-            "required": true,
-            "min": 0
-          },
-          {
-            "key": "punchingSpeed",
-            "label": "冲切速度",
-            "type": "number",
-            "required": true,
-            "min": 0,
-            "precision": 5
-          }
-        ],
-        "listColumns": [
-          "plcName",
-          "clipSlot",
-          "barcode",
-          "cellResult",
-          "punchingQuantity",
-          "punchingSpeed",
-          "completedTime"
-        ],
-        "detailSections": [
-          {
-            "title": "基础信息",
-            "fields": [
-              "barcode",
-              "deviceId",
-              "cellResult",
-              "completedTime",
-              "receivedAt"
-            ]
-          },
-          {
-            "title": "负极模切数据",
+            "title": "模切完成数据",
             "fields": [
               "plcCode",
               "plcName",

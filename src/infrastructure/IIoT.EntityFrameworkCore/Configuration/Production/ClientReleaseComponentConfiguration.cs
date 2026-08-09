@@ -53,6 +53,29 @@ public sealed class ClientReleaseComponentConfiguration : IEntityTypeConfigurati
             .HasMaxLength(64)
             .HasColumnName("target_runtime");
 
+        builder.Property(component => component.SupportedProcessType)
+            .HasMaxLength(50)
+            .HasColumnName("supported_process_type");
+        builder.Property(component => component.BusinessDocumentRef)
+            .HasMaxLength(512)
+            .HasColumnName("business_document_ref");
+        builder.Property(component => component.ManifestSchemaVersion)
+            .IsRequired()
+            .HasDefaultValue(1)
+            .HasColumnName("manifest_schema_version");
+        builder.Property(component => component.FileManifestSha256)
+            .HasMaxLength(64)
+            .HasColumnName("file_manifest_sha256");
+        builder.Property(component => component.DataCapabilitiesJson)
+            .IsRequired()
+            .HasColumnType("jsonb")
+            .HasDefaultValue("[]")
+            .HasColumnName("data_capabilities_json");
+        builder.Property(component => component.WasEverDeviceBound)
+            .IsRequired()
+            .HasDefaultValue(false)
+            .HasColumnName("was_ever_device_bound");
+
         builder.Property(component => component.CreatedAtUtc)
             .IsRequired()
             .HasColumnName("created_at_utc");
@@ -152,6 +175,27 @@ public sealed class ClientReleaseVersionConfiguration : IEntityTypeConfiguration
             .IsRequired()
             .HasColumnType("jsonb")
             .HasColumnName("dependencies_json");
+
+        builder.Property(version => version.DataCapabilitiesJson)
+            .IsRequired()
+            .HasColumnType("jsonb")
+            .HasColumnName("data_capabilities_json");
+
+        builder.Property(version => version.FileManifestSha256)
+            .HasMaxLength(64)
+            .HasColumnName("file_manifest_sha256");
+
+        builder.Property(version => version.DependencyClosureSha256)
+            .HasMaxLength(64)
+            .HasColumnName("dependency_closure_sha256");
+
+        builder.Property(version => version.DependencyHostVersion)
+            .HasMaxLength(64)
+            .HasColumnName("dependency_host_version");
+
+        builder.Property(version => version.DependencyHostFileManifestSha256)
+            .HasMaxLength(64)
+            .HasColumnName("dependency_host_file_manifest_sha256");
 
         builder.Property(version => version.Status)
             .IsRequired()

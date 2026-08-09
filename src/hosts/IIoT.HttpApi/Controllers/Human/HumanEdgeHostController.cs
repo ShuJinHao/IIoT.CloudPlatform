@@ -1,5 +1,6 @@
 using IIoT.HttpApi.Infrastructure;
 using IIoT.ProductionService.Queries.EdgeHosts;
+using IIoT.ProductionService.Queries.DeviceMetadata;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -35,5 +36,26 @@ public sealed class HumanEdgeHostController : ApiControllerBase
         CancellationToken cancellationToken)
     {
         return ReturnResult(await Sender.Send(new GetEdgeHostPlcRuntimeStatesQuery(deviceId), cancellationToken));
+    }
+
+    [HttpGet("{deviceId:guid}/plcs")]
+    public async Task<IActionResult> GetDevicePlcs(
+        [FromRoute] Guid deviceId,
+        CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(
+            new GetHumanDevicePlcsQuery(deviceId),
+            cancellationToken));
+    }
+
+    [HttpGet("{deviceId:guid}/data-schemas")]
+    public async Task<IActionResult> GetDeviceDataSchemas(
+        [FromRoute] Guid deviceId,
+        [FromQuery] string? plcCode,
+        CancellationToken cancellationToken)
+    {
+        return ReturnResult(await Sender.Send(
+            new GetHumanDeviceDataSchemasQuery(deviceId, plcCode),
+            cancellationToken));
     }
 }

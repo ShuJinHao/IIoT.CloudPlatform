@@ -1,15 +1,30 @@
+using System.IdentityModel.Tokens.Jwt;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using FluentAssertions;
+using IIoT.Services.Contracts.Authorization;
+using IIoT.Services.Contracts.Identity;
+using Npgsql;
+using OpenIddict.Abstractions;
 
 namespace IIoT.CloudPlatform.EndToEndTests;
 
-public sealed partial class CloudProductionFlowTests
+public sealed class CloudOidcFlowTests : IAsyncLifetime
 {
     private const string AicopilotOidcCallbackUri = "http://127.0.0.1:5178/api/identity/cloud-oidc/callback";
+    private readonly IIoTAppFixture _fixture = new(
+        disableDataWorkerOutboxDispatcher: true,
+        skipRecordSchemaAndTimescale: true,
+        useDirectHttpApi: true);
+
+    public Task InitializeAsync() => _fixture.StartAsync();
+
+    public Task DisposeAsync() => _fixture.DisposeAsync().AsTask();
 
     [Fact]
     public async Task CloudOidc_Discovery_ShouldExposeCodeFlowPkceAndProviderEndpoints()
@@ -35,6 +50,7 @@ public sealed partial class CloudProductionFlowTests
         var scopes = ReadStringArray(root, "scopes_supported");
         scopes.Should().Contain("openid");
         scopes.Should().Contain("profile");
+        scopes.Should().Contain(AiReadDelegationDefaults.Scope);
     }
 
     [Fact]
@@ -114,6 +130,68 @@ public sealed partial class CloudProductionFlowTests
         }
     }
 
+    [Fact]
+    public async Task CloudOidc_DelegatedCodeFlow_ShouldIssueBoundTokenAndHonorTokenEntryRevocation()
+    {
+        _fixture.ClearAuthToken();
+        var verifier = CreatePkceVerifier();
+        var code = await GetAuthorizationCodeAsync(
+            "state-delegated-ai-read",
+            "nonce-delegated-ai-read",
+            CreatePkceChallenge(verifier),
+            $"openid profile {AiReadDelegationDefaults.Scope}");
+
+        using var tokenResponse = await ExchangeAuthorizationCodeAsync(code, verifier);
+        var tokenBody = await tokenResponse.Content.ReadAsStringAsync();
+        tokenResponse.StatusCode.Should().Be(HttpStatusCode.OK, tokenBody);
+
+        using var tokenDocument = JsonDocument.Parse(tokenBody);
+        var tokenRoot = tokenDocument.RootElement;
+        tokenRoot.TryGetProperty("refresh_token", out _).Should().BeFalse();
+        var accessToken = tokenRoot.GetProperty("access_token").GetString();
+        accessToken.Should().NotBeNullOrWhiteSpace();
+
+        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(accessToken);
+        jwt.Audiences.Should().Equal(AiReadDelegationDefaults.Audience);
+        jwt.Claims.Single(claim => claim.Type == IIoTClaimTypes.ActorType).Value
+            .Should().Be(AiReadDelegationDefaults.Actor);
+        var subject = jwt.Claims.Single(claim => claim.Type == JwtRegisteredClaimNames.Sub).Value;
+        jwt.Claims.Single(claim => claim.Type == IIoTClaimTypes.DelegatedUserId).Value
+            .Should().Be(subject);
+        jwt.Claims.Single(claim => claim.Type == OpenIddictConstants.Claims.Scope).Value
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Should().Contain(AiReadDelegationDefaults.Scope);
+        var now = DateTime.UtcNow;
+        jwt.ValidTo.Should().BeAfter(now);
+        jwt.ValidTo.Should().BeOnOrBefore(
+            now.AddMinutes(AiReadDelegationDefaults.LifetimeMinutes)
+                .AddSeconds(5));
+        tokenRoot.GetProperty("expires_in").GetInt32()
+            .Should().BeLessThanOrEqualTo(
+                checked(AiReadDelegationDefaults.LifetimeMinutes * 60));
+
+        using (var beforeRevocation = CreateBearerRequest(
+                   HttpMethod.Get,
+                   "/api/v1/ai/read/processes?maxRows=1",
+                   accessToken!))
+        using (var response = await _fixture.HttpClient.SendAsync(beforeRevocation))
+        {
+            var body = await response.Content.ReadAsStringAsync();
+            response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        }
+
+        var tokenId = Guid.Parse(
+            new ClaimsPrincipal(new ClaimsIdentity(jwt.Claims)).GetTokenId()!);
+        await RevokeOpenIddictTokenEntryAsync(tokenId);
+
+        using var afterRevocation = CreateBearerRequest(
+            HttpMethod.Get,
+            "/api/v1/ai/read/processes?maxRows=1",
+            accessToken!);
+        using var revokedResponse = await _fixture.HttpClient.SendAsync(afterRevocation);
+        revokedResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
     private static string[] ReadStringArray(JsonElement root, string propertyName)
     {
         return root.GetProperty(propertyName)
@@ -127,13 +205,19 @@ public sealed partial class CloudProductionFlowTests
     private async Task<string> GetAuthorizationCodeAsync(
         string state,
         string nonce,
-        string codeChallenge)
+        string codeChallenge,
+        string scope = "openid profile")
     {
         var sessionCookie = await LoginAndReadOidcSessionCookieAsync();
         using var client = CreateNoRedirectGatewayClient();
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
-            CreateAuthorizePath(state, nonce, codeChallenge, AicopilotOidcCallbackUri));
+            CreateAuthorizePath(
+                state,
+                nonce,
+                codeChallenge,
+                AicopilotOidcCallbackUri,
+                scope));
         request.Headers.TryAddWithoutValidation("Cookie", sessionCookie);
 
         using var response = await client.SendAsync(request);
@@ -162,7 +246,7 @@ public sealed partial class CloudProductionFlowTests
             "Cloud human login should create the OIDC server session cookie.");
 
         var oidcCookie = cookies!
-            .FirstOrDefault(cookie => cookie.StartsWith("__Host-IIoT-OidcSession=", StringComparison.Ordinal));
+            .FirstOrDefault(cookie => cookie.StartsWith("IIoT-OidcSession=", StringComparison.Ordinal));
         oidcCookie.Should().NotBeNullOrWhiteSpace(
             "AICopilot must never receive Cloud cookies directly, but Cloud authorize needs its own OIDC session cookie.");
 
@@ -195,14 +279,15 @@ public sealed partial class CloudProductionFlowTests
         string state,
         string nonce,
         string codeChallenge,
-        string redirectUri)
+        string redirectUri,
+        string scope = "openid profile")
     {
         var parameters = new Dictionary<string, string>
         {
             ["client_id"] = "aicopilot",
             ["redirect_uri"] = redirectUri,
             ["response_type"] = "code",
-            ["scope"] = "openid profile",
+            ["scope"] = scope,
             ["state"] = state,
             ["nonce"] = nonce,
             ["code_challenge"] = codeChallenge,
@@ -243,5 +328,33 @@ public sealed partial class CloudProductionFlowTests
             .Where(pair => string.Equals(Uri.UnescapeDataString(pair[0]), key, StringComparison.Ordinal))
             .Select(pair => Uri.UnescapeDataString(pair[1]))
             .FirstOrDefault();
+    }
+
+    private static HttpRequestMessage CreateBearerRequest(
+        HttpMethod method,
+        string path,
+        string accessToken)
+    {
+        var request = new HttpRequestMessage(method, path);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        return request;
+    }
+
+    private async Task RevokeOpenIddictTokenEntryAsync(Guid tokenId)
+    {
+        var connectionString = await _fixture.GetConnectionStringAsync(
+            IIoT.SharedKernel.Configuration.ConnectionResourceNames.IiotDatabase);
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            UPDATE "OpenIddictTokens"
+            SET "Status" = @status
+            WHERE "Id" = @token_id;
+            """,
+            connection);
+        command.Parameters.AddWithValue("status", OpenIddictConstants.Statuses.Revoked);
+        command.Parameters.AddWithValue("token_id", tokenId);
+        (await command.ExecuteNonQueryAsync()).Should().Be(1);
     }
 }

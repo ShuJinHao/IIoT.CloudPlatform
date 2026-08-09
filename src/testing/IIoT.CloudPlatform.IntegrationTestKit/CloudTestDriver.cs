@@ -170,7 +170,7 @@ public sealed class CloudTestDriver(IIoTAppFixture fixture)
             new(JwtRegisteredClaimNames.UniqueName, "ai-read-e2e"),
             new(ClaimTypes.NameIdentifier, subjectId.ToString()),
             new(ClaimTypes.Name, "ai-read-e2e"),
-            new(IIoTClaimTypes.ActorType, IIoTClaimTypes.AiServiceActor),
+            new(IIoTClaimTypes.ActorType, IIoTClaimTypes.AiDelegatedUserActor),
             new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
         };
         claims.AddRange(permissions.Select(permission => new Claim(IIoTClaimTypes.Permission, permission)));

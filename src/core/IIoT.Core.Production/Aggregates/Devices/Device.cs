@@ -52,6 +52,9 @@ public class Device : BaseEntity<Guid>, IAggregateRoot<Guid>
 
         Id = id;
         DeviceName = deviceName.Trim();
+        NormalizedDeviceName = BusinessIdentityNormalization.NormalizeDisplayNameKey(
+            deviceName,
+            nameof(deviceName));
         Code = code.Value;
         ProcessId = processId;
 
@@ -59,6 +62,8 @@ public class Device : BaseEntity<Guid>, IAggregateRoot<Guid>
     }
 
     public string DeviceName { get; private set; } = null!;
+
+    public string NormalizedDeviceName { get; private set; } = null!;
 
     public string Code { get; private set; } = null!;
 
@@ -79,6 +84,9 @@ public class Device : BaseEntity<Guid>, IAggregateRoot<Guid>
         }
 
         DeviceName = normalizedName;
+        NormalizedDeviceName = BusinessIdentityNormalization.NormalizeDisplayNameKey(
+            normalizedName,
+            nameof(newName));
         AddDomainEvent(new DeviceRenamedDomainEvent(Id, DeviceName, Code, ProcessId));
     }
 
@@ -87,6 +95,15 @@ public class Device : BaseEntity<Guid>, IAggregateRoot<Guid>
         ArgumentException.ThrowIfNullOrWhiteSpace(bootstrapSecretHash);
 
         BootstrapSecretHash = bootstrapSecretHash.Trim();
+    }
+
+    /// <summary>
+    /// Once a v3 installer instance is activated, the legacy long-lived
+    /// bootstrap path must never mint another formal session.
+    /// </summary>
+    public void DisableLegacyBootstrap()
+    {
+        BootstrapSecretHash = null;
     }
 
     public void MigrateProcess(Guid targetProcessId)

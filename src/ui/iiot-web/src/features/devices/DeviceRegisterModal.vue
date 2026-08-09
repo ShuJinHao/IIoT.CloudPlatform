@@ -15,6 +15,21 @@
           />
           <span class="form-hint">工序由设备台账当前上下文锁定，创建后如需调整必须走迁移预检。</span>
       </div>
+      <div class="form-field">
+        <label class="form-label">独立设备插件 <span class="required">*</span></label>
+        <UiSelect
+          v-model:value="form.pluginComponentId"
+          :options="pluginSeriesOptions"
+          :loading="pluginSeriesLoading"
+          :disabled="pluginSeriesLoading || pluginSeriesOptions.length === 0"
+          placeholder="选择已发布且未绑定的插件"
+        />
+        <span v-if="pluginSeriesError" class="form-hint">{{ pluginSeriesError }}</span>
+        <span v-else-if="!pluginSeriesLoading && pluginSeriesOptions.length === 0" class="form-hint">
+          当前工序没有可绑定的独立设备插件，请先发布并验证插件。
+        </span>
+        <span v-else class="form-hint">一个插件发布系列只能绑定一台具体设备。</span>
+      </div>
       <div class="hint-card">
         <div class="hint-card__title">设备 Code 由云端自动生成</div>
         <div class="hint-card__desc">保存后请到「客户端首装生成」为对应工序生成绑定安装包，现场无需手工配置密钥。</div>
@@ -23,7 +38,12 @@
     <template #footer>
       <div class="modal-actions">
         <UiButton @click="show = false">取消</UiButton>
-        <UiButton type="primary" :loading="submitting" @click="$emit('submit')">确认创建</UiButton>
+        <UiButton
+          type="primary"
+          :loading="submitting"
+          :disabled="pluginSeriesLoading || pluginSeriesOptions.length === 0"
+          @click="$emit('submit')"
+        >确认创建</UiButton>
       </div>
     </template>
   </UiModal>
@@ -42,6 +62,9 @@ const show = defineModel<boolean>('show', { required: true });
 defineProps<{
   form: DeviceRegisterForm;
   processOptions: UiSelectOption[];
+  pluginSeriesOptions: UiSelectOption[];
+  pluginSeriesLoading: boolean;
+  pluginSeriesError: string;
   submitting: boolean;
 }>();
 </script>

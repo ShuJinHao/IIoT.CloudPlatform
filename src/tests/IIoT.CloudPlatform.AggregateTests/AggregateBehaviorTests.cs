@@ -101,13 +101,13 @@ public sealed class AggregateBehaviorTests
 
         process.Rename("Injection", "注液工序");
 
-        Assert.Equal("Injection", process.ProcessCode);
+        Assert.Equal("INJECTION", process.ProcessCode);
         Assert.Equal("注液工序", process.ProcessName);
         var domainEvent = Assert.IsType<MfgProcessRenamedDomainEvent>(
             Assert.Single(process.DomainEvents));
         Assert.Equal(process.Id, domainEvent.ProcessId);
-        Assert.Equal("Stacking", domainEvent.OldProcessCode);
-        Assert.Equal("Injection", domainEvent.NewProcessCode);
+        Assert.Equal("STACKING", domainEvent.OldProcessCode);
+        Assert.Equal("INJECTION", domainEvent.NewProcessCode);
         Assert.Equal("叠片工序", domainEvent.OldProcessName);
         Assert.Equal("注液工序", domainEvent.NewProcessName);
     }

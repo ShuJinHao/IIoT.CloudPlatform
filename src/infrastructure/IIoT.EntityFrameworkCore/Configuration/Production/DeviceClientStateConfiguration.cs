@@ -98,6 +98,18 @@ public sealed class DeviceClientStateConfiguration : IEntityTypeConfiguration<De
             .HasMaxLength(64)
             .HasColumnName("plc_snapshot_content_sha256");
 
+        builder.Property(state => state.PlcSnapshotIsAuthoritative)
+            .IsRequired()
+            .HasColumnName("plc_snapshot_is_authoritative");
+
+        builder.Property(state => state.PlcSnapshotConfigurationVersion)
+            .HasMaxLength(128)
+            .HasColumnName("plc_snapshot_configuration_version");
+
+        builder.Property(state => state.PlcSnapshotExplicitClear)
+            .IsRequired()
+            .HasColumnName("plc_snapshot_explicit_clear");
+
         builder.Property(state => state.CreatedAtUtc)
             .IsRequired()
             .HasColumnName("created_at_utc");

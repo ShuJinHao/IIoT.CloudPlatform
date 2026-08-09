@@ -166,6 +166,11 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .HasColumnType("character varying(32)")
                         .HasColumnName("accent_color");
 
+                    b.Property<string>("BusinessDocumentRef")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("business_document_ref");
+
                     b.Property<string>("Channel")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -188,6 +193,13 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at_utc");
 
+                    b.Property<string>("DataCapabilitiesJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasDefaultValue("[]")
+                        .HasColumnName("data_capabilities_json");
+
                     b.Property<string>("Description")
                         .HasMaxLength(512)
                         .HasColumnType("character varying(512)")
@@ -199,16 +211,32 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .HasColumnType("character varying(128)")
                         .HasColumnName("display_name");
 
+                    b.Property<string>("FileManifestSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("file_manifest_sha256");
+
                     b.Property<string>("IconKind")
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)")
                         .HasColumnName("icon_kind");
+
+                    b.Property<int>("ManifestSchemaVersion")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1)
+                        .HasColumnName("manifest_schema_version");
 
                     b.Property<uint>("RowVersion")
                         .IsConcurrencyToken()
                         .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("xid")
                         .HasColumnName("xmin");
+
+                    b.Property<string>("SupportedProcessType")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("supported_process_type");
 
                     b.Property<string>("TargetRuntime")
                         .IsRequired()
@@ -219,6 +247,12 @@ namespace IIoT.EntityFrameworkCore.Migrations
                     b.Property<DateTime>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at_utc");
+
+                    b.Property<bool>("WasEverDeviceBound")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("was_ever_device_bound");
 
                     b.HasKey("Id");
 
@@ -411,6 +445,11 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at_utc");
 
+                    b.Property<string>("DataCapabilitiesJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("data_capabilities_json");
+
                     b.Property<DateTime?>("DeletedAtUtc")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("deleted_at_utc");
@@ -432,11 +471,31 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .HasColumnType("jsonb")
                         .HasColumnName("dependencies_json");
 
+                    b.Property<string>("DependencyClosureSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("dependency_closure_sha256");
+
+                    b.Property<string>("DependencyHostFileManifestSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("dependency_host_file_manifest_sha256");
+
+                    b.Property<string>("DependencyHostVersion")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("dependency_host_version");
+
                     b.Property<string>("DownloadUrl")
                         .IsRequired()
                         .HasMaxLength(1024)
                         .HasColumnType("character varying(1024)")
                         .HasColumnName("download_url");
+
+                    b.Property<string>("FileManifestSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("file_manifest_sha256");
 
                     b.Property<string>("HostApiVersion")
                         .IsRequired()
@@ -547,6 +606,11 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .HasColumnType("character varying(128)")
                         .HasColumnName("module_id");
 
+                    b.Property<string>("PackageSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("package_sha256");
+
                     b.Property<string>("Version")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -611,10 +675,23 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .HasColumnType("character varying(128)")
                         .HasColumnName("machine_profile");
 
+                    b.Property<string>("PlcSnapshotConfigurationVersion")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("plc_snapshot_configuration_version");
+
                     b.Property<string>("PlcSnapshotContentSha256")
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)")
                         .HasColumnName("plc_snapshot_content_sha256");
+
+                    b.Property<bool>("PlcSnapshotExplicitClear")
+                        .HasColumnType("boolean")
+                        .HasColumnName("plc_snapshot_explicit_clear");
+
+                    b.Property<bool>("PlcSnapshotIsAuthoritative")
+                        .HasColumnType("boolean")
+                        .HasColumnName("plc_snapshot_is_authoritative");
 
                     b.Property<DateTime?>("PlcSnapshotReceivedAtUtc")
                         .HasColumnType("timestamp with time zone")
@@ -755,6 +832,49 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .HasDatabaseName("ux_edge_device_client_version_snapshots_device");
 
                     b.ToTable("edge_device_client_version_snapshots", (string)null);
+                });
+
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.DevicePluginBinding", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("BoundAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("bound_at_utc");
+
+                    b.Property<Guid>("ClientReleaseComponentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("client_release_component_id");
+
+                    b.Property<Guid>("DeviceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("device_id");
+
+                    b.Property<string>("ProcessType")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("process_type");
+
+                    b.Property<uint>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ClientReleaseComponentId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_device_plugin_bindings_component");
+
+                    b.HasIndex("DeviceId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_device_plugin_bindings_device");
+
+                    b.ToTable("device_plugin_bindings", (string)null);
                 });
 
             modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.EdgeDeviceRuntimeHeartbeat", b =>
@@ -925,6 +1045,86 @@ namespace IIoT.EntityFrameworkCore.Migrations
                     b.ToTable("edge_installer_generation_records", (string)null);
                 });
 
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.EdgeInstallerPendingCredential", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ActivatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("ActivationStartedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("ActivationReplayCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ClientCode")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("DeviceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("ExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("GenerationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ModuleId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("PackageSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("PluginVersion")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<DateTime?>("ReadyAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("ReadyProcessId")
+                        .HasColumnType("integer");
+
+                    b.Property<uint>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.Property<string>("SecretHash")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DeviceId");
+
+                    b.HasIndex("GenerationId", "DeviceId")
+                        .IsUnique();
+
+                    b.HasIndex("ClientCode", "Status", "ExpiresAtUtc");
+
+                    b.ToTable("edge_installer_pending_credentials", (string)null);
+                });
+
             modelBuilder.Entity("IIoT.Core.Production.Aggregates.Devices.Device", b =>
                 {
                     b.Property<Guid>("Id")
@@ -949,6 +1149,12 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .HasColumnType("character varying(100)")
                         .HasColumnName("device_name");
 
+                    b.Property<string>("NormalizedDeviceName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("normalized_device_name");
+
                     b.Property<Guid>("ProcessId")
                         .HasColumnType("uuid")
                         .HasColumnName("process_id");
@@ -965,9 +1171,9 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .IsUnique()
                         .HasDatabaseName("ix_devices_client_code");
 
-                    b.HasIndex("DeviceName")
+                    b.HasIndex("NormalizedDeviceName")
                         .IsUnique()
-                        .HasDatabaseName("ix_devices_device_name");
+                        .HasDatabaseName("ux_devices_normalized_device_name");
 
                     b.HasIndex("ProcessId")
                         .HasDatabaseName("ix_devices_process_id");
@@ -1000,6 +1206,10 @@ namespace IIoT.EntityFrameworkCore.Migrations
                     b.Property<Guid>("DeviceId")
                         .HasColumnType("uuid")
                         .HasColumnName("device_id");
+
+                    b.Property<bool?>("Enabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("enabled");
 
                     b.Property<bool>("IsConnected")
                         .HasColumnType("boolean")
@@ -2111,12 +2321,42 @@ namespace IIoT.EntityFrameworkCore.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.DevicePluginBinding", b =>
+                {
+                    b.HasOne("IIoT.Core.Production.Aggregates.ClientReleases.ClientReleaseComponent", null)
+                        .WithOne()
+                        .HasForeignKey("IIoT.Core.Production.Aggregates.ClientReleases.DevicePluginBinding", "ClientReleaseComponentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("IIoT.Core.Production.Aggregates.Devices.Device", null)
+                        .WithOne()
+                        .HasForeignKey("IIoT.Core.Production.Aggregates.ClientReleases.DevicePluginBinding", "DeviceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.EdgeDeviceRuntimeHeartbeat", b =>
                 {
                     b.HasOne("IIoT.Core.Production.Aggregates.Devices.Device", null)
                         .WithMany()
                         .HasForeignKey("DeviceId")
                         .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("IIoT.Core.Production.Aggregates.ClientReleases.EdgeInstallerPendingCredential", b =>
+                {
+                    b.HasOne("IIoT.Core.Production.Aggregates.Devices.Device", null)
+                        .WithMany()
+                        .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("IIoT.Core.Production.Aggregates.ClientReleases.EdgeInstallerGenerationRecord", null)
+                        .WithMany()
+                        .HasForeignKey("GenerationId")
+                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
 

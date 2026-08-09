@@ -11,6 +11,8 @@ public sealed class CurrentUser : ICurrentUser
     public string? ActorType { get; }
     public IReadOnlyCollection<string> Permissions { get; } = [];
     public Guid? DeviceId { get; }
+    public string? ClientCode { get; }
+    public Guid? InstallerGenerationId { get; }
     public bool IsAuthenticated { get; }
 
     public CurrentUser(IHttpContextAccessor httpContextAccessor)
@@ -38,6 +40,15 @@ public sealed class CurrentUser : ICurrentUser
         if (Guid.TryParse(user.FindFirstValue(IIoTClaimTypes.DeviceId), out var deviceId))
         {
             DeviceId = deviceId;
+        }
+
+        ClientCode = user.FindFirstValue(IIoTClaimTypes.ClientCode)?.Trim().ToUpperInvariant();
+
+        if (Guid.TryParse(
+                user.FindFirstValue(IIoTClaimTypes.InstallerGenerationId),
+                out var generationId))
+        {
+            InstallerGenerationId = generationId;
         }
 
         IsAuthenticated = true;

@@ -128,7 +128,10 @@ public sealed class AuditTrailPersistenceIsolationTests
     private static EfAuditTrailService CreateService(
         SqliteEfTestDatabase database,
         ILogger<EfAuditTrailService>? logger = null)
-        => new(database.Options, logger ?? NullLogger<EfAuditTrailService>.Instance);
+        => new(
+            database.CreateContext(),
+            database.Options,
+            logger ?? NullLogger<EfAuditTrailService>.Instance);
 
     private sealed class ThrowAuditSaveInterceptor(string message) : SaveChangesInterceptor
     {

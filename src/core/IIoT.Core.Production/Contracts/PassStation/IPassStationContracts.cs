@@ -18,4 +18,5 @@ public sealed record PassStationRecordWriteModel(
     DateTime CompletedTime,
     DateTime ReceivedAt,
     string DeduplicationKey,
-    string PayloadJson) : IPassStationWriteModel;
+    string PayloadJson,
+    string? CompletionId = null) : IPassStationWriteModel;

@@ -76,7 +76,8 @@ const deletionImpact: DeviceDeletionImpactDto = {
   employeeDeviceAccesses: 10,
   refreshTokenSessions: 11,
   edgeHostPlcRuntimeStates: 12,
-  totalAssociatedRows: 78,
+  installerPendingCredentials: 13,
+  totalAssociatedRows: 91,
 };
 
 const processOptions = [
@@ -104,6 +105,7 @@ const migrationImpact: DeviceProcessMigrationImpactDto = {
     employeeDeviceAccesses: 1,
     refreshTokenSessions: 1,
     edgeHostPlcRuntimeStates: 0,
+    installerPendingCredentials: 0,
     totalAssociatedRows: 7,
   },
   blockers: [],
@@ -290,8 +292,9 @@ describe('devices feature guards', () => {
       { label: '人员设备授权', value: 10 },
       { label: '设备 refresh token', value: 11 },
       { label: 'PLC 运行状态', value: 12 },
+      { label: '待激活安装凭证', value: 13 },
     ]);
-    expect(state.deletionImpactRows.value).toHaveLength(12);
+    expect(state.deletionImpactRows.value).toHaveLength(13);
     expect(
       state.deletionImpactRows.value.reduce((total, item) => total + item.value, 0),
     ).toBe(deletionImpact.totalAssociatedRows);

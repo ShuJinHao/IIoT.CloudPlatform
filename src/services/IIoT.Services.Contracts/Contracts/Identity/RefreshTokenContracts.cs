@@ -51,6 +51,17 @@ public interface IRefreshTokenService
         Guid subjectId,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Atomically issues one replacement session and revokes all prior active
+    /// sessions for the same non-human subject. If issuing the replacement
+    /// fails, prior sessions remain valid.
+    /// </summary>
+    Task<RefreshTokenEnvelope> IssueReplacingAsync(
+        string actorType,
+        Guid subjectId,
+        string reason,
+        CancellationToken cancellationToken = default);
+
     Task<Result<RefreshTokenRotationResult>> RotateAsync(
         string actorType,
         string refreshToken,

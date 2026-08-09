@@ -192,7 +192,8 @@ public sealed record GetAiReadProcessesQuery(
     int? MaxRows = null) : IAiReadQuery<Result<AiReadListResponse<AiReadProcessDto>>>;
 
 public sealed class GetAiReadProcessesHandler(
-    IProcessReadQueryService processReadQueryService,
+    IAiReadProcessQueryService processReadQueryService,
+    IAiReadScopeAccessor scopeAccessor,
     IOptions<AiReadOptions> options)
     : IQueryHandler<GetAiReadProcessesQuery, Result<AiReadListResponse<AiReadProcessDto>>>
 {
@@ -203,10 +204,15 @@ public sealed class GetAiReadProcessesHandler(
         if (request.ProcessId == Guid.Empty)
             return Result.Invalid("工序不能为空。");
 
+        var scopeValidation = AiReadQueryGuard.ResolveDeviceScope(scopeAccessor, out var allowedDeviceIds);
+        if (scopeValidation is not null)
+            return scopeValidation;
+
         var maxRows = AiReadQueryGuard.NormalizeMaxRows(request.MaxRows, options.Value);
         var (processes, totalCount) = await processReadQueryService.GetPagedAsync(
             request.ProcessId,
             request.Keyword,
+            allowedDeviceIds,
             0,
             maxRows,
             cancellationToken);
@@ -222,7 +228,9 @@ public sealed class GetAiReadProcessesHandler(
             "processes",
             AiReadQueryGuard.BuildScope(
                 ("processId", AiReadQueryGuard.ScopeGuid(request.ProcessId)),
-                ("keyword", AiReadQueryGuard.ScopeText(request.Keyword))),
+                ("keyword", AiReadQueryGuard.ScopeText(request.Keyword)),
+                ("delegatedUserId", AiReadQueryGuard.ScopeGuid(scopeAccessor.DelegatedUserId)),
+                ("delegatedDeviceCount", AiReadQueryGuard.ScopeNumber(allowedDeviceIds?.Count))),
             items.Count,
             totalCount > items.Count));
     }
@@ -670,7 +678,7 @@ public sealed record GetAiReadProductionRecordsQuery(
     string? PlcName = null) : IAiReadQuery<Result<AiReadListResponse<AiReadProductionRecordDto>>>;
 
 public sealed class GetAiReadProductionRecordsHandler(
-    IPassStationSchemaProvider schemaProvider,
+    IDevicePluginDataCapabilityResolver capabilityResolver,
     IAiProductionRecordQueryService productionRecordQueryService,
     IAiReadScopeAccessor scopeAccessor,
     IOptions<AiReadOptions> options)
@@ -690,21 +698,12 @@ public sealed class GetAiReadProductionRecordsHandler(
         if (fieldMode is not ("list" or "full"))
             return Result.Invalid("fieldMode 只支持 list 或 full。");
 
-        PassStationTypeDefinitionDto? requestedDefinition = null;
-        string? normalizedTypeKey = null;
-        if (!string.IsNullOrWhiteSpace(request.TypeKey))
+        if (!request.DeviceId.HasValue
+            || request.DeviceId == Guid.Empty
+            || string.IsNullOrWhiteSpace(request.TypeKey))
         {
-            normalizedTypeKey = request.TypeKey.Trim().ToLowerInvariant();
-            requestedDefinition = schemaProvider.Find(normalizedTypeKey);
-            if (requestedDefinition is null)
-                return Result.NotFound($"生产数据类型 [{request.TypeKey}] 不存在。");
-        }
-
-        if (string.IsNullOrWhiteSpace(normalizedTypeKey)
-            && !request.DeviceId.HasValue
-            && !request.ProcessId.HasValue)
-        {
-            return Result.Invalid("跨类型查询 production-records 时必须提供 deviceId 或 processId。");
+            return Result.Invalid(
+                "production-records 必须先唯一封印 deviceId 和 TypeKey。");
         }
 
         var rangeValidation = AiReadQueryGuard.ResolveTimeRange(
@@ -725,12 +724,33 @@ public sealed class GetAiReadProductionRecordsHandler(
                 return deviceValidation;
         }
 
+        var resolvedCapability = await capabilityResolver.ResolveAsync(
+            request.DeviceId.Value,
+            request.TypeKey,
+            cancellationToken);
+        if (!resolvedCapability.IsSuccess)
+        {
+            var errors = resolvedCapability.Errors?.ToArray()
+                         ?? ["capability_unavailable"];
+            return resolvedCapability.Status switch
+            {
+                ResultStatus.NotFound => Result.NotFound(errors),
+                ResultStatus.Forbidden => Result.Forbidden(errors),
+                ResultStatus.Unauthorized => Result.Unauthorized(errors),
+                ResultStatus.Invalid => Result.Invalid(errors),
+                _ => Result.Failure(errors)
+            };
+        }
+        var requestedDefinition = IIoT.ProductionService.Queries.PassStations
+            .PassStationQueryRuntime.ToDefinition(
+            resolvedCapability.Value!.Capability);
+
         var maxRows = AiReadQueryGuard.NormalizeMaxRows(request.MaxRows, options.Value);
         var queryRequest = new AiProductionRecordQueryRequest(
             new Pagination { PageNumber = 1, PageSize = maxRows },
             range!.StartTime,
             range.EndTime,
-            TypeKey: requestedDefinition?.TypeKey,
+            TypeKey: requestedDefinition.TypeKey,
             ProcessId: request.ProcessId,
             DeviceId: request.DeviceId,
             Barcode: request.Barcode?.Trim(),
@@ -742,17 +762,13 @@ public sealed class GetAiReadProductionRecordsHandler(
             queryRequest,
             allowedDeviceIds,
             cancellationToken);
-        var definitions = schemaProvider.GetAll()
-            .ToDictionary(definition => definition.TypeKey, StringComparer.Ordinal);
-
         var resultItems = items
             .Take(maxRows)
             .Select(item =>
             {
-                definitions.TryGetValue(item.TypeKey, out var definition);
-                List<PassStationFieldDefinitionDto> fieldDefinitions = definition is null
-                    ? []
-                    : SelectFieldDefinitions(definition, fieldMode);
+                var definition = requestedDefinition;
+                List<PassStationFieldDefinitionDto> fieldDefinitions =
+                    SelectFieldDefinitions(definition, fieldMode);
                 var exposedFieldKeys = fieldDefinitions
                     .Select(field => field.Key)
                     .ToHashSet(StringComparer.Ordinal);
@@ -760,19 +776,17 @@ public sealed class GetAiReadProductionRecordsHandler(
                 return new AiReadProductionRecordDto(
                 item.Id,
                 item.TypeKey,
-                definition?.DisplayName ?? item.TypeKey,
+                definition.DisplayName,
                 item.DeviceId,
                 item.DeviceName,
                 item.Barcode,
                 item.Result,
                 item.CompletedTime.HasValue ? AiReadQueryGuard.NormalizeUtc(item.CompletedTime.Value) : null,
                 item.ReceivedAt.HasValue ? AiReadQueryGuard.NormalizeUtc(item.ReceivedAt.Value) : null,
-                definition is null
-                    ? new Dictionary<string, object?>(StringComparer.Ordinal)
-                    : PassStationPublicFieldProjection.Project(
-                        definition,
-                        item.Fields,
-                        exposedFieldKeys),
+                PassStationPublicFieldProjection.Project(
+                    definition,
+                    item.Fields,
+                    exposedFieldKeys),
                 fieldDefinitions
                     .Select(field => new AiReadProductionFieldSchemaDto(
                         field.Key,
@@ -790,7 +804,7 @@ public sealed class GetAiReadProductionRecordsHandler(
             DateTimeOffset.UtcNow,
             "production_records",
             AiReadQueryGuard.BuildScope(
-                ("typeKey", AiReadQueryGuard.ScopeText(requestedDefinition?.TypeKey)),
+                ("typeKey", AiReadQueryGuard.ScopeText(requestedDefinition.TypeKey)),
                 ("processId", AiReadQueryGuard.ScopeGuid(request.ProcessId)),
                 ("deviceId", AiReadQueryGuard.ScopeGuid(request.DeviceId)),
                 ("plcCode", AiReadQueryGuard.ScopeText(request.PlcCode)),

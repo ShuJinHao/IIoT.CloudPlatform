@@ -2,6 +2,17 @@ namespace IIoT.Services.Contracts.Authorization;
 
 public static class SystemRolePermissionTemplates
 {
+    public static readonly IReadOnlyCollection<string> AdminDelegatedAiReadPermissions =
+    [
+        AiReadPermissions.Device,
+        AiReadPermissions.Process,
+        AiReadPermissions.ClientRelease,
+        AiReadPermissions.DeviceClientState,
+        AiReadPermissions.Capacity,
+        AiReadPermissions.DeviceLog,
+        AiReadPermissions.ProductionRecord
+    ];
+
     public static readonly IReadOnlyDictionary<string, IReadOnlyCollection<string>> Templates =
         new Dictionary<string, IReadOnlyCollection<string>>
         {

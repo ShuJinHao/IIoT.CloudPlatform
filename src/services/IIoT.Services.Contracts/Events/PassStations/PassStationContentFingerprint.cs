@@ -25,6 +25,7 @@ public static class PassStationContentFingerprint
                         : @event.ProcessType),
                 Items = @event.Items.Select(item => new
                 {
+                    CompletionId = item.CompletionId?.Trim(),
                     Barcode = item.Barcode.Trim(),
                     CellResult = item.CellResult.Trim(),
                     CompletedTime = NormalizeDateTime(item.CompletedTime),

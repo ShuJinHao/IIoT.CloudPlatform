@@ -5,10 +5,22 @@ using Microsoft.Extensions.Logging;
 namespace IIoT.EntityFrameworkCore.Auditing;
 
 internal sealed class EfAuditTrailService(
+    IIoTDbContext scopedDbContext,
     DbContextOptions<IIoTDbContext> dbContextOptions,
     ILogger<EfAuditTrailService> logger) : IAuditTrailService
 {
     internal static readonly EventId PersistenceFailed = new(4301, nameof(PersistenceFailed));
+
+    public void Stage(AuditTrailEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        var normalized = entry with
+        {
+            IdempotencyKey = NormalizeIdempotencyKey(entry.IdempotencyKey),
+            ExecutedAtUtc = NormalizePostgresTimestamp(entry.ExecutedAtUtc)
+        };
+        scopedDbContext.AuditTrails.Add(AuditTrailRecord.FromEntry(normalized));
+    }
 
     public async Task TryWriteAsync(
         AuditTrailEntry entry,

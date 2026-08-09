@@ -1,4 +1,5 @@
 using IIoT.ProductionService.Commands.PassStations;
+using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.PassStations;
 using IIoT.ProductionService.Queries.PassStations;
 using IIoT.Services.Contracts.RecordQueries;
@@ -15,6 +16,13 @@ public static class PassStationRegistration
     {
         services.AddSingleton<IPassStationSchemaProvider, PassStationSchemaProvider>();
         services.AddScoped<IPassStationReceiveService, PassStationReceiveService>();
+        services.AddScoped<
+            IDevicePluginDataCapabilityResolver,
+            DevicePluginDataCapabilityResolver>();
+        services.AddScoped<IEdgeInstallerPlanService, EdgeInstallerPlanService>();
+        services.AddScoped<
+            IProductionBindingMigrationService,
+            ProductionBindingMigrationService>();
         services.AddTransient<
             IRequestHandler<GetPassStationTypesQuery, Result<IReadOnlyList<PassStationTypeDefinitionDto>>>,
             GetPassStationTypesHandler>();

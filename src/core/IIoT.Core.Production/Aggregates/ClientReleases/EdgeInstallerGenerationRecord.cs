@@ -127,7 +127,8 @@ public sealed record EdgeInstallerGenerationBindingFact(
     Guid DeviceId,
     string ClientCode,
     string DeviceName,
-    Guid ProcessId);
+    Guid ProcessId,
+    string? ActualProfile = null);
 
 public sealed record EdgeInstallerGenerationPluginFact(
     string ModuleId,

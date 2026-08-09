@@ -24,12 +24,14 @@ public class EdgeBootstrapController : ApiControllerBase
         var result = await Sender.Send(
             new GetDeviceByInstanceQuery(clientCode, bootstrapSecret),
             cancellationToken);
-        if (result.IsSuccess && result.Value is not null)
+        if (result.IsSuccess
+            && result.Value?.RefreshToken is not null
+            && result.Value.RefreshTokenExpiresAtUtc is not null)
         {
             RefreshTokenResponseFilter.SetHeaders(
                 HttpContext,
                 result.Value.RefreshToken,
-                result.Value.RefreshTokenExpiresAtUtc,
+                result.Value.RefreshTokenExpiresAtUtc.Value,
                 result.Value.DeviceIdentity.UploadAccessTokenExpiresAtUtc);
         }
 
@@ -43,12 +45,14 @@ public class EdgeBootstrapController : ApiControllerBase
         CancellationToken cancellationToken)
     {
         var result = await Sender.Send(new RefreshEdgeDeviceIdentityCommand(refreshToken), cancellationToken);
-        if (result.IsSuccess && result.Value is not null)
+        if (result.IsSuccess
+            && result.Value?.RefreshToken is not null
+            && result.Value.RefreshTokenExpiresAtUtc is not null)
         {
             RefreshTokenResponseFilter.SetHeaders(
                 HttpContext,
                 result.Value.RefreshToken,
-                result.Value.RefreshTokenExpiresAtUtc,
+                result.Value.RefreshTokenExpiresAtUtc.Value,
                 result.Value.DeviceIdentity.UploadAccessTokenExpiresAtUtc);
         }
 

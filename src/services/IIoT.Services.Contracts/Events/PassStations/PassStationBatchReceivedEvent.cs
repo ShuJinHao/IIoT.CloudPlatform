@@ -23,6 +23,8 @@ public sealed record PassStationBatchReceivedEvent : IPassStationEvent
 
 public sealed record PassStationBatchItem
 {
+    public string? CompletionId { get; init; }
+
     public string Barcode { get; init; } = string.Empty;
 
     public string CellResult { get; init; } = string.Empty;

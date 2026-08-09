@@ -14,6 +14,13 @@ public sealed record AuditTrailEntry(
 
 public interface IAuditTrailService
 {
+    /// <summary>
+    /// Stage an audit record in the caller's scoped EF unit of work. Commands
+    /// whose business mutation and success audit must be atomic use this path.
+    /// </summary>
+    void Stage(AuditTrailEntry entry)
+        => TryWriteAsync(entry).GetAwaiter().GetResult();
+
     Task TryWriteAsync(
         AuditTrailEntry entry,
         CancellationToken cancellationToken = default);

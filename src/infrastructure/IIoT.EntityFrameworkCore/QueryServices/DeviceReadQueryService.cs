@@ -1,4 +1,5 @@
 using IIoT.Services.Contracts.RecordQueries;
+using IIoT.SharedKernel.Domain;
 using Microsoft.EntityFrameworkCore;
 
 namespace IIoT.EntityFrameworkCore.QueryServices;
@@ -84,10 +85,12 @@ public sealed class DeviceReadQueryService(IIoTDbContext dbContext) : IDeviceRea
         Guid? excludingDeviceId = null,
         CancellationToken cancellationToken = default)
     {
-        var normalizedName = name.Trim();
+        var normalizedName = BusinessIdentityNormalization.NormalizeDisplayNameKey(
+            name,
+            nameof(name));
         var query = dbContext.Devices
             .AsNoTracking()
-            .Where(device => device.DeviceName == normalizedName);
+            .Where(device => device.NormalizedDeviceName == normalizedName);
 
         if (excludingDeviceId.HasValue)
         {

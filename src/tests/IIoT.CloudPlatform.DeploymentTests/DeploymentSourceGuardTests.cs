@@ -253,9 +253,9 @@ public sealed class DeploymentSourceGuardTests
         var agentsSource = File.ReadAllText(CloudRepositoryPath.Find("AGENTS.md"));
         var cloudRulesSource = File.ReadAllText(CloudRepositoryPath.Find("docs", "云端规则.md"));
 
-        agentsSource.Should().Contain("长期规则直接进入本文件、`docs/云端规则.md` 或对应专题契约");
-        agentsSource.Should().Contain("事故只进入工作区事故文档");
-        cloudRulesSource.Should().Contain("活动树不维护滚动复盘、历史核心类文档、旧计划或日期式治理快照");
+        agentsSource.Should().Contain("长期业务只进入工作区业务总纲或 Cloud 规则");
+        agentsSource.Should().Contain("真实事故只进入工作区事故索引");
+        agentsSource.Should().Contain("不新建滚动复盘、日期式快照或第二份部署手册");
         cloudRulesSource.Should().Contain("真实事故只进入工作区");
         agentsSource.Should().NotContain("任何代码改动完成前");
         cloudRulesSource.Should().NotContain("最终回复必须列出复盘文档");
@@ -282,6 +282,8 @@ public sealed class DeploymentSourceGuardTests
         composeSource.Should().Contain("restart: \"no\"");
         composeSource.Should().Contain("DOTNET_ENVIRONMENT: Production");
         composeSource.Should().NotContain("DataWorker__Testing__DisableOutboxDispatcher");
+        composeSource.Should().NotContain("SkipRecordSchemaAndTimescale");
+        composeSource.Should().NotContain("HttpApi__Testing__IdentityOnlyHost");
     }
 
     [Fact]
@@ -664,6 +666,8 @@ public sealed class DeploymentSourceGuardTests
         envExampleSource.Should().Contain("BACKUP_MAX_AGE_HOURS=24");
         envExampleSource.Should().Contain("BACKUP_VERIFY_MAX_AGE_DAYS=7");
         envExampleSource.Should().Contain("GATEWAY_HTTP_PORT=81");
+        envExampleSource.Should().Contain("SEED_ADMIN_NO=101650");
+        envExampleSource.Should().NotContain("SEED_ADMIN_NO=admin");
         envExampleSource.Should().NotContain("BOOTSTRAP_AUTH_REQUIRE_SECRET");
         envExampleSource.Should().Contain("X-IIoT-Bootstrap-Secret");
         envExampleSource.Should().Contain("installers/stable/{version}");
@@ -741,6 +745,8 @@ public sealed class DeploymentSourceGuardTests
         source.Should().Contain("proxy_pass http://gateway_pool;");
         source.Should().Contain("proxy_pass http://iiot-web:8080;");
         source.Should().Contain("location /api/v1/bootstrap/");
+        source.Should().Contain(
+            "location ^~ /edge-updates/installers/generated/");
         source.Should().NotContain("include /etc/nginx/proxy_params;");
         source.Should().NotContain("listen 443 ssl http2;");
         source.Should().NotContain("Strict-Transport-Security");

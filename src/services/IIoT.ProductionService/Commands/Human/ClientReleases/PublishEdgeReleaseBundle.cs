@@ -624,14 +624,14 @@ public sealed class PublishEdgeReleaseBundleHandler(
 
     private static string? ValidateManifestBasics(EdgeInstallerArtifactManifest manifest)
     {
-        if (manifest.SchemaVersion != ClientReleaseCatalogSchema.Version)
+        if (manifest.SchemaVersion != 3)
         {
             return "Edge 发布包 manifest schemaVersion 不受支持。";
         }
 
-        if (manifest.InstallerBindingSchemaVersion != 2)
+        if (manifest.InstallerBindingSchemaVersion != 3)
         {
-            return "Edge 发布包必须声明 installerBindingSchemaVersion=2。";
+            return "Edge 发布包必须声明 installerBindingSchemaVersion=3。";
         }
 
         if (!string.Equals(manifest.Channel, "stable", StringComparison.OrdinalIgnoreCase))
@@ -649,6 +649,10 @@ public sealed class PublishEdgeReleaseBundleHandler(
             || string.IsNullOrWhiteSpace(manifest.InstallerStubFile)
             || string.IsNullOrWhiteSpace(manifest.LauncherDirectory)
             || string.IsNullOrWhiteSpace(manifest.HostDirectory)
+            || string.IsNullOrWhiteSpace(manifest.HostFileManifest)
+            || !ClientReleaseFileFacts.IsSha256(
+                manifest.HostFileManifestSha256)
+            || manifest.HostFileManifestFileCount <= 0
             || string.IsNullOrWhiteSpace(manifest.PluginsRoot)
             || manifest.Modules is null)
         {
@@ -658,6 +662,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
         if (!IsSafeRelativePath(manifest.InstallerStubFile)
             || !IsSafeRelativePath(manifest.LauncherDirectory)
             || !IsSafeRelativePath(manifest.HostDirectory)
+            || !IsSafeRelativePath(manifest.HostFileManifest)
             || !IsSafeRelativePath(manifest.PluginsRoot))
         {
             return "Edge 发布包 manifest 包含非法相对路径。";
@@ -722,6 +727,11 @@ public sealed class PublishEdgeReleaseBundleHandler(
         if (!Directory.Exists(Path.Combine(installerRoot, manifest.HostDirectory)))
         {
             return "Edge 发布包缺少 host/。";
+        }
+
+        if (!File.Exists(Path.Combine(installerRoot, manifest.HostFileManifest)))
+        {
+            return "Edge 发布包缺少 host-file-manifest.json。";
         }
 
         var pluginsRoot = Path.Combine(installerRoot, manifest.PluginsRoot);
@@ -795,6 +805,27 @@ public sealed class PublishEdgeReleaseBundleHandler(
             return "Edge 发布包 host 目录 sha256 或 size 与 manifest 不一致。";
         }
 
+        var hostFileManifestError = ValidateHostFileManifest(
+            installerRoot,
+            hostDirectory,
+            manifest);
+        if (hostFileManifestError is not null)
+        {
+            return hostFileManifestError;
+        }
+
+        var launcherDirectory = Path.Combine(installerRoot, manifest.LauncherDirectory);
+        if (!ClientReleaseFileFacts.IsSha256(manifest.LauncherDirectorySha256)
+            || !string.Equals(
+                ClientReleaseFileFacts.ComputeDirectorySha256(launcherDirectory),
+                manifest.LauncherDirectorySha256,
+                StringComparison.OrdinalIgnoreCase)
+            || ClientReleaseFileFacts.GetDirectorySize(launcherDirectory)
+            != manifest.LauncherDirectorySize)
+        {
+            return "Edge 发布包 launcher 目录 sha256 或 size 与 manifest 不一致。";
+        }
+
         if (!string.IsNullOrWhiteSpace(manifest.VelopackSetupFile))
         {
             var setupPath = Path.Combine(installerRoot, manifest.VelopackSetupFile);
@@ -814,6 +845,93 @@ public sealed class PublishEdgeReleaseBundleHandler(
                 || ClientReleaseFileFacts.GetDirectorySize(pluginDirectory) != module.PluginSize)
             {
                 return $"Edge 发布包插件 {module.ModuleId} sha256 或 size 与 manifest 不一致。";
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ValidateHostFileManifest(
+        string installerRoot,
+        string hostDirectory,
+        EdgeInstallerArtifactManifest artifact)
+    {
+        var manifestPath = Path.Combine(
+            installerRoot,
+            artifact.HostFileManifest);
+        if (!ClientReleaseFileFacts.IsExactRegularFile(
+                manifestPath,
+                artifact.HostFileManifestSha256!,
+                new FileInfo(manifestPath).Length))
+        {
+            return "Edge 发布包 Host 逐文件清单摘要已变更。";
+        }
+
+        HostFileManifest? manifest;
+        try
+        {
+            manifest = JsonSerializer.Deserialize<HostFileManifest>(
+                File.ReadAllBytes(manifestPath),
+                JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return "Edge 发布包 Host 逐文件清单无法解析。";
+        }
+
+        if (manifest is null
+            || manifest.SchemaVersion != 1
+            || !string.Equals(
+                manifest.Component,
+                "Host",
+                StringComparison.Ordinal)
+            || !string.Equals(
+                manifest.Version,
+                artifact.Version,
+                StringComparison.Ordinal)
+            || manifest.Files is null
+            || manifest.Files.Count != artifact.HostFileManifestFileCount
+            || manifest.Files.Count == 0)
+        {
+            return "Edge 发布包 Host 逐文件清单与精确版本不一致。";
+        }
+
+        var declared = new Dictionary<string, HostFileManifestEntry>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var item in manifest.Files)
+        {
+            if (!IsSafeRelativePath(item.Path)
+                || !declared.TryAdd(item.Path.Replace('\\', '/'), item)
+                || item.Size < 0
+                || !ClientReleaseFileFacts.IsSha256(item.Sha256)
+                || !string.Equals(item.Component, "Host", StringComparison.Ordinal)
+                || !string.Equals(item.Version, artifact.Version, StringComparison.Ordinal))
+            {
+                return "Edge 发布包 Host 逐文件清单文件项无效。";
+            }
+        }
+
+        var actualPaths = Directory
+            .EnumerateFiles(hostDirectory, "*", SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(hostDirectory, path)
+                .Replace('\\', '/'))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!actualPaths.SetEquals(declared.Keys))
+        {
+            return "Edge 发布包 Host 逐文件清单与实际依赖闭包不一致。";
+        }
+
+        foreach (var (relativePath, item) in declared)
+        {
+            var path = Path.Combine(
+                hostDirectory,
+                relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (!ClientReleaseFileFacts.IsExactRegularFile(
+                    path,
+                    item.Sha256,
+                    item.Size))
+            {
+                return "Edge 发布包 Host 逐文件清单的文件证据不一致。";
             }
         }
 
@@ -981,6 +1099,8 @@ public sealed class PublishEdgeReleaseBundleHandler(
             "IIoT",
             manifest.GeneratedAtUtc,
             hostArtifacts);
+        hostVersion.ConfigureHostManifest(
+            manifest.HostFileManifestSha256);
         expected.Add(ClientReleaseExpectedVersionState.From(hostComponent, hostVersion));
 
         foreach (var module in manifest.Modules)
@@ -1227,6 +1347,7 @@ public sealed class PublishEdgeReleaseBundleHandler(
         {
             Path.Combine(installerTarget, "installer-artifact.json"),
             Path.Combine(installerTarget, manifest.InstallerStubFile),
+            Path.Combine(installerTarget, manifest.HostFileManifest),
             Path.Combine(velopackTarget, "RELEASES")
         };
         files.AddRange(ClientReleaseVelopackPaths.StableManifestNames.Select(
@@ -1394,6 +1515,24 @@ public sealed class PublishEdgeReleaseBundleHandler(
         string Sha256,
         long PackageSize,
         PluginReleasePublishFileTransaction FileTransaction);
+
+    private sealed class HostFileManifest
+    {
+        public int SchemaVersion { get; set; }
+        public string Component { get; set; } = string.Empty;
+        public string Version { get; set; } = string.Empty;
+        public List<HostFileManifestEntry>? Files { get; set; }
+    }
+
+    private sealed class HostFileManifestEntry
+    {
+        public string Path { get; set; } = string.Empty;
+        public long Size { get; set; }
+        public string Sha256 { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty;
+        public string Component { get; set; } = string.Empty;
+        public string Version { get; set; } = string.Empty;
+    }
 
     private enum HostPublishAuditOutcome
     {

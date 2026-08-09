@@ -7,6 +7,7 @@ import type {
 export interface DeviceRegisterForm {
   deviceName: string;
   processId: string | null;
+  pluginComponentId: string | null;
 }
 
 export interface DeviceEditForm {

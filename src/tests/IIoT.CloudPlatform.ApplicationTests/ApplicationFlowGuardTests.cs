@@ -241,6 +241,8 @@ public sealed class ApplicationFlowGuardTests
         var repository = new InMemoryRepository<Device>();
         var processId = Guid.NewGuid();
         var processQueries = new StubProcessReadQueryService { Exists = true };
+        processQueries.PagedProcesses.Add(new ProcessReadItem(processId, "CP", "模切"));
+        var plugin = CreatePublishedDevicePlugin("CP");
         var deviceQueries = new StubDeviceReadQueryService();
         var auditTrail = new RecordingAuditTrailService();
         var clientStateStore = new RecordingDeviceClientStateStore();
@@ -255,7 +257,13 @@ public sealed class ApplicationFlowGuardTests
             },
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
             repository,
+            new InMemoryRepository<DevicePluginBinding>(),
+            new InMemoryRepository<ClientReleaseComponent>
+            {
+                SingleOrDefaultResult = plugin
+            },
             processQueries,
+            new StubDevicePluginBindingQueryService(),
             deviceQueries,
             auditTrail,
             new RecordingUnitOfWork(),
@@ -265,7 +273,8 @@ public sealed class ApplicationFlowGuardTests
         var result = await handler.Handle(
             new RegisterDeviceCommand(
                 "Injection-01",
-                processId),
+                processId,
+                plugin.Id),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -297,6 +306,7 @@ public sealed class ApplicationFlowGuardTests
     {
         var repository = new InMemoryRepository<Device>();
         var processQueries = new StubProcessReadQueryService { Exists = true };
+        var plugin = CreatePublishedDevicePlugin("CP");
         var deviceQueries = new StubDeviceReadQueryService();
         var auditTrail = new RecordingAuditTrailService();
         var handler = new RegisterDeviceHandler(
@@ -309,7 +319,13 @@ public sealed class ApplicationFlowGuardTests
             },
             new StubCurrentUserDeviceAccessService(),
             repository,
+            new InMemoryRepository<DevicePluginBinding>(),
+            new InMemoryRepository<ClientReleaseComponent>
+            {
+                SingleOrDefaultResult = plugin
+            },
             processQueries,
+            new StubDevicePluginBindingQueryService(),
             deviceQueries,
             auditTrail,
             new RecordingUnitOfWork(),
@@ -317,7 +333,7 @@ public sealed class ApplicationFlowGuardTests
             new RecordingDeviceClientStateStore());
 
         var result = await handler.Handle(
-            new RegisterDeviceCommand("Injection-01", Guid.NewGuid()),
+            new RegisterDeviceCommand("Injection-01", Guid.NewGuid(), plugin.Id),
             CancellationToken.None);
 
         Assert.False(result.IsSuccess);
@@ -335,7 +351,10 @@ public sealed class ApplicationFlowGuardTests
     public async Task RegisterDeviceHandler_ShouldFailWhenUniqueCodeCannotBeAllocated()
     {
         var repository = new InMemoryRepository<Device>();
+        var processId = Guid.NewGuid();
         var processQueries = new StubProcessReadQueryService { Exists = true };
+        processQueries.PagedProcesses.Add(new ProcessReadItem(processId, "CP", "模切"));
+        var plugin = CreatePublishedDevicePlugin("CP");
         var deviceQueries = new StubDeviceReadQueryService { CodeExists = true };
         var auditTrail = new RecordingAuditTrailService();
         var handler = new RegisterDeviceHandler(
@@ -349,7 +368,13 @@ public sealed class ApplicationFlowGuardTests
             },
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
             repository,
+            new InMemoryRepository<DevicePluginBinding>(),
+            new InMemoryRepository<ClientReleaseComponent>
+            {
+                SingleOrDefaultResult = plugin
+            },
             processQueries,
+            new StubDevicePluginBindingQueryService(),
             deviceQueries,
             auditTrail,
             new RecordingUnitOfWork(),
@@ -357,7 +382,7 @@ public sealed class ApplicationFlowGuardTests
             new RecordingDeviceClientStateStore());
 
         var result = await handler.Handle(
-            new RegisterDeviceCommand("Injection-01", Guid.NewGuid()),
+            new RegisterDeviceCommand("Injection-01", processId, plugin.Id),
             CancellationToken.None);
 
         Assert.False(result.IsSuccess);
@@ -371,7 +396,10 @@ public sealed class ApplicationFlowGuardTests
     public async Task RegisterDeviceHandler_ShouldRejectDuplicateName()
     {
         var repository = new InMemoryRepository<Device>();
+        var processId = Guid.NewGuid();
         var processQueries = new StubProcessReadQueryService { Exists = true };
+        processQueries.PagedProcesses.Add(new ProcessReadItem(processId, "CP", "模切"));
+        var plugin = CreatePublishedDevicePlugin("CP");
         var deviceQueries = new StubDeviceReadQueryService { NameExists = true };
         var auditTrail = new RecordingAuditTrailService();
         var handler = new RegisterDeviceHandler(
@@ -385,7 +413,13 @@ public sealed class ApplicationFlowGuardTests
             },
             new StubCurrentUserDeviceAccessService { IsAdministrator = true },
             repository,
+            new InMemoryRepository<DevicePluginBinding>(),
+            new InMemoryRepository<ClientReleaseComponent>
+            {
+                SingleOrDefaultResult = plugin
+            },
             processQueries,
+            new StubDevicePluginBindingQueryService(),
             deviceQueries,
             auditTrail,
             new RecordingUnitOfWork(),
@@ -393,7 +427,7 @@ public sealed class ApplicationFlowGuardTests
             new RecordingDeviceClientStateStore());
 
         var result = await handler.Handle(
-            new RegisterDeviceCommand("Injection-01", Guid.NewGuid()),
+            new RegisterDeviceCommand("Injection-01", processId, plugin.Id),
             CancellationToken.None);
 
         Assert.False(result.IsSuccess);
@@ -823,7 +857,7 @@ public sealed class ApplicationFlowGuardTests
 
     [Theory]
     [InlineData(IIoTClaimTypes.EdgeDeviceActor)]
-    [InlineData(IIoTClaimTypes.AiServiceActor)]
+    [InlineData(IIoTClaimTypes.AiDelegatedUserActor)]
     public async Task OnboardEmployeeHandler_ShouldNotGrantAccessBypassToNonHumanAdmin(
         string actorType)
     {
@@ -1886,9 +1920,9 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
-    public void UploadCommandValidators_ShouldRejectInvalidPassStationItem()
+    public void UploadCommandValidators_ShouldRejectInvalidPassStationTransportEnvelope()
     {
-        var validator = new ReceivePassStationBatchCommandValidator(CreatePassStationSchemaProvider());
+        var validator = new ReceivePassStationBatchCommandValidator();
         var command = new ReceivePassStationBatchCommand(
             "cp",
             Guid.NewGuid(),
@@ -1912,14 +1946,12 @@ public sealed class ApplicationFlowGuardTests
 
         Assert.False(result.IsValid);
         Assert.Contains(result.Errors, x => x.PropertyName.Contains(nameof(PassStationItemInput.Barcode), StringComparison.Ordinal));
-        Assert.Contains(result.Errors, x => x.PropertyName.Contains("punchingQuantity", StringComparison.Ordinal));
-        Assert.Contains(result.Errors, x => x.PropertyName.Contains("punchingSpeed", StringComparison.Ordinal));
     }
 
     [Fact]
     public void UploadCommandValidators_ShouldAcceptStandardCellDataTransportMetadata()
     {
-        var validator = new ReceivePassStationBatchCommandValidator(CreatePassStationSchemaProvider());
+        var validator = new ReceivePassStationBatchCommandValidator();
         var command = new ReceivePassStationBatchCommand(
             "cp",
             Guid.NewGuid(),
@@ -1953,9 +1985,9 @@ public sealed class ApplicationFlowGuardTests
     }
 
     [Fact]
-    public void UploadCommandValidators_ShouldRejectUnknownPassStationPayloadField()
+    public void UploadCommandValidators_ShouldLeavePluginPayloadFieldsToResolvedCapabilityHandler()
     {
-        var validator = new ReceivePassStationBatchCommandValidator(CreatePassStationSchemaProvider());
+        var validator = new ReceivePassStationBatchCommandValidator();
         var command = new ReceivePassStationBatchCommand(
             "ap",
             Guid.NewGuid(),
@@ -1978,14 +2010,13 @@ public sealed class ApplicationFlowGuardTests
 
         var result = validator.Validate(command);
 
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Errors, x => x.PropertyName.Contains("extraField", StringComparison.Ordinal));
+        Assert.True(result.IsValid);
     }
 
     [Fact]
     public void UploadCommandValidators_ShouldRejectUnsupportedPassStationSchemaVersion()
     {
-        var validator = new ReceivePassStationBatchCommandValidator(CreatePassStationSchemaProvider());
+        var validator = new ReceivePassStationBatchCommandValidator();
         var command = new ReceivePassStationBatchCommand(
             "cp",
             Guid.NewGuid(),
@@ -2004,12 +2035,52 @@ public sealed class ApplicationFlowGuardTests
                     }
                     """))
             ],
-            SchemaVersion: 3);
+            SchemaVersion: 4);
 
         var result = validator.Validate(command);
 
         Assert.False(result.IsValid);
         Assert.Contains(result.Errors, x => x.PropertyName == nameof(ReceivePassStationBatchCommand.SchemaVersion));
+    }
+
+    [Fact]
+    public void UploadCommandValidators_ShouldRequireCompleteV3Identity()
+    {
+        var validator = new ReceivePassStationBatchCommandValidator();
+        var item = new PassStationItemInput(
+            "BC-001",
+            "OK",
+            DateTime.UtcNow,
+            JsonPayload("""
+            {
+              "plcCode": "P2-CP01"
+            }
+            """));
+
+        var missingBatchClientCode = validator.Validate(new ReceivePassStationBatchCommand(
+            "die-cutting-completion",
+            Guid.NewGuid(),
+            [item],
+            SchemaVersion: 3,
+            ProcessType: "diecut"));
+        Assert.Contains(
+            missingBatchClientCode.Errors,
+            error => error.PropertyName == nameof(ReceivePassStationBatchCommand.ClientCode));
+
+        var complete = validator.Validate(new ReceivePassStationBatchCommand(
+            "die-cutting-completion",
+            Guid.NewGuid(),
+            [item with
+            {
+                CompletionId = "completion-001",
+                ClientCode = "DEVICE-P2-0001",
+                TypeKey = "die-cutting-completion",
+                PlcCode = "P2-CP01"
+            }],
+            SchemaVersion: 3,
+            ProcessType: "diecut",
+            ClientCode: "DEVICE-P2-0001"));
+        Assert.True(complete.IsValid);
     }
 
     [Fact]
@@ -2158,7 +2229,7 @@ public sealed class ApplicationFlowGuardTests
         Assert.True(result.IsSuccess);
         var enqueued = Assert.IsType<HourlyCapacityReceivedEvent>(registry.LastRegisteredEvent);
         Assert.Equal(2, enqueued.SchemaVersion);
-        Assert.Equal("cp", enqueued.ProcessType);
+        Assert.Equal("CP", enqueued.ProcessType);
         Assert.Equal("P2-CP01", enqueued.PlcCode);
         Assert.Equal("正极模切一号 PLC", enqueued.PlcName);
         Assert.True(enqueued.PlcNameIsTrusted);
@@ -2529,7 +2600,16 @@ public sealed class ApplicationFlowGuardTests
                 Snapshot = new DeviceIdentitySnapshot(deviceId, "EDGE-01", ProcessCode: "cp")
             },
             registry);
-        var handler = new ReceivePassStationBatchHandler(receiveService, CreatePassStationSchemaProvider());
+        var handler = new ReceivePassStationBatchHandler(
+            receiveService,
+            new StubDevicePluginDataCapabilityResolver(CreatePassStationSchemaProvider()),
+            new TestCurrentUser
+            {
+                DeviceId = deviceId,
+                ClientCode = "EDGE-01",
+                ActorType = IIoTClaimTypes.EdgeDeviceActor,
+                IsAuthenticated = true
+            });
 
         var result = await handler.Handle(
             new ReceivePassStationBatchCommand(
@@ -2562,7 +2642,7 @@ public sealed class ApplicationFlowGuardTests
         Assert.Equal("request:pass-request-1", registry.LastDeduplicationKey);
         var registered = Assert.IsType<PassStationBatchReceivedEvent>(registry.LastRegisteredEvent);
         Assert.Equal("cp", registered.TypeKey);
-        Assert.Equal("cp", registered.ProcessType);
+        Assert.Equal("CP", registered.ProcessType);
         Assert.Single(registered.Items);
     }
 
@@ -2580,7 +2660,16 @@ public sealed class ApplicationFlowGuardTests
                 Snapshot = new DeviceIdentitySnapshot(deviceId, "EDGE-01", ProcessCode: "cp")
             },
             registry);
-        var handler = new ReceivePassStationBatchHandler(receiveService, CreatePassStationSchemaProvider());
+        var handler = new ReceivePassStationBatchHandler(
+            receiveService,
+            new StubDevicePluginDataCapabilityResolver(CreatePassStationSchemaProvider()),
+            new TestCurrentUser
+            {
+                DeviceId = deviceId,
+                ClientCode = "EDGE-01",
+                ActorType = IIoTClaimTypes.EdgeDeviceActor,
+                IsAuthenticated = true
+            });
 
         var result = await handler.Handle(
             new ReceivePassStationBatchCommand(
@@ -2623,7 +2712,17 @@ public sealed class ApplicationFlowGuardTests
             registry);
         var handler = new ReceivePassStationBatchHandler(
             receiveService,
-            CreatePassStationSchemaProvider());
+            new StubDevicePluginDataCapabilityResolver(CreatePassStationSchemaProvider())
+            {
+                ProcessType = "ap"
+            },
+            new TestCurrentUser
+            {
+                DeviceId = deviceId,
+                ClientCode = "EDGE-01",
+                ActorType = IIoTClaimTypes.EdgeDeviceActor,
+                IsAuthenticated = true
+            });
 
         var result = await handler.Handle(
             new ReceivePassStationBatchCommand(
@@ -2632,7 +2731,8 @@ public sealed class ApplicationFlowGuardTests
                 [CreateStrictPassStationItem("BC-WRONG-PROCESS")],
                 "wrong-process",
                 SchemaVersion: 2,
-                ProcessType: "cp"),
+                ProcessType: "cp",
+                ClientCode: "EDGE-01"),
             CancellationToken.None);
 
         Assert.False(result.IsSuccess);
@@ -2652,10 +2752,24 @@ public sealed class ApplicationFlowGuardTests
         };
         var firstHandler = new ReceivePassStationBatchHandler(
             new PassStationReceiveService(identity, firstRegistry),
-            CreatePassStationSchemaProvider());
+            new StubDevicePluginDataCapabilityResolver(CreatePassStationSchemaProvider()),
+            new TestCurrentUser
+            {
+                DeviceId = deviceId,
+                ClientCode = "EDGE-01",
+                ActorType = IIoTClaimTypes.EdgeDeviceActor,
+                IsAuthenticated = true
+            });
         var secondHandler = new ReceivePassStationBatchHandler(
             new PassStationReceiveService(identity, secondRegistry),
-            CreatePassStationSchemaProvider());
+            new StubDevicePluginDataCapabilityResolver(CreatePassStationSchemaProvider()),
+            new TestCurrentUser
+            {
+                DeviceId = deviceId,
+                ClientCode = "EDGE-01",
+                ActorType = IIoTClaimTypes.EdgeDeviceActor,
+                IsAuthenticated = true
+            });
         var completedTime = new DateTime(2026, 8, 2, 1, 30, 0, DateTimeKind.Utc);
         var firstItem = CreateStrictPassStationItem("BC-FINGERPRINT", completedTime);
         var secondItem = firstItem with
@@ -2674,11 +2788,11 @@ public sealed class ApplicationFlowGuardTests
 
         await firstHandler.Handle(
             new ReceivePassStationBatchCommand(
-                "cp", deviceId, [firstItem], "same-request", 2, "cp"),
+                "cp", deviceId, [firstItem], "same-request", 2, "cp", "EDGE-01"),
             CancellationToken.None);
         await secondHandler.Handle(
             new ReceivePassStationBatchCommand(
-                "CP", deviceId, [secondItem], "same-request", 2, "CP"),
+                "CP", deviceId, [secondItem], "same-request", 2, "CP", "EDGE-01"),
             CancellationToken.None);
 
         Assert.NotNull(firstRegistry.LastContentFingerprint);
@@ -3362,6 +3476,7 @@ public sealed class ApplicationFlowGuardTests
         var queryService = new StubPassStationRecordQueryService();
         var handler = new GetPassStationListByTypeHandler(
             CreatePassStationSchemaProvider(),
+            new StubDevicePluginDataCapabilityResolver(CreatePassStationSchemaProvider()),
             queryService,
             new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [allowedDeviceId, Guid.NewGuid()] },
             new StubProcessReadQueryService { DeviceIds = [allowedDeviceId, processOnlyDeviceId] });
@@ -3407,6 +3522,7 @@ public sealed class ApplicationFlowGuardTests
         };
         var handler = new GetPassStationListByTypeHandler(
             CreatePassStationSchemaProvider(),
+            new StubDevicePluginDataCapabilityResolver(CreatePassStationSchemaProvider()),
             queryService,
             new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [deviceId] },
             new StubProcessReadQueryService());
@@ -3434,6 +3550,7 @@ public sealed class ApplicationFlowGuardTests
         var queryService = new StubPassStationRecordQueryService();
         var handler = new GetPassStationListByTypeHandler(
             CreatePassStationSchemaProvider(),
+            new StubDevicePluginDataCapabilityResolver(CreatePassStationSchemaProvider()),
             queryService,
             new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [Guid.NewGuid()] },
             new StubProcessReadQueryService { DeviceIds = [Guid.NewGuid()] });
@@ -3470,6 +3587,7 @@ public sealed class ApplicationFlowGuardTests
         };
         var handler = new GetPassStationDetailByTypeHandler(
             CreatePassStationSchemaProvider(),
+            new StubDevicePluginDataCapabilityResolver(CreatePassStationSchemaProvider()),
             queryService,
             new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [Guid.NewGuid()] });
 
@@ -3502,6 +3620,7 @@ public sealed class ApplicationFlowGuardTests
             });
         var handler = new GetPassStationDetailByTypeHandler(
             CreatePassStationSchemaProvider(),
+            new StubDevicePluginDataCapabilityResolver(CreatePassStationSchemaProvider()),
             new StubPassStationRecordQueryService { Detail = detail },
             new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [deviceId] });
 
@@ -3542,6 +3661,7 @@ public sealed class ApplicationFlowGuardTests
         var queryService = new StubPassStationRecordQueryService { Items = [item] };
         var handler = new ExportPassStationsByTypeHandler(
             CreatePassStationSchemaProvider(),
+            new StubDevicePluginDataCapabilityResolver(CreatePassStationSchemaProvider()),
             queryService,
             new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [deviceId] },
             new StubProcessReadQueryService());
@@ -3584,6 +3704,7 @@ public sealed class ApplicationFlowGuardTests
         };
         var handler = new ExportPassStationsByTypeHandler(
             CreatePassStationSchemaProvider(),
+            new StubDevicePluginDataCapabilityResolver(CreatePassStationSchemaProvider()),
             queryService,
             new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [deviceId] },
             new StubProcessReadQueryService());
@@ -3637,7 +3758,8 @@ public sealed class ApplicationFlowGuardTests
         var handler = new GetDeviceByInstanceHandler(
             repository,
             new StubJwtTokenGenerator(),
-            refreshTokenService);
+            refreshTokenService,
+            new InMemoryEdgeInstallerGenerationStore());
 
         var result = await handler.Handle(
             new GetDeviceByInstanceQuery($"  {device.Code.ToLowerInvariant()}  ", bootstrapSecret),
@@ -3669,7 +3791,8 @@ public sealed class ApplicationFlowGuardTests
         var handler = new GetDeviceByInstanceHandler(
             repository,
             new StubJwtTokenGenerator(),
-            new StubRefreshTokenService());
+            new StubRefreshTokenService(),
+            new InMemoryEdgeInstallerGenerationStore());
 
         var missingSecret = await handler.Handle(
             new GetDeviceByInstanceQuery(device.Code),
@@ -3857,6 +3980,40 @@ public sealed class ApplicationFlowGuardTests
             queryService,
             cache);
         return (handler, queryService, cache);
+    }
+
+    private static ClientReleaseComponent CreatePublishedDevicePlugin(
+        string processType)
+    {
+        var component = ClientReleaseComponent.CreatePlugin(
+            $"PLUGIN-{Guid.NewGuid():N}",
+            "测试设备插件",
+            null,
+            null,
+            null,
+            "stable",
+            "win-x64");
+        component.ConfigurePluginContract(
+            processType,
+            "docs/test-plugin.md",
+            2,
+            new string('a', 64),
+            "[]");
+        component.UpsertPluginVersion(
+            "2.0.12",
+            "2.0.0",
+            "2.0.0",
+            "9.9.9",
+            "net10.0-windows",
+            "/edge-updates/test-plugin.zip",
+            new string('b', 64),
+            1024,
+            null,
+            "[]",
+            ClientReleaseStatus.Published,
+            null,
+            "test");
+        return component;
     }
 
     private static IPassStationSchemaProvider CreatePassStationSchemaProvider()

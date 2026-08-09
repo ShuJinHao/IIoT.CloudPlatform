@@ -1,6 +1,13 @@
+using System.Reflection;
+using IIoT.HttpApi.Controllers.Oidc;
+using IIoT.HttpApi.Infrastructure.Oidc;
 using IIoT.IdentityService.Queries;
+using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
+using Microsoft.Extensions.Options;
+using Moq;
+using OpenIddict.Abstractions;
 using Xunit;
 
 namespace IIoT.CloudPlatform.ContractTests;
@@ -145,15 +152,49 @@ public sealed class CloudOidcProviderBehaviorTests
     }
 
     [Fact]
-    public void CloudIdentityStatusQuery_ShouldRequireAiReadIdentityStatusPermission()
+    public void CloudIdentityStatusQuery_ShouldNotUseInteractiveAiReadAuthorization()
     {
         var attributes = typeof(GetCloudIdentityStatusQuery)
             .GetCustomAttributes(typeof(IIoT.Services.CrossCutting.Attributes.AuthorizeAiReadAttribute), inherit: true)
             .Cast<IIoT.Services.CrossCutting.Attributes.AuthorizeAiReadAttribute>()
             .ToArray();
 
-        var attribute = Assert.Single(attributes);
-        Assert.Equal(AiReadPermissions.IdentityStatus, attribute.Permission);
+        Assert.Empty(attributes);
+    }
+
+    [Fact]
+    public void DelegatedAiReadPrincipal_ShouldUseOnlyDedicatedAudienceResource()
+    {
+        var controller = new CloudOidcController(
+            Mock.Of<ICloudOidcUserProfileService>(),
+            Mock.Of<ICloudOidcSessionService>(),
+            Mock.Of<IAuditTrailService>(),
+            Mock.Of<IOidcIssuanceAuditTrailService>(),
+            Options.Create(CreateValidOidcProviderOptions()));
+        var createPrincipal = typeof(CloudOidcController).GetMethod(
+            "CreatePrincipal",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("OIDC principal factory was not found.");
+        var profile = new CloudOidcUserProfile(
+            Guid.NewGuid(),
+            "101650",
+            "Canonical AI Admin",
+            AccountEnabled: true,
+            EmployeeActive: true,
+            CloudIdentityTenants.Default,
+            "status-v1");
+
+        var principal = Assert.IsType<System.Security.Claims.ClaimsPrincipal>(
+            createPrincipal.Invoke(
+                controller,
+                [profile, new[] { "openid", "profile", AiReadDelegationDefaults.Scope }]));
+
+        Assert.Equal(
+            new[] { AiReadDelegationDefaults.Audience },
+            principal.GetResources().ToArray());
+        Assert.Equal(
+            new[] { AiReadDelegationDefaults.Audience },
+            principal.GetAudiences().ToArray());
     }
 
     private static OidcProviderOptions CreateValidOidcProviderOptions()

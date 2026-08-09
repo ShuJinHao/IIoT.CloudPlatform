@@ -18,6 +18,12 @@ public interface IJwtTokenGenerator
         string clientCode,
         Guid processId);
 
+    JwtTokenResult GenerateEdgeActivationToken(
+        Guid generationId,
+        Guid deviceId,
+        string clientCode,
+        Guid processId);
+
     JwtTokenResult GenerateEdgeReleasePublisherToken(
         Guid apiKeyId,
         string apiKeyName,

@@ -50,7 +50,10 @@ public sealed class EdgeHostBehaviorTests
                         : new DeviceReportState(
                             state.PlcSnapshotReportedAtUtc.Value,
                             state.PlcSnapshotReceivedAtUtc.Value,
-                            state.PlcSnapshotContentSha256);
+                            state.PlcSnapshotContentSha256,
+                            state.PlcSnapshotIsAuthoritative,
+                            state.PlcSnapshotConfigurationVersion,
+                            state.PlcSnapshotExplicitClear);
                 var observation = new DeviceReportWriteObservation(
                     true,
                     clientCode,
@@ -251,13 +254,85 @@ public sealed class EdgeHostBehaviorTests
                 deviceId,
                 "DEV-PLCSTATE06",
                 DateTime.UtcNow,
-                []),
+                [],
+                IsAuthoritative: true,
+                ConfigurationVersion: "cfg-clear-2",
+                ClearPlcList: true),
             CancellationToken.None);
 
         Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
         Assert.Equal(0, result.Value!.ReceivedCount);
         Assert.Empty(store.States);
         Assert.True(store.SaveChangesCalled);
+    }
+
+    [Fact]
+    public async Task ReportEdgeHostPlcRuntimeStatesHandler_ShouldRequireNewConfigurationVersionBeforeClear()
+    {
+        var deviceId = Guid.NewGuid();
+        const string clientCode = "DEV-PLC-CLEAR-VERSION";
+        var store = new StubEdgeHostPlcRuntimeStateStore();
+        store.States.Add(new EdgeHostPlcRuntimeState(
+            deviceId,
+            clientCode,
+            "PLC-KEEP"));
+        var clientStateStore = new StubDeviceClientStateStore();
+        var acceptedAt = new DateTime(
+            2026,
+            8,
+            7,
+            1,
+            0,
+            0,
+            DateTimeKind.Utc);
+        var clientState = new DeviceClientState(deviceId, clientCode);
+        clientState.ApplyPlcSnapshot(
+            acceptedAt,
+            acceptedAt,
+            new string('a', 64),
+            isAuthoritative: true,
+            configurationVersion: "cfg-v2",
+            explicitClear: false);
+        clientStateStore.States.Add(clientState);
+        var handler = CreatePlcReportHandler(
+            deviceId,
+            clientCode,
+            store,
+            clientStateStore: clientStateStore);
+
+        var rejected = await handler.Handle(
+            new ReportEdgeHostPlcRuntimeStatesCommand(
+                deviceId,
+                clientCode,
+                acceptedAt.AddSeconds(1),
+                [],
+                IsAuthoritative: true,
+                ConfigurationVersion: " cfg-v2 ",
+                ClearPlcList: true),
+            CancellationToken.None);
+
+        Assert.Equal(ResultStatus.Invalid, rejected.Status);
+        Assert.Contains(
+            "清空 PLC 投影必须使用新的配置清单版本。",
+            rejected.Errors ?? []);
+        Assert.Single(store.States);
+        Assert.False(store.SaveChangesCalled);
+
+        var accepted = await handler.Handle(
+            new ReportEdgeHostPlcRuntimeStatesCommand(
+                deviceId,
+                clientCode,
+                acceptedAt.AddSeconds(2),
+                [],
+                IsAuthoritative: true,
+                ConfigurationVersion: "cfg-v3",
+                ClearPlcList: true),
+            CancellationToken.None);
+
+        Assert.True(
+            accepted.IsSuccess,
+            string.Join("; ", accepted.Errors ?? []));
+        Assert.Empty(store.States);
     }
 
     [Fact]

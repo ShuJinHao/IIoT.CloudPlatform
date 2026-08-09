@@ -248,10 +248,11 @@ public sealed class DatabaseSchemaCompatibilityPostgresTests(
                 $"""
                  INSERT INTO mfg_processes (id, process_code, process_name)
                  VALUES ('{processId}'::uuid, 'PG-{unique}', 'Postgres {unique}');
-                 INSERT INTO devices (id, device_name, process_id, client_code, mac_address)
+                 INSERT INTO devices
+                    (id, device_name, normalized_device_name, process_id, client_code, mac_address)
                  VALUES
-                    ('{firstDeviceId}'::uuid, 'Legacy first', '{processId}'::uuid, ' legacy-code ', '00:00:00:00:00:01'),
-                    ('{secondDeviceId}'::uuid, 'Legacy second', '{processId}'::uuid, 'LEGACY-CODE', '00:00:00:00:00:02');
+                    ('{firstDeviceId}'::uuid, 'Legacy first', 'LEGACYFIRST', '{processId}'::uuid, ' legacy-code ', '00:00:00:00:00:01'),
+                    ('{secondDeviceId}'::uuid, 'Legacy second', 'LEGACYSECOND', '{processId}'::uuid, 'LEGACY-CODE', '00:00:00:00:00:02');
                  """,
                 testToken);
 

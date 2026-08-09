@@ -1,4 +1,5 @@
 using System.Text;
+using System.Security.Cryptography;
 using System.Threading.RateLimiting;
 using FluentValidation;
 using IIoT.Dapper;
@@ -36,6 +37,7 @@ using Microsoft.IdentityModel.Tokens;
 using OpenIddict.Abstractions;
 using OpenIddict.Server;
 using OpenIddict.Server.AspNetCore;
+using OpenIddict.Validation.AspNetCore;
 
 namespace IIoT.HttpApi;
 
@@ -75,7 +77,10 @@ public static class DependencyInjection
         builder.Services.AddSingleton<IBusinessTimeProvider, BusinessTimeProvider>();
         builder.AddValidatedOptions<EdgeInstallerArtifactOptions>(
             EdgeInstallerArtifactOptions.SectionName,
-            static options => options.Validate());
+            options => options.Validate(builder.Environment.IsProduction()));
+        builder.AddValidatedOptions<PluginReleaseSignatureOptions>(
+            PluginReleaseSignatureOptions.SectionName,
+            options => options.Validate(builder.Environment.IsProduction()));
         builder.AddValidatedOptions<EdgeReleaseRetentionOptions>(
             EdgeReleaseRetentionOptions.SectionName,
             static options => options.Validate());
@@ -86,6 +91,7 @@ public static class DependencyInjection
         builder.Services.AddScoped<IClientReleaseRetentionPolicyReader>(sp =>
             sp.GetRequiredService<IClientReleaseRetentionService>());
         builder.Services.AddScoped<IClientReleaseComponentDeletionProcessor, ClientReleaseComponentDeletionProcessor>();
+        builder.Services.AddHostedService<EdgeInstallerReadyPackageCleanupService>();
         builder.Services.AddScoped<ClientReleaseUploadCoordinator>();
         builder.Services.AddPassStationRuntime();
 
@@ -115,6 +121,12 @@ public static class DependencyInjection
             JwtSettings.SectionName,
             static options => options.Validate());
         var jwtSecret = JwtSecretResolver.Resolve(builder.Environment, jwtSettings.Secret);
+        var aiIdentityStatusTokenOptions = builder.AddValidatedOptions<AiIdentityStatusTokenOptions>(
+            AiIdentityStatusTokenOptions.SectionName,
+            static options => options.Validate());
+        var aiIdentityStatusSigningSecret = aiIdentityStatusTokenOptions.Enabled
+            ? aiIdentityStatusTokenOptions.SigningSecret
+            : Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         var rateLimiting = builder.Configuration.GetRequiredValidatedOptions<HttpApiRateLimitingOptions>(
             HttpApiRateLimitingOptions.SectionName,
             static options => options.Validate());
@@ -131,6 +143,11 @@ public static class DependencyInjection
         var oidcProviderOptions = builder.AddValidatedOptions<OidcProviderOptions>(
             OidcProviderOptions.SectionName,
             options => options.Validate(builder.Environment.EnvironmentName));
+        var identityOnlyTestHost = builder.Configuration.GetValue<bool>(
+            HttpApiTestingConfiguration.IdentityOnlyHostConfigurationKey);
+        HttpApiTestingConfiguration.EnsureAllowed(
+            identityOnlyTestHost,
+            builder.Environment.EnvironmentName);
         var authenticatedUserPolicy = new AuthorizationPolicyBuilder()
             .RequireAuthenticatedUser()
             .Build();
@@ -188,6 +205,36 @@ public static class DependencyInjection
                         return Task.CompletedTask;
                     }
                 };
+            })
+            .AddJwtBearer(AiIdentityStatusTokenDefaults.AuthenticationScheme, options =>
+            {
+                options.MapInboundClaims = false;
+                options.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuer = true,
+                    ValidateAudience = true,
+                    ValidateLifetime = true,
+                    ValidateIssuerSigningKey = true,
+                    ValidIssuer = aiIdentityStatusTokenOptions.Issuer,
+                    ValidAudience = aiIdentityStatusTokenOptions.Audience,
+                    IssuerSigningKey = new SymmetricSecurityKey(
+                        Encoding.UTF8.GetBytes(aiIdentityStatusSigningSecret)),
+                    ValidAlgorithms = [SecurityAlgorithms.HmacSha256],
+                    ClockSkew = TimeSpan.Zero
+                };
+                options.Events = new JwtBearerEvents
+                {
+                    OnTokenValidated = context =>
+                    {
+                        if (!AiIdentityStatusTokenValidator.IsValid(context.SecurityToken))
+                        {
+                            context.Fail(
+                                "Identity-status token claims are missing, duplicated or outside the fixed five-minute contract.");
+                        }
+
+                        return Task.CompletedTask;
+                    }
+                };
             });
 
         builder.Services.AddOpenIddict()
@@ -202,13 +249,20 @@ public static class DependencyInjection
                 options.AllowAuthorizationCodeFlow()
                     .RequireProofKeyForCodeExchange();
 
-                options.RegisterScopes(OpenIddictConstants.Scopes.Profile);
+                options.RegisterScopes(
+                    OpenIddictConstants.Scopes.Profile,
+                    AiReadDelegationDefaults.Scope);
                 options.SetAuthorizationCodeLifetime(TimeSpan.FromMinutes(
                     oidcProviderOptions.AuthorizationCodeLifetimeMinutes));
                 options.SetAccessTokenLifetime(TimeSpan.FromMinutes(
                     oidcProviderOptions.AccessTokenLifetimeMinutes));
                 options.SetIdentityTokenLifetime(TimeSpan.FromMinutes(
                     oidcProviderOptions.IdentityTokenLifetimeMinutes));
+
+                if (identityOnlyTestHost)
+                {
+                    options.DisableAccessTokenEncryption();
+                }
 
                 ConfigureOpenIddictCertificates(options, oidcProviderOptions, builder.Environment);
 
@@ -222,6 +276,12 @@ public static class DependencyInjection
                 {
                     aspNetCore.DisableTransportSecurityRequirement();
                 }
+            })
+            .AddValidation(options =>
+            {
+                options.UseLocalServer();
+                options.EnableTokenEntryValidation();
+                options.UseAspNetCore();
             });
 
         builder.Services.AddScoped<HumanJwtStatusValidator>();
@@ -322,7 +382,11 @@ public static class DependencyInjection
         builder.Services.AddScoped<IAdminTargetGuard, AdminTargetGuard>();
         builder.Services.AddScoped<IClientReleaseUploadSource, CurrentClientReleaseUploadSource>();
         builder.Services.AddScoped<ICloudOidcSessionService, CloudOidcSessionService>();
-        builder.Services.AddScoped<IAiReadScopeAccessor, HttpAiReadScopeAccessor>();
+        builder.Services.AddScoped<HttpAiReadScopeAccessor>();
+        builder.Services.AddScoped<IAiReadScopeAccessor>(provider =>
+            provider.GetRequiredService<HttpAiReadScopeAccessor>());
+        builder.Services.AddScoped<IAiReadAuthorizationContext>(provider =>
+            provider.GetRequiredService<HttpAiReadScopeAccessor>());
         builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, CloudAuthorizationResultHandler>();
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddExceptionHandler<UseCaseExceptionHandler>();
@@ -345,9 +409,46 @@ public static class DependencyInjection
                 policy.RequireAuthenticatedUser()
                     .RequireClaim(IIoTClaimTypes.ActorType, IIoTClaimTypes.EdgeDeviceActor)
                     .RequireClaim(IIoTClaimTypes.DeviceId))
-            .AddPolicy(HttpApiPolicies.RequireAiReadToken, policy =>
+            .AddPolicy(HttpApiPolicies.RequireEdgeActivationToken, policy =>
                 policy.RequireAuthenticatedUser()
-                    .RequireClaim(IIoTClaimTypes.ActorType, IIoTClaimTypes.AiServiceActor));
+                    .RequireClaim(
+                        IIoTClaimTypes.ActorType,
+                        IIoTClaimTypes.EdgeActivationActor)
+                    .RequireClaim(IIoTClaimTypes.DeviceId)
+                    .RequireClaim(IIoTClaimTypes.InstallerGenerationId))
+            .AddPolicy(HttpApiPolicies.RequireAiReadDelegation, policy =>
+                policy.AddAuthenticationSchemes(
+                        OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme)
+                    .RequireAuthenticatedUser()
+                    .RequireClaim(
+                        IIoTClaimTypes.ActorType,
+                        IIoTClaimTypes.AiDelegatedUserActor)
+                    .RequireAssertion(context =>
+                        HasSpaceDelimitedClaimValue(
+                            context.User,
+                            OpenIddictConstants.Claims.Scope,
+                            AiReadDelegationDefaults.Scope) &&
+                        HasSpaceDelimitedClaimValue(
+                            context.User,
+                            OpenIddictConstants.Claims.Audience,
+                            AiReadDelegationDefaults.Audience)))
+            .AddPolicy(HttpApiPolicies.RequireAiIdentityStatusToken, policy =>
+                policy.AddAuthenticationSchemes(
+                        AiIdentityStatusTokenDefaults.AuthenticationScheme)
+                    .RequireAuthenticatedUser()
+                    .RequireClaim(
+                        IIoTClaimTypes.ActorType,
+                        IIoTClaimTypes.AiIdentityStatusActor));
+    }
+
+    private static bool HasSpaceDelimitedClaimValue(
+        System.Security.Claims.ClaimsPrincipal principal,
+        string claimType,
+        string expectedValue)
+    {
+        return principal.FindAll(claimType)
+            .SelectMany(claim => claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            .Contains(expectedValue, StringComparer.Ordinal);
     }
 
     private static void ConfigureOpenIddictCertificates(

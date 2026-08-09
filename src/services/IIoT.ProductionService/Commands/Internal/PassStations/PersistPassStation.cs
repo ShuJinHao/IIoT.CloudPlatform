@@ -37,7 +37,8 @@ public sealed class PersistPassStationHandler(
                 item.CompletedTime,
                 receivedAt,
                 item.DeduplicationKey,
-                item.PayloadJson))
+                item.PayloadJson,
+                item.CompletionId))
             .ToArray();
 
         await repository.InsertBatchAsync(records, cancellationToken);

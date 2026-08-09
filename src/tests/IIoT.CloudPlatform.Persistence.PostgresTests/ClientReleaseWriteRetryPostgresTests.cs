@@ -9,15 +9,18 @@ using IIoT.Core.Production.Contracts.ClientReleases;
 using IIoT.EntityFrameworkCore;
 using IIoT.EntityFrameworkCore.Auditing;
 using IIoT.EntityFrameworkCore.ClientReleases;
+using IIoT.EntityFrameworkCore.Identity;
 using IIoT.EntityFrameworkCore.Persistence;
 using IIoT.EntityFrameworkCore.Repository;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.Commands.ClientReleases;
 using IIoT.ProductionService.Security;
 using IIoT.Services.Contracts;
+using IIoT.Services.Contracts.Auditing;
 using IIoT.Services.Contracts.Authorization;
 using IIoT.Services.Contracts.Identity;
 using IIoT.Services.Contracts.Persistence;
+using IIoT.Services.Contracts.RecordQueries;
 using IIoT.SharedKernel.Result;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -123,6 +126,331 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
         }
     }
 
+    [Fact]
+    public async Task InstallerPendingActivationLifecycle_ShouldPersistReadyConfirmAndExpiry()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(60));
+        var options = CreateObservationOptions(budget.ConnectionString);
+        var store = new EfEdgeInstallerGenerationStore(
+            options,
+            NullLogger<EfEdgeInstallerGenerationStore>.Instance);
+        var process = new MfgProcess(
+            $"IPL-{Guid.NewGuid():N}"[..20],
+            "Installer pending lifecycle");
+        var device = new Device(
+            $"Installer lifecycle {Guid.NewGuid():N}"[..40],
+            $"IPL-{Guid.NewGuid():N}"[..20],
+            process.Id);
+        device.SetBootstrapSecretHash(
+            BootstrapSecretHasher.Hash(BootstrapSecretGenerator.Generate()));
+        var generationIds = new[] { Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid() };
+
+        try
+        {
+            await using (var setup = new IIoTDbContext(options))
+            {
+                setup.MfgProcesses.Add(process);
+                setup.Devices.Add(device);
+                await setup.SaveChangesAsync(budget.Token);
+            }
+
+            foreach (var generationId in generationIds)
+            {
+                var record = new EdgeInstallerGenerationRecord(
+                    generationId,
+                    null,
+                    "installer-lifecycle-test",
+                    DateTime.UtcNow,
+                    "stable",
+                    "win-x64",
+                    "2.0.12",
+                    new string('a', 64),
+                    $"installer-{generationId:N}.exe",
+                    new string('b', 64),
+                    1024,
+                    [new EdgeInstallerGenerationBindingFact(
+                        "LIFECYCLE",
+                        device.Id,
+                        device.Code,
+                        device.DeviceName,
+                        process.Id)],
+                    [new EdgeInstallerGenerationPluginFact(
+                        "LIFECYCLE",
+                        "2.0.12",
+                        new string('c', 64))]);
+                var pending = new EdgeInstallerPendingCredential(
+                    generationId,
+                    device.Id,
+                    device.Code,
+                    BootstrapSecretHasher.Hash(BootstrapSecretGenerator.Generate()),
+                    "LIFECYCLE",
+                    "2.0.12",
+                    new string('b', 64),
+                    DateTime.UtcNow.AddDays(7));
+                Assert.True(await store.TryAddConfirmedAsync(
+                    record,
+                    [pending],
+                    budget.Token));
+            }
+
+            var readyAtUtc = new DateTime(
+                DateTime.UtcNow.Ticks - DateTime.UtcNow.Ticks % 10,
+                DateTimeKind.Utc);
+            Assert.Equal(
+                EdgeInstallerActivationAttempt.Started,
+                await store.TryActivateAsync(
+                    generationIds[0],
+                    device.Id,
+                    4312,
+                    readyAtUtc,
+                    budget.Token));
+            Assert.Equal(
+                EdgeInstallerActivationAttempt.Confirmed,
+                await store.ConfirmActivationAsync(
+                    generationIds[0],
+                    device.Id,
+                    4312,
+                    readyAtUtc,
+                    budget.Token));
+
+            await using (var expireSetup = new IIoTDbContext(options))
+            {
+                await expireSetup.EdgeInstallerPendingCredentials
+                    .Where(item => item.GenerationId == generationIds[1]
+                                   || item.GenerationId == generationIds[2])
+                    .ExecuteUpdateAsync(
+                        setters => setters.SetProperty(
+                            item => item.ExpiresAtUtc,
+                            DateTime.UtcNow.AddMinutes(-1)),
+                        budget.Token);
+            }
+
+            var directlyExpired = await store.GetPendingAsync(
+                generationIds[1],
+                device.Id,
+                budget.Token);
+            Assert.NotNull(directlyExpired);
+            Assert.Equal(
+                EdgeInstallerPendingCredentialStatus.Expired,
+                directlyExpired.Status);
+            Assert.False(await store.HasDownloadablePendingAsync(
+                generationIds[2],
+                DateTime.UtcNow,
+                budget.Token));
+
+            await using var observation = new IIoTDbContext(options);
+            var persisted = await observation.EdgeInstallerPendingCredentials
+                .AsNoTracking()
+                .Where(item => generationIds.Contains(item.GenerationId))
+                .OrderBy(item => item.GenerationId)
+                .ToListAsync(budget.Token);
+            Assert.Equal(3, persisted.Count);
+            Assert.Contains(
+                persisted,
+                item => item.GenerationId == generationIds[0]
+                        && item.Status == EdgeInstallerPendingCredentialStatus.Activated
+                        && item.ReadyProcessId == 4312);
+            Assert.Equal(
+                2,
+                persisted.Count(item =>
+                    item.Status == EdgeInstallerPendingCredentialStatus.Expired));
+            Assert.Null(await observation.Devices
+                .AsNoTracking()
+                .Where(item => item.Id == device.Id)
+                .Select(item => item.BootstrapSecretHash)
+                .SingleAsync(budget.Token));
+        }
+        finally
+        {
+            await using var cleanup = new IIoTDbContext(options);
+            await cleanup.EdgeInstallerPendingCredentials
+                .Where(item => generationIds.Contains(item.GenerationId))
+                .ExecuteDeleteAsync(CancellationToken.None);
+            await cleanup.EdgeInstallerGenerationRecords
+                .Where(item => generationIds.Contains(item.Id))
+                .ExecuteDeleteAsync(CancellationToken.None);
+            await cleanup.Devices
+                .Where(item => item.Id == device.Id)
+                .ExecuteDeleteAsync(CancellationToken.None);
+            await cleanup.MfgProcesses
+                .Where(item => item.Id == process.Id)
+                .ExecuteDeleteAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task ProductionBindingApplyStore_ShouldPersistBindingAndAuditAtomically()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var options = CreateObservationOptions(budget.ConnectionString);
+        var process = new MfgProcess(
+            $"PBA-{Guid.NewGuid():N}"[..20],
+            "Production binding apply");
+        var device = new Device(
+            $"Binding apply {Guid.NewGuid():N}"[..40],
+            $"PBA-{Guid.NewGuid():N}"[..20],
+            process.Id);
+        var component = CreatePluginComponent(
+            $"PBA-{Guid.NewGuid():N}"[..24],
+            "stable",
+            "2.0.12",
+            "plugins/pba/2.0.12/plugin.zip",
+            new string('d', 64),
+            1024);
+        component.ConfigurePluginContract(
+            process.ProcessCode,
+            "docs/plugins/pba.md",
+            2,
+            new string('e', 64),
+            "[]");
+        var bindingId = Guid.NewGuid();
+        var auditId = Guid.NewGuid();
+        var request = new ProductionBindingApplyRequest(
+            bindingId,
+            device.Id,
+            component.Id,
+            process.ProcessCode,
+            DateTime.UtcNow,
+            auditId,
+            new AuditTrailEntry(
+                Guid.NewGuid(),
+                "binding-admin",
+                "DevicePluginBinding.ProductionApply",
+                "Device",
+                device.Id.ToString("D"),
+                DateTime.UtcNow,
+                true,
+                "PostgreSQL binding apply evidence.",
+                IdempotencyKey: $"binding-apply:{bindingId:N}"));
+
+        try
+        {
+            await using (var setup = new IIoTDbContext(options))
+            {
+                setup.MfgProcesses.Add(process);
+                setup.Devices.Add(device);
+                setup.ClientReleaseComponents.Add(component);
+                await setup.SaveChangesAsync(budget.Token);
+            }
+
+            var store = new EfProductionBindingApplyStore(options);
+            Assert.Equal(
+                ProductionBindingApplyResult.Applied,
+                await store.TryApplyAsync(request, budget.Token));
+            Assert.Equal(
+                ProductionBindingApplyResult.Idempotent,
+                await store.TryApplyAsync(request, budget.Token));
+
+            await using var observation = new IIoTDbContext(options);
+            var binding = await observation.DevicePluginBindings
+                .AsNoTracking()
+                .SingleAsync(item => item.Id == bindingId, budget.Token);
+            Assert.Equal(device.Id, binding.DeviceId);
+            Assert.Equal(component.Id, binding.ClientReleaseComponentId);
+            Assert.True(await observation.ClientReleaseComponents
+                .AsNoTracking()
+                .Where(item => item.Id == component.Id)
+                .Select(item => item.WasEverDeviceBound)
+                .SingleAsync(budget.Token));
+            Assert.True(await observation.AuditTrails
+                .AsNoTracking()
+                .AnyAsync(item => item.Id == auditId, budget.Token));
+        }
+        finally
+        {
+            await using var cleanup = new IIoTDbContext(options);
+            await cleanup.DevicePluginBindings
+                .Where(item => item.Id == bindingId)
+                .ExecuteDeleteAsync(CancellationToken.None);
+            await cleanup.AuditTrails
+                .Where(item => item.Id == auditId)
+                .ExecuteDeleteAsync(CancellationToken.None);
+            await cleanup.ClientReleaseComponents
+                .Where(item => item.Id == component.Id)
+                .ExecuteDeleteAsync(CancellationToken.None);
+            await cleanup.Devices
+                .Where(item => item.Id == device.Id)
+                .ExecuteDeleteAsync(CancellationToken.None);
+            await cleanup.MfgProcesses
+                .Where(item => item.Id == process.Id)
+                .ExecuteDeleteAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task EdgeRefreshReplacement_ShouldRevokePriorSessionAndPersistReplacement()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(
+            fixture,
+            TimeSpan.FromSeconds(45));
+        var options = CreateObservationOptions(budget.ConnectionString);
+        var process = new MfgProcess(
+            $"ERR-{Guid.NewGuid():N}"[..20],
+            "Edge refresh replacement");
+        var device = new Device(
+            $"Refresh replacement {Guid.NewGuid():N}"[..40],
+            $"ERR-{Guid.NewGuid():N}"[..20],
+            process.Id);
+
+        try
+        {
+            await using (var setup = new IIoTDbContext(options))
+            {
+                setup.MfgProcesses.Add(process);
+                setup.Devices.Add(device);
+                await setup.SaveChangesAsync(budget.Token);
+            }
+
+            await using var serviceContext = new IIoTDbContext(options);
+            var service = new EfRefreshTokenService(
+                serviceContext,
+                Options.Create(new RefreshTokenOptions()));
+            await service.IssueAsync(
+                IIoTClaimTypes.EdgeDeviceActor,
+                device.Id,
+                budget.Token);
+            var replacement = await service.IssueReplacingAsync(
+                IIoTClaimTypes.EdgeDeviceActor,
+                device.Id,
+                "installer-v3-activated",
+                budget.Token);
+
+            await using var observation = new IIoTDbContext(options);
+            var sessions = await observation.RefreshTokenSessions
+                .AsNoTracking()
+                .Where(item => item.ActorType == IIoTClaimTypes.EdgeDeviceActor
+                               && item.SubjectId == device.Id)
+                .ToListAsync(budget.Token);
+            Assert.Equal(2, sessions.Count);
+            var prior = Assert.Single(
+                sessions,
+                item => item.RevokedReason == "installer-v3-activated");
+            var active = Assert.Single(sessions, item => item.RevokedAtUtc is null);
+            Assert.Equal(active.Id, prior.ReplacedByTokenId);
+            Assert.Equal(
+                replacement.ExpiresAtUtc,
+                active.ExpiresAtUtc);
+        }
+        finally
+        {
+            await using var cleanup = new IIoTDbContext(options);
+            await cleanup.RefreshTokenSessions
+                .Where(item => item.ActorType == IIoTClaimTypes.EdgeDeviceActor
+                               && item.SubjectId == device.Id)
+                .ExecuteDeleteAsync(CancellationToken.None);
+            await cleanup.Devices
+                .Where(item => item.Id == device.Id)
+                .ExecuteDeleteAsync(CancellationToken.None);
+            await cleanup.MfgProcesses
+                .Where(item => item.Id == process.Id)
+                .ExecuteDeleteAsync(CancellationToken.None);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -148,6 +476,7 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
             var observationReader =
                 new CloudWriteObservationReader(observationOptions);
             var auditTrail = new EfAuditTrailService(
+                new IIoTDbContext(observationOptions),
                 observationOptions,
                 NullLogger<EfAuditTrailService>.Instance);
             var currentUser = CreateAdmin();
@@ -214,7 +543,7 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
             await using (var dbContext =
                          new IIoTDbContext(writeOptions))
             {
-                await VerifyInstallerSecretRotationAsync(
+                await VerifyInstallerPendingCredentialAsync(
                     dbContext,
                     new EfRepository<ClientReleaseComponent>(
                         dbContext),
@@ -266,7 +595,9 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
                 new ArchiveClientReleaseCommand(versionId),
                 cancellationToken);
 
-        Assert.True(result.IsSuccess);
+        Assert.True(
+            result.IsSuccess,
+            string.Join(" | ", result.Errors ?? []));
         Assert.Equal(expectedFaults, fault.ExceptionsThrown);
         dbContext.ChangeTracker.Clear();
         Assert.Equal(
@@ -522,6 +853,7 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
                     }),
                 componentRepository,
                 clientStateStore,
+                new StubDevicePluginBindingQueryService(),
                 deletionStore,
                 processor,
                 currentUser,
@@ -573,7 +905,7 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
                     cancellationToken));
     }
 
-    private static async Task VerifyInstallerSecretRotationAsync(
+    private static async Task VerifyInstallerPendingCredentialAsync(
         IIoTDbContext dbContext,
         EfRepository<ClientReleaseComponent> componentRepository,
         EfRepository<Device> deviceRepository,
@@ -584,7 +916,7 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
         string edgeRoot,
         CancellationToken cancellationToken)
     {
-        var channel = UniqueSegment("pg-installer");
+        const string channel = "stable";
         const string runtime = "win-x64";
         const string hostVersion = "4.0.0";
         const string pluginVersion = "4.1.0";
@@ -602,7 +934,7 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
             pluginRelativePath.Replace(
                 '/',
                 Path.DirectorySeparatorChar));
-        CreatePluginPackage(
+        var fileManifestSha256 = CreatePluginPackage(
             pluginPath,
             moduleId,
             pluginVersion);
@@ -618,11 +950,18 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
             pluginVersion,
             pluginRelativePath,
             FileSha256(pluginPath),
-            new FileInfo(pluginPath).Length);
+            new FileInfo(pluginPath).Length,
+            fileManifestSha256);
         var unique = Guid.NewGuid().ToString("N");
         var process = new MfgProcess(
             $"PGI-{unique}"[..20],
             "Postgres installer process");
+        plugin.ConfigurePluginContract(
+            process.ProcessCode,
+            "docs/postgres-installer-plugin.md",
+            2,
+            fileManifestSha256,
+            "[]");
         var device = new Device(
             $"Postgres installer {unique}"[..40],
             $"PGI-{unique}"[..20],
@@ -633,43 +972,81 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
         dbContext.MfgProcesses.Add(process);
         dbContext.Devices.Add(device);
         dbContext.ClientReleaseComponents.AddRange(host, plugin);
+        var binding = new DevicePluginBinding(
+            device.Id,
+            plugin.Id,
+            process.ProcessCode,
+            DateTime.UtcNow);
+        plugin.MarkDeviceBound();
+        dbContext.DevicePluginBindings.Add(binding);
         await dbContext.SaveChangesAsync(cancellationToken);
         dbContext.ChangeTracker.Clear();
 
+        var access = new StubCurrentUserDeviceAccessService
+        {
+            IsAdministrator = true
+        };
+        var bindingQuery = new StubDevicePluginBindingQueryService
+        {
+            Bindings =
+            [
+                new DevicePluginBindingReadItem(
+                    binding.Id,
+                    device.Id,
+                    plugin.Id,
+                    plugin.ComponentKey,
+                    plugin.DisplayName,
+                    process.ProcessCode,
+                    channel,
+                    runtime,
+                    plugin.DataCapabilitiesJson)
+            ]
+        };
+        var planService = new EdgeInstallerPlanService(
+            access,
+            deviceRepository,
+            componentRepository,
+            bindingQuery);
+        var planResult = await planService.BuildAsync(
+            [device.Id],
+            cancellationToken);
+        Assert.True(planResult.IsSuccess);
+        var plan = planResult.Value!;
+
         var expectedFaults = fault.ExceptionsThrown + 1;
+        using var payloadSigningKey = RSA.Create(2048);
+        var generationStore = new EfEdgeInstallerGenerationStore(
+            dbContext.ContextOptions,
+            NullLogger<EfEdgeInstallerGenerationStore>.Instance);
         fault.Arm();
         var result =
             await new GenerateEdgeInstallerPackageHandler(
                     currentUser,
-                    new StubCurrentUserDeviceAccessService
-                    {
-                        IsAdministrator = true
-                    },
+                    access,
                     deviceRepository,
                     componentRepository,
                     auditTrail,
                     Options.Create(
                         new EdgeInstallerArtifactOptions
                         {
-                            RootPath = installerRoot
+                            RootPath = installerRoot,
+                            PayloadSigningKeyId = "postgres-installer-test-key",
+                            PayloadSigningPrivateKeyPem =
+                                payloadSigningKey.ExportRSAPrivateKeyPem()
                     }),
-                    CreateUnitOfWork(dbContext),
                     observationReader,
-                    new InMemoryEdgeInstallerGenerationStore())
+                    generationStore,
+                    planService)
                 .Handle(
                     new GenerateEdgeInstallerPackageCommand(
-                        [
-                            new EdgeBindingSelection(
-                                moduleId,
-                                device.Id)
-                        ],
-                        channel,
-                        runtime,
-                        hostVersion,
-                        "http://cloud.local"),
+                        BaseUrl: "http://cloud.local",
+                        DeviceIds: [device.Id],
+                        PlanFingerprint: plan.PlanFingerprint),
                     cancellationToken);
 
-        Assert.True(result.IsSuccess);
+        Assert.True(
+            result.IsSuccess,
+            string.Join(" | ", result.Errors ?? []));
         Assert.Equal(expectedFaults, fault.ExceptionsThrown);
         await result.Value!.Content.DisposeAsync();
         dbContext.ChangeTracker.Clear();
@@ -679,7 +1056,24 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
             .Select(current => current.BootstrapSecretHash)
             .SingleAsync(cancellationToken);
         Assert.NotNull(targetHash);
-        Assert.NotEqual(oldHash, targetHash);
+        Assert.Equal(oldHash, targetHash);
+        var pendingCredential = Assert.Single(await dbContext
+            .EdgeInstallerPendingCredentials
+            .AsNoTracking()
+            .Where(item =>
+                item.GenerationId == result.Value.GenerationId
+                && item.DeviceId == device.Id)
+            .ToListAsync(cancellationToken));
+        Assert.Equal(
+            EdgeInstallerPendingCredentialStatus.Pending,
+            pendingCredential.Status);
+        Assert.NotEqual(oldHash, pendingCredential.SecretHash);
+        Assert.StartsWith("v1:", pendingCredential.SecretHash, StringComparison.Ordinal);
+        Assert.Equal(3, pendingCredential.SecretHash.Split(':').Length);
+        Assert.Single(await dbContext.EdgeInstallerGenerationRecords
+            .AsNoTracking()
+            .Where(record => record.Id == result.Value.GenerationId)
+            .ToListAsync(cancellationToken));
         Assert.Equal(
             1,
             await dbContext.AuditTrails
@@ -692,6 +1086,31 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
                         == device.Id.ToString()
                         && record.Succeeded,
                     cancellationToken));
+
+        dbContext.ChangeTracker.Clear();
+        await dbContext.EdgeInstallerPendingCredentials
+            .Where(item => item.GenerationId == result.Value.GenerationId)
+            .ExecuteDeleteAsync(CancellationToken.None);
+        await dbContext.EdgeInstallerGenerationRecords
+            .Where(record => record.Id == result.Value.GenerationId)
+            .ExecuteDeleteAsync(CancellationToken.None);
+        await dbContext.AuditTrails
+            .Where(record =>
+                record.OperationType == "Edge.GenerateInstallerPackage"
+                && record.TargetIdOrKey == device.Id.ToString())
+            .ExecuteDeleteAsync(CancellationToken.None);
+        await dbContext.DevicePluginBindings
+            .Where(item => item.DeviceId == device.Id)
+            .ExecuteDeleteAsync(CancellationToken.None);
+        await dbContext.Devices
+            .Where(item => item.Id == device.Id)
+            .ExecuteDeleteAsync(CancellationToken.None);
+        await dbContext.ClientReleaseComponents
+            .Where(item => item.Id == host.Id || item.Id == plugin.Id)
+            .ExecuteDeleteAsync(CancellationToken.None);
+        await dbContext.MfgProcesses
+            .Where(item => item.Id == process.Id)
+            .ExecuteDeleteAsync(CancellationToken.None);
     }
 
     private static DbContextOptions<IIoTDbContext>
@@ -777,7 +1196,8 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
         string version,
         string packageRelativePath,
         string sha256,
-        long packageSize)
+        long packageSize,
+        string? fileManifestSha256 = null)
     {
         var component = ClientReleaseComponent.CreatePlugin(
             moduleId,
@@ -787,7 +1207,7 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
             null,
             channel,
             "win-x64");
-        component.UpsertPluginVersion(
+        var release = component.UpsertPluginVersion(
             version,
             "1.0.0",
             "1.0.0",
@@ -814,6 +1234,11 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
                     sha256,
                     packageSize)
             ]);
+        if (fileManifestSha256 is not null)
+        {
+            release.ConfigurePluginManifest("[]", fileManifestSha256);
+        }
+
         return component;
     }
 
@@ -827,30 +1252,32 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
             installerRoot,
             channel,
             version);
+        var installerStubPath = Path.Combine(
+            artifactRoot,
+            "IIoT.Edge.Setup.exe");
         WriteFile(
-            Path.Combine(
-                artifactRoot,
-                "IIoT.Edge.Setup.exe"),
+            installerStubPath,
             "MZ-postgres-installer");
+        var launcherRoot = Path.Combine(artifactRoot, "launcher");
         WriteFile(
             Path.Combine(
-                artifactRoot,
-                "launcher",
+                launcherRoot,
                 "IIoT.Edge.Launcher.dll"),
             "launcher");
+        var hostRoot = Path.Combine(artifactRoot, "host");
         WriteFile(
             Path.Combine(
-                artifactRoot,
-                "host",
+                hostRoot,
                 "IIoT.Edge.Shell.dll"),
             "host");
         Directory.CreateDirectory(
             Path.Combine(artifactRoot, "plugins"));
+        var velopackSetupPath = Path.Combine(
+            artifactRoot,
+            "velopack",
+            "IIoT.EdgeClient-Setup.exe");
         WriteFile(
-            Path.Combine(
-                artifactRoot,
-                "velopack",
-                "IIoT.EdgeClient-Setup.exe"),
+            velopackSetupPath,
             "velopack setup");
         File.WriteAllText(
             Path.Combine(
@@ -859,57 +1286,103 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
             JsonSerializer.Serialize(
                 new
                 {
-                    schemaVersion = 2,
-                    installerBindingSchemaVersion = 2,
+                    schemaVersion = 3,
+                    installerBindingSchemaVersion =
+                        EdgeBindingWireSchema.SchemaVersion,
                     channel,
                     version,
                     hostApiVersion = "1.0.0",
                     targetRuntime,
                     targetFramework = "net10.0",
                     installerStubFile = "IIoT.Edge.Setup.exe",
+                    installerStubSha256 = FileSha256(installerStubPath),
+                    installerStubSize = new FileInfo(installerStubPath).Length,
                     launcherDirectory = "launcher",
+                    launcherDirectorySha256 =
+                        ClientReleaseFileFacts.ComputeDirectorySha256(
+                            launcherRoot),
+                    launcherDirectorySize =
+                        ClientReleaseFileFacts.GetDirectorySize(launcherRoot),
                     hostDirectory = "host",
+                    hostDirectorySha256 =
+                        ClientReleaseFileFacts.ComputeDirectorySha256(hostRoot),
+                    hostDirectorySize =
+                        ClientReleaseFileFacts.GetDirectorySize(hostRoot),
                     pluginsRoot = "plugins",
                     velopackSetupFile =
                         "velopack/IIoT.EdgeClient-Setup.exe",
+                    velopackSetupSha256 = FileSha256(velopackSetupPath),
+                    velopackSetupSize =
+                        new FileInfo(velopackSetupPath).Length,
                     modules = Array.Empty<object>()
                 }),
             new UTF8Encoding(false));
     }
 
-    private static void CreatePluginPackage(
+    private static string CreatePluginPackage(
         string packagePath,
         string moduleId,
         string version)
     {
         Directory.CreateDirectory(
             Path.GetDirectoryName(packagePath)!);
+        var pluginJson = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            moduleId,
+            version,
+            hostApiVersion = "1.0.0",
+            minHostVersion = "1.0.0",
+            maxHostVersion = "99.0.0",
+            entryAssembly =
+                $"IIoT.Edge.Module.{moduleId}.dll"
+        });
+        var assemblyBytes = Encoding.UTF8.GetBytes("postgres plugin");
+        var files = new[]
+        {
+            (Path: "plugin.json", Bytes: pluginJson),
+            (Path: $"IIoT.Edge.Module.{moduleId}.dll", Bytes: assemblyBytes)
+        };
+        var fileManifestBytes = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            schemaVersion = 1,
+            component = moduleId,
+            version,
+            files = files.Select(file => new
+            {
+                path = file.Path,
+                size = file.Bytes.LongLength,
+                sha256 = Convert.ToHexString(SHA256.HashData(file.Bytes))
+                    .ToLowerInvariant(),
+                type = "file",
+                component = moduleId,
+                version
+            })
+        });
+
         using var archive = ZipFile.Open(
             packagePath,
             ZipArchiveMode.Create);
         var manifest = archive.CreateEntry("plugin.json");
-        using (var writer = new StreamWriter(
-                   manifest.Open(),
-                   new UTF8Encoding(false)))
+        using (var stream = manifest.Open())
         {
-            writer.Write(JsonSerializer.Serialize(new
-            {
-                moduleId,
-                version,
-                hostApiVersion = "1.0.0",
-                minHostVersion = "1.0.0",
-                maxHostVersion = "99.0.0",
-                entryAssembly =
-                    $"IIoT.Edge.Module.{moduleId}.dll"
-            }));
+            stream.Write(pluginJson);
         }
 
         var assembly = archive.CreateEntry(
             $"IIoT.Edge.Module.{moduleId}.dll");
-        using var assemblyWriter = new StreamWriter(
-            assembly.Open(),
-            new UTF8Encoding(false));
-        assemblyWriter.Write("postgres plugin");
+        using (var stream = assembly.Open())
+        {
+            stream.Write(assemblyBytes);
+        }
+
+        var fileManifest = archive.CreateEntry("file-manifest.json");
+        using (var stream = fileManifest.Open())
+        {
+            stream.Write(fileManifestBytes);
+        }
+
+        return Convert.ToHexString(SHA256.HashData(fileManifestBytes))
+            .ToLowerInvariant();
     }
 
     private static void WriteFile(string path, string content)

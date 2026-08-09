@@ -43,7 +43,12 @@ public sealed record ClientReleaseVersionObservation(
     DateTime? DeletedAtUtc,
     string? DeletionReason,
     string? DeletionFailure,
-    IReadOnlyList<ClientReleaseArtifactObservation> Artifacts);
+    IReadOnlyList<ClientReleaseArtifactObservation> Artifacts,
+    string DataCapabilitiesJson = "[]",
+    string? FileManifestSha256 = null,
+    string? DependencyClosureSha256 = null,
+    string? DependencyHostVersion = null,
+    string? DependencyHostFileManifestSha256 = null);
 
 /// <summary>
 /// Reads an expected release-version set through one newly-created persistence context and one

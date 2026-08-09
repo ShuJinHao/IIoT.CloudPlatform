@@ -35,6 +35,10 @@ public sealed class DeviceClientPluginVersionConfiguration : IEntityTypeConfigur
             .HasMaxLength(64)
             .HasColumnName("host_api_version");
 
+        builder.Property(plugin => plugin.PackageSha256)
+            .HasMaxLength(64)
+            .HasColumnName("package_sha256");
+
         builder.Property(plugin => plugin.Enabled)
             .IsRequired()
             .HasColumnName("enabled");

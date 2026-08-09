@@ -1,4 +1,5 @@
 using IIoT.Services.Contracts.Identity;
+using IIoT.Services.Contracts.Authorization;
 using Microsoft.Extensions.Options;
 using OpenIddict.Abstractions;
 
@@ -41,7 +42,8 @@ public sealed class OpenIddictClientSeeder(
                 OpenIddictConstants.Permissions.Endpoints.EndSession,
                 OpenIddictConstants.Permissions.GrantTypes.AuthorizationCode,
                 OpenIddictConstants.Permissions.ResponseTypes.Code,
-                OpenIddictConstants.Permissions.Scopes.Profile
+                OpenIddictConstants.Permissions.Scopes.Profile,
+                OpenIddictConstants.Permissions.Prefixes.Scope + AiReadDelegationDefaults.Scope
             },
             Requirements =
             {

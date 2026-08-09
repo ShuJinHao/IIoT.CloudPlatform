@@ -40,10 +40,17 @@ public sealed class IIoTAppFixture : IAsyncDisposable
     private readonly string _postgresVolumeName = $"postgres-iiot-e2e-{Guid.NewGuid():N}";
     private readonly string _rabbitMqVolumeName = $"rabbitmq-iiot-e2e-{Guid.NewGuid():N}";
     private readonly bool _disableDataWorkerOutboxDispatcher;
+    private readonly bool _skipRecordSchemaAndTimescale;
+    private readonly bool _useDirectHttpApi;
 
-    public IIoTAppFixture(bool disableDataWorkerOutboxDispatcher = false)
+    public IIoTAppFixture(
+        bool disableDataWorkerOutboxDispatcher = false,
+        bool skipRecordSchemaAndTimescale = false,
+        bool useDirectHttpApi = false)
     {
         _disableDataWorkerOutboxDispatcher = disableDataWorkerOutboxDispatcher;
+        _skipRecordSchemaAndTimescale = skipRecordSchemaAndTimescale;
+        _useDirectHttpApi = useDirectHttpApi;
     }
 
     public HttpClient HttpClient => _httpClient ?? throw new InvalidOperationException("环境未启动。");
@@ -76,14 +83,22 @@ public sealed class IIoTAppFixture : IAsyncDisposable
                 .WaitAsync(startupTimeout.Token);
             await _app.ResourceNotifications.WaitForResourceHealthyAsync("iiot-httpapi")
                 .WaitAsync(startupTimeout.Token);
-            await _app.ResourceNotifications.WaitForResourceHealthyAsync("iiot-gateway")
-                .WaitAsync(startupTimeout.Token);
-            await _app.ResourceNotifications.WaitForResourceAsync(
-                "iiot-dataworker",
-                KnownResourceStates.Running).WaitAsync(startupTimeout.Token);
+            if (!_useDirectHttpApi)
+            {
+                await _app.ResourceNotifications.WaitForResourceHealthyAsync("iiot-gateway")
+                    .WaitAsync(startupTimeout.Token);
+                await _app.ResourceNotifications.WaitForResourceAsync(
+                    "iiot-dataworker",
+                    KnownResourceStates.Running).WaitAsync(startupTimeout.Token);
+            }
 
-            _httpClient = _app.CreateHttpClient("iiot-gateway");
-            await WaitForGatewayHealthzAsync(_httpClient, startupTimeout.Token);
+            _httpClient = _useDirectHttpApi
+                ? new HttpClient(new HttpClientHandler { UseProxy = false })
+                {
+                    BaseAddress = _app.GetEndpoint("iiot-httpapi", "http")
+                }
+                : _app.CreateHttpClient("iiot-gateway", "http");
+            await WaitForHealthzAsync(_httpClient, startupTimeout.Token);
         }
         catch (DistributedApplicationException ex)
             when (ex.Message.Contains("docker", StringComparison.OrdinalIgnoreCase))
@@ -167,6 +182,9 @@ public sealed class IIoTAppFixture : IAsyncDisposable
         SetEnvironmentVariable(
             "AppHost__Testing__DisableDataWorkerOutboxDispatcher",
             _disableDataWorkerOutboxDispatcher ? "true" : null);
+        SetEnvironmentVariable(
+            "AppHost__Testing__SkipMigrationRecordSchemaAndTimescale",
+            _skipRecordSchemaAndTimescale ? "true" : null);
         SetEnvironmentVariable("JwtSettings__Secret", TestJwtSecret);
         SetEnvironmentVariable("JWTSETTINGS__SECRET", TestJwtSecret);
         SetEnvironmentVariable("SEED_ADMIN_NO", SeedAdminEmployeeNo);
@@ -184,7 +202,7 @@ public sealed class IIoTAppFixture : IAsyncDisposable
         Environment.SetEnvironmentVariable(name, value);
     }
 
-    private static async Task WaitForGatewayHealthzAsync(
+    private static async Task WaitForHealthzAsync(
         HttpClient httpClient,
         CancellationToken cancellationToken)
     {

@@ -1,106 +1,85 @@
-using System.Security.Claims;
 using IIoT.HttpApi.Infrastructure;
 using IIoT.Services.Contracts.Authorization;
-using IIoT.Services.Contracts.Identity;
-using Microsoft.AspNetCore.Http;
 
 namespace IIoT.CloudPlatform.HttpTests;
 
 public sealed class HttpAiReadScopeAccessorTests
 {
     [Fact]
-    public void Scope_ShouldBeGlobalOnlyWhenDelegationClaimsAreAbsent()
+    public void Scope_ShouldBeInvalidUntilLiveAuthorizationInitializesRequest()
     {
-        var accessor = CreateAccessor([]);
+        var accessor = new HttpAiReadScopeAccessor();
 
-        Assert.Equal(AiReadScopeKind.Global, accessor.ScopeKind);
+        Assert.False(accessor.IsInitialized);
+        Assert.Equal(AiReadScopeKind.Invalid, accessor.ScopeKind);
         Assert.Null(accessor.DelegatedUserId);
         Assert.Null(accessor.DelegatedDeviceIds);
+        Assert.Equal("unverified-ai-delegation", accessor.Caller);
     }
 
     [Fact]
-    public void Scope_ShouldKeepValidDelegatedUserWithEmptyDeviceScope()
+    public void Scope_ShouldKeepOrdinaryUserWithZeroDevicesAsEmptyDelegatedScope()
     {
         var delegatedUserId = Guid.NewGuid();
-        var accessor = CreateAccessor(
-        [
-            new Claim(IIoTClaimTypes.DelegatedUserId, delegatedUserId.ToString())
-        ]);
+        var accessor = new HttpAiReadScopeAccessor();
 
+        accessor.Initialize(new AiReadDelegatedAuthorization(
+            delegatedUserId,
+            IsAdministrator: false,
+            AllowedDeviceIds: []));
+
+        Assert.True(accessor.IsInitialized);
         Assert.Equal(AiReadScopeKind.Delegated, accessor.ScopeKind);
         Assert.Equal(delegatedUserId, accessor.DelegatedUserId);
         Assert.Empty(accessor.DelegatedDeviceIds!);
+        Assert.Equal(delegatedUserId.ToString("D"), accessor.Caller);
     }
 
     [Fact]
-    public void Scope_ShouldDeduplicateValidDelegatedDeviceClaims()
+    public void Scope_ShouldExposeOnlyLiveResolvedDeviceScope()
     {
         var delegatedUserId = Guid.NewGuid();
         var delegatedDeviceId = Guid.NewGuid();
-        var accessor = CreateAccessor(
-        [
-            new Claim(IIoTClaimTypes.DelegatedUserId, delegatedUserId.ToString()),
-            new Claim(IIoTClaimTypes.DelegatedDeviceId, delegatedDeviceId.ToString()),
-            new Claim(IIoTClaimTypes.DelegatedDeviceId, delegatedDeviceId.ToString())
-        ]);
+        var accessor = new HttpAiReadScopeAccessor();
+
+        accessor.Initialize(new AiReadDelegatedAuthorization(
+            delegatedUserId,
+            IsAdministrator: false,
+            AllowedDeviceIds: [delegatedDeviceId]));
 
         Assert.Equal(AiReadScopeKind.Delegated, accessor.ScopeKind);
         Assert.Equal([delegatedDeviceId], accessor.DelegatedDeviceIds);
     }
 
-    [Theory]
-    [InlineData(IIoTClaimTypes.DelegatedUserId, "not-a-guid")]
-    [InlineData(IIoTClaimTypes.DelegatedUserId, "00000000-0000-0000-0000-000000000000")]
-    [InlineData(IIoTClaimTypes.DelegatedDeviceId, "not-a-guid")]
-    [InlineData(IIoTClaimTypes.DelegatedDeviceId, "00000000-0000-0000-0000-000000000000")]
-    public void Scope_ShouldFailClosedForInvalidDelegationClaim(string claimType, string claimValue)
+    [Fact]
+    public void Scope_ShouldBeGlobalOnlyForLiveResolvedAdmin()
     {
-        var claims = new List<Claim>();
-        if (claimType == IIoTClaimTypes.DelegatedDeviceId)
-        {
-            claims.Add(new Claim(IIoTClaimTypes.DelegatedUserId, Guid.NewGuid().ToString()));
-        }
+        var delegatedUserId = Guid.NewGuid();
+        var accessor = new HttpAiReadScopeAccessor();
 
-        claims.Add(new Claim(claimType, claimValue));
-        var accessor = CreateAccessor(claims);
+        accessor.Initialize(new AiReadDelegatedAuthorization(
+            delegatedUserId,
+            IsAdministrator: true,
+            AllowedDeviceIds: null));
 
-        Assert.Equal(AiReadScopeKind.Invalid, accessor.ScopeKind);
-        Assert.Null(accessor.DelegatedUserId);
-        Assert.Empty(accessor.DelegatedDeviceIds!);
+        Assert.Equal(AiReadScopeKind.Global, accessor.ScopeKind);
+        Assert.Equal(delegatedUserId, accessor.DelegatedUserId);
+        Assert.Null(accessor.DelegatedDeviceIds);
     }
 
     [Fact]
-    public void Scope_ShouldFailClosedWhenDeviceClaimHasNoDelegatedUser()
+    public void Scope_ShouldRejectSecondInitializationWithinSameRequest()
     {
-        var accessor = CreateAccessor(
-        [
-            new Claim(IIoTClaimTypes.DelegatedDeviceId, Guid.NewGuid().ToString())
-        ]);
+        var accessor = new HttpAiReadScopeAccessor();
+        accessor.Initialize(new AiReadDelegatedAuthorization(
+            Guid.NewGuid(),
+            IsAdministrator: false,
+            AllowedDeviceIds: []));
 
-        Assert.Equal(AiReadScopeKind.Invalid, accessor.ScopeKind);
-        Assert.Empty(accessor.DelegatedDeviceIds!);
-    }
-
-    [Fact]
-    public void Scope_ShouldFailClosedWhenValidAndInvalidDeviceClaimsAreMixed()
-    {
-        var accessor = CreateAccessor(
-        [
-            new Claim(IIoTClaimTypes.DelegatedUserId, Guid.NewGuid().ToString()),
-            new Claim(IIoTClaimTypes.DelegatedDeviceId, Guid.NewGuid().ToString()),
-            new Claim(IIoTClaimTypes.DelegatedDeviceId, "invalid-device")
-        ]);
-
-        Assert.Equal(AiReadScopeKind.Invalid, accessor.ScopeKind);
-        Assert.Empty(accessor.DelegatedDeviceIds!);
-    }
-
-    private static HttpAiReadScopeAccessor CreateAccessor(IEnumerable<Claim> claims)
-    {
-        var httpContext = new DefaultHttpContext
-        {
-            User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"))
-        };
-        return new HttpAiReadScopeAccessor(new HttpContextAccessor { HttpContext = httpContext });
+        Assert.Throws<InvalidOperationException>(() => accessor.Initialize(
+            new AiReadDelegatedAuthorization(
+                Guid.NewGuid(),
+                IsAdministrator: false,
+                AllowedDeviceIds: [])));
     }
 }
