@@ -7,6 +7,7 @@ using IIoT.Dapper.Production.Repositories.Capacities;
 using IIoT.Dapper.Production.Repositories.DeviceLogs;
 using IIoT.Dapper.Production.Repositories.PassStations;
 using IIoT.Dapper.TypeHandlers;
+using IIoT.SharedKernel.Domain;
 using IIoT.SharedKernel.Paging;
 using Npgsql;
 
@@ -270,6 +271,7 @@ public sealed class CapacityPersistencePostgresTests(
         var deviceLogs = new DeviceLogRecordRepository(connectionFactory);
         var observedAtUtc = DateTime.UtcNow;
         var deduplicationKey = Guid.NewGuid().ToString("N");
+        var completionId = $"completion-{Guid.NewGuid():N}";
         var passStation = new PassStationRecordWriteModel(
             Guid.NewGuid(),
             device.DeviceId,
@@ -295,6 +297,24 @@ public sealed class CapacityPersistencePostgresTests(
             await passStations.InsertBatchAsync(
                 [passStation with { Id = Guid.NewGuid() }],
                 budget.Token);
+            await passStations.InsertBatchAsync(
+                [passStation with
+                {
+                    Id = Guid.NewGuid(),
+                    CompletionId = completionId,
+                    DeduplicationKey = Guid.NewGuid().ToString("N")
+                }],
+                budget.Token);
+            await passStations.InsertBatchAsync(
+                [passStation with
+                {
+                    Id = Guid.NewGuid(),
+                    Barcode = "BC-CONFLICTING-COMPLETION",
+                    CompletedTime = observedAtUtc.AddMinutes(1),
+                    CompletionId = completionId,
+                    DeduplicationKey = Guid.NewGuid().ToString("N")
+                }],
+                budget.Token);
             await deviceLogs.InsertBatchAsync([deviceLog], budget.Token);
             await deviceLogs.InsertBatchAsync(
                 [deviceLog with { Id = Guid.NewGuid() }],
@@ -311,6 +331,24 @@ public sealed class CapacityPersistencePostgresTests(
                     where device_id = @deviceId and deduplication_key = @key;
                     """,
                     new { deviceId = device.DeviceId, key = deduplicationKey }));
+            Assert.Equal(
+                1,
+                await connection.ExecuteScalarAsync<int>(
+                    """
+                    select count(*)
+                    from pass_station_records
+                    where device_id = @deviceId and completion_id = @completionId;
+                    """,
+                    new { deviceId = device.DeviceId, completionId }));
+            Assert.Equal(
+                1,
+                await connection.ExecuteScalarAsync<int>(
+                    """
+                    select count(*)
+                    from pass_station_completion_claims
+                    where device_id = @deviceId and completion_id = @completionId;
+                    """,
+                    new { deviceId = device.DeviceId, completionId }));
             Assert.Equal(
                 1,
                 await connection.ExecuteScalarAsync<int>(
@@ -370,14 +408,22 @@ public sealed class CapacityPersistencePostgresTests(
             INSERT INTO mfg_processes (id, process_code, process_name)
             VALUES (@process_id, @process_code, @process_name);
 
-            INSERT INTO devices (id, device_name, process_id, client_code)
-            VALUES (@device_id, @device_name, @process_id, @client_code);
+            INSERT INTO devices
+                (id, device_name, normalized_device_name, process_id, client_code)
+            VALUES
+                (@device_id, @device_name, @normalized_device_name, @process_id, @client_code);
             """;
+        var deviceName = $"Capacity device {unique}";
         command.Parameters.AddWithValue("process_id", processId);
         command.Parameters.AddWithValue("process_code", $"CAP-{unique}");
         command.Parameters.AddWithValue("process_name", $"Capacity {unique}");
         command.Parameters.AddWithValue("device_id", deviceId);
-        command.Parameters.AddWithValue("device_name", $"Capacity device {unique}");
+        command.Parameters.AddWithValue("device_name", deviceName);
+        command.Parameters.AddWithValue(
+            "normalized_device_name",
+            BusinessIdentityNormalization.NormalizeDisplayNameKey(
+                deviceName,
+                nameof(deviceName)));
         command.Parameters.AddWithValue("client_code", $"CAP-{unique}"[..24]);
         await command.ExecuteNonQueryAsync(cancellationToken);
         return (deviceId, processId);
@@ -393,6 +439,7 @@ public sealed class CapacityPersistencePostgresTests(
         await connection.OpenAsync(cleanup.Token);
         await using var command = connection.CreateCommand();
         command.CommandText = """
+            DELETE FROM pass_station_completion_claims WHERE device_id = @device_id;
             DELETE FROM pass_station_records WHERE device_id = @device_id;
             DELETE FROM device_logs WHERE device_id = @device_id;
             DELETE FROM hourly_capacity WHERE device_id = @device_id;

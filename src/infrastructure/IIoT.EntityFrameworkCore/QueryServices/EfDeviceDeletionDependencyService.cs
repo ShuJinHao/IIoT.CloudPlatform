@@ -582,6 +582,7 @@ public sealed class EfDeviceDeletionDependencyService(
 
         await dbContext.Database.ExecuteSqlRawAsync(
             "LOCK TABLE recipes, hourly_capacity, pass_station_records, "
+            + "pass_station_completion_claims, "
             + "edge_host_plc_runtime_states IN SHARE ROW EXCLUSIVE MODE;",
             cancellationToken);
     }
@@ -685,6 +686,9 @@ public sealed class EfDeviceDeletionDependencyService(
 
             delete from refresh_token_sessions
             where "ActorType" = {IIoTClaimTypes.EdgeDeviceActor} and "SubjectId" = {deviceId};
+
+            delete from pass_station_completion_claims
+            where device_id = {deviceId};
 
             delete from pass_station_records
             where device_id = {deviceId};

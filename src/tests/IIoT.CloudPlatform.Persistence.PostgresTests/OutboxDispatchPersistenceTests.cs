@@ -13,6 +13,7 @@ using IIoT.Services.Contracts.Caching;
 using IIoT.Services.Contracts.Events.Capacities;
 using IIoT.Services.CrossCutting.Caching;
 using IIoT.SharedKernel.Configuration;
+using IIoT.SharedKernel.Domain;
 using MassTransit;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -426,12 +427,20 @@ public sealed class OutboxDispatchPersistenceTests(
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO devices (id, device_name, client_code, process_id)
-            VALUES (@device_id, @device_name, @client_code, @process_id)
+            INSERT INTO devices
+                (id, device_name, normalized_device_name, client_code, process_id)
+            VALUES
+                (@device_id, @device_name, @normalized_device_name, @client_code, @process_id)
             ON CONFLICT (id) DO NOTHING;
             """;
+        var deviceName = $"ACK lost {deviceId:N}";
         command.Parameters.AddWithValue("device_id", deviceId);
-        command.Parameters.AddWithValue("device_name", $"ACK lost {deviceId:N}");
+        command.Parameters.AddWithValue("device_name", deviceName);
+        command.Parameters.AddWithValue(
+            "normalized_device_name",
+            BusinessIdentityNormalization.NormalizeDisplayNameKey(
+                deviceName,
+                nameof(deviceName)));
         command.Parameters.AddWithValue("client_code", $"ACK-{deviceId:N}");
         command.Parameters.AddWithValue("process_id", Guid.NewGuid());
         await command.ExecuteNonQueryAsync();

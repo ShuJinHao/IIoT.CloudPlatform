@@ -25,7 +25,7 @@ public sealed partial class PassStationTypesOptions
             foreach (var legacyTypeKey in type.LegacyTypeKeys)
             {
                 var alias = Normalize(legacyTypeKey);
-                if (!IsSafeKey(alias)
+                if (!IsSafeTypeKey(alias)
                     || typeKeys.Contains(alias)
                     || !aliases.Add(alias))
                 {
@@ -38,7 +38,7 @@ public sealed partial class PassStationTypesOptions
 
     private static void ValidateType(PassStationTypeDefinitionDto type)
     {
-        if (!IsSafeKey(type.TypeKey))
+        if (!IsSafeTypeKey(type.TypeKey))
             throw new InvalidOperationException($"PassStation type key '{type.TypeKey}' is invalid.");
         if (string.IsNullOrWhiteSpace(type.DisplayName))
             throw new InvalidOperationException($"PassStation type '{type.TypeKey}' must define DisplayName.");
@@ -96,7 +96,7 @@ public sealed partial class PassStationTypesOptions
 
     private static void ValidateField(string typeKey, PassStationFieldDefinitionDto field)
     {
-        if (!IsSafeKey(field.Key))
+        if (!IsSafeFieldKey(field.Key))
             throw new InvalidOperationException($"PassStation type '{typeKey}' field key '{field.Key}' is invalid.");
         if (string.IsNullOrWhiteSpace(field.Label))
             throw new InvalidOperationException($"PassStation type '{typeKey}' field '{field.Key}' must define Label.");
@@ -111,10 +111,16 @@ public sealed partial class PassStationTypesOptions
             throw new InvalidOperationException($"PassStation type '{typeKey}' field '{field.Key}' min cannot exceed max.");
     }
 
-    private static bool IsSafeKey(string value)
+    private static bool IsSafeTypeKey(string value)
     {
         return !string.IsNullOrWhiteSpace(value)
-               && SafeKeyPattern().IsMatch(value);
+               && SafeTypeKeyPattern().IsMatch(value);
+    }
+
+    private static bool IsSafeFieldKey(string value)
+    {
+        return !string.IsNullOrWhiteSpace(value)
+               && SafeFieldKeyPattern().IsMatch(value);
     }
 
     private static string Normalize(string value)
@@ -122,8 +128,11 @@ public sealed partial class PassStationTypesOptions
         return value.Trim().ToLowerInvariant();
     }
 
+    [GeneratedRegex("^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")]
+    private static partial Regex SafeTypeKeyPattern();
+
     [GeneratedRegex("^[a-z][a-zA-Z0-9]*$")]
-    private static partial Regex SafeKeyPattern();
+    private static partial Regex SafeFieldKeyPattern();
 }
 
 public static class PassStationFieldTypes

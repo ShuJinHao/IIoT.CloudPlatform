@@ -23,8 +23,9 @@ public sealed class CloudWriteObservationReader(
         string processCode,
         CancellationToken cancellationToken)
     {
-        var normalizedProcessCode =
-            BusinessIdentityNormalization.NormalizeClassificationCode(
+        var normalizedProcessCode = string.IsNullOrWhiteSpace(processCode)
+            ? string.Empty
+            : BusinessIdentityNormalization.NormalizeClassificationCode(
                 processCode,
                 nameof(processCode));
         return ObserveConsistentAsync(
@@ -67,8 +68,9 @@ public sealed class CloudWriteObservationReader(
         Guid processId,
         CancellationToken cancellationToken)
     {
-        var normalizedDeviceName =
-            BusinessIdentityNormalization.NormalizeDisplayNameKey(
+        var normalizedDeviceName = string.IsNullOrWhiteSpace(deviceName)
+            ? string.Empty
+            : BusinessIdentityNormalization.NormalizeDisplayNameKey(
                 deviceName,
                 nameof(deviceName));
         return ObserveConsistentAsync(

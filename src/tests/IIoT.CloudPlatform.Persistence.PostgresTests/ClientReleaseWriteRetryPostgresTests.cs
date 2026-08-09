@@ -543,7 +543,7 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
             await using (var dbContext =
                          new IIoTDbContext(writeOptions))
             {
-                await VerifyInstallerSecretRotationAsync(
+                await VerifyInstallerPendingCredentialAsync(
                     dbContext,
                     new EfRepository<ClientReleaseComponent>(
                         dbContext),
@@ -595,7 +595,9 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
                 new ArchiveClientReleaseCommand(versionId),
                 cancellationToken);
 
-        Assert.True(result.IsSuccess);
+        Assert.True(
+            result.IsSuccess,
+            string.Join(" | ", result.Errors ?? []));
         Assert.Equal(expectedFaults, fault.ExceptionsThrown);
         dbContext.ChangeTracker.Clear();
         Assert.Equal(
@@ -903,7 +905,7 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
                     cancellationToken));
     }
 
-    private static async Task VerifyInstallerSecretRotationAsync(
+    private static async Task VerifyInstallerPendingCredentialAsync(
         IIoTDbContext dbContext,
         EfRepository<ClientReleaseComponent> componentRepository,
         EfRepository<Device> deviceRepository,
@@ -932,7 +934,7 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
             pluginRelativePath.Replace(
                 '/',
                 Path.DirectorySeparatorChar));
-        CreatePluginPackage(
+        var fileManifestSha256 = CreatePluginPackage(
             pluginPath,
             moduleId,
             pluginVersion);
@@ -948,7 +950,8 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
             pluginVersion,
             pluginRelativePath,
             FileSha256(pluginPath),
-            new FileInfo(pluginPath).Length);
+            new FileInfo(pluginPath).Length,
+            fileManifestSha256);
         var unique = Guid.NewGuid().ToString("N");
         var process = new MfgProcess(
             $"PGI-{unique}"[..20],
@@ -957,7 +960,7 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
             process.ProcessCode,
             "docs/postgres-installer-plugin.md",
             2,
-            new string('a', 64),
+            fileManifestSha256,
             "[]");
         var device = new Device(
             $"Postgres installer {unique}"[..40],
@@ -1011,6 +1014,10 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
         var plan = planResult.Value!;
 
         var expectedFaults = fault.ExceptionsThrown + 1;
+        using var payloadSigningKey = RSA.Create(2048);
+        var generationStore = new EfEdgeInstallerGenerationStore(
+            dbContext.ContextOptions,
+            NullLogger<EfEdgeInstallerGenerationStore>.Instance);
         fault.Arm();
         var result =
             await new GenerateEdgeInstallerPackageHandler(
@@ -1022,10 +1029,13 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
                     Options.Create(
                         new EdgeInstallerArtifactOptions
                         {
-                            RootPath = installerRoot
+                            RootPath = installerRoot,
+                            PayloadSigningKeyId = "postgres-installer-test-key",
+                            PayloadSigningPrivateKeyPem =
+                                payloadSigningKey.ExportRSAPrivateKeyPem()
                     }),
                     observationReader,
-                    new InMemoryEdgeInstallerGenerationStore(),
+                    generationStore,
                     planService)
                 .Handle(
                     new GenerateEdgeInstallerPackageCommand(
@@ -1034,7 +1044,9 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
                         PlanFingerprint: plan.PlanFingerprint),
                     cancellationToken);
 
-        Assert.True(result.IsSuccess);
+        Assert.True(
+            result.IsSuccess,
+            string.Join(" | ", result.Errors ?? []));
         Assert.Equal(expectedFaults, fault.ExceptionsThrown);
         await result.Value!.Content.DisposeAsync();
         dbContext.ChangeTracker.Clear();
@@ -1044,7 +1056,24 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
             .Select(current => current.BootstrapSecretHash)
             .SingleAsync(cancellationToken);
         Assert.NotNull(targetHash);
-        Assert.NotEqual(oldHash, targetHash);
+        Assert.Equal(oldHash, targetHash);
+        var pendingCredential = Assert.Single(await dbContext
+            .EdgeInstallerPendingCredentials
+            .AsNoTracking()
+            .Where(item =>
+                item.GenerationId == result.Value.GenerationId
+                && item.DeviceId == device.Id)
+            .ToListAsync(cancellationToken));
+        Assert.Equal(
+            EdgeInstallerPendingCredentialStatus.Pending,
+            pendingCredential.Status);
+        Assert.NotEqual(oldHash, pendingCredential.SecretHash);
+        Assert.StartsWith("v1:", pendingCredential.SecretHash, StringComparison.Ordinal);
+        Assert.Equal(3, pendingCredential.SecretHash.Split(':').Length);
+        Assert.Single(await dbContext.EdgeInstallerGenerationRecords
+            .AsNoTracking()
+            .Where(record => record.Id == result.Value.GenerationId)
+            .ToListAsync(cancellationToken));
         Assert.Equal(
             1,
             await dbContext.AuditTrails
@@ -1057,6 +1086,31 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
                         == device.Id.ToString()
                         && record.Succeeded,
                     cancellationToken));
+
+        dbContext.ChangeTracker.Clear();
+        await dbContext.EdgeInstallerPendingCredentials
+            .Where(item => item.GenerationId == result.Value.GenerationId)
+            .ExecuteDeleteAsync(CancellationToken.None);
+        await dbContext.EdgeInstallerGenerationRecords
+            .Where(record => record.Id == result.Value.GenerationId)
+            .ExecuteDeleteAsync(CancellationToken.None);
+        await dbContext.AuditTrails
+            .Where(record =>
+                record.OperationType == "Edge.GenerateInstallerPackage"
+                && record.TargetIdOrKey == device.Id.ToString())
+            .ExecuteDeleteAsync(CancellationToken.None);
+        await dbContext.DevicePluginBindings
+            .Where(item => item.DeviceId == device.Id)
+            .ExecuteDeleteAsync(CancellationToken.None);
+        await dbContext.Devices
+            .Where(item => item.Id == device.Id)
+            .ExecuteDeleteAsync(CancellationToken.None);
+        await dbContext.ClientReleaseComponents
+            .Where(item => item.Id == host.Id || item.Id == plugin.Id)
+            .ExecuteDeleteAsync(CancellationToken.None);
+        await dbContext.MfgProcesses
+            .Where(item => item.Id == process.Id)
+            .ExecuteDeleteAsync(CancellationToken.None);
     }
 
     private static DbContextOptions<IIoTDbContext>
@@ -1142,7 +1196,8 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
         string version,
         string packageRelativePath,
         string sha256,
-        long packageSize)
+        long packageSize,
+        string? fileManifestSha256 = null)
     {
         var component = ClientReleaseComponent.CreatePlugin(
             moduleId,
@@ -1152,7 +1207,7 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
             null,
             channel,
             "win-x64");
-        component.UpsertPluginVersion(
+        var release = component.UpsertPluginVersion(
             version,
             "1.0.0",
             "1.0.0",
@@ -1179,6 +1234,11 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
                     sha256,
                     packageSize)
             ]);
+        if (fileManifestSha256 is not null)
+        {
+            release.ConfigurePluginManifest("[]", fileManifestSha256);
+        }
+
         return component;
     }
 
@@ -1192,30 +1252,32 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
             installerRoot,
             channel,
             version);
+        var installerStubPath = Path.Combine(
+            artifactRoot,
+            "IIoT.Edge.Setup.exe");
         WriteFile(
-            Path.Combine(
-                artifactRoot,
-                "IIoT.Edge.Setup.exe"),
+            installerStubPath,
             "MZ-postgres-installer");
+        var launcherRoot = Path.Combine(artifactRoot, "launcher");
         WriteFile(
             Path.Combine(
-                artifactRoot,
-                "launcher",
+                launcherRoot,
                 "IIoT.Edge.Launcher.dll"),
             "launcher");
+        var hostRoot = Path.Combine(artifactRoot, "host");
         WriteFile(
             Path.Combine(
-                artifactRoot,
-                "host",
+                hostRoot,
                 "IIoT.Edge.Shell.dll"),
             "host");
         Directory.CreateDirectory(
             Path.Combine(artifactRoot, "plugins"));
+        var velopackSetupPath = Path.Combine(
+            artifactRoot,
+            "velopack",
+            "IIoT.EdgeClient-Setup.exe");
         WriteFile(
-            Path.Combine(
-                artifactRoot,
-                "velopack",
-                "IIoT.EdgeClient-Setup.exe"),
+            velopackSetupPath,
             "velopack setup");
         File.WriteAllText(
             Path.Combine(
@@ -1224,57 +1286,103 @@ public sealed class ClientReleaseWriteRetryPostgresTests(
             JsonSerializer.Serialize(
                 new
                 {
-                    schemaVersion = 2,
-                    installerBindingSchemaVersion = 2,
+                    schemaVersion = 3,
+                    installerBindingSchemaVersion =
+                        EdgeBindingWireSchema.SchemaVersion,
                     channel,
                     version,
                     hostApiVersion = "1.0.0",
                     targetRuntime,
                     targetFramework = "net10.0",
                     installerStubFile = "IIoT.Edge.Setup.exe",
+                    installerStubSha256 = FileSha256(installerStubPath),
+                    installerStubSize = new FileInfo(installerStubPath).Length,
                     launcherDirectory = "launcher",
+                    launcherDirectorySha256 =
+                        ClientReleaseFileFacts.ComputeDirectorySha256(
+                            launcherRoot),
+                    launcherDirectorySize =
+                        ClientReleaseFileFacts.GetDirectorySize(launcherRoot),
                     hostDirectory = "host",
+                    hostDirectorySha256 =
+                        ClientReleaseFileFacts.ComputeDirectorySha256(hostRoot),
+                    hostDirectorySize =
+                        ClientReleaseFileFacts.GetDirectorySize(hostRoot),
                     pluginsRoot = "plugins",
                     velopackSetupFile =
                         "velopack/IIoT.EdgeClient-Setup.exe",
+                    velopackSetupSha256 = FileSha256(velopackSetupPath),
+                    velopackSetupSize =
+                        new FileInfo(velopackSetupPath).Length,
                     modules = Array.Empty<object>()
                 }),
             new UTF8Encoding(false));
     }
 
-    private static void CreatePluginPackage(
+    private static string CreatePluginPackage(
         string packagePath,
         string moduleId,
         string version)
     {
         Directory.CreateDirectory(
             Path.GetDirectoryName(packagePath)!);
+        var pluginJson = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            moduleId,
+            version,
+            hostApiVersion = "1.0.0",
+            minHostVersion = "1.0.0",
+            maxHostVersion = "99.0.0",
+            entryAssembly =
+                $"IIoT.Edge.Module.{moduleId}.dll"
+        });
+        var assemblyBytes = Encoding.UTF8.GetBytes("postgres plugin");
+        var files = new[]
+        {
+            (Path: "plugin.json", Bytes: pluginJson),
+            (Path: $"IIoT.Edge.Module.{moduleId}.dll", Bytes: assemblyBytes)
+        };
+        var fileManifestBytes = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            schemaVersion = 1,
+            component = moduleId,
+            version,
+            files = files.Select(file => new
+            {
+                path = file.Path,
+                size = file.Bytes.LongLength,
+                sha256 = Convert.ToHexString(SHA256.HashData(file.Bytes))
+                    .ToLowerInvariant(),
+                type = "file",
+                component = moduleId,
+                version
+            })
+        });
+
         using var archive = ZipFile.Open(
             packagePath,
             ZipArchiveMode.Create);
         var manifest = archive.CreateEntry("plugin.json");
-        using (var writer = new StreamWriter(
-                   manifest.Open(),
-                   new UTF8Encoding(false)))
+        using (var stream = manifest.Open())
         {
-            writer.Write(JsonSerializer.Serialize(new
-            {
-                moduleId,
-                version,
-                hostApiVersion = "1.0.0",
-                minHostVersion = "1.0.0",
-                maxHostVersion = "99.0.0",
-                entryAssembly =
-                    $"IIoT.Edge.Module.{moduleId}.dll"
-            }));
+            stream.Write(pluginJson);
         }
 
         var assembly = archive.CreateEntry(
             $"IIoT.Edge.Module.{moduleId}.dll");
-        using var assemblyWriter = new StreamWriter(
-            assembly.Open(),
-            new UTF8Encoding(false));
-        assemblyWriter.Write("postgres plugin");
+        using (var stream = assembly.Open())
+        {
+            stream.Write(assemblyBytes);
+        }
+
+        var fileManifest = archive.CreateEntry("file-manifest.json");
+        using (var stream = fileManifest.Open())
+        {
+            stream.Write(fileManifestBytes);
+        }
+
+        return Convert.ToHexString(SHA256.HashData(fileManifestBytes))
+            .ToLowerInvariant();
     }
 
     private static void WriteFile(string path, string content)

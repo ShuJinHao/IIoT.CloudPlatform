@@ -35,7 +35,8 @@ public sealed class RecordSchemaInitializerPostgresTests(
                 SELECT
                     to_regclass('device_logs') IS NOT NULL
                     AND to_regclass('hourly_capacity') IS NOT NULL
-                    AND to_regclass('pass_station_records') IS NOT NULL;
+                    AND to_regclass('pass_station_records') IS NOT NULL
+                    AND to_regclass('pass_station_completion_claims') IS NOT NULL;
                 """,
                 connection);
             Assert.True(Convert.ToBoolean(

@@ -119,7 +119,8 @@ public sealed class ProductionRetryTransactionPostgresTests(
         await VerifyBusinessAggregateWritesAsync(
             provider,
             interceptor.Arm,
-            budget.Token);
+            expectedAuditAttempts: 3,
+            cancellationToken: budget.Token);
 
         Assert.Equal(9, interceptor.ExceptionsThrown);
     }
@@ -138,7 +139,8 @@ public sealed class ProductionRetryTransactionPostgresTests(
         await VerifyBusinessAggregateWritesAsync(
             provider,
             () => interceptor.Arm(),
-            budget.Token);
+            expectedAuditAttempts: 2,
+            cancellationToken: budget.Token);
 
         Assert.Equal(9, interceptor.ExceptionsThrown);
     }
@@ -3584,7 +3586,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
     }
 
     [Fact]
-    public async Task DeviceRegistrationCancellationAfterCommit_ShouldRecoverAndConfirmAuditOutsideCallerToken()
+    public async Task DeviceRegistrationCancellationAfterCommit_ShouldRecoverWithAtomicAudit()
     {
         using var budget = await PostgresTestBudget.CreateAsync(fixture);
         using var cancellation =
@@ -3608,7 +3610,12 @@ public sealed class ProductionRetryTransactionPostgresTests(
         dbContext.ClientReleaseComponents.Add(registrationPlugin);
         await dbContext.SaveChangesAsync(budget.Token);
         dbContext.ChangeTracker.Clear();
-        var audit = new RecordingAuditTrailService();
+        var dbContextOptions = services.GetRequiredService<
+            DbContextOptions<IIoTDbContext>>();
+        var audit = new EfAuditTrailService(
+            dbContext,
+            dbContextOptions,
+            NullLogger<EfAuditTrailService>.Instance);
         var handler = new RegisterDeviceHandler(
             HumanAdmin(),
             new StubCurrentUserDeviceAccessService
@@ -3623,9 +3630,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
             new DeviceReadQueryService(dbContext),
             audit,
             CreateUnitOfWork(dbContext),
-            new CloudWriteObservationReader(
-                services.GetRequiredService<
-                    DbContextOptions<IIoTDbContext>>()),
+            new CloudWriteObservationReader(dbContextOptions),
             new EfDeviceClientStateStore(dbContext));
 
         interceptor.Arm();
@@ -3640,13 +3645,6 @@ public sealed class ProductionRetryTransactionPostgresTests(
         var created = Assert.IsType<CreateDeviceResultDto>(result.Value);
         Assert.True(cancellation.IsCancellationRequested);
         Assert.Equal(1, interceptor.ExceptionsThrown);
-        Assert.Single(audit.Entries);
-        Assert.Single(audit.ConfirmedEntries);
-        var auditCancellationToken =
-            Assert.Single(audit.CancellationTokens);
-        Assert.True(auditCancellationToken.CanBeCanceled);
-        Assert.False(auditCancellationToken.IsCancellationRequested);
-        Assert.NotEqual(cancellation.Token, auditCancellationToken);
         dbContext.ChangeTracker.Clear();
         var device = await dbContext.Devices
             .AsNoTracking()
@@ -3655,6 +3653,16 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 budget.Token);
         Assert.Equal(created.Code, device.Code);
         Assert.Equal(process.Id, device.ProcessId);
+        var auditRecord = Assert.Single(await dbContext.AuditTrails
+            .AsNoTracking()
+            .Where(entry =>
+                entry.OperationType == "Device.Register"
+                && entry.TargetIdOrKey == created.Id.ToString())
+            .ToListAsync(budget.Token));
+        Assert.True(auditRecord.Succeeded);
+        Assert.Equal(
+            $"device-register:{created.Id:N}",
+            auditRecord.IdempotencyKey);
         Assert.Equal(
             1,
             await CountOutboxAsync(
@@ -4038,6 +4046,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
     private static async Task VerifyBusinessAggregateWritesAsync(
         ServiceProvider provider,
         Action armCommitFailure,
+        int expectedAuditAttempts,
         CancellationToken cancellationToken)
     {
         await using var scope = provider.CreateAsyncScope();
@@ -4209,7 +4218,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 "DeviceDeletedDomainEvent",
                 deviceId,
                 cancellationToken));
-        Assert.Equal(2, audit.Entries.Count);
+        Assert.Equal(expectedAuditAttempts, audit.Entries.Count);
         Assert.Equal(
             2,
             audit.Entries

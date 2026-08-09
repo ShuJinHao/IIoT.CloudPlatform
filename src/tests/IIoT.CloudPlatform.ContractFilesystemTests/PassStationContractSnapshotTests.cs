@@ -287,8 +287,15 @@ public sealed class PassStationContractSnapshotTests
     [Fact]
     public void CurrentProductionPassStationCatalog_ShouldExposeDieCuttingCompletionWithLegacyAliases()
     {
-        using var document = JsonDocument.Parse(File.ReadAllBytes(CloudRepositoryPath.Find(
-            "src", "hosts", "IIoT.HttpApi", "config", "pass-station-types.json")));
+        var catalogBytes = File.ReadAllBytes(CloudRepositoryPath.Find(
+            "src", "hosts", "IIoT.HttpApi", "config", "pass-station-types.json"));
+        using var document = JsonDocument.Parse(catalogBytes);
+        var configuredOptions = JsonSerializer.Deserialize<PassStationTypesOptions>(
+            document.RootElement.GetProperty("PassStationTypes").GetRawText(),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        Assert.NotNull(configuredOptions);
+        configuredOptions.Validate();
+
         var types = document.RootElement
             .GetProperty("PassStationTypes")
             .GetProperty("types")
@@ -341,6 +348,25 @@ public sealed class PassStationContractSnapshotTests
         Assert.Contains(
             "on pass_station_records (type_key, (payload_jsonb ->> 'plcName'), completed_time desc)",
             schemaSql,
+            StringComparison.Ordinal);
+
+        var completionSchemaSql = File.ReadAllText(CloudRepositoryPath.Find(
+            "src", "infrastructure", "IIoT.Dapper", "Production", "Sql", "Schemas", "008_pass_station_completion_id.sql"));
+        Assert.Contains(
+            "create table if not exists pass_station_completion_claims",
+            completionSchemaSql,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(
+            "create unique index if not exists uq_pass_station_records_device_type_completion",
+            completionSchemaSql,
+            StringComparison.OrdinalIgnoreCase);
+
+        var repositorySource = File.ReadAllText(CloudRepositoryPath.Find(
+            "src", "infrastructure", "IIoT.Dapper", "Production", "Repositories", "PassStations", "PassStationRecordRepository.cs"));
+        Assert.Contains("with completion_claim as", repositorySource, StringComparison.Ordinal);
+        Assert.Contains(
+            "insert into pass_station_completion_claims",
+            repositorySource,
             StringComparison.Ordinal);
     }
 
