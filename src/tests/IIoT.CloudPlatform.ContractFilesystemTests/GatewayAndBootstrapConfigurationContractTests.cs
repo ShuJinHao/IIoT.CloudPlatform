@@ -71,7 +71,7 @@ public sealed class GatewayAndBootstrapConfigurationContractTests
         fixtureSource.Should().Contain("SetEnvironmentVariable(name, null)");
         fixtureSource.Should().Contain("SetEnvironmentVariable(\"NO_PROXY\", TestNoProxyValue)");
         fixtureSource.Should().Contain("localhost,127.0.0.1,::1,host.docker.internal");
-        fixtureSource.Should().Contain("WaitForGatewayHealthzAsync(_httpClient, startupTimeout.Token)");
+        fixtureSource.Should().Contain("WaitForHealthzAsync(_httpClient, startupTimeout.Token)");
     }
 
     [Fact]
