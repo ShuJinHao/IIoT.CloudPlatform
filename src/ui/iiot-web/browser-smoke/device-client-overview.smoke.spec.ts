@@ -75,6 +75,19 @@ function plcState(deviceId: string, suffix: string) {
     lastError: null,
     lastSeenAtUtc: '2026-07-23T01:00:00Z',
     updatedAtUtc: '2026-07-23T01:00:00Z',
+    freshness: 'Current',
+  };
+}
+
+function plcProjection(deviceId: string, suffix: string) {
+  return {
+    deviceId,
+    clientCode: `DC-${suffix}`,
+    plcFreshness: 'Current',
+    plcSnapshotReceivedAtUtc: '2026-07-23T01:00:00Z',
+    lastPlcSeenAtUtc: '2026-07-23T01:00:00Z',
+    plcIssue: null,
+    plcStates: [plcState(deviceId, suffix)],
   };
 }
 
@@ -146,8 +159,8 @@ test('late device A detail responses cannot replace the currently open device B'
     releaseVersionA = resolve;
   });
 
-  await page.route(/\/api\/v1\/human\/edge-hosts\/[^/]+\/plc-runtime-states(?:\?.*)?$/, async (route) => {
-    const deviceId = new URL(route.request().url()).pathname.split('/').at(-2);
+  await page.route(/\/api\/v1\/human\/edge-hosts\/[^/?]+(?:\?.*)?$/, async (route) => {
+    const deviceId = new URL(route.request().url()).pathname.split('/').at(-1);
     if (deviceId === DEVICE_A) {
       plcAStarted = true;
       await plcAGate;
@@ -156,7 +169,7 @@ test('late device A detail responses cannot replace the currently open device B'
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify([plcState(deviceId!, suffix)]),
+      body: JSON.stringify(plcProjection(deviceId!, suffix)),
     });
   });
   await page.route(/\/api\/v1\/human\/device-client-overviews\/[^/]+\/release-details(?:\?.*)?$/, async (route) => {
@@ -192,7 +205,7 @@ test('late device A detail responses cannot replace the currently open device B'
 
   const lateResponses = Promise.all([
     page.waitForResponse((response) =>
-      response.url().includes(`/edge-hosts/${DEVICE_A}/plc-runtime-states`)),
+      new URL(response.url()).pathname === `/api/v1/human/edge-hosts/${DEVICE_A}`),
     page.waitForResponse((response) =>
       response.url().includes(`/device-client-overviews/${DEVICE_A}/release-details`)),
   ]);
