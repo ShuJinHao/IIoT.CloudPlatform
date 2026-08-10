@@ -110,13 +110,6 @@
     />
     <DeviceEditModal v-model:show="showEditModal" :form="editForm" :submitting="submitting" @submit="submitEdit" />
     <DeviceDetailDrawer v-model:show="showDetailPanel" :device="selectedDevice" :process-name-map="processNameMap" />
-    <DeviceDeleteConfirm
-      v-model:show="confirmDialog.show"
-      :dialog="confirmDialog"
-      :deletion-impact-rows="deletionImpactRows"
-      :confirm-disabled="confirmDisabled"
-      :submitting="submitting"
-    />
     <DeviceProcessMigrationModal
       v-model:show="migrationDialog.show"
       :dialog="migrationDialog"
@@ -142,7 +135,6 @@ import UiPagination from '../../components/ui/UiPagination.vue';
 import UiSelect from '../../components/ui/UiSelect.vue';
 import UiTag from '../../components/ui/UiTag.vue';
 import { createDeviceColumns } from './columns';
-import DeviceDeleteConfirm from './DeviceDeleteConfirm.vue';
 import DeviceDetailDrawer from './DeviceDetailDrawer.vue';
 import DeviceEditModal from './DeviceEditModal.vue';
 import DeviceRegisterModal from './DeviceRegisterModal.vue';
@@ -177,9 +169,6 @@ const {
   selectedDevice,
   showEditModal,
   editForm,
-  confirmDialog,
-  deletionImpactRows,
-  confirmDisabled,
   migrationDialog,
   initialize,
   fetchProcesses,
@@ -204,6 +193,7 @@ const columns = createDeviceColumns({
   canUpdateDevice: () => canUpdateDevice.value,
   canDeleteDevice: () => canDeleteDevice.value,
   canMigrateDevice: () => canMigrateDevice.value,
+  isSubmitting: () => submitting.value,
   processLabel,
   onDetail: openDetailPanel,
   onEdit: openEditModal,

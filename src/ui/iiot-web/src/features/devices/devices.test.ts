@@ -1,6 +1,7 @@
-import { mount } from '@vue/test-utils';
+import axios from 'axios';
+import { flushPromises, mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { defineComponent, h, nextTick, reactive } from 'vue';
+import { defineComponent, h, reactive } from 'vue';
 import { Permissions } from '../../types/permissions';
 import type {
   DeviceDeletionImpactDto,
@@ -9,13 +10,13 @@ import type {
 } from './api';
 import { createDeviceColumns } from './columns';
 import { deviceRoutes } from './routes';
-import { isDeviceDeleteConfirmDisabled } from './types';
 import { useDevices } from './useDevices';
 
 const deviceApiMocks = vi.hoisted(() => ({
   getDevicePagedListApi: vi.fn(),
   getDeviceDeletionImpactApi: vi.fn(),
   getDeviceLedgerProcessOptionsApi: vi.fn(),
+  getAvailableDevicePluginSeriesApi: vi.fn(),
   getDeviceProcessMigrationImpactApi: vi.fn(),
   migrateDeviceProcessApi: vi.fn(),
   deleteDeviceApi: vi.fn(),
@@ -77,7 +78,8 @@ const deletionImpact: DeviceDeletionImpactDto = {
   refreshTokenSessions: 11,
   edgeHostPlcRuntimeStates: 12,
   installerPendingCredentials: 13,
-  totalAssociatedRows: 91,
+  devicePluginBindings: 14,
+  totalAssociatedRows: 105,
 };
 
 const processOptions = [
@@ -125,11 +127,49 @@ function emptyDevicePage() {
   };
 }
 
-function mountDeviceActions(canDeleteDevice: () => boolean) {
+function devicePage(items: DeviceListItemDto[], totalCount = items.length) {
+  return {
+    items,
+    metaData: {
+      totalCount,
+      pageSize: 10,
+      currentPage: 1,
+      totalPages: Math.max(1, Math.ceil(totalCount / 10)),
+    },
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function axiosError(status: number, detail: string) {
+  const error = new axios.AxiosError(`Request failed with status code ${status}`);
+  error.response = {
+    status,
+    data: { title: String(status), detail },
+    headers: {},
+    config: {} as never,
+    statusText: String(status),
+  };
+  return error;
+}
+
+function mountDeviceActions(
+  canDeleteDevice: () => boolean,
+  isSubmitting: () => boolean = () => false,
+) {
   const actionColumn = createDeviceColumns({
     canUpdateDevice: () => false,
     canDeleteDevice,
     canMigrateDevice: () => false,
+    isSubmitting,
     processLabel: () => '注液',
     onDetail: vi.fn(),
     onEdit: vi.fn(),
@@ -161,6 +201,7 @@ describe('devices feature guards', () => {
     );
     deviceApiMocks.getDevicePagedListApi.mockResolvedValue(emptyDevicePage());
     deviceApiMocks.getDeviceDeletionImpactApi.mockResolvedValue(deletionImpact);
+    deviceApiMocks.getAvailableDevicePluginSeriesApi.mockResolvedValue([]);
     deviceApiMocks.deleteDeviceApi.mockResolvedValue(true);
     deviceApiMocks.getDeviceLedgerProcessOptionsApi.mockResolvedValue(processOptions);
     deviceApiMocks.getDeviceProcessMigrationImpactApi.mockResolvedValue(migrationImpact);
@@ -180,10 +221,9 @@ describe('devices feature guards', () => {
     expect(route!.meta?.requiredPermission).toBe(Permissions.Device.Read);
   });
 
-  it('does not require retyping device name before cascade delete confirmation', () => {
-    expect(isDeviceDeleteConfirmDisabled('一号注液机', '')).toBe(false);
-    expect(isDeviceDeleteConfirmDisabled('一号注液机', '一号')).toBe(false);
-    expect(isDeviceDeleteConfirmDisabled('一号注液机', '一号注液机')).toBe(false);
+  it('删除影响 DTO 包含插件绑定计数', () => {
+    expect(deletionImpact.devicePluginBindings).toBe(14);
+    expect(deletionImpact.totalAssociatedRows).toBe(105);
   });
 
   it('loads process options without selecting the first process or querying devices', async () => {
@@ -253,16 +293,21 @@ describe('devices feature guards', () => {
 
     await state.handleDelete(device);
 
-    expect(state.confirmDialog.show).toBe(false);
     expect(deviceApiMocks.getDeviceDeletionImpactApi).not.toHaveBeenCalled();
     expect(deviceApiMocks.deleteDeviceApi).not.toHaveBeenCalled();
   });
 
-  it('keeps the full cascade-confirmation flow for an Admin with no raw permissions', async () => {
+  it('Admin 点击删除直接调用 DELETE，不请求影响预览也不打开确认框', async () => {
     authMock.state!.isAdmin = true;
     authMock.state!.permissions = [];
+    deviceApiMocks.getDevicePagedListApi
+      .mockResolvedValueOnce(devicePage([device]))
+      .mockResolvedValueOnce(emptyDevicePage());
     const state = useDevices();
     const actions = mountDeviceActions(() => state.canDeleteDevice.value);
+    await state.initialize();
+    await state.selectProcess('process-1');
+    state.openDetailPanel(device);
 
     expect(state.canDeleteDevice.value).toBe(true);
     expect(actions.text()).toContain('删除');
@@ -273,66 +318,130 @@ describe('devices feature guards', () => {
 
     await state.handleDelete(device);
 
-    expect(deviceApiMocks.getDeviceDeletionImpactApi).toHaveBeenCalledTimes(1);
-    expect(deviceApiMocks.getDeviceDeletionImpactApi).toHaveBeenCalledWith(device.id);
-    expect(deviceApiMocks.deleteDeviceApi).not.toHaveBeenCalled();
-    expect(state.confirmDialog.show).toBe(true);
-    expect(state.confirmDialog.title).toBe('确认级联删除设备');
-    expect(state.confirmDialog.impact).toEqual(deletionImpact);
-    expect(state.deletionImpactRows.value).toEqual([
-      { label: '配方', value: 1 },
-      { label: '产能记录', value: 2 },
-      { label: '设备日志', value: 3 },
-      { label: '过站数据', value: 4 },
-      { label: '客户端状态投影', value: 5 },
-      { label: '客户端版本快照', value: 6 },
-      { label: '插件版本快照', value: 7 },
-      { label: '运行心跳', value: 8 },
-      { label: '上传幂等登记', value: 9 },
-      { label: '人员设备授权', value: 10 },
-      { label: '设备 refresh token', value: 11 },
-      { label: 'PLC 运行状态', value: 12 },
-      { label: '待激活安装凭证', value: 13 },
-    ]);
-    expect(state.deletionImpactRows.value).toHaveLength(13);
-    expect(
-      state.deletionImpactRows.value.reduce((total, item) => total + item.value, 0),
-    ).toBe(deletionImpact.totalAssociatedRows);
-
-    await state.confirmDialog.onConfirm();
-
+    expect(deviceApiMocks.getDeviceDeletionImpactApi).not.toHaveBeenCalled();
     expect(deviceApiMocks.deleteDeviceApi).toHaveBeenCalledTimes(1);
     expect(deviceApiMocks.deleteDeviceApi).toHaveBeenCalledWith(device.id);
-    expect(
-      deviceApiMocks.getDeviceDeletionImpactApi.mock.invocationCallOrder[0]!,
-    ).toBeLessThan(deviceApiMocks.deleteDeviceApi.mock.invocationCallOrder[0]!);
-    expect(state.confirmDialog.show).toBe(false);
-    expect(state.confirmDialog.impact).toBeNull();
+    expect(state.selectedDevice.value).toBeNull();
+    expect(state.showDetailPanel.value).toBe(false);
+    expect(feedbackMocks.notifySuccess).toHaveBeenCalledWith('设备及其可变关联数据已删除。');
   });
 
-  it('blocks final deletion when the Admin identity is lost after impact preview', async () => {
+  it('重复点击只发送一个删除请求', async () => {
     authMock.state!.isAdmin = true;
-    authMock.state!.permissions = [];
+    const pendingDelete = deferred<boolean>();
+    deviceApiMocks.deleteDeviceApi.mockReturnValue(pendingDelete.promise);
     const state = useDevices();
+
+    const first = state.handleDelete(device);
+    const second = state.handleDelete(device);
+    expect(deviceApiMocks.deleteDeviceApi).toHaveBeenCalledTimes(1);
+    pendingDelete.resolve(true);
+    await Promise.all([first, second]);
+  });
+
+  it('请求期间删除按钮保持危险色并禁用', () => {
+    const actions = mountDeviceActions(() => true, () => true);
+    const deleteButton = actions.findAll('button').find(button => button.text() === '删除');
+    expect(deleteButton).toBeDefined();
+    expect(deleteButton!.attributes('disabled')).toBeDefined();
+    expect(deleteButton!.classes()).toContain('bg-[#ffe7e7]');
+  });
+
+  it.each([403, 409, 500])('%i 失败保留选中设备和详情，不替换后端错误', async (status) => {
+    authMock.state!.isAdmin = true;
+    deviceApiMocks.deleteDeviceApi.mockRejectedValue(axiosError(status, '后端稳定原因'));
+    const state = useDevices();
+    state.openDetailPanel(device);
 
     await state.handleDelete(device);
 
-    expect(state.confirmDialog.show).toBe(true);
-    expect(deviceApiMocks.getDeviceDeletionImpactApi).toHaveBeenCalledTimes(1);
+    expect(state.selectedDevice.value).toEqual(device);
+    expect(state.showDetailPanel.value).toBe(true);
+    expect(feedbackMocks.notifySuccess).not.toHaveBeenCalled();
+    expect(feedbackMocks.notifyWarning).not.toHaveBeenCalled();
+    expect(deviceApiMocks.getDevicePagedListApi).not.toHaveBeenCalled();
+  });
 
-    authMock.state!.isAdmin = false;
-    authMock.state!.permissions = [
-      Permissions.Device.Delete,
-      Permissions.Device.CascadeDelete,
-    ];
-    await nextTick();
+  it('404 保留详情并刷新列表校正已失效行', async () => {
+    authMock.state!.isAdmin = true;
+    deviceApiMocks.getDevicePagedListApi.mockResolvedValue(devicePage([device]));
+    deviceApiMocks.deleteDeviceApi.mockRejectedValue(axiosError(404, '设备已不存在'));
+    const state = useDevices();
+    await state.initialize();
+    await state.selectProcess('process-1');
+    state.openDetailPanel(device);
+    deviceApiMocks.getDevicePagedListApi.mockClear();
 
-    expect(state.canDeleteDevice.value).toBe(false);
+    await state.handleDelete(device);
 
-    await state.confirmDialog.onConfirm();
+    expect(state.selectedDevice.value).toEqual(device);
+    expect(state.showDetailPanel.value).toBe(true);
+    expect(deviceApiMocks.getDevicePagedListApi).toHaveBeenCalledTimes(1);
+  });
 
+  it('删除当前页最后一行时回退到上一页', async () => {
+    authMock.state!.isAdmin = true;
+    let deleted = false;
+    deviceApiMocks.deleteDeviceApi.mockImplementation(async () => {
+      deleted = true;
+      return true;
+    });
+    deviceApiMocks.getDevicePagedListApi.mockImplementation(({ PaginationParams }: {
+      PaginationParams: { PageNumber: number };
+    }) => {
+      if (PaginationParams.PageNumber === 2) {
+        return Promise.resolve(deleted ? devicePage([], 10) : devicePage([device], 11));
+      }
+      return Promise.resolve(devicePage([device], deleted ? 10 : 11));
+    });
+    const state = useDevices();
+    await state.initialize();
+    await state.selectProcess('process-1');
+    state.onPageChange(2);
+    await flushPromises();
+
+    await state.handleDelete(device);
+    await flushPromises();
+
+    expect(state.currentPage.value).toBe(1);
+    expect(deviceApiMocks.getDevicePagedListApi).toHaveBeenLastCalledWith(
+      expect.objectContaining({ PaginationParams: expect.objectContaining({ PageNumber: 1 }) }),
+    );
+  });
+
+  it('删除前发出的迟到列表响应不得复活已删设备', async () => {
+    authMock.state!.isAdmin = true;
+    const stalePage = deferred<ReturnType<typeof devicePage>>();
+    deviceApiMocks.getDevicePagedListApi
+      .mockResolvedValueOnce(devicePage([device]))
+      .mockReturnValueOnce(stalePage.promise)
+      .mockResolvedValueOnce(emptyDevicePage());
+    const state = useDevices();
+    await state.initialize();
+    await state.selectProcess('process-1');
+    state.openDetailPanel(device);
+
+    const staleRefresh = state.fetchList();
+    const deleting = state.handleDelete(device);
+    await deleting;
+    stalePage.resolve(devicePage([device]));
+    await staleRefresh;
+
+    expect(state.devices.value).toHaveLength(0);
+    expect(state.selectedDevice.value).toBeNull();
+    expect(state.showDetailPanel.value).toBe(false);
+  });
+
+  it('设备工序迁移确认流程保持独立', async () => {
+    authMock.state!.isAdmin = true;
+    const state = useDevices();
+    state.openMigrationDialog(device);
+    await state.selectMigrationTarget('process-2');
+    state.migrationDialog.confirmInput = migrationImpact.confirmationText;
+
+    await state.submitMigration();
+
+    expect(deviceApiMocks.migrateDeviceProcessApi).toHaveBeenCalledTimes(1);
     expect(deviceApiMocks.deleteDeviceApi).not.toHaveBeenCalled();
-    expect(state.confirmDialog.show).toBe(true);
-    expect(state.confirmDialog.impact).toEqual(deletionImpact);
   });
 });

@@ -36,9 +36,10 @@
 - Human 读取 PLC runtime state 只能走 `GET /api/v1/human/edge-hosts/{deviceId}/plc-runtime-states`。
 - Human 按设备读取动态 PLC 清单使用 `GET /api/v1/human/edge-hosts/{deviceId}/plcs`；读取该设备实际安装插件版本声明的数据能力使用 `GET /api/v1/human/edge-hosts/{deviceId}/data-schemas?plcCode=...`。
 - Human 查询必须使用 `EdgeHost.Read` 权限。
-- Human 统一“设备运行与版本”主视图使用 `DeviceClientOverview.Read`，主列表不得返回或预取 PLC runtime state；只有详情抽屉具备 `EdgeHost.Read` 时才允许调用上述 PLC 专属接口。
+- Human 统一“设备运行与版本”主视图使用 `DeviceClientOverview.Read`，主列表不得返回或预取 PLC runtime state；只有详情抽屉具备 `EdgeHost.Read` 时，才允许按设备读取 `GET /api/v1/human/edge-hosts/{deviceId}` 的 Cloud 物化投影或上述 PLC 专属接口。详情投影不得恢复旧 edge-host 列表页。
 - Human 上位机列表和详情必须以当前人员可访问的 `Device` 为主数据源，左连 `DeviceClientState` 和 `EdgeHostPlcRuntimeState`，不得以旧 `EdgeHost` 配置表作为列表基准。
 - Human 上位机 PLC 总览必须在每次 handler 中捕获一次 `utcNow`，并与 AiRead、`device-plcs`和 `data-schemas` 动态元数据共用同一 Cloud 配置和同一 PLC freshness resolver；不得复制阈值或在各 handler 中自行实现判定。快照 `age` 恰好等于窗口时仍有效，只有 `age > window` 才过期；过期后即使最后上报的 `RuntimeStatus=Connected`，也不得显示在线，必须返回过期/不可用语义并展示最后采集或接收时间。
+- `EdgeHostListItemDto` 和 `EdgeHostDto` 必须返回 `plcFreshness`、`plcSnapshotReceivedAtUtc`、`plcIssue`；`EdgeHostPlcRuntimeStateDto` 必须返回每行 `freshness`。`Current` 保留当前连接/故障事实；`Stale` 对外不得显示在线或当前故障；`Unavailable` 不得被解释为权威的 0 PLC 清单。前端只展示 Cloud 已物化语义，不得用浏览器时间重算窗口。
 - Human 上位机列表的 count、分页和 keyword 过滤必须在数据库侧完成；只允许为当前页设备批量读取 `DeviceClientState` 和 `EdgeHostPlcRuntimeState`，不得为了搜索 PLC 字段把全部授权设备和全部 PLC 状态拉入内存后再分页。
 - Human 查询只能展示设备身份、客户端运行状态和 runtime state 投影，不得反向修配置，不得写 `edge_host_plc_runtime_states`。
 - Human API 和前端不得暴露新增、编辑、删除、启用、禁用上位机或 PLC 的入口；`EdgeHost.Manage` 权限点不得恢复。
