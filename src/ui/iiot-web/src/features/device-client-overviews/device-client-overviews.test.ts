@@ -386,6 +386,31 @@ describe('详情抽屉权限独立请求', () => {
     document.body.innerHTML = '';
   });
 
+  it('Stale 空投影只标识为过期历史，不声称当前权威零 PLC', async () => {
+    authMock.release = false;
+    apiMocks.getEdgeHostPlcProjectionApi.mockResolvedValue(makePlcProjection({
+      plcFreshness: 'Stale',
+      plcIssue: 'PlcSnapshotStale',
+      plcStates: [],
+    }));
+    const wrapper = mount(DeviceClientOverviewPage, {
+      attachTo: document.body,
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+    await wrapper.findAll('button').find((button) => button.text() === '详情')!.trigger('click');
+    await flushPromises();
+
+    const bodyText = document.body.textContent ?? '';
+    expect(bodyText).toContain('PLC 状态已过期');
+    expect(bodyText).toContain('仅保留过期的历史快照');
+    expect(bodyText).not.toContain('当前权威快照中无 PLC');
+    expect(bodyText).not.toContain('· 0 台');
+
+    wrapper.unmount();
+    document.body.innerHTML = '';
+  });
+
   it('运行实例、安装上报和最新正式发布分别展示，插件三种状态不混用', async () => {
     authMock.plc = false;
     apiMocks.getDeviceClientReleaseDetailsApi.mockResolvedValue(makeReleaseDetails({

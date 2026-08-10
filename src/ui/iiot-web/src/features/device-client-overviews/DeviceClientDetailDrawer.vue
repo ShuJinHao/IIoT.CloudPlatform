@@ -63,6 +63,11 @@
                 description="Cloud 未获得可作为当前事实的 PLC 快照，不将空列表解释为 0 台 PLC。"
               />
               <EmptyState
+                v-else-if="normalizedPlcFreshness === 'Stale'"
+                title="PLC 状态已过期"
+                description="Cloud 仅保留过期的历史快照，不将其空列表解释为当前 0 台 PLC。"
+              />
+              <EmptyState
                 v-else
                 title="当前权威快照中无 PLC"
                 description="Cloud 已确认当前权威快照中没有 PLC 行。"
