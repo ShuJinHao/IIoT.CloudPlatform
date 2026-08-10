@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 // 旧「上位机 PLC 状态」列表与「设备客户端状态」inventory 视图已随统一主视图退役：
-// 旧 API、旧路由与旧 feature 目录不得再有前端消费者（后端旧接口本轮保留，由 C2 后端清理）。
+// 旧 API、旧路由与旧 feature 目录不得再有前端消费者；后端兼容路由是独立范围。
 // 用 import.meta.glob 读取源码文本，避免引入 node 类型。
 // 数组 glob 模式下 eager raw 的 key 会带上 ?raw query，统一按去掉 query 后的路径匹配。
 const rawSources = import.meta.glob(['../../*.ts', '../../**/*.ts', '../../**/*.vue'], { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
@@ -49,16 +49,29 @@ describe('旧 device-inventory 与旧 edge-host 列表消费者归零', () => {
     expect(leftovers).toEqual([]);
   });
 
-  it('PLC 专属接口只在统一主视图 feature 消费，旧 edge-host 列表接口无人调用', () => {
+  it('PLC 投影详情只在统一主视图 feature 消费，旧 edge-host 列表接口无人调用', () => {
     // 全部已加载源码中不得再出现旧 edge-host 列表 API、旧路由或旧列表 DTO。
     const all = [...sources.values()].join('\n');
     expect(all).not.toContain('getEdgeHostPagedListApi');
     expect(all).not.toContain('getEdgeHostDetailApi');
     expect(all).not.toContain('EdgeHostListItemDto');
     expect(all).not.toContain("path: 'edge-hosts'");
-    // 新 feature 只保留 PLC 专属详情接口，不重建旧 edge-hosts 列表基地址。
+    // 新 feature 只按设备读取 Cloud 物化的投影详情，不重建旧 edge-hosts 列表基地址。
     const hits = [...sources.entries()].filter(([key, text]) =>
       !key.includes('legacy-consumers.test') && text.includes("'/human/edge-hosts'"));
     expect(hits.map(([key]) => key)).toEqual([]);
+  });
+
+  it('前端不使用浏览器时间或三分钟常量重算 PLC Freshness', () => {
+    const feature = [
+      featureSource('api.ts'),
+      featureSource('useDeviceClientOverviews.ts'),
+      featureSource('DeviceClientDetailDrawer.vue'),
+      featureSource('columns.ts'),
+    ].join('\n');
+    expect(feature).not.toContain('Date.now');
+    expect(feature).not.toContain('180000');
+    expect(feature).not.toContain('180 * 1000');
+    expect(feature).not.toContain('3 * 60');
   });
 });

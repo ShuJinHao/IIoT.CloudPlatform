@@ -5,13 +5,22 @@ import { i18n } from '../../i18n';
 import { Permissions } from '../../types/permissions';
 import DeviceClientOverviewPage from './DeviceClientOverviewPage.vue';
 import { deviceClientOverviewRoutes } from './routes';
-import { releaseStatusText, softwareStatusText } from './columns';
+import {
+  plcFreshnessText,
+  plcRuntimeStatusText,
+  releaseStatusText,
+  softwareStatusText,
+} from './columns';
 import { useDeviceClientOverviews } from './useDeviceClientOverviews';
+import type {
+  EdgeHostPlcProjectionDto,
+  EdgeHostPlcRuntimeStateDto,
+} from './api';
 
 // ===== API 模块整体打桩：组合式函数走真实流程，只有边界是假的 =====
 const apiMocks = vi.hoisted(() => ({
   getDeviceClientOverviewsApi: vi.fn(),
-  getEdgeHostPlcRuntimeStatesApi: vi.fn(),
+  getEdgeHostPlcProjectionApi: vi.fn(),
   getDeviceClientReleaseDetailsApi: vi.fn(),
 }));
 
@@ -115,7 +124,9 @@ function makeReleaseDetails(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function makePlcState(overrides: Record<string, unknown> = {}) {
+function makePlcState(
+  overrides: Partial<EdgeHostPlcRuntimeStateDto> = {},
+): EdgeHostPlcRuntimeStateDto {
   return {
     id: 'plc-state-1',
     deviceId: DEVICE_ID,
@@ -130,6 +141,22 @@ function makePlcState(overrides: Record<string, unknown> = {}) {
     lastError: null,
     lastSeenAtUtc: '2026-07-23T01:00:00Z',
     updatedAtUtc: '2026-07-23T01:00:00Z',
+    freshness: 'Current',
+    ...overrides,
+  };
+}
+
+function makePlcProjection(
+  overrides: Partial<EdgeHostPlcProjectionDto> = {},
+): EdgeHostPlcProjectionDto {
+  return {
+    deviceId: DEVICE_ID,
+    clientCode: 'DC-0001',
+    plcFreshness: 'Current',
+    plcSnapshotReceivedAtUtc: '2026-07-23T01:00:30Z',
+    lastPlcSeenAtUtc: '2026-07-23T01:00:00Z',
+    plcIssue: null,
+    plcStates: [makePlcState()],
     ...overrides,
   };
 }
@@ -145,7 +172,7 @@ beforeEach(() => {
   authMock.plc = true;
   authMock.release = true;
   apiMocks.getDeviceClientOverviewsApi.mockResolvedValue(makeOverviewPage([makeOverviewItem()]));
-  apiMocks.getEdgeHostPlcRuntimeStatesApi.mockResolvedValue([makePlcState()]);
+  apiMocks.getEdgeHostPlcProjectionApi.mockResolvedValue(makePlcProjection());
   apiMocks.getDeviceClientReleaseDetailsApi.mockResolvedValue(makeReleaseDetails());
 });
 
@@ -178,6 +205,16 @@ describe('状态文案映射', () => {
     expect(releaseStatusText('NoRelease')).toBe('无发布');
     expect(releaseStatusText('Unknown')).toBe('未知');
     expect(releaseStatusText('SomethingNew')).toBe('SomethingNew');
+  });
+
+  it('PLC 状态先遵循 Cloud Freshness，再解释连接事实', () => {
+    expect(plcRuntimeStatusText(makePlcState({ freshness: 'Current', isConnected: true }))).toBe('在线');
+    expect(plcRuntimeStatusText(makePlcState({ freshness: 'Stale', isConnected: true }))).toBe('状态已过期');
+    expect(plcRuntimeStatusText(makePlcState({ freshness: 'Unavailable', isConnected: true }))).toBe('权威快照不可用');
+    expect(plcRuntimeStatusText(makePlcState({ freshness: 'Current', isConnected: false, runtimeStatus: 'Faulted' }))).toBe('故障');
+    expect(plcRuntimeStatusText(makePlcState({ freshness: 'Stale', isConnected: false, runtimeStatus: 'Faulted' }))).toBe('状态已过期');
+    expect(plcRuntimeStatusText(makePlcState({ freshness: 'Current', isConnected: false, runtimeStatus: 'Disconnected' }))).toBe('离线');
+    expect(plcFreshnessText('Unavailable')).toBe('权威快照不可用');
   });
 });
 
@@ -262,6 +299,118 @@ describe('useDeviceClientOverviews 主列表', () => {
 });
 
 describe('详情抽屉权限独立请求', () => {
+  it.each([
+    ['Current', true, 'Connected', '在线'],
+    ['Current', false, 'Faulted', '故障'],
+    ['Current', false, 'Disconnected', '离线'],
+    ['Stale', true, 'Connected', '状态已过期'],
+    ['Unavailable', true, 'Connected', '权威快照不可用'],
+  ] as const)('PLC %s/%s/%s 按 Cloud 投影显示 %s', async (
+    freshness,
+    isConnected,
+    runtimeStatus,
+    expected,
+  ) => {
+    authMock.release = false;
+    apiMocks.getEdgeHostPlcProjectionApi.mockResolvedValue(makePlcProjection({
+      plcFreshness: freshness,
+      plcIssue: freshness === 'Stale'
+        ? 'PlcSnapshotStale'
+        : freshness === 'Unavailable' ? 'PlcSnapshotUnavailable' : null,
+      plcStates: [makePlcState({ freshness, isConnected, runtimeStatus })],
+    }));
+    const wrapper = mount(DeviceClientOverviewPage, {
+      attachTo: document.body,
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+    await wrapper.findAll('button').find((button) => button.text() === '详情')!.trigger('click');
+    await flushPromises();
+
+    const bodyText = document.body.textContent ?? '';
+    expect(bodyText).toContain(expected);
+    if (freshness !== 'Current') expect(bodyText).not.toContain('在线');
+
+    wrapper.unmount();
+    document.body.innerHTML = '';
+  });
+
+  it('快照接收时间、PLC 最后观测时间和判定原因分别展示', async () => {
+    authMock.release = false;
+    apiMocks.getEdgeHostPlcProjectionApi.mockResolvedValue(makePlcProjection({
+      plcFreshness: 'Stale',
+      plcIssue: 'PlcSnapshotStale',
+      plcStates: [makePlcState({ freshness: 'Stale', isConnected: false, runtimeStatus: 'Unknown' })],
+    }));
+    const wrapper = mount(DeviceClientOverviewPage, {
+      attachTo: document.body,
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+    await wrapper.findAll('button').find((button) => button.text() === '详情')!.trigger('click');
+    await flushPromises();
+
+    const bodyText = document.body.textContent ?? '';
+    expect(bodyText).toContain('运行中');
+    expect(bodyText).toContain('状态已过期');
+    expect(bodyText).toContain('快照最后接收时间');
+    expect(bodyText).toContain('PLC 最后观测时间');
+    expect(bodyText).toContain('Cloud 已判定 PLC 权威快照超过统一新鲜度窗口');
+
+    wrapper.unmount();
+    document.body.innerHTML = '';
+  });
+
+  it('Unavailable 空投影不冒充 0 台 PLC 的成功状态', async () => {
+    authMock.release = false;
+    apiMocks.getEdgeHostPlcProjectionApi.mockResolvedValue(makePlcProjection({
+      plcFreshness: 'Unavailable',
+      plcSnapshotReceivedAtUtc: null,
+      plcIssue: 'PlcSnapshotUnavailable',
+      plcStates: [],
+    }));
+    const wrapper = mount(DeviceClientOverviewPage, {
+      attachTo: document.body,
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+    await wrapper.findAll('button').find((button) => button.text() === '详情')!.trigger('click');
+    await flushPromises();
+
+    const bodyText = document.body.textContent ?? '';
+    expect(bodyText).toContain('PLC 权威快照不可用');
+    expect(bodyText).not.toContain('· 0 台');
+    expect(bodyText).not.toContain('来自 Edge 客户端上报 0');
+
+    wrapper.unmount();
+    document.body.innerHTML = '';
+  });
+
+  it('Stale 空投影只标识为过期历史，不声称当前权威零 PLC', async () => {
+    authMock.release = false;
+    apiMocks.getEdgeHostPlcProjectionApi.mockResolvedValue(makePlcProjection({
+      plcFreshness: 'Stale',
+      plcIssue: 'PlcSnapshotStale',
+      plcStates: [],
+    }));
+    const wrapper = mount(DeviceClientOverviewPage, {
+      attachTo: document.body,
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+    await wrapper.findAll('button').find((button) => button.text() === '详情')!.trigger('click');
+    await flushPromises();
+
+    const bodyText = document.body.textContent ?? '';
+    expect(bodyText).toContain('PLC 状态已过期');
+    expect(bodyText).toContain('仅保留过期的历史快照');
+    expect(bodyText).not.toContain('当前权威快照中无 PLC');
+    expect(bodyText).not.toContain('· 0 台');
+
+    wrapper.unmount();
+    document.body.innerHTML = '';
+  });
+
   it('运行实例、安装上报和最新正式发布分别展示，插件三种状态不混用', async () => {
     authMock.plc = false;
     apiMocks.getDeviceClientReleaseDetailsApi.mockResolvedValue(makeReleaseDetails({
@@ -388,7 +537,7 @@ describe('详情抽屉权限独立请求', () => {
         expect(document.querySelector('.ui-drawer')).toBeNull();
       }
 
-      expect(apiMocks.getEdgeHostPlcRuntimeStatesApi.mock.calls).toHaveLength(plcCalls);
+      expect(apiMocks.getEdgeHostPlcProjectionApi.mock.calls).toHaveLength(plcCalls);
       expect(apiMocks.getDeviceClientReleaseDetailsApi.mock.calls).toHaveLength(releaseCalls);
       wrapper.unmount();
       document.body.innerHTML = '';
@@ -400,11 +549,11 @@ describe('详情抽屉权限独立请求', () => {
       makeOverviewItem({ deviceId: DEVICE_ID, deviceName: '设备 A' }),
       makeOverviewItem({ deviceId: SECOND_DEVICE_ID, deviceName: '设备 B' }),
     ]));
-    const plcA = deferred<ReturnType<typeof makePlcState>[]>();
-    const plcB = deferred<ReturnType<typeof makePlcState>[]>();
+    const plcA = deferred<ReturnType<typeof makePlcProjection>>();
+    const plcB = deferred<ReturnType<typeof makePlcProjection>>();
     const releaseA = deferred<ReturnType<typeof makeReleaseDetails>>();
     const releaseB = deferred<ReturnType<typeof makeReleaseDetails>>();
-    apiMocks.getEdgeHostPlcRuntimeStatesApi.mockImplementation(
+    apiMocks.getEdgeHostPlcProjectionApi.mockImplementation(
       (deviceId: string) => deviceId === DEVICE_ID ? plcA.promise : plcB.promise,
     );
     apiMocks.getDeviceClientReleaseDetailsApi.mockImplementation(
@@ -417,11 +566,14 @@ describe('详情抽屉权限独立请求', () => {
     state.closeDetailDrawer();
     state.openDetailDrawer(state.items.value[1]!);
 
-    plcB.resolve([makePlcState({
-      id: 'plc-b',
+    plcB.resolve(makePlcProjection({
       deviceId: SECOND_DEVICE_ID,
-      plcCode: 'PLC-B',
-    })]);
+      plcStates: [makePlcState({
+        id: 'plc-b',
+        deviceId: SECOND_DEVICE_ID,
+        plcCode: 'PLC-B',
+      })],
+    }));
     releaseB.resolve(makeReleaseDetails({
       deviceId: SECOND_DEVICE_ID,
       deviceName: '设备 B',
@@ -432,7 +584,9 @@ describe('详情抽屉权限独立请求', () => {
     expect(state.plcStates.value[0]?.deviceId).toBe(SECOND_DEVICE_ID);
     expect(state.releaseDetails.value?.deviceId).toBe(SECOND_DEVICE_ID);
 
-    plcA.resolve([makePlcState({ id: 'plc-a', deviceId: DEVICE_ID, plcCode: 'PLC-A' })]);
+    plcA.resolve(makePlcProjection({
+      plcStates: [makePlcState({ id: 'plc-a', deviceId: DEVICE_ID, plcCode: 'PLC-A' })],
+    }));
     releaseA.reject(axiosError(500, {
       title: 'Internal Server Error',
       detail: '设备 A 的迟到错误',
@@ -449,11 +603,11 @@ describe('详情抽屉权限独立请求', () => {
   });
 
   it('同一设备重试只接受各分支最新请求，旧请求迟到不得回写', async () => {
-    const initialPlc = deferred<ReturnType<typeof makePlcState>[]>();
-    const retriedPlc = deferred<ReturnType<typeof makePlcState>[]>();
+    const initialPlc = deferred<ReturnType<typeof makePlcProjection>>();
+    const retriedPlc = deferred<ReturnType<typeof makePlcProjection>>();
     const initialRelease = deferred<ReturnType<typeof makeReleaseDetails>>();
     const retriedRelease = deferred<ReturnType<typeof makeReleaseDetails>>();
-    apiMocks.getEdgeHostPlcRuntimeStatesApi
+    apiMocks.getEdgeHostPlcProjectionApi
       .mockReturnValueOnce(initialPlc.promise)
       .mockReturnValueOnce(retriedPlc.promise);
     apiMocks.getDeviceClientReleaseDetailsApi
@@ -466,13 +620,17 @@ describe('详情抽屉权限独立请求', () => {
     state.retryPlcStates();
     state.retryReleaseDetails();
 
-    retriedPlc.resolve([makePlcState({ id: 'plc-retry', plcCode: 'PLC-RETRY' })]);
+    retriedPlc.resolve(makePlcProjection({
+      plcStates: [makePlcState({ id: 'plc-retry', plcCode: 'PLC-RETRY' })],
+    }));
     retriedRelease.resolve(makeReleaseDetails({ currentVersion: '3.1.0' }));
     await flushPromises();
     expect(state.plcStates.value[0]?.plcCode).toBe('PLC-RETRY');
     expect(state.releaseDetails.value?.currentVersion).toBe('3.1.0');
 
-    initialPlc.resolve([makePlcState({ id: 'plc-old', plcCode: 'PLC-OLD' })]);
+    initialPlc.resolve(makePlcProjection({
+      plcStates: [makePlcState({ id: 'plc-old', plcCode: 'PLC-OLD' })],
+    }));
     initialRelease.resolve(makeReleaseDetails({ currentVersion: '2.4.0' }));
     await flushPromises();
     expect(state.plcStates.value[0]?.plcCode).toBe('PLC-RETRY');
@@ -481,17 +639,17 @@ describe('详情抽屉权限独立请求', () => {
     expect(state.releaseLoading.value).toBe(false);
   });
 
-  it('PLC 详情请求保留专属路由 /human/edge-hosts/{deviceId}/plc-runtime-states', async () => {
+  it('PLC 详情请求 Cloud 物化的主机投影，不在浏览器重算 Freshness', async () => {
     const state = useDeviceClientOverviews();
     await state.refresh();
     state.openDetailDrawer(state.items.value[0]!);
     await flushPromises();
-    expect(apiMocks.getEdgeHostPlcRuntimeStatesApi).toHaveBeenCalledWith(DEVICE_ID);
+    expect(apiMocks.getEdgeHostPlcProjectionApi).toHaveBeenCalledWith(DEVICE_ID);
     expect(apiMocks.getDeviceClientReleaseDetailsApi).toHaveBeenCalledWith(DEVICE_ID);
   });
 
   it('PLC 失败不影响版本详情，版本详情失败不影响 PLC；错误内联展示真实 ProblemDetails', async () => {
-    apiMocks.getEdgeHostPlcRuntimeStatesApi.mockRejectedValue(axiosError(500, {
+    apiMocks.getEdgeHostPlcProjectionApi.mockRejectedValue(axiosError(500, {
       title: 'Internal Server Error',
       detail: 'PLC 投影读取超时',
     }));
@@ -511,7 +669,7 @@ describe('详情抽屉权限独立请求', () => {
   });
 
   it('PLC 失败时版本详情仍成功渲染；重试只重发失败的那一路', async () => {
-    apiMocks.getEdgeHostPlcRuntimeStatesApi.mockRejectedValueOnce(new Error('boom'));
+    apiMocks.getEdgeHostPlcProjectionApi.mockRejectedValueOnce(new Error('boom'));
     const state = useDeviceClientOverviews();
     await state.refresh();
     state.openDetailDrawer(state.items.value[0]!);
@@ -520,7 +678,7 @@ describe('详情抽屉权限独立请求', () => {
     expect(state.plcError.value).toBeTruthy();
     expect(state.releaseDetails.value?.plugins).toHaveLength(1);
 
-    apiMocks.getEdgeHostPlcRuntimeStatesApi.mockResolvedValue([makePlcState()]);
+    apiMocks.getEdgeHostPlcProjectionApi.mockResolvedValue(makePlcProjection());
     state.retryPlcStates();
     await flushPromises();
     expect(state.plcError.value).toBeNull();

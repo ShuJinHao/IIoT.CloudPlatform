@@ -1,7 +1,7 @@
 import http from '../../core/http/httpClient';
 import type { PagedList } from '../../core/types/pagination';
 
-// 冻结契约：统一主视图只返回窄字段，PLC/插件/升级详情必须走下方两个专属接口。
+// 冻结契约：统一主视图只返回窄字段，PLC/插件/升级详情必须走独立权限的详情接口。
 export interface DeviceClientOverviewItemDto {
   deviceId: string;
   deviceName: string;
@@ -55,7 +55,26 @@ export interface EdgeHostPlcRuntimeStateDto {
   lastError?: string | null;
   lastSeenAtUtc: string;
   updatedAtUtc: string;
+  freshness: PlcProjectionFreshness;
 }
+
+export type PlcProjectionFreshness = 'Current' | 'Stale' | 'Unavailable';
+
+export interface EdgeHostPlcProjectionDto {
+  deviceId: string;
+  clientCode: string;
+  plcFreshness: PlcProjectionFreshness;
+  plcSnapshotReceivedAtUtc?: string | null;
+  lastPlcSeenAtUtc?: string | null;
+  plcIssue?: string | null;
+  plcStates: EdgeHostPlcRuntimeStateDto[];
+}
+
+// 详情投影由 Cloud 同一 resolver 物化；前端不再根据浏览器时间重算新鲜度。
+export const getEdgeHostPlcProjectionApi = (deviceId: string) =>
+  http.get<EdgeHostPlcProjectionDto>(`/human/edge-hosts/${deviceId}`, {
+    inlineFeedback: true,
+  });
 
 export const getEdgeHostPlcRuntimeStatesApi = (deviceId: string) =>
   http.get<EdgeHostPlcRuntimeStateDto[]>(`/human/edge-hosts/${deviceId}/plc-runtime-states`, {

@@ -75,7 +75,7 @@
       :device="selectedDevice"
       :can-view-plc="canViewPlcDetails"
       :can-view-release="canViewReleaseDetails"
-      :plc-states="plcStates"
+      :plc-projection="plcProjection"
       :plc-loading="plcLoading"
       :plc-error="plcError"
       :release="releaseDetails"
@@ -112,7 +112,7 @@ const {
   keyword, sortBy, sortDirection,
   canViewPlcDetails, canViewReleaseDetails, canViewAnyDetails,
   showDetailDrawer, selectedDevice,
-  plcStates, plcLoading, plcError,
+  plcProjection, plcLoading, plcError,
   releaseDetails, releaseLoading, releaseError,
   refresh, onSearchInput, onClearKeyword, toggleSort, gotoPage,
   openDetailDrawer, retryPlcStates, retryReleaseDetails, closeDetailDrawer,

@@ -8,6 +8,7 @@ interface DeviceColumnOptions {
   canUpdateDevice: () => boolean;
   canDeleteDevice: () => boolean;
   canMigrateDevice: () => boolean;
+  isSubmitting: () => boolean;
   processLabel: (processId: string) => string;
   onDetail: (device: DeviceListItemDto) => void;
   onEdit: (device: DeviceListItemDto) => void;
@@ -114,6 +115,7 @@ export function createDeviceColumns(
                 size: 'tiny',
                 type: 'error',
                 secondary: true,
+                disabled: options.isSubmitting(),
                 onClick: () => options.onDelete(row),
               },
               { default: () => '删除' },

@@ -93,33 +93,49 @@ export function releaseStatusTone(status?: string | null): TagTone {
   }
 }
 
-function runtimeStatusTone(status?: string | null): TagTone {
-  switch ((status ?? '').toLowerCase()) {
-    case 'connected':
-      return 'success';
-    case 'disconnected':
-      return 'warning';
-    case 'faulted':
-      return 'error';
-    case 'unknown':
-      return 'default';
-    default:
+export function plcFreshnessTagTone(freshness?: string | null): TagTone {
+  switch ((freshness ?? '').toLowerCase()) {
+    case 'current':
       return 'info';
+    case 'stale':
+      return 'warning';
+    default:
+      return 'default';
   }
 }
 
-function runtimeStatusText(status?: string | null): string {
-  switch ((status ?? '').toLowerCase()) {
-    case 'connected':
-      return '已连接';
-    case 'disconnected':
-      return '未连接';
+export function plcFreshnessText(freshness?: string | null): string {
+  switch ((freshness ?? '').toLowerCase()) {
+    case 'current':
+      return '权威快照当前';
+    case 'stale':
+      return '状态已过期';
+    default:
+      return '权威快照不可用';
+  }
+}
+
+export function plcRuntimeStatusTone(row: EdgeHostPlcRuntimeStateDto): TagTone {
+  const freshness = row.freshness.toLowerCase();
+  if (freshness === 'stale') return 'warning';
+  if (freshness !== 'current') return 'default';
+  if (row.isConnected) return 'success';
+  if (row.runtimeStatus.toLowerCase() === 'faulted') return 'error';
+  return 'default';
+}
+
+export function plcRuntimeStatusText(row: EdgeHostPlcRuntimeStateDto): string {
+  const freshness = row.freshness.toLowerCase();
+  if (freshness === 'stale') return '状态已过期';
+  if (freshness !== 'current') return '权威快照不可用';
+  if (row.isConnected) return '在线';
+  switch (row.runtimeStatus.toLowerCase()) {
     case 'faulted':
       return '故障';
-    case 'unknown':
-      return '未知';
+    case 'disconnected':
+      return '离线';
     default:
-      return status || '未知';
+      return '未知';
   }
 }
 
@@ -214,8 +230,8 @@ export function createPlcRuntimeStateColumns(): UiDataTableColumn<EdgeHostPlcRun
       render(row) {
         return h(
           UiTag,
-          { size: 'small', bordered: false, type: runtimeStatusTone(row.runtimeStatus) },
-          { default: () => runtimeStatusText(row.runtimeStatus) },
+          { size: 'small', bordered: false, type: plcRuntimeStatusTone(row) },
+          { default: () => plcRuntimeStatusText(row) },
         );
       },
     },
@@ -247,7 +263,7 @@ export function createPlcRuntimeStateColumns(): UiDataTableColumn<EdgeHostPlcRun
       },
     },
     {
-      title: '最后上报',
+      title: 'PLC 最后观测时间',
       key: 'lastSeenAtUtc',
       minWidth: 160,
       render(row) {

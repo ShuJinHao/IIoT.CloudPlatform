@@ -21,8 +21,14 @@
       <section v-if="canViewPlc" class="detail-drawer__section">
         <div class="detail-drawer__section-title">
           <h3>PLC 状态</h3>
-          <UiTag v-if="!plcLoading && !plcError" size="small" :bordered="false" type="info">
-            来自 Edge 客户端上报 {{ plcStates.length }}
+          <UiTag
+            v-if="!plcLoading && !plcError && plcProjection"
+            size="small"
+            :bordered="false"
+            :type="plcFreshnessTone"
+            data-testid="plc-freshness-tag"
+          >
+            {{ plcFreshnessLabel }}
           </UiTag>
         </div>
         <div v-if="plcLoading" class="detail-state">加载中…</div>
@@ -30,16 +36,45 @@
           <EmptyState title="PLC 状态加载失败" :description="plcError" />
           <UiButton size="small" secondary @click="$emit('retryPlc')">重试</UiButton>
         </div>
-        <UiDataTable
-          v-else
-          :columns="plcColumns"
-          :data="plcStates"
-          :row-key="plcRowKey"
-        >
-          <template #empty>
-            <EmptyState title="客户端尚未上报 PLC 清单" description="等待 Edge 客户端上报本地 PLC 配置快照和运行状态。" />
-          </template>
-        </UiDataTable>
+        <template v-else>
+          <dl v-if="plcProjection" class="plc-projection-summary" data-testid="plc-projection-summary">
+            <div>
+              <dt>快照最后接收时间</dt>
+              <dd>{{ formatDateTime(plcProjection.plcSnapshotReceivedAtUtc) }}</dd>
+            </div>
+            <div>
+              <dt>PLC 最后观测时间</dt>
+              <dd>{{ formatDateTime(plcProjection.lastPlcSeenAtUtc) }}</dd>
+            </div>
+            <div>
+              <dt>判定原因</dt>
+              <dd>{{ plcIssueText }}</dd>
+            </div>
+          </dl>
+          <UiDataTable
+            :columns="plcColumns"
+            :data="plcStates"
+            :row-key="plcRowKey"
+          >
+            <template #empty>
+              <EmptyState
+                v-if="normalizedPlcFreshness === 'Unavailable'"
+                title="PLC 权威快照不可用"
+                description="Cloud 未获得可作为当前事实的 PLC 快照，不将空列表解释为 0 台 PLC。"
+              />
+              <EmptyState
+                v-else-if="normalizedPlcFreshness === 'Stale'"
+                title="PLC 状态已过期"
+                description="Cloud 仅保留过期的历史快照，不将其空列表解释为当前 0 台 PLC。"
+              />
+              <EmptyState
+                v-else
+                title="当前权威快照中无 PLC"
+                description="Cloud 已确认当前权威快照中没有 PLC 行。"
+              />
+            </template>
+          </UiDataTable>
+        </template>
       </section>
 
       <!-- 版本、插件和升级详情：仅 ClientRelease.Read；与 PLC 区块失败互不影响 -->
@@ -69,16 +104,23 @@ import DeviceClientVersionFacts from './DeviceClientVersionFacts.vue';
 import type {
   DeviceClientOverviewItemDto,
   DeviceClientReleaseDetailsDto,
+  EdgeHostPlcProjectionDto,
   EdgeHostPlcRuntimeStateDto,
 } from './api';
-import { createPlcRuntimeStateColumns, softwareStatusText } from './columns';
+import {
+  createPlcRuntimeStateColumns,
+  plcFreshnessTagTone,
+  plcFreshnessText as resolvePlcFreshnessText,
+  softwareStatusText,
+} from './columns';
+import { formatDateTime } from './types';
 
 const props = defineProps<{
   show: boolean;
   device: DeviceClientOverviewItemDto | null;
   canViewPlc: boolean;
   canViewRelease: boolean;
-  plcStates: EdgeHostPlcRuntimeStateDto[];
+  plcProjection: EdgeHostPlcProjectionDto | null;
   plcLoading: boolean;
   plcError: string | null;
   release: DeviceClientReleaseDetailsDto | null;
@@ -94,6 +136,34 @@ const emit = defineEmits<{
 }>();
 
 const plcColumns = createPlcRuntimeStateColumns();
+const plcStates = computed(() => props.plcProjection?.plcStates ?? []);
+const normalizedPlcFreshness = computed(() => {
+  const freshness = props.plcProjection?.plcFreshness;
+  return freshness === 'Current' || freshness === 'Stale' ? freshness : 'Unavailable';
+});
+const plcFreshnessTone = computed(() => plcFreshnessTagTone(normalizedPlcFreshness.value));
+const plcFreshnessLabel = computed(() => {
+  const base = resolvePlcFreshnessText(normalizedPlcFreshness.value);
+  return normalizedPlcFreshness.value === 'Current'
+    ? `${base} · ${plcStates.value.length} 台`
+    : base;
+});
+const plcIssueText = computed(() => {
+  switch (props.plcProjection?.plcIssue) {
+    case 'PlcSnapshotStale':
+      return 'Cloud 已判定 PLC 权威快照超过统一新鲜度窗口。';
+    case 'PlcSnapshotUnavailable':
+      return '缺少可用的 PLC 权威快照。';
+    case 'PlcSnapshotClockSkew':
+      return 'PLC 快照接收时间晚于 Cloud 当前时间，已记录时钟偏差。';
+    default:
+      return props.plcProjection?.plcIssue || (
+        normalizedPlcFreshness.value === 'Current'
+          ? '当前权威快照有效。'
+          : '权威 PLC 快照不可用。'
+      );
+  }
+});
 
 const deviceStatusText = computed(() => softwareStatusText(props.device?.softwareStatus));
 const softwareTagTone = computed(() => {

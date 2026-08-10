@@ -5,12 +5,12 @@ import { Permissions } from '../../types/permissions';
 import {
   getDeviceClientOverviewsApi,
   getDeviceClientReleaseDetailsApi,
-  getEdgeHostPlcRuntimeStatesApi,
+  getEdgeHostPlcProjectionApi,
   type DeviceClientOverviewItemDto,
   type DeviceClientOverviewSortBy,
   type DeviceClientOverviewSortDirection,
   type DeviceClientReleaseDetailsDto,
-  type EdgeHostPlcRuntimeStateDto,
+  type EdgeHostPlcProjectionDto,
 } from './api';
 import {
   DEFAULT_SORT_BY,
@@ -92,7 +92,8 @@ export function useDeviceClientOverviews() {
   // ===== 详情抽屉：PLC 与版本详情权限独立、请求独立、失败互不影响 =====
   const showDetailDrawer = ref(false);
   const selectedDevice = ref<DeviceClientOverviewItemDto | null>(null);
-  const plcStates = ref<EdgeHostPlcRuntimeStateDto[]>([]);
+  const plcProjection = ref<EdgeHostPlcProjectionDto | null>(null);
+  const plcStates = computed(() => plcProjection.value?.plcStates ?? []);
   const plcLoading = ref(false);
   const plcError = ref<string | null>(null);
   const releaseDetails = ref<DeviceClientReleaseDetailsDto | null>(null);
@@ -107,7 +108,7 @@ export function useDeviceClientOverviews() {
   }
 
   function resetDetailState() {
-    plcStates.value = [];
+    plcProjection.value = null;
     plcLoading.value = false;
     plcError.value = null;
     releaseDetails.value = null;
@@ -126,13 +127,13 @@ export function useDeviceClientOverviews() {
     plcLoading.value = true;
     plcError.value = null;
     try {
-      const nextStates = await getEdgeHostPlcRuntimeStatesApi(deviceId);
+      const nextProjection = await getEdgeHostPlcProjectionApi(deviceId);
       if (!isCurrentRequest()) return;
-      plcStates.value = nextStates;
+      plcProjection.value = nextProjection;
     } catch (error) {
       const message = await resolveInlineErrorMessage(error, 'PLC 状态加载失败，请重试。');
       if (!isCurrentRequest()) return;
-      plcStates.value = [];
+      plcProjection.value = null;
       plcError.value = message;
     } finally {
       if (isCurrentRequest()) {
@@ -219,6 +220,7 @@ export function useDeviceClientOverviews() {
     canViewAnyDetails,
     showDetailDrawer,
     selectedDevice,
+    plcProjection,
     plcStates,
     plcLoading,
     plcError,

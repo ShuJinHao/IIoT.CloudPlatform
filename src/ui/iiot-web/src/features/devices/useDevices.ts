@@ -1,12 +1,13 @@
+import axios from 'axios';
 import { computed, reactive, ref } from 'vue';
 import { useListPage } from '../../core/list-page';
 import type { PagedMetaData } from '../../core/types/pagination';
+import { ResultStatus } from '../../core/types/api';
 import { useAuthStore } from '../../stores/auth';
 import { Permissions } from '../../types/permissions';
 import { notifySuccess, notifyWarning } from '../../utils/feedback';
 import {
   deleteDeviceApi,
-  getDeviceDeletionImpactApi,
   getDeviceLedgerProcessOptionsApi,
   getAvailableDevicePluginSeriesApi,
   getDevicePagedListApi,
@@ -14,15 +15,11 @@ import {
   migrateDeviceProcessApi,
   registerDeviceApi,
   updateDeviceProfileApi,
-  type DeviceDeletionImpactDto,
   type DeviceLedgerProcessOptionDto,
   type AvailableDevicePluginSeriesDto,
   type DeviceListItemDto,
 } from './api';
 import {
-  isDeviceDeleteConfirmDisabled,
-  type DeviceConfirmDialogState,
-  type DeviceDeletionImpactRow,
   type DeviceProcessMigrationDialogState,
 } from './types';
 
@@ -65,17 +62,6 @@ export function useDevices() {
     loading: false,
     error: '',
     confirmInput: '',
-  });
-  const confirmDialog = reactive<DeviceConfirmDialogState>({
-    show: false,
-    title: '',
-    desc: '',
-    confirmText: '',
-    danger: true,
-    impact: null,
-    requiredText: '',
-    confirmInput: '',
-    onConfirm: async () => {},
   });
 
   const listPage = useListPage<
@@ -139,29 +125,6 @@ export function useDevices() {
     && authStore.hasPermission(Permissions.Device.MigrateProcess),
   );
   const listError = computed(() => listPage.error.value?.message ?? '');
-  const deletionImpactRows = computed<DeviceDeletionImpactRow[]>(() => {
-    const impact = confirmDialog.impact;
-    if (!impact) return [];
-    return [
-      { label: '配方', value: impact.recipes },
-      { label: '产能记录', value: impact.capacities },
-      { label: '设备日志', value: impact.deviceLogs },
-      { label: '过站数据', value: impact.passStations },
-      { label: '客户端状态投影', value: impact.clientStates },
-      { label: '客户端版本快照', value: impact.clientVersionSnapshots },
-      { label: '插件版本快照', value: impact.clientPluginVersions },
-      { label: '运行心跳', value: impact.runtimeHeartbeats },
-      { label: '上传幂等登记', value: impact.uploadReceiveRegistrations },
-      { label: '人员设备授权', value: impact.employeeDeviceAccesses },
-      { label: '设备 refresh token', value: impact.refreshTokenSessions },
-      { label: 'PLC 运行状态', value: impact.edgeHostPlcRuntimeStates },
-      { label: '待激活安装凭证', value: impact.installerPendingCredentials },
-    ];
-  });
-  const confirmDisabled = computed(() =>
-    isDeviceDeleteConfirmDisabled(confirmDialog.requiredText, confirmDialog.confirmInput),
-  );
-
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
   let migrationRequestGeneration = 0;
 
@@ -216,7 +179,6 @@ export function useDevices() {
     showDetailPanel.value = false;
     selectedDevice.value = null;
     showEditModal.value = false;
-    confirmDialog.show = false;
     closeMigrationDialog();
     if (processId) {
       await fetchList();
@@ -336,47 +298,25 @@ export function useDevices() {
   }
 
   async function handleDelete(device: DeviceListItemDto) {
-    if (!canDeleteDevice.value) return;
+    if (!canDeleteDevice.value || submitting.value) return;
 
     submitting.value = true;
-    let impact: DeviceDeletionImpactDto;
     try {
-      impact = await getDeviceDeletionImpactApi(device.id);
-    } catch {
+      await deleteDeviceApi(device.id);
+      if (selectedDevice.value?.id === device.id) {
+        selectedDevice.value = null;
+        showDetailPanel.value = false;
+      }
+      notifySuccess('设备及其可变关联数据已删除。');
+      await refreshAfterMutation();
+    } catch (error) {
+      // 错误文案由 httpClient 原样呈现；404 只额外校正已失效的列表。
+      if (isNotFoundError(error)) {
+        await refreshAfterMutation();
+      }
+    } finally {
       submitting.value = false;
-      return;
     }
-    submitting.value = false;
-
-    Object.assign(confirmDialog, {
-      show: true,
-      danger: true,
-      title: '确认级联删除设备',
-      desc: '该操作会永久删除设备主数据及下列关联数据，删除后不可恢复。',
-      confirmText: '确认级联删除',
-      impact,
-      requiredText: '',
-      confirmInput: '',
-      onConfirm: async () => {
-        if (!canDeleteDevice.value || confirmDisabled.value) return;
-
-        submitting.value = true;
-        try {
-          await deleteDeviceApi(device.id);
-          if (selectedDevice.value?.id === device.id) {
-            showDetailPanel.value = false;
-            selectedDevice.value = null;
-          }
-          confirmDialog.show = false;
-          confirmDialog.impact = null;
-          await refreshAfterMutation();
-        } catch {
-          /* feedback handled by http client */
-        } finally {
-          submitting.value = false;
-        }
-      },
-    });
   }
 
   function openMigrationDialog(device: DeviceListItemDto) {
@@ -474,6 +414,16 @@ export function useDevices() {
       : fallback;
   }
 
+  function isNotFoundError(error: unknown) {
+    if (axios.isAxiosError(error)) {
+      return error.response?.status === 404;
+    }
+    return typeof error === 'object'
+      && error !== null
+      && 'status' in error
+      && error.status === ResultStatus.NotFound;
+  }
+
   return {
     authStore,
     devices: listPage.items,
@@ -500,9 +450,6 @@ export function useDevices() {
     selectedDevice,
     showEditModal,
     editForm,
-    confirmDialog,
-    deletionImpactRows,
-    confirmDisabled,
     migrationDialog,
     initialize,
     fetchProcesses,
