@@ -3501,7 +3501,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 1,
                 auditSummary.RootElement
                     .GetProperty("deleted")
-                    .GetProperty("edge_device_client_states")
+                    .GetProperty("clientStates")
                     .GetInt64());
         }
         dbContext.ChangeTracker.Clear();
@@ -3717,7 +3717,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
         Assert.Equal(1, deletion.Impact.DeviceLogs);
         Assert.Equal(1, deletion.Impact.TotalAssociatedRows);
         Assert.Contains(
-            "\"device_logs\":1",
+            "\"logs\":1",
             Assert.Single(audit.Entries).Summary,
             StringComparison.Ordinal);
     }
@@ -3925,7 +3925,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
         Assert.Equal(15, deletion.Impact.TotalAssociatedRows);
         Assert.Equal(3, deletion.Impact.RefreshTokenSessions);
         Assert.Contains(
-            "\"refresh_token_sessions\":3",
+            "\"sessions\":3",
             Assert.Single(audit.Entries).Summary,
             StringComparison.Ordinal);
 
@@ -3984,7 +3984,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
         Assert.Equal(14, deletion.Impact.TotalAssociatedRows);
         Assert.Equal(2, deletion.Impact.RefreshTokenSessions);
         Assert.Contains(
-            "\"refresh_token_sessions\":2",
+            "\"sessions\":2",
             Assert.Single(audit.Entries).Summary,
             StringComparison.Ordinal);
 
@@ -5689,7 +5689,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
         var auditEntry = Assert.Single(audit.Entries);
         Assert.True(auditEntry.Succeeded);
         Assert.Contains(
-            "\"edge_host_plc_runtime_states\":1",
+            "\"plcStates\":1",
             auditEntry.Summary,
             StringComparison.Ordinal);
         Assert.Contains(

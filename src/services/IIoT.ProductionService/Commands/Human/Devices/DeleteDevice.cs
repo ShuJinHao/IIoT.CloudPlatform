@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using IIoT.Core.Production.Aggregates.Devices;
 using IIoT.Core.Production.Specifications.Devices;
@@ -35,6 +38,13 @@ public class DeleteDeviceHandler(
     IDeviceWriteObservationReader observationReader)
     : ICommandHandler<DeleteDeviceCommand, Result<bool>>
 {
+    private const int AuditSummaryMaxLength = 512;
+
+    private static readonly JsonSerializerOptions AuditJsonOptions = new()
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+
     public async Task<Result<bool>> Handle(
         DeleteDeviceCommand request,
         CancellationToken cancellationToken)
@@ -117,7 +127,9 @@ public class DeleteDeviceHandler(
             accessTarget.Id.ToString(),
             auditExecutedAtUtc,
             true,
-            BuildDeletionAuditSummary(deletionResult.Impact),
+            BuildDeletionAuditSummary(
+                accessTarget,
+                deletionResult.Impact),
             IdempotencyKey: $"device-delete:{request.DeviceId:N}");
         if (commitRecovered)
         {
@@ -189,32 +201,84 @@ public class DeleteDeviceHandler(
             : null;
 
     private static string BuildDeletionAuditSummary(
+        Device device,
         DeviceDeletionImpact impact)
-        => JsonSerializer.Serialize(new
+    {
+        var deleted = new
+        {
+            recipes = impact.Recipes,
+            capacities = impact.Capacities,
+            logs = impact.DeviceLogs,
+            passStations = impact.PassStations,
+            clientStates = impact.ClientStates,
+            clientVersions = impact.ClientVersionSnapshots,
+            pluginVersions = impact.ClientPluginVersions,
+            heartbeats = impact.RuntimeHeartbeats,
+            uploads = impact.UploadReceiveRegistrations,
+            access = impact.EmployeeDeviceAccesses,
+            sessions = impact.RefreshTokenSessions,
+            plcStates = impact.EdgeHostPlcRuntimeStates,
+            pendingCredentials = impact.InstallerPendingCredentials,
+            device_plugin_bindings = impact.DevicePluginBindings
+        };
+        var summary = JsonSerializer.Serialize(new
         {
             action = "DeviceCascadeDelete",
+            device = new
+            {
+                name = device.DeviceName,
+                clientCode = device.Code,
+                processId = device.ProcessId
+            },
+            deleted
+        }, AuditJsonOptions);
+        if (summary.Length <= AuditSummaryMaxLength)
+        {
+            return summary;
+        }
+
+        // The immutable audit column is bounded. Preserve ClientCode and the
+        // process identity while replacing only an unusually escape-heavy
+        // display name with deterministic evidence.
+        var deviceNameSha256 = Sha256Hex(device.DeviceName);
+        var compactSummary = JsonSerializer.Serialize(new
+        {
+            device = new
+            {
+                nameSha256 = deviceNameSha256,
+                clientCode = device.Code,
+                processId = device.ProcessId
+            },
+            deleted
+        }, AuditJsonOptions);
+        if (compactSummary.Length <= AuditSummaryMaxLength)
+        {
+            return compactSummary;
+        }
+
+        var countEvidence = JsonSerializer.Serialize(
+            deleted,
+            AuditJsonOptions);
+        return JsonSerializer.Serialize(new
+        {
+            action = "DeviceCascadeDelete",
+            device = new
+            {
+                nameSha256 = deviceNameSha256,
+                clientCodeSha256 = Sha256Hex(device.Code),
+                processId = device.ProcessId
+            },
             deleted = new
             {
-                recipes = impact.Recipes,
-                hourly_capacity = impact.Capacities,
-                device_logs = impact.DeviceLogs,
-                pass_station_records = impact.PassStations,
-                edge_device_client_states = impact.ClientStates,
-                edge_device_client_version_snapshots =
-                    impact.ClientVersionSnapshots,
-                edge_device_client_plugin_versions =
-                    impact.ClientPluginVersions,
-                edge_device_runtime_heartbeats = impact.RuntimeHeartbeats,
-                upload_receive_registrations =
-                    impact.UploadReceiveRegistrations,
-                employee_device_accesses =
-                    impact.EmployeeDeviceAccesses,
-                refresh_token_sessions = impact.RefreshTokenSessions,
-                edge_host_plc_runtime_states =
-                    impact.EdgeHostPlcRuntimeStates,
-                edge_installer_pending_credentials =
-                    impact.InstallerPendingCredentials,
-                device_plugin_bindings = impact.DevicePluginBindings
+                total = impact.TotalAssociatedRows,
+                device_plugin_bindings = impact.DevicePluginBindings,
+                countsSha256 = Sha256Hex(countEvidence)
             }
-        });
+        }, AuditJsonOptions);
+    }
+
+    private static string Sha256Hex(string value)
+        => Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(value)))
+            .ToLowerInvariant();
 }

@@ -1621,10 +1621,14 @@ public sealed class ApplicationFlowGuardTests
             && x.TargetIdOrKey == device.Id.ToString()
             && x.Succeeded
             && x.Summary.Contains("\"DeviceCascadeDelete\"", StringComparison.Ordinal)
-            && x.Summary.Contains("\"device_logs\":4", StringComparison.Ordinal)
+            && x.Summary.Contains("\"name\":\"Device-Delete\"", StringComparison.Ordinal)
+            && x.Summary.Contains("\"clientCode\":\"DEV-DELETE001\"", StringComparison.Ordinal)
+            && x.Summary.Contains($"\"processId\":\"{processId:D}\"", StringComparison.Ordinal)
+            && x.Summary.Contains("\"logs\":4", StringComparison.Ordinal)
             && !x.Summary.Contains("\"edge_hosts\"", StringComparison.Ordinal)
-            && x.Summary.Contains("\"edge_host_plc_runtime_states\":3", StringComparison.Ordinal)
-            && x.Summary.Contains("\"device_plugin_bindings\":2", StringComparison.Ordinal));
+            && x.Summary.Contains("\"plcStates\":3", StringComparison.Ordinal)
+            && x.Summary.Contains("\"device_plugin_bindings\":2", StringComparison.Ordinal)
+            && x.Summary.Length <= 512);
     }
 
     [Fact]
