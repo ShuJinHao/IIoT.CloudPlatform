@@ -1594,7 +1594,8 @@ public sealed class ApplicationFlowGuardTests
                 EmployeeDeviceAccesses: 7,
                 RefreshTokenSessions: 8,
                 RuntimeHeartbeats: 1,
-                EdgeHostPlcRuntimeStates: 3)
+                EdgeHostPlcRuntimeStates: 3,
+                DevicePluginBindings: 2)
         };
         var auditTrail = new RecordingAuditTrailService();
         var handler = new DeleteDeviceHandler(
@@ -1622,7 +1623,8 @@ public sealed class ApplicationFlowGuardTests
             && x.Summary.Contains("\"DeviceCascadeDelete\"", StringComparison.Ordinal)
             && x.Summary.Contains("\"device_logs\":4", StringComparison.Ordinal)
             && !x.Summary.Contains("\"edge_hosts\"", StringComparison.Ordinal)
-            && x.Summary.Contains("\"edge_host_plc_runtime_states\":3", StringComparison.Ordinal));
+            && x.Summary.Contains("\"edge_host_plc_runtime_states\":3", StringComparison.Ordinal)
+            && x.Summary.Contains("\"device_plugin_bindings\":2", StringComparison.Ordinal));
     }
 
     [Fact]

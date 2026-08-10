@@ -63,7 +63,12 @@ public sealed class EfDeviceDeletionDependencyService(
                     select count(*)::bigint
                     from edge_installer_pending_credentials credential
                     where credential."DeviceId" = {deviceId}
-                ) as "InstallerPendingCredentials"
+                ) as "InstallerPendingCredentials",
+                (
+                    select count(*)::bigint
+                    from device_plugin_bindings binding
+                    where binding.device_id = {deviceId}
+                ) as "DevicePluginBindings"
             """)
             .SingleAsync(cancellationToken);
 
@@ -519,7 +524,8 @@ public sealed class EfDeviceDeletionDependencyService(
             impact.RefreshTokenSessions + additionalImpact.RefreshTokenSessions,
             impact.RuntimeHeartbeats + additionalImpact.RuntimeHeartbeats,
             impact.EdgeHostPlcRuntimeStates + additionalImpact.EdgeHostPlcRuntimeStates,
-            impact.InstallerPendingCredentials + additionalImpact.InstallerPendingCredentials);
+            impact.InstallerPendingCredentials + additionalImpact.InstallerPendingCredentials,
+            impact.DevicePluginBindings + additionalImpact.DevicePluginBindings);
     }
 
     private async Task<uint?> LockDeviceAsync(
@@ -732,6 +738,8 @@ public sealed class EfDeviceDeletionDependencyService(
 
         public long InstallerPendingCredentials { get; set; }
 
+        public long DevicePluginBindings { get; set; }
+
         public DeviceDeletionImpact ToContract()
         {
             return new DeviceDeletionImpact(
@@ -747,7 +755,8 @@ public sealed class EfDeviceDeletionDependencyService(
                 RefreshTokenSessions,
                 RuntimeHeartbeats,
                 EdgeHostPlcRuntimeStates,
-                InstallerPendingCredentials);
+                InstallerPendingCredentials,
+                DevicePluginBindings);
         }
     }
 

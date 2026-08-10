@@ -17,6 +17,7 @@ using IIoT.ProductionService.AiRead;
 using IIoT.ProductionService.BusinessTime;
 using IIoT.ProductionService.Caching;
 using IIoT.ProductionService.ClientReleases;
+using IIoT.ProductionService.EdgeHosts;
 using IIoT.ProductionService.PassStations;
 using IIoT.ProductionService.Profiles;
 using IIoT.Services.CrossCutting.Behaviors;
@@ -75,6 +76,16 @@ public static class DependencyInjection
             BusinessTimeOptions.SectionName,
             static options => options.Validate());
         builder.Services.AddSingleton<IBusinessTimeProvider, BusinessTimeProvider>();
+        var plcProjectionFreshnessOptions = builder.Configuration
+            .GetSection(PlcProjectionFreshnessOptions.SectionName)
+            .Get<PlcProjectionFreshnessOptions>()
+            ?? new PlcProjectionFreshnessOptions();
+        plcProjectionFreshnessOptions.Validate();
+        builder.Services.AddSingleton(plcProjectionFreshnessOptions);
+        builder.Services.AddSingleton<
+            IPlcProjectionFreshnessResolver,
+            PlcProjectionFreshnessResolver>();
+        builder.Services.AddScoped<AiReadQueryParameterValidationFilter>();
         builder.AddValidatedOptions<EdgeInstallerArtifactOptions>(
             EdgeInstallerArtifactOptions.SectionName,
             options => options.Validate(builder.Environment.IsProduction()));

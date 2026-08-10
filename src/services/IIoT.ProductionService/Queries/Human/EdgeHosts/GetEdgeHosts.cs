@@ -31,7 +31,9 @@ public sealed class GetEdgeHostPagedListHandler(
     ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IEdgeHostOverviewQueryService overviewQueryService,
     IDeviceClientStateStore clientStateStore,
-    IEdgeHostPlcRuntimeStateStore runtimeStateStore)
+    IEdgeHostPlcRuntimeStateStore runtimeStateStore,
+    IPlcProjectionFreshnessResolver plcFreshnessResolver,
+    TimeProvider timeProvider)
     : IQueryHandler<GetEdgeHostPagedListQuery, Result<PagedList<EdgeHostListItemDto>>>
 {
     public async Task<Result<PagedList<EdgeHostListItemDto>>> Handle(
@@ -60,7 +62,7 @@ public sealed class GetEdgeHostPagedListHandler(
         var deviceIds = page.Devices.Select(device => device.DeviceId).ToList();
         var statesByDevice = await GetClientStatesByDeviceAsync(deviceIds, cancellationToken);
         var plcStatesByDevice = await GetPlcStatesByDeviceAsync(deviceIds, cancellationToken);
-        var utcNow = DateTime.UtcNow;
+        var utcNow = timeProvider.GetUtcNow().UtcDateTime;
 
         var pageItems = page.Devices
             .Select(device => EdgeHostMapping.ToListItemDto(
@@ -69,7 +71,10 @@ public sealed class GetEdgeHostPagedListHandler(
                 device.ClientCode,
                 statesByDevice.GetValueOrDefault(device.DeviceId),
                 plcStatesByDevice.GetValueOrDefault(device.DeviceId) ?? [],
-                utcNow))
+                utcNow,
+                plcFreshnessResolver.Resolve(
+                    statesByDevice.GetValueOrDefault(device.DeviceId),
+                    utcNow)))
             .ToList();
 
         return Result.Success(new PagedList<EdgeHostListItemDto>(
@@ -111,7 +116,9 @@ public sealed class GetEdgeHostDetailHandler(
     ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IReadRepository<Device> deviceRepository,
     IDeviceClientStateStore clientStateStore,
-    IEdgeHostPlcRuntimeStateStore runtimeStateStore)
+    IEdgeHostPlcRuntimeStateStore runtimeStateStore,
+    IPlcProjectionFreshnessResolver plcFreshnessResolver,
+    TimeProvider timeProvider)
     : IQueryHandler<GetEdgeHostDetailQuery, Result<EdgeHostDto>>
 {
     public async Task<Result<EdgeHostDto>> Handle(
@@ -137,9 +144,17 @@ public sealed class GetEdgeHostDetailHandler(
             device.Id,
             device.Code,
             cancellationToken);
-        var utcNow = DateTime.UtcNow;
+        var utcNow = timeProvider.GetUtcNow().UtcDateTime;
+        var plcFreshness = plcFreshnessResolver.Resolve(
+            clientState,
+            utcNow);
 
-        return Result.Success(EdgeHostMapping.ToDetailDto(device, clientState, plcStates, utcNow));
+        return Result.Success(EdgeHostMapping.ToDetailDto(
+            device,
+            clientState,
+            plcStates,
+            utcNow,
+            plcFreshness));
     }
 
     internal static async Task<Result<Device>> ResolveDeviceAsync(
@@ -174,7 +189,10 @@ public sealed class GetEdgeHostDetailHandler(
 public sealed class GetEdgeHostPlcRuntimeStatesHandler(
     ICurrentUserDeviceAccessService currentUserDeviceAccessService,
     IReadRepository<Device> deviceRepository,
-    IEdgeHostPlcRuntimeStateStore runtimeStateStore)
+    IDeviceClientStateStore clientStateStore,
+    IEdgeHostPlcRuntimeStateStore runtimeStateStore,
+    IPlcProjectionFreshnessResolver plcFreshnessResolver,
+    TimeProvider timeProvider)
     : IQueryHandler<GetEdgeHostPlcRuntimeStatesQuery, Result<IReadOnlyList<EdgeHostPlcRuntimeStateDto>>>
 {
     public async Task<Result<IReadOnlyList<EdgeHostPlcRuntimeStateDto>>> Handle(
@@ -192,14 +210,24 @@ public sealed class GetEdgeHostPlcRuntimeStatesHandler(
         }
 
         var device = resolved.Value!;
+        var clientState = await clientStateStore.GetStateByIdentityAsync(
+            device.Id,
+            device.Code,
+            cancellationToken);
         var states = await runtimeStateStore.GetByIdentityAsync(
             device.Id,
             device.Code,
             cancellationToken);
+        var utcNow = timeProvider.GetUtcNow().UtcDateTime;
+        var plcFreshness = plcFreshnessResolver.Resolve(
+            clientState,
+            utcNow);
         var items = states
             .OrderByDescending(state => state.LastSeenAtUtc)
             .ThenBy(state => state.PlcCode, StringComparer.OrdinalIgnoreCase)
-            .Select(EdgeHostMapping.ToRuntimeStateDto)
+            .Select(state => EdgeHostMapping.ToRuntimeStateDto(
+                state,
+                plcFreshness))
             .ToList();
 
         return Result.Success((IReadOnlyList<EdgeHostPlcRuntimeStateDto>)items);

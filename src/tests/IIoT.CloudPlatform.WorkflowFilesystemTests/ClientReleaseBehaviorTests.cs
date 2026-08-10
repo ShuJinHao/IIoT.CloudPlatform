@@ -13,6 +13,7 @@ using IIoT.Core.Production.Contracts.EdgeHosts;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.Commands.ClientReleases;
 using IIoT.ProductionService.Commands.ClientVersions;
+using IIoT.ProductionService.EdgeHosts;
 using IIoT.ProductionService.Validators;
 using IIoT.ProductionService.Queries.ClientReleases;
 using IIoT.ProductionService.Queries.DeviceMetadata;
@@ -7542,6 +7543,9 @@ public sealed class ClientReleaseBehaviorTests
             bindingService,
             stateStore,
             new StubEdgeHostPlcRuntimeStateQueryService(),
+            new PlcProjectionFreshnessResolver(
+                new PlcProjectionFreshnessOptions()),
+            DateTime.UtcNow,
             CancellationToken.None);
     }
 

@@ -12,6 +12,7 @@ namespace IIoT.HttpApi.Controllers;
 [Route("api/v1/ai/read")]
 [ApiController]
 [Tags("AI Read")]
+[ServiceFilter(typeof(AiReadQueryParameterValidationFilter))]
 public sealed class AiReadController : ApiControllerBase
 {
     [HttpGet("device-plcs")]
@@ -44,12 +45,6 @@ public sealed class AiReadController : ApiControllerBase
         [FromQuery] int? maxRows = null,
         CancellationToken cancellationToken = default)
     {
-        var unsupported = GetKnownUnsupportedQueryParameters(
-            "status",
-            "lineName",
-            "processName",
-            "updatedAt");
-
         return ReturnResult(await Sender.Send(
             new GetAiReadDevicesQuery(
                 deviceId,
@@ -57,7 +52,6 @@ public sealed class AiReadController : ApiControllerBase
                 processId,
                 keyword,
                 maxRows,
-                unsupported,
                 DeviceCodeSupplied: Request.Query.ContainsKey("deviceCode")),
             cancellationToken));
     }
@@ -97,15 +91,6 @@ public sealed class AiReadController : ApiControllerBase
         [FromQuery] int? maxRows = null,
         CancellationToken cancellationToken = default)
     {
-        var unsupported = GetKnownUnsupportedQueryParameters(
-            "softwareStatus",
-            "runtimeStatus",
-            "status",
-            "lineName",
-            "processName",
-            "updatedAt",
-            "updatedAtUtc");
-
         return ReturnResult(await Sender.Send(
             new GetAiReadDeviceClientStatesQuery(
                 deviceId,
@@ -113,7 +98,6 @@ public sealed class AiReadController : ApiControllerBase
                 processId,
                 keyword,
                 maxRows,
-                unsupported,
                 DeviceCodeSupplied: Request.Query.ContainsKey("deviceCode")),
             cancellationToken));
     }
@@ -198,10 +182,4 @@ public sealed class AiReadController : ApiControllerBase
             cancellationToken));
     }
 
-    private IReadOnlyList<string> GetKnownUnsupportedQueryParameters(params string[] parameterNames)
-    {
-        return parameterNames
-            .Where(Request.Query.ContainsKey)
-            .ToArray();
-    }
 }

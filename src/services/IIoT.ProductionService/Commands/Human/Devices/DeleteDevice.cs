@@ -117,9 +117,7 @@ public class DeleteDeviceHandler(
             accessTarget.Id.ToString(),
             auditExecutedAtUtc,
             true,
-            BuildDeletionAuditSummary(
-                accessTarget,
-                deletionResult.Impact),
+            BuildDeletionAuditSummary(deletionResult.Impact),
             IdempotencyKey: $"device-delete:{request.DeviceId:N}");
         if (commitRecovered)
         {
@@ -191,15 +189,10 @@ public class DeleteDeviceHandler(
             : null;
 
     private static string BuildDeletionAuditSummary(
-        Device device,
         DeviceDeletionImpact impact)
         => JsonSerializer.Serialize(new
         {
             action = "DeviceCascadeDelete",
-            deviceId = device.Id,
-            deviceName = device.DeviceName,
-            clientCode = device.Code,
-            processId = device.ProcessId,
             deleted = new
             {
                 recipes = impact.Recipes,
@@ -220,7 +213,8 @@ public class DeleteDeviceHandler(
                 edge_host_plc_runtime_states =
                     impact.EdgeHostPlcRuntimeStates,
                 edge_installer_pending_credentials =
-                    impact.InstallerPendingCredentials
+                    impact.InstallerPendingCredentials,
+                device_plugin_bindings = impact.DevicePluginBindings
             }
         });
 }

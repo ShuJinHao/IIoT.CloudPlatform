@@ -7,6 +7,7 @@ using IIoT.Core.Production.Specifications.ClientReleases;
 using IIoT.Core.Production.Specifications.Devices;
 using IIoT.ProductionService.ClientReleases;
 using IIoT.ProductionService.AiRead;
+using IIoT.ProductionService.EdgeHosts;
 using IIoT.Services.Contracts;
 using IIoT.Services.Contracts.AiRead;
 using IIoT.Services.Contracts.Authorization;
@@ -85,7 +86,9 @@ public sealed class GetHumanDevicePlcsHandler(
     IReadRepository<Device> deviceRepository,
     IDevicePluginBindingQueryService bindingQueryService,
     IDeviceClientStateQueryService clientStateStore,
-    IEdgeHostPlcRuntimeStateQueryService runtimeStateStore)
+    IEdgeHostPlcRuntimeStateQueryService runtimeStateStore,
+    IPlcProjectionFreshnessResolver plcFreshnessResolver,
+    TimeProvider timeProvider)
     : IQueryHandler<
         GetHumanDevicePlcsQuery,
         Result<IReadOnlyList<DevicePlcMetadataDto>>>
@@ -109,10 +112,15 @@ public sealed class GetHumanDevicePlcsHandler(
             clientStateStore,
             runtimeStateStore,
             cancellationToken);
+        var utcNow = timeProvider.GetUtcNow().UtcDateTime;
         return !resolved.IsSuccess
             ? Result.From(resolved)
             : Result.Success((IReadOnlyList<DevicePlcMetadataDto>)
-                DevicePluginMetadataResolver.MapPlcs(resolved.Value!));
+                DevicePluginMetadataResolver.MapPlcs(
+                    resolved.Value!,
+                    plcFreshnessResolver.Resolve(
+                        resolved.Value!.ClientState,
+                        utcNow)));
     }
 }
 
@@ -122,7 +130,9 @@ public sealed class GetHumanDeviceDataSchemasHandler(
     IReadRepository<ClientReleaseComponent> componentRepository,
     IDevicePluginBindingQueryService bindingQueryService,
     IDeviceClientStateQueryService clientStateStore,
-    IEdgeHostPlcRuntimeStateQueryService runtimeStateStore)
+    IEdgeHostPlcRuntimeStateQueryService runtimeStateStore,
+    IPlcProjectionFreshnessResolver plcFreshnessResolver,
+    TimeProvider timeProvider)
     : IQueryHandler<
         GetHumanDeviceDataSchemasQuery,
         Result<IReadOnlyList<DeviceDataSchemaDto>>>
@@ -139,6 +149,7 @@ public sealed class GetHumanDeviceDataSchemasHandler(
             return Result.From(access);
         }
 
+        var utcNow = timeProvider.GetUtcNow().UtcDateTime;
         var result = await DevicePluginMetadataResolver.ResolveSchemasAsync(
             request.DeviceId,
             request.PlcCode,
@@ -147,6 +158,8 @@ public sealed class GetHumanDeviceDataSchemasHandler(
             bindingQueryService,
             clientStateStore,
             runtimeStateStore,
+            plcFreshnessResolver,
+            utcNow,
             cancellationToken);
         return !result.IsSuccess
             ? Result.From(result)
@@ -159,7 +172,9 @@ public sealed class GetAiReadDevicePlcsHandler(
     IReadRepository<Device> deviceRepository,
     IDevicePluginBindingQueryService bindingQueryService,
     IDeviceClientStateQueryService clientStateStore,
-    IEdgeHostPlcRuntimeStateQueryService runtimeStateStore)
+    IEdgeHostPlcRuntimeStateQueryService runtimeStateStore,
+    IPlcProjectionFreshnessResolver plcFreshnessResolver,
+    TimeProvider timeProvider)
     : IQueryHandler<
         GetAiReadDevicePlcsQuery,
         Result<AiReadListResponse<DevicePlcMetadataDto>>>
@@ -176,6 +191,8 @@ public sealed class GetAiReadDevicePlcsHandler(
             return scope;
         }
 
+        var utcNow = timeProvider.GetUtcNow();
+
         var resolved = await DevicePluginMetadataResolver.ResolveAsync(
             request.DeviceId,
             deviceRepository,
@@ -189,15 +206,19 @@ public sealed class GetAiReadDevicePlcsHandler(
                 "device_plcs_unavailable: 设备 PLC 元数据不可用。");
         }
 
-        var items = DevicePluginMetadataResolver.MapPlcs(resolved.Value!);
-        var unavailable = resolved.Value!.ClientState?
-            .PlcSnapshotReceivedAtUtc is null;
+        var plcFreshness = plcFreshnessResolver.Resolve(
+            resolved.Value!.ClientState,
+            utcNow.UtcDateTime);
+        var items = DevicePluginMetadataResolver.MapPlcs(
+            resolved.Value!,
+            plcFreshness);
+        var unavailable = !plcFreshness.IsCurrent;
         return Result.Success(new AiReadListResponse<DevicePlcMetadataDto>(
             items,
-            DateTimeOffset.UtcNow,
+            utcNow,
             unavailable ? "device_plcs_unavailable" : "device_plcs",
             $"deviceId={request.DeviceId:D};availability="
-            + (unavailable ? "Unavailable" : "Available"),
+            + plcFreshness.State,
             items.Count,
             false));
     }
@@ -209,7 +230,9 @@ public sealed class GetAiReadDeviceDataSchemasHandler(
     IReadRepository<ClientReleaseComponent> componentRepository,
     IDevicePluginBindingQueryService bindingQueryService,
     IDeviceClientStateQueryService clientStateStore,
-    IEdgeHostPlcRuntimeStateQueryService runtimeStateStore)
+    IEdgeHostPlcRuntimeStateQueryService runtimeStateStore,
+    IPlcProjectionFreshnessResolver plcFreshnessResolver,
+    TimeProvider timeProvider)
     : IQueryHandler<
         GetAiReadDeviceDataSchemasQuery,
         Result<AiReadListResponse<DeviceDataSchemaDto>>>
@@ -226,6 +249,8 @@ public sealed class GetAiReadDeviceDataSchemasHandler(
             return scope;
         }
 
+        var utcNow = timeProvider.GetUtcNow();
+
         var resolved = await DevicePluginMetadataResolver.ResolveSchemasAsync(
             request.DeviceId,
             request.PlcCode,
@@ -234,6 +259,8 @@ public sealed class GetAiReadDeviceDataSchemasHandler(
             bindingQueryService,
             clientStateStore,
             runtimeStateStore,
+            plcFreshnessResolver,
+            utcNow.UtcDateTime,
             cancellationToken);
         if (!resolved.IsSuccess)
         {
@@ -244,7 +271,7 @@ public sealed class GetAiReadDeviceDataSchemasHandler(
         var items = resolved.Value!;
         return Result.Success(new AiReadListResponse<DeviceDataSchemaDto>(
             items,
-            DateTimeOffset.UtcNow,
+            utcNow,
             "data_schemas",
             $"deviceId={request.DeviceId:D};plcCode="
             + (string.IsNullOrWhiteSpace(request.PlcCode)
@@ -266,8 +293,6 @@ internal sealed record DevicePluginMetadataContext(
 
 internal static class DevicePluginMetadataResolver
 {
-    private static readonly TimeSpan FreshnessWindow = TimeSpan.FromMinutes(3);
-
     public static async Task<Result<DevicePluginMetadataContext>> ResolveAsync(
         Guid deviceId,
         IReadRepository<Device> deviceRepository,
@@ -326,17 +351,11 @@ internal static class DevicePluginMetadataResolver
     }
 
     public static IReadOnlyList<DevicePlcMetadataDto> MapPlcs(
-        DevicePluginMetadataContext context)
+        DevicePluginMetadataContext context,
+        PlcProjectionFreshnessResolution plcFreshness)
     {
-        var now = DateTime.UtcNow;
         var state = context.ClientState;
-        var freshness = state?.PlcSnapshotReceivedAtUtc is null
-            || !state.PlcSnapshotIsAuthoritative
-                ? "Unavailable"
-                : now - state.PlcSnapshotReceivedAtUtc.Value
-                    > FreshnessWindow
-                    ? "Stale"
-                    : "Current";
+        var isCurrent = plcFreshness.IsCurrent;
         return context.PlcStates
             .OrderBy(plc => plc.PlcCode, StringComparer.OrdinalIgnoreCase)
             .Select(plc => new DevicePlcMetadataDto(
@@ -349,13 +368,15 @@ internal static class DevicePluginMetadataResolver
                 state?.PlcSnapshotIsAuthoritative ?? false,
                 state?.PlcSnapshotConfigurationVersion,
                 state?.PlcSnapshotReportedAtUtc,
-                state?.PlcSnapshotReceivedAtUtc,
-                freshness,
+                plcFreshness.SnapshotReceivedAtUtc,
+                plcFreshness.State.ToString(),
                 plc.Enabled,
                 plc.Protocol,
                 plc.Address,
-                plc.RuntimeStatus,
-                plc.IsConnected,
+                isCurrent
+                    ? plc.RuntimeStatus
+                    : EdgeHostPlcRuntimeStatus.Unknown,
+                isCurrent && plc.IsConnected,
                 plc.LastSeenAtUtc,
                 plc.LastError))
             .ToList();
@@ -370,6 +391,8 @@ internal static class DevicePluginMetadataResolver
             IDevicePluginBindingQueryService bindingQueryService,
             IDeviceClientStateQueryService clientStateStore,
             IEdgeHostPlcRuntimeStateQueryService runtimeStateStore,
+            IPlcProjectionFreshnessResolver plcFreshnessResolver,
+            DateTime utcNow,
             CancellationToken cancellationToken)
     {
         var contextResult = await ResolveAsync(
@@ -392,12 +415,10 @@ internal static class DevicePluginMetadataResolver
                 "capability_unavailable: 设备尚未上报实际安装的插件版本。");
         }
 
-        var snapshotReceivedAtUtc = context.ClientState?
-            .PlcSnapshotReceivedAtUtc;
-        if (snapshotReceivedAtUtc is null
-            || context.ClientState?.PlcSnapshotIsAuthoritative != true
-            || DateTime.UtcNow - snapshotReceivedAtUtc.Value
-            > FreshnessWindow)
+        var plcFreshness = plcFreshnessResolver.Resolve(
+            context.ClientState,
+            utcNow);
+        if (!plcFreshness.IsCurrent)
         {
             return Result.Invalid(
                 "capability_unavailable: PLC 权威快照不可用或已过期。");
