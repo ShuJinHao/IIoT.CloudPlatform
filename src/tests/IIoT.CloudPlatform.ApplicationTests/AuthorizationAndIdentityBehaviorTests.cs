@@ -1100,6 +1100,48 @@ public sealed class AuthorizationAndIdentityBehaviorTests
         Assert.Null(permissionProvider.LastUserId);
     }
 
+    [Fact]
+    public async Task DeviceImpactHandler_ShouldExposePluginBindingCountInDtoAndTotal()
+    {
+        var device = new Device(
+            "绑定影响设备",
+            "DEV-IMPACT-BINDING",
+            Guid.NewGuid());
+        var deviceRepository = new InMemoryRepository<Device>();
+        deviceRepository.ListResult.Add(device);
+        var dependencyQueryService =
+            new RecordingDeviceDeletionDependencyQueryService
+            {
+                Impact = new DeviceDeletionImpact(
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    DevicePluginBindings: 2)
+            };
+        var handler = new GetDeviceDeletionImpactHandler(
+            deviceRepository,
+            dependencyQueryService,
+            new StubCurrentUserDeviceAccessService
+            {
+                IsAdministrator = true
+            });
+
+        var result = await handler.Handle(
+            new GetDeviceDeletionImpactQuery(device.Id),
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, result.Value!.DevicePluginBindings);
+        Assert.Equal(2, result.Value.TotalAssociatedRows);
+    }
+
     [Theory]
     [InlineData(IIoTClaimTypes.EdgeDeviceActor)]
     [InlineData(IIoTClaimTypes.AiDelegatedUserActor)]
@@ -2068,6 +2110,9 @@ public sealed class AuthorizationAndIdentityBehaviorTests
     {
         public int GetImpactCalls { get; private set; }
 
+        public DeviceDeletionImpact Impact { get; set; } =
+            new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
         public Task<DeviceDeletionDependencies> GetDependenciesAsync(
             Guid deviceId,
             CancellationToken cancellationToken = default)
@@ -2080,7 +2125,7 @@ public sealed class AuthorizationAndIdentityBehaviorTests
             CancellationToken cancellationToken = default)
         {
             GetImpactCalls++;
-            return Task.FromResult(new DeviceDeletionImpact(0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
+            return Task.FromResult(Impact);
         }
 
         public Task<DeviceCascadeDeletionResult> DeleteCascadeAsync(

@@ -3501,7 +3501,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 1,
                 auditSummary.RootElement
                     .GetProperty("deleted")
-                    .GetProperty("edge_device_client_states")
+                    .GetProperty("clientStates")
                     .GetInt64());
         }
         dbContext.ChangeTracker.Clear();
@@ -3717,9 +3717,108 @@ public sealed class ProductionRetryTransactionPostgresTests(
         Assert.Equal(1, deletion.Impact.DeviceLogs);
         Assert.Equal(1, deletion.Impact.TotalAssociatedRows);
         Assert.Contains(
-            "\"device_logs\":1",
+            "\"logs\":1",
             Assert.Single(audit.Entries).Summary,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DeviceDelete_ShouldCountAndRemoveEveryBindingInLegacyCorruptMultiBindingState()
+    {
+        using var budget = await PostgresTestBudget.CreateAsync(fixture);
+        var options = new DbContextOptionsBuilder<IIoTDbContext>()
+            .UseNpgsql(budget.ConnectionString)
+            .Options;
+        await using var dbContext = new IIoTDbContext(options);
+        var (process, device) = CreateProcessAndDevice("DELMULTIBIND");
+        var firstPlugin = CreatePublishedRegistrationPlugin(
+            process.ProcessCode);
+        var secondPlugin = CreatePublishedRegistrationPlugin(
+            process.ProcessCode);
+        process.ClearDomainEvents();
+        device.ClearDomainEvents();
+
+        await dbContext.Database.ExecuteSqlRawAsync(
+            "DROP INDEX IF EXISTS ux_device_plugin_bindings_device;",
+            budget.Token);
+        try
+        {
+            dbContext.MfgProcesses.Add(process);
+            dbContext.Devices.Add(device);
+            dbContext.ClientReleaseComponents.AddRange(
+                firstPlugin,
+                secondPlugin);
+            await dbContext.SaveChangesAsync(budget.Token);
+            await dbContext.Database.ExecuteSqlInterpolatedAsync($"""
+                insert into device_plugin_bindings
+                    (id, device_id, client_release_component_id,
+                     process_type, bound_at_utc)
+                values
+                    ({Guid.NewGuid()}, {device.Id}, {firstPlugin.Id},
+                     {process.ProcessCode}, {DateTime.UtcNow}),
+                    ({Guid.NewGuid()}, {device.Id}, {secondPlugin.Id},
+                     {process.ProcessCode}, {DateTime.UtcNow});
+                """, budget.Token);
+            dbContext.ChangeTracker.Clear();
+
+            var deletionService =
+                new EfDeviceDeletionDependencyService(dbContext);
+            var before = await deletionService.GetImpactAsync(
+                device.Id,
+                budget.Token);
+            Assert.Equal(2, before.DevicePluginBindings);
+            Assert.Equal(2, before.TotalAssociatedRows);
+            var audit = new RecordingAuditTrailService();
+            var handler = new DeleteDeviceHandler(
+                HumanAdmin(),
+                new EfRepository<Device>(dbContext),
+                deletionService,
+                new StubCurrentUserDeviceAccessService
+                {
+                    IsAdministrator = true
+                },
+                audit,
+                new CloudWriteObservationReader(options));
+
+            var result = await handler.Handle(
+                new DeleteDeviceCommand(device.Id),
+                budget.Token);
+
+            Assert.True(result.IsSuccess);
+            dbContext.ChangeTracker.Clear();
+            Assert.Equal(
+                0,
+                await dbContext.DevicePluginBindings
+                    .AsNoTracking()
+                    .CountAsync(
+                        binding => binding.DeviceId == device.Id,
+                        budget.Token));
+            var after = await deletionService.GetImpactAsync(
+                device.Id,
+                budget.Token);
+            Assert.Equal(0, after.DevicePluginBindings);
+            Assert.Equal(0, after.TotalAssociatedRows);
+            using var auditSummary = JsonDocument.Parse(
+                Assert.Single(audit.Entries).Summary);
+            Assert.Equal(
+                2,
+                auditSummary.RootElement
+                    .GetProperty("deleted")
+                    .GetProperty("device_plugin_bindings")
+                    .GetInt64());
+        }
+        finally
+        {
+            await dbContext.Database.ExecuteSqlInterpolatedAsync($"""
+                delete from device_plugin_bindings
+                where device_id = {device.Id};
+                """, CancellationToken.None);
+            await dbContext.Database.ExecuteSqlRawAsync(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                + "ux_device_plugin_bindings_device "
+                + "ON device_plugin_bindings (device_id);",
+                CancellationToken.None);
+        }
     }
 
     [Fact]
@@ -3823,10 +3922,10 @@ public sealed class ProductionRetryTransactionPostgresTests(
         var deletion = Assert.IsType<DeviceCascadeDeletionResult>(
             deletionService.LastDeletionResult);
         Assert.True(deletion.DeviceDeleted);
-        Assert.Equal(14, deletion.Impact.TotalAssociatedRows);
+        Assert.Equal(15, deletion.Impact.TotalAssociatedRows);
         Assert.Equal(3, deletion.Impact.RefreshTokenSessions);
         Assert.Contains(
-            "\"refresh_token_sessions\":3",
+            "\"sessions\":3",
             Assert.Single(audit.Entries).Summary,
             StringComparison.Ordinal);
 
@@ -3882,10 +3981,10 @@ public sealed class ProductionRetryTransactionPostgresTests(
         Assert.Equal(1, interceptor.LateSessionsInserted);
         var deletion = Assert.IsType<DeviceCascadeDeletionResult>(
             deletionService.LastDeletionResult);
-        Assert.Equal(13, deletion.Impact.TotalAssociatedRows);
+        Assert.Equal(14, deletion.Impact.TotalAssociatedRows);
         Assert.Equal(2, deletion.Impact.RefreshTokenSessions);
         Assert.Contains(
-            "\"refresh_token_sessions\":2",
+            "\"sessions\":2",
             Assert.Single(audit.Entries).Summary,
             StringComparison.Ordinal);
 
@@ -5568,7 +5667,7 @@ public sealed class ProductionRetryTransactionPostgresTests(
         var deletion = Assert.IsType<DeviceCascadeDeletionResult>(
             capturingDeletionService.LastDeletionResult);
         Assert.True(deletion.DeviceDeleted);
-        Assert.Equal(12, deletion.Impact.TotalAssociatedRows);
+        Assert.Equal(13, deletion.Impact.TotalAssociatedRows);
         Assert.All(
             new[]
             {
@@ -5583,13 +5682,18 @@ public sealed class ProductionRetryTransactionPostgresTests(
                 deletion.Impact.UploadReceiveRegistrations,
                 deletion.Impact.EmployeeDeviceAccesses,
                 deletion.Impact.RefreshTokenSessions,
-                deletion.Impact.EdgeHostPlcRuntimeStates
+                deletion.Impact.EdgeHostPlcRuntimeStates,
+                deletion.Impact.DevicePluginBindings
             },
             count => Assert.Equal(1, count));
         var auditEntry = Assert.Single(audit.Entries);
         Assert.True(auditEntry.Succeeded);
         Assert.Contains(
-            "\"edge_host_plc_runtime_states\":1",
+            "\"plcStates\":1",
+            auditEntry.Summary,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "\"device_plugin_bindings\":1",
             auditEntry.Summary,
             StringComparison.Ordinal);
 
@@ -5937,9 +6041,18 @@ public sealed class ProductionRetryTransactionPostgresTests(
             true,
             EdgeHostPlcRuntimeStatus.Connected,
             DateTime.UtcNow);
+        var pluginSeries = CreatePublishedRegistrationPlugin(
+            process.ProcessCode);
+        var pluginBinding = new DevicePluginBinding(
+            device.Id,
+            pluginSeries.Id,
+            process.ProcessCode,
+            DateTime.UtcNow);
 
         dbContext.MfgProcesses.Add(process);
         dbContext.Devices.Add(device);
+        dbContext.ClientReleaseComponents.Add(pluginSeries);
+        dbContext.DevicePluginBindings.Add(pluginBinding);
         dbContext.Recipes.Add(recipe);
         dbContext.DeviceClientVersionSnapshots.Add(snapshot);
         dbContext.DeviceClientStates.Add(clientState);
@@ -6002,7 +6115,8 @@ public sealed class ProductionRetryTransactionPostgresTests(
         dbContext.ChangeTracker.Clear();
         var impact = await new EfDeviceDeletionDependencyService(dbContext)
             .GetImpactAsync(device.Id, cancellationToken);
-        Assert.Equal(12, impact.TotalAssociatedRows);
+        Assert.Equal(13, impact.TotalAssociatedRows);
+        Assert.Equal(1, impact.DevicePluginBindings);
         return new SeededDevice(device.Id);
     }
 

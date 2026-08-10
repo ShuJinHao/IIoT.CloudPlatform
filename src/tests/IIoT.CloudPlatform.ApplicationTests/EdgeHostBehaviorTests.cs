@@ -641,6 +641,14 @@ public sealed class EdgeHostBehaviorTests
     [Fact]
     public async Task GetEdgeHostPagedListHandler_ShouldUseAccessibleDevicesAsHostList()
     {
+        var utcNow = new DateTime(
+            2026,
+            8,
+            10,
+            12,
+            0,
+            0,
+            DateTimeKind.Utc);
         var processId = Guid.NewGuid();
         var device = new Device("开发测试模切设备", "DEV-HOST01", processId);
         var deniedDevice = new Device("无权设备", "DEV-HOST02", processId);
@@ -656,13 +664,22 @@ public sealed class EdgeHostBehaviorTests
             "1.0.25",
             "host-api-1",
             "Running",
-            DateTime.UtcNow.AddHours(-1),
-            DateTime.UtcNow,
+            utcNow.AddHours(-1),
+            utcNow,
             ["10.0.0.10"]));
+        clientState.ApplyPlcSnapshot(
+            utcNow,
+            utcNow,
+            new string('a', 64));
         clientStateStore.States.Add(clientState);
         var runtimeStore = new StubEdgeHostPlcRuntimeStateStore();
         var plcState = new EdgeHostPlcRuntimeState(device.Id, device.Code, "PLC-CUT-01");
-        plcState.ReplaceReport("现场 PLC", true, "Connected", DateTime.UtcNow, protocol: "ModbusTcp");
+        plcState.ReplaceReport(
+            "现场 PLC",
+            true,
+            "Connected",
+            utcNow,
+            protocol: "ModbusTcp");
         runtimeStore.States.Add(plcState);
         var overviewQueryService = new StubEdgeHostOverviewQueryService();
         overviewQueryService.Devices.AddRange([
@@ -674,7 +691,9 @@ public sealed class EdgeHostBehaviorTests
             new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [device.Id] },
             overviewQueryService,
             clientStateStore,
-            runtimeStore);
+            runtimeStore,
+            CreateFreshnessResolver(),
+            new FixedTimeProvider(utcNow));
 
         var result = await handler.Handle(
             new GetEdgeHostPagedListQuery(new Pagination { PageNumber = 1, PageSize = 10 }, "PLC-CUT"),
@@ -699,6 +718,13 @@ public sealed class EdgeHostBehaviorTests
         public override DateTimeOffset GetUtcNow() => utcNow;
     }
 
+    private static PlcProjectionFreshnessResolver
+        CreateFreshnessResolver(int windowSeconds = 180)
+        => new(new PlcProjectionFreshnessOptions
+        {
+            WindowSeconds = windowSeconds
+        });
+
     [Fact]
     public async Task GetEdgeHostPagedListHandler_ShouldLoadClientAndPlcStatesForCurrentPageOnly()
     {
@@ -720,7 +746,9 @@ public sealed class EdgeHostBehaviorTests
             new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [firstDevice.Id, secondDevice.Id] },
             overviewQueryService,
             clientStateStore,
-            runtimeStore);
+            runtimeStore,
+            CreateFreshnessResolver(),
+            TimeProvider.System);
 
         var result = await handler.Handle(
             new GetEdgeHostPagedListQuery(new Pagination { PageNumber = 2, PageSize = 1 }),
@@ -740,7 +768,13 @@ public sealed class EdgeHostBehaviorTests
         var utcNow = new DateTime(2026, 7, 10, 12, 0, 0, DateTimeKind.Utc);
         var device = new Device("状态冻结设备", "DEV-STATUS-FREEZE", Guid.NewGuid());
 
-        var missing = EdgeHostMapping.ToListItemDto(device, null, [], utcNow);
+        var resolver = CreateFreshnessResolver();
+        var missing = EdgeHostMapping.ToListItemDto(
+            device,
+            null,
+            [],
+            utcNow,
+            resolver.Resolve(null, utcNow));
 
         Assert.Equal("MissingRuntimeHeartbeat", missing.SoftwareStatus);
         Assert.Equal("客户端尚未上报运行心跳。", missing.Issue);
@@ -757,10 +791,235 @@ public sealed class EdgeHostBehaviorTests
             utcNow.AddHours(-25),
             utcNow.AddHours(-24).AddTicks(-1)));
 
-        var stale = EdgeHostMapping.ToListItemDto(device, state, [], utcNow);
+        var stale = EdgeHostMapping.ToListItemDto(
+            device,
+            state,
+            [],
+            utcNow,
+            resolver.Resolve(state, utcNow));
 
         Assert.Equal("RuntimeHeartbeatStale", stale.SoftwareStatus);
         Assert.Equal("超过 24 小时未收到运行心跳。", stale.Issue);
+    }
+
+    [Fact]
+    public void EdgeHostMapping_ShouldPreserveCurrentPlcFacts()
+    {
+        var utcNow = new DateTime(
+            2026,
+            8,
+            10,
+            12,
+            0,
+            0,
+            DateTimeKind.Utc);
+        var device = new Device(
+            "当前 PLC 设备",
+            "DEV-PLC-CURRENT",
+            Guid.NewGuid());
+        var clientState = new DeviceClientState(device.Id, device.Code);
+        clientState.ApplyPlcSnapshot(
+            utcNow.AddMinutes(-3),
+            utcNow.AddMinutes(-3),
+            new string('b', 64));
+        var connected = new EdgeHostPlcRuntimeState(
+            device.Id,
+            device.Code,
+            "PLC-ONLINE");
+        connected.ReplaceReport(
+            "在线 PLC",
+            true,
+            EdgeHostPlcRuntimeStatus.Connected,
+            utcNow.AddSeconds(-10));
+        var faulted = new EdgeHostPlcRuntimeState(
+            device.Id,
+            device.Code,
+            "PLC-FAULTED");
+        faulted.ReplaceReport(
+            "故障 PLC",
+            false,
+            EdgeHostPlcRuntimeStatus.Faulted,
+            utcNow.AddSeconds(-20),
+            "连接失败");
+        var resolver = CreateFreshnessResolver();
+        var freshness = resolver.Resolve(clientState, utcNow);
+
+        var detail = EdgeHostMapping.ToDetailDto(
+            device,
+            clientState,
+            [connected, faulted],
+            utcNow,
+            freshness);
+
+        Assert.Equal("Current", detail.PlcFreshness);
+        Assert.Equal(2, detail.PlcCount);
+        Assert.Equal(1, detail.ConnectedPlcCount);
+        Assert.Equal(1, detail.FaultedPlcCount);
+        Assert.Contains(detail.PlcStates, row =>
+            row.PlcCode == "PLC-ONLINE"
+            && row.IsConnected
+            && row.RuntimeStatus
+            == EdgeHostPlcRuntimeStatus.Connected);
+        Assert.Contains(detail.PlcStates, row =>
+            row.PlcCode == "PLC-FAULTED"
+            && row.RuntimeStatus
+            == EdgeHostPlcRuntimeStatus.Faulted);
+    }
+
+    [Fact]
+    public void EdgeHostMapping_ShouldDecayStalePlcWithoutDeletingHistory()
+    {
+        var utcNow = new DateTime(
+            2026,
+            8,
+            10,
+            12,
+            0,
+            0,
+            DateTimeKind.Utc);
+        var device = new Device(
+            "过期 PLC 设备",
+            "DEV-PLC-STALE",
+            Guid.NewGuid());
+        var clientState = new DeviceClientState(device.Id, device.Code);
+        clientState.ApplyRuntimeHeartbeat(new EdgeDeviceRuntimeHeartbeat(
+            device.Id,
+            device.Code,
+            "runtime-plc-stale",
+            null,
+            "1.0.0",
+            "2.0.0",
+            "Running",
+            utcNow.AddHours(-1),
+            utcNow));
+        clientState.ApplyPlcSnapshot(
+            utcNow.AddMinutes(-3).AddTicks(-1),
+            utcNow.AddMinutes(-3).AddTicks(-1),
+            new string('c', 64));
+        var plcState = new EdgeHostPlcRuntimeState(
+            device.Id,
+            device.Code,
+            "PLC-STALE");
+        plcState.ReplaceReport(
+            "历史在线 PLC",
+            true,
+            EdgeHostPlcRuntimeStatus.Connected,
+            utcNow.AddMinutes(-4));
+        var resolver = CreateFreshnessResolver();
+        var freshness = resolver.Resolve(clientState, utcNow);
+
+        var detail = EdgeHostMapping.ToDetailDto(
+            device,
+            clientState,
+            [plcState],
+            utcNow,
+            freshness);
+
+        Assert.Equal("Running", detail.SoftwareStatus);
+        Assert.Equal("Stale", detail.PlcFreshness);
+        Assert.Equal(
+            PlcProjectionFreshnessResolver.StaleIssueCode,
+            detail.PlcIssue);
+        Assert.Equal(1, detail.PlcCount);
+        Assert.Equal(0, detail.ConnectedPlcCount);
+        Assert.Equal(0, detail.FaultedPlcCount);
+        var row = Assert.Single(detail.PlcStates);
+        Assert.False(row.IsConnected);
+        Assert.Equal(EdgeHostPlcRuntimeStatus.Unknown, row.RuntimeStatus);
+        Assert.Equal("Stale", row.Freshness);
+        Assert.Equal(utcNow.AddMinutes(-4), row.LastSeenAtUtc);
+        Assert.Equal(
+            clientState.PlcSnapshotReceivedAtUtc,
+            detail.PlcSnapshotReceivedAtUtc);
+    }
+
+    [Fact]
+    public void EdgeHostMapping_ShouldKeepSoftwareAndPlcFreshnessIndependent()
+    {
+        var utcNow = new DateTime(
+            2026,
+            8,
+            10,
+            12,
+            0,
+            0,
+            DateTimeKind.Utc);
+        var device = new Device(
+            "软件过期 PLC 当前设备",
+            "DEV-SOFTWARE-STALE",
+            Guid.NewGuid());
+        var clientState = new DeviceClientState(device.Id, device.Code);
+        clientState.ApplyRuntimeHeartbeat(new EdgeDeviceRuntimeHeartbeat(
+            device.Id,
+            device.Code,
+            "runtime-software-stale",
+            null,
+            "1.0.0",
+            "2.0.0",
+            "Running",
+            utcNow.AddHours(-25),
+            utcNow.AddHours(-24).AddTicks(-1)));
+        clientState.ApplyPlcSnapshot(
+            utcNow,
+            utcNow,
+            new string('d', 64));
+        var resolver = CreateFreshnessResolver();
+
+        var item = EdgeHostMapping.ToListItemDto(
+            device,
+            clientState,
+            [],
+            utcNow,
+            resolver.Resolve(clientState, utcNow));
+
+        Assert.Equal("RuntimeHeartbeatStale", item.SoftwareStatus);
+        Assert.Equal("Current", item.PlcFreshness);
+    }
+
+    [Fact]
+    public void EdgeHostMapping_ShouldExposeUnavailableWithoutInventingEmptyAuthority()
+    {
+        var utcNow = new DateTime(
+            2026,
+            8,
+            10,
+            12,
+            0,
+            0,
+            DateTimeKind.Utc);
+        var device = new Device(
+            "不可用 PLC 设备",
+            "DEV-PLC-UNAVAILABLE",
+            Guid.NewGuid());
+        var plcState = new EdgeHostPlcRuntimeState(
+            device.Id,
+            device.Code,
+            "PLC-HISTORY");
+        plcState.ReplaceReport(
+            "历史 PLC",
+            true,
+            EdgeHostPlcRuntimeStatus.Connected,
+            utcNow.AddMinutes(-1));
+        var resolver = CreateFreshnessResolver();
+        var freshness = resolver.Resolve(null, utcNow);
+
+        var detail = EdgeHostMapping.ToDetailDto(
+            device,
+            null,
+            [plcState],
+            utcNow,
+            freshness);
+
+        Assert.Equal("Unavailable", detail.PlcFreshness);
+        Assert.Equal(
+            PlcProjectionFreshnessResolver.UnavailableIssueCode,
+            detail.PlcIssue);
+        Assert.Equal(1, detail.PlcCount);
+        Assert.Equal(0, detail.ConnectedPlcCount);
+        Assert.False(Assert.Single(detail.PlcStates).IsConnected);
+        Assert.Equal(
+            EdgeHostPlcRuntimeStatus.Unknown,
+            detail.PlcStates[0].RuntimeStatus);
     }
 
     [Fact]
@@ -789,7 +1048,10 @@ public sealed class EdgeHostBehaviorTests
         var handler = new GetEdgeHostPlcRuntimeStatesHandler(
             new StubCurrentUserDeviceAccessService { AccessibleDeviceIds = [] },
             deviceRepository,
-            new StubEdgeHostPlcRuntimeStateStore());
+            new StubDeviceClientStateStore(),
+            new StubEdgeHostPlcRuntimeStateStore(),
+            CreateFreshnessResolver(),
+            TimeProvider.System);
 
         var result = await handler.Handle(new GetEdgeHostPlcRuntimeStatesQuery(device.Id), CancellationToken.None);
 

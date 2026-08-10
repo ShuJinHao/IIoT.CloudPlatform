@@ -49,6 +49,8 @@
 
 新增允许域前必须先补本文档、权限点、行为测试和 `AiReadHttpContractTests`。
 
+`AiReadController` 的全部 GET Action 必须由同一个参数门根据当前 Action 的 `[FromQuery]` 元数据自动生成大小写不敏感白名单；显式 binder name 优先，没有时使用参数名。未知参数、当前 Action 不适用的参数和重复标量参数必须在进入 MediatR 前统一返回 400，稳定错误码为 `ai_read_invalid_query_parameters`。错误只允许返回排序、去重后的参数名，不得回显参数值、原始 query string、Token 或请求头；不得另建手写全局字段表，也不得让未来新增 Action 绕过该门。
+
 ## 3. 设备与工序主数据精确查询
 
 `GET /api/v1/ai/read/devices` 只返回正式设备主数据字段：

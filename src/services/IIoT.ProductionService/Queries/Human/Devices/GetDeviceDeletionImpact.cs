@@ -42,7 +42,8 @@ public sealed record DeviceDeletionImpactDto(
     long RefreshTokenSessions,
     long EdgeHostPlcRuntimeStates,
     long TotalAssociatedRows,
-    long InstallerPendingCredentials = 0);
+    long InstallerPendingCredentials = 0,
+    long DevicePluginBindings = 0);
 
 public sealed class GetDeviceDeletionImpactHandler(
     IReadRepository<Device> deviceRepository,
@@ -90,6 +91,7 @@ public sealed class GetDeviceDeletionImpactHandler(
             impact.RefreshTokenSessions,
             impact.EdgeHostPlcRuntimeStates,
             impact.TotalAssociatedRows,
-            impact.InstallerPendingCredentials));
+            impact.InstallerPendingCredentials,
+            impact.DevicePluginBindings));
     }
 }

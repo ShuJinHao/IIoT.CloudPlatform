@@ -19,6 +19,9 @@ public sealed record EdgeHostListItemDto(
     int ConnectedPlcCount,
     int FaultedPlcCount,
     DateTime? LastPlcSeenAtUtc,
+    string PlcFreshness,
+    DateTime? PlcSnapshotReceivedAtUtc,
+    string? PlcIssue,
     string? Issue);
 
 public sealed record EdgeHostDto(
@@ -35,6 +38,9 @@ public sealed record EdgeHostDto(
     int ConnectedPlcCount,
     int FaultedPlcCount,
     DateTime? LastPlcSeenAtUtc,
+    string PlcFreshness,
+    DateTime? PlcSnapshotReceivedAtUtc,
+    string? PlcIssue,
     string? Issue,
     IReadOnlyList<EdgeHostPlcRuntimeStateDto> PlcStates);
 
@@ -51,7 +57,8 @@ public sealed record EdgeHostPlcRuntimeStateDto(
     string RuntimeStatus,
     string? LastError,
     DateTime LastSeenAtUtc,
-    DateTime UpdatedAtUtc);
+    DateTime UpdatedAtUtc,
+    string Freshness);
 
 public sealed record EdgeHostPlcRuntimeStateReportResultDto(
     Guid DeviceId,
@@ -65,8 +72,16 @@ public static class EdgeHostMapping
         Device device,
         DeviceClientState? clientState,
         IReadOnlyList<EdgeHostPlcRuntimeState> plcStates,
-        DateTime utcNow)
-        => ToListItemDto(device.Id, device.DeviceName, device.Code, clientState, plcStates, utcNow);
+        DateTime utcNow,
+        PlcProjectionFreshnessResolution plcFreshness)
+        => ToListItemDto(
+            device.Id,
+            device.DeviceName,
+            device.Code,
+            clientState,
+            plcStates,
+            utcNow,
+            plcFreshness);
 
     public static EdgeHostListItemDto ToListItemDto(
         Guid deviceId,
@@ -74,13 +89,18 @@ public static class EdgeHostMapping
         string clientCode,
         DeviceClientState? clientState,
         IReadOnlyList<EdgeHostPlcRuntimeState> plcStates,
-        DateTime utcNow)
+        DateTime utcNow,
+        PlcProjectionFreshnessResolution plcFreshness)
     {
         var softwareStatus = DeviceClientSoftwareStatusResolver.Resolve(clientState, utcNow);
         var lastPlcSeenAtUtc = plcStates.Count == 0
             ? (DateTime?)null
             : plcStates.Max(state => state.LastSeenAtUtc);
-        var issue = ResolveIssue(softwareStatus.Issue, plcStates);
+        var issue = ResolveIssue(
+            softwareStatus.Issue,
+            plcFreshness,
+            plcStates);
+        var isCurrent = plcFreshness.IsCurrent;
 
         return new EdgeHostListItemDto(
             deviceId,
@@ -93,9 +113,20 @@ public static class EdgeHostMapping
             BuildCurrentVersion(clientState),
             clientState?.LastRuntimeHeartbeatAtUtc,
             plcStates.Count,
-            plcStates.Count(state => state.RuntimeStatus == EdgeHostPlcRuntimeStatus.Connected),
-            plcStates.Count(state => state.RuntimeStatus == EdgeHostPlcRuntimeStatus.Faulted),
+            isCurrent
+                ? plcStates.Count(state =>
+                    state.RuntimeStatus
+                    == EdgeHostPlcRuntimeStatus.Connected)
+                : 0,
+            isCurrent
+                ? plcStates.Count(state =>
+                    state.RuntimeStatus
+                    == EdgeHostPlcRuntimeStatus.Faulted)
+                : 0,
             lastPlcSeenAtUtc,
+            plcFreshness.State.ToString(),
+            plcFreshness.SnapshotReceivedAtUtc,
+            plcFreshness.IssueCode,
             issue);
     }
 
@@ -103,9 +134,15 @@ public static class EdgeHostMapping
         Device device,
         DeviceClientState? clientState,
         IReadOnlyList<EdgeHostPlcRuntimeState> plcStates,
-        DateTime utcNow)
+        DateTime utcNow,
+        PlcProjectionFreshnessResolution plcFreshness)
     {
-        var listItem = ToListItemDto(device, clientState, plcStates, utcNow);
+        var listItem = ToListItemDto(
+            device,
+            clientState,
+            plcStates,
+            utcNow,
+            plcFreshness);
         return new EdgeHostDto(
             listItem.Id,
             listItem.DeviceId,
@@ -120,16 +157,24 @@ public static class EdgeHostMapping
             listItem.ConnectedPlcCount,
             listItem.FaultedPlcCount,
             listItem.LastPlcSeenAtUtc,
+            listItem.PlcFreshness,
+            listItem.PlcSnapshotReceivedAtUtc,
+            listItem.PlcIssue,
             listItem.Issue,
             plcStates
                 .OrderByDescending(state => state.LastSeenAtUtc)
                 .ThenBy(state => state.PlcCode, StringComparer.OrdinalIgnoreCase)
-                .Select(ToRuntimeStateDto)
+                .Select(state => ToRuntimeStateDto(
+                    state,
+                    plcFreshness))
                 .ToList());
     }
 
-    public static EdgeHostPlcRuntimeStateDto ToRuntimeStateDto(EdgeHostPlcRuntimeState state)
+    public static EdgeHostPlcRuntimeStateDto ToRuntimeStateDto(
+        EdgeHostPlcRuntimeState state,
+        PlcProjectionFreshnessResolution plcFreshness)
     {
+        var isCurrent = plcFreshness.IsCurrent;
         return new EdgeHostPlcRuntimeStateDto(
             state.Id,
             state.DeviceId,
@@ -139,20 +184,29 @@ public static class EdgeHostMapping
             state.StationCode,
             state.Protocol,
             state.Address,
-            state.IsConnected,
-            state.RuntimeStatus,
+            isCurrent && state.IsConnected,
+            isCurrent
+                ? state.RuntimeStatus
+                : EdgeHostPlcRuntimeStatus.Unknown,
             state.LastError,
             state.LastSeenAtUtc,
-            state.UpdatedAtUtc);
+            state.UpdatedAtUtc,
+            plcFreshness.State.ToString());
     }
 
     private static string? ResolveIssue(
         string? softwareIssue,
+        PlcProjectionFreshnessResolution plcFreshness,
         IReadOnlyList<EdgeHostPlcRuntimeState> plcStates)
     {
         if (!string.IsNullOrWhiteSpace(softwareIssue))
         {
             return softwareIssue;
+        }
+
+        if (!plcFreshness.IsCurrent)
+        {
+            return plcFreshness.IssueMessage;
         }
 
         if (plcStates.Count == 0)

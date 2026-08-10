@@ -509,7 +509,12 @@ public sealed class CloudWriteObservationReader(
                     select count(*)::bigint
                     from edge_installer_pending_credentials credential
                     where credential."DeviceId" = {deviceId}
-                ) as "InstallerPendingCredentials"
+                ) as "InstallerPendingCredentials",
+                (
+                    select count(*)::bigint
+                    from device_plugin_bindings binding
+                    where binding.device_id = {deviceId}
+                ) as "DevicePluginBindings"
             """)
             .SingleAsync(cancellationToken);
         return row.ToContract();
@@ -530,6 +535,7 @@ public sealed class CloudWriteObservationReader(
         public long RefreshTokenSessions { get; init; }
         public long EdgeHostPlcRuntimeStates { get; init; }
         public long InstallerPendingCredentials { get; init; }
+        public long DevicePluginBindings { get; init; }
 
         public DeviceDeletionImpact ToContract()
             => new(
@@ -545,6 +551,7 @@ public sealed class CloudWriteObservationReader(
                 RefreshTokenSessions,
                 RuntimeHeartbeats,
                 EdgeHostPlcRuntimeStates,
-                InstallerPendingCredentials);
+                InstallerPendingCredentials,
+                DevicePluginBindings);
     }
 }

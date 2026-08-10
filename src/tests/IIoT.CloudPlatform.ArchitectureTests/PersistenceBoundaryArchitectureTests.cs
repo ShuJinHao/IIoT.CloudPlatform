@@ -1121,7 +1121,8 @@ public sealed class PersistenceBoundaryArchitectureTests
                      "edge_device_client_states", "edge_device_client_version_snapshots",
                      "edge_device_client_plugin_versions", "edge_device_runtime_heartbeats",
                      "upload_receive_registrations", "employee_device_accesses",
-                     "refresh_token_sessions", "edge_host_plc_runtime_states"
+                     "refresh_token_sessions", "edge_host_plc_runtime_states",
+                     "device_plugin_bindings"
                  })
         {
             Assert.Contains(table, implementationSource, StringComparison.Ordinal);

@@ -413,7 +413,7 @@ public sealed class AiReadBehaviorTests
     }
 
     [Fact]
-    public async Task AiReadDeviceQueries_ShouldRejectUnsupportedParametersAndBlankDeviceCode()
+    public async Task AiReadDeviceQueries_ShouldRejectBlankDeviceCode()
     {
         var options = Options.Create(new AiReadOptions());
         var deviceHandler = new GetAiReadDevicesHandler(
@@ -426,21 +426,19 @@ public sealed class AiReadBehaviorTests
             new TestAiReadScopeAccessor(),
             options);
 
-        var unsupportedDevice = await deviceHandler.Handle(
-            new GetAiReadDevicesQuery(UnsupportedParameters: ["status"]),
-            CancellationToken.None);
         var blankDevice = await deviceHandler.Handle(
-            new GetAiReadDevicesQuery(DeviceCode: "   "),
-            CancellationToken.None);
-        var unsupportedState = await stateHandler.Handle(
-            new GetAiReadDeviceClientStatesQuery(UnsupportedParameters: ["runtimeStatus"]),
+            new GetAiReadDevicesQuery(
+                DeviceCode: "   ",
+                DeviceCodeSupplied: true),
             CancellationToken.None);
         var blankState = await stateHandler.Handle(
-            new GetAiReadDeviceClientStatesQuery(DeviceCode: "\t"),
+            new GetAiReadDeviceClientStatesQuery(
+                DeviceCode: "\t",
+                DeviceCodeSupplied: true),
             CancellationToken.None);
 
         Assert.All(
-            new[] { unsupportedDevice.Status, blankDevice.Status, unsupportedState.Status, blankState.Status },
+            new[] { blankDevice.Status, blankState.Status },
             status => Assert.Equal(ResultStatus.Invalid, status));
     }
 

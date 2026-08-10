@@ -116,7 +116,6 @@ public sealed record GetAiReadDevicesQuery(
     Guid? ProcessId = null,
     string? Keyword = null,
     int? MaxRows = null,
-    IReadOnlyList<string>? UnsupportedParameters = null,
     bool DeviceCodeSupplied = false)
     : IAiReadQuery<Result<AiReadListResponse<AiReadDeviceDto>>>;
 
@@ -132,8 +131,7 @@ public sealed class GetAiReadDevicesHandler(
     {
         var queryParameterValidation = AiReadQueryGuard.ValidateDeviceQueryParameters(
             request.DeviceCode,
-            request.DeviceCodeSupplied,
-            request.UnsupportedParameters);
+            request.DeviceCodeSupplied);
         if (queryParameterValidation is not null)
             return queryParameterValidation;
 
@@ -305,7 +303,6 @@ public sealed record GetAiReadDeviceClientStatesQuery(
     Guid? ProcessId = null,
     string? Keyword = null,
     int? MaxRows = null,
-    IReadOnlyList<string>? UnsupportedParameters = null,
     bool DeviceCodeSupplied = false)
     : IAiReadQuery<Result<AiReadListResponse<AiReadDeviceClientStateDto>>>;
 
@@ -322,8 +319,7 @@ public sealed class GetAiReadDeviceClientStatesHandler(
     {
         var queryParameterValidation = AiReadQueryGuard.ValidateDeviceQueryParameters(
             request.DeviceCode,
-            request.DeviceCodeSupplied,
-            request.UnsupportedParameters);
+            request.DeviceCodeSupplied);
         if (queryParameterValidation is not null)
             return queryParameterValidation;
 
@@ -848,36 +844,15 @@ internal readonly record struct AiReadScopeValue(string? Value);
 
 internal static class AiReadQueryGuard
 {
-    private static readonly HashSet<string> KnownUnsupportedQueryParameters = new(
-        [
-            "softwareStatus",
-            "runtimeStatus",
-            "status",
-            "lineName",
-            "processName",
-            "updatedAt",
-            "updatedAtUtc"
-        ],
-        StringComparer.Ordinal);
-
     public static Result? ValidateDeviceQueryParameters(
         string? deviceCode,
-        bool deviceCodeSupplied,
-        IReadOnlyList<string>? unsupportedParameters)
+        bool deviceCodeSupplied)
     {
         if ((deviceCodeSupplied && string.IsNullOrWhiteSpace(deviceCode))
             || (deviceCode is not null && string.IsNullOrWhiteSpace(deviceCode)))
             return Result.Invalid("设备编码不能为空白。");
 
-        if (unsupportedParameters is not { Count: > 0 })
-            return null;
-
-        var names = unsupportedParameters
-            .Select(parameter => KnownUnsupportedQueryParameters.Contains(parameter) ? parameter : "unknown")
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(parameter => parameter, StringComparer.Ordinal)
-            .ToArray();
-        return Result.Invalid($"不支持的查询参数：{string.Join(", ", names)}。");
+        return null;
     }
 
     private static readonly HashSet<string> ProductionRecordCommonColumns = new(StringComparer.Ordinal)
