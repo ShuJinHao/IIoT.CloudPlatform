@@ -253,10 +253,12 @@ public sealed class DeploymentSourceGuardTests
         var agentsSource = File.ReadAllText(CloudRepositoryPath.Find("AGENTS.md"));
         var cloudRulesSource = File.ReadAllText(CloudRepositoryPath.Find("docs", "云端规则.md"));
 
-        agentsSource.Should().Contain("长期业务只进入工作区业务总纲或 Cloud 规则");
-        agentsSource.Should().Contain("真实事故只进入工作区事故索引");
+        agentsSource.Should().Contain("长期业务只进入 Cloud 规则");
+        agentsSource.Should().Contain("Cloud 自身事故在本仓维护");
+        agentsSource.Should().Contain("不自动加载外层总规则");
+        agentsSource.Should().NotContain("唯一默认必读入口");
         agentsSource.Should().Contain("不新建滚动复盘、日期式快照或第二份部署手册");
-        cloudRulesSource.Should().Contain("真实事故只进入工作区");
+        cloudRulesSource.Should().Contain("Cloud 自身事故在本仓");
         agentsSource.Should().NotContain("任何代码改动完成前");
         cloudRulesSource.Should().NotContain("最终回复必须列出复盘文档");
     }
