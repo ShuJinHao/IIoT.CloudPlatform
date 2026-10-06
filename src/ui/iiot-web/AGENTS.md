@@ -54,18 +54,6 @@
 
 ## 7. 测试和验证
 
-- 阶段性改动至少运行 `npm run build`。
+- 前端代码改动运行 `npm run build`；纯文档变更只做静态核对。
 - 涉及核心 HTTP、分页、路由守卫、设备删除、schema 动态列时必须补单元测试，并用 CI selector 或 `vitest related` 运行受影响测试；完整 `npm run test:unit` 只在用户显式 Quality/Full 授权时运行。
 - 涉及可见 UI 布局时必须真实运行或截图验收；build 通过不等于 UI 通过。
-
-## Pre-change Checklist
-
-- [ ] 已读工作区 `docs/总规则.md` 和本文件；只有改动实际触碰 Cloud 后端边界或过站工序时，才读取对应项目规则/专题章节。
-- [ ] 改动范围只在 `IIoT.CloudPlatform`。
-- [ ] 没有修改后端 API 契约或业务红线。
-- [ ] 新增/修改页面 SFC 不超过 200 行。
-- [ ] 列表页使用统一 list-page composable。
-- [ ] 表格列定义不继续堆在页面 SFC。
-- [ ] API 错误展示后端返回的具体信息。
-- [ ] 通用分页类型从 `src/core/types/pagination.ts` 导入。
-- [ ] 前端 build 和相关单元测试通过。
